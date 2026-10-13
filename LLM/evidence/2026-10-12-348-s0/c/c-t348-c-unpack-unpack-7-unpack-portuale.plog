@@ -1,0 +1,13 @@
+=== P=t348-c-unpack-unpack-7 EAPI=7 PHASE=unpack ===
+unpack abs tar.gz: rc=0
+unpack abs txz: rc=0
+unpack abs xz: rc=0
+unpack abs uppercase TGZ (case-sensitive in 7/8): rc=0
+unpack abs 7z (7:yes/8:no): rc=1
+unpack abs rar (7:yes/8:no): rc=13
+unpack bare name (DISTDIR miss): rc=1
+unpack ./-relative: rc=0
+uout-listing:
+uout
+uout/p
+uout/plain.txt

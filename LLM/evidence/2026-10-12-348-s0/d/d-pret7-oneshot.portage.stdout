@@ -1,0 +1,56 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/updates/2Q-2024..
+
+
+Calculating dependencies ... done!
+Dependency resolution took 1.57 s (backtrack: 0/20).
+
+
+>>> Verifying ebuild manifests
+
+>>> Running pre-merge checks for app-misc/t348-d-pret-7
+ [33;01m*[0m t348-d-pret pkg_pretend ran EAPI=7
+ [31;01m*[0m ERROR: app-misc/t348-d-pret-7::t348 failed (pretend phase):
+ [31;01m*[0m   t348-d-pret refuses on purpose
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m              ebuild.sh, line 143:  Called pkg_pretend
+ [31;01m*[0m   t348-d-pret-7.ebuild, line   6:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	die "t348-d-pret refuses on purpose"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-d-pret-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-d-pret-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-d/cfg/logs/app-misc:t348-d-pret-7:20261012-235703.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-pret-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-pret-7/temp/die.env'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-pret-7/empty'
+ [31;01m*[0m S: '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-pret-7/work/t348-d-pret-7'
+
+>>> Failed to emerge app-misc/t348-d-pret-7 for /var/tmp/t348-d/cfg/, Log file:
+
+>>>  '/var/tmp/t348-d/cfg/logs/app-misc:t348-d-pret-7:20261012-235703.log'
+
+ * Messages for package app-misc/t348-d-pret-7 merged to /var/tmp/t348-d/cfg/:
+ * Log file: /var/tmp/t348-d/cfg/logs/app-misc:t348-d-pret-7:20261012-235703.log
+
+ * t348-d-pret pkg_pretend ran EAPI=7
+ * ERROR: app-misc/t348-d-pret-7::t348 failed (pretend phase):
+ *   t348-d-pret refuses on purpose
+ * Call stack:
+ *              ebuild.sh, line 143:  Called pkg_pretend
+ *   t348-d-pret-7.ebuild, line   6:  Called die
+ * The specific snippet of code:
+ *   	die "t348-d-pret refuses on purpose"
+ * If you need support, post the output of `emerge --info '=app-misc/t348-d-pret-7::t348'`,
+ * the complete build log and the output of `emerge -pqv '=app-misc/t348-d-pret-7::t348'`.
+ * The complete build log is located at '/var/tmp/t348-d/cfg/logs/app-misc:t348-d-pret-7:20261012-235703.log'.
+ * For convenience, a symlink to the build log is located at '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-pret-7/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-pret-7/temp/die.env'.
+ * Working directory: '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-pret-7/empty'
+ * S: '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-pret-7/work/t348-d-pret-7'

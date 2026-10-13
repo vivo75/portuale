@@ -1,0 +1,19 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-sfall-8/work
+ [31;01m*[0m ERROR: app-misc/t348-d-sfall-8::t348 failed (prepare phase):
+ [31;01m*[0m   The source directory '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-sfall-8/work/t348-d-missing' doesn't exist
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m            ebuild.sh, line  838:  Called __ebuild_main 'prepare'
+ [31;01m*[0m   phase-functions.sh, line 1145:  Called __dyn_prepare
+ [31;01m*[0m   phase-functions.sh, line  444:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		die "The source directory '${S}' doesn't exist"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-d-sfall-8::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-d-sfall-8::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-d/cfg/logs/app-misc:t348-d-sfall-8:20261012-235639.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-sfall-8/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-sfall-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-sfall-8'
+ [31;01m*[0m S: '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-sfall-8/work/t348-d-missing'

@@ -1,0 +1,16 @@
+>>> Not marked as unpacked; recreating WORKDIR...
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-eapisp-1/work
+>>> Preparing source in /var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-eapisp-1/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-eapisp-1/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-eapisp-1/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-d-eapisp-1
+
+>>> Install app-misc/t348-d-eapisp-1 into /var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-eapisp-1/image
+>>> Completed installing app-misc/t348-d-eapisp-1 into /var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-eapisp-1/image
+
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  1 KiB

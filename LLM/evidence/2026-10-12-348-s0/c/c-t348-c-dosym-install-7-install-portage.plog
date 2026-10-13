@@ -1,0 +1,13 @@
+=== P=t348-c-dosym-install-7 EAPI=7 PHASE=install ===
+dosym -r abs: rc=1
+dosym -r relative-target: rc=1
+dosym plain: rc=0
+mylink: not a symlink
+mylink2: not a symlink
+readlink mylink3 => [/usr/bin/myapp]
+D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image/usr
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image/usr/bin
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image/usr/bin/myapp
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image/usr/bin/mylink3

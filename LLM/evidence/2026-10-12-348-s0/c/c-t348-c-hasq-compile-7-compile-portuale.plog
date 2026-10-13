@@ -1,0 +1,6 @@
+=== P=t348-c-hasq-compile-7 EAPI=7 PHASE=compile ===
+hasq hit: rc=1
+hasq miss: rc=1
+hasv hit: rc=1 out=[]
+useq foo (flag disabled): rc=0
+useq no-arg: rc=1

@@ -1,0 +1,19 @@
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Unable to do any operations on 'app-misc/t348-d-eapi7a-1', since its
+!!! EAPI is higher than this portage version's. Please upgrade to a
+!!! portage version that supports EAPI '7_alpha'.

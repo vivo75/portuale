@@ -1,0 +1,26 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-strip-install-8/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-strip-install-8/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-strip-install-8/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-strip-install-8/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-c-strip-install-8
+
+>>> Install app-misc/t348-c-strip-install-8 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-strip-install-8/image
+ [32m*[0m === P=t348-c-strip-install-8 EAPI=8 PHASE=install ===
+ [32m*[0m declare dostrip: [dostrip 191 /usr/lib/portage/python3.14/phase-helpers.sh]
+ [32m*[0m dostrip /usr/bin: rc=0
+ [32m*[0m dostrip -x: rc=0
+ [32m*[0m docompress: rc=0
+ [32m*[0m docompress -x: rc=0
+ [32m*[0m PORTAGE_DOSTRIP=[/]
+ [32m*[0m PORTAGE_DOSTRIP_SKIP=[]
+ [32m*[0m PORTAGE_DOCOMPRESS=[/usr/share/doc /usr/share/info /usr/share/man]
+ [32m*[0m PORTAGE_DOCOMPRESS_SKIP=[/usr/share/doc/t348-c-strip-install-8/html]
+>>> Completed installing app-misc/t348-c-strip-install-8 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-strip-install-8/image
+
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  1 KiB
+

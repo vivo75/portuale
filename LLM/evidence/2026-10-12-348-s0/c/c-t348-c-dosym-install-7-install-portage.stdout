@@ -1,0 +1,49 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-c-dosym-install-7
+
+>>> Install app-misc/t348-c-dosym-install-7 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image
+ [32m*[0m === P=t348-c-dosym-install-7 EAPI=7 PHASE=install ===
+ [31;01m*[0m ERROR: app-misc/t348-c-dosym-install-7::t348 failed (install phase):
+ [31;01m*[0m   dosym: two arguments needed
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-dosym-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-dosym-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-dosym-install-7:20261012-235444.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/work'
+ [32m*[0m dosym -r abs: rc=1
+ [31;01m*[0m ERROR: app-misc/t348-c-dosym-install-7::t348 failed (install phase):
+ [31;01m*[0m   dosym: two arguments needed
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-dosym-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-dosym-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-dosym-install-7:20261012-235444.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/work'
+ [32m*[0m dosym -r relative-target: rc=1
+ [32m*[0m dosym plain: rc=0
+ [32m*[0m mylink: not a symlink
+ [32m*[0m mylink2: not a symlink
+ [32m*[0m readlink mylink3 => [/usr/bin/myapp]
+ [32m*[0m D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image/usr
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image/usr/bin
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image/usr/bin/myapp
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image/usr/bin/mylink3
+>>> Completed installing app-misc/t348-c-dosym-install-7 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-install-7/image
+
+ [32m*[0m Final size of build directory: 2 KiB
+ [32m*[0m Final size of installed tree:  5 KiB
+

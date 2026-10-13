@@ -1,0 +1,8 @@
+=== P=t348-c-insopts-compile-7 EAPI=7 PHASE=compile ===
+doconfd with insopts -m0600: rc=0
+doinitd with exeopts -m0750: rc=0
+confd mode=[600]
+initd mode=[750]
+doenvd with insopts: rc=0
+envd listing:
+f.conf

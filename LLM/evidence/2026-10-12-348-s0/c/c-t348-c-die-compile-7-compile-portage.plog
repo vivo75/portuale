@@ -1,0 +1,9 @@
+=== P=t348-c-die-compile-7 EAPI=7 PHASE=compile ===
+die msg: rc=1
+assert pass: rc=0
+assert fail: rc=1
+declare pipestatus: []
+pipestatus call: rc=127
+pipestatus -v after true|false: rc=127
+die -n without nonfatal: rc=1
+nonfatal die -n: rc=1

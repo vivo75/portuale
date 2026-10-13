@@ -1,0 +1,1 @@
+emerge --oneshot --ignore-default-opts --buildpkgonly =app-misc/t348-b-env-8 

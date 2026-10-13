@@ -1,0 +1,20 @@
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+
+  The following REQUIRED_USE flag constraints are unsatisfied:
+    t348dfoo? ( t348dbar )
+

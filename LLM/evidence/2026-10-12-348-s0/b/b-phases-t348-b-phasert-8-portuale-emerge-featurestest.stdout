@@ -1,0 +1,15 @@
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging (1 of 1) app-misc/t348-b-phasert-8::t348 for /var/tmp/t348-b/root-portuale
+t348-b-phasert configured ok
+mkdir -p "/var/tmp/t348-b/tmp-portuale/portage/app-misc/t348-b-phasert-8/image/usr/share/t348-b-phasert"
+cp built.txt "/var/tmp/t348-b/tmp-portuale/portage/app-misc/t348-b-phasert-8/image/usr/share/t348-b-phasert/built.txt"
+cp config.args "/var/tmp/t348-b/tmp-portuale/portage/app-misc/t348-b-phasert-8/image/usr/share/t348-b-phasert/config.args"
+
+>>> Installing (1 of 1) app-misc/t348-b-phasert-8::t348 to /var/tmp/t348-b/root-portuale
+
+>>> Completed (1 of 1) app-misc/t348-b-phasert-8::t348 to /var/tmp/t348-b/root-portuale
+
+ * GNU info directory index is up-to-date.

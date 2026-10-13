@@ -1,0 +1,7 @@
+=== P=t348-c-ver-compile-8 EAPI=8 PHASE=compile ===
+declare ver_cut: [ver_cut 42 /home/vivo/repo/PORTUALE/portuale/bin/version-functions.sh]
+ver_cut 1-2 1.2.3-r4 => [1.2]
+ver_rs 1- 1.2.3 => [8]
+ver_test 1.2.3 -gt 1.2.2: rc=0
+ver_test 1.2.3 -lt 1.2.2: rc=1
+ver_cut bad-range: rc=0

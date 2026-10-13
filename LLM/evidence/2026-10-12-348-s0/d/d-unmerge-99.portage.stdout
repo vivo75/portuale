@@ -1,0 +1,32 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+>>> Using system located in ROOT tree /var/tmp/t348-d/rootU1/
+
+ app-misc/t348-d-unmerge
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+All selected packages: =app-misc/t348-d-unmerge-1
+
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+
+>>> Waiting 5 seconds before starting...
+>>> (Control-C to abort)...
+>>> Unmerging in: 5 4 3 2 1
+>>> Unmerging (1 of 1) app-misc/t348-d-unmerge-1...
+
+ * GNU info directory index is up-to-date.
+
+ * IMPORTANT: 7 news items need reading for repository 'gentoo'.
+ * IMPORTANT: 1 news items need reading for repository 'testrepo'.
+ * Use eselect news read to view new items.

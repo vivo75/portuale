@@ -1,0 +1,1 @@
+emerge -p --ignore-default-opts =app-misc/t348-d-eapimm-1

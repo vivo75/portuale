@@ -1,0 +1,32 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/work ...
+ [32m*[0m === P=t348-c-dosym-compile-8 EAPI=8 PHASE=compile ===
+ [32m*[0m dosym -r abs: rc=0
+ [31;01m*[0m ERROR: app-misc/t348-c-dosym-compile-8::t348 failed (compile phase):
+ [31;01m*[0m   dosym: -r specified but no absolute target path: 'relative-target'
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-dosym-compile-8::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-dosym-compile-8::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-dosym-compile-8:20261012-235442.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/work'
+ [32m*[0m dosym -r relative-target: rc=1
+ [32m*[0m dosym plain: rc=0
+ [32m*[0m readlink mylink => [myapp]
+ [32m*[0m mylink2: not a symlink
+ [32m*[0m readlink mylink3 => [/usr/bin/myapp]
+ [32m*[0m D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr/bin
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr/bin/myapp
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr/bin/mylink
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr/bin/mylink3
+>>> Source compiled.

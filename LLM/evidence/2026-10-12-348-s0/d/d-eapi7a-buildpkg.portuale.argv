@@ -1,0 +1,1 @@
+emerge --buildpkgonly --ignore-default-opts =t348-d-eapi7a-1

@@ -1,0 +1,4 @@
+=== P=t348-c-libdir-compile-7 EAPI=7 PHASE=compile ===
+declare get_libdir: [get_libdir 962 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+get_libdir => [lib]
+ABI=amd64 LIBDIR_amd64=lib64 => [lib64]

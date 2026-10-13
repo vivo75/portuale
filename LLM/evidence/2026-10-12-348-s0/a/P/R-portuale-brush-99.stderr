@@ -1,0 +1,14 @@
+ [31;01m*[0m ERROR: t348-a/t348-a-pred-99:: failed (pretend phase):
+ [31;01m*[0m   EAPI 99 requires >=bash-5.3 but only 5.2 was found
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m   ebuild.sh, line 75:  Called __check_bash_version
+ [31;01m*[0m   ebuild.sh, line 48:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		die "${dependent} requires >=bash-${maj}.${min} but only ${BASH_VERSINFO[*]:0:2} was found"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=t348-a/t348-a-pred-99::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=t348-a/t348-a-pred-99::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-a/tmp-pb-brush-99/portage/t348-a/t348-a-pred-99/temp/die.env'.
+ [31;01m*[0m Working directory: '/home/vivo/repo/PORTUALE/portuale'
+ [31;01m*[0m S: '/var/tmp/t348-a/tmp-pb-brush-99/portage/t348-a/t348-a-pred-99/work/t348-a-pred-99'

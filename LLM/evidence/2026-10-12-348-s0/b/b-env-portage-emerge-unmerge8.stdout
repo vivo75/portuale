@@ -1,0 +1,25 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/updates/2Q-2024..
+
+
+
+>>> Using system located in ROOT tree /var/tmp/t348-b/root-portage/
+
+ app-misc/t348-b-env
+    selected: 8 
+   protected: none 
+     omitted: none 
+
+All selected packages: =app-misc/t348-b-env-8
+
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+
+>>> Unmerging (1 of 1) app-misc/t348-b-env-8...
+
+ * GNU info directory index is up-to-date.

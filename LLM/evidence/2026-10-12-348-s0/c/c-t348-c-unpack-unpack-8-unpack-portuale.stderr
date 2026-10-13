@@ -1,0 +1,26 @@
+ [32m*[0m === P=t348-c-unpack-unpack-8 EAPI=8 PHASE=unpack ===
+ [32m*[0m unpack abs tar.gz: rc=0
+ [32m*[0m unpack abs txz: rc=0
+ [32m*[0m unpack abs xz: rc=0
+ [32m*[0m unpack abs uppercase TGZ (case-sensitive in 7/8): rc=0
+ [32m*[0m unpack abs 7z (7:yes/8:no): rc=0
+ [32m*[0m unpack abs rar (7:yes/8:no): rc=0
+ [31;01m*[0m ERROR: app-misc/t348-c-unpack-unpack-8:: failed (unpack phase):
+ [31;01m*[0m   unpack: 't.tar.gz' either does not exist or is not a regular file
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_unpack
+ [31;01m*[0m        environment, line 227:  Called t_unpack
+ [31;01m*[0m        environment, line 263:  Called unpack 't.tar.gz'
+ [31;01m*[0m   phase-helpers.sh, line 415:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   			die "unpack: ${f@Q} either does not exist or is not a regular file"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-unpack-unpack-8::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-unpack-unpack-8::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-unpack-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-unpack-8/work/uout'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-unpack-8/work'
+ [32m*[0m unpack bare name (DISTDIR miss): rc=1
+ [32m*[0m unpack ./-relative: rc=0
+ [32m*[0m uout-listing:

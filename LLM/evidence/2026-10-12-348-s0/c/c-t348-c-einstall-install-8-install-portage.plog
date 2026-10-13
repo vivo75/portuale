@@ -1,0 +1,3 @@
+=== P=t348-c-einstall-install-8 EAPI=8 PHASE=install ===
+declare einstall: [einstall 679 /usr/lib/portage/python3.14/phase-helpers.sh]
+einstall (banned 6+): rc=1

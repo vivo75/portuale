@@ -1,0 +1,1 @@
+PORTAGE_TMPDIR=/var/tmp/t348-a/tmp-pb-bash-99 portuale ebuild /var/tmp/t348-a/t348-a-pred/t348-a-pred-99.ebuild setup --shell bash

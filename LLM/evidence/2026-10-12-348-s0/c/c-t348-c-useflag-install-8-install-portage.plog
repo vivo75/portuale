@@ -1,0 +1,15 @@
+=== P=t348-c-useflag-install-8 EAPI=8 PHASE=install ===
+declare in_iuse: [in_iuse 1202 /usr/lib/portage/python3.14/phase-helpers.sh]
+in_iuse foo: rc=0
+in_iuse bogusflag: rc=1
+in_iuse no-arg: rc=1
+usex foo => [yes]
+usex bogusflag => []
+usex foo A B => [A]
+usex bogusflag A B => []
+usev foo: rc=0 out=[foo]
+usev foo altout (2nd arg, EAPI 8+): rc=0 out=[altout]
+use_enable foo => [--enable-foo]
+use_enable bogusflag => []
+use_with foo => [--with-foo]
+use_enable foo '' => [--enable-foo]

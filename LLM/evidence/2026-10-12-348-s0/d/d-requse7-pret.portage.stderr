@@ -1,0 +1,58 @@
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+ERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/profiles/repo_name
+	/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+
+!!! Problem resolving dependencies for =app-misc/t348-d-requse-7
+
+!!! The ebuild selected to satisfy "=app-misc/t348-d-requse-7" for /var/tmp/t348-d/cfg/ has unmet requirements.
+- app-misc/t348-d-requse-7::t348 USE="t348dfoo -t348dbar" ELIBC="glibc"
+
+  The following REQUIRED_USE flag constraints are unsatisfied:
+    t348dfoo? ( t348dbar )
+
+!!! Invalid news item: /home/vivo/repo/PORTUALE/pmtest/fixtures/repo/metadata/news/2026-09-09-portuale-format1-slotatom/2026-09-09-portuale-format1-slotatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/samepkg:1
+!!! Invalid news item: /home/vivo/repo/PORTUALE/pmtest/fixtures/repo/metadata/news/2026-09-08-portuale-malformed/2026-09-08-portuale-malformed.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[[bad
+!!! Invalid news item: /home/vivo/repo/PORTUALE/pmtest/fixtures/repo/metadata/news/2026-09-10-portuale-format1-useatom/2026-09-10-portuale-format1-useatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[alpha]

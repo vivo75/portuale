@@ -1,0 +1,4 @@
+=== P=t348-c-edo-install-8 EAPI=8 PHASE=install ===
+declare edo: []
+edo true: rc=127
+edo false: rc=127

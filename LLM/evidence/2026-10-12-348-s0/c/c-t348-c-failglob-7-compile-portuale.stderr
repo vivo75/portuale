@@ -1,0 +1,3 @@
+/home/vivo/repo/PORTUALE/pmtest/fixtures/repo-348/app-misc/t348-c-failglob/t348-c-failglob-7.ebuild: line 6: no match: /var/tmp/t348-c/tmp/portage/app-misc/t348-c-failglob-7/work/t348-c-failglob-no-such-file-*
+/home/vivo/repo/PORTUALE/pmtest/fixtures/repo-348/app-misc/t348-c-failglob/t348-c-failglob-7.ebuild: line 6: no match: /var/tmp/t348-c/tmp/portage/app-misc/t348-c-failglob-7/work/t348-c-failglob-no-such-file-*
+ [32m*[0m FAILGLOB-COMPILE-REACHED

@@ -1,0 +1,14 @@
+=== P=t348-c-dosym-compile-8 EAPI=8 PHASE=compile ===
+dosym -r abs: rc=0
+dosym -r relative-target: rc=1
+dosym plain: rc=0
+readlink mylink => [myapp]
+mylink2: not a symlink
+readlink mylink3 => [/usr/bin/myapp]
+D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr/bin
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr/bin/myapp
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr/bin/mylink
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-dosym-compile-8/image/usr/bin/mylink3

@@ -1,0 +1,43 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/updates/2Q-2024..
+
+
+Calculating dependencies ... done!
+Dependency resolution took 4.63 s (backtrack: 0/20).
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t348-b-phaseslim-8::t348 for /var/tmp/t348-b/root-portage/
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phaseslim-8/work
+>>> Preparing source in /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phaseslim-8/work/t348-b-phaseslim-8 ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phaseslim-8/work/t348-b-phaseslim-8 ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phaseslim-8/work/t348-b-phaseslim-8 ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-b-phaseslim-8
+
+>>> Install app-misc/t348-b-phaseslim-8 into /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phaseslim-8/image
+>>> Completed installing app-misc/t348-b-phaseslim-8 into /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phaseslim-8/image
+
+ [32m*[0m Final size of build directory: 3 KiB
+ [32m*[0m Final size of installed tree:  5 KiB
+
+
+>>> Installing (1 of 1) app-misc/t348-b-phaseslim-8::t348 to /var/tmp/t348-b/root-portage/
+
+>>> Completed (1 of 1) app-misc/t348-b-phaseslim-8::t348 to /var/tmp/t348-b/root-portage/
+>>> Auto-cleaning packages...
+
+>>> Using system located in ROOT tree /var/tmp/t348-b/root-portage/
+
+>>> No outdated packages were found on your system.
+
+ * GNU info directory index is up-to-date.

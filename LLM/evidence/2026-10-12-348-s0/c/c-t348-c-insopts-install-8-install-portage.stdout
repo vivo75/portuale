@@ -1,0 +1,24 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-insopts-install-8/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-insopts-install-8/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-insopts-install-8/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-insopts-install-8/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-c-insopts-install-8
+
+>>> Install app-misc/t348-c-insopts-install-8 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-insopts-install-8/image
+ [32m*[0m === P=t348-c-insopts-install-8 EAPI=8 PHASE=install ===
+ [32m*[0m doconfd with insopts -m0600: rc=0
+ [32m*[0m doinitd with exeopts -m0750: rc=0
+ [32m*[0m confd mode=[644]
+ [32m*[0m initd mode=[755]
+ [32m*[0m doenvd with insopts: rc=0
+ [32m*[0m envd listing:
+f.conf
+>>> Completed installing app-misc/t348-c-insopts-install-8 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-insopts-install-8/image
+
+ [32m*[0m Final size of build directory: 3 KiB
+ [32m*[0m Final size of installed tree:  8 KiB
+

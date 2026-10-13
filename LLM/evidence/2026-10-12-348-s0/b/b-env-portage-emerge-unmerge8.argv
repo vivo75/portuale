@@ -1,0 +1,1 @@
+emerge --unmerge --ignore-default-opts =app-misc/t348-b-env-8 

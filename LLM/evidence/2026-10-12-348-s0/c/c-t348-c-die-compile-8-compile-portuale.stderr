@@ -1,0 +1,74 @@
+ [32m*[0m === P=t348-c-die-compile-8 EAPI=8 PHASE=compile ===
+ [31;01m*[0m ERROR: app-misc/t348-c-die-compile-8:: failed (compile phase):
+ [31;01m*[0m   t348-plain-die
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m   environment, line 210:  Called t_die
+ [31;01m*[0m   environment, line 243:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       ( die "t348-plain-die" );
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-die-compile-8::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-die-compile-8::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/work'
+ [32m*[0m die msg: rc=1
+ [32m*[0m assert pass: rc=0
+ [31;01m*[0m ERROR: app-misc/t348-c-die-compile-8:: failed (compile phase):
+ [31;01m*[0m   t348-assert-fail
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m        environment, line 210:  Called t_die
+ [31;01m*[0m        environment, line 249:  Called assert 't348-assert-fail'
+ [31;01m*[0m   phase-helpers.sh, line  35:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		[[ ${x} -eq 0 ]] || die "$@"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-die-compile-8::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-die-compile-8::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/work'
+ [32m*[0m assert fail: rc=1
+ [32m*[0m declare pipestatus: []
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/temp/environment: line 252: pipestatus: command not found
+ [32m*[0m pipestatus call: rc=127
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/temp/environment: line 255: pipestatus: command not found
+ [32m*[0m pipestatus -v after true|false: rc=127
+ [31;01m*[0m ERROR: app-misc/t348-c-die-compile-8:: failed (compile phase):
+ [31;01m*[0m   t348-die-dashn-no-nonfatal
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m   environment, line 210:  Called t_die
+ [31;01m*[0m   environment, line 257:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       ( die -n "t348-die-dashn-no-nonfatal" );
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-die-compile-8::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-die-compile-8::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/work'
+ [32m*[0m die -n without nonfatal: rc=1
+t348-die-dashn
+ [32m*[0m nonfatal die -n: rc=1
+ [31;01m*[0m ERROR: app-misc/t348-c-die-compile-8:: failed (compile phase):
+ [31;01m*[0m   t348-nonfatal-die
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m               ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m             environment, line 210:  Called t_die
+ [31;01m*[0m             environment, line 261:  Called nonfatal 'die' 't348-nonfatal-die'
+ [31;01m*[0m   isolated-functions.sh, line  86:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	PORTAGE_NONFATAL=1 "$@"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-die-compile-8::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-die-compile-8::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-die-compile-8/work'

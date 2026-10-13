@@ -1,0 +1,1 @@
+env FEATURES=test emerge --oneshot --ignore-default-opts =app-misc/t348-b-phases-7 ROOT=/var/tmp/t348-b/root-ft-portage (dedicated fresh root; T348_LOGDIR + repos identical to harness)

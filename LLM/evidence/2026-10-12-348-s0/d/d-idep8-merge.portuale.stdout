@@ -1,0 +1,17 @@
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging (1 of 2) app-misc/t348-d-good-1::t348 for /var/tmp/t348-d/rootQ
+
+>>> Installing (1 of 2) app-misc/t348-d-good-1::t348 to /var/tmp/t348-d/rootQ
+
+>>> Completed (1 of 2) app-misc/t348-d-good-1::t348 to /var/tmp/t348-d/rootQ
+
+>>> Emerging (2 of 2) app-misc/t348-d-idep-8::t348 for /var/tmp/t348-d/rootQ
+
+>>> Installing (2 of 2) app-misc/t348-d-idep-8::t348 to /var/tmp/t348-d/rootQ
+
+>>> Completed (2 of 2) app-misc/t348-d-idep-8::t348 to /var/tmp/t348-d/rootQ
+
+ * GNU info directory index is up-to-date.

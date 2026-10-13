@@ -1,0 +1,6 @@
+ [32m*[0m === P=t348-c-edo-compile-7 EAPI=7 PHASE=compile ===
+ [32m*[0m declare edo: []
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-edo-compile-7/temp/environment: line 244: edo: command not found
+ [32m*[0m edo true: rc=127
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-edo-compile-7/temp/environment: line 246: edo: command not found
+ [32m*[0m edo false: rc=127

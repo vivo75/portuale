@@ -1,0 +1,6 @@
+pkg_setup
+src_unpack
+pkg_setup
+src_unpack
+src_compile
+src_install

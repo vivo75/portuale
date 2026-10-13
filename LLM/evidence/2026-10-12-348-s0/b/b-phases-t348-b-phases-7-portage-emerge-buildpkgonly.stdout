@@ -1,0 +1,49 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/updates/2Q-2024..
+
+
+Calculating dependencies ... done!
+Dependency resolution took 4.86 s (backtrack: 0/20).
+
+
+>>> Verifying ebuild manifests
+
+>>> Running pre-merge checks for app-misc/t348-b-phases-7
+
+>>> Emerging (1 of 1) app-misc/t348-b-phases-7::t348 for /var/tmp/t348-b/root-portage/
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/work
+>>> Preparing source in /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/work/t348-b-phases-7 ...
+ [32m*[0m Applying fix.patch ...
+[A[72C [34;01m[ [32;01mok[34;01m ][0m
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/work/t348-b-phases-7 ...
+./configure --prefix=/usr --host= --mandir=/usr/share/man --infodir=/usr/share/info --datadir=/usr/share --sysconfdir=/etc --localstatedir=/var/lib
+t348-b-phases configured ok
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/work/t348-b-phases-7 ...
+make -j32 
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-b-phases-7
+
+>>> Install app-misc/t348-b-phases-7 into /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/image
+make -j32 DESTDIR=/var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/image install 
+mkdir -p "/var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/image/usr/share/t348-b-phases"
+cp built.txt "/var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/image/usr/share/t348-b-phases/built.txt"
+cp config.args "/var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/image/usr/share/t348-b-phases/config.args"
+>>> Completed installing app-misc/t348-b-phases-7 into /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-phases-7/image
+
+ [32m*[0m Final size of build directory: 28 KiB
+ [32m*[0m Final size of installed tree:   9 KiB
+
+>>> Creating binpkg
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+>>> Done.

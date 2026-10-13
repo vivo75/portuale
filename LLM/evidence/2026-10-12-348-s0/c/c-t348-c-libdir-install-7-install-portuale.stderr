@@ -1,0 +1,6 @@
+ [32m*[0m === P=t348-c-libdir-install-7 EAPI=7 PHASE=install ===
+ [32m*[0m declare get_libdir: [get_libdir 962 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+ [32m*[0m get_libdir => [lib]
+ [32m*[0m ABI=amd64 LIBDIR_amd64=lib64 => [lib64]
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  1 KiB

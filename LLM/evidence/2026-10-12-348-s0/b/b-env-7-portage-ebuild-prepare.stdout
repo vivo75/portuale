@@ -1,0 +1,9 @@
+>>> WORKDIR is up-to-date, keeping...
+>>> It appears that 'pretend' has already executed for 't348-b-env-7'; skipping.
+>>> Remove '/var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-env-7/.pretended' to force pretend.
+>>> It appears that 'setup' has already executed for 't348-b-env-7'; skipping.
+>>> Remove '/var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-env-7/.setuped' to force setup.
+>>> It appears that 'unpack' has already executed for 't348-b-env-7'; skipping.
+>>> Remove '/var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-env-7/.unpacked' to force unpack.
+>>> Preparing source in /var/tmp/t348-b/tmp-portage/portage/app-misc/t348-b-env-7/work/t348-b-env-7 ...
+>>> Source prepared.

@@ -1,0 +1,122 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work ...
+ [32m*[0m === P=t348-c-hasq-compile-8 EAPI=8 PHASE=compile ===
+ [31;01m*[0m ERROR: app-misc/t348-c-hasq-compile-8::t348 failed (compile phase):
+ [31;01m*[0m   'hasq' banned in EAPI 8
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m               ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m             environment, line 227:  Called t_hasq
+ [31;01m*[0m             environment, line 260:  Called hasq 'foo' 'foo bar'
+ [31;01m*[0m   isolated-functions.sh, line 489:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	___eapi_has_hasq || die "'${FUNCNAME}' banned in EAPI ${EAPI}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-hasq-compile-8::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-hasq-compile-8::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-hasq-compile-8:20261012-235630.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [32m*[0m hasq hit: rc=1
+ [31;01m*[0m ERROR: app-misc/t348-c-hasq-compile-8::t348 failed (compile phase):
+ [31;01m*[0m   'hasq' banned in EAPI 8
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m               ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m             environment, line 227:  Called t_hasq
+ [31;01m*[0m             environment, line 262:  Called hasq 'zz' 'foo bar'
+ [31;01m*[0m   isolated-functions.sh, line 489:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	___eapi_has_hasq || die "'${FUNCNAME}' banned in EAPI ${EAPI}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-hasq-compile-8::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-hasq-compile-8::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-hasq-compile-8:20261012-235630.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [32m*[0m hasq miss: rc=1
+ [31;01m*[0m ERROR: app-misc/t348-c-hasq-compile-8::t348 failed (compile phase):
+ [31;01m*[0m   'hasv' banned in EAPI 8
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m               ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m             environment, line 227:  Called t_hasq
+ [31;01m*[0m             environment, line 264:  Called hasv 'foo' 'foo bar'
+ [31;01m*[0m   isolated-functions.sh, line 496:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	___eapi_has_hasv || die "'${FUNCNAME}' banned in EAPI ${EAPI}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-hasq-compile-8::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-hasq-compile-8::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-hasq-compile-8:20261012-235630.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [31;01m*[0m ERROR: app-misc/t348-c-hasq-compile-8::t348 failed (compile phase):
+ [31;01m*[0m   'hasv' banned in EAPI 8
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m               ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m             environment, line 227:  Called t_hasq
+ [31;01m*[0m             environment, line 265:  Called hasv 'foo' 'foo bar'
+ [31;01m*[0m   isolated-functions.sh, line 496:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	___eapi_has_hasv || die "'${FUNCNAME}' banned in EAPI ${EAPI}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-hasq-compile-8::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-hasq-compile-8::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-hasq-compile-8:20261012-235630.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [32m*[0m hasv hit: rc=1 out=[]
+ [31;01m*[0m ERROR: app-misc/t348-c-hasq-compile-8::t348 failed (compile phase):
+ [31;01m*[0m   'useq' banned in EAPI 8
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m        environment, line 227:  Called t_hasq
+ [31;01m*[0m        environment, line 266:  Called useq 'foo'
+ [31;01m*[0m   phase-helpers.sh, line 218:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	___eapi_has_useq || die "'${FUNCNAME}' banned in EAPI ${EAPI}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-hasq-compile-8::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-hasq-compile-8::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-hasq-compile-8:20261012-235630.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [32m*[0m useq foo (flag disabled): rc=1
+ [31;01m*[0m ERROR: app-misc/t348-c-hasq-compile-8::t348 failed (compile phase):
+ [31;01m*[0m   'useq' banned in EAPI 8
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m        environment, line 227:  Called t_hasq
+ [31;01m*[0m        environment, line 268:  Called useq
+ [31;01m*[0m   phase-helpers.sh, line 218:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	___eapi_has_useq || die "'${FUNCNAME}' banned in EAPI ${EAPI}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-hasq-compile-8::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-hasq-compile-8::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-hasq-compile-8:20261012-235630.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-hasq-compile-8/work'
+ [32m*[0m useq no-arg: rc=1
+>>> Source compiled.

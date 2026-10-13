@@ -1,0 +1,9 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-eapply-prepare-8/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-eapply-prepare-8/work ...
+ [32m*[0m === P=t348-c-eapply-prepare-8 EAPI=8 PHASE=prepare ===
+ [32m*[0m Applying fix.patch ...
+[A[72C [34;01m[ [32;01mok[34;01m ][0m
+ [32m*[0m eapply file: rc=0 content=[world]
+ [32m*[0m eapply_user: rc=0
+>>> Source prepared.

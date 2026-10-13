@@ -1,0 +1,20 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/work ...
+ [32m*[0m === P=t348-c-einstalldocs-compile-8 EAPI=8 PHASE=compile ===
+ [32m*[0m declare einstalldocs: [einstalldocs 973 /usr/lib/portage/python3.14/phase-helpers.sh]
+ [32m*[0m einstalldocs: rc=0
+ [32m*[0m D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/image/usr
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/image/usr/share
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/image/usr/share/doc
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/image/usr/share/doc/t348-c-einstalldocs-compile-8
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/image/usr/share/doc/t348-c-einstalldocs-compile-8/edoc.txt
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/image/usr/share/doc/t348-c-einstalldocs-compile-8/html
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-8/image/usr/share/doc/t348-c-einstalldocs-compile-8/html/ehtml.html
+>>> Source compiled.

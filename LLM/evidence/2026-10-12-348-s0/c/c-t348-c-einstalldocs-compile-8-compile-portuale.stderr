@@ -1,0 +1,4 @@
+ [32m*[0m === P=t348-c-einstalldocs-compile-8 EAPI=8 PHASE=compile ===
+ [32m*[0m declare einstalldocs: [einstalldocs 973 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+ [32m*[0m einstalldocs: rc=0
+ [32m*[0m D-listing:

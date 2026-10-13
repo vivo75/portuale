@@ -1,0 +1,53 @@
+## eapi_* consumers outside dep/ (host Portage 3.0.82.2)
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:40:    eapi_is_supported,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:66:    _get_eapi_attrs,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:67:    eapi_exports_KV,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:68:    eapi_exports_merge_type,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:69:    eapi_exports_pms_vars,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:70:    eapi_exports_replace_vars,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:71:    eapi_has_pkg_pretend,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:72:    eapi_has_required_use,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:73:    eapi_has_src_prepare_and_src_configure,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:571:    if not eapi_is_supported(eapi):
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:655:        if not eapi_exports_KV(eapi):
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:1282:            eapi_exports_merge_type(mysettings["EAPI"])
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:1300:        if eapi_exports_replace_vars(mysettings["EAPI"]) and (
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:1943:        and eapi_has_required_use(pkg.eapi)
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:2211:    if not eapi_exports_pms_vars(eapi) or os.environ.get(
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:2388:    if mydo in ("configure", "prepare") and not eapi_has_src_prepare_and_src_configure(
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:2393:    if mydo == "pretend" and not eapi_has_pkg_pretend(eapi):
+/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py:2710:    eapi_attrs = _get_eapi_attrs(settings.configdict["pkg"]["EAPI"])
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:50:    _get_eapi_attrs,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:51:    eapi_exports_AA,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:52:    eapi_exports_merge_type,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:53:    eapi_exports_replace_vars,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:54:    eapi_supports_prefix,
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:974:                    if _get_eapi_attrs(x.eapi).allows_package_provided:
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:1888:        eapi_attrs = _get_eapi_attrs(eapi)
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:3271:        eapi_attrs = _get_eapi_attrs(eapi)
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:3332:        if not eapi_exports_AA(eapi):
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:3335:        if not eapi_exports_merge_type(eapi):
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:3351:            and not eapi_supports_prefix(eapi)
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:3363:        ) or not eapi_exports_replace_vars(eapi):
+/usr/lib/python3.14/site-packages/portage/package/ebuild/config.py:3366:        if phase not in ("prerm", "postrm") or not eapi_exports_replace_vars(eapi):
+--- _emerge:
+/usr/lib/python3.14/site-packages/_emerge/EbuildMetadataPhase.py:74:        self.eapi_supported = portage.eapi_is_supported(parsed_eapi)
+/usr/lib/python3.14/site-packages/_emerge/EbuildMetadataPhase.py:234:                self.eapi_supported = portage.eapi_is_supported(metadata["EAPI"])
+/usr/lib/python3.14/site-packages/_emerge/Package.py:19:from portage.eapi import _get_eapi_attrs
+/usr/lib/python3.14/site-packages/_emerge/Package.py:109:        eapi_attrs = _get_eapi_attrs(self.eapi)
+/usr/lib/python3.14/site-packages/_emerge/Package.py:376:            if not _get_eapi_attrs(eapi).required_use:
+/usr/lib/python3.14/site-packages/_emerge/Package.py:439:        if not portage.eapi_is_supported(eapi):
+/usr/lib/python3.14/site-packages/_emerge/Package.py:441:        if portage._eapi_is_deprecated(eapi):
+/usr/lib/python3.14/site-packages/_emerge/Binpkg.py:12:from portage.eapi import eapi_exports_replace_vars
+/usr/lib/python3.14/site-packages/_emerge/Binpkg.py:94:        if eapi_exports_replace_vars(settings["EAPI"]):
+/usr/lib/python3.14/site-packages/_emerge/FakeVartree.py:11:from portage.eapi import _get_eapi_attrs
+/usr/lib/python3.14/site-packages/_emerge/FakeVartree.py:159:                portage.eapi_is_supported(live_metadata["EAPI"])
+/usr/lib/python3.14/site-packages/_emerge/FakeVartree.py:160:                and portage.eapi_is_supported(pkg.eapi)
+/usr/lib/python3.14/site-packages/_emerge/FakeVartree.py:168:                and _get_eapi_attrs(pkg.eapi).slot_operator
+/usr/lib/python3.14/site-packages/_emerge/FakeVartree.py:176:                live_eapi_attrs = _get_eapi_attrs(live_metadata["EAPI"])
+/usr/lib/python3.14/site-packages/_emerge/EbuildExecuter.py:8:    eapi_exports_replace_vars,
+/usr/lib/python3.14/site-packages/_emerge/EbuildExecuter.py:9:    eapi_has_src_prepare_and_src_configure,
+/usr/lib/python3.14/site-packages/_emerge/EbuildExecuter.py:75:        if eapi_exports_replace_vars(settings["EAPI"]):
+/usr/lib/python3.14/site-packages/_emerge/EbuildExecuter.py:135:        if not eapi_has_src_prepare_and_src_configure(eapi):
+/usr/lib/python3.14/site-packages/_emerge/EbuildPhase.py:13:from portage.eapi import _get_eapi_attrs
+/usr/lib/python3.14/site-packages/_emerge/EbuildPhase.py:54:    eapi_attrs = _get_eapi_attrs(settings["EAPI"])

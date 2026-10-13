@@ -1,0 +1,17 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/work ...
+ [32m*[0m === P=t348-c-keepdir-compile-8 EAPI=8 PHASE=compile ===
+ [32m*[0m keepdir new: rc=0
+ [32m*[0m keepdir existing: rc=0
+ [32m*[0m D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image/var
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image/var/lib
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image/var/lib/t348c
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image/var/lib/t348c/.keep_app-misc_t348-c-keepdir-compile-0
+>>> Source compiled.

@@ -1,0 +1,29 @@
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+Traceback (most recent call last):
+  File "/usr/lib/python-exec/python3.14/ebuild", line 445, in <module>
+    main()
+    ~~~~^^
+  File "/usr/lib/python-exec/python3.14/ebuild", line 406, in main
+    a = portage.doebuild(
+        ebuild,
+    ...<4 lines>...
+        vartree=portage.db[portage.root]["vartree"],
+    )
+  File "/usr/lib/python3.14/site-packages/portage/package/ebuild/doebuild.py", line 1116, in doebuild
+    raise TypeError("returnproc or returnpid must be True for depend phase")
+TypeError: returnproc or returnpid must be True for depend phase

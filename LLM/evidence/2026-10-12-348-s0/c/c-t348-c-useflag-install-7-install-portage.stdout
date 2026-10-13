@@ -1,0 +1,145 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-c-useflag-install-7
+
+>>> Install app-misc/t348-c-useflag-install-7 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/image
+ [32m*[0m === P=t348-c-useflag-install-7 EAPI=7 PHASE=install ===
+ [32m*[0m declare in_iuse: [in_iuse 1202 /usr/lib/portage/python3.14/phase-helpers.sh]
+ [32m*[0m in_iuse foo: rc=0
+ [32m*[0m in_iuse bogusflag: rc=1
+!!! in_iuse() called without a parameter.
+!!! in_iuse <USEFLAG>
+ [31;01m*[0m ERROR: app-misc/t348-c-useflag-install-7::t348 failed (install phase):
+ [31;01m*[0m   in_iuse() called without a parameter
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_install
+ [31;01m*[0m        environment, line 234:  Called t_useflag
+ [31;01m*[0m        environment, line 264:  Called in_iuse
+ [31;01m*[0m   phase-helpers.sh, line 1207:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   			die "in_iuse() called without a parameter"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-useflag-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-useflag-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-useflag-install-7:20261012-235427.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [32m*[0m in_iuse no-arg: rc=1
+ [32m*[0m usex foo => [yes]
+ [31;01m*[0m ERROR: app-misc/t348-c-useflag-install-7::t348 failed (install phase):
+ [31;01m*[0m   USE Flag 'bogusflag' not in IUSE for app-misc/t348-c-useflag-install-7
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_install
+ [31;01m*[0m        environment, line 234:  Called t_useflag
+ [31;01m*[0m        environment, line 267:  Called usex 'bogusflag'
+ [31;01m*[0m   phase-helpers.sh, line 238:  Called use 'bogusflag'
+ [31;01m*[0m   phase-helpers.sh, line 276:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   				die "USE Flag '${u}' not in IUSE for ${CATEGORY}/${PF}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-useflag-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-useflag-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-useflag-install-7:20261012-235427.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [32m*[0m usex bogusflag => []
+ [32m*[0m usex foo A B => [A]
+ [31;01m*[0m ERROR: app-misc/t348-c-useflag-install-7::t348 failed (install phase):
+ [31;01m*[0m   USE Flag 'bogusflag' not in IUSE for app-misc/t348-c-useflag-install-7
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_install
+ [31;01m*[0m        environment, line 234:  Called t_useflag
+ [31;01m*[0m        environment, line 269:  Called usex 'bogusflag' 'A' 'B'
+ [31;01m*[0m   phase-helpers.sh, line 238:  Called use 'bogusflag'
+ [31;01m*[0m   phase-helpers.sh, line 276:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   				die "USE Flag '${u}' not in IUSE for ${CATEGORY}/${PF}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-useflag-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-useflag-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-useflag-install-7:20261012-235427.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [32m*[0m usex bogusflag A B => []
+foo
+ [32m*[0m usev foo: rc=0 out=[foo]
+ [31;01m*[0m ERROR: app-misc/t348-c-useflag-install-7::t348 failed (install phase):
+ [31;01m*[0m   usev takes at most 1 arguments
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_install
+ [31;01m*[0m        environment, line 234:  Called t_useflag
+ [31;01m*[0m        environment, line 272:  Called usev 'foo' 'altout'
+ [31;01m*[0m   phase-helpers.sh, line 227:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	[[ ${#} -gt ${nargs} ]] && die "usev takes at most ${nargs} arguments"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-useflag-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-useflag-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-useflag-install-7:20261012-235427.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [31;01m*[0m ERROR: app-misc/t348-c-useflag-install-7::t348 failed (install phase):
+ [31;01m*[0m   usev takes at most 1 arguments
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_install
+ [31;01m*[0m        environment, line 234:  Called t_useflag
+ [31;01m*[0m        environment, line 273:  Called usev 'foo' 'altout'
+ [31;01m*[0m   phase-helpers.sh, line 227:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   	[[ ${#} -gt ${nargs} ]] && die "usev takes at most ${nargs} arguments"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-useflag-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-useflag-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-useflag-install-7:20261012-235427.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [32m*[0m usev foo altout (2nd arg, EAPI 8+): rc=1 out=[]
+ [32m*[0m use_enable foo => [--enable-foo]
+ [31;01m*[0m ERROR: app-misc/t348-c-useflag-install-7::t348 failed (install phase):
+ [31;01m*[0m   USE Flag 'bogusflag' not in IUSE for app-misc/t348-c-useflag-install-7
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_install
+ [31;01m*[0m        environment, line 234:  Called t_useflag
+ [31;01m*[0m        environment, line 275:  Called use_enable 'bogusflag'
+ [31;01m*[0m   phase-helpers.sh, line 324:  Called use 'bogusflag'
+ [31;01m*[0m   phase-helpers.sh, line 276:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   				die "USE Flag '${u}' not in IUSE for ${CATEGORY}/${PF}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-useflag-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-useflag-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-useflag-install-7:20261012-235427.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/work'
+ [32m*[0m use_enable bogusflag => []
+ [32m*[0m use_with foo => [--with-foo]
+ [32m*[0m use_enable foo '' => [--enable-foo]
+>>> Completed installing app-misc/t348-c-useflag-install-7 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-7/image
+
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  1 KiB
+

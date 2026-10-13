@@ -1,0 +1,13 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-econf-compile-8/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-econf-compile-8/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-econf-compile-8/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-econf-compile-8/work ...
+ [32m*[0m === P=t348-c-econf-compile-8 EAPI=8 PHASE=compile ===
+ [33m*[0m QA Notice: econf called in src_compile instead of src_configure
+./configure --prefix=/usr --host= --mandir=/usr/share/man --infodir=/usr/share/info --datadir=/usr/share --sysconfdir=/etc --localstatedir=/var/lib --datarootdir=/usr/share --disable-dependency-tracking --disable-silent-rules --disable-static --docdir=/usr/share/doc/t348-c-econf-compile-8 --htmldir=/usr/share/doc/t348-c-econf-compile-8/html --with-extra-flag
+FAKE-CONFIGURE-ARGV: --prefix=/usr --host= --mandir=/usr/share/man --infodir=/usr/share/info --datadir=/usr/share --sysconfdir=/etc --localstatedir=/var/lib --datarootdir=/usr/share --disable-dependency-tracking --disable-silent-rules --disable-static --docdir=/usr/share/doc/t348-c-econf-compile-8 --htmldir=/usr/share/doc/t348-c-econf-compile-8/html --with-extra-flag
+ [32m*[0m econf: rc=0
+>>> Source compiled.

@@ -1,0 +1,6 @@
+!!! Section 'layoutmasteroverlay' in repos.conf has name different from repository name 'layoutrenamed' set inside repository
+!!! Section 'repnamesection' in repos.conf has name different from repository name 'repnamefromfile' set inside repository
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility

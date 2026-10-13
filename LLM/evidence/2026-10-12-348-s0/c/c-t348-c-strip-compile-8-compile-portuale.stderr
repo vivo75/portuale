@@ -1,0 +1,10 @@
+ [32m*[0m === P=t348-c-strip-compile-8 EAPI=8 PHASE=compile ===
+ [32m*[0m declare dostrip: [dostrip 191 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+ [32m*[0m dostrip /usr/bin: rc=0
+ [32m*[0m dostrip -x: rc=0
+ [32m*[0m docompress: rc=0
+ [32m*[0m docompress -x: rc=0
+ [32m*[0m PORTAGE_DOSTRIP=[/]
+ [32m*[0m PORTAGE_DOSTRIP_SKIP=[]
+ [32m*[0m PORTAGE_DOCOMPRESS=[/usr/share/doc /usr/share/info /usr/share/man]
+ [32m*[0m PORTAGE_DOCOMPRESS_SKIP=[/usr/share/doc/t348-c-strip-compile-8/html]

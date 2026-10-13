@@ -1,0 +1,1 @@
+/home/vivo/repo/PORTUALE/portuale/target/release/portuale emerge --oneshot --ignore-default-opts =app-misc/t348-b-env-7 

@@ -1,0 +1,10 @@
+=== P=t348-c-strip-compile-7 EAPI=7 PHASE=compile ===
+declare dostrip: [dostrip 191 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+dostrip /usr/bin: rc=0
+dostrip -x: rc=0
+docompress: rc=0
+docompress -x: rc=0
+PORTAGE_DOSTRIP=[/]
+PORTAGE_DOSTRIP_SKIP=[]
+PORTAGE_DOCOMPRESS=[/usr/share/doc /usr/share/info /usr/share/man]
+PORTAGE_DOCOMPRESS_SKIP=[/usr/share/doc/t348-c-strip-compile-7/html]

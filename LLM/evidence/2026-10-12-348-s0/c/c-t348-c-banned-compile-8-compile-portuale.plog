@@ -1,0 +1,4 @@
+=== P=t348-c-banned-compile-8 EAPI=8 PHASE=compile ===
+dohtml (banned 7/8): rc=1
+dosed (banned 4+): rc=1
+dohard (banned 4+): rc=1

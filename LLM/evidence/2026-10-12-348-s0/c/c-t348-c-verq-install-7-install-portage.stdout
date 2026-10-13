@@ -1,0 +1,65 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-c-verq-install-7
+
+>>> Install app-misc/t348-c-verq-install-7 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/image
+ [32m*[0m === P=t348-c-verq-install-7 EAPI=7 PHASE=install ===
+ [32m*[0m PORTAGE_IPC_DAEMON=[1]
+ [32m*[0m has_version sys-apps/portage (hermetic vdb empty): rc=1
+ [32m*[0m has_version -b: rc=0
+ [32m*[0m has_version -d: rc=0
+ [32m*[0m has_version -r: rc=1
+
+ [32m*[0m best_version: rc=0 out=[]
+ [31;01m*[0m ERROR: app-misc/t348-c-verq-install-7::t348 failed (install phase):
+ [31;01m*[0m   has_version: option --host-root is not supported with EAPI 7
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_install
+ [31;01m*[0m        environment, line 234:  Called t_verq
+ [31;01m*[0m        environment, line 270:  Called has_version '--host-root' 'sys-apps/portage'
+ [31;01m*[0m   phase-helpers.sh, line 944:  Called ___best_version_and_has_version_common '--host-root' 'sys-apps/portage'
+ [31;01m*[0m   phase-helpers.sh, line 876:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   				die "${FUNCNAME[1]}: option ${root_arg} is not supported with EAPI ${EAPI}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-verq-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-verq-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-verq-install-7:20261012-235547.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/work'
+ [32m*[0m has_version --host-root (EAPI 5/6 only): rc=1
+best_version: Invalid atom: !!!invalid-atom!!!
+ [31;01m*[0m ERROR: app-misc/t348-c-verq-install-7::t348 failed (install phase):
+ [31;01m*[0m   best_version: invalid atom: !!!invalid-atom!!!
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_install
+ [31;01m*[0m        environment, line 234:  Called t_verq
+ [31;01m*[0m        environment, line 272:  Called best_version '!!!invalid-atom!!!'
+ [31;01m*[0m   phase-helpers.sh, line 954:  Called ___best_version_and_has_version_common '!!!invalid-atom!!!'
+ [31;01m*[0m   phase-helpers.sh, line 925:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   			die "${FUNCNAME[1]}: invalid atom: ${atom}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-verq-install-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-verq-install-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-verq-install-7:20261012-235547.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/work'
+ [32m*[0m best_version invalid atom: rc=1
+>>> Completed installing app-misc/t348-c-verq-install-7 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-verq-install-7/image
+
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  1 KiB
+

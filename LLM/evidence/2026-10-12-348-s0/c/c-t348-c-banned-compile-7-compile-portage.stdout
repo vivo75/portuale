@@ -1,0 +1,42 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work ...
+ [32m*[0m === P=t348-c-banned-compile-7 EAPI=7 PHASE=compile ===
+ [31;01m*[0m ERROR: app-misc/t348-c-banned-compile-7::t348 failed (compile phase):
+ [31;01m*[0m   'dohtml' has been banned for EAPI '7'
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-banned-compile-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-banned-compile-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-banned-compile-7:20261012-235620.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work'
+ [32m*[0m dohtml (banned 7/8): rc=1
+ [31;01m*[0m ERROR: app-misc/t348-c-banned-compile-7::t348 failed (compile phase):
+ [31;01m*[0m   'dosed' has been banned for EAPI '7'
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-banned-compile-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-banned-compile-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-banned-compile-7:20261012-235620.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work'
+ [32m*[0m dosed (banned 4+): rc=1
+ [31;01m*[0m ERROR: app-misc/t348-c-banned-compile-7::t348 failed (compile phase):
+ [31;01m*[0m   'dohard' has been banned for EAPI '7'
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-banned-compile-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-banned-compile-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-banned-compile-7:20261012-235620.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-compile-7/work'
+ [32m*[0m dohard (banned 4+): rc=1
+>>> Source compiled.

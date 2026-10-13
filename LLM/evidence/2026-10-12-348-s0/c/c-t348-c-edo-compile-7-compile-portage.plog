@@ -1,0 +1,4 @@
+=== P=t348-c-edo-compile-7 EAPI=7 PHASE=compile ===
+declare edo: []
+edo true: rc=127
+edo false: rc=127

@@ -1,0 +1,8 @@
+ [32m*[0m === P=t348-c-edo-install-7 EAPI=7 PHASE=install ===
+ [32m*[0m declare edo: []
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-edo-install-7/temp/environment: line 243: edo: command not found
+ [32m*[0m edo true: rc=127
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-edo-install-7/temp/environment: line 245: edo: command not found
+ [32m*[0m edo false: rc=127
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  1 KiB

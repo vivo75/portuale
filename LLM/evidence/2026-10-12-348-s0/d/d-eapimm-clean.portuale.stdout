@@ -1,0 +1,3 @@
+ebuild: dry run -- one or more of these commands is recognized but not yet implemented in portuale
+ebuild file: "/home/vivo/repo/PORTUALE/pmtest/fixtures/repo-348/app-misc/t348-d-eapimm/t348-d-eapimm-1.ebuild"
+commands: ["clean"]

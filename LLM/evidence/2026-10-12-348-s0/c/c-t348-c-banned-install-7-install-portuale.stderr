@@ -1,0 +1,30 @@
+ [32m*[0m === P=t348-c-banned-install-7 EAPI=7 PHASE=install ===
+ [31;01m*[0m ERROR: app-misc/t348-c-banned-install-7:: failed (install phase):
+ [31;01m*[0m   'dohtml' has been banned for EAPI '7'
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-banned-install-7::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-banned-install-7::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-install-7/work'
+ [32m*[0m dohtml (banned 7/8): rc=1
+ [31;01m*[0m ERROR: app-misc/t348-c-banned-install-7:: failed (install phase):
+ [31;01m*[0m   'dosed' has been banned for EAPI '7'
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-banned-install-7::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-banned-install-7::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-install-7/work'
+ [32m*[0m dosed (banned 4+): rc=1
+ [31;01m*[0m ERROR: app-misc/t348-c-banned-install-7:: failed (install phase):
+ [31;01m*[0m   'dohard' has been banned for EAPI '7'
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-banned-install-7::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-banned-install-7::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-install-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-install-7/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-banned-install-7/work'
+ [32m*[0m dohard (banned 4+): rc=1
+ [32m*[0m Final size of build directory: 3 KiB
+ [32m*[0m Final size of installed tree:  1 KiB

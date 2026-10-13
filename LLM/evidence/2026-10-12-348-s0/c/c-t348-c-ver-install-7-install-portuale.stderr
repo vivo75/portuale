@@ -1,0 +1,9 @@
+ [32m*[0m === P=t348-c-ver-install-7 EAPI=7 PHASE=install ===
+ [32m*[0m declare ver_cut: [ver_cut 42 /home/vivo/repo/PORTUALE/portuale/bin/version-functions.sh]
+ [32m*[0m ver_cut 1-2 1.2.3-r4 => [1.2]
+ [32m*[0m ver_rs 1- 1.2.3 => [7]
+ [32m*[0m ver_test 1.2.3 -gt 1.2.2: rc=0
+ [32m*[0m ver_test 1.2.3 -lt 1.2.2: rc=1
+ [32m*[0m ver_cut bad-range: rc=0
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  1 KiB

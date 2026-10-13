@@ -1,0 +1,5 @@
+ [32m*[0m === P=t348-c-eapply-prepare-8 EAPI=8 PHASE=prepare ===
+ [32m*[0m Applying fix.patch ...
+[A[72C [34;01m[ [32;01mok[34;01m ][0m
+ [32m*[0m eapply file: rc=0 content=[world]
+ [32m*[0m eapply_user: rc=0

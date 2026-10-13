@@ -1,0 +1,11 @@
+=== P=t348-c-newins-install-8 EAPI=8 PHASE=install ===
+newins file: rc=0
+newins stdin: rc=0
+piped content=[piped-data]
+D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-newins-install-8/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-newins-install-8/image/usr
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-newins-install-8/image/usr/share
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-newins-install-8/image/usr/share/t348c-newins
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-newins-install-8/image/usr/share/t348c-newins/piped.txt
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-newins-install-8/image/usr/share/t348c-newins/renamed.txt

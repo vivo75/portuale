@@ -1,0 +1,19 @@
+ [32m*[0m === P=t348-c-einstall-compile-8 EAPI=8 PHASE=compile ===
+ [32m*[0m declare einstall: [einstall 679 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+ [31;01m*[0m ERROR: app-misc/t348-c-einstall-compile-8:: failed (compile phase):
+ [31;01m*[0m   'einstall' has been banned for EAPI '8'
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m        environment, line 210:  Called t_einstall
+ [31;01m*[0m        environment, line 244:  Called einstall
+ [31;01m*[0m   phase-helpers.sh, line 681:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		die "'${FUNCNAME}' has been banned for EAPI '${EAPI}'"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-einstall-compile-8::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-einstall-compile-8::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstall-compile-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstall-compile-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstall-compile-8/work'
+ [32m*[0m einstall (banned 6+): rc=1

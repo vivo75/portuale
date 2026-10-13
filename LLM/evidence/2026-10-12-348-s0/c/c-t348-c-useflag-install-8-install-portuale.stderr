@@ -1,0 +1,35 @@
+ [32m*[0m === P=t348-c-useflag-install-8 EAPI=8 PHASE=install ===
+ [32m*[0m declare in_iuse: [in_iuse 1202 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+ [32m*[0m in_iuse foo: rc=1
+ [32m*[0m in_iuse bogusflag: rc=1
+!!! in_iuse() called without a parameter.
+!!! in_iuse <USEFLAG>
+ [31;01m*[0m ERROR: app-misc/t348-c-useflag-install-8:: failed (install phase):
+ [31;01m*[0m   in_iuse() called without a parameter
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_install
+ [31;01m*[0m        environment, line 217:  Called t_useflag
+ [31;01m*[0m        environment, line 247:  Called in_iuse
+ [31;01m*[0m   phase-helpers.sh, line 1207:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   			die "in_iuse() called without a parameter"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-useflag-install-8::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-useflag-install-8::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-8/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-8/work'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-useflag-install-8/work'
+ [32m*[0m in_iuse no-arg: rc=1
+ [32m*[0m usex foo => [yes]
+ [32m*[0m usex bogusflag => [no]
+ [32m*[0m usex foo A B => [A]
+ [32m*[0m usex bogusflag A B => [B]
+ [32m*[0m usev foo: rc=0 out=[foo]
+ [32m*[0m usev foo altout (2nd arg, EAPI 8+): rc=0 out=[altout]
+ [32m*[0m use_enable foo => [--enable-foo]
+ [32m*[0m use_enable bogusflag => [--disable-bogusflag]
+ [32m*[0m use_with foo => [--with-foo]
+ [32m*[0m use_enable foo '' => [--enable-foo]
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  1 KiB

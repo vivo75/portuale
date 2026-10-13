@@ -1,0 +1,3 @@
+=== P=t348-c-eapply-compile-7 EAPI=7 PHASE=compile ===
+eapply file: rc=0 content=[world]
+eapply_user: rc=1

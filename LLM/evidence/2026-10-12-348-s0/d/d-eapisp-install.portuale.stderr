@@ -1,0 +1,16 @@
+/home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh: line 849: eapply_user: command not found
+ [31;01m*[0m ERROR: app-misc/t348-d-eapisp-1:: failed (prepare phase):
+ [31;01m*[0m   eapply_user (or default) must be called in src_prepare()!
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m            ebuild.sh, line  838:  Called __ebuild_main 'prepare'
+ [31;01m*[0m   phase-functions.sh, line 1216:  Called __dyn_prepare
+ [31;01m*[0m   phase-functions.sh, line  525:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		die "eapply_user (or default) must be called in src_prepare()!"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-d-eapisp-1::'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-d-eapisp-1::'`.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-eapisp-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-eapisp-1/work'
+ [31;01m*[0m S: '/var/tmp/t348-d/cfg/tmp/portage/app-misc/t348-d-eapisp-1/work/t348-d-eapisp-1'

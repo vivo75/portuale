@@ -1,0 +1,15 @@
+=== P=t348-c-useflag-compile-7 EAPI=7 PHASE=compile ===
+declare in_iuse: [in_iuse 1202 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+in_iuse foo: rc=1
+in_iuse bogusflag: rc=1
+in_iuse no-arg: rc=1
+usex foo => [yes]
+usex bogusflag => [no]
+usex foo A B => [A]
+usex bogusflag A B => [B]
+usev foo: rc=0 out=[foo]
+usev foo altout (2nd arg, EAPI 8+): rc=1 out=[]
+use_enable foo => [--enable-foo]
+use_enable bogusflag => [--disable-bogusflag]
+use_with foo => [--with-foo]
+use_enable foo '' => [--enable-foo]

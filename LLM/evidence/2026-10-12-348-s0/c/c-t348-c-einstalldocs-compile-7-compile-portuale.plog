@@ -1,0 +1,12 @@
+=== P=t348-c-einstalldocs-compile-7 EAPI=7 PHASE=compile ===
+declare einstalldocs: [einstalldocs 973 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+einstalldocs: rc=0
+D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-7/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-7/image/usr
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-7/image/usr/share
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-7/image/usr/share/doc
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-7/image/usr/share/doc/t348-c-einstalldocs-compile-7
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-7/image/usr/share/doc/t348-c-einstalldocs-compile-7/edoc.txt
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-7/image/usr/share/doc/t348-c-einstalldocs-compile-7/html
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-einstalldocs-compile-7/image/usr/share/doc/t348-c-einstalldocs-compile-7/html/ehtml.html

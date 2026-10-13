@@ -1,0 +1,9 @@
+=== P=t348-c-keepdir-compile-8 EAPI=8 PHASE=compile ===
+keepdir new: rc=0
+keepdir existing: rc=0
+D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image/var
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image/var/lib
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image/var/lib/t348c
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-keepdir-compile-8/image/var/lib/t348c/.keep_app-misc_t348-c-keepdir-compile-

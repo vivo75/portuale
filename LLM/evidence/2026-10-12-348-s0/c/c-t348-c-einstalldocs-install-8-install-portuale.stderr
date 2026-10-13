@@ -1,0 +1,6 @@
+ [32m*[0m === P=t348-c-einstalldocs-install-8 EAPI=8 PHASE=install ===
+ [32m*[0m declare einstalldocs: [einstalldocs 973 /home/vivo/repo/PORTUALE/portuale/bin/phase-helpers.sh]
+ [32m*[0m einstalldocs: rc=0
+ [32m*[0m D-listing:
+ [32m*[0m Final size of build directory: 3 KiB
+ [32m*[0m Final size of installed tree:  8 KiB

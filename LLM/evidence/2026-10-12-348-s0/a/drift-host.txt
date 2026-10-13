@@ -1,0 +1,54 @@
+== S0.2 drift vs host PORTAGE_BIN_PATH=/usr/lib/portage/python3.14 (worker a, 2026-10-12T23:37:54Z)
+
+--- DIFF filter-bash-environment.py (bin/ vs host /usr/lib/portage/python3.14/filter-bash-environment.py)
+--- /usr/lib/portage/python3.14/filter-bash-environment.py	2026-08-29 13:23:42.468150119 -0000
++++ /home/vivo/repo/PORTUALE/portuale/bin/filter-bash-environment.py	2026-08-13 18:25:57.002717537 -0000
+@@ -1,4 +1,4 @@
+-#!/usr/bin/python3.14
++#!/usr/bin/env python
+ # Copyright 1999-2014 Gentoo Foundation
+ # Distributed under the terms of the GNU General Public License v2
+ 
+
+--- DIFF phase-functions.sh (bin/ vs host /usr/lib/portage/python3.14/phase-functions.sh)
+--- /usr/lib/portage/python3.14/phase-functions.sh	2026-08-28 07:55:03.000000000 -0000
++++ /home/vivo/repo/PORTUALE/portuale/bin/phase-functions.sh	2026-10-05 12:04:44.547063903 -0000
+@@ -3,6 +3,21 @@
+ # Distributed under the terms of the GNU General Public License v2
+ # shellcheck disable=SC2128
+ 
++# ---------------------------------------------------------------------------
++# VENDORED from upstream Portage's bin/phase-functions.sh -- see the [portage]
++# entry in 3rdparty/repos.toml for the exact ref this was copied from.
++# portuale drives this file directly for real ebuild phase execution, so it
++# has to ship with the pilot (the point is to `emerge` on a host with no
++# Portage installed). Re-sync from upstream by copying the file over and
++# re-applying the one local change below.
++#
++# LOCAL CHANGE (brush strategy #2): ___save_and_filter_ebuild_env stages
++# __save_ebuild_env | __filter_readonly_variables through a ${T} temp file so
++# neither shell function is a pipeline stage -- a shell that runs a non-last
++# function pipeline stage inline deadlocks once it writes past the OS pipe
++# buffer. See README.md's "brush strategy #2" section.
++# ---------------------------------------------------------------------------
++
+ # Hardcoded bash lists are needed for backward compatibility with
+ # <portage-2.1.4 since they assume that a newly installed version
+ # of ebuild.sh will work for pkg_postinst, pkg_prerm, and pkg_postrm
+@@ -131,6 +146,13 @@
+ 	# because it was used unofficially before EAPI 7. See bug #661006.
+ 	filtered_vars+=( SYSROOT )
+ 
++	# portuale: its own runtime variables (PORTUALE_BIN for the native
++	# portageq-wrapper shim, PORTUALE_VDB_* naming the selected
++	# installed-package database) are exported into every phase but must
++	# never be saved into ${T}/environment or the vdb environment.bz2,
++	# which real Portage writes without them (feat#157 S6.4).
++	filtered_vars+=( "PORTUALE_.*" )
++
+ 	if ___eapi_has_BROOT; then
+ 		filtered_vars+=( BROOT )
+ 	fi
+@@ -185,6 +207,54 @@
+ 	|| die "filter-bash-environment.py failed"
+

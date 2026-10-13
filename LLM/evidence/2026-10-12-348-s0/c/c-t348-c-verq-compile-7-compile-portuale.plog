@@ -1,0 +1,9 @@
+=== P=t348-c-verq-compile-7 EAPI=7 PHASE=compile ===
+PORTAGE_IPC_DAEMON=[unset]
+has_version sys-apps/portage (hermetic vdb empty): rc=1
+has_version -b: rc=0
+has_version -d: rc=0
+has_version -r: rc=1
+best_version: rc=0 out=[]
+has_version --host-root (EAPI 5/6 only): rc=1
+best_version invalid atom: rc=1

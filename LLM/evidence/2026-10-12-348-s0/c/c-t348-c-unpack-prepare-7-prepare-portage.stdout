@@ -1,0 +1,101 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work ...
+ [32m*[0m === P=t348-c-unpack-prepare-7 EAPI=7 PHASE=prepare ===
+>>> Unpacking '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/t.tar.gz' to /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/uout
+ [32m*[0m unpack abs tar.gz: rc=0
+>>> Unpacking '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/t.txz' to /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/uout
+ [32m*[0m unpack abs txz: rc=0
+>>> Unpacking '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/p.xz' to /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/uout
+ [32m*[0m unpack abs xz: rc=0
+>>> Unpacking '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/up.TGZ' to /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/uout
+ [32m*[0m unpack abs uppercase TGZ (case-sensitive in 7/8): rc=0
+>>> Unpacking '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.7z' to /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/uout
+ERROR: /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.7z
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.7z
+Open ERROR: Cannot open the file as [7z] archive
+
+
+ERRORS:
+Is not archive
+
+7-Zip (z) 26.03 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-09-03
+ 64-bit locale=C.utf8 Threads:32 OPEN_MAX:524288
+
+Scanning the drive for archives:
+1 file, 15 bytes (1 KiB)
+
+Extracting archive: /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.7z
+
+Can't open as archive: 1
+Files: 0
+Size:       0
+Compressed: 0
+ [31;01m*[0m ERROR: app-misc/t348-c-unpack-prepare-7::t348 failed (prepare phase):
+ [31;01m*[0m   unpack: failure unpacking '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.7z'
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_prepare
+ [31;01m*[0m        environment, line 239:  Called t_unpack
+ [31;01m*[0m        environment, line 279:  Called unpack '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.7z'
+ [31;01m*[0m   phase-helpers.sh, line 506:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		esac || die "unpack: failure unpacking ${f@Q}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-unpack-prepare-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-unpack-prepare-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-unpack-prepare-7:20261012-235538.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/uout'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work'
+ [32m*[0m unpack abs 7z (7:yes/8:no): rc=1
+>>> Unpacking '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.rar' to /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/uout
+
+ERROR: Bad archive /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.rar
+
+ [31;01m*[0m ERROR: app-misc/t348-c-unpack-prepare-7::t348 failed (prepare phase):
+ [31;01m*[0m   unpack: failure unpacking '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.rar'
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_prepare
+ [31;01m*[0m        environment, line 239:  Called t_unpack
+ [31;01m*[0m        environment, line 281:  Called unpack '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/up/f.rar'
+ [31;01m*[0m   phase-helpers.sh, line 506:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		esac || die "unpack: failure unpacking ${f@Q}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-unpack-prepare-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-unpack-prepare-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-unpack-prepare-7:20261012-235538.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/uout'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work'
+ [32m*[0m unpack abs rar (7:yes/8:no): rc=13
+ [31;01m*[0m ERROR: app-misc/t348-c-unpack-prepare-7::t348 failed (prepare phase):
+ [31;01m*[0m   unpack: 't.tar.gz' either does not exist or is not a regular file
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m          ebuild.sh, line 143:  Called src_prepare
+ [31;01m*[0m        environment, line 239:  Called t_unpack
+ [31;01m*[0m        environment, line 283:  Called unpack 't.tar.gz'
+ [31;01m*[0m   phase-helpers.sh, line 415:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   			die "unpack: ${f@Q} either does not exist or is not a regular file"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/t348-c-unpack-prepare-7::t348'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/t348-c-unpack-prepare-7::t348'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/t348-c/logs/logdir/app-misc:t348-c-unpack-prepare-7:20261012-235538.log'.
+ [31;01m*[0m For convenience, a symlink to the build log is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work/uout'
+ [31;01m*[0m S: '/var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work'
+ [32m*[0m unpack bare name (DISTDIR miss): rc=1
+>>> Unpacking './up/t.tar.gz' to /var/tmp/t348-c/tmp/portage/app-misc/t348-c-unpack-prepare-7/work
+ [32m*[0m unpack ./-relative: rc=0
+ [32m*[0m uout-listing:
+uout
+uout/p
+uout/plain.txt
+>>> Source prepared.

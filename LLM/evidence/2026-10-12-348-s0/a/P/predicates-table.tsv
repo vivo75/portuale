@@ -1,0 +1,223 @@
+cell	predicate	eapi.sh:line	host-bash	portuale-brush	portuale-bash	verdict
+P-___eapi_default_src_test_disables_parallel_jobs-7	___eapi_default_src_test_disables_parallel_jobs	7	1	1	1	same
+P-___eapi_has_S_WORKDIR_fallback-7	___eapi_has_S_WORKDIR_fallback	8	1	1	1	same
+P-___eapi_has_pkg_pretend-7	___eapi_has_pkg_pretend	9	0	0	0	same
+P-___eapi_has_src_configure-7	___eapi_has_src_configure	10	0	0	0	same
+P-___eapi_has_src_prepare-7	___eapi_has_src_prepare	11	0	0	0	same
+P-___eapi_has_BDEPEND-7	___eapi_has_BDEPEND	15	0	0	0	same
+P-___eapi_has_BROOT-7	___eapi_has_BROOT	16	0	0	0	same
+P-___eapi_has_IDEPEND-7	___eapi_has_IDEPEND	17	1	1	1	same
+P-___eapi_has_PORTDIR_ECLASSDIR-7	___eapi_has_PORTDIR_ECLASSDIR	18	1	1	1	same
+P-___eapi_has_RDEPEND_DEPEND_fallback-7	___eapi_has_RDEPEND_DEPEND_fallback	19	1	1	1	same
+P-___eapi_has_SYSROOT-7	___eapi_has_SYSROOT	20	0	0	0	same
+P-___eapi_has_accumulated_PROPERTIES-7	___eapi_has_accumulated_PROPERTIES	21	1	1	1	same
+P-___eapi_has_accumulated_RESTRICT-7	___eapi_has_accumulated_RESTRICT	22	1	1	1	same
+P-___eapi_has_prefix_variables-7	___eapi_has_prefix_variables	23	0	0	0	same
+P-___eapi_has_assert-7	___eapi_has_assert	27	0	0	0	same
+P-___eapi_has_docompress-7	___eapi_has_docompress	28	0	0	0	same
+P-___eapi_has_dohard-7	___eapi_has_dohard	29	1	1	1	same
+P-___eapi_has_doheader-7	___eapi_has_doheader	30	0	0	0	same
+P-___eapi_has_dohtml-7	___eapi_has_dohtml	31	1	1	1	same
+P-___eapi_has_dolib_libopts-7	___eapi_has_dolib_libopts	32	1	1	1	same
+P-___eapi_has_domo-7	___eapi_has_domo	33	0	0	0	same
+P-___eapi_has_dosed-7	___eapi_has_dosed	34	1	1	1	same
+P-___eapi_has_dostrip-7	___eapi_has_dostrip	35	0	0	0	same
+P-___eapi_has_eapply-7	___eapi_has_eapply	36	0	0	0	same
+P-___eapi_has_eapply_user-7	___eapi_has_eapply_user	37	0	0	0	same
+P-___eapi_has_edo-7	___eapi_has_edo	38	1	1	1	same
+P-___eapi_has_einstall-7	___eapi_has_einstall	39	1	1	1	same
+P-___eapi_has_einstalldocs-7	___eapi_has_einstalldocs	40	0	0	0	same
+P-___eapi_has_get_libdir-7	___eapi_has_get_libdir	41	0	0	0	same
+P-___eapi_has_hasq-7	___eapi_has_hasq	42	0	0	0	same
+P-___eapi_has_hasv-7	___eapi_has_hasv	43	0	0	0	same
+P-___eapi_has_in_iuse-7	___eapi_has_in_iuse	44	0	0	0	same
+P-___eapi_has_nonfatal-7	___eapi_has_nonfatal	45	0	0	0	same
+P-___eapi_has_pipestatus-7	___eapi_has_pipestatus	46	1	1	1	same
+P-___eapi_has_useq-7	___eapi_has_useq	47	0	0	0	same
+P-___eapi_has_usex-7	___eapi_has_usex	48	0	0	0	same
+P-___eapi_has_ver_replacing-7	___eapi_has_ver_replacing	49	1	1	1	same
+P-___eapi_has_version_functions-7	___eapi_has_version_functions	50	0	0	0	same
+P-___eapi_best_version_and_has_version_support_--host-root-7	___eapi_best_version_and_has_version_support_--host-root	54	1	1	1	same
+P-___eapi_best_version_and_has_version_support_-b_-d_-r-7	___eapi_best_version_and_has_version_support_-b_-d_-r	55	0	0	0	same
+P-___eapi_die_can_respect_nonfatal-7	___eapi_die_can_respect_nonfatal	56	0	0	0	same
+P-___eapi_doconfd_respects_insopts-7	___eapi_doconfd_respects_insopts	57	0	0	0	same
+P-___eapi_dodoc_supports_-r-7	___eapi_dodoc_supports_-r	58	0	0	0	same
+P-___eapi_doenvd_respects_insopts-7	___eapi_doenvd_respects_insopts	59	0	0	0	same
+P-___eapi_doheader_respects_insopts-7	___eapi_doheader_respects_insopts	60	0	0	0	same
+P-___eapi_doinitd_respects_exeopts-7	___eapi_doinitd_respects_exeopts	61	0	0	0	same
+P-___eapi_doins_and_newins_preserve_symlinks-7	___eapi_doins_and_newins_preserve_symlinks	62	0	0	0	same
+P-___eapi_domo_respects_into-7	___eapi_domo_respects_into	63	1	1	1	same
+P-___eapi_econf_passes_--datarootdir-7	___eapi_econf_passes_--datarootdir	64	1	1	1	same
+P-___eapi_econf_passes_--disable-dependency-tracking-7	___eapi_econf_passes_--disable-dependency-tracking	65	0	0	0	same
+P-___eapi_econf_passes_--disable-silent-rules-7	___eapi_econf_passes_--disable-silent-rules	66	0	0	0	same
+P-___eapi_econf_passes_--disable-static-7	___eapi_econf_passes_--disable-static	67	1	1	1	same
+P-___eapi_econf_passes_--docdir_and_--htmldir-7	___eapi_econf_passes_--docdir_and_--htmldir	68	0	0	0	same
+P-___eapi_econf_passes_--with-sysroot-7	___eapi_econf_passes_--with-sysroot	69	0	0	0	same
+P-___eapi_has_DESTTREE_INSDESTTREE-7	___eapi_has_DESTTREE_INSDESTTREE	70	1	1	1	same
+P-___eapi_has_dosym_r-7	___eapi_has_dosym_r	71	1	1	1	same
+P-___eapi_helpers_can_die-7	___eapi_helpers_can_die	72	0	0	0	same
+P-___eapi_newins_supports_reading_from_standard_input-7	___eapi_newins_supports_reading_from_standard_input	73	0	0	0	same
+P-___eapi_unpack_is_case_sensitive-7	___eapi_unpack_is_case_sensitive	74	1	1	1	same
+P-___eapi_unpack_supports_7z-7	___eapi_unpack_supports_7z	75	0	0	0	same
+P-___eapi_unpack_supports_absolute_paths-7	___eapi_unpack_supports_absolute_paths	76	0	0	0	same
+P-___eapi_unpack_supports_lha-7	___eapi_unpack_supports_lha	77	0	0	0	same
+P-___eapi_unpack_supports_rar-7	___eapi_unpack_supports_rar	78	0	0	0	same
+P-___eapi_unpack_supports_txz-7	___eapi_unpack_supports_txz	79	0	0	0	same
+P-___eapi_unpack_supports_xz-7	___eapi_unpack_supports_xz	80	0	0	0	same
+P-___eapi_use_enable_and_use_with_support_empty_third_argument-7	___eapi_use_enable_and_use_with_support_empty_third_argument	81	0	0	0	same
+P-___eapi_usev_has_second_arg-7	___eapi_usev_has_second_arg	82	1	1	1	same
+P-___eapi_bash_3_2-7	___eapi_bash_3_2	86	1	1	1	same
+P-___eapi_bash_4_2-7	___eapi_bash_4_2	87	0	0	0	same
+P-___eapi_bash_5_0-7	___eapi_bash_5_0	88	1	1	1	same
+P-___eapi_bash_5_3-7	___eapi_bash_5_3	89	1	1	1	same
+P-___eapi_enables_failglob_in_global_scope-7	___eapi_enables_failglob_in_global_scope	90	0	0	0	same
+P-___eapi_has_ENV_UNSET-7	___eapi_has_ENV_UNSET	91	0	0	0	same
+P-___eapi_has_strict_keepdir-7	___eapi_has_strict_keepdir	92	1	1	1	same
+P-___eapi_default_src_test_disables_parallel_jobs-8	___eapi_default_src_test_disables_parallel_jobs	7	1	1	1	same
+P-___eapi_has_S_WORKDIR_fallback-8	___eapi_has_S_WORKDIR_fallback	8	1	1	1	same
+P-___eapi_has_pkg_pretend-8	___eapi_has_pkg_pretend	9	0	0	0	same
+P-___eapi_has_src_configure-8	___eapi_has_src_configure	10	0	0	0	same
+P-___eapi_has_src_prepare-8	___eapi_has_src_prepare	11	0	0	0	same
+P-___eapi_has_BDEPEND-8	___eapi_has_BDEPEND	15	0	0	0	same
+P-___eapi_has_BROOT-8	___eapi_has_BROOT	16	0	0	0	same
+P-___eapi_has_IDEPEND-8	___eapi_has_IDEPEND	17	0	0	0	same
+P-___eapi_has_PORTDIR_ECLASSDIR-8	___eapi_has_PORTDIR_ECLASSDIR	18	1	1	1	same
+P-___eapi_has_RDEPEND_DEPEND_fallback-8	___eapi_has_RDEPEND_DEPEND_fallback	19	1	1	1	same
+P-___eapi_has_SYSROOT-8	___eapi_has_SYSROOT	20	0	0	0	same
+P-___eapi_has_accumulated_PROPERTIES-8	___eapi_has_accumulated_PROPERTIES	21	0	0	0	same
+P-___eapi_has_accumulated_RESTRICT-8	___eapi_has_accumulated_RESTRICT	22	0	0	0	same
+P-___eapi_has_prefix_variables-8	___eapi_has_prefix_variables	23	0	0	0	same
+P-___eapi_has_assert-8	___eapi_has_assert	27	0	0	0	same
+P-___eapi_has_docompress-8	___eapi_has_docompress	28	0	0	0	same
+P-___eapi_has_dohard-8	___eapi_has_dohard	29	1	1	1	same
+P-___eapi_has_doheader-8	___eapi_has_doheader	30	0	0	0	same
+P-___eapi_has_dohtml-8	___eapi_has_dohtml	31	1	1	1	same
+P-___eapi_has_dolib_libopts-8	___eapi_has_dolib_libopts	32	1	1	1	same
+P-___eapi_has_domo-8	___eapi_has_domo	33	0	0	0	same
+P-___eapi_has_dosed-8	___eapi_has_dosed	34	1	1	1	same
+P-___eapi_has_dostrip-8	___eapi_has_dostrip	35	0	0	0	same
+P-___eapi_has_eapply-8	___eapi_has_eapply	36	0	0	0	same
+P-___eapi_has_eapply_user-8	___eapi_has_eapply_user	37	0	0	0	same
+P-___eapi_has_edo-8	___eapi_has_edo	38	1	1	1	same
+P-___eapi_has_einstall-8	___eapi_has_einstall	39	1	1	1	same
+P-___eapi_has_einstalldocs-8	___eapi_has_einstalldocs	40	0	0	0	same
+P-___eapi_has_get_libdir-8	___eapi_has_get_libdir	41	0	0	0	same
+P-___eapi_has_hasq-8	___eapi_has_hasq	42	1	1	1	same
+P-___eapi_has_hasv-8	___eapi_has_hasv	43	1	1	1	same
+P-___eapi_has_in_iuse-8	___eapi_has_in_iuse	44	0	0	0	same
+P-___eapi_has_nonfatal-8	___eapi_has_nonfatal	45	0	0	0	same
+P-___eapi_has_pipestatus-8	___eapi_has_pipestatus	46	1	1	1	same
+P-___eapi_has_useq-8	___eapi_has_useq	47	1	1	1	same
+P-___eapi_has_usex-8	___eapi_has_usex	48	0	0	0	same
+P-___eapi_has_ver_replacing-8	___eapi_has_ver_replacing	49	1	1	1	same
+P-___eapi_has_version_functions-8	___eapi_has_version_functions	50	0	0	0	same
+P-___eapi_best_version_and_has_version_support_--host-root-8	___eapi_best_version_and_has_version_support_--host-root	54	1	1	1	same
+P-___eapi_best_version_and_has_version_support_-b_-d_-r-8	___eapi_best_version_and_has_version_support_-b_-d_-r	55	0	0	0	same
+P-___eapi_die_can_respect_nonfatal-8	___eapi_die_can_respect_nonfatal	56	0	0	0	same
+P-___eapi_doconfd_respects_insopts-8	___eapi_doconfd_respects_insopts	57	1	1	1	same
+P-___eapi_dodoc_supports_-r-8	___eapi_dodoc_supports_-r	58	0	0	0	same
+P-___eapi_doenvd_respects_insopts-8	___eapi_doenvd_respects_insopts	59	1	1	1	same
+P-___eapi_doheader_respects_insopts-8	___eapi_doheader_respects_insopts	60	1	1	1	same
+P-___eapi_doinitd_respects_exeopts-8	___eapi_doinitd_respects_exeopts	61	1	1	1	same
+P-___eapi_doins_and_newins_preserve_symlinks-8	___eapi_doins_and_newins_preserve_symlinks	62	0	0	0	same
+P-___eapi_domo_respects_into-8	___eapi_domo_respects_into	63	1	1	1	same
+P-___eapi_econf_passes_--datarootdir-8	___eapi_econf_passes_--datarootdir	64	0	0	0	same
+P-___eapi_econf_passes_--disable-dependency-tracking-8	___eapi_econf_passes_--disable-dependency-tracking	65	0	0	0	same
+P-___eapi_econf_passes_--disable-silent-rules-8	___eapi_econf_passes_--disable-silent-rules	66	0	0	0	same
+P-___eapi_econf_passes_--disable-static-8	___eapi_econf_passes_--disable-static	67	0	0	0	same
+P-___eapi_econf_passes_--docdir_and_--htmldir-8	___eapi_econf_passes_--docdir_and_--htmldir	68	0	0	0	same
+P-___eapi_econf_passes_--with-sysroot-8	___eapi_econf_passes_--with-sysroot	69	0	0	0	same
+P-___eapi_has_DESTTREE_INSDESTTREE-8	___eapi_has_DESTTREE_INSDESTTREE	70	1	1	1	same
+P-___eapi_has_dosym_r-8	___eapi_has_dosym_r	71	0	0	0	same
+P-___eapi_helpers_can_die-8	___eapi_helpers_can_die	72	0	0	0	same
+P-___eapi_newins_supports_reading_from_standard_input-8	___eapi_newins_supports_reading_from_standard_input	73	0	0	0	same
+P-___eapi_unpack_is_case_sensitive-8	___eapi_unpack_is_case_sensitive	74	1	1	1	same
+P-___eapi_unpack_supports_7z-8	___eapi_unpack_supports_7z	75	1	1	1	same
+P-___eapi_unpack_supports_absolute_paths-8	___eapi_unpack_supports_absolute_paths	76	0	0	0	same
+P-___eapi_unpack_supports_lha-8	___eapi_unpack_supports_lha	77	1	1	1	same
+P-___eapi_unpack_supports_rar-8	___eapi_unpack_supports_rar	78	1	1	1	same
+P-___eapi_unpack_supports_txz-8	___eapi_unpack_supports_txz	79	0	0	0	same
+P-___eapi_unpack_supports_xz-8	___eapi_unpack_supports_xz	80	0	0	0	same
+P-___eapi_use_enable_and_use_with_support_empty_third_argument-8	___eapi_use_enable_and_use_with_support_empty_third_argument	81	0	0	0	same
+P-___eapi_usev_has_second_arg-8	___eapi_usev_has_second_arg	82	0	0	0	same
+P-___eapi_bash_3_2-8	___eapi_bash_3_2	86	1	1	1	same
+P-___eapi_bash_4_2-8	___eapi_bash_4_2	87	1	1	1	same
+P-___eapi_bash_5_0-8	___eapi_bash_5_0	88	0	0	0	same
+P-___eapi_bash_5_3-8	___eapi_bash_5_3	89	1	1	1	same
+P-___eapi_enables_failglob_in_global_scope-8	___eapi_enables_failglob_in_global_scope	90	0	0	0	same
+P-___eapi_has_ENV_UNSET-8	___eapi_has_ENV_UNSET	91	0	0	0	same
+P-___eapi_has_strict_keepdir-8	___eapi_has_strict_keepdir	92	0	0	0	same
+P-___eapi_default_src_test_disables_parallel_jobs-99	___eapi_default_src_test_disables_parallel_jobs	7	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_S_WORKDIR_fallback-99	___eapi_has_S_WORKDIR_fallback	8	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_pkg_pretend-99	___eapi_has_pkg_pretend	9	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_src_configure-99	___eapi_has_src_configure	10	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_src_prepare-99	___eapi_has_src_prepare	11	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_BDEPEND-99	___eapi_has_BDEPEND	15	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_BROOT-99	___eapi_has_BROOT	16	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_IDEPEND-99	___eapi_has_IDEPEND	17	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_PORTDIR_ECLASSDIR-99	___eapi_has_PORTDIR_ECLASSDIR	18	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_RDEPEND_DEPEND_fallback-99	___eapi_has_RDEPEND_DEPEND_fallback	19	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_SYSROOT-99	___eapi_has_SYSROOT	20	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_accumulated_PROPERTIES-99	___eapi_has_accumulated_PROPERTIES	21	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_accumulated_RESTRICT-99	___eapi_has_accumulated_RESTRICT	22	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_prefix_variables-99	___eapi_has_prefix_variables	23	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_assert-99	___eapi_has_assert	27	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_docompress-99	___eapi_has_docompress	28	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_dohard-99	___eapi_has_dohard	29	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_doheader-99	___eapi_has_doheader	30	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_dohtml-99	___eapi_has_dohtml	31	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_dolib_libopts-99	___eapi_has_dolib_libopts	32	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_domo-99	___eapi_has_domo	33	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_dosed-99	___eapi_has_dosed	34	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_dostrip-99	___eapi_has_dostrip	35	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_eapply-99	___eapi_has_eapply	36	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_eapply_user-99	___eapi_has_eapply_user	37	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_edo-99	___eapi_has_edo	38	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_einstall-99	___eapi_has_einstall	39	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_einstalldocs-99	___eapi_has_einstalldocs	40	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_get_libdir-99	___eapi_has_get_libdir	41	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_hasq-99	___eapi_has_hasq	42	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_hasv-99	___eapi_has_hasv	43	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_in_iuse-99	___eapi_has_in_iuse	44	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_nonfatal-99	___eapi_has_nonfatal	45	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_pipestatus-99	___eapi_has_pipestatus	46	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_useq-99	___eapi_has_useq	47	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_usex-99	___eapi_has_usex	48	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_ver_replacing-99	___eapi_has_ver_replacing	49	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_version_functions-99	___eapi_has_version_functions	50	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_best_version_and_has_version_support_--host-root-99	___eapi_best_version_and_has_version_support_--host-root	54	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_best_version_and_has_version_support_-b_-d_-r-99	___eapi_best_version_and_has_version_support_-b_-d_-r	55	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_die_can_respect_nonfatal-99	___eapi_die_can_respect_nonfatal	56	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_doconfd_respects_insopts-99	___eapi_doconfd_respects_insopts	57	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_dodoc_supports_-r-99	___eapi_dodoc_supports_-r	58	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_doenvd_respects_insopts-99	___eapi_doenvd_respects_insopts	59	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_doheader_respects_insopts-99	___eapi_doheader_respects_insopts	60	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_doinitd_respects_exeopts-99	___eapi_doinitd_respects_exeopts	61	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_doins_and_newins_preserve_symlinks-99	___eapi_doins_and_newins_preserve_symlinks	62	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_domo_respects_into-99	___eapi_domo_respects_into	63	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_econf_passes_--datarootdir-99	___eapi_econf_passes_--datarootdir	64	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_econf_passes_--disable-dependency-tracking-99	___eapi_econf_passes_--disable-dependency-tracking	65	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_econf_passes_--disable-silent-rules-99	___eapi_econf_passes_--disable-silent-rules	66	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_econf_passes_--disable-static-99	___eapi_econf_passes_--disable-static	67	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_econf_passes_--docdir_and_--htmldir-99	___eapi_econf_passes_--docdir_and_--htmldir	68	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_econf_passes_--with-sysroot-99	___eapi_econf_passes_--with-sysroot	69	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_DESTTREE_INSDESTTREE-99	___eapi_has_DESTTREE_INSDESTTREE	70	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_dosym_r-99	___eapi_has_dosym_r	71	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_helpers_can_die-99	___eapi_helpers_can_die	72	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_newins_supports_reading_from_standard_input-99	___eapi_newins_supports_reading_from_standard_input	73	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_unpack_is_case_sensitive-99	___eapi_unpack_is_case_sensitive	74	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_unpack_supports_7z-99	___eapi_unpack_supports_7z	75	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_unpack_supports_absolute_paths-99	___eapi_unpack_supports_absolute_paths	76	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_unpack_supports_lha-99	___eapi_unpack_supports_lha	77	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_unpack_supports_rar-99	___eapi_unpack_supports_rar	78	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_unpack_supports_txz-99	___eapi_unpack_supports_txz	79	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_unpack_supports_xz-99	___eapi_unpack_supports_xz	80	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_use_enable_and_use_with_support_empty_third_argument-99	___eapi_use_enable_and_use_with_support_empty_third_argument	81	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_usev_has_second_arg-99	___eapi_usev_has_second_arg	82	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_bash_3_2-99	___eapi_bash_3_2	86	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_bash_4_2-99	___eapi_bash_4_2	87	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_bash_5_0-99	___eapi_bash_5_0	88	1	-	1	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_bash_5_3-99	___eapi_bash_5_3	89	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_enables_failglob_in_global_scope-99	___eapi_enables_failglob_in_global_scope	90	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_ENV_UNSET-99	___eapi_has_ENV_UNSET	91	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)
+P-___eapi_has_strict_keepdir-99	___eapi_has_strict_keepdir	92	0	-	0	not reproducible (brush dies at __check_bash_version before any phase body; bodies proven equal by arg99 runs)

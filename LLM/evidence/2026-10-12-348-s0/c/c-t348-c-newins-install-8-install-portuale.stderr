@@ -1,0 +1,7 @@
+ [32m*[0m === P=t348-c-newins-install-8 EAPI=8 PHASE=install ===
+ [32m*[0m newins file: rc=0
+ [32m*[0m newins stdin: rc=0
+ [32m*[0m piped content=[piped-data]
+ [32m*[0m D-listing:
+ [32m*[0m Final size of build directory: 3 KiB
+ [32m*[0m Final size of installed tree:  6 KiB

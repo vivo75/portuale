@@ -1,0 +1,21 @@
+ [32;01m*[39;49;00m checking 3 files for package collisions
+>>> Merging app-misc/t348-b-phases-7 to /var/tmp/t348-b/root-portage/
+--- /var/tmp/t348-b/root-portage/usr/
+--- /var/tmp/t348-b/root-portage/usr/share/
+--- /var/tmp/t348-b/root-portage/usr/share/t348-b-phases/
+=== /var/tmp/t348-b/root-portage/usr/share/t348-b-phases/built.txt
+=== /var/tmp/t348-b/root-portage/usr/share/t348-b-phases/config.args
+--- /var/tmp/t348-b/root-portage/usr/share/doc/
+>>> /var/tmp/t348-b/root-portage/usr/share/doc/t348-b-phases-7/
+>>> /var/tmp/t348-b/root-portage/usr/share/doc/t348-b-phases-7/README.md
+>>> Safely unmerging already-installed instance...
+--- replaced obj /var/tmp/t348-b/root-portage/usr/share/t348-b-phases/config.args
+--- replaced obj /var/tmp/t348-b/root-portage/usr/share/t348-b-phases/built.txt
+--- replaced dir /var/tmp/t348-b/root-portage/usr/share/t348-b-phases
+<<<          obj /var/tmp/t348-b/root-portage/usr/share/doc/t348-b-phases-8/README.md
+--- replaced dir /var/tmp/t348-b/root-portage/usr/share/doc
+--- replaced dir /var/tmp/t348-b/root-portage/usr/share
+--- replaced dir /var/tmp/t348-b/root-portage/usr
+<<<          dir /var/tmp/t348-b/root-portage/usr/share/doc/t348-b-phases-8
+>>> Original instance of package unmerged safely.
+>>> app-misc/t348-b-phases-7 merged.

@@ -1,0 +1,26 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/work
+>>> Preparing source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-c-doin-install-7
+
+>>> Install app-misc/t348-c-doin-install-7 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/image
+ [32m*[0m === P=t348-c-doin-install-7 EAPI=7 PHASE=install ===
+ [32m*[0m doins file+symlink: rc=0
+ [32m*[0m symlink preserved
+ [32m*[0m D-listing:
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/image
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/image/usr
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/image/usr/share
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/image/usr/share/t348c-doin
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/image/usr/share/t348c-doin/f.txt
+/var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/image/usr/share/t348c-doin/link.txt
+>>> Completed installing app-misc/t348-c-doin-install-7 into /var/tmp/t348-c/tmp/portage/app-misc/t348-c-doin-install-7/image
+
+ [32m*[0m Final size of build directory: 4 KiB
+ [32m*[0m Final size of installed tree:  6 KiB
+
