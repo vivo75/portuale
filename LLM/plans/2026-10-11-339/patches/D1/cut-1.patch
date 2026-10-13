@@ -1,0 +1,825 @@
+diff --git a/crates/portuale/src/pretend/display/entry_line.rs b/crates/portuale/src/pretend/display/entry_line.rs
+index 8a9414d6..df3199c3 100644
+--- a/crates/portuale/src/pretend/display/entry_line.rs
++++ b/crates/portuale/src/pretend/display/entry_line.rs
+@@ -2,6 +2,9 @@
+ 
+ use crate::color::PkgprintArgs;
+ use crate::pretend::*;
++use portage_repo::MaskedDepReport;
++use portage_repo::PlainMissDepReport;
++use portage_repo::UseUnsatDepReport;
+ 
+ /// Arguments of [`print_entry_line`].
+ pub(crate) struct PrintEntryLineArgs<'a> {
+@@ -94,18 +97,6 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
+     let binary = entry.source == portage_repo::CandidateSource::Binary;
+     let is_favorite = top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+     let unslotted = entry.slot.as_deref().unwrap_or("0") == "0";
+-    let classify = |version: &str| -> (bool, bool) {
+-        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
+-        let matches_any = |atoms: &[String]| {
+-            atoms
+-                .iter()
+-                .any(|a| match_from_list(a, &[cpv.as_str()]).is_some_and(|m| !m.is_empty()))
+-        };
+-        let system = matches_any(system_atoms);
+-        let would_add_to_world = is_favorite && !(oneshot || onlydeps) && !(system && unslotted);
+-        let world = would_add_to_world || matches_any(world_atoms);
+-        (system, world)
+-    };
+     // Placed right before `use_suffix` in each arm, matching Portage's own
+     // ordering (`pkg_str + " " + oldbest + "to " + pkg.root`).
+     let root_annotation = root_suffix(entry, root, running_root);
+@@ -156,185 +147,43 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
+         || entry.oldbest.iter().any(|r| is_non00(&r.slot, &r.sub_slot));
+     // The displayed version: bare at `-p`, `:slot::repo`-decorated at `-pv`.
+     // A binary whose index carried `BUILD_ID` shows `<cpv>-<build_id>`.
+-    let disp_version = |v: &str| -> String {
+-        let v = match &entry.build_id {
+-            Some(bid) => format!("{v}-{bid}"),
+-            None => v.to_string(),
+-        };
+-        if v3 {
+-            decorate_version(DecorateVersionArgs {
+-                version: &v,
+-                slot: entry_slot,
+-                sub_slot: entry_sub,
+-                repo: entry_repo,
+-                show_slot,
+-                force_sub_slot: false,
+-            })
+-        } else {
+-            v
+-        }
+-    };
+     // `blue("[" + versions + "]")`, each `-r0`-stripped and (at `-pv`)
+     // `:slot::repo`-decorated with its own slot/sub_slot/repo. Empty with
+     // no `oldbest`.
+-    let oldbest_str = || -> String {
+-        if entry.oldbest.is_empty() {
+-            return String::new();
+-        }
+-        let parts: Vec<String> = entry
+-            .oldbest
+-            .iter()
+-            .map(|r| {
+-                let v = r.version.strip_suffix("-r0").unwrap_or(&r.version);
+-                if v3 {
+-                    // Also append the old sub-slot when only it moved
+-                    // (`old.slot == pkg.slot and old.sub_slot != pkg.sub_slot`).
+-                    let force_sub =
+-                        !entry.new_slot && r.slot == entry_slot && r.sub_slot != entry_sub;
+-                    decorate_version(DecorateVersionArgs {
+-                        version: v,
+-                        slot: &r.slot,
+-                        sub_slot: &r.sub_slot,
+-                        repo: &r.repo,
+-                        show_slot,
+-                        force_sub_slot: force_sub,
+-                    })
+-                } else {
+-                    v.to_string()
+-                }
+-            })
+-            .collect();
+-        format!("[{}]", parts.join(", "))
+-    };
+     // `darkgreen("to " + pkg.root)`, shared by the merge, `nomerge` and
+     // uninstall arms.
+-    let root_col = |r: &str| {
+-        if r.is_empty() {
+-            String::new()
+-        } else {
+-            color.c("darkgreen", r)
+-        }
+-    };
+     // One merge line, shared by `New`/`Upgrade`/`Downgrade`/`Reinstall`.
+     // The space before `oldbest` is always there, even when empty; the
+     // `to <root>` suffix and USE display each carry their own leading space.
+     // Portage: output.py, _set_no_columns
+-    let emit = |f: &str, version: &str| {
+-        if onlydeps_suppressed {
+-            return;
+-        }
+-        let (system, world) = classify(version);
+-        let disp_ver = disp_version(version);
+-        let oldbest = oldbest_str();
+-        let use_str = use_suffix(UseSuffixArgs {
+-            entry,
+-            verbose,
+-            quiet,
+-            alphabetical,
+-            color,
+-        });
+-        // The fetch size renders only for a `--getbinpkg` remote binary or
+-        // under `force_sizes` (the circular re-display runs forced-verbose).
+-        // Portage: output.py, verbose_size
+-        let size_suffix = if v3 && (entry.remote_binary || force_sizes) {
+-            let bytes: u64 = entry.download_files.iter().map(|(_, s)| s).sum();
+-            let size = localized_size(bytes);
+-            // The USE string already ends with a space, so the size carries
+-            // its own leading space only without one.
+-            if use_str.is_empty() {
+-                format!(" {size}")
+-            } else {
+-                size
+-            }
+-        } else {
+-            String::new()
+-        };
+-        if columns {
+-            let root_str = if root_annotation.is_empty() {
+-                String::new()
+-            } else {
+-                format!(" {}", root_col(&root_annotation))
+-            };
+-            println!(
+-                "{}{root_str}{use_str}{size_suffix}",
+-                columns_line(ColumnsLineArgs {
+-                    bracket_word: bracket,
+-                    field: f,
+-                    indent,
+-                    category: &entry.category,
+-                    package: &entry.package,
+-                    version: &disp_ver,
+-                    oldbest: &oldbest,
+-                    columnwidth,
+-                    color,
+-                    binary,
+-                    system,
+-                    world
+-                })
+-            );
+-            return;
+-        }
+-        let bword = color.pkgprint(PkgprintArgs {
+-            text: bracket,
+-            binary,
+-            system,
+-            world,
+-        });
+-        let pkg_str = color.pkgprint(PkgprintArgs {
+-            text: &format!("{}/{}-{disp_ver}", entry.category, entry.package),
+-            binary,
+-            system,
+-            world,
+-        });
+-        let mut tail = String::from(" ");
+-        if !oldbest.is_empty() {
+-            tail.push_str(&color.c("blue", &oldbest));
+-        }
+-        if !root_annotation.is_empty() {
+-            if !oldbest.is_empty() {
+-                tail.push(' ');
+-            }
+-            tail.push_str(&root_col(&root_annotation));
+-        }
+-        tail.push_str(&use_str);
+-        tail.push_str(&size_suffix);
+-        println!("[{bword} {f}] {indent}{pkg_str}{tail}");
+-    };
+     // The non-merge arm for a tree ancestor occurrence: no attr columns and
+     // no size suffix, but the USE display IS appended, like every other row.
+     // Portage: output.py, _set_no_columns
+-    let emit_nomerge = |version: &str| {
+-        let oldbest = oldbest_str();
+-        let mut tail = String::new();
+-        if !oldbest.is_empty() {
+-            tail.push(' ');
+-            tail.push_str(&color.c("blue", &oldbest));
+-        }
+-        if !root_annotation.is_empty() {
+-            // The space after the version is unconditional, so the suffix
+-            // carries its own leading space even when oldbest is empty.
+-            tail.push(' ');
+-            tail.push_str(&root_col(&root_annotation));
+-        }
+-        // The nomerge arm carries the same USE suffix as a merge row.
+-        tail.push_str(&use_suffix(UseSuffixArgs {
+-            entry,
+-            verbose,
+-            quiet,
+-            alphabetical,
+-            color,
+-        }));
+-        println!(
+-            "{}",
+-            nomerge_row(NomergeRowArgs {
+-                category: &entry.category,
+-                package: &entry.package,
+-                disp_ver: &disp_version(version),
+-                indent,
+-                quiet,
+-                tail: &tail
+-            })
+-        );
++    let ctx = EntryLineCtx {
++        entry,
++        system_atoms,
++        world_atoms,
++        is_favorite,
++        oneshot,
++        onlydeps,
++        unslotted,
++        quiet,
++        color,
++        v3,
++        entry_slot,
++        entry_sub,
++        entry_repo,
++        show_slot,
++        verbose,
++        alphabetical,
++        root_annotation: &root_annotation,
++        bracket,
++        onlydeps_suppressed,
++        force_sizes,
++        columns,
++        indent,
++        columnwidth,
++        binary,
+     };
+     match &entry.outcome {
+         PretendOutcome::New { version } => {
+@@ -343,10 +192,10 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
+             // for a brand-new package.
+             // Portage: output.py, _get_installed_best
+             if !ordered {
+-                emit_nomerge(version);
++                ctx.emit_nomerge(version);
+                 return;
+             }
+-            emit(&field(true, entry.new_slot, false, false, false), version);
++            ctx.emit(&field(true, entry.new_slot, false, false, false), version);
+             blocker_lines.extend(trailing_blocker_lines(TrailingBlockerLinesArgs {
+                 entries,
+                 root,
+@@ -361,10 +210,10 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
+             // An in-slot version bump -> `attr.new_version` only (`U`, no
+             // `R`); oldbest = the in-slot installed version(s).
+             if !ordered {
+-                emit_nomerge(to);
++                ctx.emit_nomerge(to);
+                 return;
+             }
+-            emit(&field(false, false, false, true, false), to);
++            ctx.emit(&field(false, false, false, true, false), to);
+             blocker_lines.extend(trailing_blocker_lines(TrailingBlockerLinesArgs {
+                 entries,
+                 root,
+@@ -378,10 +227,10 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
+         PretendOutcome::Downgrade { from: _, to } => {
+             // In-slot downgrade -> `attr.new_version` *and* `attr.downgrade`.
+             if !ordered {
+-                emit_nomerge(to);
++                ctx.emit_nomerge(to);
+                 return;
+             }
+-            emit(&field(false, false, false, true, true), to);
++            ctx.emit(&field(false, false, false, true, true), to);
+             blocker_lines.extend(trailing_blocker_lines(TrailingBlockerLinesArgs {
+                 entries,
+                 root,
+@@ -404,10 +253,10 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
+             // The exact cpv is already installed -> `attr.replace` (yellow `R`),
+             // with an empty `myoldbest`. No inline reinstall "why" at `-pv`.
+             if !ordered {
+-                emit_nomerge(version);
++                ctx.emit_nomerge(version);
+                 return;
+             }
+-            emit(&field(false, false, true, false, false), version);
++            ctx.emit(&field(false, false, true, false, false), version);
+             blocker_lines.extend(trailing_blocker_lines(TrailingBlockerLinesArgs {
+                 entries,
+                 root,
+@@ -471,135 +320,412 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
+                         "{}/{}-{}",
+                         entry.category,
+                         entry.package,
+-                        disp_version(version)
++                        ctx.disp_version(version)
+                     ),
+                 ),
+             );
+         }
+         PretendOutcome::NoVisibleCandidate => {
+-            // The USE-unsatisfied block renders before the masked block when
+-            // both apply, so the lookup is ordered the same way.
+-            // Portage: depgraph.py, _show_unsatisfied_dep
+-            if let Some(report) = use_unsat_deps
+-                .iter()
+-                .find(|r| r.category == entry.category && r.package == entry.package)
+-            {
+-                eprintln!(
+-                    "\nemerge: there are no ebuilds built with USE flags to satisfy {:?}.",
+-                    report.atom
+-                );
+-                eprintln!(
+-                    "!!! One of the following packages is required to complete your request:"
+-                );
+-                for (cpv, reasons) in &report.rows {
+-                    eprintln!("- {cpv} ({})", reasons.join(", "));
+-                }
+-                for (node, ty) in &report.chain {
+-                    eprintln!("(dependency required by \"{node}\" [{ty}])");
+-                }
+-            } else if let Some(report) = masked_deps
+-                .iter()
+-                .find(|r| r.category == entry.category && r.package == entry.package)
+-            {
+-                eprintln!(
+-                    "\n!!! All ebuilds that could satisfy {:?} have been masked.",
+-                    report.atom
+-                );
+-                eprintln!(
+-                    "!!! One of the following masked packages is required to complete your request:"
+-                );
+-                for (cpv, reasons) in &report.masked {
+-                    eprintln!("- {cpv} (masked by: {})", reasons.join(", "));
+-                }
+-                if report
+-                    .masked
+-                    .iter()
+-                    .any(|(_, reasons)| reasons.iter().any(|r| r.starts_with("EAPI ")))
+-                {
+-                    eprint!("{}", portage_repo::eapi_mask_upgrade_notice());
+-                }
+-                eprintln!();
+-                for (node, ty) in &report.chain {
+-                    eprintln!("(dependency required by \"{node}\" [{ty}])");
+-                }
+-                eprintln!("For more information, see the MASKED PACKAGES section in the emerge");
+-                eprintln!("man page or refer to the Gentoo Handbook.");
+-            } else if let Some(report) = plain_miss_deps
+-                .iter()
+-                .find(|r| r.category == entry.category && r.package == entry.package)
+-            {
+-                // The plain-miss block: the unevaluated atom as queued plus the
+-                // `_get_dep_chain` rows, in place of the bare line.
+-                eprintln!(
+-                    "\nemerge: there are no ebuilds to satisfy {:?}.",
+-                    report.atom
+-                );
+-                for (node, ty) in &report.chain {
+-                    eprintln!("(dependency required by \"{node}\" [{ty}])");
+-                }
+-            } else {
+-                eprintln!(
+-                    "!!! no visible ebuild for dependency \"{}/{}\"",
+-                    entry.category, entry.package
+-                );
+-            }
+-            // The `--autounmask` keyword suggestion for a dependency's own
+-            // NoVisibleCandidate (see `GraphEntry::keyword_suggestion`).
+-            if let Some((version, keyword)) = &entry.keyword_suggestion {
+-                eprintln!(
+-                    "!!! note: {}/{}-{version} exists but is masked by KEYWORDS; \
++            print_no_visible_candidate(use_unsat_deps, entry, masked_deps, plain_miss_deps);
++        }
++    }
++}
++
++/// Print the NoVisibleCandidate row with its masked, USE and keyword disclosures.
++pub(crate) fn print_no_visible_candidate(
++    use_unsat_deps: &[UseUnsatDepReport],
++    entry: &GraphEntry,
++    masked_deps: &[MaskedDepReport],
++    plain_miss_deps: &[PlainMissDepReport],
++) {
++    // The USE-unsatisfied block renders before the masked block when
++    // both apply, so the lookup is ordered the same way.
++    // Portage: depgraph.py, _show_unsatisfied_dep
++    if let Some(report) = use_unsat_deps
++        .iter()
++        .find(|r| r.category == entry.category && r.package == entry.package)
++    {
++        eprintln!(
++            "\nemerge: there are no ebuilds built with USE flags to satisfy {:?}.",
++            report.atom
++        );
++        eprintln!("!!! One of the following packages is required to complete your request:");
++        for (cpv, reasons) in &report.rows {
++            eprintln!("- {cpv} ({})", reasons.join(", "));
++        }
++        for (node, ty) in &report.chain {
++            eprintln!("(dependency required by \"{node}\" [{ty}])");
++        }
++    } else if let Some(report) = masked_deps
++        .iter()
++        .find(|r| r.category == entry.category && r.package == entry.package)
++    {
++        eprintln!(
++            "\n!!! All ebuilds that could satisfy {:?} have been masked.",
++            report.atom
++        );
++        eprintln!("!!! One of the following masked packages is required to complete your request:");
++        for (cpv, reasons) in &report.masked {
++            eprintln!("- {cpv} (masked by: {})", reasons.join(", "));
++        }
++        if report
++            .masked
++            .iter()
++            .any(|(_, reasons)| reasons.iter().any(|r| r.starts_with("EAPI ")))
++        {
++            eprint!("{}", portage_repo::eapi_mask_upgrade_notice());
++        }
++        eprintln!();
++        for (node, ty) in &report.chain {
++            eprintln!("(dependency required by \"{node}\" [{ty}])");
++        }
++        eprintln!("For more information, see the MASKED PACKAGES section in the emerge");
++        eprintln!("man page or refer to the Gentoo Handbook.");
++    } else if let Some(report) = plain_miss_deps
++        .iter()
++        .find(|r| r.category == entry.category && r.package == entry.package)
++    {
++        // The plain-miss block: the unevaluated atom as queued plus the
++        // `_get_dep_chain` rows, in place of the bare line.
++        eprintln!(
++            "\nemerge: there are no ebuilds to satisfy {:?}.",
++            report.atom
++        );
++        for (node, ty) in &report.chain {
++            eprintln!("(dependency required by \"{node}\" [{ty}])");
++        }
++    } else {
++        eprintln!(
++            "!!! no visible ebuild for dependency \"{}/{}\"",
++            entry.category, entry.package
++        );
++    }
++    // The `--autounmask` keyword suggestion for a dependency's own
++    // NoVisibleCandidate (see `GraphEntry::keyword_suggestion`).
++    if let Some((version, keyword)) = &entry.keyword_suggestion {
++        eprintln!(
++            "!!! note: {}/{}-{version} exists but is masked by KEYWORDS; \
+                      --autounmask-keep-keywords=n suggests adding \"{}/{} {keyword}\" \
+                      to package.accept_keywords",
+-                    entry.category, entry.package, entry.category, entry.package,
+-                );
+-            }
+-            // The `--autounmask-use` suggestion (see `GraphEntry::use_suggestion`).
+-            if let Some((version, flip)) = &entry.use_suggestion {
+-                let adjustments: Vec<String> = flip
+-                    .iter()
+-                    .map(|(flag, enabled)| {
+-                        if *enabled {
+-                            flag.clone()
+-                        } else {
+-                            format!("-{flag}")
+-                        }
+-                    })
+-                    .collect();
+-                eprintln!(
+-                    "!!! note: {}/{}-{version} exists but its USE flags don't satisfy \
++            entry.category, entry.package, entry.category, entry.package,
++        );
++    }
++    // The `--autounmask-use` suggestion (see `GraphEntry::use_suggestion`).
++    if let Some((version, flip)) = &entry.use_suggestion {
++        let adjustments: Vec<String> = flip
++            .iter()
++            .map(|(flag, enabled)| {
++                if *enabled {
++                    flag.clone()
++                } else {
++                    format!("-{flag}")
++                }
++            })
++            .collect();
++        eprintln!(
++            "!!! note: {}/{}-{version} exists but its USE flags don't satisfy \
+                      this atom; --autounmask-use suggests adding \"={}/{}-{version} {}\" \
+                      to package.use",
+-                    entry.category,
+-                    entry.package,
+-                    entry.category,
+-                    entry.package,
+-                    adjustments.join(" "),
+-                );
+-            }
+-            // The opt-aware *parent* flip (see
+-            // `GraphEntry::parent_use_suggestion`); a fallback hint for when
+-            // the suggestion exists but wasn't applied.
+-            if let Some((parent_category, parent_package, parent_version, flip)) =
+-                &entry.parent_use_suggestion
+-            {
+-                let adjustments: Vec<String> = flip
+-                    .iter()
+-                    .map(|(flag, enabled)| {
+-                        if *enabled {
+-                            flag.clone()
+-                        } else {
+-                            format!("-{flag}")
+-                        }
+-                    })
+-                    .collect();
+-                eprintln!(
+-                    "!!! note: {parent_category}/{parent_package}-{parent_version}'s own USE \
++            entry.category,
++            entry.package,
++            entry.category,
++            entry.package,
++            adjustments.join(" "),
++        );
++    }
++    // The opt-aware *parent* flip (see
++    // `GraphEntry::parent_use_suggestion`); a fallback hint for when
++    // the suggestion exists but wasn't applied.
++    if let Some((parent_category, parent_package, parent_version, flip)) =
++        &entry.parent_use_suggestion
++    {
++        let adjustments: Vec<String> = flip
++            .iter()
++            .map(|(flag, enabled)| {
++                if *enabled {
++                    flag.clone()
++                } else {
++                    format!("-{flag}")
++                }
++            })
++            .collect();
++        eprintln!(
++            "!!! note: {parent_category}/{parent_package}-{parent_version}'s own USE \
+                      flags need to change to satisfy this dependency; --autounmask-use \
+                      suggests adding \"={parent_category}/{parent_package}-{parent_version} {}\" \
+                      to package.use",
+-                    adjustments.join(" "),
+-                );
++            adjustments.join(" "),
++        );
++    }
++}
++
++/// The values the line-printing helpers of [`print_entry_line`] borrow from it.
++struct EntryLineCtx<'a> {
++    entry: &'a GraphEntry,
++    system_atoms: &'a [String],
++    world_atoms: &'a [String],
++    is_favorite: bool,
++    oneshot: bool,
++    onlydeps: bool,
++    unslotted: bool,
++    quiet: bool,
++    color: &'a Colorizer,
++    v3: bool,
++    entry_slot: &'a str,
++    entry_sub: &'a str,
++    entry_repo: &'a str,
++    show_slot: bool,
++    verbose: bool,
++    alphabetical: bool,
++    root_annotation: &'a str,
++    bracket: &'a str,
++    onlydeps_suppressed: bool,
++    force_sizes: bool,
++    columns: bool,
++    indent: &'a str,
++    columnwidth: i64,
++    binary: bool,
++}
++
++impl EntryLineCtx<'_> {
++    fn classify(&self, version: &str) -> (bool, bool) {
++        let &EntryLineCtx {
++            entry,
++            system_atoms,
++            world_atoms,
++            is_favorite,
++            oneshot,
++            onlydeps,
++            unslotted,
++            ..
++        } = self;
++        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
++        let matches_any = |atoms: &[String]| {
++            atoms
++                .iter()
++                .any(|a| match_from_list(a, &[cpv.as_str()]).is_some_and(|m| !m.is_empty()))
++        };
++        let system = matches_any(system_atoms);
++        let would_add_to_world = is_favorite && !(oneshot || onlydeps) && !(system && unslotted);
++        let world = would_add_to_world || matches_any(world_atoms);
++        (system, world)
++    }
++
++    fn disp_version(&self, v: &str) -> String {
++        let &EntryLineCtx {
++            entry,
++            v3,
++            entry_slot,
++            entry_sub,
++            entry_repo,
++            show_slot,
++            ..
++        } = self;
++        let v = match &entry.build_id {
++            Some(bid) => format!("{v}-{bid}"),
++            None => v.to_string(),
++        };
++        if v3 {
++            decorate_version(DecorateVersionArgs {
++                version: &v,
++                slot: entry_slot,
++                sub_slot: entry_sub,
++                repo: entry_repo,
++                show_slot,
++                force_sub_slot: false,
++            })
++        } else {
++            v
++        }
++    }
++
++    fn oldbest_str(&self) -> String {
++        let &EntryLineCtx {
++            entry,
++            v3,
++            entry_slot,
++            entry_sub,
++            show_slot,
++            ..
++        } = self;
++        if entry.oldbest.is_empty() {
++            return String::new();
++        }
++        let parts: Vec<String> = entry
++            .oldbest
++            .iter()
++            .map(|r| {
++                let v = r.version.strip_suffix("-r0").unwrap_or(&r.version);
++                if v3 {
++                    // Also append the old sub-slot when only it moved
++                    // (`old.slot == pkg.slot and old.sub_slot != pkg.sub_slot`).
++                    let force_sub =
++                        !entry.new_slot && r.slot == entry_slot && r.sub_slot != entry_sub;
++                    decorate_version(DecorateVersionArgs {
++                        version: v,
++                        slot: &r.slot,
++                        sub_slot: &r.sub_slot,
++                        repo: &r.repo,
++                        show_slot,
++                        force_sub_slot: force_sub,
++                    })
++                } else {
++                    v.to_string()
++                }
++            })
++            .collect();
++        format!("[{}]", parts.join(", "))
++    }
++
++    fn root_col(&self, r: &str) -> String {
++        let &EntryLineCtx { color, .. } = self;
++        if r.is_empty() {
++            String::new()
++        } else {
++            color.c("darkgreen", r)
++        }
++    }
++
++    fn emit(&self, f: &str, version: &str) {
++        let &EntryLineCtx {
++            entry,
++            quiet,
++            color,
++            v3,
++            verbose,
++            alphabetical,
++            root_annotation,
++            bracket,
++            onlydeps_suppressed,
++            force_sizes,
++            columns,
++            indent,
++            columnwidth,
++            binary,
++            ..
++        } = self;
++        if onlydeps_suppressed {
++            return;
++        }
++        let (system, world) = self.classify(version);
++        let disp_ver = self.disp_version(version);
++        let oldbest = self.oldbest_str();
++        let use_str = use_suffix(UseSuffixArgs {
++            entry,
++            verbose,
++            quiet,
++            alphabetical,
++            color,
++        });
++        // The fetch size renders only for a `--getbinpkg` remote binary or
++        // under `force_sizes` (the circular re-display runs forced-verbose).
++        // Portage: output.py, verbose_size
++        let size_suffix = if v3 && (entry.remote_binary || force_sizes) {
++            let bytes: u64 = entry.download_files.iter().map(|(_, s)| s).sum();
++            let size = localized_size(bytes);
++            // The USE string already ends with a space, so the size carries
++            // its own leading space only without one.
++            if use_str.is_empty() {
++                format!(" {size}")
++            } else {
++                size
++            }
++        } else {
++            String::new()
++        };
++        if columns {
++            let root_str = if root_annotation.is_empty() {
++                String::new()
++            } else {
++                format!(" {}", self.root_col(root_annotation))
++            };
++            println!(
++                "{}{root_str}{use_str}{size_suffix}",
++                columns_line(ColumnsLineArgs {
++                    bracket_word: bracket,
++                    field: f,
++                    indent,
++                    category: &entry.category,
++                    package: &entry.package,
++                    version: &disp_ver,
++                    oldbest: &oldbest,
++                    columnwidth,
++                    color,
++                    binary,
++                    system,
++                    world
++                })
++            );
++            return;
++        }
++        let bword = color.pkgprint(PkgprintArgs {
++            text: bracket,
++            binary,
++            system,
++            world,
++        });
++        let pkg_str = color.pkgprint(PkgprintArgs {
++            text: &format!("{}/{}-{disp_ver}", entry.category, entry.package),
++            binary,
++            system,
++            world,
++        });
++        let mut tail = String::from(" ");
++        if !oldbest.is_empty() {
++            tail.push_str(&color.c("blue", &oldbest));
++        }
++        if !root_annotation.is_empty() {
++            if !oldbest.is_empty() {
++                tail.push(' ');
+             }
++            tail.push_str(&self.root_col(root_annotation));
+         }
++        tail.push_str(&use_str);
++        tail.push_str(&size_suffix);
++        println!("[{bword} {f}] {indent}{pkg_str}{tail}");
++    }
++
++    fn emit_nomerge(&self, version: &str) {
++        let &EntryLineCtx {
++            entry,
++            quiet,
++            color,
++            verbose,
++            alphabetical,
++            root_annotation,
++            indent,
++            ..
++        } = self;
++        let oldbest = self.oldbest_str();
++        let mut tail = String::new();
++        if !oldbest.is_empty() {
++            tail.push(' ');
++            tail.push_str(&color.c("blue", &oldbest));
++        }
++        if !root_annotation.is_empty() {
++            // The space after the version is unconditional, so the suffix
++            // carries its own leading space even when oldbest is empty.
++            tail.push(' ');
++            tail.push_str(&self.root_col(root_annotation));
++        }
++        // The nomerge arm carries the same USE suffix as a merge row.
++        tail.push_str(&use_suffix(UseSuffixArgs {
++            entry,
++            verbose,
++            quiet,
++            alphabetical,
++            color,
++        }));
++        println!(
++            "{}",
++            nomerge_row(NomergeRowArgs {
++                category: &entry.category,
++                package: &entry.package,
++                disp_ver: &self.disp_version(version),
++                indent,
++                quiet,
++                tail: &tail
++            })
++        );
+     }
+ }
