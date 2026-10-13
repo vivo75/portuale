@@ -1,0 +1,113 @@
+diff --git a/crates/portage-repo/src/resolve/enqueue.rs b/crates/portage-repo/src/resolve/enqueue.rs
+index 51c55627..c1eb94f1 100644
+--- a/crates/portage-repo/src/resolve/enqueue.rs
++++ b/crates/portage-repo/src/resolve/enqueue.rs
+@@ -150,9 +150,6 @@ pub(crate) fn enqueue_dependencies(
+     } else {
+         Default::default()
+     };
+-    let group_running = |atoms: &[String]| -> bool {
+-        cross_active && atoms.iter().all(|a| running_tags.contains(a))
+-    };
+     // The blocker tokens' build-time provenance, flattened from just the
+     // build-time keys. Empty without `with_bdeps`.
+     let buildtime_tokens: HashSet<String> = if with_bdeps {
+@@ -240,7 +237,7 @@ pub(crate) fn enqueue_dependencies(
+         },
+         &mut |atoms: &[String]| {
+             // Same root scoping as the main walk's closures.
+-            let grp_running = group_running(atoms);
++            let grp_running = group_running(atoms, cross_active, &running_tags);
+             let grp_root: &Path = if grp_running {
+                 root_deps_running_root.expect("running-root group without a running root")
+             } else {
+@@ -430,3 +427,8 @@ pub(crate) fn enqueue_dependencies(
+         });
+     }
+ }
++
++/// Whether every atom of the group belongs to the running root.
++fn group_running(atoms: &[String], cross_active: bool, running_tags: &HashSet<String>) -> bool {
++    cross_active && atoms.iter().all(|a| running_tags.contains(a))
++}
+diff --git a/crates/portage-repo/src/resolve/slot_expand.rs b/crates/portage-repo/src/resolve/slot_expand.rs
+index aed37cb7..f0f0ef35 100644
+--- a/crates/portage-repo/src/resolve/slot_expand.rs
++++ b/crates/portage-repo/src/resolve/slot_expand.rs
+@@ -278,23 +278,11 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+         &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+     };
+     // Same build-time/run-time classification as the fresh expansion.
+-    let flatten_keys = |keys: &[&str]| -> HashSet<String> {
+-        let joined: String = keys
+-            .iter()
+-            .filter_map(|k| delta_meta.get(*k))
+-            .map(String::as_str)
+-            .collect::<Vec<_>>()
+-            .join(" ");
+-        let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+-        portage_use_reduce::use_reduce_flat(&toks, new_use, portage_use_reduce::MatchMode::Normal)
+-            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+-            .unwrap_or_default()
+-    };
+-    let buildtime_atoms = flatten_keys(&["DEPEND", "BDEPEND"]);
+-    let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
++    let buildtime_atoms = flatten_keys(&["DEPEND", "BDEPEND"], &delta_meta, new_use);
++    let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"], &delta_meta, new_use);
+     // `BDEPEND` alone, for the same running-`BDEPEND`-soft rule as the fresh
+     // expansion.
+-    let bdepend_atoms = flatten_keys(&["BDEPEND"]);
++    let bdepend_atoms = flatten_keys(&["BDEPEND"], &delta_meta, new_use);
+     // The flipped entry's own per-group roots, same rule as the fresh
+     // expansion.
+     let cross_running_root: Option<&Path> = ctx.cross_root();
+@@ -307,9 +295,6 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+             )
+         })
+         .unwrap_or_default();
+-    let group_running = |atoms: &[String]| -> bool {
+-        cross_running_root.is_some() && atoms.iter().all(|a| running_tags.contains(a))
+-    };
+     let queued: Vec<QueueItem> = state.queue.iter().cloned().collect();
+     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
+         portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+@@ -361,7 +346,7 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+             },
+         },
+         &mut |atoms: &[String]| {
+-            let grp_running = group_running(atoms);
++            let grp_running = group_running(atoms, cross_running_root, &running_tags);
+             let grp_root: &Path = if grp_running {
+                 cross_running_root.expect("running-root group without a cross root")
+             } else {
+@@ -632,3 +617,30 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+         }
+     }
+ }
++
++/// Whether every atom of the group belongs to the running root.
++fn group_running(
++    atoms: &[String],
++    cross_running_root: Option<&Path>,
++    running_tags: &HashSet<String>,
++) -> bool {
++    cross_running_root.is_some() && atoms.iter().all(|a| running_tags.contains(a))
++}
++
++/// Flatten the dependency strings of `keys` under `new_use` into their atoms.
++fn flatten_keys(
++    keys: &[&str],
++    delta_meta: &HashMap<String, String>,
++    new_use: &HashSet<String>,
++) -> HashSet<String> {
++    let joined: String = keys
++        .iter()
++        .filter_map(|k| delta_meta.get(*k))
++        .map(String::as_str)
++        .collect::<Vec<_>>()
++        .join(" ");
++    let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
++    portage_use_reduce::use_reduce_flat(&toks, new_use, portage_use_reduce::MatchMode::Normal)
++        .map(|v| v.into_iter().filter(|t| t != "||").collect())
++        .unwrap_or_default()
++}

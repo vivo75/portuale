@@ -24,12 +24,18 @@ Re-expanding a resolved slot when USE changes.
 - Portage never flips a built package (`_pkg_use_enabled` returns the baked USE for `pkg.built`, `depgraph.py:7676`; `can_adjust_use = not pkg.built`, `:8131`): the delta only ever applies to a fresh ebuild entry, which is also the only shape whose md5-cache metadata this re-reads below. (`resolved_slots` only ever indexes New/Upgrade/Downgrade/Reinstall outcomes, so no outcome check.)
 - The flipped package's own depth (Portage `pkg.depth`): the delta atoms queue one deeper, exactly where the fresh expansion put its own.
 - The same key-inclusion rule as the fresh expansion (an ebuild source, so only the `--buildpkgonly`-without-`--deep` runtime blanking applies). Portage `RDEPEND`-first discovery order for the merge-order edges, same `portage_order_keys` as the fresh expansion. The same build-time/run-time classification as the fresh expansion (an ebuild source always classifies from both key sets).
-- Track X Slice B fix (#242): `BDEPEND` alone, for the same running-`BDEPEND`-soft rule the fresh expansion applies (see `enqueue_flat_deps`'s own `bdepend_atoms` doc comment).
-- Track X Slice B (#242): the flipped entry's own per-group roots -- same rule as the fresh expansion (a flipped running-root entry re-resolves its build groups against the running root).
-- Track X Slice C (#242): the node key carries the flipped entry's own root (Portage's node-identity keying); the gate reads the whole graph (same slices the bins would see on a same-root run).
 - The same `--root-deps` running-root split as the fresh expansion (Track X Slice B: flag-on coinciding-roots only -- the unified per-group walk owns every cross-root atom).
+
+## fn enqueue_flipped_tokens
 - Compared in evaluated form, the same text `visited_atoms` and the queue itself carry.
 - L0 20260928T063310Z: a text-new atom that cleanly re-resolves to its already-settled slot (`delta_atom_cleanly_reuses_resolved_slot`) is dropped before any bookkeeping -- queueing it would record the flipped package as an owner at pop and synthesize the phantom edge Portage never has. The genuinely-new survivors are untouched. Track X Slice B (#242): the tag is raw-keyed -- `tok` here is still the raw survivor (evaluated only for the lookup below).
 - Narrowing (L0 20260928T054625Z): unioning the whole flipped flatten would also re-add edges for already-graphed targets (a `||` re-choice under the later queue state, an evaluated-form difference), which over-constrained Kahn's walk and reordered unrelated packages (gui-libs/gtk:4 went set-identical but order-shifted). The flipped package's genuinely new deps still get their edge (and cycle classification).
+
+## fn enqueue_test_deps_for_flip
 - `--with-test-deps` follow-up, same gating as the fresh expansion (top-level packages only): the flipped USE may newly enable `test?` deps the pre-flip `use_flags` hid. Same genuinely-new filter as the main delta: the pre-flip expansion already queued this package's test deps under the old USE (evaluated here against the flipped test uselist, like the fresh path evaluates at queue time).
 - Track X Slice B (#242): a `test?` dep stays target-rooted (same gate as the fresh expansion).
+
+## fn flatten_deps_for_flip
+- Track X Slice B fix (#242): `BDEPEND` alone, for the same running-`BDEPEND`-soft rule the fresh expansion applies (see `enqueue_flat_deps`'s own `bdepend_atoms` doc comment).
+- Track X Slice B (#242): the flipped entry's own per-group roots -- same rule as the fresh expansion (a flipped running-root entry re-resolves its build groups against the running root).
+- Track X Slice C (#242): the node key carries the flipped entry's own root (Portage's node-identity keying); the gate reads the whole graph (same slices the bins would see on a same-root run).

@@ -1,0 +1,947 @@
+diff --git a/crates/portage-repo/src/resolve/enqueue.rs b/crates/portage-repo/src/resolve/enqueue.rs
+index 51c55627..55fec491 100644
+--- a/crates/portage-repo/src/resolve/enqueue.rs
++++ b/crates/portage-repo/src/resolve/enqueue.rs
+@@ -1,6 +1,9 @@
+ //! Queueing one package's dependencies.
+ 
+ use crate::*;
++use portage_profile::Config;
++use std::ops::ControlFlow;
++use std::sync::Arc;
+ 
+ /// The installed or newly selected package whose dependencies
+ /// [`enqueue_dependencies`] queues.
+@@ -150,136 +153,39 @@ pub(crate) fn enqueue_dependencies(
+     } else {
+         Default::default()
+     };
+-    let group_running = |atoms: &[String]| -> bool {
+-        cross_active && atoms.iter().all(|a| running_tags.contains(a))
+-    };
+-    // The blocker tokens' build-time provenance, flattened from just the
+-    // build-time keys. Empty without `with_bdeps`.
+-    let buildtime_tokens: HashSet<String> = if with_bdeps {
+-        let mut joined = String::new();
+-        for dep_key in ["DEPEND", "BDEPEND"] {
+-            let layer = if dynamic_deps {
+-                InstalledMetaLayer::Effective
+-            } else {
+-                InstalledMetaLayer::Raw
+-            };
+-            joined.push_str(&installed_dep_string(InstalledDepStringArgs {
+-                root,
+-                dynamic_deps,
+-                ignore_built_slot_operator_deps,
+-                category,
+-                package,
+-                version,
+-                live: Some(&metadata),
+-                key: dep_key,
+-                layer,
+-                memo: installed_meta_memo,
+-            }));
+-            joined.push(' ');
+-        }
+-        let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+-        portage_use_reduce::use_reduce_flat(
+-            &toks,
+-            &use_flags,
+-            portage_use_reduce::MatchMode::Normal,
+-        )
+-        .map(|v| v.into_iter().filter(|t| t != "||").collect())
+-        .unwrap_or_default()
+-    } else {
+-        HashSet::new()
+-    };
++    let buildtime_tokens = collect_buildtime_tokens(CollectBuildtimeTokensArgs {
++        with_bdeps,
++        dynamic_deps,
++        root,
++        ignore_built_slot_operator_deps,
++        category,
++        package,
++        version,
++        metadata: &metadata,
++        installed_meta_memo,
++        use_flags: &use_flags,
++    });
+     // The node key for the resolver map (installed deep-walk owner).
+     let self_node: RootCp = (false, category.to_string(), package.to_string());
+     // Branch selection shares the `disjunction_preference` helper; same
+     // drain-state snapshot as the main walk.
+-    let queued: Vec<QueueItem> = queue.iter().cloned().collect();
+-    let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
+-        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+-            tokens: &tokens,
+-            uselist: &use_flags,
+-            mode: portage_use_reduce::MatchMode::Normal, // Installed recursion defaults.
+-            empty_groups_always_true: false,
+-            tie_break: &mut |alts: &[Vec<String>]| {
+-                let grp_running = cross_active
+-                    && alts
+-                        .iter()
+-                        .flat_map(|v| v.iter())
+-                        .next()
+-                        .is_some_and(|a| running_tags.contains(a));
+-                let grp_root: &Path = if grp_running {
+-                    root_deps_running_root.expect("running-root group without a running root")
+-                } else {
+-                    root
+-                };
+-                let scoped_entries: Option<Vec<GraphEntry>> = cross_active.then(|| {
+-                    entries
+-                        .iter()
+-                        .filter(|e| e.targets_running_root == grp_running)
+-                        .cloned()
+-                        .collect()
+-                });
+-                let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
+-                let scoped_queued: Option<Vec<QueueItem>> = cross_active.then(|| {
+-                    queued
+-                        .iter()
+-                        .filter(|q| q.targets_running_root == grp_running)
+-                        .cloned()
+-                        .collect()
+-                });
+-                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
+-                promote_tied_alternative(PromoteTiedAlternativeArgs {
+-                    repos,
+-                    config,
+-                    root: grp_root,
+-                    entries: entries_view,
+-                    constraints: disj_constraints,
+-                    alts,
+-                    queued: queued_view,
+-                })
+-            },
+-        },
+-        &mut |atoms: &[String]| {
+-            // Same root scoping as the main walk's closures.
+-            let grp_running = group_running(atoms);
+-            let grp_root: &Path = if grp_running {
+-                root_deps_running_root.expect("running-root group without a running root")
+-            } else {
+-                root
+-            };
+-            let scoped_entries: Option<Vec<GraphEntry>> = cross_active.then(|| {
+-                entries
+-                    .iter()
+-                    .filter(|e| e.targets_running_root == grp_running)
+-                    .cloned()
+-                    .collect()
+-            });
+-            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
+-            let scoped_queued: Option<Vec<QueueItem>> = cross_active.then(|| {
+-                queued
+-                    .iter()
+-                    .filter(|q| q.targets_running_root == grp_running)
+-                    .cloned()
+-                    .collect()
+-            });
+-            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
+-            disjunction_preference(DisjunctionPreferenceArgs {
+-                repos,
+-                config,
+-                root: grp_root,
+-                entries: entries_view,
+-                self_cp: &self_node,
+-                constraints: disj_constraints, // The empty map (see the parameter doc).
+-                circular_dependency: &HashMap::new(),
+-                root_deps_running_root,
+-                atoms,
+-                queued: queued_view,
+-                update,
+-                gate_entries: entries,
+-                gate_queued: &queued,
+-            })
+-        },
+-    ) else {
+-        return;
++    let flat_deps = match flatten_deps_for_enqueue(FlattenDepsForEnqueueArgs {
++        queue,
++        tokens: &tokens,
++        use_flags: &use_flags,
++        cross_active,
++        running_tags: &running_tags,
++        root_deps_running_root,
++        root,
++        entries,
++        repos,
++        config,
++        disj_constraints,
++        self_node: &self_node,
++        update,
++    }) {
++        ControlFlow::Continue(out) => out,
++        ControlFlow::Break(()) => return,
+     };
+ 
+     let root_deps_satisfied: HashSet<String> = if with_bdeps {
+@@ -344,6 +250,131 @@ pub(crate) fn enqueue_dependencies(
+         .partition(|t| t != "||" && universe.contains(t));
+     plains.reverse();
+     disj.reverse();
++    enqueue_plain_tokens(EnqueuePlainTokensArgs {
++        plains,
++        disj,
++        use_flags: &use_flags,
++        buildtime_tokens: &buildtime_tokens,
++        pending_blockers,
++        owner_key,
++        owner_version: &owner_version,
++        root_deps_split,
++        root_deps_satisfied: &root_deps_satisfied,
++        root_deps_unsatisfied: &root_deps_unsatisfied,
++        root,
++        config,
++        slot_pullers,
++        queue,
++        child_depth,
++        entries,
++        running_tags: &running_tags,
++    });
++}
++
++/// The values [`collect_buildtime_tokens`] reads from its caller.
++pub(crate) struct CollectBuildtimeTokensArgs<'a> {
++    pub(crate) with_bdeps: bool,
++    pub(crate) dynamic_deps: bool,
++    pub(crate) root: &'a Path,
++    pub(crate) ignore_built_slot_operator_deps: bool,
++    pub(crate) category: &'a str,
++    pub(crate) package: &'a str,
++    pub(crate) version: &'a str,
++    pub(crate) metadata: &'a Arc<HashMap<String, String>>,
++    pub(crate) installed_meta_memo: &'a mut HashMap<(String, String, String, String), String>,
++    pub(crate) use_flags: &'a HashSet<String>,
++}
++
++/// Flatten the build-time dependency keys into the set of blocker-token atoms; empty without with_bdeps.
++pub(crate) fn collect_buildtime_tokens(args: CollectBuildtimeTokensArgs<'_>) -> HashSet<String> {
++    let CollectBuildtimeTokensArgs {
++        with_bdeps,
++        dynamic_deps,
++        root,
++        ignore_built_slot_operator_deps,
++        category,
++        package,
++        version,
++        metadata,
++        installed_meta_memo,
++        use_flags,
++    } = args;
++    // The blocker tokens' build-time provenance, flattened from just the
++    // build-time keys. Empty without `with_bdeps`.
++    let buildtime_tokens: HashSet<String> = if with_bdeps {
++        let mut joined = String::new();
++        for dep_key in ["DEPEND", "BDEPEND"] {
++            let layer = if dynamic_deps {
++                InstalledMetaLayer::Effective
++            } else {
++                InstalledMetaLayer::Raw
++            };
++            joined.push_str(&installed_dep_string(InstalledDepStringArgs {
++                root,
++                dynamic_deps,
++                ignore_built_slot_operator_deps,
++                category,
++                package,
++                version,
++                live: Some(metadata),
++                key: dep_key,
++                layer,
++                memo: installed_meta_memo,
++            }));
++            joined.push(' ');
++        }
++        let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
++        portage_use_reduce::use_reduce_flat(&toks, use_flags, portage_use_reduce::MatchMode::Normal)
++            .map(|v| v.into_iter().filter(|t| t != "||").collect())
++            .unwrap_or_default()
++    } else {
++        HashSet::new()
++    };
++    buildtime_tokens
++}
++
++/// The values [`enqueue_plain_tokens`] reads from its caller.
++pub(crate) struct EnqueuePlainTokensArgs<'a> {
++    pub(crate) plains: Vec<String>,
++    pub(crate) disj: Vec<String>,
++    pub(crate) use_flags: &'a HashSet<String>,
++    pub(crate) buildtime_tokens: &'a HashSet<String>,
++    pub(crate) pending_blockers: &'a mut Vec<PendingBlocker>,
++    pub(crate) owner_key: (String, String),
++    pub(crate) owner_version: &'a str,
++    pub(crate) root_deps_split: Option<&'a Path>,
++    pub(crate) root_deps_satisfied: &'a HashSet<String>,
++    pub(crate) root_deps_unsatisfied: &'a [String],
++    pub(crate) root: &'a Path,
++    pub(crate) config: &'a Config,
++    pub(crate) slot_pullers: &'a mut SlotPullers,
++    pub(crate) queue: &'a mut VecDeque<QueueItem>,
++    pub(crate) child_depth: u32,
++    pub(crate) entries: &'a mut Vec<GraphEntry>,
++    pub(crate) running_tags: &'a HashSet<String>,
++}
++
++/// Queue the plain dependency tokens, recording blockers and slot pullers.
++pub(crate) fn enqueue_plain_tokens(args: EnqueuePlainTokensArgs<'_>) {
++    let EnqueuePlainTokensArgs {
++        plains,
++        disj,
++        use_flags,
++        buildtime_tokens,
++        pending_blockers,
++        owner_key,
++        owner_version,
++        root_deps_split,
++        root_deps_satisfied,
++        root_deps_unsatisfied,
++        root,
++        config,
++        slot_pullers,
++        queue,
++        child_depth,
++        entries,
++        running_tags,
++    } = args;
+     for (tok, from_disjunction) in plains
+         .into_iter()
+         .map(|t| (t, false))
+@@ -356,8 +387,8 @@ pub(crate) fn enqueue_dependencies(
+         // parent's USE before classification or queueing; `raw` is kept for
+         // the `unevaluated` queue field only.
+         let raw = tok;
+-        let evaluated = portage_dep::evaluate_atom_conditionals(&raw, &use_flags)
+-            .unwrap_or_else(|| raw.clone());
++        let evaluated =
++            portage_dep::evaluate_atom_conditionals(&raw, use_flags).unwrap_or_else(|| raw.clone());
+         let unevaluated = if evaluated != raw {
+             Some(raw.clone())
+         } else {
+@@ -376,7 +407,7 @@ pub(crate) fn enqueue_dependencies(
+                 target_category: dep_atom.category,
+                 target_package: dep_atom.package,
+                 owner_key: owner_key.clone(),
+-                owner_version: owner_version.clone(),
++                owner_version: owner_version.to_string(),
+                 owner_merging: false,
+                 owner_installed: false,
+             });
+@@ -409,7 +440,7 @@ pub(crate) fn enqueue_dependencies(
+                 .push((
+                     owner_key.0.clone(),
+                     owner_key.1.clone(),
+-                    owner_version.clone(),
++                    owner_version.to_string(),
+                     tok.clone(),
+                 ));
+         }
+@@ -430,3 +461,136 @@ pub(crate) fn enqueue_dependencies(
+         });
+     }
+ }
++
++/// The values [`flatten_deps_for_enqueue`] reads from its caller.
++pub(crate) struct FlattenDepsForEnqueueArgs<'a> {
++    pub(crate) queue: &'a mut VecDeque<QueueItem>,
++    pub(crate) tokens: &'a [String],
++    pub(crate) use_flags: &'a HashSet<String>,
++    pub(crate) cross_active: bool,
++    pub(crate) running_tags: &'a HashSet<String>,
++    pub(crate) root_deps_running_root: Option<&'a Path>,
++    pub(crate) root: &'a Path,
++    pub(crate) entries: &'a mut Vec<GraphEntry>,
++    pub(crate) repos: &'a [RepoConfig],
++    pub(crate) config: &'a Config,
++    pub(crate) disj_constraints: &'a HashMap<(String, String), Vec<String>>,
++    pub(crate) self_node: &'a (bool, String, String),
++    pub(crate) update: bool,
++}
++
++/// Flatten the installed dependency strings, choosing one branch of each disjunction as the walk does.
++pub(crate) fn flatten_deps_for_enqueue(
++    args: FlattenDepsForEnqueueArgs<'_>,
++) -> ControlFlow<(), Vec<String>> {
++    let FlattenDepsForEnqueueArgs {
++        queue,
++        tokens,
++        use_flags,
++        cross_active,
++        running_tags,
++        root_deps_running_root,
++        root,
++        entries,
++        repos,
++        config,
++        disj_constraints,
++        self_node,
++        update,
++    } = args;
++    let queued: Vec<QueueItem> = queue.iter().cloned().collect();
++    let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
++        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
++            tokens,
++            uselist: use_flags,
++            mode: portage_use_reduce::MatchMode::Normal, // Installed recursion defaults.
++            empty_groups_always_true: false,
++            tie_break: &mut |alts: &[Vec<String>]| {
++                let grp_running = cross_active
++                    && alts
++                        .iter()
++                        .flat_map(|v| v.iter())
++                        .next()
++                        .is_some_and(|a| running_tags.contains(a));
++                let grp_root: &Path = if grp_running {
++                    root_deps_running_root.expect("running-root group without a running root")
++                } else {
++                    root
++                };
++                let scoped_entries: Option<Vec<GraphEntry>> = cross_active.then(|| {
++                    entries
++                        .iter()
++                        .filter(|e| e.targets_running_root == grp_running)
++                        .cloned()
++                        .collect()
++                });
++                let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
++                let scoped_queued: Option<Vec<QueueItem>> = cross_active.then(|| {
++                    queued
++                        .iter()
++                        .filter(|q| q.targets_running_root == grp_running)
++                        .cloned()
++                        .collect()
++                });
++                let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
++                promote_tied_alternative(PromoteTiedAlternativeArgs {
++                    repos,
++                    config,
++                    root: grp_root,
++                    entries: entries_view,
++                    constraints: disj_constraints,
++                    alts,
++                    queued: queued_view,
++                })
++            },
++        },
++        &mut |atoms: &[String]| {
++            // Same root scoping as the main walk's closures.
++            let grp_running = group_running(atoms, cross_active, running_tags);
++            let grp_root: &Path = if grp_running {
++                root_deps_running_root.expect("running-root group without a running root")
++            } else {
++                root
++            };
++            let scoped_entries: Option<Vec<GraphEntry>> = cross_active.then(|| {
++                entries
++                    .iter()
++                    .filter(|e| e.targets_running_root == grp_running)
++                    .cloned()
++                    .collect()
++            });
++            let entries_view: &[GraphEntry] = scoped_entries.as_deref().unwrap_or(entries);
++            let scoped_queued: Option<Vec<QueueItem>> = cross_active.then(|| {
++                queued
++                    .iter()
++                    .filter(|q| q.targets_running_root == grp_running)
++                    .cloned()
++                    .collect()
++            });
++            let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
++            disjunction_preference(DisjunctionPreferenceArgs {
++                repos,
++                config,
++                root: grp_root,
++                entries: entries_view,
++                self_cp: self_node,
++                constraints: disj_constraints, // The empty map (see the parameter doc).
++                circular_dependency: &HashMap::new(),
++                root_deps_running_root,
++                atoms,
++                queued: queued_view,
++                update,
++                gate_entries: entries,
++                gate_queued: &queued,
++            })
++        },
++    ) else {
++        return ControlFlow::Break(());
++    };
++    ControlFlow::Continue(flat_deps)
++}
++
++/// Whether every atom of the group belongs to the running root.
++fn group_running(atoms: &[String], cross_active: bool, running_tags: &HashSet<String>) -> bool {
++    cross_active && atoms.iter().all(|a| running_tags.contains(a))
++}
+diff --git a/crates/portage-repo/src/resolve/slot_expand.rs b/crates/portage-repo/src/resolve/slot_expand.rs
+index aed37cb7..0d0647c5 100644
+--- a/crates/portage-repo/src/resolve/slot_expand.rs
++++ b/crates/portage-repo/src/resolve/slot_expand.rs
+@@ -1,6 +1,9 @@
+ //! Re-expanding a resolved slot when USE changes.
+ 
+ use crate::*;
++use portage_profile::Config;
++use std::ops::ControlFlow;
++use std::sync::Arc;
+ 
+ /// Arguments of [`delta_atom_cleanly_reuses_resolved_slot`].
+ pub(crate) struct DeltaAtomCleanlyReusesResolvedSlotArgs<'a> {
+@@ -278,23 +281,11 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+         &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+     };
+     // Same build-time/run-time classification as the fresh expansion.
+-    let flatten_keys = |keys: &[&str]| -> HashSet<String> {
+-        let joined: String = keys
+-            .iter()
+-            .filter_map(|k| delta_meta.get(*k))
+-            .map(String::as_str)
+-            .collect::<Vec<_>>()
+-            .join(" ");
+-        let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
+-        portage_use_reduce::use_reduce_flat(&toks, new_use, portage_use_reduce::MatchMode::Normal)
+-            .map(|v| v.into_iter().filter(|t| t != "||").collect())
+-            .unwrap_or_default()
+-    };
+-    let buildtime_atoms = flatten_keys(&["DEPEND", "BDEPEND"]);
+-    let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"]);
++    let buildtime_atoms = flatten_keys(&["DEPEND", "BDEPEND"], &delta_meta, new_use);
++    let runtime_atoms = flatten_keys(&["RDEPEND", "PDEPEND", "IDEPEND"], &delta_meta, new_use);
+     // `BDEPEND` alone, for the same running-`BDEPEND`-soft rule as the fresh
+     // expansion.
+-    let bdepend_atoms = flatten_keys(&["BDEPEND"]);
++    let bdepend_atoms = flatten_keys(&["BDEPEND"], &delta_meta, new_use);
+     // The flipped entry's own per-group roots, same rule as the fresh
+     // expansion.
+     let cross_running_root: Option<&Path> = ctx.cross_root();
+@@ -307,13 +298,164 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+             )
+         })
+         .unwrap_or_default();
+-    let group_running = |atoms: &[String]| -> bool {
+-        cross_running_root.is_some() && atoms.iter().all(|a| running_tags.contains(a))
++    let flat_deps = match flatten_deps_for_flip(FlattenDepsForFlipArgs {
++        state,
++        tokens: &tokens,
++        new_use,
++        delta_meta: &delta_meta,
++        cross_running_root,
++        running_tags: &running_tags,
++        ctx,
++        config,
++        union_constraints,
++        existing_idx,
++        key,
++        bp,
++    }) {
++        ControlFlow::Continue(out) => out,
++        ControlFlow::Break(()) => return,
+     };
++    // Same `--root-deps` running-root split as the fresh expansion (flag-on
++    // coinciding-roots only).
++    let root_deps_split: Option<&Path> = ctx
++        .root_deps_running_root
++        .filter(|_| cross_running_root.is_none());
++    // (No-ops unless `root_deps_split` is set.)
++    let root_deps_satisfied: HashSet<String> = root_deps_split
++        .map(|root| {
++            root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
++                metadata: &delta_meta,
++                use_flags: new_use,
++                repos: &ctx.repos,
++                config,
++                running_root: root,
++                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
++                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
++                    delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
++                ),
++            })
++        })
++        .unwrap_or_default();
++    let root_deps_unsatisfied: Vec<String> = root_deps_split
++        .map(|root| {
++            unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
++                metadata: &delta_meta,
++                use_flags: new_use,
++                repos: &ctx.repos,
++                config,
++                running_root: root,
++                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
++                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
++                    delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
++                ),
++            })
++        })
++        .unwrap_or_default();
++    let flat_deps: Vec<String> = flat_deps
++        .into_iter()
++        .filter(|tok| {
++            let evaluated = portage_dep::evaluate_atom_conditionals(tok, new_use)
++                .unwrap_or_else(|| tok.clone());
++            !root_deps_satisfied.contains(&evaluated)
++        })
++        .filter(|tok| {
++            let evaluated = portage_dep::evaluate_atom_conditionals(tok, new_use)
++                .unwrap_or_else(|| tok.clone());
++            !root_deps_unsatisfied.contains(&evaluated)
++        })
++        .collect();
++    if let Some(running_root) = ctx.root_deps_running_root {
++        for atom_str in &root_deps_unsatisfied {
++            state.entries.extend(resolve_root_deps_build_entries(
++                ResolveRootDepsBuildEntriesArgs {
++                    repos: &ctx.repos,
++                    running_root,
++                    atom_str,
++                    config,
++                    owner: key.clone(),
++                    seen: &mut state.root_deps_build_seen,
++                    local_binpkg: &ctx.local_binpkg,
++                },
++            ));
++        }
++    }
++    if enqueue_flipped_tokens(EnqueueFlippedTokensArgs {
++        state,
++        flat_deps: &flat_deps,
++        new_use,
++        ctx,
++        config,
++        union_constraints,
++        bp,
++        running_tags: &running_tags,
++        key,
++        existing_version,
++        existing_depth,
++        buildtime_atoms: &buildtime_atoms,
++        runtime_atoms: &runtime_atoms,
++        bdepend_atoms: &bdepend_atoms,
++        tokens: &tokens,
++        existing_idx,
++        delta_meta: &delta_meta,
++        portage_order_keys,
++    })
++    .is_break()
++    {
++        return;
++    }
++    enqueue_test_deps_for_flip(EnqueueTestDepsForFlipArgs {
++        ctx,
++        existing_depth,
++        new_use,
++        delta_meta: &delta_meta,
++        key,
++        existing_cand,
++        existing_version,
++        config,
++        tokens: &tokens,
++        state,
++        existing_idx,
++    });
++}
++
++/// The values [`flatten_deps_for_flip`] reads from its caller.
++pub(crate) struct FlattenDepsForFlipArgs<'a> {
++    pub(crate) state: &'a mut PassState,
++    pub(crate) tokens: &'a [String],
++    pub(crate) new_use: &'a HashSet<String>,
++    pub(crate) delta_meta: &'a Arc<HashMap<String, String>>,
++    pub(crate) cross_running_root: Option<&'a Path>,
++    pub(crate) running_tags: &'a HashSet<String>,
++    pub(crate) ctx: &'a ResolveCtx<'a>,
++    pub(crate) config: &'a Config,
++    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
++    pub(crate) existing_idx: usize,
++    pub(crate) key: &'a (String, String),
++    pub(crate) bp: &'a BacktrackParams,
++}
++
++/// Flatten the flipped dependency strings, choosing one branch of each disjunction as the walk does.
++pub(crate) fn flatten_deps_for_flip(
++    args: FlattenDepsForFlipArgs<'_>,
++) -> ControlFlow<(), Vec<String>> {
++    let FlattenDepsForFlipArgs {
++        state,
++        tokens,
++        new_use,
++        delta_meta,
++        cross_running_root,
++        running_tags,
++        ctx,
++        config,
++        union_constraints,
++        existing_idx,
++        key,
++        bp,
++    } = args;
+     let queued: Vec<QueueItem> = state.queue.iter().cloned().collect();
+     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
+         portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+-            tokens: &tokens,
++            tokens,
+             uselist: new_use,
+             mode: portage_use_reduce::MatchMode::Normal,
+             empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+@@ -361,7 +503,7 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+             },
+         },
+         &mut |atoms: &[String]| {
+-            let grp_running = group_running(atoms);
++            let grp_running = group_running(atoms, cross_running_root, running_tags);
+             let grp_root: &Path = if grp_running {
+                 cross_running_root.expect("running-root group without a cross root")
+             } else {
+@@ -408,77 +550,60 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+             })
+         },
+     ) else {
+-        return;
++        return ControlFlow::Break(());
+     };
+-    // Same `--root-deps` running-root split as the fresh expansion (flag-on
+-    // coinciding-roots only).
+-    let root_deps_split: Option<&Path> = ctx
+-        .root_deps_running_root
+-        .filter(|_| cross_running_root.is_none());
+-    // (No-ops unless `root_deps_split` is set.)
+-    let root_deps_satisfied: HashSet<String> = root_deps_split
+-        .map(|root| {
+-            root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
+-                metadata: &delta_meta,
+-                use_flags: new_use,
+-                repos: &ctx.repos,
+-                config,
+-                running_root: root,
+-                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
+-                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+-                    delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+-                ),
+-            })
+-        })
+-        .unwrap_or_default();
+-    let root_deps_unsatisfied: Vec<String> = root_deps_split
+-        .map(|root| {
+-            unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
+-                metadata: &delta_meta,
+-                use_flags: new_use,
+-                repos: &ctx.repos,
+-                config,
+-                running_root: root,
+-                dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
+-                empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+-                    delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+-                ),
+-            })
+-        })
+-        .unwrap_or_default();
+-    let flat_deps: Vec<String> = flat_deps
+-        .into_iter()
+-        .filter(|tok| {
+-            let evaluated = portage_dep::evaluate_atom_conditionals(tok, new_use)
+-                .unwrap_or_else(|| tok.clone());
+-            !root_deps_satisfied.contains(&evaluated)
+-        })
+-        .filter(|tok| {
+-            let evaluated = portage_dep::evaluate_atom_conditionals(tok, new_use)
+-                .unwrap_or_else(|| tok.clone());
+-            !root_deps_unsatisfied.contains(&evaluated)
+-        })
+-        .collect();
+-    if let Some(running_root) = ctx.root_deps_running_root {
+-        for atom_str in &root_deps_unsatisfied {
+-            state.entries.extend(resolve_root_deps_build_entries(
+-                ResolveRootDepsBuildEntriesArgs {
+-                    repos: &ctx.repos,
+-                    running_root,
+-                    atom_str,
+-                    config,
+-                    owner: key.clone(),
+-                    seen: &mut state.root_deps_build_seen,
+-                    local_binpkg: &ctx.local_binpkg,
+-                },
+-            ));
+-        }
+-    }
++    ControlFlow::Continue(flat_deps)
++}
++
++/// The values [`enqueue_flipped_tokens`] reads from its caller.
++pub(crate) struct EnqueueFlippedTokensArgs<'a> {
++    pub(crate) state: &'a mut PassState,
++    pub(crate) flat_deps: &'a [String],
++    pub(crate) new_use: &'a HashSet<String>,
++    pub(crate) ctx: &'a ResolveCtx<'a>,
++    pub(crate) config: &'a Config,
++    pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
++    pub(crate) bp: &'a BacktrackParams,
++    pub(crate) running_tags: &'a HashSet<String>,
++    pub(crate) key: &'a (String, String),
++    pub(crate) existing_version: &'a str,
++    pub(crate) existing_depth: u32,
++    pub(crate) buildtime_atoms: &'a HashSet<String>,
++    pub(crate) runtime_atoms: &'a HashSet<String>,
++    pub(crate) bdepend_atoms: &'a HashSet<String>,
++    pub(crate) tokens: &'a [String],
++    pub(crate) existing_idx: usize,
++    pub(crate) delta_meta: &'a Arc<HashMap<String, String>>,
++    pub(crate) portage_order_keys: &'a [&'a str],
++}
++
++/// Queue the genuinely new atoms of the flipped dependency strings and add their merge-order edges.
++pub(crate) fn enqueue_flipped_tokens(args: EnqueueFlippedTokensArgs<'_>) -> ControlFlow<()> {
++    let EnqueueFlippedTokensArgs {
++        state,
++        flat_deps,
++        new_use,
++        ctx,
++        config,
++        union_constraints,
++        bp,
++        running_tags,
++        key,
++        existing_version,
++        existing_depth,
++        buildtime_atoms,
++        runtime_atoms,
++        bdepend_atoms,
++        tokens,
++        existing_idx,
++        delta_meta,
++        portage_order_keys,
++    } = args;
+     // Only genuinely new atoms flow, compared in evaluated form: re-queueing a
+     // visited/queued atom would duplicate puller rows and re-resolve it.
+     let queued_atoms: HashSet<&str> = state.queue.iter().map(|q| q.atom.as_str()).collect();
+     let mut new_toks: Vec<String> = Vec::new();
+-    for tok in &flat_deps {
++    for tok in flat_deps {
+         let evaluated =
+             portage_dep::evaluate_atom_conditionals(tok, new_use).unwrap_or_else(|| tok.clone());
+         if state.visited_atoms.contains(&evaluated) || queued_atoms.contains(evaluated.as_str()) {
+@@ -487,7 +612,7 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+         new_toks.push(tok.clone());
+     }
+     if new_toks.is_empty() {
+-        return;
++        return ControlFlow::Break(());
+     }
+     // A text-new atom that cleanly re-resolves to its settled slot is dropped
+     // before any bookkeeping, or the pop would synthesize the phantom edge.
+@@ -511,7 +636,7 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+         kept_toks.push(tok.clone());
+     }
+     if kept_toks.is_empty() {
+-        return;
++        return ControlFlow::Break(());
+     }
+     let new_toks = kept_toks;
+     for tok in &new_toks {
+@@ -538,11 +663,11 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+         parent_use: new_use,
+         queue: &mut state.queue,
+         pending_blockers: &mut state.pending_blockers,
+-        buildtime_atoms: &buildtime_atoms,
+-        runtime_atoms: &runtime_atoms,
+-        bdepend_atoms: &bdepend_atoms,
+-        or_universe: &or_group_universe(&tokens),
+-        running_atoms: &running_tags,
++        buildtime_atoms,
++        runtime_atoms,
++        bdepend_atoms,
++        or_universe: &or_group_universe(tokens),
++        running_atoms: running_tags,
+         owner_targets_running_root: state.entries[existing_idx].targets_running_root,
+     });
+     // Merge-order edges are added ONLY for newly-queued targets: unioning the
+@@ -558,7 +683,7 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+         .collect();
+     if !new_targets.is_empty() {
+         let fresh_edges =
+-            merge_order::dep_edges_from_metadata(&delta_meta, new_use, portage_order_keys, false);
++            merge_order::dep_edges_from_metadata(delta_meta, new_use, portage_order_keys, false);
+         let entry_deps = &mut state.entries[existing_idx].deps;
+         for edge in fresh_edges {
+             if new_targets.contains(&(edge.category.clone(), edge.package.clone()))
+@@ -568,6 +693,39 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+             }
+         }
+     }
++    ControlFlow::Continue(())
++}
++
++/// The values [`enqueue_test_deps_for_flip`] reads from its caller.
++pub(crate) struct EnqueueTestDepsForFlipArgs<'a> {
++    pub(crate) ctx: &'a ResolveCtx<'a>,
++    pub(crate) existing_depth: u32,
++    pub(crate) new_use: &'a HashSet<String>,
++    pub(crate) delta_meta: &'a Arc<HashMap<String, String>>,
++    pub(crate) key: &'a (String, String),
++    pub(crate) existing_cand: &'a Candidate,
++    pub(crate) existing_version: &'a str,
++    pub(crate) config: &'a Config,
++    pub(crate) tokens: &'a [String],
++    pub(crate) state: &'a mut PassState,
++    pub(crate) existing_idx: usize,
++}
++
++/// Queue the test? dependencies the USE flip newly enables (top-level only).
++pub(crate) fn enqueue_test_deps_for_flip(args: EnqueueTestDepsForFlipArgs<'_>) {
++    let EnqueueTestDepsForFlipArgs {
++        ctx,
++        existing_depth,
++        new_use,
++        delta_meta,
++        key,
++        existing_cand,
++        existing_version,
++        config,
++        tokens,
++        state,
++        existing_idx,
++    } = args;
+     // `--with-test-deps` follow-up (top-level only): the flip may newly enable
+     // `test?` deps the pre-flip USE hid.
+     if ctx.with_test_deps && existing_depth == 0 && !new_use.contains("test") {
+@@ -596,7 +754,7 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+             test_uselist.insert("test".to_string());
+             let subset: HashSet<String> = ["test".to_string()].into_iter().collect();
+             if let Ok(test_deps) = portage_use_reduce::use_reduce_flat_subset(
+-                &tokens,
++                tokens,
+                 &test_uselist,
+                 portage_use_reduce::MatchMode::Normal,
+                 &subset,
+@@ -632,3 +790,30 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
+         }
+     }
+ }
++
++/// Whether every atom of the group belongs to the running root.
++fn group_running(
++    atoms: &[String],
++    cross_running_root: Option<&Path>,
++    running_tags: &HashSet<String>,
++) -> bool {
++    cross_running_root.is_some() && atoms.iter().all(|a| running_tags.contains(a))
++}
++
++/// Flatten the dependency strings of `keys` under `new_use` into their atoms.
++fn flatten_keys(
++    keys: &[&str],
++    delta_meta: &HashMap<String, String>,
++    new_use: &HashSet<String>,
++) -> HashSet<String> {
++    let joined: String = keys
++        .iter()
++        .filter_map(|k| delta_meta.get(*k))
++        .map(String::as_str)
++        .collect::<Vec<_>>()
++        .join(" ");
++    let toks: Vec<String> = joined.split_whitespace().map(String::from).collect();
++    portage_use_reduce::use_reduce_flat(&toks, new_use, portage_use_reduce::MatchMode::Normal)
++        .map(|v| v.into_iter().filter(|t| t != "||").collect())
++        .unwrap_or_default()
++}
