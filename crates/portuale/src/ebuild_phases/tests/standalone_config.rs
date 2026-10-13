@@ -309,3 +309,75 @@ fn resolve_unmerge_config_reads_binpkg_format_from_make_conf() {
     );
     std::fs::remove_dir_all(&probe).ok();
 }
+
+/// E5: `md5_slot` reads the cache `SLOT` verbatim (`None` outside a repo).
+#[test]
+fn md5_slot_reads_the_cache_slot_verbatim() {
+    let tmp = TempDir::new("ebuild-phases-test-s2-md5slot").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let repo = tmp.join("repo");
+    std::fs::create_dir_all(repo.join("profiles")).unwrap();
+    std::fs::write(repo.join("profiles/repo_name"), "testrepo\n").unwrap();
+    let pkg_dir = repo.join("dev-libs/slotpkg");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    std::fs::write(pkg_dir.join("slotpkg-2.1.ebuild"), "EAPI=8\nSLOT=\"0/1\"\n").unwrap();
+    let cache_dir = repo.join("metadata/md5-cache/dev-libs");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::write(
+        cache_dir.join("slotpkg-2.1"),
+        "EAPI=8\nIUSE=\nKEYWORDS=amd64\nSLOT=0/1\n\
+         _md5_=0000000000000000000000000000000\n",
+    )
+    .unwrap();
+    let portage_tmpdir = tmp.join("pt");
+    let env = compute_environment(&pkg_dir.join("slotpkg-2.1.ebuild"), &portage_tmpdir)
+        .expect("synthetic ebuild parses");
+    assert_eq!(md5_slot(&env).as_deref(), Some("0/1"));
+
+    // Outside any repo checkout there is no cache to read.
+    let lone = tmp.join("lone");
+    std::fs::create_dir_all(lone.join("dev-libs/solo")).unwrap();
+    std::fs::write(lone.join("dev-libs/solo/solo-1.0.ebuild"), "EAPI=8\n").unwrap();
+    let lone_env =
+        compute_environment(&lone.join("dev-libs/solo/solo-1.0.ebuild"), &portage_tmpdir)
+            .expect("lone ebuild parses");
+    assert_eq!(md5_slot(&lone_env), None);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// E3: `phase_replacing_versions` joins the installed same-main-slot
+/// versions, sorted (`""` on a fresh root); other slots and other
+/// packages never leak in.
+#[test]
+fn phase_replacing_versions_lists_the_installed_same_slot_versions() {
+    let tmp = TempDir::new("ebuild-phases-test-s2-replacing").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let root = tmp.join("root");
+    assert_eq!(
+        phase_replacing_versions(&root, "dev-libs", "rvpkg", "0"),
+        ""
+    );
+    let vdb = |pf: &str, slot: &str| {
+        let dir = root.join(format!("var/db/pkg/dev-libs/{pf}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SLOT"), format!("{slot}\n")).unwrap();
+    };
+    vdb("rvpkg-2.0", "0");
+    vdb("rvpkg-1.0", "0");
+    vdb("rvpkg-9.9", "1");
+    vdb("other-3.0", "0");
+    assert_eq!(
+        phase_replacing_versions(&root, "dev-libs", "rvpkg", "0"),
+        "1.0 2.0"
+    );
+    assert_eq!(
+        phase_replacing_versions(&root, "dev-libs", "rvpkg", "1"),
+        "9.9"
+    );
+    // A full `slot/sub` query matches on the main slot.
+    assert_eq!(
+        phase_replacing_versions(&root, "dev-libs", "rvpkg", "0/1"),
+        "1.0 2.0"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

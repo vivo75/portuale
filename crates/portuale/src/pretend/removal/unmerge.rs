@@ -491,6 +491,8 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
             options: &options,
             backup: backup.as_ref(),
             is_replacement: false,
+            // Standalone `emerge -C`: no replacing version.
+            replaced_by_version: None,
             replacement_preserved: &BTreeMap::new(),
             replacement_needed: &[],
             deferred_delete: None,

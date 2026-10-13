@@ -43,3 +43,9 @@ The post-install merge driver and same-slot unmerge.
 
 ## struct RunVdbSavedEnvPhaseArgs
 - The phase runs from the entry's own vdb-stored `environment.bz2` + `<pf>.ebuild`, copied into `scratch_dir` as `<cat>/<pn>/<pf>.ebuild` so `compute_environment`'s `<cat>/<pn>/<pf>.ebuild` path parse works (the vdb layout is `<cat>/<pf>/<pf>.ebuild`). Errors if the vdb entry carries no saved environment or ebuild (a package installed before portuale started keeping them).
+
+## fn merge_after_install (REPLACING always, preinst A, #348 S2 E3)
+- `REPLACING_VERSIONS` is always threaded into `preinst`/`postinst` envs (empty on fresh installs, like `treewalk` sets it unconditionally); the replace-var phase gate lives in `apply_eapi_phase_env`. `preinst` re-supplies `A` via `source_distfiles` exactly like `postinst` (the filtered `${T}/environment` drops it).
+
+## fn unmerge_replaced_same_slot / struct UnmergeOneInstalledArgs (replaced_by_version, #348 S2 E3)
+- The replace loop passes the replacing version down to the old version's hooks as `REPLACED_BY_VERSION` (`new_pf` minus `package-`); standalone `emerge -C` passes `None` (Portage: `dblink.treewalk` sets it, `dblink.unmerge` does not).

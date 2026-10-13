@@ -61,3 +61,17 @@ The environment variables and PATH a phase runs with.
 
 ## fn shell_single_quote
 - A POSIX single-quoted shell word: everything between `'…'` is literal, and an embedded `'` is the usual `'\''` close/escape/reopen dance. `$`, backticks, `\`, `"`, whitespace and newlines are all inert inside it. Used by `phase_setup_script` for every brush `export` value (G6 of the #37 plan).
+
+## fn phase_func_name
+- Portage's `_phase_func_map` (`doebuild.py:143-159`), all 15 runnable phases; internal phases (`clean`, `depend`, `instprep`, `fetch`, `merge`, …) map to nothing. #348 S2 (E1).
+
+## fn is_src_like_phase
+- `phase == "setup"` or the mapped function starts with `src_*` (`config.py`, `environ`'s `src_like_phase`): only those phases keep `ESYSROOT`. #348 S2 (E4).
+
+## fn apply_eapi_phase_env
+- Central per-EAPI, per-phase export rules applied after `extra_env` (caller values win — same last-wins layering as Portage's configdict stack). Every decision reads `EapiAttrs` (#348 S1), never a hard-coded EAPI: `exports_ebuild_phase_func` (E1 FUNC set), `exports_merge_type`/`exports_replace_vars` + phase gates (E3 drops; `REPLACING_VERSIONS` defaults to `phase_replacing_versions`, `""` fresh), `sysroot`/`broot` (E4 `SYSROOT` always, `ESYSROOT` src-like only, `BROOT`), md5 `SLOT` (E5), `A` reduced against the fetch `USE` for every non-`depend` phase (E2), standalone `IUSE_EFFECTIVE` + synthesized `BASH_FUNC____in_portage_iuse%%` body (E6). At EAPI 7/8 every gate is open, so merge/saved-env paths that already thread a value see no change.
+- `PORTAGE_INTERNAL_CALLER=1` is pushed with the other computed literals: `use()`'s strict branch needs it (`phase-helpers.sh:270`), and the oracle shows `declare -rx` in direct, merge and unmerge phases alike (`config.py`, `portage._internal_caller`).
+- Brush cannot `export BASH_FUNC_…%%=…` (not a valid identifier), so `phase_setup_script` emits `___in_portage_iuse() { … }` as a function definition instead; bash imports the execve-passed var as the same function and `ebuild.sh:11` (`export -n -f`) hides the variable on both sides.
+
+## fn eapi_path_var
+- #348 S2: the trailing-slash decision now reads `path_variables_end_with_trailing_slash` from `EapiAttrs` instead of matching `0..6`; behaviour identical (`SYSROOT` is always stripped per bug 654600 and never comes through here).

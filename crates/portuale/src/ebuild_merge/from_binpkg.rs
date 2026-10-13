@@ -144,9 +144,12 @@ pub fn merge_binpkg(
     let seeded = std::cell::Cell::new(false);
     // `REPLACING_VERSIONS` is computed before the hooks so the closure
     // can thread it into `pkg_preinst`/`pkg_postinst`; `merge_tree`
-    // reuses the same value.
+    // reuses the same value. Always threaded (empty on a fresh install),
+    // like `_emerge/Binpkg` sets it unconditionally: the replace-var
+    // phase gate lives centrally in `apply_eapi_phase_env`.
     let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
-    let replacing_versions = replacing_versions(&package, installed_instance.as_deref());
+    let replacing_versions =
+        replacing_versions(&package, installed_instance.as_deref()).unwrap_or_default();
     let run_hook_ex =
         |phase: &str, always: bool, update_env: Option<&Path>| -> Result<i32, String> {
             match &extracted_ebuild {
@@ -166,7 +169,9 @@ pub fn merge_binpkg(
                             log_file: options.log_file.as_deref(),
                             update_env,
                             refresh_features: update_env.map(|_| options.features.as_str()),
-                            replacing_versions: replacing_versions.as_deref(),
+                            replacing_versions: Some(replacing_versions.as_str()),
+                            merge_type: Some("binary"),
+                            replaced_by_version: None,
                         },
                     )
                 }

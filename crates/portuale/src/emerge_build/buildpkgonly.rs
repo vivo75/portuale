@@ -271,6 +271,14 @@ pub(crate) fn buildpkgonly_entry_build_env(
         entry,
         Some(candidate),
     ));
+    // A `--buildpkgonly` build is neither a source merge nor a binary
+    // install (`EbuildBuild` sets exactly this; the emerge scheduler sets
+    // `source` the same way for real merges). `exports_merge_type`
+    // (EAPI 4+) is enforced centrally in `apply_eapi_phase_env`.
+    // Portage: _emerge/EbuildBuild.py
+    if !build_env.iter().any(|(k, _)| k == "MERGE_TYPE") {
+        build_env.push(("MERGE_TYPE".to_string(), "buildonly".to_string()));
+    }
     // Re-derive the xpak pipe command from the layered env, as the
     // install phases save it and `__dyn_package` reads it back through
     // `${T}/environment`.

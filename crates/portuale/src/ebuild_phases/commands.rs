@@ -70,12 +70,23 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
             use_flags: &use_flags,
         })
         .await?;
-        // Portage exports `A` for EAPI 4+ but never `AA`; the floor here is EAPI 5+.
+        // Portage exports `A` for EAPI 4+ but never `AA`
+        // (`exports_AA` ends at 3); the floor here is EAPI 5+.
+        // `AA`'s absence is enforced centrally in `apply_eapi_phase_env`.
         extra_env.push(("A".to_string(), a.join(" ")));
         Some(a)
     } else {
         None
     };
+    // A direct `ebuild <file> <phase>` run is a source merge
+    // (`EMERGE_FROM=ebuild` rides in `phase_env_vars` already):
+    // `MERGE_TYPE=source`, like `doebuild()` sets for `tree == "porttree"`.
+    // `exports_merge_type` (EAPI 4+) is enforced centrally in
+    // `apply_eapi_phase_env`, which also drops it for older EAPIs.
+    // Portage: doebuild.py, doebuild
+    if !extra_env.iter().any(|(k, _)| k == "MERGE_TYPE") {
+        extra_env.push(("MERGE_TYPE".to_string(), "source".to_string()));
+    }
     // Portage: doebuild.py, doebuild — the fake distdir is prepared unless the
     // command is bare `setup` (FEATURES=noauto excepted); `install`/`unpack`
     // chains always need it. The first test is over the command, not the chain.

@@ -75,7 +75,7 @@ fn sandbox_name_tables_are_one_plain_name_per_line() {
         }
     }
     assert_eq!(SANDBOXED_SRC_PHASES.lines().count(), 6);
-    assert_eq!(ENVIRON_WHITELIST.lines().count(), 153);
+    assert_eq!(ENVIRON_WHITELIST.lines().count(), 154);
     assert!(listed(SANDBOXED_SRC_PHASES, "compile"));
     assert!(!listed(SANDBOXED_SRC_PHASES, "setup"));
     assert!(environ_whitelisted("HOME") && environ_whitelisted("CCACHE_DIR"));

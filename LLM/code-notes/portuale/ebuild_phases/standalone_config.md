@@ -59,3 +59,15 @@ Configuration for standalone `ebuild` phases and unmerge. Context moved out of t
 
 ## fn resolve_unmerge_config
 - The resolved global `Config` for the config-less `emerge -C` path (`execute_unmerge`'s `FEATURES=unmerge-backup` quickpkg, backlog #173): the same `resolve_config` chain (`make.globals` → profile `make.defaults` → `make.conf`) every other path reads, minus any package identity -- `BINPKG_FORMAT` is a global scalar, not a per-package one, so no ebuild path / `package.env` match is needed (unlike the standalone helpers above, which resolve through an ebuild's own path). `None` when no config resolves (missing `repos.conf`, no main repo, `resolve_config` error) -- the caller keeps Portage's `make.globals` default (`PackageOptions::default().binpkg_format`).
+
+## fn md5_slot
+- The cache `SLOT` for standalone phases (`None` outside a repo); the merge drivers thread their own. #348 S2 (E5). Portage: `doebuild_environment` → `setcpv` (`aux_get`).
+
+## fn md5_iuse
+- The cache declared `IUSE` tokens (raw, `+`/`-` kept for `iuse_bare`); feeds `standalone_iuse_pair`. #348 S2 (E6).
+
+## fn phase_replacing_versions
+- Installed same-main-slot versions, sorted, space-joined (`""` fresh) for the `REPLACING_VERSIONS` default. Portage joins a set (nondeterministic order); sorted is the deterministic equivalent. Multi-same-slot divergence vs `replacing_versions()` (single highest-counter, kept for the merge drivers) is known and unpinned. #348 S2 (E3). Portage: `doebuild.py` (`vardb.match(cpv_slot) + vardb.match("="+cpv)`), `_emerge/EbuildExecuter.py`, `Scheduler.py`, `vartree.py`.
+
+## fn standalone_iuse_pair
+- `IUSE_EFFECTIVE` + `___in_portage_iuse` body for standalone phases (own `resolve_standalone_config`, md5 `IUSE`, profile implicit set; `None` outside a repo or below `iuse_effective`, where Portage serves the `PORTAGE_IUSE`-regex form instead). #348 S2 (E6). Portage: `config.py`, `setcpv` (`:2181-2185`).

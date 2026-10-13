@@ -25,3 +25,6 @@
 ## fn buildpkgonly_entry_build_env
 - Ports Portage's per-entry `config.environ()` (backlog #129). Incrementals layer before the tail so the base is the run-wide value, matching `entry_build_env`'s order; then the resolved `USE`/`IUSE_EFFECTIVE`/`USE_EXPAND` and `SLOT`/repo identity rows.
 - Per-package `BINPKG_COMPRESS` (backlog #147 S2): the matched scalars are layered above, so the xpak pipe command is re-derived here; the install phases save this env and Portage's `__dyn_package` reads it back through the saved `${T}/environment`. Unmatched entries recompute the run-wide command byte-identically (backlog #180: the re-derivation falls back through the calling env to the config's own file chain, so a `make.conf` value survives it).
+
+## fn buildpkgonly_entry_build_env (MERGE_TYPE, #348 S2 E3)
+- Threads `MERGE_TYPE=buildonly` (a `--buildpkgonly` build is neither a source merge nor a binary install); `exports_merge_type` is enforced centrally in `apply_eapi_phase_env`. Portage: `_emerge/EbuildBuild.py`.

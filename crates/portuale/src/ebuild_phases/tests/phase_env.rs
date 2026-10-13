@@ -1,13 +1,27 @@
 use super::*;
 
 /// Path variables lose their trailing slash from EAPI 7 on, so
-/// `ROOT=/` is exported empty.
+/// `ROOT=/` is exported empty. The decision reads
+/// `path_variables_end_with_trailing_slash` (EAPI 6 and below), never a
+/// hard-coded EAPI list.
 #[test]
 fn eapi_path_var_strips_the_trailing_slash_from_eapi_7() {
-    assert_eq!(eapi_path_var("8", "//"), "");
-    assert_eq!(eapi_path_var("7", "/var/tmp/p/image/"), "/var/tmp/p/image");
-    assert_eq!(eapi_path_var("6", "/"), "/");
-    assert_eq!(eapi_path_var("5", "/var/tmp/p/image/"), "/var/tmp/p/image/");
+    use portage_dep::eapi::eapi_attrs;
+    let trailing = |eapi: &str| {
+        eapi_attrs(Some(eapi))
+            .unwrap()
+            .path_variables_end_with_trailing_slash
+    };
+    assert_eq!(eapi_path_var(trailing("8"), "//"), "");
+    assert_eq!(
+        eapi_path_var(trailing("7"), "/var/tmp/p/image/"),
+        "/var/tmp/p/image"
+    );
+    assert_eq!(eapi_path_var(trailing("6"), "/"), "/");
+    assert_eq!(
+        eapi_path_var(trailing("5"), "/var/tmp/p/image/"),
+        "/var/tmp/p/image/"
+    );
 }
 
 /// A threaded `PATH` pair is the base behind the helper dir,
@@ -217,4 +231,251 @@ fn standalone_phase_env_layers_matching_package_env_build_vars() {
             .any(|(_, v)| v.contains("-march=fixturepkgenv")),
         "depend keeps its empty base"
     );
+}
+
+/// E1: `phase_func_name` is Portage's `_phase_func_map` exactly: the 15
+/// runnable phases map to their function, every internal phase maps to
+/// nothing (so `EBUILD_PHASE_FUNC` stays unset there).
+// Portage: doebuild.py, _phase_func_map
+#[test]
+fn phase_func_name_maps_exactly_portages_phase_func_map() {
+    for (phase, func) in [
+        ("config", "pkg_config"),
+        ("setup", "pkg_setup"),
+        ("nofetch", "pkg_nofetch"),
+        ("unpack", "src_unpack"),
+        ("prepare", "src_prepare"),
+        ("configure", "src_configure"),
+        ("compile", "src_compile"),
+        ("test", "src_test"),
+        ("install", "src_install"),
+        ("preinst", "pkg_preinst"),
+        ("postinst", "pkg_postinst"),
+        ("prerm", "pkg_prerm"),
+        ("postrm", "pkg_postrm"),
+        ("info", "pkg_info"),
+        ("pretend", "pkg_pretend"),
+    ] {
+        assert_eq!(phase_func_name(phase), Some(func), "{phase}");
+    }
+    for phase in [
+        "clean", "cleanrm", "depend", "fetch", "instprep", "merge", "package", "qmerge", "unmerge",
+        "bogus",
+    ] {
+        assert_eq!(phase_func_name(phase), None, "{phase}");
+    }
+    // `ESYSROOT` survives only for `setup` and the `src_*` phases.
+    // Portage: config.py, environ (`src_like_phase`)
+    assert!(is_src_like_phase("setup"));
+    for phase in [
+        "unpack",
+        "prepare",
+        "configure",
+        "compile",
+        "test",
+        "install",
+    ] {
+        assert!(is_src_like_phase(phase), "{phase}");
+    }
+    for phase in [
+        "pretend", "preinst", "postinst", "prerm", "postrm", "config", "info", "clean", "instprep",
+    ] {
+        assert!(!is_src_like_phase(phase), "{phase}");
+    }
+}
+
+/// E1–E6: a standalone `setup` exports the per-EAPI phase environment —
+/// `EBUILD_PHASE_FUNC`, `A`, `SYSROOT`/`ESYSROOT`/`BROOT`, `SLOT`,
+/// `REPLACING_VERSIONS` (fresh root: `""`), `IUSE_EFFECTIVE` with its
+/// `___in_portage_iuse` body, and `PORTAGE_INTERNAL_CALLER`.
+/// `dev-libs/usebuildpkg` (EAPI 8, `IUSE="buildflag"`, `SLOT="0"`,
+/// no `SRC_URI`) pins the values; Portage's own are in
+/// `LLM/evidence/2026-10-12-348-s0/b/b-env-7-portage-ebuild-setup.*`.
+#[test]
+fn standalone_setup_exports_the_eapi_phase_environment() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let repo = fixtures.join("repo");
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-env").keep();
+    let bin_dir = bin_dir().unwrap().to_path_buf();
+    let vars_for = |phase: &str, extra_env: &[(String, String)]| {
+        let env = compute_environment(
+            &repo.join("dev-libs/usebuildpkg/usebuildpkg-1.0.ebuild"),
+            &portage_tmpdir,
+        )
+        .expect("fixture ebuild parses");
+        phase_env_vars(PhaseEnvVarsArgs {
+            env: &env,
+            root: &fixtures,
+            ebuild_phase_value: phase,
+            debug: false,
+            bin_dir: &bin_dir,
+            helpers_dir: &bin_dir.join("ebuild-helpers"),
+            config_root: &fixtures,
+            extra_env,
+        })
+    };
+    let get = |vars: &[(String, String)], key: &str| {
+        vars.iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .next_back()
+    };
+    let setup_vars = vars_for("setup", &[]);
+    assert_eq!(
+        get(&setup_vars, "EBUILD_PHASE_FUNC").as_deref(),
+        Some("pkg_setup")
+    );
+    assert_eq!(get(&setup_vars, "A").as_deref(), Some(""));
+    assert_eq!(get(&setup_vars, "SYSROOT").as_deref(), Some(""));
+    assert_eq!(get(&setup_vars, "ESYSROOT").as_deref(), Some(""));
+    assert_eq!(get(&setup_vars, "BROOT").as_deref(), Some(""));
+    assert_eq!(get(&setup_vars, "SLOT").as_deref(), Some("0"));
+    assert_eq!(get(&setup_vars, "REPLACING_VERSIONS").as_deref(), Some(""));
+    assert_eq!(
+        get(&setup_vars, "PORTAGE_INTERNAL_CALLER").as_deref(),
+        Some("1")
+    );
+    let iuse = get(&setup_vars, "IUSE_EFFECTIVE").expect("IUSE_EFFECTIVE is set");
+    assert!(
+        iuse.split_whitespace().any(|f| f == "buildflag"),
+        "declared IUSE joins the implicit set: {iuse}"
+    );
+    let body = get(&setup_vars, "BASH_FUNC____in_portage_iuse%%")
+        .expect("the in_portage_iuse gate is exported");
+    assert!(body.starts_with("() {"), "{body}");
+    assert!(body.contains("[\"buildflag\"]=1"), "{body}");
+
+    // `preinst` is not src-like: no `ESYSROOT`, but the function,
+    // `REPLACING_VERSIONS` default and `SLOT` stay.
+    let preinst_vars = vars_for("preinst", &[]);
+    assert_eq!(
+        get(&preinst_vars, "EBUILD_PHASE_FUNC").as_deref(),
+        Some("pkg_preinst")
+    );
+    assert_eq!(get(&preinst_vars, "ESYSROOT"), None);
+    assert_eq!(get(&preinst_vars, "SYSROOT").as_deref(), Some(""));
+    assert_eq!(
+        get(&preinst_vars, "REPLACING_VERSIONS").as_deref(),
+        Some("")
+    );
+
+    // `prerm`: neither replace var survives without a caller value.
+    let prerm_vars = vars_for("prerm", &[]);
+    assert_eq!(
+        get(&prerm_vars, "EBUILD_PHASE_FUNC").as_deref(),
+        Some("pkg_prerm")
+    );
+    assert_eq!(get(&prerm_vars, "REPLACING_VERSIONS"), None);
+    assert_eq!(get(&prerm_vars, "REPLACED_BY_VERSION"), None);
+
+    // Caller values win, but the phase gates still apply: a
+    // `REPLACING_VERSIONS` threaded into `compile` is dropped, a
+    // binary `MERGE_TYPE` and a `REPLACED_BY_VERSION` for `prerm` stay.
+    let compile_vars = vars_for(
+        "compile",
+        &[
+            ("MERGE_TYPE".to_string(), "binary".to_string()),
+            ("REPLACING_VERSIONS".to_string(), "7".to_string()),
+        ],
+    );
+    assert_eq!(get(&compile_vars, "MERGE_TYPE").as_deref(), Some("binary"));
+    assert_eq!(get(&compile_vars, "REPLACING_VERSIONS"), None);
+    let prerm_replaced = vars_for(
+        "prerm",
+        &[("REPLACED_BY_VERSION".to_string(), "8".to_string())],
+    );
+    assert_eq!(
+        get(&prerm_replaced, "REPLACED_BY_VERSION").as_deref(),
+        Some("8")
+    );
+    let setup_replaced = vars_for(
+        "setup",
+        &[("REPLACED_BY_VERSION".to_string(), "8".to_string())],
+    );
+    assert_eq!(get(&setup_replaced, "REPLACED_BY_VERSION"), None);
+
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// Below `iuse_effective` / `broot` / `sysroot` (EAPI 4 here) the gates
+/// close: no `EBUILD_PHASE_FUNC`, no `ESYSROOT`/`BROOT`, no
+/// `IUSE_EFFECTIVE` pair — while `SYSROOT`, `A` and `SLOT` keep their
+/// ungated shapes. `MERGE_TYPE` stays: `exports_merge_type` opens at 4.
+// Portage: eapi.py, _get_eapi_attrs; config.py, environ
+#[test]
+fn old_eapi_closes_the_gated_phase_exports() {
+    let tmp = TempDir::new("ebuild-phases-test-s2-eapi4").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let repo = tmp.join("repo");
+    std::fs::create_dir_all(repo.join("profiles")).unwrap();
+    std::fs::write(repo.join("profiles/repo_name"), "testrepo\n").unwrap();
+    let pkg_dir = repo.join("dev-libs/oldpkg");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    std::fs::write(pkg_dir.join("oldpkg-1.0.ebuild"), "EAPI=4\nSLOT=\"0\"\n").unwrap();
+    let cache_dir = repo.join("metadata/md5-cache/dev-libs");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::write(
+        cache_dir.join("oldpkg-1.0"),
+        "EAPI=4\nIUSE=\nKEYWORDS=amd64\nSLOT=0\n\
+         _md5_=0000000000000000000000000000000\n",
+    )
+    .unwrap();
+    let portage_tmpdir = tmp.join("pt");
+    let env = compute_environment(&pkg_dir.join("oldpkg-1.0.ebuild"), &portage_tmpdir)
+        .expect("synthetic ebuild parses");
+    assert_eq!(env.eapi, "4");
+    let bin_dir = bin_dir().unwrap().to_path_buf();
+    let vars = phase_env_vars(PhaseEnvVarsArgs {
+        env: &env,
+        root: &tmp,
+        ebuild_phase_value: "setup",
+        debug: false,
+        bin_dir: &bin_dir,
+        helpers_dir: &bin_dir.join("ebuild-helpers"),
+        config_root: &tmp,
+        extra_env: &[],
+    });
+    let get = |key: &str| {
+        vars.iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .next_back()
+    };
+    assert_eq!(get("EBUILD_PHASE_FUNC"), None);
+    assert_eq!(get("ESYSROOT"), None);
+    assert_eq!(get("BROOT"), None);
+    assert_eq!(get("IUSE_EFFECTIVE"), None);
+    assert_eq!(get("BASH_FUNC____in_portage_iuse%%"), None);
+    assert_eq!(get("SYSROOT").as_deref(), Some(""));
+    assert_eq!(get("A").as_deref(), Some(""));
+    assert_eq!(get("SLOT").as_deref(), Some("0"));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The brush setup script defines `___in_portage_iuse` instead of
+/// emitting an unparsable `export BASH_FUNC_…%%=…` line.
+#[test]
+fn brush_setup_script_defines_in_portage_iuse_as_a_function() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let repo = fixtures.join("repo");
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-brush").keep();
+    let bin_dir = bin_dir().unwrap().to_path_buf();
+    let env = compute_environment(
+        &repo.join("dev-libs/usebuildpkg/usebuildpkg-1.0.ebuild"),
+        &portage_tmpdir,
+    )
+    .expect("fixture ebuild parses");
+    let script = phase_setup_script(PhaseSetupScriptArgs {
+        env: &env,
+        root: &fixtures,
+        ebuild_phase_value: "setup",
+        debug: false,
+        bin_dir: &bin_dir,
+        helpers_dir: &bin_dir.join("ebuild-helpers"),
+        config_root: &fixtures,
+        extra_env: &[],
+    });
+    assert!(script.contains("___in_portage_iuse() {"), "{script}");
+    assert!(!script.contains("export BASH_FUNC"), "{script}");
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }

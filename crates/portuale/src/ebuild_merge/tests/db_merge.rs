@@ -564,6 +564,7 @@ fn unmerge_standalone(root: &Path, ptmp: &Path, pf: &str, pn: &str) {
         options: &MergeOptions::default(),
         backup: None,
         is_replacement: false,
+        replaced_by_version: None,
         replacement_preserved: &BTreeMap::new(),
         replacement_needed: &[],
         deferred_delete: None,

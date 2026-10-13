@@ -25,3 +25,6 @@ Merging a binary package.
 - Portage's `_emerge/Binpkg._start_task`: "Store the md5sum in the vdb."
 - Portage's `dblink.treewalk()`: `preinst_mask` + `install_mask_dir` run before `_collision_protect` and before any file is copied -- so a masked path (e.g. `/usr/share/info` under `FEATURES=noinfo`) never reaches `${ROOT}` and never shows up in the vdb `CONTENTS`. The resolved `INSTALL_MASK` also lands in `build-info`, so `populate_vdb_tmp` copies it into the vdb entry.
 - Portage's `treewalk()`: a preserved lib this new version now provides itself is taken over from the `preserved_libs_registry` and stripped from the previous owner's `CONTENTS` -- identical to `merge_after_install`. The collision check carries no ebuild/repo, so `mypkglist`'s blocker term comes from the `*DEPEND` build-info files.
+
+## fn merge_binpkg (REPLACING always, #348 S2 E3)
+- `REPLACING_VERSIONS` is always threaded into the saved-env hooks (empty on fresh installs, like `_emerge/Binpkg` sets it unconditionally); `merge_type: Some("binary")` keeps the already-correct `MERGE_TYPE=binary` path untouched.

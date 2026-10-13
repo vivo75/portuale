@@ -69,12 +69,20 @@ pub(crate) fn merge_after_install(
     let main_slot = full_slot.split('/').next().unwrap_or("0");
     let installed_instance_pf =
         installed_instance_pf(root, &env.category, &env.split.pn, main_slot);
-    // `REPLACING_VERSIONS` is set for `pkg_preinst` (and `postinst`).
+    // `REPLACING_VERSIONS` is set for `pkg_preinst` (and `postinst`),
+    // always threaded (empty on a fresh install), like `vartree.py`
+    // `treewalk` sets it unconditionally: the replace-var phase gate
+    // lives centrally in `apply_eapi_phase_env`.
     // Portage: vartree.py, treewalk; doebuild.py, doebuild_environment
-    let replacing_versions = replacing_versions(&env.split.pn, installed_instance_pf.as_deref());
+    let replacing_versions =
+        replacing_versions(&env.split.pn, installed_instance_pf.as_deref()).unwrap_or_default();
     let mut preinst_env = options.build_env.clone();
-    if let Some(version) = &replacing_versions {
-        preinst_env.push(("REPLACING_VERSIONS".to_string(), version.clone()));
+    preinst_env.push(("REPLACING_VERSIONS".to_string(), replacing_versions.clone()));
+    // `A` is re-supplied (the filtered `${T}/environment` drops it),
+    // like `postinst` below.
+    // Portage: vartree.py, treewalk; doebuild.py, doebuild_environment
+    if let Some(a) = source_distfiles(env, &preinst_env) {
+        preinst_env.push(("A".to_string(), a));
     }
 
     // The install mask runs before the collision check and before any
@@ -243,9 +251,7 @@ pub(crate) fn merge_after_install(
         &env.portage_builddir().join("vdb-update-env"),
     )?;
     let mut postinst_env = options.build_env.clone();
-    if let Some(version) = &replacing_versions {
-        postinst_env.push(("REPLACING_VERSIONS".to_string(), version.clone()));
-    }
+    postinst_env.push(("REPLACING_VERSIONS".to_string(), replacing_versions));
     postinst_env.push((
         "PORTAGE_UPDATE_ENV".to_string(),
         update_env.path.display().to_string(),
@@ -360,6 +366,11 @@ pub(crate) fn unmerge_replaced_same_slot(
     // publishing commit, not here; later iterations still treat already
     // unmerged instances as gone.
     let defer_delete = portage_vdb::for_root(root).replace_in_publish();
+    // The version doing the replacing: every replaced same-slot hook
+    // sees it as `REPLACED_BY_VERSION` (Portage: `dblink.treewalk`).
+    let new_version = new_pf
+        .strip_prefix(&format!("{package}-"))
+        .unwrap_or(new_pf);
     for (i, old_pf) in replaced.iter().enumerate() {
         unmerge_one_installed(UnmergeOneInstalledArgs {
             root,
@@ -372,6 +383,7 @@ pub(crate) fn unmerge_replaced_same_slot(
             options,
             backup: None,
             is_replacement: true,
+            replaced_by_version: Some(new_version),
             replacement_preserved,
             replacement_needed: &replacement_needed,
             deferred_delete: defer_delete.then(|| &replaced[..i]),
@@ -416,6 +428,10 @@ pub(crate) struct UnmergeOneInstalledArgs<'a> {
     pub(crate) options: &'a MergeOptions,
     pub(crate) backup: Option<&'a crate::ebuild_package::PackageOptions>,
     pub(crate) is_replacement: bool,
+    /// The replacing version for a replace-loop unmerge (`Some`): its
+    /// hooks see `REPLACED_BY_VERSION`. `None` for a standalone unmerge.
+    /// Portage: vartree.py, `dblink.treewalk` (sets it) vs `dblink.unmerge`.
+    pub(crate) replaced_by_version: Option<&'a str>,
     pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
     pub(crate) deferred_delete: Option<&'a [String]>,
@@ -459,6 +475,7 @@ pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result
         options,
         backup,
         is_replacement,
+        replaced_by_version,
         replacement_preserved,
         replacement_needed,
         deferred_delete,
@@ -511,6 +528,7 @@ pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result
             scratch_dir,
             portage_tmpdir,
             options,
+            replaced_by_version,
         })
     };
 
@@ -555,6 +573,10 @@ pub(crate) struct RunVdbSavedEnvPhaseArgs<'a> {
     pub(crate) scratch_dir: &'a Path,
     pub(crate) portage_tmpdir: &'a Path,
     pub(crate) options: &'a MergeOptions,
+    /// The replacing version for a replace-loop unmerge (`Some`): the
+    /// hook sees `REPLACED_BY_VERSION`. `None` for a standalone unmerge
+    /// (and for `pkg_config`, which is not a replacement either).
+    pub(crate) replaced_by_version: Option<&'a str>,
 }
 
 /// Run one phase for an already-installed `<category>/<pf>` straight from
@@ -575,6 +597,7 @@ pub(crate) fn run_vdb_saved_env_phase(args: RunVdbSavedEnvPhaseArgs<'_>) -> Resu
         scratch_dir,
         portage_tmpdir,
         options,
+        replaced_by_version,
     } = args;
     // The entry's own directory on `files`; on a database backend a
     // scratch copy under `scratch_dir` (nothing stored back).
@@ -613,6 +636,9 @@ pub(crate) fn run_vdb_saved_env_phase(args: RunVdbSavedEnvPhaseArgs<'_>) -> Resu
         crate::ebuild_phases::RunPhaseFromSavedEnvArgs { ebuild_path: &dst, saved_env_bz2: &env, seed: // Each unmerge seeds its own (old version's) builddir once.
         true, phase, root, portage_tmpdir, debug: options.debug, config_root: &options.config_root, shell: options.shell, log_file: options.log_file.as_deref(), update_env: // An unmerge's `prerm`/`postrm` never rewrites a vdb env.
         None, refresh_features: None, replacing_versions: // No `REPLACING_VERSIONS` on an unmerge hook.
-        None },
+        None,
+        // No `MERGE_TYPE`/`EMERGE_FROM` on an unmerge hook either: both
+        // stay unset and `ebuild.sh` re-creates them readonly-empty.
+        merge_type: None, replaced_by_version },
     )
 }

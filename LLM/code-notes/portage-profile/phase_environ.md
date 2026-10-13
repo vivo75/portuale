@@ -58,3 +58,9 @@ Portage `config.environ()` for build-phase environments: the export set a source
 
 ## fn phase_environ_pkg
 - Portage `config.py:2218-2252`.
+
+## fn in_portage_iuse_body
+- The hash-form `___in_portage_iuse` body for EAPIs with `iuse_effective` (5+), byte shape from `config.py:2184-2190`. #348 S2 (E6).
+
+## fn standalone_iuse_effective
+- `(IUSE_EFFECTIVE, body)` from declared `IUSE` + profile implicit set, gated on `EapiAttrs.iuse_effective`; `None` below it (Portage serves the `PORTAGE_IUSE`-regex form there, which this port never builds — below the EAPI floor). #348 S2 (E6). Portage: `config.py`, `setcpv`.

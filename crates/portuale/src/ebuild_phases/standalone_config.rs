@@ -97,6 +97,86 @@ pub(crate) fn resolve_standalone_config(
     .ok()
 }
 
+/// The md5-cache `SLOT` for `env`'s package (`None` outside a repo or
+/// without the entry): what standalone phases export, since no graph
+/// entry threads one. Portage reads the same key via `aux_get`
+/// (`doebuild_environment` → `setcpv`).
+// Portage: doebuild.py, doebuild_environment
+pub(crate) fn md5_slot(env: &Environment) -> Option<String> {
+    let repo_root = repo_root_for(&env.pkg_dir)?;
+    let slot = portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf)
+        .ok()
+        .and_then(|m| m.get("SLOT").cloned())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())?;
+    Some(slot)
+}
+
+/// The md5-cache declared `IUSE` tokens for `env`'s package (raw,
+/// `+`/`-` default markers kept for `iuse_bare`); empty outside a repo
+/// or without the entry.
+pub(crate) fn md5_iuse(env: &Environment) -> Vec<String> {
+    let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
+        return Vec::new();
+    };
+    portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf)
+        .ok()
+        .and_then(|m| m.get("IUSE").cloned())
+        .map(|s| s.split_whitespace().map(String::from).collect())
+        .unwrap_or_default()
+}
+
+/// The installed same-slot versions this build replaces, space-joined
+/// and sorted (`""` on a fresh install): the `REPLACING_VERSIONS`
+/// default for pretend/setup/preinst/postinst. Portage joins a set
+/// (nondeterministic order); the sorted order here is the deterministic
+/// equivalent. Only the main slot compares (a missing `SLOT` reads
+/// `"0"`, like everywhere else).
+// Portage: doebuild.py, doebuild (`vardb.match(cpv_slot) + vardb.match("="+cpv)`);
+//   _emerge/EbuildExecuter.py, Scheduler.py, vartree.py (merge paths)
+pub(crate) fn phase_replacing_versions(
+    root: &Path,
+    category: &str,
+    pn: &str,
+    slot: &str,
+) -> String {
+    let main_slot = slot.split('/').next().unwrap_or(slot);
+    let mut versions: Vec<String> = portage_repo::installed_versions(root, category, pn)
+        .into_iter()
+        .filter(|version| {
+            let pf = format!("{pn}-{version}");
+            let raw = portage_repo::vdb_entry_slot(root, category, &pf);
+            let installed_main = raw.split('/').next().unwrap_or("");
+            let installed_main = if installed_main.is_empty() {
+                "0"
+            } else {
+                installed_main
+            };
+            installed_main == main_slot
+        })
+        .collect();
+    versions.sort();
+    versions.join(" ")
+}
+
+/// `IUSE_EFFECTIVE` plus the `___in_portage_iuse` body for a standalone
+/// phase: the md5-cache declared `IUSE` folded over the resolved
+/// config's implicit set (`None` outside a repo, without a config, or
+/// below `iuse_effective`).
+// Portage: config.py, setcpv
+pub(crate) fn standalone_iuse_pair(
+    env: &Environment,
+    config_root: &Path,
+    eroot: &Path,
+) -> Option<(String, String)> {
+    let eapi_attrs = portage_dep::eapi::eapi_attrs(Some(&env.eapi))
+        .or_else(|_| portage_dep::eapi::eapi_attrs(None))
+        .ok()?;
+    let config = resolve_standalone_config(&env.pkg_dir, config_root, eroot)?;
+    let iuse = md5_iuse(env);
+    portage_profile::standalone_iuse_effective(&config, &iuse, eapi_attrs)
+}
+
 /// The `cat/pkg-ver:slot/sub` identity to match `package.env` against
 /// for an ebuild with no resolved graph entry, from md5-cache `SLOT`.
 pub(crate) fn standalone_cpv_slot(pkg_dir: &Path, category: &str, pf: &str) -> Option<String> {

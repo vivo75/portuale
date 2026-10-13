@@ -81,8 +81,17 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
         extra_env,
     } = args;
     // No EPREFIX support: `ED` collapses to `D`'s value, no separate computation.
-    let d = eapi_path_var(&env.eapi, &format!("{}/", env.d().display()));
-    let root_value = eapi_path_var(&env.eapi, &format!("{}/", root.display()));
+    let attrs = portage_dep::eapi::eapi_attrs(Some(&env.eapi))
+        .or_else(|_| portage_dep::eapi::eapi_attrs(None))
+        .expect("None always yields the permissive set");
+    let d = eapi_path_var(
+        attrs.path_variables_end_with_trailing_slash,
+        &format!("{}/", env.d().display()),
+    );
+    let root_value = eapi_path_var(
+        attrs.path_variables_end_with_trailing_slash,
+        &format!("{}/", root.display()),
+    );
     let resolved_features = features_string(extra_env);
     let path = phase_path(helpers_dir, extra_env, &resolved_features);
     // Config-derived base for standalone runs (USE + whole config env); `("", [])`
@@ -166,6 +175,11 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
         ("USE".to_string(), standalone_base_env.0.clone()),
         ("EPREFIX".to_string(), String::new()),
         ("EMERGE_FROM".to_string(), "ebuild".to_string()),
+        // Portage marks the internal caller so `use()` enforces `IUSE`
+        // membership (`phase-helpers.sh:270`); always set under
+        // `bin/ebuild` and `emerge` alike.
+        // Portage: config.py (`portage._internal_caller`)
+        ("PORTAGE_INTERNAL_CALLER".to_string(), "1".to_string()),
         ("PORTAGE_QUIET".to_string(), "1".to_string()),
         (
             "PORTAGE_DEBUG".to_string(),
@@ -238,6 +252,20 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
             .cloned(),
     );
 
+    // Portage `config.environ()`'s per-EAPI, per-phase export rules: the
+    // `_eapi_attrs` gates plus the `doebuild_environment` dynamics the
+    // callers don't thread (set-but-gated here, so every entry point —
+    // direct `ebuild`, merge builds, saved-env hooks — shares them).
+    apply_eapi_phase_env(ApplyEapiPhaseEnvArgs {
+        vars: &mut vars,
+        env,
+        root,
+        config_root,
+        phase: ebuild_phase_value,
+        extra_env,
+        attrs: &attrs,
+    });
+
     // The actual dir moves to `PORTAGE_ACTUAL_DISTDIR`; `DISTDIR` becomes the
     // per-package fake. No `DISTDIR` at all leaves both untouched.
     // Portage: config.py, config.environ
@@ -290,13 +318,223 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
     vars
 }
 
-/// Trailing `/` on `D`/`ED`/`ROOT`/`EROOT` only for EAPI 6 and below; later EAPIs
-/// strip it (so `ROOT=/` exports `""`). `value` arrives with its slash.
-/// Portage: config.py, eapi.py
-pub(crate) fn eapi_path_var(eapi: &str, value: &str) -> String {
-    let trailing = matches!(eapi, "0" | "1" | "2" | "3" | "4" | "5" | "6");
+/// Portage's `_phase_func_map`: the ebuild function each `EBUILD_PHASE`
+/// runs (`doebuild.py:143-159`). Internal phases (`clean`, `depend`,
+/// `instprep`, `fetch`, …) map to nothing, so `EBUILD_PHASE_FUNC` stays
+/// unset for them, like Portage's `config.environ()`.
+// Portage: doebuild.py, _phase_func_map
+pub(crate) fn phase_func_name(phase: &str) -> Option<&'static str> {
+    match phase {
+        "config" => Some("pkg_config"),
+        "setup" => Some("pkg_setup"),
+        "nofetch" => Some("pkg_nofetch"),
+        "unpack" => Some("src_unpack"),
+        "prepare" => Some("src_prepare"),
+        "configure" => Some("src_configure"),
+        "compile" => Some("src_compile"),
+        "test" => Some("src_test"),
+        "install" => Some("src_install"),
+        "preinst" => Some("pkg_preinst"),
+        "postinst" => Some("pkg_postinst"),
+        "prerm" => Some("pkg_prerm"),
+        "postrm" => Some("pkg_postrm"),
+        "info" => Some("pkg_info"),
+        "pretend" => Some("pkg_pretend"),
+        _ => None,
+    }
+}
+
+/// Whether `ESYSROOT` survives `config.environ()` for `phase`: only
+/// `setup` and the `src_*` phases carry it (`eapi_has_sysroot` gates the
+/// value itself).
+// Portage: config.py, environ (`src_like_phase`)
+pub(crate) fn is_src_like_phase(phase: &str) -> bool {
+    phase == "setup" || phase_func_name(phase).is_some_and(|f| f.starts_with("src_"))
+}
+
+/// The name of the `___in_portage_iuse` export Portage threads through
+/// `configdict["env"]` (`config.py:2185`).
+const IN_PORTAGE_IUSE_FUNC: &str = "BASH_FUNC____in_portage_iuse%%";
+
+/// Portage `config.environ()`'s per-EAPI, per-phase export rules for one
+/// phase, applied after the caller's `extra_env` (whose values win when
+/// present — the same last-wins layering `config.environ()` gets from
+/// its configdict stack). Every decision reads `attrs`
+/// (`portage_dep::eapi::eapi_attrs`, S1), never a hard-coded EAPI
+/// threshold: at the floor (EAPI 7/8) every gate below is open, so the
+/// saved-env and merge paths that already thread a value see no change.
+///
+/// Rules mirrored (`config.py`, `environ`; `doebuild.py`,
+/// `doebuild_environment`):
+/// - `EBUILD_PHASE_FUNC` is (re)set from [`phase_func_name`] when
+///   `exports_ebuild_phase_func` (E1).
+/// - `MERGE_TYPE`/`REPLACING_VERSIONS`/`REPLACED_BY_VERSION` that fail
+///   their `exports_merge_type`/`exports_replace_vars` or phase gate are
+///   dropped; a missing `REPLACING_VERSIONS` defaults to the installed
+///   same-slot versions (`""` fresh) for
+///   pretend/setup/preinst/postinst (E3).
+/// - `SYSROOT`/`ESYSROOT`/`BROOT` default to `""` under their
+///   `sysroot`/`broot` gates (`ESYSROOT` only for
+///   [`is_src_like_phase`]) (E4).
+/// - `SLOT` defaults to the md5-cache value (E5).
+/// - `A` defaults to the USE-reduced distfile list (`""` without
+///   `SRC_URI`, like Portage's `InvalidDependString` fallbacks) for
+///   every phase but `depend` (E2).
+/// - `IUSE_EFFECTIVE` defaults to the standalone pair (declared `IUSE`
+///   plus the profile implicit set) with its `___in_portage_iuse` body;
+///   when any path already carries `IUSE_EFFECTIVE`, only a missing
+///   function body is synthesized from it (E6).
+///
+/// Arguments of [`apply_eapi_phase_env`].
+/// Portage: config.py, environ; doebuild.py, doebuild_environment
+pub(crate) struct ApplyEapiPhaseEnvArgs<'a> {
+    pub(crate) vars: &'a mut Vec<(String, String)>,
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) phase: &'a str,
+    pub(crate) extra_env: &'a [(String, String)],
+    pub(crate) attrs: &'a portage_dep::eapi::EapiAttrs,
+}
+
+pub(crate) fn apply_eapi_phase_env(args: ApplyEapiPhaseEnvArgs<'_>) {
+    let ApplyEapiPhaseEnvArgs {
+        vars,
+        env,
+        root,
+        config_root,
+        phase,
+        extra_env,
+        attrs,
+    } = args;
+    let has = |vars: &Vec<(String, String)>, key: &str| vars.iter().any(|(k, _)| k == key);
+    let drop_here = |vars: &mut Vec<(String, String)>, key: &str| {
+        vars.retain(|(k, _)| k != key);
+    };
+
+    // E1: always (re)set when the EAPI exports it; internal phases keep
+    // no function at all.
+    drop_here(vars, "EBUILD_PHASE_FUNC");
+    if attrs.exports_ebuild_phase_func
+        && let Some(func) = phase_func_name(phase)
+    {
+        vars.push(("EBUILD_PHASE_FUNC".to_string(), func.to_string()));
+    }
+
+    // E3 gates: `MERGE_TYPE` needs `exports_merge_type`;
+    // `REPLACING_VERSIONS` only reaches pretend/setup/preinst/postinst and
+    // `REPLACED_BY_VERSION` only prerm/postrm, both under
+    // `exports_replace_vars`.
+    if !attrs.exports_merge_type {
+        drop_here(vars, "MERGE_TYPE");
+    }
+    if !attrs.exports_replace_vars || !matches!(phase, "pretend" | "setup" | "preinst" | "postinst")
+    {
+        drop_here(vars, "REPLACING_VERSIONS");
+    } else if !has(vars, "REPLACING_VERSIONS") {
+        // Callers thread the merge-time value (merge drivers, binpkg);
+        // otherwise the installed same-slot versions (`""` fresh).
+        let slot = vars
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "SLOT")
+            .map(|(_, v)| v.clone())
+            .or_else(|| md5_slot(env))
+            .unwrap_or_default();
+        vars.push((
+            "REPLACING_VERSIONS".to_string(),
+            phase_replacing_versions(root, &env.category, &env.split.pn, &slot),
+        ));
+    }
+    if !attrs.exports_replace_vars || !matches!(phase, "prerm" | "postrm") {
+        drop_here(vars, "REPLACED_BY_VERSION");
+    }
+    // `AA` never reaches EAPI 7/8 phases (`exports_AA` ends at 3).
+    if !attrs.exports_aa {
+        drop_here(vars, "AA");
+    }
+
+    // E4: always exported in non-cross builds (`""`); `ESYSROOT` only
+    // for `setup`/`src_*` under `sysroot`, `BROOT` under `broot`.
+    if !has(vars, "SYSROOT") {
+        vars.push(("SYSROOT".to_string(), String::new()));
+    }
+    if !(is_src_like_phase(phase) && attrs.sysroot) {
+        drop_here(vars, "ESYSROOT");
+    } else if !has(vars, "ESYSROOT") {
+        vars.push(("ESYSROOT".to_string(), String::new()));
+    }
+    if !attrs.broot {
+        drop_here(vars, "BROOT");
+    } else if !has(vars, "BROOT") {
+        vars.push(("BROOT".to_string(), String::new()));
+    }
+
+    // E5: the merge drivers thread `SLOT`; standalone phases read the
+    // md5-cache (absent outside a repo, as in Portage).
+    if !has(vars, "SLOT")
+        && let Some(slot) = md5_slot(env)
+    {
+        vars.push(("SLOT".to_string(), slot));
+    }
+
+    // E2: every non-`depend` phase exports `A`, reduced against the same
+    // `USE` the fetch path uses (empty for standalone runs); an
+    // unparsable `SRC_URI` yields `""`, like Portage's
+    // `InvalidDependString` fallbacks.
+    if !has(vars, "A") && phase != "depend" {
+        let use_flags = extra_env
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "USE")
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("");
+        let a = package_a(env, use_flags).unwrap_or_default().join(" ");
+        vars.push(("A".to_string(), a));
+    }
+
+    // E6: standalone phases carry the package's `IUSE_EFFECTIVE`; the
+    // merge drivers already thread it, so only a missing value is
+    // computed (never for `depend`, which keeps its empty base).
+    if !has(vars, "IUSE_EFFECTIVE") && phase != "depend" && attrs.iuse_effective {
+        let needs_iuse = !extra_env.iter().any(|(k, _)| k == "USE");
+        if needs_iuse && let Some((effective, _)) = standalone_iuse_pair(env, config_root, root) {
+            vars.push(("IUSE_EFFECTIVE".to_string(), effective));
+        }
+    }
+    // The `___in_portage_iuse` gate, synthesized from whatever
+    // `IUSE_EFFECTIVE` won (merge-threaded or standalone-computed), so
+    // `use()` enforces `IUSE` membership on every path. `ebuild.sh:11`
+    // un-exports it on entry, so phases see the function but never the
+    // variable — exactly like Portage.
+    if !has(vars, IN_PORTAGE_IUSE_FUNC)
+        && attrs.iuse_effective
+        && let Some(effective) = vars
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "IUSE_EFFECTIVE")
+            .map(|(_, v)| v.clone())
+    {
+        let flags = effective
+            .split_whitespace()
+            .map(String::from)
+            .collect::<Vec<_>>();
+        vars.push((
+            IN_PORTAGE_IUSE_FUNC.to_string(),
+            portage_profile::in_portage_iuse_body(&flags),
+        ));
+    }
+}
+
+/// Trailing `/` on `D`/`ED`/`ROOT`/`EROOT` only while
+/// `path_variables_end_with_trailing_slash` (EAPI 6 and below); later
+/// EAPIs strip it (so `ROOT=/` exports `""`). `value` arrives with its
+/// slash. `SYSROOT` is always stripped (bug 654600), so it never comes
+/// through here.
+// Portage: config.py, eapi.py
+pub(crate) fn eapi_path_var(trailing_slash: bool, value: &str) -> String {
     let base = value.trim_end_matches('/');
-    if trailing {
+    if trailing_slash {
         format!("{base}/")
     } else {
         base.to_string()
@@ -384,7 +622,19 @@ pub(crate) fn phase_setup_script(args: PhaseSetupScriptArgs<'_>) -> String {
         }
     }
     for (name, value) in vars {
-        script.push_str(&format!("export {name}={}\n", shell_single_quote(&value)));
+        // Exported shell functions (`BASH_FUNC_foo%%`) are not valid
+        // `export` identifiers: emitting one would abort the setup under
+        // brush. Define the function directly instead — the same shape
+        // bash's own `BASH_FUNC_foo%%` import takes.
+        if let Some(func) = name
+            .strip_prefix("BASH_FUNC_")
+            .and_then(|s| s.strip_suffix("%%"))
+            && value.starts_with("()")
+        {
+            script.push_str(&format!("{func}{value}\n"));
+        } else {
+            script.push_str(&format!("export {name}={}\n", shell_single_quote(&value)));
+        }
     }
     script
 }

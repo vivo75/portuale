@@ -142,6 +142,7 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
         scratch_dir: &scratch,
         portage_tmpdir: &portage_tmpdir,
         options: &options,
+        replaced_by_version: None,
     }) {
         Ok(code) => code,
         Err(e) => {

@@ -61,13 +61,28 @@ pub(crate) fn run_single_phase(args: RunSinglePhaseArgs<'_>) -> Result<i32, Stri
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;
         create_directories(&env)?;
-        // No `A`/`AA` here: these hooks run after `unpack` completed.
+        // Every caller of this entry point is a source-merge hook or a
+        // direct `ebuild <file> <phase>` run (both `EMERGE_FROM=ebuild`):
+        // default `MERGE_TYPE=source` unless the caller threaded one.
+        // `exports_merge_type` (EAPI 4+) is enforced centrally in
+        // `apply_eapi_phase_env`. Saved-env unmerge hooks never come
+        // through here (they use `run_phase_from_saved_env` with no
+        // merge type); `ebuild <file> unmerge` shares the direct shape
+        // (portuale-only command, no oracle cell).
+        // Portage: doebuild.py, doebuild (`tree == "porttree"`)
+        let mut extra_env = build_env.to_vec();
+        if !extra_env.iter().any(|(k, _)| k == "MERGE_TYPE") {
+            extra_env.push(("MERGE_TYPE".to_string(), "source".to_string()));
+        }
+        // `A`/`AA` come from `apply_eapi_phase_env` (Portage's
+        // `doebuild_environment` computes them for every non-`depend`
+        // phase, including these standalone hooks).
         run_one_phase(RunOnePhaseArgs {
             env: &env,
             root,
             phase,
             debug,
-            extra_env: build_env,
+            extra_env: &extra_env,
             config_root,
             shell,
             log_file,
@@ -232,6 +247,16 @@ pub(crate) struct RunPhaseFromSavedEnvArgs<'a> {
     /// Threaded into the hook env for binary-merge hooks; `None` for unmerge
     /// hooks (see `ebuild_merge::replacing_versions` for the source).
     pub(crate) replacing_versions: Option<&'a str>,
+    /// The merge type for a binary-merge hook (`Some("binary")`, which also
+    /// sets `EMERGE_FROM=binary`); `None` for an unmerge hook, where both
+    /// stay unset and `ebuild.sh` re-creates them readonly-empty from the
+    /// filtered saved env (Portage: `dblink.unmerge` never sets them).
+    pub(crate) merge_type: Option<&'a str>,
+    /// Threaded into the hook env for a replaced version's unmerge hooks
+    /// (`Some` with the replacing version); `None` for a standalone
+    /// unmerge and for binary-merge hooks.
+    /// Portage: vartree.py, `dblink.treewalk` (`REPLACED_BY_VERSION`).
+    pub(crate) replaced_by_version: Option<&'a str>,
 }
 
 /// Like `run_single_phase`, but seeds `${T}/environment` from a binary
@@ -253,6 +278,8 @@ pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Re
         update_env,
         refresh_features,
         replacing_versions,
+        merge_type,
+        replaced_by_version,
     } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(async {
@@ -262,9 +289,20 @@ pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Re
             seed_saved_environment(&env, saved_env_bz2)?;
         }
 
-        let mut extra_env = binary_merge_env();
+        // Binary-merge hooks keep `EMERGE_FROM`/`MERGE_TYPE=binary` (which
+        // `EMERGE_FROM` alone doesn't cover for eclasses gating on
+        // `MERGE_TYPE`); unmerge hooks carry neither. Both
+        // `exports_merge_type` and the replace-var phase gates are
+        // enforced centrally in `apply_eapi_phase_env`.
+        let mut extra_env = Vec::new();
+        if merge_type.is_some() {
+            extra_env.extend(binary_merge_env());
+        }
         if let Some(version) = replacing_versions {
             extra_env.push(("REPLACING_VERSIONS".to_string(), version.to_string()));
+        }
+        if let Some(version) = replaced_by_version {
+            extra_env.push(("REPLACED_BY_VERSION".to_string(), version.to_string()));
         }
         if let Some(p) = update_env {
             extra_env.push(("PORTAGE_UPDATE_ENV".to_string(), p.display().to_string()));

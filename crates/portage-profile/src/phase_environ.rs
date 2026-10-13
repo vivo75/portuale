@@ -274,6 +274,43 @@ fn iuse_effective_for(config: &Config, iuse: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// The `___in_portage_iuse` exported-function body for `portage_iuse`
+/// (already sorted): the hash form Portage emits for EAPIs with
+/// `iuse_effective` (5+). Byte shape from `config.py:2184-2190`
+/// (`BASH_FUNC____in_portage_iuse%%`), which `ebuild.sh:11` un-exports
+/// on entry (`export -n -f`), so phases see the function but never the
+/// variable itself.
+// Portage: config.py, setcpv
+pub fn in_portage_iuse_body(portage_iuse: &[String]) -> String {
+    let hashed = portage_iuse
+        .iter()
+        .map(|f| format!("[\"{f}\"]=1"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "() {{ if [[ ${{#___PORTAGE_IUSE_HASH[@]}} -lt 1 ]]; then   declare -gA ___PORTAGE_IUSE_HASH=({hashed}); fi; [[ -n ${{___PORTAGE_IUSE_HASH[$1]}} ]]; }}"
+    )
+}
+
+/// `IUSE_EFFECTIVE` plus the `___in_portage_iuse` body for a standalone
+/// phase (no resolved candidate): the md5-cache declared `IUSE` plus the
+/// profile implicit set. `None` when the EAPI predates `iuse_effective`
+/// (below the floor: Portage serves the `PORTAGE_IUSE`-regex form there,
+/// which needs the lazy implicit-iuse regex this port never builds).
+// Portage: config.py, setcpv (`_calc_iuse_effective`, `config.py:2181-2185`)
+pub fn standalone_iuse_effective(
+    config: &Config,
+    iuse: &[String],
+    attrs: portage_dep::eapi::EapiAttrs,
+) -> Option<(String, String)> {
+    if !attrs.iuse_effective {
+        return None;
+    }
+    let effective = iuse_effective_for(config, iuse);
+    let body = in_portage_iuse_body(&effective);
+    Some((effective.join(" "), body))
+}
+
 fn iuse_bare(flag: &str) -> &str {
     flag.trim_start_matches(['+', '-'])
 }
@@ -550,6 +587,43 @@ mod tests {
             let iuse = strs(&["+baseflag", "other"]);
             let dup = strs(&["baseflag", "baseflag", "amd64"]);
             assert_eq!(portage_use(&c, &iuse, &dup), strs(&["amd64", "baseflag"]));
+        });
+    }
+
+    #[test]
+    fn standalone_iuse_effective_matches_portage_setcpv_shape() {
+        use portage_dep::eapi::eapi_attrs;
+        let (root, repo) = synthetic_root("standalone-iuse", "");
+        with_test_env(&[], || {
+            let c = resolve(&root, &repo);
+            let attrs8 = eapi_attrs(Some("8")).unwrap();
+            // Declared IUSE (with a `+` default marker) joins the profile
+            // implicit set, sorted; the body carries the same set hashed.
+            let (effective, body) =
+                standalone_iuse_effective(&c, &strs(&["+foo", "bar"]), attrs8).unwrap();
+            let implicit = c.iuse_effective.iter().cloned().collect::<Vec<_>>();
+            let mut want: Vec<String> = implicit
+                .into_iter()
+                .chain(["foo", "bar"].map(String::from))
+                .collect();
+            want.sort();
+            want.dedup();
+            assert_eq!(effective, want.join(" "));
+            let hashed = want
+                .iter()
+                .map(|f| format!("[\"{f}\"]=1"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(
+                body,
+                format!(
+                    "() {{ if [[ ${{#___PORTAGE_IUSE_HASH[@]}} -lt 1 ]]; then   declare -gA ___PORTAGE_IUSE_HASH=({hashed}); fi; [[ -n ${{___PORTAGE_IUSE_HASH[$1]}} ]]; }}"
+                )
+            );
+            // Below `iuse_effective` (EAPI 4): no pair (Portage serves the
+            // `PORTAGE_IUSE`-regex form there instead).
+            let attrs4 = eapi_attrs(Some("4")).unwrap();
+            assert!(standalone_iuse_effective(&c, &strs(&["foo"]), attrs4).is_none());
         });
     }
 

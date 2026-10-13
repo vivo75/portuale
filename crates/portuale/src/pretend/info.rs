@@ -684,6 +684,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                         scratch_dir: &scratch,
                         portage_tmpdir: &portage_tmpdir,
                         options: &opts,
+                        replaced_by_version: None,
                     })
                 }
                 InfoPkg::Binary(b) => {

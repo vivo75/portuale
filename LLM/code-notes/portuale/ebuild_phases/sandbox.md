@@ -52,3 +52,6 @@ The phase shell backend, the calling-environment filter, and sandbox/isolation.
 
 ## fn unshare_combo_usable
 - Whether `unshare <flags> -- true` actually succeeds here (cached per distinct flag combination). Portage validates the `unshare(2)` call in a short-lived subprocess before relying on it (`_unshare_validator`); this is the same idea via the `unshare(1)` CLI, which portuale already assumes is present the way it assumes `tar`/`wget`/`bash`. A `false` result (unprivileged user namespaces disabled, or no `unshare` binary) drops the wrappers with a warning -- Portage's own non-fatal "Unable to unshare" degrade.
+
+## ENVIRON_WHITELIST (BASH_FUNC____in_portage_iuse%%, #348 S2 E6)
+- Carries Portage's own `BASH_FUNC____in_portage_iuse%%` whitelist entry (`special_env_vars.py`): the gate function is set programmatically, but the calling-env filter must let it through like Portage's does.
