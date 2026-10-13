@@ -1,6 +1,9 @@
 //! `emerge --info`.
 
+use crate::ebuild_phases::ShellBackend;
 use crate::pretend::*;
+use portage_profile::Config;
+use portage_repo::RepoConfig;
 
 /// `emerge --info`: the deterministic config/repository block plus the per-atom
 /// `Package Settings` section. Host-state output (version probes, timestamps)
@@ -300,6 +303,32 @@ pub(crate) fn info_profile_version(config_root: &Path, main_repo_loc: &Path) -> 
     }
     "unavailable".to_string()
 }
+pub(crate) enum InfoPkg {
+    Installed(portage_repo::InstalledInfo),
+    Ebuild(portage_repo::InfoCandidate),
+    // The `(bindb, "binary")` half: only under `--usepkg`/`--usepkgonly`
+    // when nothing is installed and no visible ebuild defines `pkg_info()`.
+    Binary(portage_repo::InfoBinaryCandidate),
+}
+
+// Each flag token is coloured; `--info` always shows every flag.
+fn use_line(disp: &[(String, String)], color: &Colorizer) -> String {
+    disp.iter()
+        .map(|(name, body)| {
+            let colored = if body.is_empty() {
+                String::new()
+            } else {
+                body.split(' ')
+                    .map(|t| colorize_use_token(t, color))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            format!("{name}=\"{colored}\"")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Arguments of [`run_info`].
 pub(crate) struct RunInfoArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
@@ -449,6 +478,51 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
     // sorted. Each prints as `VAR="value"`, or joins the trailing `Unset:` line.
     // The incremental members print resolved, then space-joined and sorted.
     // Portage: _emerge/actions.py, action_info
+    print_info_variables(config, repos);
+
+    // The `Package Settings` section: per atom, every installed vdb match wins;
+    // otherwise the best visible ebuild candidate defining `pkg_info()`. The
+    // header prints once, only if at least one atom yielded something.
+    // Portage: _emerge/actions.py, action_info
+    let mut pkgs: Vec<InfoPkg> = Vec::new();
+    for a in atom_args {
+        let installed = portage_repo::resolve_installed_info(root, a, config);
+        if !installed.is_empty() {
+            pkgs.extend(installed.into_iter().map(InfoPkg::Installed));
+            continue;
+        }
+        if let Some(c) = portage_repo::resolve_info_candidate(repos, a, config)
+            .ok()
+            .flatten()
+            .filter(|c| c.defines_pkg_info)
+        {
+            pkgs.push(InfoPkg::Ebuild(c));
+            continue;
+        }
+        // Only when `--usepkg` and the ebuild half yielded nothing.
+        if let Some(idx) = local_binpkg.as_ref()
+            && let Some(b) = portage_repo::resolve_info_binary_candidate(config, a, idx)
+                .ok()
+                .flatten()
+        {
+            pkgs.push(InfoPkg::Binary(b));
+        }
+    }
+    print_info_packages(PrintInfoPackagesArgs {
+        pkgs: &pkgs,
+        config,
+        color,
+        root,
+        debug,
+        config_root,
+        shell,
+    });
+
+    ExitCode::SUCCESS
+}
+
+/// The variable dump of `--info`.
+pub(crate) fn print_info_variables(config: &Config, repos: &[RepoConfig]) {
     let use_expand: Vec<String> = {
         let mut v: Vec<String> = config.use_expand.iter().cloned().collect();
         v.sort();
@@ -548,59 +622,30 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
     // A single trailing blank line; the `Package Settings` block below, when
     // present, starts with its own leading `\n`.
     println!();
+}
 
-    // The `Package Settings` section: per atom, every installed vdb match wins;
-    // otherwise the best visible ebuild candidate defining `pkg_info()`. The
-    // header prints once, only if at least one atom yielded something.
-    // Portage: _emerge/actions.py, action_info
-    enum InfoPkg {
-        Installed(portage_repo::InstalledInfo),
-        Ebuild(portage_repo::InfoCandidate),
-        // The `(bindb, "binary")` half: only under `--usepkg`/`--usepkgonly`
-        // when nothing is installed and no visible ebuild defines `pkg_info()`.
-        Binary(portage_repo::InfoBinaryCandidate),
-    }
-    // Each flag token is coloured; `--info` always shows every flag.
-    let use_line = |disp: &[(String, String)]| -> String {
-        disp.iter()
-            .map(|(name, body)| {
-                let colored = if body.is_empty() {
-                    String::new()
-                } else {
-                    body.split(' ')
-                        .map(|t| colorize_use_token(t, color))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                };
-                format!("{name}=\"{colored}\"")
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let mut pkgs: Vec<InfoPkg> = Vec::new();
-    for a in atom_args {
-        let installed = portage_repo::resolve_installed_info(root, a, config);
-        if !installed.is_empty() {
-            pkgs.extend(installed.into_iter().map(InfoPkg::Installed));
-            continue;
-        }
-        if let Some(c) = portage_repo::resolve_info_candidate(repos, a, config)
-            .ok()
-            .flatten()
-            .filter(|c| c.defines_pkg_info)
-        {
-            pkgs.push(InfoPkg::Ebuild(c));
-            continue;
-        }
-        // Only when `--usepkg` and the ebuild half yielded nothing.
-        if let Some(idx) = local_binpkg.as_ref()
-            && let Some(b) = portage_repo::resolve_info_binary_candidate(config, a, idx)
-                .ok()
-                .flatten()
-        {
-            pkgs.push(InfoPkg::Binary(b));
-        }
-    }
+/// The values [`print_info_packages`] reads from its caller.
+pub(crate) struct PrintInfoPackagesArgs<'a> {
+    pub(crate) pkgs: &'a [InfoPkg],
+    pub(crate) config: &'a Config,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) root: &'a Path,
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+}
+
+/// The package-settings section of `--info <atom>`.
+pub(crate) fn print_info_packages(args: PrintInfoPackagesArgs<'_>) {
+    let PrintInfoPackagesArgs {
+        pkgs,
+        config,
+        color,
+        root,
+        debug,
+        config_root,
+        shell,
+    } = args;
     if !pkgs.is_empty() {
         let title = "Package Settings";
         // Real `header_title.rjust(int(header_width / 2 + len(title) / 2))`.
@@ -612,7 +657,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
         let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(config));
-        for pkg in &pkgs {
+        for pkg in pkgs {
             // Header + USE line (+ the installed-only var diff), then two blank
             // lines, then `>>> Attempting to run pkg_info() ...` and the phase.
             // The ebuild/binary halves always run (selected for defining it);
@@ -625,7 +670,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                         "\n{} would be built with the following:",
                         color.c("INFORM", &format!("{}::{}", c.cpv, c.repo_name))
                     );
-                    println!("{}", use_line(&c.use_expand_display));
+                    println!("{}", use_line(&c.use_expand_display, color));
                     (&c.cpv, true)
                 }
                 InfoPkg::Binary(b) => {
@@ -633,7 +678,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                         "\n{} (non-installed binary) was built with the following:",
                         color.c("INFORM", &format!("{}::{}", b.cpv, b.repo_name))
                     );
-                    println!("{}", use_line(&b.use_expand_display));
+                    println!("{}", use_line(&b.use_expand_display, color));
                     (&b.cpv, true)
                 }
                 InfoPkg::Installed(i) => {
@@ -641,7 +686,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                         "\n{} was built with the following:",
                         color.c("INFORM", &format!("{}::{}", i.cpv, i.repo_name))
                     );
-                    println!("{}", use_line(&i.use_expand_display));
+                    println!("{}", use_line(&i.use_expand_display, color));
                     for (name, value) in &i.differing_vars {
                         println!("{name}=\"{value}\"");
                     }
@@ -748,6 +793,4 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
             }
         }
     }
-
-    ExitCode::SUCCESS
 }

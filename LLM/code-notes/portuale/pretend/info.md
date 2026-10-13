@@ -37,16 +37,22 @@
 ## fn run_info
 - The local binary index: backlog #123 -- threaded as an `Arc`, never re-derived from `&Config` per atom.
 - The existence probe (`list_candidates`, all versions masked included, + the vdb) is portuale's `cp_exists` proxy.
+- Portage `RepoConfig.info_string()` field order (the subset portuale models): name, location, sync-type, sync-uri, masters, priority, aliases, volatile, then any set module-specific opts.
+- Portage `BinRepoConfig.info_string()` field order: name, location (if set), priority, sync-uri, verify-signature.
+- Installed sets (Portage `root_config.sets["selected"].getNonAtoms()` -> the `@name` entries of `world_sets`).
+
+## fn print_info_variables
 - The variable dump: `<PORTDIR>/profiles/info_vars` (`actions.py:2221`); skipped: `PORTAGE_REPOSITORIES`, `PORTDIR`, `PORTDIR_OVERLAY`, `SYNC`. The `const.INCREMENTALS` members (`CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`/`ENV_UNSET`/`FEATURES`, plus `ACCEPT_KEYWORDS`) are shown as Portage stores them: `-*`/`-tok` resolved, then `" ".join(sorted(...))`.
 - `USE=` line: Portage `config.regenerate()`'s global USE.
 - The buffer end: Portage ends with two `append("")` so `"\n".join` yields a single trailing blank line (`…\n\n`).
+- Portage `settings.get(k)` walks `lookuplist` env-first (`actions.py:2240`; `config.py:3178-3182`, `USE_ORDER` `"env:pkg:conf:…"` at `:1031-1035`), so the calling environment wins over `make.conf`/profile/`make.globals` -- including for keys `resolve_config` never env-folds itself (backlog #219: `PORTAGE_BZIP2_COMMAND`, `PORTAGE_BUNZIP2_COMMAND`).
+
+## fn print_info_packages
 - Installed lookup short-circuits the ebuild lookup (`actions.py:1869-1875`); the ebuild half needs `defines_pkg_info`; the binary half is Portage `(bindb, "binary")` (`actions.py:1876`). The header math is `header_title.rjust(int(header_width / 2 + len(title) / 2))` (`header_width = 65`, `actions.py:1956`).
 - Per-package block: Portage `actions.py:2314-2410` -- header + `pkg_use_display` line (+ the installed-only `mydesiredvars` diff). `run_phase` is Portage's `if metadata["DEFINED_PHASES"]: if "info" not in ...: continue`.
 - The `>>> Attempting` line is Portage `writemsg_stdout(f">>> Attempting to run pkg_info() for '{pkg.cpv}'\n")` then `portage.doebuild(ebuildpath, "info", ...)`. The Python contract reference stops here (no phase machinery, like `--config`/`--regen`); the phase's own output is covered Rust-only in `test_portuale.py`.
 - The binary arm ports `bindb.bintree.getname(cpv)` + `doebuild(..., "info", tree="bintree")` (Portage `doebuild` gets `CATEGORY`/`PN` from the binpkg metadata).
 - Portage `action_info` also checks `bindb.match(x.cp)` when `--usepkg` is on (`actions.py:1877-1885`): a package only ever available as a binary isn't a "no ebuilds" error.
-- Portage `RepoConfig.info_string()` field order (the subset portuale models): name, location, sync-type, sync-uri, masters, priority, aliases, volatile, then any set module-specific opts.
-- Portage `BinRepoConfig.info_string()` field order: name, location (if set), priority, sync-uri, verify-signature.
-- Installed sets (Portage `root_config.sets["selected"].getNonAtoms()` -> the `@name` entries of `world_sets`).
-- Portage `settings.get(k)` walks `lookuplist` env-first (`actions.py:2240`; `config.py:3178-3182`, `USE_ORDER` `"env:pkg:conf:…"` at `:1031-1035`), so the calling environment wins over `make.conf`/profile/`make.globals` -- including for keys `resolve_config` never env-folds itself (backlog #219: `PORTAGE_BZIP2_COMMAND`, `PORTAGE_BUNZIP2_COMMAND`).
+
+## fn use_line
 - Portage `pkg_use_display`'s own `UseFlagDisplay.__str__`: each flag token is coloured (the same `colorize_use_token` scheme the merge-list `USE="…"` column already uses), independent of `--quiet`/`--verbose` -- `--info`'s block always shows every flag.
