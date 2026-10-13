@@ -1,6 +1,10 @@
 //! Selecting one atom's candidate (`resolve_pretend`).
 
 use crate::*;
+use portage_dep::Atom;
+use portage_profile::Config;
+use std::ops::ControlFlow;
+use std::sync::Arc;
 
 /// Arguments of [`dependency_avoid_update_candidate`].
 pub(crate) struct DependencyAvoidUpdateCandidateArgs<'a> {
@@ -423,6 +427,457 @@ pub fn resolve_pretend(
         // `retain`ed below). One clone per resolved atom, cheap next to the walk.
         list_candidates(repos, &atom.category, &atom.package)?.to_vec()
     };
+    collect_binary_candidates(CollectBinaryCandidatesArgs {
+        usepkg,
+        usepkgonly,
+        local_binpkg,
+        atom: &atom,
+        getbinpkg,
+        config,
+        root,
+        binpkg_respect_use,
+        newuse,
+        changed_use,
+        candidates: &mut candidates,
+        repos,
+        with_bdeps,
+        atom_str,
+        extra_constraints,
+        usepkg_exclude,
+        usepkg_include,
+    });
+
+    // Portage's `avoid_update` early return for a dependency atom happens before it
+    // ever looks for a "best available" candidate, so it is checked here too, before
+    // the tree visibility filtering below can wrongly bail out with
+    // `NoVisibleCandidate` for an atom whose installed version already satisfies it.
+    // `--exclude` keeps the narrower pre-existing behavior (see the `!update`
+    // shortcut below), so this site skips when it is active.
+    //
+    // `extra_constraints` gates both `avoid_update` shortcuts and the `matched` list
+    // they bypass: they are every *other* parent atom targeting this `cat/pkg:slot`
+    // (Portage weighs the whole atom set), so an installed version one of them
+    // rejects falls through to the ordinary search, letting a solvable
+    // installed-vs-merge slot collision reconcile on retry instead of re-deriving
+    // the same conflict.
+    // Portage: depgraph.py _select_pkg_highest_available
+    // `--emptytree` skips installed packages as candidates entirely, so the
+    // dependency `avoid_update` early return below can never fire (its pool holds no
+    // installed instance).
+    // Portage: depgraph.py
+    if !update && !empty && !is_top_level && excluded.is_empty() {
+        let installed = installed_candidates(root, &atom.category, &atom.package);
+        if let Some(installed_best) =
+            dependency_avoid_update_candidate(DependencyAvoidUpdateCandidateArgs {
+                root,
+                atom: &atom,
+                atom_str,
+                candidates: &candidates,
+                installed: &installed,
+                config,
+            })
+            .filter(|c| satisfies_extra_constraints(c, &atom, extra_constraints))
+        {
+            return already_installed_or_reinstall(
+                source,
+                opts,
+                &atom,
+                installed_best,
+                best_binary_build_time(&candidates, &installed_best.version),
+            );
+        }
+    }
+
+    let mut visible: Vec<&Candidate> = candidates
+        .iter()
+        .filter(|c| is_visible(c, &atom.category, &atom.package, config))
+        .collect();
+    if let Some(outcome) = relax_until_usable(RelaxUntilUsableArgs {
+        autounmask_license,
+        autounmask_keywords,
+        autounmask_masks,
+        visible: &mut visible,
+        atom: &atom,
+        atom_str,
+        extra_constraints,
+        candidates: &candidates,
+        config,
+        empty,
+        is_top_level,
+        usepkg,
+        usepkgonly,
+        root,
+    }) {
+        return outcome;
+    }
+
+    // Match through portage-dep's `match_from_list`; candidate strings round-trip
+    // back to their `Candidate` via `by_str` below. Each pair carries the
+    // candidate's binary build-id, so an `=`+build-id atom matches only the
+    // equal instance (dep:2994-3008, S9).
+    let candidate_strs: Vec<String> = visible
+        .iter()
+        .map(|c| {
+            format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            )
+        })
+        .collect();
+    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let candidate_pairs: Vec<(&str, Option<&str>)> = candidate_str_refs
+        .iter()
+        .copied()
+        .zip(visible.iter().map(|c| c.build_id.as_deref()))
+        .collect();
+    let matched = portage_dep::match_from_list_with_build_id(atom_str, &candidate_pairs)
+        .ok_or_else(|| Error::InvalidAtom {
+            atom: atom_str.to_string(),
+        })?;
+
+    let NarrowMatchedCandidatesOut { matched, by_str } =
+        match narrow_matched_candidates(NarrowMatchedCandidatesArgs {
+            extra_constraints,
+            matched,
+            candidate_str_refs: &candidate_str_refs,
+            visible: &visible,
+            atom: &atom,
+            config,
+            autounmask_use,
+        }) {
+            ControlFlow::Continue(out) => out,
+            ControlFlow::Break(outcome) => return outcome,
+        };
+
+    // `installed_pairs` carries each installed version's own main slot, so "already
+    // installed" is answered against the resolved candidate's *own* main slot (not
+    // merely "this version exists in some slot"); otherwise `emerge -p cat/foo:1`
+    // with only `foo:0` installed mis-classifies a new-slot install as an upgrade.
+    // Portage: output.py _get_installed_best; vardb.match(pkg.slot_atom)
+    let installed_pairs = installed_candidates(root, &atom.category, &atom.package);
+
+    let best = match select_best_candidate(SelectBestCandidateArgs {
+        excluded,
+        matched: &matched,
+        by_str: &by_str,
+        installed_pairs: &installed_pairs,
+        extra_constraints,
+        atom: &atom,
+        is_top_level,
+        repos,
+        atom_str,
+        config,
+        root,
+        update,
+        empty,
+        selective,
+        candidates: &candidates,
+        source,
+        opts,
+    }) {
+        ControlFlow::Continue(out) => out,
+        ControlFlow::Break(outcome) => return outcome,
+    };
+
+    classify_best_against_installed(ClassifyBestAgainstInstalledArgs {
+        best,
+        installed_pairs: &installed_pairs,
+        extra_constraints,
+        atom: &atom,
+        newuse,
+        changed_use,
+        root,
+        config,
+        changed_deps,
+        repos,
+        with_bdeps,
+        changed_slot,
+        usepkg,
+        usepkgonly,
+        candidates: &candidates,
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
+        update,
+        newrepo,
+        empty,
+        is_top_level,
+        selective,
+    })
+}
+
+/// What [`narrow_matched_candidates`] hands back to its caller.
+pub(crate) struct NarrowMatchedCandidatesOut<'a, 'b> {
+    pub(crate) matched: Vec<&'a str>,
+    pub(crate) by_str: HashMap<&'a str, &'b Candidate>,
+}
+
+/// The values [`narrow_matched_candidates`] reads from its caller.
+pub(crate) struct NarrowMatchedCandidatesArgs<'a, 'b> {
+    pub(crate) extra_constraints: &'a [String],
+    pub(crate) matched: Vec<&'a str>,
+    pub(crate) candidate_str_refs: &'a [&'a str],
+    pub(crate) visible: &'a [&'b Candidate],
+    pub(crate) atom: &'a Atom,
+    pub(crate) config: &'a Config,
+    pub(crate) autounmask_use: bool,
+}
+
+/// Narrow the matched candidates by extra constraints, USE dependencies and --useoldpkg-atoms.
+pub(crate) fn narrow_matched_candidates<'a, 'b>(
+    args: NarrowMatchedCandidatesArgs<'a, 'b>,
+) -> ControlFlow<Result<PretendOutcome, Error>, NarrowMatchedCandidatesOut<'a, 'b>> {
+    let NarrowMatchedCandidatesArgs {
+        extra_constraints,
+        matched,
+        candidate_str_refs,
+        visible,
+        atom,
+        config,
+        autounmask_use,
+    } = args;
+    // Slot-conflict reconciliation: on a re-resolve the caller passes every *other*
+    // parent atom targeting the same `cat/pkg:slot`, and the winner must satisfy all
+    // of them at once. Empty (the default) is a strict no-op. A `!`-prefixed entry
+    // is a *negative* constraint (Portage's `runtime_pkg_mask`): the winner must NOT
+    // match the atom after the `!`.
+    // Portage: depgraph.py _process_slot_conflicts; _select_pkg
+    let matched: Vec<&str> = if extra_constraints.is_empty() {
+        matched
+    } else {
+        matched
+            .into_iter()
+            .filter(|m| {
+                extra_constraints.iter().all(|c| {
+                    // A per-instance negative hides no tree candidate (see
+                    // [`is_instance_only_mask`]).
+                    if is_instance_only_mask(c) {
+                        return true;
+                    }
+                    if let Some(neg) = c.strip_prefix('!') {
+                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    } else {
+                        portage_dep::match_from_list(c, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    }
+                })
+            })
+            .collect()
+    };
+
+    let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
+    for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
+        by_str.insert(*s, *c);
+    }
+
+    // USE deps (PMS 8.3.4): a post-filter on version/slot/repo matching, where
+    // Portage's own `match_from_list` applies its USE-dep post-pass (see
+    // `use_deps_satisfied`). Each survivor's own current-tree IUSE/effective-USE
+    // decides; an unreadable candidate is dropped ("can't tell, so exclude").
+    let matched: Vec<&str> = match &atom.use_deps {
+        Some(use_deps) if !use_deps.is_empty() => matched
+            .into_iter()
+            .filter(|m| {
+                let Some(candidate) = by_str.get(m) else {
+                    return false;
+                };
+                let Some((iuse, use_flags)) =
+                    candidate_iuse_and_use(candidate, &atom.category, &atom.package, config)
+                else {
+                    return false;
+                };
+                if portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+                {
+                    return true;
+                }
+                // Portage `--autounmask-use`: a mismatch a `package.use` flip would fix
+                // keeps the candidate; the graph layer applies the flip and records it.
+                autounmask_use
+                    && suggested_use_flip(
+                        candidate,
+                        &atom.category,
+                        &atom.package,
+                        use_deps,
+                        config,
+                    )
+                    .is_some()
+            })
+            .collect(),
+        _ => matched,
+    };
+
+    // `--binpkg-respect-use` ran as a candidate-level filter above.
+    if matched.is_empty() {
+        return ControlFlow::Break(Ok(PretendOutcome::NoVisibleCandidate));
+    }
+
+    // `--useoldpkg-atoms`: for a matching package prefer a *built* (binary) candidate
+    // over any newer *unbuilt* ebuild, so every downstream check sees only the old
+    // binaries. Empty (the default) or a pool with no binaries is a strict no-op.
+    // Portage: depgraph.py matched_oldpkg/visible_matches
+    let matched: Vec<&str> = {
+        let oldpkg: Vec<&str> = matched
+            .iter()
+            .copied()
+            .filter(|m| {
+                by_str.get(m).is_some_and(|c| {
+                    c.source == CandidateSource::Binary
+                        && useoldpkg_atom_matches(&atom.category, &atom.package, &c.version)
+                })
+            })
+            .collect();
+        if oldpkg.is_empty() { matched } else { oldpkg }
+    };
+    ControlFlow::Continue(NarrowMatchedCandidatesOut { matched, by_str })
+}
+
+/// The values [`relax_until_usable`] reads from its caller.
+pub(crate) struct RelaxUntilUsableArgs<'a, 'b> {
+    pub(crate) autounmask_license: bool,
+    pub(crate) autounmask_keywords: bool,
+    pub(crate) autounmask_masks: bool,
+    pub(crate) visible: &'a mut Vec<&'b Candidate>,
+    pub(crate) atom: &'a Atom,
+    pub(crate) atom_str: &'a str,
+    pub(crate) extra_constraints: &'a [String],
+    pub(crate) candidates: &'b [Candidate],
+    pub(crate) config: &'a Config,
+    pub(crate) empty: bool,
+    pub(crate) is_top_level: bool,
+    pub(crate) usepkg: bool,
+    pub(crate) usepkgonly: bool,
+    pub(crate) root: &'a Path,
+}
+
+/// Relax licence, keyword and mask checks level by level until a candidate is usable; answer early when none is.
+pub(crate) fn relax_until_usable(
+    args: RelaxUntilUsableArgs<'_, '_>,
+) -> Option<Result<PretendOutcome, Error>> {
+    let RelaxUntilUsableArgs {
+        autounmask_license,
+        autounmask_keywords,
+        autounmask_masks,
+        visible,
+        atom,
+        atom_str,
+        extra_constraints,
+        candidates,
+        config,
+        empty,
+        is_top_level,
+        usepkg,
+        usepkgonly,
+        root,
+    } = args;
+    // Portage's `_autounmask_levels` + per-level loop: try each allowed relaxation
+    // set least-to-most invasive, re-scanning every version at each level, stopping
+    // at the first level with a satisfying candidate. A later level relaxes `LICENSE`
+    // only if level 1 was allowed to. The `missing keywords` steps are skipped (no
+    // `**` suggestion). `(relax_license, relax_keywords, relax_masks)`:
+    // Portage: depgraph.py
+    let mut levels: Vec<(bool, bool, bool)> = Vec::new();
+    let mut relax_license = false;
+    if autounmask_license {
+        relax_license = true;
+        levels.push((true, false, false)); // 1. +license
+    }
+    if autounmask_keywords {
+        levels.push((relax_license, true, false)); // 2. +~arch (+license)
+    }
+    if autounmask_masks {
+        // 4. +masks, keywords still respected.
+        levels.push((relax_license, false, true));
+        if autounmask_keywords {
+            // 5. +~arch +masks (+license).
+            levels.push((relax_license, true, true));
+        }
+    }
+    for (rl, rk, rm) in levels {
+        if !need_fallback(visible, atom, atom_str, extra_constraints) {
+            break;
+        }
+        *visible = candidates
+            .iter()
+            .filter(|c| {
+                visible_with_relax(VisibleWithRelaxArgs {
+                    candidate: c,
+                    category: &atom.category,
+                    package: &atom.package,
+                    config,
+                    relax_license: rl,
+                    relax_keywords: rk,
+                    relax_masks: rm,
+                })
+            })
+            .collect();
+    }
+    if need_fallback(visible, atom, atom_str, extra_constraints) {
+        // Portage's installed fallback after the merge-candidate search comes up
+        // empty: in `selective` mode an installed version satisfying the atom is
+        // accepted as-is (`operation="nomerge"`). This vdb-only check also covers a
+        // dependency whose ebuild left the tree and `--usepkgonly` with no binary for
+        // an installed dependency (Portage restricts the *merge* pool, not
+        // installed-satisfaction). A top-level atom still reports the miss: Portage
+        // requires something mergeable for a command-line package. Scoped to
+        // `--usepkg`/`--usepkgonly` and non-top-level deps (not `--emptytree`, which
+        // must rebuild everything); runtime-keyed deps get their hearing one layer up
+        // instead (the queue loop sees the edge kind this function never receives).
+        // Portage: depgraph.py _iter_match_pkgs installed
+        if !empty
+            && !is_top_level
+            && (usepkg || usepkgonly)
+            && let Some(version) =
+                best_installed_for_atom(root, atom_str, &atom.category, &atom.package)
+        {
+            return Some(Ok(PretendOutcome::AlreadyInstalled { version }));
+        }
+        return Some(Ok(PretendOutcome::NoVisibleCandidate));
+    }
+    None
+}
+
+/// The values [`collect_binary_candidates`] reads from its caller.
+pub(crate) struct CollectBinaryCandidatesArgs<'a> {
+    pub(crate) usepkg: bool,
+    pub(crate) usepkgonly: bool,
+    pub(crate) local_binpkg: &'a Arc<BinaryIndex>,
+    pub(crate) atom: &'a Atom,
+    pub(crate) getbinpkg: bool,
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) binpkg_respect_use: bool,
+    pub(crate) newuse: bool,
+    pub(crate) changed_use: bool,
+    pub(crate) candidates: &'a mut Vec<Candidate>,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) with_bdeps: bool,
+    pub(crate) atom_str: &'a str,
+    pub(crate) extra_constraints: &'a [String],
+    pub(crate) usepkg_exclude: &'a [String],
+    pub(crate) usepkg_include: &'a [String],
+}
+
+/// Add the usable binary packages to the candidate pool (--usepkg, --usepkgonly, --getbinpkg).
+pub(crate) fn collect_binary_candidates(args: CollectBinaryCandidatesArgs<'_>) {
+    let CollectBinaryCandidatesArgs {
+        usepkg,
+        usepkgonly,
+        local_binpkg,
+        atom,
+        getbinpkg,
+        config,
+        root,
+        binpkg_respect_use,
+        newuse,
+        changed_use,
+        candidates,
+        repos,
+        with_bdeps,
+        atom_str,
+        extra_constraints,
+        usepkg_exclude,
+        usepkg_include,
+    } = args;
     if usepkg || usepkgonly {
         let mut binary_candidates =
             list_binary_candidates(local_binpkg, &atom.category, &atom.package);
@@ -524,7 +979,7 @@ pub fn resolve_pretend(
         // `cpv:slot::repo` (Portage yields instances newest-first and stops at the
         // first acceptable one).
         // Portage: depgraph.py, _iter_match_pkgs
-        let mut binary_candidates = dedup_binary_instances(binary_candidates, &atom, config);
+        let mut binary_candidates = dedup_binary_instances(binary_candidates, atom, config);
         // `slot_operator_mask_built` steers the backtrack-config restart away from the
         // stale binary. A candidate-level filter like the rejections above: the
         // same-version ebuild must survive, so the marked negative must not reach the
@@ -544,321 +999,59 @@ pub fn resolve_pretend(
             usepkg_include,
         ));
     }
+}
 
-    // Portage's `avoid_update` early return for a dependency atom happens before it
-    // ever looks for a "best available" candidate, so it is checked here too, before
-    // the tree visibility filtering below can wrongly bail out with
-    // `NoVisibleCandidate` for an atom whose installed version already satisfies it.
-    // `--exclude` keeps the narrower pre-existing behavior (see the `!update`
-    // shortcut below), so this site skips when it is active.
-    //
-    // `extra_constraints` gates both `avoid_update` shortcuts and the `matched` list
-    // they bypass: they are every *other* parent atom targeting this `cat/pkg:slot`
-    // (Portage weighs the whole atom set), so an installed version one of them
-    // rejects falls through to the ordinary search, letting a solvable
-    // installed-vs-merge slot collision reconcile on retry instead of re-deriving
-    // the same conflict.
-    // Portage: depgraph.py _select_pkg_highest_available
-    let satisfies_extra_constraints =
-        |c: &Candidate| -> bool {
-            if extra_constraints.is_empty() {
-                return true;
-            }
-            let s = format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            );
-            extra_constraints
-                .iter()
-                .all(|ec| match ec.strip_prefix('!') {
-                    // A per-instance negative hides no tree candidate (see
-                    // [`is_instance_only_mask`]).
-                    Some(_) if is_instance_only_mask(ec) => true,
-                    Some(neg) => !portage_dep::match_from_list(neg, &[s.as_str()])
-                        .is_some_and(|r| !r.is_empty()),
-                    None => portage_dep::match_from_list(ec, &[s.as_str()])
-                        .is_some_and(|r| !r.is_empty()),
-                })
-        };
-    // `--emptytree` skips installed packages as candidates entirely, so the
-    // dependency `avoid_update` early return below can never fire (its pool holds no
-    // installed instance).
-    // Portage: depgraph.py
-    if !update && !empty && !is_top_level && excluded.is_empty() {
-        let installed = installed_candidates(root, &atom.category, &atom.package);
-        if let Some(installed_best) =
-            dependency_avoid_update_candidate(DependencyAvoidUpdateCandidateArgs {
-                root,
-                atom: &atom,
-                atom_str,
-                candidates: &candidates,
-                installed: &installed,
-                config,
-            })
-            .filter(|c| satisfies_extra_constraints(c))
-        {
-            return already_installed_or_reinstall(
-                source,
-                opts,
-                &atom,
-                installed_best,
-                best_binary_build_time(&candidates, &installed_best.version),
-            );
-        }
-    }
+/// The values [`select_best_candidate`] reads from its caller.
+pub(crate) struct SelectBestCandidateArgs<'a> {
+    pub(crate) excluded: &'a [String],
+    pub(crate) matched: &'a [&'a str],
+    pub(crate) by_str: &'a HashMap<&'a str, &'a Candidate>,
+    pub(crate) installed_pairs: &'a [(String, String, String)],
+    pub(crate) extra_constraints: &'a [String],
+    pub(crate) atom: &'a Atom,
+    pub(crate) is_top_level: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) atom_str: &'a str,
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) update: bool,
+    pub(crate) empty: bool,
+    pub(crate) selective: bool,
+    pub(crate) candidates: &'a [Candidate],
+    pub(crate) source: &'a SelectSource<'a>,
+    pub(crate) opts: &'a SelectOptions<'a>,
+}
 
-    let mut visible: Vec<&Candidate> = candidates
-        .iter()
-        .filter(|c| is_visible(c, &atom.category, &atom.package, config))
-        .collect();
-    // Whether a candidate satisfies `atom_str` plus every `extra_constraints` entry.
-    // A fallback level is worth trying not just when *nothing* passes `is_visible`,
-    // but when nothing visible satisfies the whole request: Portage weighs the whole
-    // request before calling a version unavailable (e.g. `>=foo-2` where only `foo-2`
-    // `~arch` is in range autounmasks its keyword). With no bound and no constraints
-    // this is the old `is_empty()` gate.
-    // Portage: depgraph.py, _select_pkg
-    let usable = |c: &Candidate| {
-        let s = format!(
-            "{}/{}-{}:{}/{}::{}",
-            atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-        );
-        // The atom match sees the candidate's binary build-id, so an
-        // `=`+build-id request is usable only by the equal instance
-        // (dep:2994-3008, S9).
-        if !portage_dep::match_from_list_with_build_id(
-            atom_str,
-            &[(s.as_str(), c.build_id.as_deref())],
-        )
-        .is_some_and(|r| !r.is_empty())
-        {
-            return false;
-        }
-        extra_constraints.iter().all(|ec| {
-            // A per-instance negative hides no tree candidate (see
-            // [`is_instance_only_mask`]).
-            if is_instance_only_mask(ec) {
-                return true;
-            }
-            if let Some(neg) = ec.strip_prefix('!') {
-                !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
-            } else {
-                portage_dep::match_from_list(ec, &[s.as_str()]).is_some_and(|r| !r.is_empty())
-            }
-        })
-    };
-    let need_fallback = |vis: &[&Candidate]| !vis.iter().any(|c| usable(c));
-    // Portage's `_autounmask_levels` + per-level loop: try each allowed relaxation
-    // set least-to-most invasive, re-scanning every version at each level, stopping
-    // at the first level with a satisfying candidate. A later level relaxes `LICENSE`
-    // only if level 1 was allowed to. The `missing keywords` steps are skipped (no
-    // `**` suggestion). `(relax_license, relax_keywords, relax_masks)`:
-    // Portage: depgraph.py
-    let mut levels: Vec<(bool, bool, bool)> = Vec::new();
-    let mut relax_license = false;
-    if autounmask_license {
-        relax_license = true;
-        levels.push((true, false, false)); // 1. +license
-    }
-    if autounmask_keywords {
-        levels.push((relax_license, true, false)); // 2. +~arch (+license)
-    }
-    if autounmask_masks {
-        // 4. +masks, keywords still respected.
-        levels.push((relax_license, false, true));
-        if autounmask_keywords {
-            // 5. +~arch +masks (+license).
-            levels.push((relax_license, true, true));
-        }
-    }
-    for (rl, rk, rm) in levels {
-        if !need_fallback(&visible) {
-            break;
-        }
-        visible = candidates
-            .iter()
-            .filter(|c| {
-                visible_with_relax(VisibleWithRelaxArgs {
-                    candidate: c,
-                    category: &atom.category,
-                    package: &atom.package,
-                    config,
-                    relax_license: rl,
-                    relax_keywords: rk,
-                    relax_masks: rm,
-                })
-            })
-            .collect();
-    }
-    if need_fallback(&visible) {
-        // Portage's installed fallback after the merge-candidate search comes up
-        // empty: in `selective` mode an installed version satisfying the atom is
-        // accepted as-is (`operation="nomerge"`). This vdb-only check also covers a
-        // dependency whose ebuild left the tree and `--usepkgonly` with no binary for
-        // an installed dependency (Portage restricts the *merge* pool, not
-        // installed-satisfaction). A top-level atom still reports the miss: Portage
-        // requires something mergeable for a command-line package. Scoped to
-        // `--usepkg`/`--usepkgonly` and non-top-level deps (not `--emptytree`, which
-        // must rebuild everything); runtime-keyed deps get their hearing one layer up
-        // instead (the queue loop sees the edge kind this function never receives).
-        // Portage: depgraph.py _iter_match_pkgs installed
-        if !empty
-            && !is_top_level
-            && (usepkg || usepkgonly)
-            && let Some(version) =
-                best_installed_for_atom(root, atom_str, &atom.category, &atom.package)
-        {
-            return Ok(PretendOutcome::AlreadyInstalled { version });
-        }
-        return Ok(PretendOutcome::NoVisibleCandidate);
-    }
-
-    // Match through portage-dep's `match_from_list`; candidate strings round-trip
-    // back to their `Candidate` via `by_str` below. Each pair carries the
-    // candidate's binary build-id, so an `=`+build-id atom matches only the
-    // equal instance (dep:2994-3008, S9).
-    let candidate_strs: Vec<String> = visible
-        .iter()
-        .map(|c| {
-            format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
-        .collect();
-    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
-    let candidate_pairs: Vec<(&str, Option<&str>)> = candidate_str_refs
-        .iter()
-        .copied()
-        .zip(visible.iter().map(|c| c.build_id.as_deref()))
-        .collect();
-    let matched = portage_dep::match_from_list_with_build_id(atom_str, &candidate_pairs)
-        .ok_or_else(|| Error::InvalidAtom {
-            atom: atom_str.to_string(),
-        })?;
-
-    // Slot-conflict reconciliation: on a re-resolve the caller passes every *other*
-    // parent atom targeting the same `cat/pkg:slot`, and the winner must satisfy all
-    // of them at once. Empty (the default) is a strict no-op. A `!`-prefixed entry
-    // is a *negative* constraint (Portage's `runtime_pkg_mask`): the winner must NOT
-    // match the atom after the `!`.
-    // Portage: depgraph.py _process_slot_conflicts; _select_pkg
-    let matched: Vec<&str> = if extra_constraints.is_empty() {
-        matched
-    } else {
-        matched
-            .into_iter()
-            .filter(|m| {
-                extra_constraints.iter().all(|c| {
-                    // A per-instance negative hides no tree candidate (see
-                    // [`is_instance_only_mask`]).
-                    if is_instance_only_mask(c) {
-                        return true;
-                    }
-                    if let Some(neg) = c.strip_prefix('!') {
-                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
-                            .is_some_and(|r| !r.is_empty())
-                    } else {
-                        portage_dep::match_from_list(c, std::slice::from_ref(m))
-                            .is_some_and(|r| !r.is_empty())
-                    }
-                })
-            })
-            .collect()
-    };
-
-    let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
-    for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
-        by_str.insert(*s, *c);
-    }
-
-    // USE deps (PMS 8.3.4): a post-filter on version/slot/repo matching, where
-    // Portage's own `match_from_list` applies its USE-dep post-pass (see
-    // `use_deps_satisfied`). Each survivor's own current-tree IUSE/effective-USE
-    // decides; an unreadable candidate is dropped ("can't tell, so exclude").
-    let matched: Vec<&str> = match &atom.use_deps {
-        Some(use_deps) if !use_deps.is_empty() => matched
-            .into_iter()
-            .filter(|m| {
-                let Some(candidate) = by_str.get(m) else {
-                    return false;
-                };
-                let Some((iuse, use_flags)) =
-                    candidate_iuse_and_use(candidate, &atom.category, &atom.package, config)
-                else {
-                    return false;
-                };
-                if portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
-                {
-                    return true;
-                }
-                // Portage `--autounmask-use`: a mismatch a `package.use` flip would fix
-                // keeps the candidate; the graph layer applies the flip and records it.
-                autounmask_use
-                    && suggested_use_flip(
-                        candidate,
-                        &atom.category,
-                        &atom.package,
-                        use_deps,
-                        config,
-                    )
-                    .is_some()
-            })
-            .collect(),
-        _ => matched,
-    };
-
-    // `--binpkg-respect-use` ran as a candidate-level filter above.
-    if matched.is_empty() {
-        return Ok(PretendOutcome::NoVisibleCandidate);
-    }
-
-    // `--useoldpkg-atoms`: for a matching package prefer a *built* (binary) candidate
-    // over any newer *unbuilt* ebuild, so every downstream check sees only the old
-    // binaries. Empty (the default) or a pool with no binaries is a strict no-op.
-    // Portage: depgraph.py matched_oldpkg/visible_matches
-    let matched: Vec<&str> = {
-        let oldpkg: Vec<&str> = matched
-            .iter()
-            .copied()
-            .filter(|m| {
-                by_str.get(m).is_some_and(|c| {
-                    c.source == CandidateSource::Binary
-                        && useoldpkg_atom_matches(&atom.category, &atom.package, &c.version)
-                })
-            })
-            .collect();
-        if oldpkg.is_empty() { matched } else { oldpkg }
-    };
-
-    // `installed_pairs` carries each installed version's own main slot, so "already
-    // installed" is answered against the resolved candidate's *own* main slot (not
-    // merely "this version exists in some slot"); otherwise `emerge -p cat/foo:1`
-    // with only `foo:0` installed mis-classifies a new-slot install as an upgrade.
-    // Portage: output.py _get_installed_best; vardb.match(pkg.slot_atom)
-    let installed_pairs = installed_candidates(root, &atom.category, &atom.package);
-    // A matched candidate counts as already-installed only when its own main slot
-    // is installed at that version (sub-slot ignored, like Portage's `slot_atom`).
-    let candidate_is_installed = |c: &Candidate| -> bool {
-        installed_pairs.iter().any(|(version, slot, _sub_slot)| {
-            version == &c.version
-                && slot == &c.slot
-                // An `[installed]`-marked negative hides the installed instance itself;
-                // the same-version tree candidate stays eligible for merge.
-                && !extra_constraints.iter().any(|ec| {
-                    slot_operator_installed_masked_version(ec, &atom.category, &atom.package)
-                        .is_some_and(|v| &v == version)
-                })
-        })
-    };
-
+/// Pick the best matched candidate, answering early when an excluded, avoid-update or installed one already settles the request.
+pub(crate) fn select_best_candidate(
+    args: SelectBestCandidateArgs<'_>,
+) -> ControlFlow<Result<PretendOutcome, Error>, &Candidate> {
+    let SelectBestCandidateArgs {
+        excluded,
+        matched,
+        by_str,
+        installed_pairs,
+        extra_constraints,
+        atom,
+        is_top_level,
+        repos,
+        atom_str,
+        config,
+        root,
+        update,
+        empty,
+        selective,
+        candidates,
+        source,
+        opts,
+    } = args;
     // --exclude/-X: an installed version matching an exclude atom is left as-is,
     // unconditionally, before --update/--newuse/--changed-use ever get a say.
     if !excluded.is_empty()
         && let Some(installed_best) = matched
             .iter()
             .filter_map(|m| by_str.get(m).copied())
-            .filter(|c| candidate_is_installed(c))
+            .filter(|c| candidate_is_installed(c, installed_pairs, extra_constraints, atom))
             .max_by(|a, b| {
                 vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
             })
@@ -876,9 +1069,9 @@ pub fn resolve_pretend(
             .iter()
             .any(|ex| matches_cli_option_atom(ex, &installed_str))
         {
-            return Ok(PretendOutcome::AlreadyInstalled {
+            return ControlFlow::Break(Ok(PretendOutcome::AlreadyInstalled {
                 version: installed_best.version.clone(),
-            });
+            }));
         }
     }
 
@@ -894,7 +1087,7 @@ pub fn resolve_pretend(
         && !atom_currently_satisfiable(repos, atom_str, config, extra_constraints)
         && let Some(version) = best_installed_matching(root, atom_str, config)
     {
-        return Ok(PretendOutcome::AlreadyInstalled { version });
+        return ControlFlow::Break(Ok(PretendOutcome::AlreadyInstalled { version }));
     }
 
     // --update/-u: skipped entirely (not just outcome-adjusted) for a top-level atom
@@ -910,31 +1103,31 @@ pub fn resolve_pretend(
             // Same `extra_constraints` gate as the early shortcut above.
             dependency_avoid_update_candidate(DependencyAvoidUpdateCandidateArgs {
                 root,
-                atom: &atom,
+                atom,
                 atom_str,
-                candidates: &candidates,
-                installed: &installed_pairs,
+                candidates,
+                installed: installed_pairs,
                 config,
             })
-            .filter(|c| satisfies_extra_constraints(c))
+            .filter(|c| satisfies_extra_constraints(c, atom, extra_constraints))
         } else {
             matched
                 .iter()
                 .filter_map(|m| by_str.get(m).copied())
-                .filter(|c| candidate_is_installed(c))
+                .filter(|c| candidate_is_installed(c, installed_pairs, extra_constraints, atom))
                 .max_by(|a, b| {
                     vercmp_ordering(&a.version, &b.version)
                         .then(a.repo_priority.cmp(&b.repo_priority))
                 })
         };
         if let Some(installed_best) = installed_best {
-            return already_installed_or_reinstall(
+            return ControlFlow::Break(already_installed_or_reinstall(
                 source,
                 opts,
-                &atom,
+                atom,
                 installed_best,
-                best_binary_build_time(&candidates, &installed_best.version),
-            );
+                best_binary_build_time(candidates, &installed_best.version),
+            ));
         }
     }
 
@@ -969,10 +1162,66 @@ pub fn resolve_pretend(
                 .then(a.repo_priority.cmp(&b.repo_priority))
         })
     else {
-        return Ok(PretendOutcome::NoVisibleCandidate);
+        return ControlFlow::Break(Ok(PretendOutcome::NoVisibleCandidate));
     };
+    ControlFlow::Continue(best)
+}
 
-    if candidate_is_installed(best) {
+/// The values [`classify_best_against_installed`] reads from its caller.
+pub(crate) struct ClassifyBestAgainstInstalledArgs<'a> {
+    pub(crate) best: &'a Candidate,
+    pub(crate) installed_pairs: &'a [(String, String, String)],
+    pub(crate) extra_constraints: &'a [String],
+    pub(crate) atom: &'a Atom,
+    pub(crate) newuse: bool,
+    pub(crate) changed_use: bool,
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a Config,
+    pub(crate) changed_deps: bool,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) with_bdeps: bool,
+    pub(crate) changed_slot: bool,
+    pub(crate) usepkg: bool,
+    pub(crate) usepkgonly: bool,
+    pub(crate) candidates: &'a [Candidate],
+    pub(crate) rebuilt_binaries: bool,
+    pub(crate) rebuilt_binaries_timestamp: Option<u64>,
+    pub(crate) update: bool,
+    pub(crate) newrepo: bool,
+    pub(crate) empty: bool,
+    pub(crate) is_top_level: bool,
+    pub(crate) selective: bool,
+}
+
+/// Classify the chosen best candidate against what is installed: reinstall, already installed, upgrade, downgrade or new.
+pub(crate) fn classify_best_against_installed(
+    args: ClassifyBestAgainstInstalledArgs<'_>,
+) -> Result<PretendOutcome, Error> {
+    let ClassifyBestAgainstInstalledArgs {
+        best,
+        installed_pairs,
+        extra_constraints,
+        atom,
+        newuse,
+        changed_use,
+        root,
+        config,
+        changed_deps,
+        repos,
+        with_bdeps,
+        changed_slot,
+        usepkg,
+        usepkgonly,
+        candidates,
+        rebuilt_binaries,
+        rebuilt_binaries_timestamp,
+        update,
+        newrepo,
+        empty,
+        is_top_level,
+        selective,
+    } = args;
+    if candidate_is_installed(best, installed_pairs, extra_constraints, atom) {
         let changed_flags = if newuse || changed_use {
             reinstall_flags_for_use_change(ReinstallFlagsForUseChangeArgs {
                 root,
@@ -1024,7 +1273,7 @@ pub fn resolve_pretend(
                 category: &atom.category,
                 package: &atom.package,
                 version: &best.version,
-                binary_build_time: best_binary_build_time(&candidates, &best.version),
+                binary_build_time: best_binary_build_time(candidates, &best.version),
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
                 update,
@@ -1102,4 +1351,103 @@ pub fn resolve_pretend(
             version: best.version.clone(),
         }),
     }
+}
+
+/// Whether the candidate satisfies every extra constraint of the request.
+fn satisfies_extra_constraints(
+    c: &Candidate,
+    atom: &portage_dep::Atom,
+    extra_constraints: &[String],
+) -> bool {
+    if extra_constraints.is_empty() {
+        return true;
+    }
+    let s = format!(
+        "{}/{}-{}:{}/{}::{}",
+        atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+    );
+    extra_constraints
+        .iter()
+        .all(|ec| match ec.strip_prefix('!') {
+            // A per-instance negative hides no tree candidate (see
+            // [`is_instance_only_mask`]).
+            Some(_) if is_instance_only_mask(ec) => true,
+            Some(neg) => {
+                !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
+            }
+            None => portage_dep::match_from_list(ec, &[s.as_str()]).is_some_and(|r| !r.is_empty()),
+        })
+}
+
+/// Whether the candidate satisfies `atom_str` plus every extra constraint.
+///
+/// A fallback level is worth trying not just when *nothing* passes `is_visible`,
+/// but when nothing visible satisfies the whole request: Portage weighs the whole
+/// request before calling a version unavailable (e.g. `>=foo-2` where only `foo-2`
+/// `~arch` is in range autounmasks its keyword). With no bound and no constraints
+/// this is the old `is_empty()` gate.
+/// Portage: depgraph.py, _select_pkg
+fn usable(
+    c: &Candidate,
+    atom: &portage_dep::Atom,
+    atom_str: &str,
+    extra_constraints: &[String],
+) -> bool {
+    let s = format!(
+        "{}/{}-{}:{}/{}::{}",
+        atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+    );
+    // The atom match sees the candidate's binary build-id, so an
+    // `=`+build-id request is usable only by the equal instance
+    // (dep:2994-3008, S9).
+    if !portage_dep::match_from_list_with_build_id(atom_str, &[(s.as_str(), c.build_id.as_deref())])
+        .is_some_and(|r| !r.is_empty())
+    {
+        return false;
+    }
+    extra_constraints.iter().all(|ec| {
+        // A per-instance negative hides no tree candidate (see
+        // [`is_instance_only_mask`]).
+        if is_instance_only_mask(ec) {
+            return true;
+        }
+        if let Some(neg) = ec.strip_prefix('!') {
+            !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
+        } else {
+            portage_dep::match_from_list(ec, &[s.as_str()]).is_some_and(|r| !r.is_empty())
+        }
+    })
+}
+
+/// True when no visible candidate satisfies the whole request.
+fn need_fallback(
+    vis: &[&Candidate],
+    atom: &portage_dep::Atom,
+    atom_str: &str,
+    extra_constraints: &[String],
+) -> bool {
+    !vis.iter()
+        .any(|c| usable(c, atom, atom_str, extra_constraints))
+}
+
+/// Whether the candidate's own main slot is installed at its version.
+///
+/// A matched candidate counts as already-installed only when its own main slot
+/// is installed at that version (sub-slot ignored, like Portage's `slot_atom`).
+fn candidate_is_installed(
+    c: &Candidate,
+    installed_pairs: &[(String, String, String)],
+    extra_constraints: &[String],
+    atom: &portage_dep::Atom,
+) -> bool {
+    installed_pairs.iter().any(|(version, slot, _sub_slot)| {
+        version == &c.version
+            && slot == &c.slot
+            // An `[installed]`-marked negative hides the installed instance itself;
+            // the same-version tree candidate stays eligible for merge.
+            && !extra_constraints.iter().any(|ec| {
+                slot_operator_installed_masked_version(ec, &atom.category, &atom.package)
+                    .is_some_and(|v| &v == version)
+            })
+    })
 }

@@ -74,6 +74,16 @@ class ExtractBlock(unittest.TestCase):
         self.assertEqual(out.count("return ControlFlow::Break(());"), 2)
         self.assertNotIn("Break(ControlFlow", out)
 
+    def test_tail_range_becomes_the_host_tail(self):
+        src = ("fn host(x: u32) -> Result<u32, String> {\n    let y = x + 1;\n"
+               "    if y == 0 {\n        return Err(\"zero\".into());\n    }\n    Ok(y)\n}\n")
+        c, path = cut(src, 3, 6, ret="Result<u32, String>", tail=True, params=[("y", "u32", "val")])
+        c.render(typed=True)
+        out = open(path).read()
+        self.assertIn("    helper(y)\n}", out)
+        self.assertIn("pub(crate) fn helper(y: u32) -> Result<u32, String> {", out)
+        self.assertIn("return Err(\"zero\".into());", out)
+
     def test_try_keeps_return_err(self):
         src = ("fn host() -> Result<(), String> {\n    let v = parse()?;\n"
                "    if v == 0 {\n        return Err(\"zero\".into());\n    }\n    Ok(())\n}\n")

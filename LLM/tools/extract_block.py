@@ -46,6 +46,9 @@ host's loop `'LABEL` at indent N: a `continue` to that loop becomes
 `--own A,B`: these parameters go by value (the range consumes them).
 `--ret "ControlFlow<()>"`: the host returns `ControlFlow<()>`; its `return ControlFlow::Break(())` stays
 verbatim in the helper (`ControlFlow<()>`) and the call site repeats it.
+`--tail` (with `--ret HOSTTYPE`): START..END ends the host with its tail
+expression; the helper has the host's return type, keeps the body (returns,
+`?` and the tail) as it is, and the call site is the host's new tail.
 `--diverges`: the statement right after the range leaves the block (a
 let-else's closing `continue`), so the host reads nothing the range moves.
 
@@ -258,7 +261,7 @@ def code_only(text):
 
 class Cut:
     def __init__(self, src, start, end, fname, target, doc, pkg, err=None, ret="ExitCode",
-                 loop=None, indent=4, diverges=False, value=None, own=()):
+                 loop=None, indent=4, diverges=False, value=None, own=(), tail=False):
         self.src, self.start, self.end = src, start, end
         self.fname, self.target, self.doc, self.pkg = fname, target, doc, pkg
         self.orig_src = open(src).read()
@@ -284,6 +287,9 @@ class Cut:
             assert lines0[self.end].strip() == "};", lines0[self.end]
             assert self.loop, "--value needs --loop"
         self.ret_ty = ret
+        # --tail: the range ends the host with its tail expression, so the
+        # helper has the host's return type and the call becomes the tail
+        self.tail = tail
         if self.loop:
             # inside the host loop: `return Err(..)` and `?` stay as they are
             # (the function returns `Result<_, err>`), a `continue` to the
@@ -314,7 +320,10 @@ class Cut:
         self.cf = ret == "ControlFlow<()>"
         self.unit = ret == "()" or self.cf
         self.err = None
-        if not self.loop:
+        if self.tail:
+            self.returns = False
+            self.err = None
+        elif not self.loop:
             code = code_no_closures(body)
             if err:
                 # `?` / `return Err(..)`: the function returns `Result<_, err>`
@@ -342,8 +351,14 @@ class Cut:
         names = []
         for l in self.region:
             m = re.match(rf"^{self.ind}let (?:mut )?([a-z_]\w*)\b(?!\()", l)
-            if m and m.group(1) not in names and re.search(rf"(?<![\w.]){m.group(1)}\b", after):
-                names.append(m.group(1))
+            found = [m.group(1)] if m else []
+            # `let Some(x) = .. else { .. };`: the names a refutable pattern binds
+            mp = re.match(rf"^{self.ind}let ([A-Z]\w*\(([^()]*)\)) = ", l)
+            if mp:
+                found = [w for w in re.findall(r"[a-z_]\w*", mp.group(2)) if w not in ("mut", "ref")]
+            for nm in found:
+                if nm not in names and re.search(rf"(?<![\w.]){nm}\b", after):
+                    names.append(nm)
         self.outs = [] if value else [[n, None] for n in names]
         self.params = []          # [name, type, mode] mode: val|ref|mut
         self.imports = []         # `use` lines for bare type names
@@ -380,6 +395,8 @@ class Cut:
         return d[d.index("/src") + 5:].replace("/", "::")
 
     def ret_type(self, typed):
+        if self.tail:
+            return self.ret_ty
         if self.loop:
             ts = [t if typed and t else "()" for _, t in self.outs]
             o = None if not ts else ts[0] if len(ts) == 1 else pascal(self.fname) + "Out"
@@ -423,7 +440,9 @@ class Cut:
                 else oname + " { " + ", ".join("mut " + n for n in onames) + " }") if onames else None
         ind = self.ind
         self.rtn = "return ControlFlow::Break(())" if self.cf else "return"
-        if self.loop:
+        if self.tail:
+            site = [f"    {call}"]
+        elif self.loop:
             ce = call + ("?" if self.fallible else "")
             if self.value:
                 site = [f"{ind[:-4]}let ControlFlow::Continue({self.value[2]}) = {ce} else {{",
@@ -460,7 +479,9 @@ class Cut:
         rt = self.ret_type(typed)
         ret = f" -> {rt}" if rt else ""
         writeback = "".join(f"    *{n}_out = {n};\n" for n, _, _ in ps if n in copy_mut)
-        if probe:
+        if self.tail:
+            tail = ""
+        elif probe:
             tail = "\n" + "".join(f"    let _: () = {n};\n" for n in onames) + "    todo!()\n"
         elif self.value:
             tail = "\n" + writeback
@@ -486,7 +507,7 @@ class Cut:
         pre = "".join(f"*{n}_out = {n}; " for n, _, _ in ps if n in copy_mut)
         body = (self.raw_body if self.cf else wrap_returns(self.raw_body, "ControlFlow::Break" if onames or self.unit else "Some",
                              self.unit, keep_err=bool(self.err), pre=pre)
-                if self.returns else self.raw_body)
+                if self.returns and not self.tail else self.raw_body)
         if self.loop:
             brk = "return Ok(ControlFlow::Break(()))" if self.fallible else "return ControlFlow::Break(())"
             body = body.replace(BRK, f"{{ {pre}{brk} }}" if pre else brk)
@@ -544,6 +565,12 @@ class Cut:
             # the new fn goes right after the host: the file is written once
             at = self.host_end + 1 + len(new_src) - len(lines)
             out = new_src[:at] + ["", *fn.rstrip("\n").split("\n")] + new_src[at:]
+            text = "\n".join(out)
+            missing = [u for u in self.imports if u not in text]
+            if missing:
+                top = [i for i, l in enumerate(out[:60]) if l.startswith("use ")]
+                at_use = (top[-1] + 1) if top else 0
+                out[at_use:at_use] = missing
             open(self.src, "w").write("\n".join(out))
             return
         open(self.src, "w").write("\n".join(new_src))
@@ -772,6 +799,8 @@ class Cut:
                             o[1] = mm.group(1)
             for o in self.outs:
                 if o[1] is None:
+                    for m in self.check()[:4]:
+                        print(m["rendered"])
                     sys.exit(f"no type for output {o[0]}")
         # 4-5 repeat: borrow errors (E0594/E0596) only show once the type
         # errors step 5 fixes are gone, and a new mode re-renders the body
@@ -817,7 +846,7 @@ def main():
     value = tuple(a[a.index("--value") + 1:a.index("--value") + 4]) if "--value" in a else None
     own = a[a.index("--own") + 1].split(",") if "--own" in a else ()
     cut = Cut(a[0], int(a[1]), int(a[2]), a[3], a[4], doc, pkg, err, ret, loop, indent,
-              "--diverges" in a, value, own)
+              "--diverges" in a, value, own, "--tail" in a)
     try:
         cut.run()
     except SystemExit as e:

@@ -34,7 +34,7 @@ Selecting one atom's candidate (`resolve_pretend`).
 ## struct SelectSource / SelectOptions
 - 11 args trips `clippy::too_many_arguments`; same reasoning as `resolve_pretend_graph`'s identical allow. Backlog #123 for `local_binpkg`.
 
-## fn resolve_pretend (pool)
+## fn collect_binary_candidates
 - Portage's `dbs` construction (`if "--usepkgonly" not in myopts: dbs.append(("ebuild" ...)); if myopts.get("--usepkg") is True: dbs.append(("binary" ...))`); `is_visible` only consults source-independent fields (package.mask/license/keywords/properties/restrict), never anything ebuild-specific; `filter_usepkg_exclude_include` matches Portage's `break`-out-of-the-loop rejection.
 - `--getbinpkg`: Portage's `bintree.isremote` -> not remote once in `_additional_pkgs`.
 - `--binpkg-respect-use` (#69 S1): Portage's gate is `reinstall_use or (not installed and respect_use)` -- `--newuse`/`--reinstall` open it on their own, which is what makes a `newflag`-only IUSE difference reject the binary under `--newuse` even with `--binpkg-respect-use=n`.
@@ -53,49 +53,49 @@ Selecting one atom's candidate (`resolve_pretend`).
 - #157: `--emptytree` skips installed packages as candidates entirely (Portage `depgraph.py:7888-7899`, `if empty and pkg.installed ...: continue`), so the dependency `avoid_update` early return below (`depgraph.py:8453-8458`, `return inst_pkg`) can never fire -- its `matched_packages` holds no installed instance.
 - Original comment citations: Portage: depgraph.py:7888-7899,8453-8458
 
-## fn resolve_pretend (autounmask levels)
+## fn relax_until_usable (levels)
 - Portage's `_AutounmaskLevel` is a single mutable object that's re-yielded (`allow_license_changes` sticks once set). Levels 3 & 6 (`missing keywords`) skipped -- no `**` suggestion. Portage bug #463394 for level 4.
 - A `*_masked_only` fallback level is worth trying not just when *nothing* passes `is_visible`, but when nothing visible actually satisfies what this atom (and any slot-conflict constraints folded in with it) asks for: Portage `_select_pkg` weighs the whole request before calling a version unavailable, so `>=dev-libs/foo-2` where `foo-1` is stable but only `foo-2` (`~arch`) is in range autounmasks `foo-2`'s keyword rather than reporting the dep missing.
 - Original comment citations: Portage: depgraph.py:7446 4. +masks, keywords still respected (Portage bug #463394).
 
-## fn resolve_pretend (installed fallback)
+## fn relax_until_usable (installed fallback)
 - `dependency_avoid_update_candidate` only reaches atoms with *some* repo candidate (e.g. keyword-masked-but-present). `--usepkgonly` empties the ebuild pool wholesale, so without this an installed-only satisfier would wrongly go `NoVisibleCandidate` and land on the resume list ("no visible ebuild to merge") in a `-K` merge. Narrowed to the L1 test bed case (L1-a); the non-`--usepkg` path keeps reporting a tree-departed ebuild. Queue loop's #233 rewrite handles runtime-keyed deps.
 - Portage `_select_pkg_highest_available_imp`'s installed fallback (`depgraph.py` `_iter_match_pkgs(root_config, "installed", atom)` after the merge-candidate search comes up empty): in `selective` mode (the default -- `--emptytree` clears it) an already-installed version that satisfies the atom is accepted as-is (`operation="nomerge"`).
 
-## fn resolve_pretend (matched pipeline)
+## fn narrow_matched_candidates (matched pipeline)
 - `resolve_pretend_graph`'s unsolvable slot-conflict handler adds `!=cat/pkg-<ver>` entries to hide a specific version (of the conflicted package or of a pulling parent) and force a lower one on retry.
 - Slot-conflict reconciliation (Portage `_process_slot_conflicts` / `_select_pkg`'s "all the atoms pulling this slot", not just the first): when `resolve_pretend_graph` re-resolves a package that hit a slot conflict, it passes every *other* parent atom that targeted the same `cat/pkg:slot` here -- the winning candidate must satisfy all of them at once.
 - S9 (#341): the `usable` gate and the main `matched` filter pair each candidate string with its binary build-id (`match_from_list_with_build_id`), so an `=`+build-id top-level atom resolves only the equal instance (dep:2994-3008).
 
-## fn resolve_pretend (USE filter)
+## fn narrow_matched_candidates (USE filter)
 - Same "can't tell, so exclude" precedent `reinstall_flags_for_use_change` sets. `use_masked_only` re-checks `is_visible` (redundant here) and the same "only-a-flip-away" test.
 - USE deps (`dev-libs/foo[bar]`/`[-bar]`, `(+)`/`(-)` defaults -- PMS 8.3.4): a post-filter on top of match_from_list's own version/slot/repo matching, exactly where Portage's own `match_from_list` applies its equivalent USE-dep post-pass too -- see `use_deps_satisfied`'s own doc comment (portage-dep) for the ported algorithm and why match_from_list itself doesn't do this.
 
-## fn resolve_pretend (useoldpkg)
+## fn narrow_matched_candidates (useoldpkg)
 - See `set_useoldpkg_atoms`.
 - `--useoldpkg-atoms ATOMS` (Portage `depgraph.py:7936` + `matched_oldpkg`/`visible_matches`): for a package matching one of these atoms, prefer a *built* (binary) candidate over any newer *unbuilt* ebuild.
 - Original comment citations: Portage: depgraph.py:7936 matched_oldpkg/visible_matches
 
-## fn resolve_pretend (installed checks)
+## fn select_best_candidate (installed checks)
 - `installed` (version-only, all slots) is what `dependency_avoid_update_candidate` consumes -- a separate concern from the slot-aware `installed_pairs`. Portage renders `[ebuild NS]`.
 - `installed_pairs` carries each installed version's own main slot, so "is this candidate already installed" can be answered the way Portage `output.py::_get_installed_best` does -- against `vardb.match(pkg.slot_atom)` (the resolved candidate's *own* main slot), not merely "this version exists in some slot".
 - An installed version in a different slot never makes this a downgrade/upgrade -- it's a `New` into a fresh slot (the renderer's `[ebuild NS]`, see `GraphEntry::new_slot`).
 
-## fn resolve_pretend (installed-only USE selection)
+## fn select_best_candidate (installed-only USE selection)
 - #74 S1, selection half. Portage's `_want_installed_pkg` keeps an installed package the user did not name as a nomerge selection. Host probe: `dev-lang/rust:1.94.1[llvm_slot_21]` (installed with the flag; the profile's `LLVM_SLOT` expand turns it off for the ebuild) stays `AlreadyInstalled` under `-puDvN`.
 - #74 S1, selection half (Portage `_wrapped_select_pkg_highest_available_imp`'s no-autounmask pass): the ebuild candidate is matched against the profile-effective USE and the installed instance against its own built USE (`_iter_match_pkgs`'s `pkg.with_use(self._pkg_use_enabled(pkg))`, `dbapi._match_use`'s built-package branch).
 
-## fn resolve_pretend (update shortcut)
+## fn select_best_candidate (update shortcut)
 - Portage's `selective`/`is_top_level` semantics; the top-level `selective` arm is already false under `empty` (`selective = selective && !empty`).
 - Portage `create_depgraph_params.py:179`: `--emptytree` does `myparams.pop("selective", None)`.
 - Original comment citations: Portage: create_depgraph_params.py:179 (`--emptytree` pops `selective`). Portage: depgraph.py:7888-7899
 
-## fn resolve_pretend (best pick)
+## fn select_best_candidate (best pick)
 - Portage's `_wrapped_select_pkg_highest_available_imp` builds `matched_packages` in `dbs` order. `--usepkgonly` has no ebuilds; without `--usepkg` no binaries -- moot either way.
 - --exclude/-X: an excluded candidate is never eligible to become the New/Upgrade "best visible candidate" either -- see this function's own doc comment.
 - Original comment citations: Portage: depgraph.py:8492 matched_packages[-1]
 
-## fn resolve_pretend (installed best)
+## fn classify_best_against_installed
 - `policykit` (global flag `systemd`'s ebuild now defaults on) shows `[ebuild R] … policykit*` at rc 0; the child-flip block records an autounmask change only when the *effective* USE still can't satisfy the atom (`mime-types [nginx]` -> rc 1).
 - `dependency_avoid_update_candidate` above already made the same vdb-USE check and returned `None`, so a `best` that reaches here really is a same-version installed one the atom's `[flag]` isn't satisfied by.
 - The child-flip block records an autounmask change only when the *effective* USE still can't satisfy the atom (`mime-types[nginx]` -> rc 1). Forcing a `Reinstall` here (rather than `AlreadyInstalled`) is what routes the entry through that block at all.

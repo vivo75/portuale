@@ -1,0 +1,241 @@
+diff --git a/crates/portage-repo/src/resolve/pretend.rs b/crates/portage-repo/src/resolve/pretend.rs
+index f629a148..34fff6a8 100644
+--- a/crates/portage-repo/src/resolve/pretend.rs
++++ b/crates/portage-repo/src/resolve/pretend.rs
+@@ -559,27 +559,6 @@ pub fn resolve_pretend(
+     // installed-vs-merge slot collision reconcile on retry instead of re-deriving
+     // the same conflict.
+     // Portage: depgraph.py _select_pkg_highest_available
+-    let satisfies_extra_constraints =
+-        |c: &Candidate| -> bool {
+-            if extra_constraints.is_empty() {
+-                return true;
+-            }
+-            let s = format!(
+-                "{}/{}-{}:{}/{}::{}",
+-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+-            );
+-            extra_constraints
+-                .iter()
+-                .all(|ec| match ec.strip_prefix('!') {
+-                    // A per-instance negative hides no tree candidate (see
+-                    // [`is_instance_only_mask`]).
+-                    Some(_) if is_instance_only_mask(ec) => true,
+-                    Some(neg) => !portage_dep::match_from_list(neg, &[s.as_str()])
+-                        .is_some_and(|r| !r.is_empty()),
+-                    None => portage_dep::match_from_list(ec, &[s.as_str()])
+-                        .is_some_and(|r| !r.is_empty()),
+-                })
+-        };
+     // `--emptytree` skips installed packages as candidates entirely, so the
+     // dependency `avoid_update` early return below can never fire (its pool holds no
+     // installed instance).
+@@ -595,7 +574,7 @@ pub fn resolve_pretend(
+                 installed: &installed,
+                 config,
+             })
+-            .filter(|c| satisfies_extra_constraints(c))
++            .filter(|c| satisfies_extra_constraints(c, &atom, extra_constraints))
+         {
+             return already_installed_or_reinstall(
+                 source,
+@@ -618,36 +597,6 @@ pub fn resolve_pretend(
+     // `~arch` is in range autounmasks its keyword). With no bound and no constraints
+     // this is the old `is_empty()` gate.
+     // Portage: depgraph.py, _select_pkg
+-    let usable = |c: &Candidate| {
+-        let s = format!(
+-            "{}/{}-{}:{}/{}::{}",
+-            atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+-        );
+-        // The atom match sees the candidate's binary build-id, so an
+-        // `=`+build-id request is usable only by the equal instance
+-        // (dep:2994-3008, S9).
+-        if !portage_dep::match_from_list_with_build_id(
+-            atom_str,
+-            &[(s.as_str(), c.build_id.as_deref())],
+-        )
+-        .is_some_and(|r| !r.is_empty())
+-        {
+-            return false;
+-        }
+-        extra_constraints.iter().all(|ec| {
+-            // A per-instance negative hides no tree candidate (see
+-            // [`is_instance_only_mask`]).
+-            if is_instance_only_mask(ec) {
+-                return true;
+-            }
+-            if let Some(neg) = ec.strip_prefix('!') {
+-                !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
+-            } else {
+-                portage_dep::match_from_list(ec, &[s.as_str()]).is_some_and(|r| !r.is_empty())
+-            }
+-        })
+-    };
+-    let need_fallback = |vis: &[&Candidate]| !vis.iter().any(|c| usable(c));
+     // Portage's `_autounmask_levels` + per-level loop: try each allowed relaxation
+     // set least-to-most invasive, re-scanning every version at each level, stopping
+     // at the first level with a satisfying candidate. A later level relaxes `LICENSE`
+@@ -672,7 +621,7 @@ pub fn resolve_pretend(
+         }
+     }
+     for (rl, rk, rm) in levels {
+-        if !need_fallback(&visible) {
++        if !need_fallback(&visible, &atom, atom_str, extra_constraints) {
+             break;
+         }
+         visible = candidates
+@@ -690,7 +639,7 @@ pub fn resolve_pretend(
+             })
+             .collect();
+     }
+-    if need_fallback(&visible) {
++    if need_fallback(&visible, &atom, atom_str, extra_constraints) {
+         // Portage's installed fallback after the merge-candidate search comes up
+         // empty: in `selective` mode an installed version satisfying the atom is
+         // accepted as-is (`operation="nomerge"`). This vdb-only check also covers a
+@@ -839,18 +788,6 @@ pub fn resolve_pretend(
+     let installed_pairs = installed_candidates(root, &atom.category, &atom.package);
+     // A matched candidate counts as already-installed only when its own main slot
+     // is installed at that version (sub-slot ignored, like Portage's `slot_atom`).
+-    let candidate_is_installed = |c: &Candidate| -> bool {
+-        installed_pairs.iter().any(|(version, slot, _sub_slot)| {
+-            version == &c.version
+-                && slot == &c.slot
+-                // An `[installed]`-marked negative hides the installed instance itself;
+-                // the same-version tree candidate stays eligible for merge.
+-                && !extra_constraints.iter().any(|ec| {
+-                    slot_operator_installed_masked_version(ec, &atom.category, &atom.package)
+-                        .is_some_and(|v| &v == version)
+-                })
+-        })
+-    };
+ 
+     // --exclude/-X: an installed version matching an exclude atom is left as-is,
+     // unconditionally, before --update/--newuse/--changed-use ever get a say.
+@@ -858,7 +795,7 @@ pub fn resolve_pretend(
+         && let Some(installed_best) = matched
+             .iter()
+             .filter_map(|m| by_str.get(m).copied())
+-            .filter(|c| candidate_is_installed(c))
++            .filter(|c| candidate_is_installed(c, &installed_pairs, extra_constraints, &atom))
+             .max_by(|a, b| {
+                 vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
+             })
+@@ -916,12 +853,12 @@ pub fn resolve_pretend(
+                 installed: &installed_pairs,
+                 config,
+             })
+-            .filter(|c| satisfies_extra_constraints(c))
++            .filter(|c| satisfies_extra_constraints(c, &atom, extra_constraints))
+         } else {
+             matched
+                 .iter()
+                 .filter_map(|m| by_str.get(m).copied())
+-                .filter(|c| candidate_is_installed(c))
++                .filter(|c| candidate_is_installed(c, &installed_pairs, extra_constraints, &atom))
+                 .max_by(|a, b| {
+                     vercmp_ordering(&a.version, &b.version)
+                         .then(a.repo_priority.cmp(&b.repo_priority))
+@@ -972,7 +909,7 @@ pub fn resolve_pretend(
+         return Ok(PretendOutcome::NoVisibleCandidate);
+     };
+ 
+-    if candidate_is_installed(best) {
++    if candidate_is_installed(best, &installed_pairs, extra_constraints, &atom) {
+         let changed_flags = if newuse || changed_use {
+             reinstall_flags_for_use_change(ReinstallFlagsForUseChangeArgs {
+                 root,
+@@ -1103,3 +1040,92 @@ pub fn resolve_pretend(
+         }),
+     }
+ }
++
++/// Whether the candidate satisfies every extra constraint of the request.
++fn satisfies_extra_constraints(
++    c: &Candidate,
++    atom: &portage_dep::Atom,
++    extra_constraints: &[String],
++) -> bool {
++    if extra_constraints.is_empty() {
++        return true;
++    }
++    let s = format!(
++        "{}/{}-{}:{}/{}::{}",
++        atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
++    );
++    extra_constraints
++        .iter()
++        .all(|ec| match ec.strip_prefix('!') {
++            // A per-instance negative hides no tree candidate (see
++            // [`is_instance_only_mask`]).
++            Some(_) if is_instance_only_mask(ec) => true,
++            Some(neg) => {
++                !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
++            }
++            None => portage_dep::match_from_list(ec, &[s.as_str()]).is_some_and(|r| !r.is_empty()),
++        })
++}
++
++/// Whether the candidate satisfies `atom_str` plus every extra constraint.
++fn usable(
++    c: &Candidate,
++    atom: &portage_dep::Atom,
++    atom_str: &str,
++    extra_constraints: &[String],
++) -> bool {
++    let s = format!(
++        "{}/{}-{}:{}/{}::{}",
++        atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
++    );
++    // The atom match sees the candidate's binary build-id, so an
++    // `=`+build-id request is usable only by the equal instance
++    // (dep:2994-3008, S9).
++    if !portage_dep::match_from_list_with_build_id(atom_str, &[(s.as_str(), c.build_id.as_deref())])
++        .is_some_and(|r| !r.is_empty())
++    {
++        return false;
++    }
++    extra_constraints.iter().all(|ec| {
++        // A per-instance negative hides no tree candidate (see
++        // [`is_instance_only_mask`]).
++        if is_instance_only_mask(ec) {
++            return true;
++        }
++        if let Some(neg) = ec.strip_prefix('!') {
++            !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
++        } else {
++            portage_dep::match_from_list(ec, &[s.as_str()]).is_some_and(|r| !r.is_empty())
++        }
++    })
++}
++
++/// True when no visible candidate satisfies the whole request.
++fn need_fallback(
++    vis: &[&Candidate],
++    atom: &portage_dep::Atom,
++    atom_str: &str,
++    extra_constraints: &[String],
++) -> bool {
++    !vis.iter()
++        .any(|c| usable(c, atom, atom_str, extra_constraints))
++}
++
++/// Whether the candidate's own main slot is installed at its version.
++fn candidate_is_installed(
++    c: &Candidate,
++    installed_pairs: &[(String, String, String)],
++    extra_constraints: &[String],
++    atom: &portage_dep::Atom,
++) -> bool {
++    installed_pairs.iter().any(|(version, slot, _sub_slot)| {
++        version == &c.version
++            && slot == &c.slot
++            // An `[installed]`-marked negative hides the installed instance itself;
++            // the same-version tree candidate stays eligible for merge.
++            && !extra_constraints.iter().any(|ec| {
++                slot_operator_installed_masked_version(ec, &atom.category, &atom.package)
++                    .is_some_and(|v| &v == version)
++            })
++    })
++}
