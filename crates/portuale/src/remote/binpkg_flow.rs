@@ -1,6 +1,7 @@
 //! Checking the binary plan and running the binpkg flow.
 
 use crate::remote::*;
+use crate::remote_bundle::StagedBundle;
 
 // --- Vdb shadow + pre-ship collision pre-check ---------------------------------
 ///
@@ -383,6 +384,42 @@ pub(crate) fn run_binpkg_flow(args: RunBinpkgFlowArgs<'_>) -> Result<String, Str
     // failure keeps the build-time env already in the vdb with one `!!!`
     // warning and continues.
     // Portage: vartree.py, PORTAGE_UPDATE_ENV; phase-functions.sh, postinst block
+    finish_postinst_regen(FinishPostinstRegenArgs {
+        staged: &staged,
+        ctx,
+        control,
+        unit_dir: &unit_dir,
+        regen_features,
+        stateless,
+        vdb: &vdb,
+        regen_bzip2,
+    })
+}
+
+/// The values [`finish_postinst_regen`] reads from its caller.
+pub(crate) struct FinishPostinstRegenArgs<'a> {
+    pub(crate) staged: &'a StagedBundle,
+    pub(crate) ctx: &'a RemoteContext,
+    pub(crate) control: Option<&'a Path>,
+    pub(crate) unit_dir: &'a str,
+    pub(crate) regen_features: Option<&'a str>,
+    pub(crate) stateless: bool,
+    pub(crate) vdb: &'a str,
+    pub(crate) regen_bzip2: Option<&'a str>,
+}
+
+/// The client postinst and info-regen stage, then the success line.
+pub(crate) fn finish_postinst_regen(args: FinishPostinstRegenArgs<'_>) -> Result<String, String> {
+    let FinishPostinstRegenArgs {
+        staged,
+        ctx,
+        control,
+        unit_dir,
+        regen_features,
+        stateless,
+        vdb,
+        regen_bzip2,
+    } = args;
     let cpv = staged.manifest.cpv.clone();
     // The calling environment for the client phase is the server
     // process, so forward its set locale variables (never invented
@@ -391,8 +428,8 @@ pub(crate) fn run_binpkg_flow(args: RunBinpkgFlowArgs<'_>) -> Result<String, Str
     match run_postinst_regen_stage(RunPostinstRegenStageArgs {
         ctx,
         control,
-        unit_dir: &unit_dir,
-        staged: &staged,
+        unit_dir,
+        staged,
         features: regen_features,
         locale: &server_locale,
     }) {
@@ -417,13 +454,8 @@ pub(crate) fn run_binpkg_flow(args: RunBinpkgFlowArgs<'_>) -> Result<String, Str
                     } else {
                         let vdb_env =
                             format!("{vdb}/{}/{}/environment.bz2", staged.category, staged.pf);
-                        match install_regenerated_env(
-                            ctx,
-                            control,
-                            &unit_dir,
-                            &vdb_env,
-                            regen_bzip2,
-                        ) {
+                        match install_regenerated_env(ctx, control, unit_dir, &vdb_env, regen_bzip2)
+                        {
                             Ok(()) => println!(
                                 ">>> Remote env-regen {cpv}: vdb environment.bz2 regenerated"
                             ),

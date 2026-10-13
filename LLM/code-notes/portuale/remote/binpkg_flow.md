@@ -21,10 +21,10 @@ Checking the binary plan and running the binpkg flow: bundle, stream, unpack, ph
 ## fn run_binpkg_flow (merge)
 - Slice-4 merge (copy+vdb+replace).
 
-## fn run_binpkg_flow (regen postinst)
+## fn finish_postinst_regen (regen postinst)
 - Backlog #171: an undefined `pkg_postinst` is a no-op that still re-saves the env (Portage `vartree.py:5334` + `phase-functions.sh:1072-1082`). Any regen/pull/compress/install failure keeps the build-time env with one `!!!` warning and continues (Portage `_postinst_failure`: "It's stupid to bail out here").
 
-## fn run_binpkg_flow (locale)
+## fn finish_postinst_regen (locale)
 - Backlog #171b: Portage's `environ_whitelist` rule; the server process is the calling environment.
 
 ## fn run_bundle_stage
