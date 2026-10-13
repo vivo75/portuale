@@ -352,8 +352,8 @@ class Cut:
         for l in self.region:
             m = re.match(rf"^{self.ind}let (?:mut )?([a-z_]\w*)\b(?!\()", l)
             found = [m.group(1)] if m else []
-            # `let Some(x) = .. else { .. };`: the names a refutable pattern binds
-            mp = re.match(rf"^{self.ind}let ([A-Z]\w*\(([^()]*)\)) = ", l)
+            # `let Some(x) = .. else { .. };` / `let (a, b) = ..;`: the names the pattern binds
+            mp = re.match(rf"^{self.ind}let ((?:[A-Z]\w*)?\(([^()]*)\)) = ", l)
             if mp:
                 found = [w for w in re.findall(r"[a-z_]\w*", mp.group(2)) if w not in ("mut", "ref")]
             for nm in found:

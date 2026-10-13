@@ -1,6 +1,7 @@
 //! Assembling the final result.
 
 use crate::*;
+use portage_profile::Config;
 
 pub(crate) fn assemble_result(
     ctx: &ResolveCtx<'_>,
@@ -86,6 +87,140 @@ pub(crate) fn assemble_result(
     });
     pass.entries = sorted_entries;
 
+    let BuildCycleDisplayOut {
+        buildpkgonly_deps_unsatisfied,
+        circular_deps,
+        large_cycle_count,
+        cycle_display,
+        cycle_display_idx,
+    } = build_cycle_display(ctx, &pass, params, &insertion_rank);
+
+    collect_autounmask_and_conflicts(params, &mut pass, ctx, config);
+
+    collect_withheld_updates(ctx, params, config, &mut pass);
+
+    finalize_dep_reports(&mut pass, ctx);
+
+    // Classify the settled graph the way Portage's abandon sites would
+    // have (see `abort_outcome`); the virtual-cycle probe runs on the same
+    // settled graph, unconditionally but with a cheap gate.
+    // Portage: _virt_deps_visible.
+    let virtual_cycle = find_virtual_cycles(&pass.entries, ctx.root);
+    let outcome = abort_outcome(AbortOutcomeArgs {
+        entries: &pass.entries,
+        masked_deps: &pass.masked_deps,
+        circular_deps: &circular_deps,
+        cycle_display: &cycle_display,
+        cycle_display_idx: &cycle_display_idx,
+        nvc_dep_atoms: &pass.nvc_dep_atoms,
+        virtual_cycle: &virtual_cycle,
+    });
+
+    // Portage shows missed updates only with no unresolved conflicts: the
+    // settled backtrack masks become skip records only on a clean `Complete`
+    // graph. A mask-free search (including every `--backtrack=0` run)
+    // derives nothing here. Portage: display_problems.
+    let mut skipped_missing_deps: Vec<SkippedMissingDep> = Vec::new();
+    let mut skipped_missing_dep_full: Vec<SkippedMissingDepFull> = Vec::new();
+    if matches!(outcome, ResolveOutcome::Complete)
+        && pass.slot_conflicts.is_empty()
+        && pass.orphan_blockers.is_empty()
+        && !pass
+            .entries
+            .iter()
+            .any(|e| e.blockers.iter().any(|b| b.unsolvable))
+    {
+        let (mask_skipped, mask_missing, mask_full) =
+            backtrack_missed_updates(BacktrackMissedUpdatesArgs {
+                repos: &ctx.repos,
+                root: ctx.root,
+                config,
+                entries: &pass.entries,
+                params,
+                missing_args: &pass.missing_args,
+            });
+        // Mask rows lead in first-seen order; both sources collapse per
+        // `(root, slot_atom)` keeping the highest missed pkg. No re-sort:
+        // alphabetical would scramble the mask insertion order Portage
+        // renders in. Portage: depgraph.py.
+        //
+        // A slot the pass already holds is Portage's single
+        // `_conflict_missed_update` entry at the solver's position, not a
+        // leading `_runtime_pkg_mask` one: such a slot's rows move to where
+        // its first pass row sits; slots only the mask knows keep leading.
+        let slot_of = |s: &SkippedUpdate| (s.category.clone(), s.package.clone(), s.slot.clone());
+        let mask_len = mask_skipped.len();
+        let mut anchor: HashMap<(String, String, String), usize> = HashMap::new();
+        for (i, s) in pass.skipped_updates.iter().enumerate() {
+            anchor.entry(slot_of(s)).or_insert(mask_len + i);
+        }
+        let mut combined = mask_skipped;
+        combined.append(&mut pass.skipped_updates);
+        let mut keyed: Vec<(usize, SkippedUpdate)> = combined
+            .into_iter()
+            .enumerate()
+            .map(|(i, s)| (anchor.get(&slot_of(&s)).copied().unwrap_or(i), s))
+            .collect();
+        keyed.sort_by_key(|(k, _)| *k);
+        let combined: Vec<SkippedUpdate> = keyed.into_iter().map(|(_, s)| s).collect();
+        pass.skipped_updates = collapse_skipped_updates(combined);
+        skipped_missing_deps = mask_missing;
+        skipped_missing_dep_full = mask_full;
+    }
+
+    GraphResult {
+        entries: pass.entries,
+        backtrack_restarts,
+        backtrack_max: ctx.backtrack_max,
+        outcome,
+        slot_conflicts: pass.slot_conflicts,
+        skipped_updates: pass.skipped_updates,
+        skipped_missing_deps,
+        skipped_missing_dep_full,
+        orphan_blockers: pass.orphan_blockers,
+        changed_deps_report: pass.changed_deps_report_entries,
+        buildpkgonly_deps_unsatisfied,
+        prune_unresolved: false,
+        pprovided_atoms: pass.pprovided_atoms,
+        missing_args: pass.missing_args,
+        autounmask_keyword_changes: pass.autounmask_keyword_changes,
+        autounmask_use_changes: pass.autounmask_use_changes,
+        autounmask_license_changes: pass.autounmask_license_changes,
+        autounmask_mask_changes: pass.autounmask_mask_changes,
+        // The settled accumulator may still hold a flip folded for an
+        // already-graphed package (or a parent-flip rescue): either way the
+        // clean tail was pre-empted, so report no clean tail.
+        autounmask_no_clean_tail: !params.autounmask_use_config.is_empty()
+            || pass.parent_flip_rescued,
+        settled_with_backtracking: false,
+        abi_rebuilds,
+        circular_deps,
+        circular_dependency: params.circular_dependency.clone(),
+        masked_deps: pass.masked_deps,
+        use_unsat_deps: pass.use_unsat_deps,
+        plain_miss_deps: pass.plain_miss_deps,
+        large_cycle_count,
+        cycle_display,
+        virtual_cycle,
+    }
+}
+
+/// What [`build_cycle_display`] hands back to its caller.
+pub(crate) struct BuildCycleDisplayOut {
+    pub(crate) buildpkgonly_deps_unsatisfied: bool,
+    pub(crate) circular_deps: Vec<Vec<String>>,
+    pub(crate) large_cycle_count: bool,
+    pub(crate) cycle_display: Vec<String>,
+    pub(crate) cycle_display_idx: Vec<usize>,
+}
+
+/// Check the buildpkgonly dependencies and find the unbreakable cycles with their display order.
+pub(crate) fn build_cycle_display(
+    ctx: &ResolveCtx<'_>,
+    pass: &PassResult,
+    params: &BacktrackParams,
+    insertion_rank: &[usize],
+) -> BuildCycleDisplayOut {
     // See GraphResult::buildpkgonly_deps_unsatisfied's doc comment.
     let buildpkgonly_deps_unsatisfied = ctx.buildpkgonly && {
         let needs_action: HashSet<(String, String)> = pass
@@ -129,7 +264,7 @@ pub(crate) fn assemble_result(
         &pass.edge_kind_map,
         ctx.root,
         &params.circular_dependency,
-        Some(&insertion_rank),
+        Some(insertion_rank),
     );
 
     // A persisting restart cycle the hard reporter cannot see: backtracking
@@ -200,7 +335,22 @@ pub(crate) fn assemble_result(
             .collect();
         (cycles.len() > 3, display, display_idx)
     };
+    BuildCycleDisplayOut {
+        buildpkgonly_deps_unsatisfied,
+        circular_deps,
+        large_cycle_count,
+        cycle_display,
+        cycle_display_idx,
+    }
+}
 
+/// Fold in the autounmask USE changes and the residual installed-instance slot conflicts.
+pub(crate) fn collect_autounmask_and_conflicts(
+    params: &BacktrackParams,
+    pass: &mut PassResult,
+    ctx: &ResolveCtx<'_>,
+    config: &Config,
+) {
     // `--autounmask-use` changes from the already-resolved-slot re-check:
     // the graph settled with those flips applied, so surface them in the
     // same block as the fresh-path ones. Deduped by `(atom, token)`.
@@ -271,7 +421,15 @@ pub(crate) fn assemble_result(
     }) {
         record_slot_conflict(&mut pass.slot_conflicts, sc);
     }
+}
 
+/// Add the enforced pins that withhold an upgrade to the skipped updates, deduplicated.
+pub(crate) fn collect_withheld_updates(
+    ctx: &ResolveCtx<'_>,
+    params: &BacktrackParams,
+    config: &Config,
+    pass: &mut PassResult,
+) {
     // Enforced holdable pins that withhold an upgrade join the direct
     // solve's removal rows in the same skip block. Exact-dedupe covers the
     // pathological both-paths shape.
@@ -329,7 +487,10 @@ pub(crate) fn assemble_result(
         }
     }
     pass.skipped_updates = unique;
+}
 
+/// Fill in the dependency chains and per-entry details of the final dependency reports.
+pub(crate) fn finalize_dep_reports(pass: &mut PassResult, ctx: &ResolveCtx<'_>) {
     // Masked-dependency chains are walked out of the final entries
     // (`required_by` is only complete post-pass).
     for rep in &mut pass.masked_deps {
@@ -448,108 +609,5 @@ pub(crate) fn assemble_result(
             root: ctx.root,
             atom: &atom,
         });
-    }
-
-    // Classify the settled graph the way Portage's abandon sites would
-    // have (see `abort_outcome`); the virtual-cycle probe runs on the same
-    // settled graph, unconditionally but with a cheap gate.
-    // Portage: _virt_deps_visible.
-    let virtual_cycle = find_virtual_cycles(&pass.entries, ctx.root);
-    let outcome = abort_outcome(AbortOutcomeArgs {
-        entries: &pass.entries,
-        masked_deps: &pass.masked_deps,
-        circular_deps: &circular_deps,
-        cycle_display: &cycle_display,
-        cycle_display_idx: &cycle_display_idx,
-        nvc_dep_atoms: &pass.nvc_dep_atoms,
-        virtual_cycle: &virtual_cycle,
-    });
-
-    // Portage shows missed updates only with no unresolved conflicts: the
-    // settled backtrack masks become skip records only on a clean `Complete`
-    // graph. A mask-free search (including every `--backtrack=0` run)
-    // derives nothing here. Portage: display_problems.
-    let mut skipped_missing_deps: Vec<SkippedMissingDep> = Vec::new();
-    let mut skipped_missing_dep_full: Vec<SkippedMissingDepFull> = Vec::new();
-    if matches!(outcome, ResolveOutcome::Complete)
-        && pass.slot_conflicts.is_empty()
-        && pass.orphan_blockers.is_empty()
-        && !pass
-            .entries
-            .iter()
-            .any(|e| e.blockers.iter().any(|b| b.unsolvable))
-    {
-        let (mask_skipped, mask_missing, mask_full) =
-            backtrack_missed_updates(BacktrackMissedUpdatesArgs {
-                repos: &ctx.repos,
-                root: ctx.root,
-                config,
-                entries: &pass.entries,
-                params,
-                missing_args: &pass.missing_args,
-            });
-        // Mask rows lead in first-seen order; both sources collapse per
-        // `(root, slot_atom)` keeping the highest missed pkg. No re-sort:
-        // alphabetical would scramble the mask insertion order Portage
-        // renders in. Portage: depgraph.py.
-        //
-        // A slot the pass already holds is Portage's single
-        // `_conflict_missed_update` entry at the solver's position, not a
-        // leading `_runtime_pkg_mask` one: such a slot's rows move to where
-        // its first pass row sits; slots only the mask knows keep leading.
-        let slot_of = |s: &SkippedUpdate| (s.category.clone(), s.package.clone(), s.slot.clone());
-        let mask_len = mask_skipped.len();
-        let mut anchor: HashMap<(String, String, String), usize> = HashMap::new();
-        for (i, s) in pass.skipped_updates.iter().enumerate() {
-            anchor.entry(slot_of(s)).or_insert(mask_len + i);
-        }
-        let mut combined = mask_skipped;
-        combined.append(&mut pass.skipped_updates);
-        let mut keyed: Vec<(usize, SkippedUpdate)> = combined
-            .into_iter()
-            .enumerate()
-            .map(|(i, s)| (anchor.get(&slot_of(&s)).copied().unwrap_or(i), s))
-            .collect();
-        keyed.sort_by_key(|(k, _)| *k);
-        let combined: Vec<SkippedUpdate> = keyed.into_iter().map(|(_, s)| s).collect();
-        pass.skipped_updates = collapse_skipped_updates(combined);
-        skipped_missing_deps = mask_missing;
-        skipped_missing_dep_full = mask_full;
-    }
-
-    GraphResult {
-        entries: pass.entries,
-        backtrack_restarts,
-        backtrack_max: ctx.backtrack_max,
-        outcome,
-        slot_conflicts: pass.slot_conflicts,
-        skipped_updates: pass.skipped_updates,
-        skipped_missing_deps,
-        skipped_missing_dep_full,
-        orphan_blockers: pass.orphan_blockers,
-        changed_deps_report: pass.changed_deps_report_entries,
-        buildpkgonly_deps_unsatisfied,
-        prune_unresolved: false,
-        pprovided_atoms: pass.pprovided_atoms,
-        missing_args: pass.missing_args,
-        autounmask_keyword_changes: pass.autounmask_keyword_changes,
-        autounmask_use_changes: pass.autounmask_use_changes,
-        autounmask_license_changes: pass.autounmask_license_changes,
-        autounmask_mask_changes: pass.autounmask_mask_changes,
-        // The settled accumulator may still hold a flip folded for an
-        // already-graphed package (or a parent-flip rescue): either way the
-        // clean tail was pre-empted, so report no clean tail.
-        autounmask_no_clean_tail: !params.autounmask_use_config.is_empty()
-            || pass.parent_flip_rescued,
-        settled_with_backtracking: false,
-        abi_rebuilds,
-        circular_deps,
-        circular_dependency: params.circular_dependency.clone(),
-        masked_deps: pass.masked_deps,
-        use_unsat_deps: pass.use_unsat_deps,
-        plain_miss_deps: pass.plain_miss_deps,
-        large_cycle_count,
-        cycle_display,
-        virtual_cycle,
     }
 }
