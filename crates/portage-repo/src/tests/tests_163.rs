@@ -608,6 +608,7 @@ fn chain_suffix_qualifies_a_flag_gated_merge_bound_edge() {
             category: "dev-libs",
             package: "leaf",
             atoms: &atoms,
+            argument_sets: &HashMap::new(),
             root: dir.as_path(),
             atom: ""
         }),
@@ -654,6 +655,7 @@ fn chain_suffix_stays_bare_on_an_ungated_edge() {
             category: "dev-libs",
             package: "leaf",
             atoms: &atoms,
+            argument_sets: &HashMap::new(),
             root: dir.as_path(),
             atom: ""
         }),
@@ -712,6 +714,7 @@ fn chain_suffix_qualifies_a_gated_installed_edge_from_the_vdb() {
             category: "dev-libs",
             package: "leaf",
             atoms: &atoms,
+            argument_sets: &HashMap::new(),
             root: dir.as_path(),
             atom: ""
         }),
@@ -2670,7 +2673,7 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         world_reachable: reachable,
         blocker_retry_closure: HashSet::new(),
         complete_locked_merges: HashSet::new(),
-        top_level: HashSet::new(),
+        top_level: TopLevel::from_iter([]),
         top_level_cps: HashSet::new(),
         local_binpkg: build_local_binpkg_index(config),
     }
@@ -2701,6 +2704,7 @@ fn plain_163(cat: &str, pkg: &str, atom: &str) -> PlainMissDepReport {
         package: pkg.to_string(),
         atom: atom.to_string(),
         chain: Vec::new(),
+        binary_only: false,
     }
 }
 
@@ -3295,7 +3299,7 @@ fn assemble_result_change_gains_its_required_by_chain() {
         rebuild_new_slot: true,
         reachable: HashSet::new(),
     });
-    ctx.top_level = top_level;
+    ctx.top_level = TopLevel::from_iter(top_level);
     let mut pass = pass_163();
     pass.entries = vec![
         entry_163("dev-libs", "dc", new_163("1.0"), &[("dev-libs", "top")]),
@@ -3310,6 +3314,37 @@ fn assemble_result_change_gains_its_required_by_chain() {
             "required by dev-libs/top (argument)".to_string(),
         ]
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--usepkgonly` turns a plain miss into Portage's "binary packages"
+/// wording; without it the report keeps "ebuilds" (#353).
+#[test]
+fn plain_miss_reports_read_binary_only_under_usepkgonly() {
+    let dir = dir_163("plainmiss-binary");
+    let repos = repo_pkgs_163(&dir, &[]);
+    let config = cfg_163();
+    let no_strings: Vec<String> = Vec::new();
+    let atoms = vec!["dev-libs/top".to_string()];
+    let mut ctx = ctx_163(Ctx163Args {
+        root: &dir,
+        config: &config,
+        repos,
+        atoms: &atoms,
+        no_strings: &no_strings,
+        buildpkgonly: false,
+        backtrack_enabled: false,
+        ignore_slot_op: false,
+        rebuild_new_slot: true,
+        reachable: HashSet::new(),
+    });
+    for usepkgonly in [false, true] {
+        ctx.usepkgonly = usepkgonly;
+        let mut pass = pass_163();
+        pass.plain_miss_deps = vec![plain_163("dev-libs", "dc", "dev-libs/dc")];
+        finalize_dep_reports(&mut pass, &ctx);
+        assert_eq!(pass.plain_miss_deps[0].binary_only, usepkgonly);
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3335,7 +3370,7 @@ fn assemble_result_preset_chain_is_kept() {
         rebuild_new_slot: true,
         reachable: HashSet::new(),
     });
-    ctx.top_level = top_level;
+    ctx.top_level = TopLevel::from_iter(top_level);
     let mut pass = pass_163();
     pass.entries = vec![
         entry_163("dev-libs", "dc", new_163("1.0"), &[("dev-libs", "top")]),
@@ -3374,7 +3409,7 @@ fn assemble_result_change_owner_is_the_matching_entry() {
         rebuild_new_slot: true,
         reachable: HashSet::new(),
     });
-    ctx.top_level = top_level;
+    ctx.top_level = TopLevel::from_iter(top_level);
     let mut pass = pass_163();
     pass.entries = vec![
         entry_163("dev-libs", "zz", new_163("1.0"), &[]),

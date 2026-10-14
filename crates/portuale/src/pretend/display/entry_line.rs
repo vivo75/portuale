@@ -457,7 +457,12 @@ pub(crate) fn print_no_visible_candidate(
         // The plain-miss block: the unevaluated atom as queued plus the
         // `_get_dep_chain` rows, in place of the bare line.
         eprintln!(
-            "\nemerge: there are no ebuilds to satisfy {:?}.",
+            "\nemerge: there are no {} to satisfy {:?}.",
+            if report.binary_only {
+                "binary packages"
+            } else {
+                "ebuilds"
+            },
             report.atom
         );
         for (node, ty) in &report.chain {

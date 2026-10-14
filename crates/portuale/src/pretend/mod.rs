@@ -228,6 +228,7 @@ pub fn run(args: &[String]) -> ExitCode {
         expanded_atoms,
         selected_set_args,
         set_args,
+        argument_sets,
         set_validation_errors,
     } = match expand_targets(ExpandTargetsArgs {
         opts: &opts,
@@ -260,6 +261,7 @@ pub fn run(args: &[String]) -> ExitCode {
         root: &root,
         expanded_atoms: &expanded_atoms,
         set_args: &set_args,
+        argument_sets: &argument_sets,
         repos: &repos,
         color: &color,
     }) {

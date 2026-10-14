@@ -140,7 +140,15 @@ pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &Graph
                     println!();
                 }
                 portage_repo::SkippedDepDisclosure::Plain(report) => {
-                    println!("emerge: there are no ebuilds to satisfy {:?}.", report.atom);
+                    println!(
+                        "emerge: there are no {} to satisfy {:?}.",
+                        if report.binary_only {
+                            "binary packages"
+                        } else {
+                            "ebuilds"
+                        },
+                        report.atom
+                    );
                     for (node, ty) in &report.chain {
                         println!("(dependency required by \"{node}\" [{ty}])");
                     }

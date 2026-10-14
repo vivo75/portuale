@@ -455,7 +455,7 @@ fn stale_trigger_falls_back_to_the_first_requirer() {
     abk0a.required_by = vec![("dev-libs".to_string(), "abk0d".to_string())];
     let abk0d = graph_entry("dev-libs", "abk0d", "1");
     let entries = vec![abk0c, abk0a, abk0d];
-    let top_level: std::collections::HashSet<&str> = ["dev-libs/abk0d"].into_iter().collect();
+    let top_level: TopLevel<'_> = ["dev-libs/abk0d"].into_iter().collect();
     let mut changes = vec![AutounmaskChange {
         atom: ">=dev-libs/abk0c-1".to_string(),
         token: "x y".to_string(),
@@ -485,8 +485,7 @@ fn use_change_on_an_argument_package_yields_only_the_argument_row() {
     let own = graph_entry("dev-libs", "useflagpkg", "1.0");
     assert!(own.required_by.is_empty());
     let entries = vec![own];
-    let top_level: std::collections::HashSet<&str> =
-        ["dev-libs/useflagpkg[-foo]"].into_iter().collect();
+    let top_level: TopLevel<'_> = ["dev-libs/useflagpkg[-foo]"].into_iter().collect();
     let mut changes = vec![AutounmaskChange {
         atom: ">=dev-libs/useflagpkg-1.0".to_string(),
         token: "-foo".to_string(),
@@ -511,8 +510,7 @@ fn keyword_change_on_an_argument_package_yields_only_the_argument_row() {
     let own = graph_entry("dev-libs", "autounmaskkeywordpkg", "1.0");
     assert!(own.required_by.is_empty());
     let entries = vec![own];
-    let top_level: std::collections::HashSet<&str> =
-        ["dev-libs/autounmaskkeywordpkg"].into_iter().collect();
+    let top_level: TopLevel<'_> = ["dev-libs/autounmaskkeywordpkg"].into_iter().collect();
     let mut changes = vec![AutounmaskChange {
         atom: "=dev-libs/autounmaskkeywordpkg-1.0".to_string(),
         token: "~amd64".to_string(),

@@ -193,7 +193,12 @@ pub(crate) fn step_top_level_unsatisfied(
                 }
                 return Err(Error::Detail(block));
             }
-            let mut message = format!("there are no ebuilds to satisfy {current_atom:?}.");
+            let noun = if ctx.usepkgonly {
+                "binary packages"
+            } else {
+                "ebuilds"
+            };
+            let mut message = format!("there are no {noun} to satisfy {current_atom:?}.");
             // Only suggest a change that would actually fix it (KEYWORDS alone).
             // Portage's "only suggest a working change" spirit.
             if bp.autounmask_suggest_keywords

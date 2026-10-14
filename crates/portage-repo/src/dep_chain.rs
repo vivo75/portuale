@@ -219,7 +219,11 @@ pub(crate) fn chain_node_line(
 
 /// `masked_dep_chain`'s argument lines: the top-level atom texts
 /// targeting `cp`, in request order.
-pub(crate) fn chain_arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(String, String)> {
+pub(crate) fn chain_arg_lines(
+    atoms: &[String],
+    sets: &HashMap<String, String>,
+    cp: &(String, String),
+) -> Vec<(String, String)> {
     atoms
         .iter()
         .filter(|a| {
@@ -229,7 +233,7 @@ pub(crate) fn chain_arg_lines(atoms: &[String], cp: &(String, String)) -> Vec<(S
                     && at.package == cp.1
             })
         })
-        .map(|a| (a.clone(), "argument".to_string()))
+        .map(|a| (argument_label(sets, a).to_string(), "argument".to_string()))
         .collect()
 }
 
@@ -241,6 +245,8 @@ pub(crate) struct MaskedDepChainArgs<'a> {
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) atoms: &'a [String],
+    /// Set members -> `@name` (see `ResolveRequest::argument_sets`).
+    pub(crate) argument_sets: &'a HashMap<String, String>,
     pub(crate) root: &'a Path,
     /// The disclosed miss atom. Direct parents are restricted to
     /// those pulling this atom (Portage starts from the one failing parent
@@ -263,6 +269,7 @@ pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, Str
         category,
         package,
         atoms,
+        argument_sets,
         root,
         atom,
     } = args;
@@ -340,7 +347,7 @@ pub(crate) fn masked_dep_chain(args: MaskedDepChainArgs<'_>) -> Vec<(String, Str
             chain.push((node, ty));
             // A chain top targeted from the command line ends in its argument
             // line(s), like Portage stopping at args.
-            let args = chain_arg_lines(atoms, &cur);
+            let args = chain_arg_lines(atoms, argument_sets, &cur);
             if !args.is_empty() {
                 chain.extend(args);
                 break;

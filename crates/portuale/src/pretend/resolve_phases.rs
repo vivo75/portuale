@@ -14,6 +14,7 @@ pub(crate) struct RunResolvePhasesArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) expanded_atoms: &'a [String],
     pub(crate) set_args: &'a HashSet<String>,
+    pub(crate) argument_sets: &'a HashMap<String, String>,
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) color: &'a Colorizer,
 }
@@ -27,6 +28,7 @@ pub(crate) struct ResolveOnceArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) expanded_atoms: &'a [String],
     pub(crate) set_args: &'a HashSet<String>,
+    pub(crate) argument_sets: &'a HashMap<String, String>,
     pub(crate) complete: bool,
     pub(crate) locked: &'a [String],
     pub(crate) with_seeds: bool,
@@ -42,6 +44,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         root,
         expanded_atoms,
         set_args,
+        argument_sets,
         complete,
         locked,
         with_seeds,
@@ -167,6 +170,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         implicit_system_deps,
         complete,
         set_args: set_args.clone(),
+        argument_sets: argument_sets.clone(),
         solver,
     };
     active_resolver_for(solver).resolve(&req)
@@ -182,6 +186,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         root,
         expanded_atoms,
         set_args,
+        argument_sets,
         repos,
         color,
     } = args;
@@ -210,6 +215,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             root,
             expanded_atoms,
             set_args,
+            argument_sets,
             complete,
             locked,
             with_seeds,

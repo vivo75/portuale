@@ -450,6 +450,9 @@ pub struct PlainMissDepReport {
     pub atom: String,
     /// Walked post-pass exactly like [`MaskedDepReport::chain`].
     pub chain: Vec<(String, String)>,
+    /// `--usepkgonly`: the miss reads `no binary packages to satisfy`.
+    // Portage: _show_unsatisfied_dep, myopts --usepkgonly
+    pub binary_only: bool,
 }
 
 /// The candidates an atom names by version, visibility and USE ignored. `None`

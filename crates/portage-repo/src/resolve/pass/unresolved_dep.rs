@@ -626,6 +626,7 @@ pub(crate) fn record_miss_disclosure(args: RecordMissDisclosureArgs<'_>) {
                         package: key.1.clone(),
                         atom: display_atom.to_string(),
                         chain: Vec::new(),
+                        binary_only: false,
                     }),
                 }
             }

@@ -10,7 +10,7 @@ use crate::*;
 pub(crate) fn autounmask_dep_chain(
     owner: &Option<(String, String)>,
     current_atom: &str,
-    top_level: &std::collections::HashSet<&str>,
+    top_level: &TopLevel<'_>,
     entries: &[GraphEntry],
     root: &Path,
 ) -> Vec<String> {
@@ -32,7 +32,7 @@ pub(crate) fn autounmask_dep_chain(
             .collect();
         args.sort_unstable();
         let arg = args.first().copied().unwrap_or(current_atom);
-        return vec![format!("required by {arg} (argument)")];
+        return vec![format!("required by {} (argument)", top_level.label(arg))];
     };
     // Walks the whole parent chain to the argument, not just the immediate
     // owner. Each node renders `required by <cpv>::<repo>` (vdb repo for an
@@ -56,7 +56,7 @@ pub(crate) fn autounmask_dep_chain(
                         && a.blocker == portage_dep::Blocker::None
                 })
             })
-            .map(|t| format!("required by {t} (argument)"))
+            .map(|t| format!("required by {} (argument)", top_level.label(t)))
             .collect();
         // Sorted: several top-level atoms can name one package (see
         // above); the `HashSet` order would print them at random.
@@ -141,7 +141,7 @@ pub(crate) fn render_use_display_pairs(disp: &[(String, String)]) -> String {
 /// Portage: depgraph.py, _show_unsatisfied_dep.
 pub(crate) fn required_use_dep_chain(
     owner: &Option<(String, String)>,
-    top_level: &std::collections::HashSet<&str>,
+    top_level: &TopLevel<'_>,
     entries: &[GraphEntry],
 ) -> Vec<(String, String)> {
     let Some((oc, op)) = owner else {
@@ -184,7 +184,7 @@ pub(crate) fn required_use_dep_chain(
         .collect();
     matches.sort_unstable();
     if let Some(arg) = matches.first() {
-        chain.push(((*arg).to_string(), "argument".to_string()));
+        chain.push((top_level.label(arg).to_string(), "argument".to_string()));
     }
     chain
 }

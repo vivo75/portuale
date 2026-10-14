@@ -176,6 +176,7 @@ pub(crate) fn missing_dep_full_row(
                 package: apkg,
                 atom: atom.to_string(),
                 chain,
+                binary_only: false,
             })
         }
     };

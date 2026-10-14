@@ -620,6 +620,7 @@ fn graph_onlydeps(
     let req = ResolveRequest {
         config_root: root.clone(),
         root: root.clone(),
+        argument_sets: HashMap::new(),
         atoms: vec![atom_str.to_string()],
         config: test_config(),
         newuse: false,
@@ -2939,6 +2940,7 @@ mod tests_164 {
             category: "dev-libs",
             package: "target",
             atoms: &atoms,
+            argument_sets: &HashMap::new(),
             root: &dir,
             atom: "",
         });
@@ -3012,6 +3014,7 @@ mod tests_164 {
             category: "dev-libs",
             package: "target",
             atoms: &atoms,
+            argument_sets: &HashMap::new(),
             root: &dir,
             atom: "",
         });
@@ -3071,6 +3074,7 @@ mod tests_164 {
             category: "dev-libs",
             package: "target",
             atoms: &atoms,
+            argument_sets: &HashMap::new(),
             root: &dir,
             atom: "",
         });
@@ -3120,7 +3124,7 @@ mod tests_164 {
             }),
         ];
         let owner = Some(("dev-libs".to_string(), "ruparent".to_string()));
-        let top: HashSet<&str> = ["=dev-libs/ruparent-1.0"].into_iter().collect();
+        let top: TopLevel<'_> = ["=dev-libs/ruparent-1.0"].into_iter().collect();
         let got = required_use_dep_chain(&owner, &top, &entries);
         assert_eq!(
             got,
@@ -3148,7 +3152,7 @@ mod tests_164 {
             source: CandidateSource::Ebuild,
         })];
         let owner = Some(("dev-libs".to_string(), "ruup".to_string()));
-        let top: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+        let top: TopLevel<'_> = ["sys-apps/other"].into_iter().collect();
         let got = required_use_dep_chain(&owner, &top, &entries);
         assert_eq!(
             got,
@@ -3174,7 +3178,7 @@ mod tests_164 {
             source: CandidateSource::Ebuild,
         })];
         let owner = Some(("dev-libs".to_string(), "rusib".to_string()));
-        let top: HashSet<&str> = ["dev-libs/rusibling"].into_iter().collect();
+        let top: TopLevel<'_> = ["dev-libs/rusibling"].into_iter().collect();
         let got = required_use_dep_chain(&owner, &top, &entries);
         assert_eq!(
             got,
@@ -3199,7 +3203,7 @@ mod tests_164 {
             repo: Some("testrepo"),
             source: CandidateSource::Ebuild,
         })];
-        let top: HashSet<&str> = ["dev-libs/rux"].into_iter().collect();
+        let top: TopLevel<'_> = ["dev-libs/rux"].into_iter().collect();
         assert_eq!(required_use_dep_chain(&None, &top, &entries), Vec::new());
         // An `AlreadyInstalled` parent has no merge version to name.
         let installed = vec![entry_164(Entry164Args {
@@ -3213,7 +3217,7 @@ mod tests_164 {
             source: CandidateSource::Ebuild,
         })];
         let owner = Some(("dev-libs".to_string(), "ruinst".to_string()));
-        let empty: HashSet<&str> = HashSet::new();
+        let empty: TopLevel<'_> = TopLevel::from_iter([]);
         assert_eq!(
             required_use_dep_chain(&owner, &empty, &installed),
             Vec::new()
@@ -3228,14 +3232,14 @@ mod tests_164 {
         // given, not the change's own `>=<cpv>` left-hand form ...
         let entries: Vec<GraphEntry> = Vec::new();
         let root = Path::new("/");
-        let top: HashSet<&str> = ["dev-libs/aunone[bar]"].into_iter().collect();
+        let top: TopLevel<'_> = ["dev-libs/aunone[bar]"].into_iter().collect();
         let got = autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &top, &entries, root);
         assert_eq!(
             got,
             vec!["required by dev-libs/aunone[bar] (argument)".to_string()]
         );
         // ... or the bare atom when nothing in `top_level` matches.
-        let other: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+        let other: TopLevel<'_> = ["sys-apps/other"].into_iter().collect();
         let got_fallback =
             autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &other, &entries, root);
         assert_eq!(
@@ -3244,12 +3248,34 @@ mod tests_164 {
         );
         // A same-category other-package atom still matches nothing:
         // both halves of the `cp` comparison must hold.
-        let sibling: HashSet<&str> = ["dev-libs/otherpkg"].into_iter().collect();
+        let sibling: TopLevel<'_> = ["dev-libs/otherpkg"].into_iter().collect();
         let got_sibling =
             autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &sibling, &entries, root);
         assert_eq!(
             got_sibling,
             vec!["required by >=dev-libs/aunone-1.0 (argument)".to_string()]
+        );
+    }
+
+    /// A set member is named by its set (`@name`), like Portage's `SetArg`
+    /// in `_get_dep_chain`; an atom outside the set map keeps its text (#345).
+    #[test]
+    fn autounmask_dep_chain_names_the_set_argument() {
+        let entries: Vec<GraphEntry> = Vec::new();
+        let sets: HashMap<String, String> =
+            [("dev-libs/aunone".to_string(), "@myset".to_string())].into();
+        let top = TopLevel {
+            atoms: ["dev-libs/aunone", "sys-apps/plain"].into_iter().collect(),
+            sets: &sets,
+        };
+        let root = Path::new("/");
+        assert_eq!(
+            autounmask_dep_chain(&None, ">=dev-libs/aunone-1.0", &top, &entries, root),
+            vec!["required by @myset (argument)".to_string()]
+        );
+        assert_eq!(
+            autounmask_dep_chain(&None, ">=sys-apps/plain-1.0", &top, &entries, root),
+            vec!["required by sys-apps/plain (argument)".to_string()]
         );
     }
 
@@ -3292,7 +3318,7 @@ mod tests_164 {
         ];
         let owner = Some(("dev-libs".to_string(), "aumid".to_string()));
         // A same-category sibling atom must not attach mid-chain.
-        let top: HashSet<&str> = ["dev-libs/autop", "dev-libs/ausibling"]
+        let top: TopLevel<'_> = ["dev-libs/autop", "dev-libs/ausibling"]
             .into_iter()
             .collect();
         let got = autounmask_dep_chain(&owner, "dev-libs/aumid", &top, &entries, &dir);
@@ -3334,7 +3360,7 @@ mod tests_164 {
             }),
         ];
         let owner = Some(("dev-libs".to_string(), "auup".to_string()));
-        let top: HashSet<&str> = ["dev-libs/auuptop"].into_iter().collect();
+        let top: TopLevel<'_> = ["dev-libs/auuptop"].into_iter().collect();
         let got = autounmask_dep_chain(&owner, "dev-libs/auup", &top, &entries, &dir);
         assert_eq!(
             got,
@@ -3375,7 +3401,7 @@ mod tests_164 {
             }),
         ];
         let owner = Some(("dev-libs".to_string(), "auinst".to_string()));
-        let top: HashSet<&str> = ["dev-libs/auinsttop"].into_iter().collect();
+        let top: TopLevel<'_> = ["dev-libs/auinsttop"].into_iter().collect();
         let got = autounmask_dep_chain(&owner, "dev-libs/auinst", &top, &entries, &dir);
         assert_eq!(
             got,
@@ -3404,7 +3430,7 @@ mod tests_164 {
             source: CandidateSource::Ebuild,
         })];
         let owner = Some(("dev-libs".to_string(), "auself".to_string()));
-        let top: HashSet<&str> = ["sys-apps/other"].into_iter().collect();
+        let top: TopLevel<'_> = ["sys-apps/other"].into_iter().collect();
         let got = autounmask_dep_chain(&owner, "dev-libs/auselfdep", &top, &entries, &dir);
         assert_eq!(
             got,

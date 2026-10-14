@@ -3915,6 +3915,7 @@ fn exact_version_update_keeps_arg_pinned_provider() {
             config_root: root.clone(),
             root: base.clone(),
             atoms: atoms.iter().map(|a| a.to_string()).collect(),
+            argument_sets: HashMap::new(),
             config: test_config(),
             newuse: false,
             changed_use: false,

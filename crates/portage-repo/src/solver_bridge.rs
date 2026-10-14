@@ -1112,6 +1112,7 @@ mod tests {
 
     fn fixture_request(atoms: &[&str]) -> super::super::ResolveRequest {
         use super::super::{Deep, ResolveRequest, SolverKind};
+        use std::collections::HashMap;
         use std::path::PathBuf;
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures")
@@ -1124,6 +1125,7 @@ mod tests {
             config_root: root.to_path_buf(),
             root,
             atoms: atoms.iter().map(|s| s.to_string()).collect(),
+            argument_sets: HashMap::new(),
             config,
             newuse: false,
             changed_use: false,

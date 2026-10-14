@@ -177,7 +177,9 @@ pub(crate) fn misspell_suggestion_block(
     }
     // The message's first line quotes the atom; pull it back out.
     let first = message.lines().next()?;
-    let rest = first.strip_prefix("there are no ebuilds to satisfy \"")?;
+    let rest = first
+        .strip_prefix("there are no ebuilds to satisfy \"")
+        .or_else(|| first.strip_prefix("there are no binary packages to satisfy \""))?;
     let atom_str = rest.strip_suffix("\".")?;
     let atom = parse_atom(atom_str)?;
     // Only when the `cat/pkg` directory has no ebuilds anywhere.

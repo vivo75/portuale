@@ -156,7 +156,10 @@ pub(crate) fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult)
         };
         chain.push(line);
         if let Some(ai) = r.admitted_arg[cur] {
-            chain.push((ctx.atoms[ai].clone(), "argument".to_string()));
+            chain.push((
+                ctx.top_level.label(&ctx.atoms[ai]).to_string(),
+                "argument".to_string(),
+            ));
             break;
         }
         let Some((p, _)) = r.admitted_by[cur] else {

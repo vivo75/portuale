@@ -11,6 +11,10 @@ pub struct ResolveRequest {
     pub config_root: PathBuf,
     pub root: PathBuf,
     pub atoms: Vec<String>,
+    /// Expanded set members -> the `@name` of the set argument that supplied
+    /// them, for the `(argument)` lines of dependency chains.
+    // Portage: depgraph.py, _get_dep_chain (SetArg is named by its set)
+    pub argument_sets: HashMap<String, String>,
     pub config: portage_profile::Config,
     pub newuse: bool,
     pub changed_use: bool,
@@ -132,6 +136,7 @@ impl ResolveRequest {
             config_root: config_root.to_path_buf(),
             root: root.to_path_buf(),
             atoms: atoms.to_vec(),
+            argument_sets: HashMap::new(),
             config: config.clone(),
             newuse: false,
             changed_use: false,

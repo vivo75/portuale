@@ -2,6 +2,44 @@
 
 use crate::*;
 
+/// The top-level atom texts, plus the set argument each came from.
+pub(crate) struct TopLevel<'a> {
+    pub(crate) atoms: HashSet<&'a str>,
+    pub(crate) sets: &'a HashMap<String, String>,
+}
+
+impl<'a> std::ops::Deref for TopLevel<'a> {
+    type Target = HashSet<&'a str>;
+    fn deref(&self) -> &Self::Target {
+        &self.atoms
+    }
+}
+
+static NO_SETS: std::sync::LazyLock<HashMap<String, String>> =
+    std::sync::LazyLock::new(HashMap::new);
+
+/// Plain atoms with no set argument behind them.
+impl<'a> FromIterator<&'a str> for TopLevel<'a> {
+    fn from_iter<I: IntoIterator<Item = &'a str>>(iter: I) -> Self {
+        Self {
+            atoms: iter.into_iter().collect(),
+            sets: &NO_SETS,
+        }
+    }
+}
+
+impl TopLevel<'_> {
+    /// How a chain names this argument: `@set` for a set member, else the atom.
+    pub(crate) fn label<'b>(&'b self, atom: &'b str) -> &'b str {
+        argument_label(self.sets, atom)
+    }
+}
+
+/// `@set` for a set member, else the atom as given.
+pub(crate) fn argument_label<'b>(sets: &'b HashMap<String, String>, atom: &'b str) -> &'b str {
+    sets.get(atom).map_or(atom, String::as_str)
+}
+
 /// Breadth-first walk over `atoms` and their dependencies. One `GraphEntry`
 /// per distinct category/package/slot, in discovery order; different slots
 /// of one package are independent entries, never conflicts by themselves.
@@ -72,7 +110,7 @@ pub(crate) struct ResolveCtx<'a> {
     pub(crate) complete_locked_merges: HashSet<(String, String)>,
     /// Top-level atom texts, to tell a top-level `NoVisibleCandidate`
     /// (fatal) from a dependency's (reported).
-    pub(crate) top_level: HashSet<&'a str>,
+    pub(crate) top_level: TopLevel<'a>,
     /// `(cat, pkg)` of every directly-requested atom; the missing-dependency
     /// backtrack never masks one of these.
     pub(crate) top_level_cps: HashSet<(String, String)>,
@@ -187,7 +225,10 @@ impl<'a> ResolveCtx<'a> {
                         .map(|(c, p)| (c.to_string(), p.to_string()))
                 })
                 .collect(),
-            top_level: req.atoms.iter().map(|s| s.as_str()).collect(),
+            top_level: TopLevel {
+                atoms: req.atoms.iter().map(|s| s.as_str()).collect(),
+                sets: &req.argument_sets,
+            },
             top_level_cps: req
                 .atoms
                 .iter()

@@ -224,7 +224,7 @@ pub(crate) fn collect_feedback(
 pub(crate) fn fill_use_change_chains(
     entries: &[GraphEntry],
     changes: &mut [AutounmaskChange],
-    top_level: &std::collections::HashSet<&str>,
+    top_level: &TopLevel<'_>,
     root: &Path,
 ) {
     for change in changes.iter_mut() {
@@ -253,7 +253,7 @@ pub(crate) fn fill_use_change_chains(
 pub(crate) fn fill_non_use_change_chains(
     entries: &[GraphEntry],
     changes: &mut [AutounmaskChange],
-    top_level: &std::collections::HashSet<&str>,
+    top_level: &TopLevel<'_>,
     root: &Path,
 ) {
     for change in changes.iter_mut() {

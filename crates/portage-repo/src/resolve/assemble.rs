@@ -166,6 +166,11 @@ pub(crate) fn assemble_result(
         pass.skipped_updates = collapse_skipped_updates(combined);
         skipped_missing_deps = mask_missing;
         skipped_missing_dep_full = mask_full;
+        for row in &mut skipped_missing_dep_full {
+            if let SkippedDepDisclosure::Plain(report) = &mut row.dep {
+                report.binary_only = ctx.usepkgonly;
+            }
+        }
     }
 
     GraphResult {
@@ -502,6 +507,7 @@ pub(crate) fn finalize_dep_reports(pass: &mut PassResult, ctx: &ResolveCtx<'_>) 
             category: &rep.category,
             package: &rep.package,
             atoms: ctx.atoms,
+            argument_sets: ctx.top_level.sets,
             root: ctx.root,
             atom: &atom,
         });
@@ -517,6 +523,7 @@ pub(crate) fn finalize_dep_reports(pass: &mut PassResult, ctx: &ResolveCtx<'_>) 
             category: &rep.category,
             package: &rep.package,
             atoms: ctx.atoms,
+            argument_sets: ctx.top_level.sets,
             root: ctx.root,
             atom: &atom,
         });
@@ -566,9 +573,13 @@ pub(crate) fn finalize_dep_reports(pass: &mut PassResult, ctx: &ResolveCtx<'_>) 
             package: e.package.clone(),
             atom,
             chain: Vec::new(),
+            binary_only: false,
         });
     }
     pass.plain_miss_deps.extend(extra_plain_miss);
+    for rep in &mut pass.plain_miss_deps {
+        rep.binary_only = ctx.usepkgonly;
+    }
     // The `#required by …` chains are walked out of the final entries;
     // the walk-time call sites record `Vec::new()`. A change on an
     // argument package yields just the `(argument)` line.
@@ -606,6 +617,7 @@ pub(crate) fn finalize_dep_reports(pass: &mut PassResult, ctx: &ResolveCtx<'_>) 
             category: &rep.category,
             package: &rep.package,
             atoms: ctx.atoms,
+            argument_sets: ctx.top_level.sets,
             root: ctx.root,
             atom: &atom,
         });

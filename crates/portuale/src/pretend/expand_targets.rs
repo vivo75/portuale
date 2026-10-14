@@ -9,6 +9,8 @@ pub(crate) struct ExpandTargetsOut {
     pub(crate) expanded_atoms: Vec<String>,
     pub(crate) selected_set_args: Vec<String>,
     pub(crate) set_args: HashSet<String>,
+    /// Expanded set member -> `@name` of the set argument it came from.
+    pub(crate) argument_sets: HashMap<String, String>,
     /// Named-set `Validation failed …` lines, printed after the merge list
     /// (Portage depgraph.py:11142-11145); `@selected`/world drops silently.
     pub(crate) set_validation_errors: Vec<String>,
@@ -62,6 +64,9 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
     // selects no package drops into `_missing_args` instead of failing the run).
     // Parallel to `expanded_atoms` below, index-preserving.
     let mut expanded_from_set: Vec<bool> = Vec::new();
+    // The `@name` of the set argument behind each expanded atom, parallel to
+    // `expanded_atoms`; `None` for a plain atom argument.
+    let mut expanded_set_name: Vec<Option<String>> = Vec::new();
     // The `@name` set args (leading `@` stripped) resolved via a set file,
     // recorded in `world_sets` after a successful non-`--pretend` merge.
     // Portage: depgraph.py, saveNomergeFavorites
@@ -91,6 +96,7 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
     }
 
     for atom_str in atom_args {
+        let first_new = expanded_atoms.len();
         if *atom_str == "@world" || *atom_str == "@selected" {
             // `@world` is `@profile` + `@selected` + `@system`, not just the
             // world file. Portage sorts each nested set's atoms.
@@ -155,6 +161,8 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
             expanded_from_set.push(false);
             expanded_atoms.push((*atom_str).to_string());
         }
+        let name = atom_str.starts_with('@').then(|| (*atom_str).to_string());
+        expanded_set_name.extend(std::iter::repeat_n(name, expanded_atoms.len() - first_new));
     }
 
     // `profiles/updates` package moves rewrite each expanded atom before it is
@@ -175,17 +183,30 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
             .filter(|(_, f)| !**f)
             .map(|(a, _)| (*a).clone())
             .collect();
+        let plain: HashSet<String> = expanded_atoms
+            .iter()
+            .zip(expanded_set_name.iter())
+            .filter(|(_, n)| n.is_none())
+            .map(|(a, _)| (*a).clone())
+            .collect();
         let mut seen: HashSet<String> = HashSet::new();
         let mut kept_atoms = Vec::with_capacity(expanded_atoms.len());
         let mut kept_flags = Vec::with_capacity(expanded_from_set.len());
-        for (a, f) in expanded_atoms.drain(..).zip(expanded_from_set.drain(..)) {
+        let mut kept_names = Vec::with_capacity(expanded_set_name.len());
+        for ((a, f), n) in expanded_atoms
+            .drain(..)
+            .zip(expanded_from_set.drain(..))
+            .zip(expanded_set_name.drain(..))
+        {
             if seen.insert(a.clone()) {
                 kept_flags.push(f && !explicit.contains(a.as_str()));
+                kept_names.push(n.filter(|_| !plain.contains(a.as_str())));
                 kept_atoms.push(a);
             }
         }
         expanded_atoms = kept_atoms;
         expanded_from_set = kept_flags;
+        expanded_set_name = kept_names;
     }
 
     // A bare name (`emerge eix`) is qualified against the repo tree: exactly
@@ -238,6 +259,12 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         .map(|(a, _)| (*a).clone())
         .collect();
 
+    let argument_sets: HashMap<String, String> = expanded_atoms
+        .iter()
+        .zip(expanded_set_name.iter())
+        .filter_map(|(a, n)| n.as_ref().map(|n| (a.clone(), n.clone())))
+        .collect();
+
     for atom_str in &expanded_atoms {
         let Some(atom) = parse_atom(atom_str) else {
             eprintln!("emerge: invalid atom {atom_str:?}");
@@ -252,6 +279,7 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         expanded_atoms,
         selected_set_args,
         set_args,
+        argument_sets,
         set_validation_errors,
     })
 }

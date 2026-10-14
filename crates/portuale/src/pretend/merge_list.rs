@@ -204,6 +204,28 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
             deferred_abort_unsat,
             verbose,
         });
+    } else {
+        // No list is shown, but an aborted resolve still says why.
+        show_abort_disclosures(ShowAbortDisclosuresArgs {
+            result,
+            root,
+            top_level_pkgs,
+            onlydeps,
+            oneshot,
+            alphabetical,
+            root_deps_running_root,
+            color,
+            system_atoms,
+            world_atoms,
+            force_reinstall_cps,
+            quiet,
+            columns,
+            columnwidth,
+            pretend,
+            gated_abort_partial,
+            deferred_abort_unsat,
+            verbose,
+        });
     }
 }
 
@@ -307,13 +329,97 @@ pub(crate) fn render_merge_rows(args: RenderMergeRowsArgs<'_>) {
         columnwidth,
     });
 
+    show_abort_disclosures(ShowAbortDisclosuresArgs {
+        result,
+        root,
+        top_level_pkgs,
+        onlydeps,
+        oneshot,
+        alphabetical,
+        root_deps_running_root,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+        quiet,
+        columns,
+        columnwidth,
+        pretend,
+        gated_abort_partial,
+        deferred_abort_unsat,
+        verbose,
+    });
+
+    // The collected `[blocks B ...]` lines print as one group after every
+    // package line and before the counters; owner-less rows join the group.
+    // Portage: output.py, Display.print_blockers
+    for orphan in &result.orphan_blockers {
+        blocker_lines.push(format_blocker_row(
+            &format!(
+                "{}/{}-{}",
+                orphan.owner_category, orphan.owner_package, orphan.owner_version
+            ),
+            !quiet,
+            "",
+            color,
+            &orphan.conflict,
+        ));
+    }
+    for line in blocker_lines {
+        println!("{line}");
+    }
+}
+
+/// The values [`show_abort_disclosures`] reads from its caller.
+pub(crate) struct ShowAbortDisclosuresArgs<'a> {
+    pub(crate) result: &'a GraphResult,
+    pub(crate) root: &'a Path,
+    pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
+    pub(crate) onlydeps: bool,
+    pub(crate) oneshot: bool,
+    pub(crate) alphabetical: bool,
+    pub(crate) root_deps_running_root: &'a Option<PathBuf>,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) system_atoms: &'a Vec<String>,
+    pub(crate) world_atoms: &'a [String],
+    pub(crate) force_reinstall_cps: &'a HashSet<(String, String)>,
+    pub(crate) quiet: bool,
+    pub(crate) columns: bool,
+    pub(crate) columnwidth: i64,
+    pub(crate) pretend: bool,
+    pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
+    pub(crate) deferred_abort_unsat: &'a mut Vec<usize>,
+    pub(crate) verbose: bool,
+}
+
+/// The unsatisfied-dependency disclosures of an aborted resolve.
+pub(crate) fn show_abort_disclosures(args: ShowAbortDisclosuresArgs<'_>) {
+    let ShowAbortDisclosuresArgs {
+        result,
+        root,
+        top_level_pkgs,
+        onlydeps,
+        oneshot,
+        alphabetical,
+        root_deps_running_root,
+        color,
+        system_atoms,
+        world_atoms,
+        force_reinstall_cps,
+        quiet,
+        columns,
+        columnwidth,
+        pretend,
+        gated_abort_partial,
+        deferred_abort_unsat,
+        verbose,
+    } = args;
     // The aborted partial list carries no `NoVisibleCandidate` entries, so
     // re-emit their disclosure lines here in full-entries order (stderr,
-    // like the loop above). Pretend-only: on a non-`--pretend` abort Portage
-    // never shows the partial list itself.
+    // like the loop above). A non-`--pretend` abort prints the disclosures but
+    // never the preamble or the partial list.
     // Portage: _emerge/depgraph.py, display_problems
-    if pretend
-        && gated_abort_partial.is_some()
+    if gated_abort_partial.is_some()
         && matches!(
             &result.outcome,
             portage_repo::ResolveOutcome::Aborted {
@@ -324,22 +430,24 @@ pub(crate) fn render_merge_rows(args: RenderMergeRowsArgs<'_>) {
             }
         )
     {
-        // The merge-list preamble and timing line print before the abort
-        // block on stderr; the partial list itself is empty for these arms.
-        // The wall-clock seconds are cut (determinism); only `backtrack:
-        // N/M` is kept. Portage: _emerge/depgraph.py, _show_merge_list
-        println!(
-            "These are the packages that would be merged, in order:
-"
-        );
-        println!("Calculating dependencies ... done!");
-        // The timing line is suppressed under `--quiet`.
-        if !quiet {
+        if pretend {
+            // The merge-list preamble and timing line print before the abort
+            // block on stderr; the partial list itself is empty for these arms.
+            // The wall-clock seconds are cut (determinism); only `backtrack:
+            // N/M` is kept. Portage: _emerge/depgraph.py, _show_merge_list
             println!(
-                "Dependency resolution took (backtrack: {}/{}).
-",
-                result.backtrack_restarts, result.backtrack_max,
+                "These are the packages that would be merged, in order:
+"
             );
+            println!("Calculating dependencies ... done!");
+            // The timing line is suppressed under `--quiet`.
+            if !quiet {
+                println!(
+                    "Dependency resolution took (backtrack: {}/{}).
+",
+                    result.backtrack_restarts, result.backtrack_max,
+                );
+            }
         }
         let mut thrown_away: Vec<String> = Vec::new();
         for (i, entry) in result.entries.iter().enumerate() {
@@ -384,25 +492,6 @@ pub(crate) fn render_merge_rows(args: RenderMergeRowsArgs<'_>) {
                 });
             }
         }
-    }
-
-    // The collected `[blocks B ...]` lines print as one group after every
-    // package line and before the counters; owner-less rows join the group.
-    // Portage: output.py, Display.print_blockers
-    for orphan in &result.orphan_blockers {
-        blocker_lines.push(format_blocker_row(
-            &format!(
-                "{}/{}-{}",
-                orphan.owner_category, orphan.owner_package, orphan.owner_version
-            ),
-            !quiet,
-            "",
-            color,
-            &orphan.conflict,
-        ));
-    }
-    for line in blocker_lines {
-        println!("{line}");
     }
 }
 
