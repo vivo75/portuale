@@ -33,9 +33,9 @@ lexicographic order, then trace order in the adjacency lists
 | bucket | -pv | -pvu | -pvuD | -pvuDN | -pve |
 |---|---|---|---|---|---|
 | H-target-all-slots | 97 | 97 | 97 | 97 | 97 |
-| H-installed-expanded | 294 | 305 | 0 | 0 | 2 |
-| H-installed-config-USE | 0 | 0 | 43 | 2 | 0 |
-| H-installed-bdeps | 0 | 0 | 262 | 0 | 0 |
+| H-installed-expanded | 1414 | 1422 | 0 | 0 | 3 |
+| H-installed-config-USE | 0 | 0 | 140 | 0 | 0 |
+| H-installed-bdeps | 0 | 0 | 1282 | 3 | 0 |
 | H-closure | 0 | 0 | 0 | 0 | 0 |
 | H-no-R | 148 | 8 | 8 | 969 | 24223 |
 | H-installed-only | 0 | 0 | 0 | 0 | 0 |
@@ -44,7 +44,7 @@ lexicographic order, then trace order in the adjacency lists
 | H-or-choice | 0 | 0 | 0 | 0 | 0 |
 | H-cycle | 0 | 0 | 0 | 0 | 0 |
 | H-pdepend-idepend | 0 | 0 | 0 | 0 | 0 |
-| H-other | 1343 | 1297 | 1370 | 1585 | 1893 |
+| H-other | 223 | 180 | 253 | 1584 | 1892 |
 | TOTAL | 1882 | 1707 | 1780 | 2653 | 26215 |
 | modes.md missing+extra | 1882 | 1707 | 1780 | 2653 | 26215 |
 
@@ -57,7 +57,7 @@ Verification: ALL column totals equal the modes.md missing+extra totals.
 
 Zero buckets (value 0, not distinguishable by script): H-installed-only (rule 4 skipped: repo absence of an installed parent's version is not visible in the trace), H-switches, H-or-choice (`||` choice leaves no trace mark), H-cycle, H-pdepend-idepend.
 
-Diagnostics: `-rN:slot` repaired attributions: 4043; extra==target with pg-target slot!=* : 0; first-edge parent cp installed but cpv not exact (near-miss, counted by fallthrough rules, not rule 2): 46; extras with no chain from any root (-> H-other): 0.
+Diagnostics: `-rN:slot` repaired attributions: 4043; extra==target with pg-target slot!=* : 0; first-edge parent cp installed but cpv not exact (near-miss, counted by fallthrough rules, not rule 2): 3; extras with no chain from any root (-> H-other): 67.
 
 ## Example probes (up to 3 per bucket per mode)
 
@@ -69,24 +69,24 @@ Diagnostics: `-rN:slot` repaired attributions: 4043; extra==target with pg-targe
 - -pve: `sys-devel_gcc`, `sys-devel_binutils`, `dev-build_autoconf` (97 total)
 
 ### H-installed-expanded
-- -pv: `sys-apps_systemd-utils`, `dev-python_pip`, `dev-python_pyyaml` (294 total)
-- -pvu: `sys-apps_systemd-utils`, `dev-python_pip`, `dev-python_pyyaml` (305 total)
+- -pv: `sys-apps_systemd-utils`, `dev-python_pip`, `dev-python_pyyaml` (1414 total)
+- -pvu: `sys-apps_systemd-utils`, `dev-python_pip`, `dev-python_pyyaml` (1422 total)
 - -pvuD: (0)
 - -pvuDN: (0)
-- -pve: `kde-apps_kdecore-meta` (2 total)
+- -pve: `kde-apps_kdecore-meta` (3 total)
 
 ### H-installed-config-USE
 - -pv: (0)
 - -pvu: (0)
-- -pvuD: `app-portage_gentoolkit`, `dev-perl_XML-Parser`, `app-admin_sudo` (43 total)
-- -pvuDN: `kde-apps_kdecore-meta` (2 total)
+- -pvuD: `sys-apps_systemd-utils`, `app-portage_gentoolkit`, `dev-lang_ruby` (140 total)
+- -pvuDN: (0)
 - -pve: (0)
 
 ### H-installed-bdeps
 - -pv: (0)
 - -pvu: (0)
-- -pvuD: `sys-apps_systemd-utils`, `dev-python_pip`, `dev-python_pyyaml` (262 total)
-- -pvuDN: (0)
+- -pvuD: `sys-apps_systemd-utils`, `dev-python_pip`, `dev-python_pyyaml` (1282 total)
+- -pvuDN: `kde-apps_kdecore-meta` (3 total)
 - -pve: (0)
 
 ### H-closure
@@ -146,20 +146,20 @@ Diagnostics: `-rN:slot` repaired attributions: 4043; extra==target with pg-targe
 - -pve: (0)
 
 ### H-other
-- -pv: `sys-apps_portage`, `sys-apps_systemd`, `sys-apps_systemd-utils` (1343 total)
-- -pvu: `sys-apps_portage`, `sys-apps_systemd-utils`, `dev-python_pip` (1297 total)
-- -pvuD: `sys-apps_portage`, `sys-devel_gcc`, `sys-libs_glibc` (1370 total)
-- -pvuDN: `sys-apps_portage`, `sys-devel_gcc`, `sys-libs_glibc` (1585 total)
-- -pve: `sys-apps_portage`, `sys-devel_gcc`, `sys-libs_glibc` (1893 total)
+- -pv: `sys-apps_portage`, `sys-apps_systemd`, `dev-python_pip` (223 total)
+- -pvu: `sys-apps_portage`, `dev-python_pip`, `dev-python_pygments` (180 total)
+- -pvuD: `sys-apps_portage`, `sys-devel_gcc`, `sys-libs_glibc` (253 total)
+- -pvuDN: `sys-apps_portage`, `sys-devel_gcc`, `sys-libs_glibc` (1584 total)
+- -pve: `sys-apps_portage`, `sys-devel_gcc`, `sys-libs_glibc` (1892 total)
 
 ## Sample chains
 
-1. probe `net-libs_nodejs` (-pv), extra `acct-group/polkitd`, bucket H-other
-   chain: net-libs/nodejs --[DEPEND via net-libs/nodejs-20.18.2]--> net-libs/nghttp2 --[DEPEND via net-libs/nghttp2-1.69.0]--> sys-apps/systemd --[PDEPEND via sys-apps/systemd-259.4-r2]--> sys-auth/polkit --[RDEPEND via sys-auth/polkit-126-r3]--> acct-user/polkitd --[RDEPEND via acct-user/polkitd-0-r3]--> acct-group/polkitd
-2. probe `net-libs_nodejs` (-pv), extra `acct-user/polkitd`, bucket H-other
-   chain: net-libs/nodejs --[DEPEND via net-libs/nodejs-20.18.2]--> net-libs/nghttp2 --[DEPEND via net-libs/nghttp2-1.69.0]--> sys-apps/systemd --[PDEPEND via sys-apps/systemd-259.4-r2]--> sys-auth/polkit --[RDEPEND via sys-auth/polkit-126-r3]--> acct-user/polkitd
-3. probe `dev-lang_rust` (-pv), extra `dev-lang/nasm`, bucket H-installed-expanded
-   chain: dev-lang/rust --[DEPEND via dev-lang/rust-1.74.1-r101]--> net-misc/curl --[DEPEND via net-misc/curl-8.19.0]--> net-libs/libpsl --[BDEPEND via net-libs/libpsl-0.21.5]--> dev-build/meson --[DEPEND via dev-build/meson-1.10.2]--> dev-lang/nasm
+1. probe `net-libs_nodejs` (-pv), extra `acct-group/polkitd`, bucket H-installed-expanded
+   chain: net-libs/nodejs --[DEPEND via net-libs/nodejs-26.3.0]--> net-libs/nghttp2 --[DEPEND via net-libs/nghttp2-1.69.0]--> sys-apps/systemd --[PDEPEND via sys-apps/systemd-260.1-r2]--> sys-auth/polkit --[RDEPEND via sys-auth/polkit-126-r3]--> acct-user/polkitd --[RDEPEND via acct-user/polkitd-0-r3]--> acct-group/polkitd
+2. probe `net-libs_nodejs` (-pv), extra `acct-user/polkitd`, bucket H-installed-expanded
+   chain: net-libs/nodejs --[DEPEND via net-libs/nodejs-26.3.0]--> net-libs/nghttp2 --[DEPEND via net-libs/nghttp2-1.69.0]--> sys-apps/systemd --[PDEPEND via sys-apps/systemd-260.1-r2]--> sys-auth/polkit --[RDEPEND via sys-auth/polkit-126-r3]--> acct-user/polkitd
+3. probe `dev-lang_rust` (-pv), extra `dev-lang/python`, bucket H-other
+   chain: dev-lang/rust --[BDEPEND via dev-lang/rust-1.74.1-r101]--> dev-lang/python
 4. probe `app-shells_bash` (-pv), extra `app-shells/bash`, bucket H-target-all-slots
    chain: app-shells/bash == target root
 5. probe `dev-build_autoconf` (-pv), extra `dev-build/autoconf`, bucket H-target-all-slots

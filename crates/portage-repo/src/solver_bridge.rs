@@ -737,6 +737,50 @@ fn target_slot(dep: &portage_solver::Dep) -> Option<String> {
     }
 }
 
+/// Slots a bare target atom selects, like Portage's `_greedy_slots`: the slot
+/// of the best visible version matching `versions`, plus, under `update`, each
+/// installed slot whose own best match is lower. Empty when nothing matches.
+// Portage: depgraph.py, _greedy_slots
+fn target_slots(
+    lazy: &LazyRepo,
+    cp: &str,
+    versions: &portage_atom_pubgrub::PortageVersionSet,
+    installed_slots: &[String],
+    update: bool,
+) -> Vec<String> {
+    let Ok(loaded) = lazy.load_versions(cp) else {
+        return Vec::new();
+    };
+    let mut best: HashMap<&str, portage_solver::Version> = HashMap::new();
+    for v in &loaded {
+        let Ok(version) = portage_solver::Version::parse(&v.version) else {
+            continue;
+        };
+        if !versions.contains(&version) {
+            continue;
+        }
+        let slot = best
+            .entry(v.slot.as_str())
+            .or_insert_with(|| version.clone());
+        if version > *slot {
+            *slot = version;
+        }
+    }
+    let Some((top_slot, top)) = best.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0))) else {
+        return Vec::new();
+    };
+    let (top_slot, top) = (top_slot.to_string(), top.clone());
+    let mut slots = vec![top_slot];
+    if update {
+        for slot in installed_slots {
+            if !slots.contains(slot) && best.get(slot.as_str()).is_some_and(|v| *v < top) {
+                slots.push(slot.clone());
+            }
+        }
+    }
+    slots
+}
+
 // --- PubGrub backend -------------------------------------------------------
 
 /// Whether the pubgrub-bridge trace is active (`PORTUALE_PG_TRACE=1`).
@@ -898,7 +942,8 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
     // mapping keeps the original (memoized maps make the copy cheap).
     let mut provider =
         PortageDependencyProvider::new_for_targets(BridgeRepo { lazy: lazy.clone() }, seed_cpns);
-    for inst in all_installed_packages(&req.root) {
+    let installed = all_installed_packages(&req.root);
+    for inst in installed.iter().cloned() {
         let cpn = match portage_solver::Cpn::parse(&format!("{}/{}", inst.category, inst.package)) {
             Ok(cpn) => cpn,
             Err(_) => continue,
@@ -951,7 +996,25 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
             }
             None => {
                 let nodes = provider.packages_for_cpn(&dep.cpn);
-                if nodes.is_empty() {
+                let cp = format!("{}", dep.cpn);
+                let installed_slots: Vec<String> = installed
+                    .iter()
+                    .filter(|i| format!("{}/{}", i.category, i.package) == cp)
+                    .map(|i| i.slot.clone())
+                    .collect();
+                let slots = target_slots(&lazy, &cp, &versions, &installed_slots, req.update);
+                let picked: Vec<PortagePackage> = slots
+                    .iter()
+                    .map(|slot| PortagePackage::slotted(dep.cpn, interned(slot)))
+                    .filter(|node| nodes.contains(node))
+                    .collect();
+                if !picked.is_empty() {
+                    pg_trace(
+                        &mut std::io::stderr(),
+                        format_args!("pg-target {} slot={}", dep.cpn, slots.join(",")),
+                    );
+                    targets.extend(picked.into_iter().map(|n| (n, versions.clone())));
+                } else if nodes.is_empty() {
                     pg_trace(
                         &mut std::io::stderr(),
                         format_args!("pg-target {} slot=-", dep.cpn),
@@ -974,6 +1037,7 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
     let mut order = Vec::new();
     for (pkg, ver) in provider.install_order(&solution) {
         if let portage_atom_pubgrub::PortagePackage::Real { cpn, .. } = &pkg {
+            pg_trace(&mut std::io::stderr(), format_args!("pg-plan {cpn}-{ver}"));
             order.push((format!("{cpn}"), format!("{ver}")));
         }
     }
@@ -1641,6 +1705,68 @@ mod tests {
                 .resolve(&req)
                 .is_err(),
             "resolvo still cannot order a cyclic closure (Tier-4 item)"
+        );
+    }
+
+    /// Merge-bound `cpv:slot` strings, sorted, for the pubgrub S1 pins.
+    fn pg34_plan(result: &super::super::GraphResult) -> Vec<String> {
+        let mut planned: Vec<String> = result
+            .entries
+            .iter()
+            .filter_map(|e| {
+                super::super::merge_bound_cpv(e)
+                    .map(|cpv| format!("{cpv}:{}", e.slot.clone().unwrap_or_default()))
+            })
+            .collect();
+        planned.sort();
+        planned
+    }
+
+    /// #34 S1: a bare multi-slot target plans only its best visible slot
+    /// (Portage `_greedy_slots`); the bridge still plans slot 1 as well.
+    #[test]
+    fn pg34_sib_pubgrub_plans_best_slot_only() {
+        let mut req = fixture_request(&["dev-libs/pg34-sib"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        // `-pv`: not selective, no update, build deps on.
+        req.selective = false;
+        req.with_bdeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-sib resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-sib-2:2"]);
+    }
+
+    /// #34 S1: without `--update` no installed slot joins the plan
+    /// (Portage `_greedy_slots`); the bridge still upgrades slot 1.
+    #[test]
+    fn pg34_gs_pubgrub_pv_plans_new_slot_only() {
+        let mut req = fixture_request(&["dev-libs/pg34-gs"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        // `-pv`: not selective, no update, build deps on.
+        req.selective = false;
+        req.with_bdeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-gs resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-gs-2:2"]);
+    }
+
+    /// #34 S1: with `--update` the installed slot upgrades in place.
+    #[test]
+    fn pg34_gs_pubgrub_pvu_upgrades_installed_slot() {
+        let mut req = fixture_request(&["dev-libs/pg34-gs"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        // `-pvu`: selective through `--update`, build deps on.
+        req.selective = true;
+        req.update = true;
+        req.with_bdeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-gs resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-gs-1.1:1", "dev-libs/pg34-gs-2:2"]
         );
     }
 }
