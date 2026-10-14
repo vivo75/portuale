@@ -1,0 +1,13 @@
+ [32;01m*[39;49;00m checking 3 files for package collisions
+>>> Merging app-misc/t354-kd-8 to /var/tmp/t354/roots/K8/
+>>> /var/tmp/t354/roots/K8/usr/
+>>> /var/tmp/t354/roots/K8/usr/share/
+>>> /var/tmp/t354/roots/K8/usr/share/t354kd/
+>>> /var/tmp/t354/roots/K8/usr/share/t354kd/kept/
+>>> /var/tmp/t354/roots/K8/usr/share/t354kd/kept/.keep_app-misc_t354-kd-0
+>>> /var/tmp/t354/roots/K8/usr/share/t354kd/f
+--- /var/tmp/t354/roots/K8/var/
+--- /var/tmp/t354/roots/K8/var/lib/
+>>> /var/tmp/t354/roots/K8/var/lib/t354kd/
+>>> /var/tmp/t354/roots/K8/var/lib/t354kd/.keep_app-misc_t354-kd-0
+>>> app-misc/t354-kd-8 merged.

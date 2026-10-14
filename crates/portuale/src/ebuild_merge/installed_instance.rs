@@ -153,9 +153,11 @@ pub(crate) fn read_entry_text(root: &Path, category: &str, pf: &str, name: &str)
 /// holding only the directory name. Stays a direct `CONTENTS` read: the
 /// seam keys by split `(package, version)` and has no `pf`-keyed query.
 pub(crate) fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str) -> bool {
-    let Some(text) = read_contents_pf(root, category, pf) else {
-        return false;
-    };
+    read_contents_pf(root, category, pf).is_some_and(|text| contents_text_owns(&text, abs_path))
+}
+
+/// Whether a `CONTENTS` text lists `abs_path`.
+pub(crate) fn contents_text_owns(text: &str, abs_path: &str) -> bool {
     text.lines().any(|line| {
         let mut parts = line.split_whitespace();
         parts.next();
@@ -163,26 +165,28 @@ pub(crate) fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str
     })
 }
 
-/// The node type (`"obj"`/`"dir"`/`"sym"`/...) `category/pf` recorded
-/// for `abs_path`, or `None` if unowned. Tells "still a symlink there"
-/// apart from "reclassified as a directory".
-// Portage: vartree.py, dblink._match_contents
-pub(crate) fn owned_node_type_pf(
-    root: &Path,
-    category: &str,
-    pf: &str,
-    abs_path: &str,
-) -> Option<String> {
-    let text = read_contents_pf(root, category, pf)?;
+/// The node type a `CONTENTS` text records for `abs_path`.
+pub(crate) fn contents_text_node_type(text: &str, abs_path: &str) -> Option<String> {
     text.lines().find_map(|line| {
         let mut parts = line.split_whitespace();
         let node_type = parts.next()?;
-        if parts.next() == Some(abs_path) {
-            Some(node_type.to_string())
-        } else {
-            None
-        }
+        (parts.next() == Some(abs_path)).then(|| node_type.to_string())
     })
+}
+
+/// The `CONTENTS` text of a package being merged over `category/pf`: its
+/// `-MERGING-<pf>` temporary first, the live entry only when there is no
+/// temporary. On a same-version reinstall the live entry is the copy being
+/// replaced, so the live-first [`read_contents_pf`] would credit the new
+/// package with the old files.
+/// Portage: vartree.py, dblink.treewalk (`self.dbdir` is `dbtmpdir`)
+pub(crate) fn read_replacing_contents_pf(root: &Path, category: &str, pf: &str) -> Option<String> {
+    portage_vdb::for_root(root)
+        .read_pending_file(&portage_vdb::EntryKey::new(category, pf), "CONTENTS")
+        .ok()
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .or_else(|| read_contents_pf(root, category, pf))
 }
 
 /// An `obj` entry's content MD5, or a `sym` entry's target string --

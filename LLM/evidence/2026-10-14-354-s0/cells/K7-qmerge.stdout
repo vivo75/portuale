@@ -1,0 +1,15 @@
+ [32;01m*[39;49;00m checking 3 files for package collisions
+>>> Merging app-misc/t354-kd-7 to /var/tmp/t354/roots/K7/
+>>> /var/tmp/t354/roots/K7/usr/
+>>> /var/tmp/t354/roots/K7/usr/share/
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/kept/
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/kept/.keep_app-misc_t354-kd-0
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/f
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/emptydodir/
+--- /var/tmp/t354/roots/K7/var/
+--- /var/tmp/t354/roots/K7/var/lib/
+>>> /var/tmp/t354/roots/K7/var/lib/t354kd/
+>>> /var/tmp/t354/roots/K7/var/lib/t354kd/.keep_app-misc_t354-kd-0
+>>> /var/tmp/t354/roots/K7/var/t354kd-emptyvar/
+>>> app-misc/t354-kd-7 merged.

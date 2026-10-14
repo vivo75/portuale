@@ -1,0 +1,23 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t354/scratch/K8/tmp/portage/app-misc/t354-kd-8/work
+>>> Preparing source in /var/tmp/t354/scratch/K8/tmp/portage/app-misc/t354-kd-8/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t354/scratch/K8/tmp/portage/app-misc/t354-kd-8/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t354/scratch/K8/tmp/portage/app-misc/t354-kd-8/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t354-kd-8
+
+>>> Install app-misc/t354-kd-8 into /var/tmp/t354/scratch/K8/tmp/portage/app-misc/t354-kd-8/image
+>>> Completed installing app-misc/t354-kd-8 into /var/tmp/t354/scratch/K8/tmp/portage/app-misc/t354-kd-8/image
+
+ [32m*[0m Final size of build directory:  1 KiB
+ [32m*[0m Final size of installed tree:  13 KiB
+
+ [33m*[0m QA Notice: One or more empty directories installed to /var:
+ [33m*[0m 
+ [33m*[0m   /var/t354kd-emptyvar
+ [33m*[0m 
+ [33m*[0m If those directories need to be preserved, please make sure to create
+ [33m*[0m or mark them for keeping using 'keepdir'. Portage for >= EAPI 8 ebuilds
+ [33m*[0m will strip empty directories from installation image.

@@ -310,6 +310,61 @@ fn re_merging_the_same_package_replaces_the_vdb_entry_and_bumps_counter() {
     );
 }
 
+/// Reinstalling the same version removes the files the new image no longer
+/// has and keeps the ones it still has (Portage: `dblink.treewalk` takes
+/// the new package's ownership from its temporary `CONTENTS`, #354).
+#[test]
+fn reinstalling_the_same_version_removes_files_the_new_image_dropped() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let portage_tmpdir = tmp.join("tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+    let original =
+        std::fs::read_to_string(repo_root.join("dev-libs/mergepkg/mergepkg-1.0.ebuild")).unwrap();
+    let dir = tmp.join("repo/dev-libs/mergepkg");
+    std::fs::create_dir_all(&dir).unwrap();
+    let ebuild = dir.join("mergepkg-1.0.ebuild");
+    // First image: the fixture plus an extra file in a directory of its own.
+    std::fs::write(
+        &ebuild,
+        original.replace(
+            "\tdosym hello.txt",
+            "\tinsinto /usr/share/${PN}-extra\n\tdoins \"${T}/hello.txt\"\n\tdosym hello.txt",
+        ),
+    )
+    .unwrap();
+    let merge = || {
+        run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+    };
+    assert_eq!(merge().unwrap(), 0);
+    assert!(root.join("usr/share/mergepkg-extra/hello.txt").is_file());
+
+    // Second image of the same version: the extra file and the link are gone.
+    std::fs::write(
+        &ebuild,
+        original.replace("\tdosym hello.txt /usr/share/${PN}/hello-link.txt\n", ""),
+    )
+    .unwrap();
+    assert_eq!(merge().unwrap(), 0);
+    assert!(root.join("usr/share/mergepkg/hello.txt").is_file());
+    assert!(!root.join("usr/share/mergepkg-extra/hello.txt").exists());
+    assert!(!root.join("usr/share/mergepkg-extra").exists());
+    assert!(std::fs::symlink_metadata(root.join("usr/share/mergepkg/hello-link.txt")).is_err());
+    let contents =
+        std::fs::read_to_string(root.join("var/db/pkg/dev-libs/mergepkg-1.0/CONTENTS")).unwrap();
+    assert!(contents.contains("/usr/share/mergepkg/hello.txt"));
+    assert!(!contents.contains("mergepkg-extra"));
+}
+
 /// An upgrade publishes the new version's vdb entry only after unmerging the
 /// replaced same-slot version (Portage's `treewalk` position, after the replace loop).
 #[test]

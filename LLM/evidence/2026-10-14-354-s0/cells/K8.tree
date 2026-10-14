@@ -1,0 +1,30 @@
+## image /var/tmp/t354/scratch/K8/tmp/portage/app-misc/t354-kd-8/image (after install, before qmerge)
+.
+./usr
+./usr/share
+./usr/share/t354kd
+./usr/share/t354kd/f
+./usr/share/t354kd/kept
+./usr/share/t354kd/kept/.keep_app-misc_t354-kd-0
+./var
+./var/lib
+./var/lib/t354kd
+./var/lib/t354kd/.keep_app-misc_t354-kd-0
+## ROOT /var/tmp/t354/roots/K8 (t354kd paths)
+./usr/share/t354kd
+./usr/share/t354kd/f
+./usr/share/t354kd/kept
+./usr/share/t354kd/kept/.keep_app-misc_t354-kd-0
+./var/lib/t354kd
+./var/lib/t354kd/.keep_app-misc_t354-kd-0
+## CONTENTS
+dir /usr
+dir /usr/share
+dir /usr/share/t354kd
+dir /usr/share/t354kd/kept
+obj /usr/share/t354kd/kept/.keep_app-misc_t354-kd-0 d41d8cd98f00b204e9800998ecf8427e 1791965720
+obj /usr/share/t354kd/f 9a8ad92c50cae39aa2c5604fd0ab6d8c 1791965720
+dir /var
+dir /var/lib
+dir /var/lib/t354kd
+obj /var/lib/t354kd/.keep_app-misc_t354-kd-0 d41d8cd98f00b204e9800998ecf8427e 1791965720

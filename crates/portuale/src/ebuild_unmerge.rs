@@ -55,6 +55,9 @@ struct RemoveContentsArgs<'a> {
     root: &'a Path,
     category: &'a str,
     others_in_slot: &'a [String],
+    /// The members of `others_in_slot` that are the package being merged
+    /// over this one; their ownership comes from the new image's `CONTENTS`.
+    replacing: &'a [String],
     config_protect: &'a str,
     config_protect_mask: &'a str,
     unmerge_orphans: bool,
@@ -76,6 +79,7 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
         root,
         category,
         others_in_slot,
+        replacing,
         config_protect,
         config_protect_mask,
         unmerge_orphans,
@@ -92,10 +96,23 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
     let mut protected_symlinks: ProtectedSymlinks = BTreeMap::new();
     let mut dirs: Vec<(PathBuf, (u64, u64))> = Vec::new();
 
+    // Each other instance's `CONTENTS`, read once.
+    let owner_texts: Vec<Option<String>> = others_in_slot
+        .iter()
+        .map(|other_pf| {
+            if replacing.contains(other_pf) {
+                ebuild_merge::read_replacing_contents_pf(root, category, other_pf)
+            } else {
+                ebuild_merge::read_contents_pf(root, category, other_pf)
+            }
+        })
+        .collect();
+
     for entry in entries {
-        let is_owned = others_in_slot
+        let is_owned = owner_texts
             .iter()
-            .any(|other_pf| ebuild_merge::owns_path_pf(root, category, other_pf, &entry.abs_path));
+            .flatten()
+            .any(|text| ebuild_merge::contents_text_owns(text, &entry.abs_path));
 
         let relative = entry.abs_path.trim_start_matches('/');
         let dest = root.join(relative);
@@ -109,9 +126,8 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
             && let Ok(target_meta) = std::fs::metadata(&dest)
             && target_meta.is_dir()
         {
-            let symlink_orphan = others_in_slot.iter().any(|other_pf| {
-                ebuild_merge::owned_node_type_pf(root, category, other_pf, &entry.abs_path)
-                    .as_deref()
+            let symlink_orphan = owner_texts.iter().flatten().any(|text| {
+                ebuild_merge::contents_text_node_type(text, &entry.abs_path).as_deref()
                     == Some("dir")
             });
             if symlink_orphan {
@@ -486,6 +502,7 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
         root,
         category,
         others_in_slot: &others_in_slot,
+        replacing: also_keep,
         config_protect: &options.config_protect,
         config_protect_mask: &options.config_protect_mask,
         unmerge_orphans: options.unmerge_orphans,
@@ -713,6 +730,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -751,6 +769,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -782,6 +801,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: true,
@@ -813,6 +833,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: true,
@@ -844,6 +865,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: true,
@@ -875,6 +897,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -900,6 +923,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -948,6 +972,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &["otherpkg-2.0".to_string()],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -990,6 +1015,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1033,6 +1059,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &["otherpkg-2.0".to_string()],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1066,6 +1093,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &["orphanpkg-2.0".to_string()],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1109,6 +1137,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &["orphanpkg-2.0".to_string()],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1223,6 +1252,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1267,6 +1297,7 @@ mod tests {
             root: &root,
             category: "dev-libs",
             others_in_slot: &[],
+            replacing: &[],
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,

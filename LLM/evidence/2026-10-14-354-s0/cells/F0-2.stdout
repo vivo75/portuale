@@ -1,0 +1,56 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.59 s (backtrack: 0/20).
+
+[ebuild   R    ] app-misc/t354-lib-1::t354 to /var/tmp/t354/roots/F0/ 0 KiB
+
+Total: 1 package (1 reinstall), Size of downloads: 0 KiB
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t354-lib-1::t354 for /var/tmp/t354/roots/F0/
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t354/scratch/F0/tmp/portage/app-misc/t354-lib-1/work
+>>> Preparing source in /var/tmp/t354/scratch/F0/tmp/portage/app-misc/t354-lib-1/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t354/scratch/F0/tmp/portage/app-misc/t354-lib-1/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t354/scratch/F0/tmp/portage/app-misc/t354-lib-1/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t354-lib-1
+
+>>> Install app-misc/t354-lib-1 into /var/tmp/t354/scratch/F0/tmp/portage/app-misc/t354-lib-1/image
+ [32m*[0m t354-lib: image variant 2
+>>> Completed installing app-misc/t354-lib-1 into /var/tmp/t354/scratch/F0/tmp/portage/app-misc/t354-lib-1/image
+
+ [32m*[0m Final size of build directory: 13 KiB
+ [32m*[0m Final size of installed tree:   5 KiB
+
+[33m * [39;49;00mQA Notice: Unresolved soname dependencies:
+[33m * [39;49;00m
+[33m * [39;49;00m	/usr/lib64/libt354a.so.1: libc.so.6
+[33m * [39;49;00m
+
+>>> Installing (1 of 1) app-misc/t354-lib-1::t354 to /var/tmp/t354/roots/F0/
+ [32;01m*[39;49;00m checking 2 files for package collisions
+>>> Merging app-misc/t354-lib-1 to /var/tmp/t354/roots/F0/
+--- /var/tmp/t354/roots/F0/usr/
+--- /var/tmp/t354/roots/F0/usr/lib64/
+=== /var/tmp/t354/roots/F0/usr/lib64/libt354a.so.1
+>>> /var/tmp/t354/roots/F0/usr/lib64/libt354a.so -> libt354a.so.1
+>>> Safely unmerging already-installed instance...
+<<<          obj /var/tmp/t354/roots/F0/usr/lib64/libt354b.so.1
+<<<          sym /var/tmp/t354/roots/F0/usr/lib64/libt354b.so
+--- replaced obj /var/tmp/t354/roots/F0/usr/lib64/libt354a.so.1
+--- replaced sym /var/tmp/t354/roots/F0/usr/lib64/libt354a.so
+--- replaced dir /var/tmp/t354/roots/F0/usr/lib64
+--- replaced dir /var/tmp/t354/roots/F0/usr
+>>> Original instance of package unmerged safely.
+>>> app-misc/t354-lib-1 merged.
+
+>>> Completed (1 of 1) app-misc/t354-lib-1::t354 to /var/tmp/t354/roots/F0/
+
+ * GNU info directory index is up-to-date.

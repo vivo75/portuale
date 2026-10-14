@@ -1346,3 +1346,41 @@ fn fixture_reverse_dependents_are_identical_on_every_backend() {
     }
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// A same-version reinstall with a smaller image removes the dropped files on
+/// every backend: the replacing package's ownership comes from its pending
+/// entry, not from the live entry it replaces (#354).
+#[test]
+fn a_same_version_reinstall_removes_dropped_files_on_every_backend() {
+    for kind in db_kinds() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let ptmp = tmp.join("ptmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&ptmp).unwrap();
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let original =
+            std::fs::read_to_string(repo.join("dev-libs/mergepkg/mergepkg-1.0.ebuild")).unwrap();
+        let dir = tmp.join("repo/dev-libs/mergepkg");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ebuild = dir.join("mergepkg-1.0.ebuild");
+        std::fs::write(&ebuild, &original).unwrap();
+        let merge = || run_merge(&ebuild, &root, &ptmp, &MergeOptions::default(), None);
+        assert_eq!(merge().unwrap(), 0);
+        let _db = use_db(kind, &root, &tmp.join("vdb.db"));
+        std::fs::write(
+            &ebuild,
+            original.replace("\tdosym hello.txt /usr/share/${PN}/hello-link.txt\n", ""),
+        )
+        .unwrap();
+        assert_eq!(merge().unwrap(), 0, "{kind:?}");
+        assert!(
+            root.join("usr/share/mergepkg/hello.txt").is_file(),
+            "{kind:?}"
+        );
+        assert!(
+            std::fs::symlink_metadata(root.join("usr/share/mergepkg/hello-link.txt")).is_err(),
+            "{kind:?}"
+        );
+    }
+}

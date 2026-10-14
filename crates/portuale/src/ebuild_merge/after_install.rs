@@ -352,9 +352,9 @@ pub(crate) struct UnmergeReplacedSameSlotArgs<'a> {
 /// instance on a reinstall. Each hook runs from that
 /// version's own vdb-stored `environment.bz2` + `<pf>.ebuild`, gated on
 /// its recorded `DEFINED_PHASES`; a version without them skips its
-/// hooks. Only files the new version does not itself own are deleted;
-/// on a same-`pf` reinstall every path is still owned (the live entry
-/// still carries the old `CONTENTS`), so the just-merged files survive.
+/// hooks. Only files the new version does not itself own are deleted; the
+/// new version's ownership is read from its temporary entry, also on a
+/// same-`pf` reinstall where the live entry is the copy being replaced.
 /// A phase failure is logged, never fatal.
 ///
 /// A different-slot version is left untouched. `scratch_dir` holds the

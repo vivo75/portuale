@@ -1,0 +1,46 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.60 s (backtrack: 0/20).
+
+[ebuild  N     ] app-misc/t354-cons-1::t354 to /var/tmp/t354/roots/F/ 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t354-cons-1::t354 for /var/tmp/t354/roots/F/
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t354/scratch/F/tmp/portage/app-misc/t354-cons-1/work
+>>> Preparing source in /var/tmp/t354/scratch/F/tmp/portage/app-misc/t354-cons-1/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t354/scratch/F/tmp/portage/app-misc/t354-cons-1/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t354/scratch/F/tmp/portage/app-misc/t354-cons-1/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t354-cons-1
+
+>>> Install app-misc/t354-cons-1 into /var/tmp/t354/scratch/F/tmp/portage/app-misc/t354-cons-1/image
+>>> Completed installing app-misc/t354-cons-1 into /var/tmp/t354/scratch/F/tmp/portage/app-misc/t354-cons-1/image
+
+ [32m*[0m Final size of build directory: 27 KiB
+ [32m*[0m Final size of installed tree:   4 KiB
+
+[33m * [39;49;00mQA Notice: Unresolved soname dependencies:
+[33m * [39;49;00m
+[33m * [39;49;00m	/usr/bin/t354cons: libc.so.6
+[33m * [39;49;00m
+
+>>> Installing (1 of 1) app-misc/t354-cons-1::t354 to /var/tmp/t354/roots/F/
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging app-misc/t354-cons-1 to /var/tmp/t354/roots/F/
+--- /var/tmp/t354/roots/F/usr/
+>>> /var/tmp/t354/roots/F/usr/bin/
+>>> /var/tmp/t354/roots/F/usr/bin/t354cons
+>>> app-misc/t354-cons-1 merged.
+
+>>> Completed (1 of 1) app-misc/t354-cons-1::t354 to /var/tmp/t354/roots/F/
+
+ * GNU info directory index is up-to-date.

@@ -1,0 +1,82 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.61 s (backtrack: 0/20).
+
+[ebuild   R    ] app-misc/t354-re-1::t354 to /var/tmp/t354/roots/A/ 0 KiB
+
+Total: 1 package (1 reinstall), Size of downloads: 0 KiB
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t354-re-1::t354 for /var/tmp/t354/roots/A/
+
+>>> Install app-misc/t354-re-1 into /var/tmp/t354/scratch/A/tmp/portage/app-misc/t354-re-1/image
+ [32m*[0m t354: image variant 2
+>>> Completed installing app-misc/t354-re-1 into /var/tmp/t354/scratch/A/tmp/portage/app-misc/t354-re-1/image
+
+ [32m*[0m Final size of build directory:  1 KiB
+ [32m*[0m Final size of installed tree:  25 KiB
+
+>>> Creating binpkg
+>>> Done.
+
+>>> Installing (1 of 1) app-misc/t354-re-1::t354 to /var/tmp/t354/roots/A/
+ [32;01m*[39;49;00m checking 10 files for package collisions
+>>> Merging app-misc/t354-re-1 to /var/tmp/t354/roots/A/
+--- /var/tmp/t354/roots/A/usr/
+--- /var/tmp/t354/roots/A/usr/share/
+--- /var/tmp/t354/roots/A/usr/share/t354/
+>>> /var/tmp/t354/roots/A/usr/share/t354/chg
+>>> /var/tmp/t354/roots/A/usr/share/t354/new
+>>> /var/tmp/t354/roots/A/usr/share/t354/s2f
+--- /var/tmp/t354/roots/A/usr/share/t354/d/
+>>> /var/tmp/t354/roots/A/usr/share/t354/d/x2
+=== /var/tmp/t354/roots/A/usr/share/t354/keep
+>>> /var/tmp/t354/roots/A/usr/share/t354/f2s -> keep
+>>> /var/tmp/t354/roots/A/usr/share/t354/chgmod
+--- /var/tmp/t354/roots/A/etc/
+--- /var/tmp/t354/roots/A/etc/t354/
+>>> /var/tmp/t354/roots/A/etc/t354/both.conf
+>>> /var/tmp/t354/roots/A/etc/t354/._cfg0000_same.conf
+>>> /var/tmp/t354/roots/A/etc/t354/._cfg0000_bothmod.conf
+>>> Safely unmerging already-installed instance...
+<<<          sym /var/tmp/t354/roots/A/usr/share/t354/symdrop
+--- replaced sym /var/tmp/t354/roots/A/usr/share/t354/s2f
+--- replaced obj /var/tmp/t354/roots/A/usr/share/t354/keep
+<<<          obj /var/tmp/t354/roots/A/usr/share/t354/g/y
+--- replaced obj /var/tmp/t354/roots/A/usr/share/t354/f2s
+<<<          obj /var/tmp/t354/roots/A/usr/share/t354/e/f/z
+<<<          obj /var/tmp/t354/roots/A/usr/share/t354/droptouch
+<<<          obj /var/tmp/t354/roots/A/usr/share/t354/dropmod
+<<<          obj /var/tmp/t354/roots/A/usr/share/t354/drop
+<<<          obj /var/tmp/t354/roots/A/usr/share/t354/d/x
+--- replaced dir /var/tmp/t354/roots/A/usr/share/t354/d
+--- replaced obj /var/tmp/t354/roots/A/usr/share/t354/chgmod
+--- replaced obj /var/tmp/t354/roots/A/usr/share/t354/chg
+--- replaced dir /var/tmp/t354/roots/A/usr/share/t354
+--- replaced dir /var/tmp/t354/roots/A/usr/share
+--- replaced dir /var/tmp/t354/roots/A/usr
+<<<          obj /var/tmp/t354/roots/A/etc/t354/unmod.conf
+--- !mtime   obj /var/tmp/t354/roots/A/etc/t354/touch.conf
+--- replaced obj /var/tmp/t354/roots/A/etc/t354/same.conf
+--- !md5     obj /var/tmp/t354/roots/A/etc/t354/mod.conf
+--- replaced obj /var/tmp/t354/roots/A/etc/t354/bothmod.conf
+--- replaced obj /var/tmp/t354/roots/A/etc/t354/both.conf
+--- replaced dir /var/tmp/t354/roots/A/etc/t354
+--- replaced dir /var/tmp/t354/roots/A/etc
+<<<          dir /var/tmp/t354/roots/A/usr/share/t354/g
+<<<          dir /var/tmp/t354/roots/A/usr/share/t354/e/f
+<<<          dir /var/tmp/t354/roots/A/usr/share/t354/e
+>>> Original instance of package unmerged safely.
+>>> app-misc/t354-re-1 merged.
+
+>>> Completed (1 of 1) app-misc/t354-re-1::t354 to /var/tmp/t354/roots/A/
+
+ * GNU info directory index is up-to-date.
+
+ * IMPORTANT: 2 config files in '/var/tmp/t354/roots/A/etc' need updating.
+ * See the CONFIGURATION FILES and CONFIGURATION FILES UPDATE TOOLS
+ * sections of the emerge man page to learn how to update config files.

@@ -1,0 +1,38 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t354/scratch/K7/tmp/portage/app-misc/t354-kd-7/work
+>>> Preparing source in /var/tmp/t354/scratch/K7/tmp/portage/app-misc/t354-kd-7/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t354/scratch/K7/tmp/portage/app-misc/t354-kd-7/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t354/scratch/K7/tmp/portage/app-misc/t354-kd-7/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t354-kd-7
+
+>>> Install app-misc/t354-kd-7 into /var/tmp/t354/scratch/K7/tmp/portage/app-misc/t354-kd-7/image
+>>> Completed installing app-misc/t354-kd-7 into /var/tmp/t354/scratch/K7/tmp/portage/app-misc/t354-kd-7/image
+
+ [32m*[0m Final size of build directory:  1 KiB
+ [32m*[0m Final size of installed tree:  13 KiB
+
+ [33m*[0m QA Notice: One or more empty directories installed to /var:
+ [33m*[0m 
+ [33m*[0m   /var/t354kd-emptyvar
+ [33m*[0m 
+ [33m*[0m If those directories need to be preserved, please make sure to create
+ [33m*[0m or mark them for keeping using 'keepdir'. Portage for >= EAPI 8 ebuilds
+ [33m*[0m will strip empty directories from installation image.
+ [32;01m*[39;49;00m checking 3 files for package collisions
+>>> Merging app-misc/t354-kd-7 to /var/tmp/t354/roots/K7/
+>>> /var/tmp/t354/roots/K7/usr/
+>>> /var/tmp/t354/roots/K7/usr/share/
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/f
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/emptydodir/
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/kept/
+>>> /var/tmp/t354/roots/K7/usr/share/t354kd/kept/.keep_app-misc_t354-kd-0
+--- /var/tmp/t354/roots/K7/var/
+>>> /var/tmp/t354/roots/K7/var/t354kd-emptyvar/
+--- /var/tmp/t354/roots/K7/var/lib/
+>>> /var/tmp/t354/roots/K7/var/lib/t354kd/
+>>> /var/tmp/t354/roots/K7/var/lib/t354kd/.keep_app-misc_t354-kd-0
+>>> app-misc/t354-kd-7 merged.
