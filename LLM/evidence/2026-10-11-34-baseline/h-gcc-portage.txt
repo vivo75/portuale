@@ -1,0 +1,7 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.73 s (backtrack: 0/20).
+
+[ebuild   R    ] sys-devel/gcc-16.2.1_p20260926 

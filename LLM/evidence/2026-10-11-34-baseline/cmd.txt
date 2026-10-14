@@ -1,0 +1,23 @@
+# S0 Step 1 baseline captures (2026-10-14). Mechanical capture; stdout+stderr in each file.
+# Each file is the verbatim combined output; exit codes below.
+
+image: localhost/test-portuale:latest  id 5616d41d00cdbef0aa8933476973dc5b9ca07e897b635bd7167dedf61c09cb5f
+portuale HEAD: 8772601ef5701805cc5d1d6009e4c487f5ca9d9a (worktree clean at capture start)
+binary: /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+  mtime: 2026-10-14 08:38:01.889343543 +0000
+  target/release/emerge is a symlink -> portuale (symlink mtime 2026-10-10 01:11:29)
+  (HEAD commit time 2026-10-14 09:25:38 +0000; binary built before HEAD. No cargo build run.)
+container env (all podman captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC ROOT=/ PORTAGE_CONFIGROOT=/
+host env (all host captures): env PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC ROOT=/ PORTAGE_CONFIGROOT=/
+container mounts: as pm_mounts() in pmtest differential-test-bed/run/lib.sh (PM bin dir -> /usr/local/bin ro,
+  portuale checkout -> same path ro, differential-test-bed -> /TEST ro, logs -> /TEST/logs); podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+
+c-rust-portage.txt  rc=0  podman run ... --entrypoint /usr/sbin/emerge localhost/test-portuale:latest -pv --getbinpkg=n --usepkg=n --color=n dev-lang/rust
+c-rust-pg.txt       rc=0  podman run ... --entrypoint /usr/local/bin/emerge localhost/test-portuale:latest --solver=pubgrub --color=n -pv --getbinpkg=n --usepkg=n dev-lang/rust
+h-jq-portage.txt    rc=0  /usr/sbin/emerge -p --getbinpkg=n --usepkg=n --color=n app-misc/jq
+h-jq-pg.txt         rc=0  ./target/release/emerge --solver=pubgrub -p --getbinpkg=n --usepkg=n --color=n app-misc/jq   (cwd /home/vivo/repo/PORTUALE/portuale)
+h-gcc-portage.txt   rc=0  /usr/sbin/emerge -p --getbinpkg=n --usepkg=n --color=n sys-devel/gcc
+h-gcc-pg.txt        rc=0  ./target/release/emerge --solver=pubgrub -p --getbinpkg=n --usepkg=n --color=n sys-devel/gcc   (cwd /home/vivo/repo/PORTUALE/portuale)
+
+host EMERGE_DEFAULT_OPTS: unset (not in environment, /etc/portage/make.conf, /etc/make.conf). --ignore-default-opts not passed (no defaults to ignore).
+host Portage: /usr/sbin/emerge -> ../lib/python-exec/python-exec2 (Portage 3.0.82.2 per task)

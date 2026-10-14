@@ -1,0 +1,27 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.81 s (backtrack: 1/20).
+
+[ebuild  N     ] dev-lang/rust-common-1.96.1::gentoo  USE="-verify-sig" 235940 KiB
+[ebuild  N     ] dev-libs/oniguruma-6.9.10:0/5::gentoo  USE="-crnl-as-line-terminator -static-libs" ABI_X86="(64) -32 (-x32)" 957 KiB
+[ebuild  N     ] llvm-core/llvm-common-22.1.8::gentoo  USE="-emacs -verify-sig" 163147 KiB
+[ebuild  N     ] net-libs/nghttp3-1.17.0::gentoo  USE="-verify-sig" ABI_X86="(64) -32 (-x32)" 402 KiB
+[ebuild  N     ] net-libs/ngtcp2-1.24.0::gentoo  USE="openssl ssl -gnutls -verify-sig" ABI_X86="(64) -32 (-x32)" 686 KiB
+[ebuild  N     ] sys-libs/binutils-libs-2.46.1:0/2.46.1::gentoo  USE="cet nls -64-bit-bfd -multitarget -static-libs -test -verify-sig" ABI_X86="(64) -32 (-x32)" 27973 KiB
+[ebuild  N     ] sys-apps/lsb-release-3.3::gentoo  16 KiB
+[ebuild  N     ] app-eselect/eselect-rust-20210703::gentoo  5 KiB
+[ebuild  N     ] net-libs/nghttp2-1.69.0:0/1.14::gentoo  USE="systemd -debug -hpack-tools -test -utils -verify-sig -xml" ABI_X86="(64) -32 (-x32)" 1657 KiB
+[ebuild   R    ] net-misc/curl-8.21.0-r1::gentoo  USE="adns alt-svc ftp hsts http2* http3* httpsrr imap openssl pop3 psl quic* smtp ssl tftp websockets -brotli -debug (-ech) -gnutls -gopher -idn -kerberos -ldap -mbedtls (-rustls) -sasl-scram -ssh -static-libs -telnet -test -verify-sig -zstd" ABI_X86="(64) -32 (-x32)" CURL_SSL="openssl -gnutls -mbedtls (-rustls)" 2823 KiB
+[ebuild  N     ] dev-lang/rust-bin-1.96.1:1.96.1::gentoo  USE="clippy doc rustfmt (-big-endian) (-prefix) -rust-analyzer -rust-src -verify-sig" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="(22)" 193260 KiB
+[ebuild  N     ] llvm-core/llvm-22.1.8:22/22.1::gentoo  USE="binutils-plugin libffi zstd -debug (-debuginfod) -doc -exegesis -libedit -test -verify-sig -xml -z3" ABI_X86="(64) -32 (-x32)" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" 313 KiB
+[ebuild  N     ] llvm-core/llvm-toolchain-symlinks-22:22::gentoo  USE="-multilib-symlinks -native-symlinks" 0 KiB
+[ebuild  N     ] llvm-core/llvmgold-22::gentoo  0 KiB
+[ebuild  N     ] dev-lang/rust-1.96.1:1.96.1::gentoo  USE="clippy rustfmt system-llvm (-big-endian) -debug -dist -doc (-llvm-libunwind) -lto -rust-analyzer -rust-src -test -verify-sig" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="(22)" LLVM_TARGETS="(X86) -AArch64 -AMDGPU -ARC -ARM -AVR -BPF -CSKY -DirectX -Hexagon -Lanai -LoongArch -M68k -MSP430 -Mips -NVPTX -PowerPC -RISCV -SPIRV -Sparc -SystemZ -VE -WebAssembly -XCore -Xtensa" RUST_SYSROOTS="-bpf -wasm" 3 KiB
+
+Total: 15 packages (14 new, 1 reinstall), Size of downloads: 627175 KiB
+
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

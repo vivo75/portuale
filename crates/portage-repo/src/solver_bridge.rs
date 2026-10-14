@@ -23,6 +23,8 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
+use std::io::Write;
 
 use super::{
     EffectiveUseFlagsArgs, GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig,
@@ -130,6 +132,13 @@ impl LazyRepo {
             if !repo.closure.insert(cp.clone()) {
                 continue;
             }
+            pg_trace(
+                &mut std::io::stderr(),
+                format_args!(
+                    "pg-closure {cp} {}",
+                    if expand { "expanded" } else { "shallow" }
+                ),
+            );
             if !expand {
                 repo.load_versions(&cp)?;
                 continue;
@@ -730,6 +739,27 @@ fn target_slot(dep: &portage_solver::Dep) -> Option<String> {
 
 // --- PubGrub backend -------------------------------------------------------
 
+/// Whether the pubgrub-bridge trace is active (`PORTUALE_PG_TRACE=1`).
+fn pg_trace_enabled() -> bool {
+    std::env::var("PORTUALE_PG_TRACE").is_ok_and(|value| value == "1")
+}
+
+/// Write one trace `line`; no-op unless [`pg_trace_enabled`].
+fn pg_trace(out: &mut dyn Write, line: fmt::Arguments) {
+    if pg_trace_enabled() {
+        let _ = writeln!(out, "{line}");
+    }
+}
+
+/// One `pg-installed` line for an installed package.
+fn pg_installed_line(inst: &super::InstalledPackage) -> String {
+    format!(
+        "pg-installed {} slot={} policy=Favor",
+        inst.cpv(),
+        inst.slot
+    )
+}
+
 /// `portage-atom-pubgrub` over portuale's facts: the [`super::Resolver`]
 /// behind [`super::SolverKind::PubGrub`].
 pub struct PubGrubResolver;
@@ -763,6 +793,21 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
             let Ok(cpv) = portage_solver::Cpv::parse(&record.cpv()) else {
                 continue;
             };
+            // One line per referenced CPN per dep class, for the S0 chain walk.
+            if pg_trace_enabled() {
+                const CLASSES: [&str; 5] = ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"];
+                let parent = record.cpv();
+                for (class, deps) in CLASSES.iter().zip(record.deps.iter()) {
+                    let mut refs = Vec::new();
+                    referenced_cpns(deps, &mut refs);
+                    for child in refs {
+                        pg_trace(
+                            &mut std::io::stderr(),
+                            format_args!("pg-edge {parent} -> {child} ({class})"),
+                        );
+                    }
+                }
+            }
             let slot = if record.slot.is_empty() {
                 None
             } else {
@@ -815,8 +860,21 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
             return UseConfig::new();
         };
         let mut use_config = UseConfig::new();
-        for flag in self.lazy.use_of(&record) {
-            use_config.enable(interned(&flag));
+        let use_set = self.lazy.use_of(&record);
+        for flag in &use_set {
+            use_config.enable(interned(flag));
+        }
+        // Installed packages still report the config USE here; vdb USE is S3.
+        if pg_trace_enabled() {
+            let mut flags: Vec<&str> = use_set.iter().map(String::as_str).collect();
+            flags.sort();
+            pg_trace(
+                &mut std::io::stderr(),
+                format_args!(
+                    "pg-use {cp_text}-{version_text} source=config {}",
+                    flags.join(" ")
+                ),
+            );
         }
         use_config
     }
@@ -863,6 +921,10 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
             active_use: use_set.into_iter().map(|f| interned(&f)).collect(),
             iuse: iuse_set.into_iter().map(|f| interned(&f)).collect(),
         });
+        pg_trace(
+            &mut std::io::stderr(),
+            format_args!("{}", pg_installed_line(&inst)),
+        );
     }
     let mut targets = Vec::new();
     for atom in &req.atoms {
@@ -881,13 +943,26 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
         // A named `:slot` pins one slotted node, otherwise every slotted node.
         match target_slot(&dep) {
             Some(slot) => {
+                pg_trace(
+                    &mut std::io::stderr(),
+                    format_args!("pg-target {} slot={slot}", dep.cpn),
+                );
                 targets.push((PortagePackage::slotted(dep.cpn, interned(&slot)), versions))
             }
             None => {
                 let nodes = provider.packages_for_cpn(&dep.cpn);
                 if nodes.is_empty() {
+                    pg_trace(
+                        &mut std::io::stderr(),
+                        format_args!("pg-target {} slot=-", dep.cpn),
+                    );
                     targets.push((PortagePackage::unslotted(dep.cpn), versions));
                 } else {
+                    // `*`: the whole slotted-node fan-out (D-target-all-slots).
+                    pg_trace(
+                        &mut std::io::stderr(),
+                        format_args!("pg-target {} slot=*", dep.cpn),
+                    );
                     targets.extend(nodes.into_iter().map(|n| (n, versions.clone())));
                 }
             }
@@ -1175,6 +1250,56 @@ mod tests {
             set_args: std::collections::HashSet::new(),
             solver: SolverKind::Portage,
         }
+    }
+
+    /// The gated trace names each installed package (`PORTUALE_PG_TRACE=1`;
+    /// silent without it).
+    #[test]
+    fn pg_trace_emits_the_installed_line() {
+        use std::io::Write as _;
+        let dir = TempDir::new("portage-bridge-pgtrace").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        let d = dir.join("var/db/pkg/dev-libs/pgtrecord-1.0");
+        std::fs::create_dir_all(&d).unwrap();
+        for (file, content) in [
+            ("CATEGORY", "dev-libs\n"),
+            ("SLOT", "0\n"),
+            ("repository", "testrepo\n"),
+        ] {
+            let mut f = std::fs::File::create(d.join(file)).unwrap();
+            f.write_all(content.as_bytes()).unwrap();
+        }
+        let mut req = fixture_request(&["dev-libs/newpkg"]);
+        req.root = dir.to_path_buf();
+        let installed = super::super::all_installed_packages(&req.root);
+        assert_eq!(
+            installed.len(),
+            1,
+            "expected one vdb package: {installed:?}"
+        );
+        // `unsafe`: single-threaded test contract, no other test reads this var.
+        unsafe {
+            std::env::set_var("PORTUALE_PG_TRACE", "1");
+        }
+        let mut buf = Vec::new();
+        for inst in &installed {
+            super::pg_trace(&mut buf, format_args!("{}", super::pg_installed_line(inst)));
+        }
+        unsafe {
+            std::env::remove_var("PORTUALE_PG_TRACE");
+        }
+        let text = String::from_utf8(buf).expect("trace is utf-8");
+        assert!(
+            text.contains("pg-installed dev-libs/pgtrecord-1.0 slot=0 policy=Favor"),
+            "unexpected trace: {text}"
+        );
+        // Silent without the env var.
+        let mut buf = Vec::new();
+        for inst in &installed {
+            super::pg_trace(&mut buf, format_args!("{}", super::pg_installed_line(inst)));
+        }
+        assert!(buf.is_empty(), "trace leaked without PORTUALE_PG_TRACE=1");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The closure covers only the requested reachability: md5 reads, dep parses

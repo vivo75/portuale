@@ -68,6 +68,12 @@ Alternate `--solver=` backends: PubGrub and resolvo over the same repo facts.
 - The explicit copy of the closure ids stands: `iter()` is `slice::Iter` (items are `&SolvableId`), so `to_vec` would collect references.
 - Engine-native failure text (the H.15a half of the solver V1 depth cuts): resolvo's `Conflict::display_user_friendly` ("The following packages are incompatible" plus conflict chains, named through the portage provider's solvable display) instead of the raw `UnsolvableOrCancelled` debug dump (`Unsolvable(Conflict { clauses: ... })`), which names no package at all. Mirrors the pubgrub backend, whose `format_solve_error` renders its `NoSolution` derivation tree. A cancelled solve (not reachable through this synchronous call path) stays a plain message.
 
+## fn pg_trace
+- S0 Step 5 (#34): gated pubgrub-bridge trace for the §0.2 chain walk. Gate is `PORTUALE_PG_TRACE=1` (env, not the `resolver_debug` global, so unit tests can drive it without the CLI); `pg_trace(out, args)` writes one line, stderr in production, `Vec<u8>` in tests. Unset: every call site no-ops (the `versions_for` fan-out and `desired_use` flag sort sit behind an extra `pg_trace_enabled` check, so not even the formatting work runs).
+- Lines: `pg-target <cp> slot=<s>` (`s` = named slot, `*` = whole slotted-node fan-out, `-` = unslotted fallback); `pg-use <cpv> source=config <flags>` (always `config` today — installed packages still expand with the config USE; vdb USE is S3); `pg-edge <parent-cpv> -> <child-cp> (<CLASS>)` (per referenced CPN per dep class in `versions_for`); `pg-installed <cpv> slot=<s> policy=Favor` (policy is hardcoded `Favor` until S2's kept/rebuild set); `pg-closure <cp> expanded|shallow` (`LazyRepo::build`, one line per first insert).
+- `LazyRepo::build` is shared with resolvo, so a resolvo run with the env var set also emits `pg-closure` lines; the resolvo resolve path itself (`resolve_resolvo`, `versions_for`-equivalent pool fill) is untouched, and with the var unset both paths behave exactly as before.
+- Test: `pg_trace_emits_the_installed_line` (throwaway vdb, one package, asserts the line then asserts silence without the var).
+
 ## mod tests
 - Behaviour is pinned by fixture-driven tests elsewhere; here only the wiring (no panic per kind).
 - The bridge test helper resolves without `--onlydeps` (the parked engines do not implement `--onlydeps-with-*` root filtering, nor `--nodeps`).
