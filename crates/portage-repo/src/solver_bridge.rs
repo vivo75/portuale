@@ -557,8 +557,7 @@ fn newest_installed(versions: &[String]) -> &str {
 /// `kept` is the pubgrub bridge's kept/rebuild set: a same-slot same-version pick
 /// in `kept.rebuild` is a `Reinstall` (Portage's bare, reasonless `[ebuild R]`),
 /// resolvo passes `None` and its output does not move.
-// S6 owns the `graph_result_from_order` split; until then the sixth parameter
-// rides an explicit allow instead of a one-use args struct.
+// Six inputs ride an explicit allow instead of a one-use args struct.
 #[allow(clippy::too_many_arguments)]
 fn graph_result_from_order(
     req: &ResolveRequest,
@@ -573,342 +572,24 @@ fn graph_result_from_order(
     let mut pending_blockers: Vec<super::PendingBlocker> = Vec::new();
     let mut seen_blockers: HashSet<(String, String, String)> = HashSet::new();
     for (cp, version) in order {
-        // #34 S3: an installed-only pick has no repo record; map it from the
-        // vdb instead of dropping it (its entry renders `AlreadyInstalled`,
-        // hidden like any other kept package). Gated on the deep bridge: the
-        // stub path never offers these versions without deep, and resolvo
-        // (`kept: None`) keeps its skip.
-        let record = repo.record(cp, version).or_else(|| {
-            if kept.is_some_and(|kept| kept.deep) {
-                let (category, package) = cp.split_once('/')?;
-                repo.installed_record(category, package, version)
-            } else {
-                None
-            }
-        });
-        let Some(record) = record else {
+        let Some(entry) = bridge_entry_for(
+            cp,
+            version,
+            repo,
+            &installed,
+            kept,
+            req,
+            parents,
+            &mut pending_blockers,
+            &mut seen_blockers,
+        ) else {
             continue;
         };
-        let use_set = repo.use_of(&record);
-        let slot_versions = installed.by_slot.get(&(
-            record.category.clone(),
-            record.package.clone(),
-            record.slot.clone(),
-        ));
-        let (outcome, oldbest, new_slot) = match slot_versions {
-            Some(versions) if versions.iter().any(|v| v == version) => {
-                // #34 S2: a same-version pick the bridge asked to rebuild is a
-                // bare, reasonless `Reinstall` (precedent `resolve/pretend.rs:170-179`).
-                // #34 S4: a USE-drift rebuild carries its changed flags.
-                let cpv = format!("{cp}-{version}");
-                let outcome = match kept {
-                    Some(kept) if kept.rebuild.contains(&cpv) => PretendOutcome::Reinstall {
-                        version: version.clone(),
-                        changed_flags: kept.use_drift.get(&cpv).cloned().unwrap_or_default(),
-                        deps_changed: false,
-                        slot_changed: false,
-                        rebuilt_binary: false,
-                        new_repo: false,
-                        slot_operator_rebuild: false,
-                    },
-                    _ => PretendOutcome::AlreadyInstalled {
-                        version: version.clone(),
-                    },
-                };
-                (outcome, Vec::new(), false)
-            }
-            Some(versions) => {
-                let from = newest_installed(versions).to_string();
-                let outcome = match portage_versions::vercmp(version, &from) {
-                    Some(ordering) if ordering > 0 => PretendOutcome::Upgrade {
-                        from: from.clone(),
-                        to: version.clone(),
-                    },
-                    _ => PretendOutcome::Downgrade {
-                        from: from.clone(),
-                        to: version.clone(),
-                    },
-                };
-                (
-                    outcome,
-                    vec![InstalledRef {
-                        version: from,
-                        slot: record.slot.clone(),
-                        sub_slot: record.sub_slot.clone(),
-                        repo: record.repo_name.clone(),
-                    }],
-                    false,
-                )
-            }
-            None => {
-                let occupied = installed
-                    .occupied
-                    .contains(&(record.category.clone(), record.package.clone()));
-                let mut oldbest: Vec<InstalledRef> = installed
-                    .by_slot
-                    .iter()
-                    .filter(|((cat, pkg, _), _)| cat == &record.category && pkg == &record.package)
-                    .flat_map(|((_, _, slot), versions)| {
-                        versions.iter().map(|v| InstalledRef {
-                            version: v.clone(),
-                            slot: slot.clone(),
-                            sub_slot: String::new(),
-                            repo: String::new(),
-                        })
-                    })
-                    .collect();
-                oldbest.sort_by(|a, b| (&a.slot, &a.version).cmp(&(&b.slot, &b.version)));
-                (
-                    PretendOutcome::New {
-                        version: version.clone(),
-                    },
-                    oldbest,
-                    occupied,
-                )
-            }
-        };
-        let use_flags_display: Vec<(String, bool)> = parse_iuse(&record.iuse)
-            .into_iter()
-            .map(|flag| {
-                let on = use_set.contains(&flag);
-                (flag, on)
-            })
-            .collect();
-        // Forced/masked-flag `( )` markers via the walk's own helper, with the same
-        // candidate spelling the walk resolves under.
-        let candidate_str = format!(
-            "{cp}-{version}:{}/{sub}::{repo}",
-            record.slot,
-            sub = record.sub_slot,
-            repo = record.repo_name,
-        );
-        let forced = super::forced_or_masked_flags(super::ForcedOrMaskedFlagsArgs {
-            iuse: &record.iuse,
-            keywords: &record.keywords,
-            candidate_str: &candidate_str,
-            category: &record.category,
-            package: &record.package,
-            config: &req.config,
-        });
-        // Same `all_flags` split `pretend.rs` uses for `-pv` vs `-p`.
-        // #34 S4: an `R` row diffs against the vdb USE like the walk's own
-        // display (`InstalledUseState`, `USE` intersected with `IUSE`), so a
-        // drifted flag renders `x*`; anything else keeps no markers. Gated
-        // on the outcome, so resolvo (which never yields `Reinstall`) and
-        // every non-`R` row do not move.
-        let (installed_state, reinst_flags): (Option<InstalledUseState>, HashSet<String>) =
-            match &outcome {
-                PretendOutcome::Reinstall { changed_flags, .. } => {
-                    let old_iuse = read_vdb_flag_set(
-                        &req.root,
-                        &record.category,
-                        &record.package,
-                        version,
-                        "IUSE",
-                    );
-                    let mut old_use = read_vdb_flag_set(
-                        &req.root,
-                        &record.category,
-                        &record.package,
-                        version,
-                        "USE",
-                    );
-                    old_use.retain(|flag| old_iuse.contains(flag));
-                    (
-                        Some(InstalledUseState { old_use, old_iuse }),
-                        changed_flags.iter().cloned().collect(),
-                    )
-                }
-                _ => (None, HashSet::new()),
-            };
-        let use_expand_display =
-            super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
-                use_flags_display: &use_flags_display,
-                config: &req.config,
-                installed: installed_state.as_ref(),
-                forced: &forced,
-                all_flags: true,
-                reinst_flags: &reinst_flags,
-            });
-        let use_expand_display_p =
-            super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
-                use_flags_display: &use_flags_display,
-                config: &req.config,
-                installed: installed_state.as_ref(),
-                forced: &forced,
-                all_flags: false,
-                reinst_flags: &reinst_flags,
-            });
-        let cpv = format!("{cp}-{version}");
-        let mut required_by: Vec<(String, String)> = parents.get(&cpv).cloned().unwrap_or_default();
-        required_by.sort();
-        required_by.dedup();
-        // Entry `deps` from the raw dep strings plus resolved USE, exactly the
-        // walk's own call for a source candidate.
-        let dep_metadata: HashMap<String, String> = [
-            ("DEPEND", record.raw_deps[0].as_str()),
-            ("RDEPEND", record.raw_deps[1].as_str()),
-            ("BDEPEND", record.raw_deps[2].as_str()),
-            ("PDEPEND", record.raw_deps[3].as_str()),
-            ("IDEPEND", record.raw_deps[4].as_str()),
-        ]
-        .into_iter()
-        .filter(|(_, v)| !v.is_empty())
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-        let deps = super::merge_order::dep_edges_from_metadata(
-            &dep_metadata,
-            &use_set,
-            &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"],
-            false,
-        );
-        // Blocker atoms in the same raw strings, flattened with USE applied and
-        // recorded per owner (deduped); the key index recovers buildtime
-        // provenance. Portage: `_add_pkg_dep_string` diverts blockers the same way.
-        for (key_idx, raw) in record.raw_deps.iter().enumerate() {
-            let toks: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
-            let Ok(flat) = portage_use_reduce::use_reduce_flat(
-                &toks,
-                &use_set,
-                portage_use_reduce::MatchMode::Normal,
-            ) else {
-                continue;
-            };
-            for tok in flat {
-                let evaluated = portage_dep::evaluate_atom_conditionals(&tok, &use_set)
-                    .unwrap_or_else(|| tok.clone());
-                let Some(dep_atom) = portage_dep::parse_atom(&evaluated) else {
-                    continue;
-                };
-                if dep_atom.blocker == portage_dep::Blocker::None {
-                    continue;
-                }
-                if seen_blockers.insert((
-                    record.category.clone(),
-                    record.package.clone(),
-                    evaluated.clone(),
-                )) {
-                    pending_blockers.push(super::PendingBlocker {
-                        atom_str: evaluated,
-                        strong: dep_atom.blocker == portage_dep::Blocker::Strong,
-                        // Key-ordered `raw_deps`, so the index is the buildtime provenance.
-                        buildtime: key_idx == 0 || key_idx == 2,
-                        target_category: dep_atom.category,
-                        target_package: dep_atom.package,
-                        owner_key: (record.category.clone(), record.package.clone()),
-                        owner_version: version.clone(),
-                        owner_merging: true,
-                        owner_installed: false,
-                    });
-                }
-            }
-        }
-        entries.push(GraphEntry {
-            discovery: 0,
-            category: record.category.clone(),
-            package: record.package.clone(),
-            outcome,
-            blockers: Vec::new(),
-            slot: Some(record.slot.clone()),
-            sub_slot: Some(record.sub_slot.clone()),
-            repo_name: Some(record.repo_name.clone()),
-            oldbest,
-            use_flags_display,
-            use_expand_display,
-            use_expand_display_p,
-            keyword_mask: None,
-            new_slot,
-            interactive: false,
-            fetch_restrict: false,
-            fetch_restrict_satisfied: false,
-            download_files: Vec::new(),
-            required_by,
-            source: super::CandidateSource::Ebuild,
-            provenance: super::VisibilityProvenance::default(),
-            keyword_suggestion: None,
-            use_suggestion: None,
-            parent_use_suggestion: None,
-            targets_running_root: false,
-            remote_binary: false,
-            build_id: None,
-            deps,
-        });
+        entries.push(entry);
     }
-    // Blocker reporting via the shared walk-path helper, filed on owner entries.
-    // #34 S5 G7: the pubgrub path passes the walk-identical required-set
-    // closure (blocker_retry_seed_atoms + request atoms + system, over
-    // installed deps) instead of an empty set, so a blocked installed
-    // package the world/system cone still needs stays unresolved like
-    // Portage's. Resolvo (`kept: None`) keeps the empty set: its output must
-    // not move. A satisfied uninstall with an installed parent in the
-    // expanded cone flips to unresolved next (Portage's digraph-parents
-    // veto, which the solution-member-only entries cannot see).
-    let blocker_retry_closure: std::collections::HashSet<(String, String)> = if kept.is_some() {
-        let mut seeds = req.config.blocker_retry_seed_atoms.clone();
-        seeds.extend(req.atoms.iter().cloned());
-        seeds.sort();
-        seeds.dedup();
-        super::required_set_reachable_cps(&req.root, &seeds, &req.config.system_packages)
-    } else {
-        // The bridge has no required-set closure of its own.
-        std::collections::HashSet::new()
-    };
-    let mut conflicts = super::resolve_blockers(
-        &req.root,
-        &pending_blockers,
-        &entries,
-        &blocker_retry_closure,
-        // Never runs under `--buildpkgonly`, so the gate is inert here.
-        false,
-    );
-    if kept.is_some() {
-        unsolvable_with_installed_parent(&req.root, repo, &entries, &mut conflicts);
-    }
-    let mut orphan_blockers = Vec::new();
-    super::file_blocker_conflicts(
-        &mut entries,
-        &req.root,
-        conflicts,
-        // Orphans ride the same field rather than being dropped.
-        &mut orphan_blockers,
-    );
-    // ABI rebuilds via the walk's own fixpoint, extended before the merge-order
-    // sort so rebuilds land dependency-first.
-    let slot_op_reachable: HashSet<(String, String)> = if req.config.complete_seed_atoms.is_empty()
-    {
-        HashSet::new()
-    } else {
-        super::required_set_reachable_cps(&req.root, &req.config.complete_seed_atoms, &[])
-    };
-    let (slot_op_rebuilds, abi_rebuilds) =
-        if req.ignore_built_slot_operator_deps || !req.rebuild_if_new_slot {
-            (Vec::new(), Vec::new())
-        } else {
-            {
-                // Same `update` flag and top-level atoms the default path resolves
-                // under, so the bridge fixpoint runs the new-slot arm too.
-                let top_level_cps: HashSet<(String, String)> = req
-                    .atoms
-                    .iter()
-                    .filter_map(|a| portage_dep::parse_atom(a))
-                    .map(|atom| (atom.category, atom.package))
-                    .collect();
-                // The raw request atoms, for the greedy-eligibility half of the gate.
-                let top_level_atoms: HashSet<String> = req.atoms.iter().cloned().collect();
-                super::slot_operator_rebuild_entries(super::SlotOperatorRebuildEntriesArgs {
-                    root: &req.root,
-                    repos,
-                    entries: &entries,
-                    reachable: &slot_op_reachable,
-                    with_bdeps: req.with_bdeps,
-                    excluded: &req.excluded,
-                    update: req.update,
-                    top_level_cps: &top_level_cps,
-                    top_level_atoms: &top_level_atoms,
-                    config: &req.config,
-                })
-            }
-        };
+    let orphan_blockers =
+        file_bridge_blocker_conflicts(req, repo, &mut entries, kept, &pending_blockers);
+    let (slot_op_rebuilds, abi_rebuilds) = bridge_slot_operator_rebuilds(req, repos, &entries);
     entries.extend(slot_op_rebuilds);
     // Same merge-order sort the walk applies: engine order only seeds positions.
     let (entries, insertion_rank) =
@@ -923,55 +604,9 @@ fn graph_result_from_order(
             // No backtrack restart runs here, so no cycle map to demote by.
             circular: &HashMap::new(),
         });
-    // Circular-dep notice: rebuild the walk's hard/soft edge-kind map over the
-    // entry `deps` edges and report via `find_hard_cycles`, like the walk.
-    let mut edge_kinds: super::EdgeKindMap = HashMap::new();
-    for e in &entries {
-        let owner = (
-            e.targets_running_root,
-            e.category.clone(),
-            e.package.clone(),
-        );
-        for dep in &e.deps {
-            let kinds = edge_kinds
-                .entry((
-                    (
-                        super::dep_child_root(e.targets_running_root, dep.key),
-                        dep.category.clone(),
-                        dep.package.clone(),
-                    ),
-                    owner.clone(),
-                ))
-                .or_insert((false, false));
-            if dep.priority.buildtime
-                && super::best_installed_for_atom(&req.root, &dep.atom, &dep.category, &dep.package)
-                    .is_none()
-            {
-                kinds.0 = true;
-            } else {
-                kinds.1 = true;
-            }
-        }
-    }
-    let circular_deps = super::find_hard_cycles(
-        &entries,
-        &edge_kinds,
-        &req.root,
-        &HashMap::new(),
-        Some(&insertion_rank),
-    );
-    // Cycle report only when a hard cycle was reported.
-    let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
-        (false, Vec::new())
-    } else {
-        let (cycles, display) =
-            super::merge_order::cycle_report(&entries, &req.atoms, &req.root, &HashMap::new());
-        let display = display
-            .into_iter()
-            .filter_map(|i| super::merge_bound_cpv(&entries[i]))
-            .collect();
-        (cycles.len() > 3, display)
-    };
+    let (circular_deps, large_cycle_count, cycle_display) =
+        bridge_circular_display(req, &entries, &insertion_rank);
+
     GraphResult {
         entries,
         // No `Backtracker` loop: no restarts, and `--backtrack` is not consumed.
@@ -1013,6 +648,468 @@ fn graph_result_from_order(
         // No probe walk runs here, and the outcome is always `Complete`.
         virtual_cycle: Vec::new(),
     }
+}
+
+/// One planned pick against the installed db: `Reinstall` for a rebuild
+/// member, `Upgrade`/`Downgrade` across slots, else `New` or `AlreadyInstalled`.
+fn bridge_outcome_for(
+    cp: &str,
+    record: &LoadedVersion,
+    version: &str,
+    installed: &InstalledView,
+    kept: Option<&KeptInstalled>,
+) -> (PretendOutcome, Vec<InstalledRef>, bool) {
+    let slot_versions = installed.by_slot.get(&(
+        record.category.clone(),
+        record.package.clone(),
+        record.slot.clone(),
+    ));
+    match slot_versions {
+        Some(versions) if versions.iter().any(|v| v == version) => {
+            // #34 S2: a same-version pick the bridge asked to rebuild is a
+            // bare, reasonless `Reinstall` (precedent `resolve/pretend.rs:170-179`).
+            // #34 S4: a USE-drift rebuild carries its changed flags.
+            let cpv = format!("{cp}-{version}");
+            let outcome = match kept {
+                Some(kept) if kept.rebuild.contains(&cpv) => PretendOutcome::Reinstall {
+                    version: version.to_string(),
+                    changed_flags: kept.use_drift.get(&cpv).cloned().unwrap_or_default(),
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                },
+                _ => PretendOutcome::AlreadyInstalled {
+                    version: version.to_string(),
+                },
+            };
+            (outcome, Vec::new(), false)
+        }
+        Some(versions) => {
+            let from = newest_installed(versions).to_string();
+            let outcome = match portage_versions::vercmp(version, &from) {
+                Some(ordering) if ordering > 0 => PretendOutcome::Upgrade {
+                    from: from.clone(),
+                    to: version.to_string(),
+                },
+                _ => PretendOutcome::Downgrade {
+                    from: from.clone(),
+                    to: version.to_string(),
+                },
+            };
+            (
+                outcome,
+                vec![InstalledRef {
+                    version: from,
+                    slot: record.slot.clone(),
+                    sub_slot: record.sub_slot.clone(),
+                    repo: record.repo_name.clone(),
+                }],
+                false,
+            )
+        }
+        None => {
+            let occupied = installed
+                .occupied
+                .contains(&(record.category.clone(), record.package.clone()));
+            let mut oldbest: Vec<InstalledRef> = installed
+                .by_slot
+                .iter()
+                .filter(|((cat, pkg, _), _)| cat == &record.category && pkg == &record.package)
+                .flat_map(|((_, _, slot), versions)| {
+                    versions.iter().map(|v| InstalledRef {
+                        version: v.clone(),
+                        slot: slot.clone(),
+                        sub_slot: String::new(),
+                        repo: String::new(),
+                    })
+                })
+                .collect();
+            oldbest.sort_by(|a, b| (&a.slot, &a.version).cmp(&(&b.slot, &b.version)));
+            (
+                PretendOutcome::New {
+                    version: version.to_string(),
+                },
+                oldbest,
+                occupied,
+            )
+        }
+    }
+}
+
+/// USE-display columns for one bridge entry: the flag table plus the
+/// `-pv` and `-p` expand forms.
+type BridgeUseColumns = (
+    Vec<(String, bool)>,
+    Vec<(String, String)>,
+    Vec<(String, String)>,
+);
+
+#[allow(clippy::too_many_arguments)]
+fn bridge_use_columns(
+    req: &ResolveRequest,
+    cp: &str,
+    record: &LoadedVersion,
+    version: &str,
+    use_set: &HashSet<String>,
+    outcome: &PretendOutcome,
+) -> BridgeUseColumns {
+    let use_flags_display: Vec<(String, bool)> = parse_iuse(&record.iuse)
+        .into_iter()
+        .map(|flag| {
+            let on = use_set.contains(&flag);
+            (flag, on)
+        })
+        .collect();
+    // Forced/masked-flag `( )` markers via the walk's own helper, with the same
+    // candidate spelling the walk resolves under.
+    let candidate_str = format!(
+        "{cp}-{version}:{}/{sub}::{repo}",
+        record.slot,
+        sub = record.sub_slot,
+        repo = record.repo_name,
+    );
+    let forced = super::forced_or_masked_flags(super::ForcedOrMaskedFlagsArgs {
+        iuse: &record.iuse,
+        keywords: &record.keywords,
+        candidate_str: &candidate_str,
+        category: &record.category,
+        package: &record.package,
+        config: &req.config,
+    });
+    // Same `all_flags` split `pretend.rs` uses for `-pv` vs `-p`.
+    // #34 S4: an `R` row diffs against the vdb USE like the walk's own
+    // display (`InstalledUseState`, `USE` intersected with `IUSE`), so a
+    // drifted flag renders `x*`; anything else keeps no markers. Gated
+    // on the outcome, so resolvo (which never yields `Reinstall`) and
+    // every non-`R` row do not move.
+    let (installed_state, reinst_flags): (Option<InstalledUseState>, HashSet<String>) =
+        match outcome {
+            PretendOutcome::Reinstall { changed_flags, .. } => {
+                let old_iuse = read_vdb_flag_set(
+                    &req.root,
+                    &record.category,
+                    &record.package,
+                    version,
+                    "IUSE",
+                );
+                let mut old_use =
+                    read_vdb_flag_set(&req.root, &record.category, &record.package, version, "USE");
+                old_use.retain(|flag| old_iuse.contains(flag));
+                (
+                    Some(InstalledUseState { old_use, old_iuse }),
+                    changed_flags.iter().cloned().collect(),
+                )
+            }
+            _ => (None, HashSet::new()),
+        };
+    let use_expand_display = super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
+        use_flags_display: &use_flags_display,
+        config: &req.config,
+        installed: installed_state.as_ref(),
+        forced: &forced,
+        all_flags: true,
+        reinst_flags: &reinst_flags,
+    });
+    let use_expand_display_p = super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
+        use_flags_display: &use_flags_display,
+        config: &req.config,
+        installed: installed_state.as_ref(),
+        forced: &forced,
+        all_flags: false,
+        reinst_flags: &reinst_flags,
+    });
+    (use_flags_display, use_expand_display, use_expand_display_p)
+}
+
+/// Entry `deps` from the raw dep strings plus resolved USE, exactly the
+/// walk's own call for a source candidate.
+fn bridge_entry_deps(record: &LoadedVersion, use_set: &HashSet<String>) -> Vec<super::DepEdge> {
+    let dep_metadata: HashMap<String, String> = [
+        ("DEPEND", record.raw_deps[0].as_str()),
+        ("RDEPEND", record.raw_deps[1].as_str()),
+        ("BDEPEND", record.raw_deps[2].as_str()),
+        ("PDEPEND", record.raw_deps[3].as_str()),
+        ("IDEPEND", record.raw_deps[4].as_str()),
+    ]
+    .into_iter()
+    .filter(|(_, v)| !v.is_empty())
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    super::merge_order::dep_edges_from_metadata(
+        &dep_metadata,
+        use_set,
+        &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"],
+        false,
+    )
+}
+
+/// Blocker atoms in one record's raw strings, flattened with USE applied
+/// and recorded per owner (deduped); the key index recovers buildtime
+/// provenance. Portage: `_add_pkg_dep_string` diverts blockers the same way.
+fn collect_bridge_blockers(
+    record: &LoadedVersion,
+    use_set: &HashSet<String>,
+    version: &str,
+    pending_blockers: &mut Vec<super::PendingBlocker>,
+    seen_blockers: &mut HashSet<(String, String, String)>,
+) {
+    for (key_idx, raw) in record.raw_deps.iter().enumerate() {
+        let toks: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
+        let Ok(flat) = portage_use_reduce::use_reduce_flat(
+            &toks,
+            use_set,
+            portage_use_reduce::MatchMode::Normal,
+        ) else {
+            continue;
+        };
+        for tok in flat {
+            let evaluated = portage_dep::evaluate_atom_conditionals(&tok, use_set)
+                .unwrap_or_else(|| tok.clone());
+            let Some(dep_atom) = portage_dep::parse_atom(&evaluated) else {
+                continue;
+            };
+            if dep_atom.blocker == portage_dep::Blocker::None {
+                continue;
+            }
+            if seen_blockers.insert((
+                record.category.clone(),
+                record.package.clone(),
+                evaluated.clone(),
+            )) {
+                pending_blockers.push(super::PendingBlocker {
+                    atom_str: evaluated,
+                    strong: dep_atom.blocker == portage_dep::Blocker::Strong,
+                    // Key-ordered `raw_deps`, so the index is the buildtime provenance.
+                    buildtime: key_idx == 0 || key_idx == 2,
+                    target_category: dep_atom.category,
+                    target_package: dep_atom.package,
+                    owner_key: (record.category.clone(), record.package.clone()),
+                    owner_version: version.to_string(),
+                    owner_merging: true,
+                    owner_installed: false,
+                });
+            }
+        }
+    }
+}
+
+/// One ordered `(cp, version)` pick mapped to its `GraphEntry`: `None`
+/// when the pick has no record (an unoffered version the engines never
+/// emit, or an installed-only pick outside the deep bridge).
+#[allow(clippy::too_many_arguments)]
+fn bridge_entry_for(
+    cp: &str,
+    version: &str,
+    repo: &LazyRepo,
+    installed: &InstalledView,
+    kept: Option<&KeptInstalled>,
+    req: &ResolveRequest,
+    parents: &HashMap<String, Vec<(String, String)>>,
+    pending_blockers: &mut Vec<super::PendingBlocker>,
+    seen_blockers: &mut HashSet<(String, String, String)>,
+) -> Option<GraphEntry> {
+    // #34 S3: an installed-only pick has no repo record; map it from the
+    // vdb instead of dropping it (its entry renders `AlreadyInstalled`,
+    // hidden like any other kept package). Gated on the deep bridge: the
+    // stub path never offers these versions without deep, and resolvo
+    // (`kept: None`) keeps its skip.
+    let record = repo.record(cp, version).or_else(|| {
+        if kept.is_some_and(|kept| kept.deep) {
+            let (category, package) = cp.split_once('/')?;
+            repo.installed_record(category, package, version)
+        } else {
+            None
+        }
+    });
+    let record = record?;
+    let use_set = repo.use_of(&record);
+    let (outcome, oldbest, new_slot) = bridge_outcome_for(cp, &record, version, installed, kept);
+    let (use_flags_display, use_expand_display, use_expand_display_p) =
+        bridge_use_columns(req, cp, &record, version, &use_set, &outcome);
+    let cpv = format!("{cp}-{version}");
+    let mut required_by: Vec<(String, String)> = parents.get(&cpv).cloned().unwrap_or_default();
+    required_by.sort();
+    required_by.dedup();
+    let deps = bridge_entry_deps(&record, &use_set);
+    collect_bridge_blockers(&record, &use_set, version, pending_blockers, seen_blockers);
+    Some(GraphEntry {
+        discovery: 0,
+        category: record.category.clone(),
+        package: record.package.clone(),
+        outcome,
+        blockers: Vec::new(),
+        slot: Some(record.slot.clone()),
+        sub_slot: Some(record.sub_slot.clone()),
+        repo_name: Some(record.repo_name.clone()),
+        oldbest,
+        use_flags_display,
+        use_expand_display,
+        use_expand_display_p,
+        keyword_mask: None,
+        new_slot,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        required_by,
+        source: super::CandidateSource::Ebuild,
+        provenance: super::VisibilityProvenance::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        deps,
+    })
+}
+
+/// Blocker reporting via the shared walk-path helper, filed on owner entries.
+fn file_bridge_blocker_conflicts(
+    req: &ResolveRequest,
+    repo: &LazyRepo,
+    entries: &mut Vec<GraphEntry>,
+    kept: Option<&KeptInstalled>,
+    pending_blockers: &[super::PendingBlocker],
+) -> Vec<super::OrphanBlocker> {
+    // #34 S5 G7: the pubgrub path passes the walk-identical required-set
+    // closure (blocker_retry_seed_atoms + request atoms + system, over
+    // installed deps) instead of an empty set, so a blocked installed
+    // package the world/system cone still needs stays unresolved like
+    // Portage's. Resolvo (`kept: None`) keeps the empty set: its output must
+    // not move. A satisfied uninstall with an installed parent in the
+    // expanded cone flips to unresolved next (Portage's digraph-parents
+    // veto, which the solution-member-only entries cannot see).
+    let blocker_retry_closure: std::collections::HashSet<(String, String)> = if kept.is_some() {
+        let mut seeds = req.config.blocker_retry_seed_atoms.clone();
+        seeds.extend(req.atoms.iter().cloned());
+        seeds.sort();
+        seeds.dedup();
+        super::required_set_reachable_cps(&req.root, &seeds, &req.config.system_packages)
+    } else {
+        // The bridge has no required-set closure of its own.
+        std::collections::HashSet::new()
+    };
+    let mut conflicts = super::resolve_blockers(
+        &req.root,
+        pending_blockers,
+        entries,
+        &blocker_retry_closure,
+        // Never runs under `--buildpkgonly`, so the gate is inert here.
+        false,
+    );
+    if kept.is_some() {
+        unsolvable_with_installed_parent(&req.root, repo, entries, &mut conflicts);
+    }
+    let mut orphan_blockers = Vec::new();
+    super::file_blocker_conflicts(
+        entries,
+        &req.root,
+        conflicts,
+        // Orphans ride the same field rather than being dropped.
+        &mut orphan_blockers,
+    );
+    orphan_blockers
+}
+
+/// ABI rebuilds via the walk's own fixpoint, extended before the merge-order
+/// sort so rebuilds land dependency-first.
+fn bridge_slot_operator_rebuilds(
+    req: &ResolveRequest,
+    repos: &[RepoConfig],
+    entries: &[GraphEntry],
+) -> (Vec<GraphEntry>, Vec<(String, String)>) {
+    let slot_op_reachable: HashSet<(String, String)> = if req.config.complete_seed_atoms.is_empty()
+    {
+        HashSet::new()
+    } else {
+        super::required_set_reachable_cps(&req.root, &req.config.complete_seed_atoms, &[])
+    };
+    if req.ignore_built_slot_operator_deps || !req.rebuild_if_new_slot {
+        (Vec::new(), Vec::new())
+    } else {
+        // Same `update` flag and top-level atoms the default path resolves
+        // under, so the bridge fixpoint runs the new-slot arm too.
+        let top_level_cps: HashSet<(String, String)> = req
+            .atoms
+            .iter()
+            .filter_map(|a| portage_dep::parse_atom(a))
+            .map(|atom| (atom.category, atom.package))
+            .collect();
+        // The raw request atoms, for the greedy-eligibility half of the gate.
+        let top_level_atoms: HashSet<String> = req.atoms.iter().cloned().collect();
+        super::slot_operator_rebuild_entries(super::SlotOperatorRebuildEntriesArgs {
+            root: &req.root,
+            repos,
+            entries,
+            reachable: &slot_op_reachable,
+            with_bdeps: req.with_bdeps,
+            excluded: &req.excluded,
+            update: req.update,
+            top_level_cps: &top_level_cps,
+            top_level_atoms: &top_level_atoms,
+            config: &req.config,
+        })
+    }
+}
+
+/// Circular-dep notice: rebuild the walk's hard/soft edge-kind map over the
+/// entry `deps` edges and report via `find_hard_cycles`, like the walk.
+fn bridge_circular_display(
+    req: &ResolveRequest,
+    entries: &[GraphEntry],
+    insertion_rank: &[usize],
+) -> (Vec<Vec<String>>, bool, Vec<String>) {
+    let mut edge_kinds: super::EdgeKindMap = HashMap::new();
+    for e in entries {
+        let owner = (
+            e.targets_running_root,
+            e.category.clone(),
+            e.package.clone(),
+        );
+        for dep in &e.deps {
+            let kinds = edge_kinds
+                .entry((
+                    (
+                        super::dep_child_root(e.targets_running_root, dep.key),
+                        dep.category.clone(),
+                        dep.package.clone(),
+                    ),
+                    owner.clone(),
+                ))
+                .or_insert((false, false));
+            if dep.priority.buildtime
+                && super::best_installed_for_atom(&req.root, &dep.atom, &dep.category, &dep.package)
+                    .is_none()
+            {
+                kinds.0 = true;
+            } else {
+                kinds.1 = true;
+            }
+        }
+    }
+    let circular_deps = super::find_hard_cycles(
+        entries,
+        &edge_kinds,
+        &req.root,
+        &HashMap::new(),
+        Some(insertion_rank),
+    );
+    // Cycle report only when a hard cycle was reported.
+    let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
+        (false, Vec::new())
+    } else {
+        let (cycles, display) =
+            super::merge_order::cycle_report(entries, &req.atoms, &req.root, &HashMap::new());
+        let display = display
+            .into_iter()
+            .filter_map(|i| super::merge_bound_cpv(&entries[i]))
+            .collect();
+        (cycles.len() > 3, display)
+    };
+    (circular_deps, large_cycle_count, cycle_display)
 }
 
 /// Named slot from a target atom's `:slot` part, if it names one
@@ -5313,5 +5410,2180 @@ mod tests {
             .resolve(&req)
             .expect("pg34-capp resolves");
         assert_eq!(pg34_plan(&result), ["dev-libs/pg34-capp-1:0"]);
+    }
+
+    // --- #34 S6 mutation kills -------------------------------------------
+    //
+    // Each test below pins one pubgrub-path behaviour that `cargo mutants`
+    // showed the suite did not cover (baseline 2026-10-15: 115 missed of
+    // 413). Behavioural references stay Portage-side per the plan; the
+    // assertions pin the bridge's own reading of Portage's rules.
+
+    /// `newest_installed` orders by `vercmp`: the greatest version wins no
+    /// matter where it sits in the list (Portage picks the best installed
+    /// instance, not the first or last one seen).
+    #[test]
+    fn s6_newest_installed_prefers_the_greatest_version() {
+        assert_eq!(super::newest_installed(&["3.0".to_string()]), "3.0");
+        assert_eq!(
+            super::newest_installed(&["3.0".to_string(), "1.0".to_string(), "2.0".to_string()]),
+            "3.0",
+            "the greatest version wins even when it is not last"
+        );
+        assert_eq!(
+            super::newest_installed(&["1.0".to_string(), "3.0".to_string(), "2.0".to_string()]),
+            "3.0",
+            "the greatest version wins even when it is not first"
+        );
+    }
+
+    /// `version_row` leaves the sub-slot empty for a shared slot/sub-slot
+    /// (the walk's own call renders no `/sub` then) and records a distinct
+    /// one.
+    #[test]
+    fn s6_version_row_marks_a_shared_sub_slot_as_absent() {
+        let record = super::LoadedVersion {
+            category: "dev-libs".to_string(),
+            package: "pg34-x".to_string(),
+            version: "1".to_string(),
+            slot: "0".to_string(),
+            sub_slot: "0".to_string(),
+            repo_name: "testrepo".to_string(),
+            iuse: String::new(),
+            keywords: vec!["amd64".to_string()],
+            deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            raw_deps: Default::default(),
+        };
+        let (_, versions) = super::version_row(&record, Default::default()).expect("row builds");
+        assert!(
+            versions.subslot.is_none(),
+            "a sub-slot equal to the slot stays absent"
+        );
+        let distinct = super::LoadedVersion {
+            sub_slot: "0/1".to_string(),
+            ..record.clone()
+        };
+        let (_, versions) = super::version_row(&distinct, Default::default()).expect("row builds");
+        assert!(
+            versions.subslot.is_some(),
+            "a distinct sub-slot is recorded"
+        );
+    }
+
+    /// `bridge_outcome_for` maps one pick against the installed db: a
+    /// rebuild member reinstalls, a lower pick downgrades (even across a
+    /// `vercmp`-equal boundary like `1.0-r0` vs `1.0`), and a new slot
+    /// lists every installed instance as `oldbest`.
+    #[test]
+    fn s6_bridge_outcome_for_sorts_same_slot_versions() {
+        use super::super::InstalledRef;
+        use std::collections::{HashMap, HashSet};
+        let record = super::LoadedVersion {
+            category: "dev-libs".to_string(),
+            package: "pg34-x".to_string(),
+            version: "1.0-r0".to_string(),
+            slot: "0".to_string(),
+            sub_slot: "0".to_string(),
+            repo_name: "testrepo".to_string(),
+            iuse: String::new(),
+            keywords: Vec::new(),
+            deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            raw_deps: Default::default(),
+        };
+        let installed = super::InstalledView {
+            by_slot: HashMap::from([(
+                (
+                    "dev-libs".to_string(),
+                    "pg34-x".to_string(),
+                    "0".to_string(),
+                ),
+                vec!["1.0".to_string()],
+            )]),
+            occupied: HashSet::from([("dev-libs".to_string(), "pg34-x".to_string())]),
+        };
+        // A `vercmp`-equal pick is a downgrade, not an upgrade: `Equal`
+        // does not satisfy `> 0` (Portage `vercmp` revision default).
+        let (outcome, _, _) =
+            super::bridge_outcome_for("dev-libs/pg34-x", &record, "1.0-r0", &installed, None);
+        assert!(
+            matches!(outcome, super::super::PretendOutcome::Downgrade { .. }),
+            "a vercmp-equal pick downgrades: {outcome:?}"
+        );
+        // A new slot collects every installed instance, same category and
+        // package only, slot-sorted.
+        let installed = super::InstalledView {
+            by_slot: HashMap::from([
+                (
+                    (
+                        "dev-libs".to_string(),
+                        "pg34-x".to_string(),
+                        "1".to_string(),
+                    ),
+                    vec!["1".to_string()],
+                ),
+                (
+                    (
+                        "dev-libs".to_string(),
+                        "pg34-x".to_string(),
+                        "2".to_string(),
+                    ),
+                    vec!["2".to_string()],
+                ),
+                (
+                    ("other".to_string(), "pg34-x".to_string(), "1".to_string()),
+                    vec!["9".to_string()],
+                ),
+            ]),
+            occupied: HashSet::from([("dev-libs".to_string(), "pg34-x".to_string())]),
+        };
+        let record = super::LoadedVersion {
+            version: "3".to_string(),
+            slot: "3".to_string(),
+            ..record
+        };
+        let (outcome, oldbest, new_slot) =
+            super::bridge_outcome_for("dev-libs/pg34-x", &record, "3", &installed, None);
+        assert!(
+            matches!(outcome, super::super::PretendOutcome::New { .. }),
+            "an uninstalled slot is New: {outcome:?}"
+        );
+        assert_eq!(
+            oldbest,
+            vec![
+                InstalledRef {
+                    version: "1".to_string(),
+                    slot: "1".to_string(),
+                    sub_slot: String::new(),
+                    repo: String::new(),
+                },
+                InstalledRef {
+                    version: "2".to_string(),
+                    slot: "2".to_string(),
+                    sub_slot: String::new(),
+                    repo: String::new(),
+                },
+            ],
+            "oldbest holds the same-cp instances only, slot-sorted"
+        );
+        assert!(new_slot, "another slot is already installed");
+    }
+
+    /// `bridge_use_columns` diffs an `R` row against the vdb USE like the
+    /// walk's own display, so a drifted flag renders `x*` (S4).
+    #[test]
+    fn s6_bridge_use_columns_paints_reinstall_drift() {
+        let req = fixture_request(&["dev-libs/pg34-ulib"]);
+        // Installed `USE=""` against `IUSE="x"` in the fixture vdb.
+        let record = super::LoadedVersion {
+            category: "dev-libs".to_string(),
+            package: "pg34-ulib".to_string(),
+            version: "1".to_string(),
+            slot: "0".to_string(),
+            sub_slot: "0".to_string(),
+            repo_name: "testrepo".to_string(),
+            iuse: "x".to_string(),
+            keywords: vec!["amd64".to_string()],
+            deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            raw_deps: Default::default(),
+        };
+        let outcome = super::super::PretendOutcome::Reinstall {
+            version: "1".to_string(),
+            changed_flags: vec!["x".to_string()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        };
+        let use_set = ["x".to_string()].into_iter().collect();
+        let (_, expand, _) =
+            super::bridge_use_columns(&req, "dev-libs/pg34-ulib", &record, "1", &use_set, &outcome);
+        let body = expand
+            .iter()
+            .map(|(_, text)| text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            body.contains("x*"),
+            "a drifted flag carries the reinstall marker: {body}"
+        );
+    }
+
+    /// `collect_bridge_blockers` recovers buildtime provenance from the
+    /// key order: `DEPEND`/`BDEPEND` blockers are buildtime, `RDEPEND`
+    /// ones are not (Portage `blocker.priority.buildtime`).
+    #[test]
+    fn s6_collect_bridge_blockers_marks_buildtime_keys() {
+        let record = super::LoadedVersion {
+            category: "dev-libs".to_string(),
+            package: "pg34-x".to_string(),
+            version: "1".to_string(),
+            slot: "0".to_string(),
+            sub_slot: "0".to_string(),
+            repo_name: "testrepo".to_string(),
+            iuse: String::new(),
+            keywords: Vec::new(),
+            deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            raw_deps: [
+                "!!dev-libs/pg34-blka".to_string(),
+                "!dev-libs/pg34-blkb".to_string(),
+                "!!dev-libs/pg34-blkc".to_string(),
+                String::new(),
+                String::new(),
+            ],
+        };
+        let use_set = std::collections::HashSet::new();
+        let mut pending = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        super::collect_bridge_blockers(&record, &use_set, "1", &mut pending, &mut seen);
+        let mut buildtime: Vec<(&str, bool)> = pending
+            .iter()
+            .map(|blocker| (blocker.target_package.as_str(), blocker.buildtime))
+            .collect();
+        buildtime.sort();
+        assert_eq!(
+            buildtime,
+            vec![
+                ("pg34-blka", true),
+                ("pg34-blkb", false),
+                ("pg34-blkc", true),
+            ],
+            "DEPEND/BDEPEND block, RDEPEND does not"
+        );
+    }
+
+    /// `target_slot` reads only a named `:slot` pin: `=`/`*` operators
+    /// and bare atoms select no slot (Portage `_greedy_slots`).
+    #[test]
+    fn s6_target_slot_reads_only_named_slots() {
+        let named = portage_solver::Dep::parse("dev-libs/pg34-multi:1").expect("parses");
+        assert_eq!(super::target_slot(&named), Some("1".to_string()));
+        let bare = portage_solver::Dep::parse("dev-libs/pg34-multi").expect("parses");
+        assert_eq!(super::target_slot(&bare), None);
+        let equals = portage_solver::Dep::parse("dev-libs/pg34-multi:=").expect("parses");
+        assert_eq!(super::target_slot(&equals), None);
+        let any = portage_solver::Dep::parse("dev-libs/pg34-multi:*").expect("parses");
+        assert_eq!(super::target_slot(&any), None);
+    }
+
+    /// `strip_self_from_entries` reaches through plain and USE-conditional
+    /// groups: a direct self-cycle `||` alternative is dropped wherever it
+    /// nests (Portage `depgraph.py:778-793` circular handling).
+    #[test]
+    fn s6_strip_self_reaches_into_plain_and_conditional_groups() {
+        use portage_solver::DepEntry;
+        let parse = |text: &str| DepEntry::parse(text).expect("parses");
+        let atom_cpn = |entry: &DepEntry| match entry {
+            DepEntry::Atom(dep) => format!("{}", dep.cpn),
+            other => panic!("expected an atom, got {other:?}"),
+        };
+        // A self alternative nested in a plain group is dropped.
+        let group_ab = |texts: &[&str]| {
+            texts
+                .iter()
+                .map(|text| {
+                    DepEntry::parse(text)
+                        .expect("parses")
+                        .into_iter()
+                        .next()
+                        .expect("one atom")
+                })
+                .collect::<Vec<_>>()
+        };
+        let entries = vec![DepEntry::AllOf(vec![DepEntry::AnyOf(group_ab(&[
+            "dev-libs/pg34-self",
+            "dev-libs/pg34-other",
+        ]))])];
+        let stripped = super::strip_self_from_entries("dev-libs/pg34-self", "0", &[], &entries);
+        let group = match &stripped[..] {
+            [DepEntry::AllOf(children)] => match &children[..] {
+                [DepEntry::AnyOf(branches)] => branches,
+                other => panic!("the nested || survives: {other:?}"),
+            },
+            other => panic!("the plain group survives: {other:?}"),
+        };
+        assert_eq!(group.len(), 1, "the self branch is dropped");
+        assert_eq!(atom_cpn(&group[0]), "dev-libs/pg34-other");
+        // Behind a USE conditional the same rule applies.
+        let entries = parse("f? ( || ( dev-libs/pg34-self dev-libs/pg34-other ) )");
+        let stripped = super::strip_self_from_entries("dev-libs/pg34-self", "0", &[], &entries);
+        let conditional = match &stripped[..] {
+            [DepEntry::UseConditional { children, .. }] => children,
+            other => panic!("the conditional survives: {other:?}"),
+        };
+        let group = match &conditional[..] {
+            [DepEntry::AnyOf(children)] => children,
+            other => panic!("the nested || survives: {other:?}"),
+        };
+        assert_eq!(group.len(), 1, "the gated self branch is dropped");
+        assert_eq!(atom_cpn(&group[0]), "dev-libs/pg34-other");
+    }
+
+    /// `installed_satisfies_self` gates the self-cycle drop on slot and
+    /// version: an unpinned self is satisfied by any instance, a slot pin
+    /// must match, and an unmet version floor drops the branch.
+    #[test]
+    fn s6_installed_satisfies_self_checks_slot_and_version() {
+        use super::super::InstalledPackage;
+        let installed = vec![InstalledPackage {
+            category: "dev-libs".to_string(),
+            package: "pg34-self".to_string(),
+            version: "1.0".to_string(),
+            slot: "1".to_string(),
+        }];
+        // Unpinned: any installed instance satisfies.
+        let dep = portage_solver::Dep::parse("dev-libs/pg34-self").expect("parses");
+        assert!(
+            super::installed_satisfies_self(&dep, "dev-libs/pg34-self", &installed),
+            "an unpinned self builds against the installed instance"
+        );
+        assert!(
+            !super::installed_satisfies_self(&dep, "dev-libs/pg34-self", &[]),
+            "nothing installed satisfies nothing"
+        );
+        // A slot pin naming another slot does not satisfy.
+        let pinned = portage_solver::Dep::parse("dev-libs/pg34-self:1").expect("parses");
+        assert!(
+            super::installed_satisfies_self(&pinned, "dev-libs/pg34-self", &installed),
+            "a matching slot pin satisfies"
+        );
+        let other_slot = portage_solver::Dep::parse("dev-libs/pg34-self:2").expect("parses");
+        assert!(
+            !super::installed_satisfies_self(&other_slot, "dev-libs/pg34-self", &installed),
+            "another slot's pin does not satisfy"
+        );
+        // An unmet version floor does not satisfy.
+        let floored = portage_solver::Dep::parse(">=dev-libs/pg34-self-2.0").expect("parses");
+        assert!(
+            !super::installed_satisfies_self(&floored, "dev-libs/pg34-self", &installed),
+            "an installed 1.0 does not satisfy >=2.0"
+        );
+    }
+
+    /// `use_deps_satisfied` follows the PMS USE-dependency table, including
+    /// the `(+/-)` fallback for flags absent from IUSE and the `[!flag?]`
+    /// reading (Portage `dep_check.py`, engine `validate.rs`).
+    #[test]
+    fn s6_use_deps_satisfied_follows_the_pms_table() {
+        let uds_of = |atom: &str| {
+            let dep = portage_solver::Dep::parse(atom).expect("parses");
+            dep.use_deps.clone().expect("USE deps parse")
+        };
+        let set = |flags: &[&str]| {
+            flags
+                .iter()
+                .map(|flag| flag.to_string())
+                .collect::<std::collections::HashSet<_>>()
+        };
+        // `[a]`: the target flag decides.
+        let enabled = uds_of("dev-libs/pg34-x[a]");
+        assert!(super::use_deps_satisfied(
+            &enabled,
+            &set(&[]),
+            &set(&["a"]),
+            &set(&["a"])
+        ));
+        assert!(!super::use_deps_satisfied(
+            &enabled,
+            &set(&[]),
+            &set(&["a"]),
+            &set(&[])
+        ));
+        // `(+/-)` fallback: a flag absent from IUSE reads its default.
+        let defaulted = uds_of("dev-libs/pg34-x[a(+)]");
+        assert!(super::use_deps_satisfied(
+            &defaulted,
+            &set(&[]),
+            &set(&[]),
+            &set(&[])
+        ));
+        let default_off = uds_of("dev-libs/pg34-x[a(-)]");
+        assert!(!super::use_deps_satisfied(
+            &default_off,
+            &set(&[]),
+            &set(&[]),
+            &set(&[])
+        ));
+        // `[!a]`: the target flag must be off.
+        let disabled = uds_of("dev-libs/pg34-x[-a]");
+        assert!(super::use_deps_satisfied(
+            &disabled,
+            &set(&[]),
+            &set(&["a"]),
+            &set(&[])
+        ));
+        assert!(!super::use_deps_satisfied(
+            &disabled,
+            &set(&[]),
+            &set(&["a"]),
+            &set(&["a"])
+        ));
+        // `[a?]`: parent on implies target on.
+        let conditional = uds_of("dev-libs/pg34-x[a?]");
+        assert!(super::use_deps_satisfied(
+            &conditional,
+            &set(&["a"]),
+            &set(&["a"]),
+            &set(&["a"])
+        ));
+        assert!(!super::use_deps_satisfied(
+            &conditional,
+            &set(&["a"]),
+            &set(&["a"]),
+            &set(&[])
+        ));
+        assert!(super::use_deps_satisfied(
+            &conditional,
+            &set(&[]),
+            &set(&["a"]),
+            &set(&[])
+        ));
+        // `[!a?]`: parent off implies target off.
+        let inverse = uds_of("dev-libs/pg34-x[!a?]");
+        assert!(super::use_deps_satisfied(
+            &inverse,
+            &set(&[]),
+            &set(&["a"]),
+            &set(&[])
+        ));
+        assert!(!super::use_deps_satisfied(
+            &inverse,
+            &set(&[]),
+            &set(&["a"]),
+            &set(&["a"])
+        ));
+        assert!(super::use_deps_satisfied(
+            &inverse,
+            &set(&["a"]),
+            &set(&["a"]),
+            &set(&["a"])
+        ));
+        // `[a=]` / `[!a=]`: target and parent agree / disagree.
+        let equal = uds_of("dev-libs/pg34-x[a=]");
+        assert!(super::use_deps_satisfied(
+            &equal,
+            &set(&["a"]),
+            &set(&["a"]),
+            &set(&["a"])
+        ));
+        assert!(!super::use_deps_satisfied(
+            &equal,
+            &set(&[]),
+            &set(&["a"]),
+            &set(&["a"])
+        ));
+        let equal_inverse = uds_of("dev-libs/pg34-x[!a=]");
+        assert!(super::use_deps_satisfied(
+            &equal_inverse,
+            &set(&[]),
+            &set(&["a"]),
+            &set(&["a"])
+        ));
+        assert!(!super::use_deps_satisfied(
+            &equal_inverse,
+            &set(&["a"]),
+            &set(&["a"]),
+            &set(&["a"])
+        ));
+    }
+
+    /// `changed_use_dep_flags` reports exactly the required flags that flip
+    /// between the installed USE and the ebuild's effective USE, per kind.
+    #[test]
+    fn s6_changed_use_dep_flags_reports_only_flips() {
+        let uds_of = |atom: &str| {
+            let dep = portage_solver::Dep::parse(atom).expect("parses");
+            dep.use_deps.clone().expect("USE deps parse")
+        };
+        let set = |flags: &[&str]| {
+            flags
+                .iter()
+                .map(|flag| flag.to_string())
+                .collect::<std::collections::HashSet<_>>()
+        };
+        let flags = |atom: &str, parent: &[&str], vdb: &[&str], eff: &[&str]| {
+            super::changed_use_dep_flags(&uds_of(atom), &set(parent), &set(vdb), &set(eff))
+        };
+        // Enabled: off in the vdb, on in the ebuild.
+        assert_eq!(
+            flags("dev-libs/pg34-x[a]", &[], &[], &["a"]),
+            vec!["a".to_string()]
+        );
+        assert!(flags("dev-libs/pg34-x[a]", &[], &["a"], &["a"]).is_empty());
+        assert!(flags("dev-libs/pg34-x[a]", &[], &[], &[]).is_empty());
+        // Disabled: on in the vdb, off in the ebuild.
+        assert_eq!(
+            flags("dev-libs/pg34-x[-a]", &[], &["a"], &[]),
+            vec!["a".to_string()]
+        );
+        assert!(flags("dev-libs/pg34-x[-a]", &[], &[], &[]).is_empty());
+        // Conditional: parent on, vdb off, ebuild on.
+        assert_eq!(
+            flags("dev-libs/pg34-x[a?]", &["a"], &[], &["a"]),
+            vec!["a".to_string()]
+        );
+        assert!(flags("dev-libs/pg34-x[a?]", &[], &[], &["a"]).is_empty());
+        assert!(flags("dev-libs/pg34-x[a?]", &["a"], &["a"], &["a"]).is_empty());
+        // Conditional-inverse: parent off, vdb on, ebuild off.
+        assert_eq!(
+            flags("dev-libs/pg34-x[!a?]", &[], &["a"], &[]),
+            vec!["a".to_string()]
+        );
+        assert!(flags("dev-libs/pg34-x[!a?]", &["a"], &["a"], &[]).is_empty());
+        assert!(flags("dev-libs/pg34-x[!a?]", &[], &["a"], &["a"]).is_empty());
+        // Equal: drifted and landing on the parent state.
+        assert_eq!(
+            flags("dev-libs/pg34-x[a=]", &["a"], &[], &["a"]),
+            vec!["a".to_string()]
+        );
+        assert!(flags("dev-libs/pg34-x[a=]", &["a"], &["a"], &["a"]).is_empty());
+        assert!(flags("dev-libs/pg34-x[a=]", &[], &[], &[]).is_empty());
+        // Equal-inverse: drifted and landing away from the parent state.
+        assert_eq!(
+            flags("dev-libs/pg34-x[!a=]", &["a"], &["a"], &[]),
+            vec!["a".to_string()]
+        );
+        assert!(flags("dev-libs/pg34-x[!a=]", &["a"], &[], &[]).is_empty());
+        assert!(flags("dev-libs/pg34-x[!a=]", &[], &[], &[]).is_empty());
+    }
+
+    /// `or_branch_key` separates a versioned branch from a bare one, so an
+    /// override addresses the branch it was computed from (S5 fingerprint).
+    #[test]
+    fn s6_or_branch_key_separates_versioned_branches() {
+        use portage_solver::DepEntry;
+        let branch = |text: &str| {
+            DepEntry::parse(text)
+                .expect("parses")
+                .into_iter()
+                .next()
+                .expect("one branch")
+        };
+        let bare = branch("dev-libs/pg34-a");
+        let floored = branch(">=dev-libs/pg34-a-1.0");
+        assert_ne!(
+            super::or_branch_key(&bare),
+            super::or_branch_key(&floored),
+            "a version floor keys differently from the bare atom"
+        );
+        assert_eq!(
+            super::or_branch_key(&bare),
+            super::or_branch_key(&branch("dev-libs/pg34-a"))
+        );
+    }
+
+    /// `or_subtree_has_blocker` spots blockers behind plain groups, so a
+    /// group carrying one is never reordered or trimmed.
+    #[test]
+    fn s6_or_subtree_has_blocker_spots_nested_blockers() {
+        use portage_solver::DepEntry;
+        let entries = DepEntry::parse("|| ( dev-libs/pg34-a dev-libs/pg34-b )").expect("parses");
+        assert!(!super::or_subtree_has_blocker(&entries));
+        let entries = DepEntry::parse("|| ( dev-libs/pg34-a !!dev-libs/pg34-b )").expect("parses");
+        assert!(super::or_subtree_has_blocker(&entries));
+        let entries = DepEntry::parse("f? ( !dev-libs/pg34-a )").expect("parses");
+        assert!(super::or_subtree_has_blocker(&entries));
+    }
+
+    /// `visit_or_groups` numbers `||` nodes in pre-order, reaches through
+    /// plain, conditional and choice groups, and gates activity on the
+    /// member USE (the analysis pass shares this traversal with apply).
+    #[test]
+    fn s6_visit_or_groups_numbers_and_gates_groups() {
+        use portage_solver::DepEntry;
+        let visit = |text: &str, use_flags: &[&str]| {
+            let entries = DepEntry::parse(text).expect("parses");
+            let member_use = use_flags
+                .iter()
+                .map(|flag| flag.to_string())
+                .collect::<std::collections::HashSet<_>>();
+            let mut next_index = 0;
+            let mut found = Vec::new();
+            super::visit_or_groups(&entries, &member_use, true, &mut next_index, &mut found);
+            found
+        };
+        // Two sibling groups take successive indices.
+        let found = visit(
+            "|| ( dev-libs/pg34-a dev-libs/pg34-b ) || ( dev-libs/pg34-c dev-libs/pg34-d )",
+            &[],
+        );
+        let indices: Vec<usize> = found.iter().map(|(index, _, _)| *index).collect();
+        assert_eq!(indices, vec![0, 1], "a stuck counter numbers every group 0");
+        // A group behind a plain group is still visited.
+        let nested_a = vec![DepEntry::AllOf(
+            DepEntry::parse("|| ( dev-libs/pg34-a dev-libs/pg34-b )").expect("parses"),
+        )];
+        let mut next_index = 0;
+        let mut found = Vec::new();
+        super::visit_or_groups(
+            &nested_a,
+            &std::collections::HashSet::new(),
+            true,
+            &mut next_index,
+            &mut found,
+        );
+        assert_eq!(found.len(), 1, "the nested || is visited: {found:?}");
+        assert_eq!(found[0].0, 0);
+        // A group behind an unsatisfied conditional is visited but inactive;
+        // behind a satisfied one it is active.
+        let off = visit("f? ( || ( dev-libs/pg34-a dev-libs/pg34-b ) )", &[]);
+        assert_eq!(off.len(), 1);
+        assert!(!off[0].2, "an unsatisfied gate deactivates the group");
+        let on = visit("f? ( || ( dev-libs/pg34-a dev-libs/pg34-b ) )", &["f"]);
+        assert_eq!(on.len(), 1);
+        assert!(on[0].2, "a satisfied gate keeps the group active");
+        // A group inside `^^` is traversed (it still takes its own
+        // override) although never collected itself.
+        let atoms = |texts: &[&str]| {
+            texts
+                .iter()
+                .map(|text| {
+                    DepEntry::parse(text)
+                        .expect("parses")
+                        .into_iter()
+                        .next()
+                        .expect("one atom")
+                })
+                .collect::<Vec<_>>()
+        };
+        let entries = vec![DepEntry::ExactlyOneOf(vec![DepEntry::AnyOf(atoms(&[
+            "dev-libs/pg34-a",
+            "dev-libs/pg34-b",
+        ]))])];
+        let mut next_index = 0;
+        let mut found = Vec::new();
+        super::visit_or_groups(
+            &entries,
+            &std::collections::HashSet::new(),
+            true,
+            &mut next_index,
+            &mut found,
+        );
+        assert_eq!(found.len(), 1, "the || inside ^^ is visited");
+        assert_eq!(found[0].0, 0);
+    }
+
+    // --- #34 S6 throwaway-vdb scaffolding --------------------------------
+    //
+    // `parent_use_reinstalls` and the `||` analysis read installed deps
+    // from the vdb, so G2-shape tests stage their own `var/db/pkg` next
+    // to the fixture repo (pmtest owns `fixtures/`; these live in a
+    // `TempDir`, like the slotbind test's).
+
+    /// Write `(name, content)` files into `dir`.
+    fn s6_write_files(dir: &std::path::Path, files: &[(&str, &str)]) {
+        use std::io::Write as _;
+        for (name, content) in files {
+            let mut file = std::fs::File::create(dir.join(name)).expect("file creates");
+            file.write_all(content.as_bytes()).expect("file writes");
+        }
+    }
+
+    /// One vdb package dir with the metadata files the bridge readers
+    /// need (`CATEGORY`, `SLOT`, `repository`, `IUSE`, `USE`, `RDEPEND`).
+    #[allow(clippy::too_many_arguments)]
+    fn s6_mk_vdb(
+        root: &std::path::Path,
+        name: &str,
+        slot: &str,
+        iuse: &str,
+        use_flags: &str,
+        rdepend: &str,
+    ) {
+        let dir = root.join("var/db/pkg/dev-libs").join(name);
+        std::fs::create_dir_all(&dir).expect("vdb dir creates");
+        s6_write_files(
+            &dir,
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("SLOT", &format!("{slot}\n")),
+                ("repository", "testrepo\n"),
+                ("IUSE", &format!("{iuse}\n")),
+                ("USE", &format!("{use_flags}\n")),
+                ("RDEPEND", &format!("{rdepend}\n")),
+            ],
+        );
+    }
+
+    /// A throwaway vdb root holding every S6 G2-shape package: repo-backed
+    /// members (`capp-1`, `capp-99` resolve against the fixture repo) and
+    /// the installed children they pressure. Tests select their actors
+    /// through the member plan and the kept set.
+    fn s6_temp_vdb() -> std::path::PathBuf {
+        let dir = portage_util::TempDir::new("portage-bridge-s6").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        s6_mk_vdb(&dir, "pg34-capp-1", "0", "", "", "");
+        s6_mk_vdb(&dir, "pg34-capp-99", "0", "", "", "");
+        s6_mk_vdb(&dir, "pg34-clib-1", "0", "f", "", "");
+        s6_mk_vdb(&dir, "pg34-ulib-1", "0", "x", "", "dev-libs/pg34-cdep");
+        s6_mk_vdb(&dir, "pg34-ulib-2", "0", "x", "", "dev-libs/pg34-clib[f]");
+        s6_mk_vdb(&dir, "pg34-ulib-99", "0", "x", "", "");
+        s6_mk_vdb(&dir, "pg34-cdep-1", "0", "", "", "");
+        s6_mk_vdb(&dir, "pg34-g2p-1", "0", "", "", "dev-libs/pg34-ulib[x]");
+        s6_mk_vdb(&dir, "pg34-g2p2-1", "0", "", "", "!!dev-libs/pg34-clib[f]");
+        s6_mk_vdb(
+            &dir,
+            "pg34-g2p3-1",
+            "0",
+            "",
+            "",
+            "y? ( dev-libs/pg34-clib[f] )",
+        );
+        s6_mk_vdb(&dir, "pg34-g2p5-1", "0", "", "", "!dev-libs/pg34-cdep");
+        s6_mk_vdb(
+            &dir,
+            "pg34-g2phant-1",
+            "0",
+            "",
+            "",
+            "dev-libs/pg34-nosuchpkg",
+        );
+        dir
+    }
+
+    /// A hand-built kept set: the members the test selects, nothing else.
+    fn s6_kept(installed: &[&str], rebuild: &[&str], deep: bool) -> super::KeptInstalled {
+        super::KeptInstalled {
+            installed: installed.iter().map(|cpv| cpv.to_string()).collect(),
+            rebuild: rebuild.iter().map(|cpv| cpv.to_string()).collect(),
+            downgrade: std::collections::HashSet::new(),
+            use_drift: std::collections::HashMap::new(),
+            deep,
+        }
+    }
+
+    /// `LazyRepo::build` keeps the resolvo order (`seeds_first = false`)
+    /// free of vdb expansion: without deep the installed cone never
+    /// enters `closure` on that path (S2 `seeds_first`, S3 `vdb_expand`).
+    #[test]
+    fn s6_closure_skips_vdb_expansion_for_resolvo_order() {
+        use super::super::{Deep, find_repos};
+        let mut req = fixture_request(&["dev-libs/newpkg"]);
+        req.deep = Deep::Unlimited;
+        let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        assert!(shallow.contains(&"dev-libs/pg34-gone".to_string()));
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, false).expect("closure builds");
+        let closure: std::collections::HashSet<String> = lazy
+            .closure_cpns()
+            .into_iter()
+            .map(|cpn| format!("{cpn}"))
+            .collect();
+        // Installed `pg34-gone-1` points at `pg34-gextra` from its vdb,
+        // which nothing else reaches: expanding it would pull the extra
+        // package into the pool.
+        assert!(
+            !closure.contains("dev-libs/pg34-gextra"),
+            "resolvo-order closure leaves vdb deps unexpanded: {closure:?}"
+        );
+    }
+
+    /// `LazyRepo::build` never admits a vdb-referenced cp without a repo
+    /// dir: the push gate needs both novelty and resolvability, so a
+    /// removed package cannot enter `closure` (and the pop dedups the
+    /// rest).
+    #[test]
+    fn s6_closure_ignores_vdb_refs_without_a_repo_dir() {
+        use super::super::{Deep, find_repos};
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/newpkg"]);
+        req.root = root.clone();
+        req.deep = Deep::Unlimited;
+        let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        assert!(shallow.contains(&"dev-libs/pg34-g2phant".to_string()));
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let closure: std::collections::HashSet<String> = lazy
+            .closure_cpns()
+            .into_iter()
+            .map(|cpn| format!("{cpn}"))
+            .collect();
+        assert!(
+            !closure.contains("dev-libs/pg34-nosuchpkg"),
+            "a vdb-only reference never enters the closure: {closure:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `root_target_slots` matches installed instances by cp: only slots
+    /// of the requested package join the update set (Portage
+    /// `_greedy_slots`).
+    #[test]
+    fn s6_root_target_slots_matches_installed_cps() {
+        use super::super::InstalledPackage;
+        let (mut req, lazy, _) = pg34_s2_parts(&["dev-libs/pg34-multi"]);
+        req.update = true;
+        let installed = vec![
+            InstalledPackage {
+                category: "dev-libs".to_string(),
+                package: "pg34-multi".to_string(),
+                version: "1".to_string(),
+                slot: "1".to_string(),
+            },
+            InstalledPackage {
+                category: "dev-libs".to_string(),
+                package: "pg34-unrelated".to_string(),
+                version: "1".to_string(),
+                slot: "9".to_string(),
+            },
+        ];
+        let dep = portage_solver::Dep::parse("dev-libs/pg34-multi").expect("parses");
+        let slots = super::root_target_slots(
+            &req,
+            &lazy,
+            &installed,
+            &dep,
+            &portage_atom_pubgrub::PortageVersionSet::any(),
+        );
+        assert_eq!(
+            slots,
+            vec!["2".to_string(), "1".to_string()],
+            "the best slot plus the installed lower slot, never the decoy"
+        );
+    }
+
+    /// `or_member_view` hides kept leaves: without deep a kept
+    /// non-rebuild member contributes no edges, so none of its `||`
+    /// groups is evaluated (the S2 leaf rule, mirrored for analysis).
+    #[test]
+    fn s6_or_member_view_hides_kept_leaves() {
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-arg"]);
+        // Selective: the named target stays kept, never rebuilt.
+        req.selective = true;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(!kept.deep);
+        assert!(kept.installed.contains("dev-libs/pg34-arg-1"));
+        assert!(!kept.rebuild.contains("dev-libs/pg34-arg-1"));
+        assert!(
+            super::or_member_view(
+                &lazy,
+                &kept,
+                &installed,
+                "dev-libs/pg34-arg",
+                "1",
+                &super::OrChoiceOverrides::new(),
+            )
+            .is_none(),
+            "a kept leaf has no engine-visible edges"
+        );
+    }
+
+    /// A version-pinned root atom resolves the pinned version and rebuilds
+    /// it in place when installed (Portage selects the pinned instance,
+    /// then reinstalls the named argument).
+    #[test]
+    fn s6_pinned_root_versions_rebuild_in_place() {
+        let (mut req, lazy, installed) = pg34_s2_parts(&["=dev-libs/pg34-dlib-1"]);
+        req.selective = false;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-dlib-1"),
+            "the pinned installed version rebuilds: {:?}",
+            kept.rebuild
+        );
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-dlib resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-dlib-1:0"]);
+        let dlib = result
+            .entries
+            .iter()
+            .find(|entry| entry.package == "pg34-dlib")
+            .expect("pg34-dlib entry");
+        assert!(
+            matches!(dlib.outcome, super::super::PretendOutcome::Reinstall { .. }),
+            "the pinned target reinstalls instead of upgrading: {:?}",
+            dlib.outcome
+        );
+    }
+
+    /// A version-pinned root atom constrains the solve targets: with
+    /// nothing installed, `=pg34-sib-1` plans slot 1 even though slot 2
+    /// holds the newer version (the target list carries the pin, not
+    /// `any`).
+    #[test]
+    fn s6_pinned_root_versions_constrain_solve_targets() {
+        let (mut req, _, _) = pg34_s2_parts(&["=dev-libs/pg34-sib-1"]);
+        req.selective = false;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-sib resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-sib-1:1"]);
+    }
+
+    /// `set_selective_no_update` keeps a satisfied root target at its
+    /// installed version when `--update` is off (S4 engine switch,
+    /// ported from portage-cli): `-pvN` on `pg34-dlib` plans nothing.
+    #[test]
+    fn s6_selective_no_update_keeps_satisfied_roots() {
+        let (mut req, _, _) = pg34_s2_parts(&["dev-libs/pg34-dlib"]);
+        // Selective through `--noreplace`, no update, no deep.
+        req.selective = true;
+        req.update = false;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-dlib resolves");
+        assert!(
+            pg34_plan(&result).is_empty(),
+            "a satisfied root stays put without --update: {:?}",
+            pg34_plan(&result)
+        );
+    }
+
+    /// `versions_for` offers each installed version once: an installed
+    /// version already in the repo is skipped by the installed-only arm
+    /// instead of doubling the row (S3 offer rule).
+    #[test]
+    fn s6_versions_for_offers_no_duplicate_installed_rows() {
+        use portage_atom_pubgrub::PackageRepository;
+        let req = pg34_s3_request(&["dev-libs/pg34-arg"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(kept.deep, "the S3 request counts as deep");
+        let bridge = super::BridgeRepo {
+            lazy,
+            kept,
+            installed: installed.clone(),
+            or_overrides: super::OrChoiceOverrides::new(),
+        };
+        let cpn = portage_solver::Cpn::parse("dev-libs/pg34-arg").expect("cpn parses");
+        let rows = bridge.versions_for(&cpn);
+        let mut cpvs: Vec<String> = rows.iter().map(|(cpv, _)| format!("{cpv}")).collect();
+        cpvs.sort();
+        let mut deduped = cpvs.clone();
+        deduped.dedup();
+        assert_eq!(
+            cpvs, deduped,
+            "no installed version is offered twice: {cpvs:?}"
+        );
+        assert_eq!(cpvs.len(), 1, "the one repo version stands alone: {cpvs:?}");
+    }
+
+    /// `or_branch_standing` accepts the branch Portage would take: every
+    /// package independently selected, the atom matching the planned
+    /// version, the USE deps holding under the member USE.
+    #[test]
+    fn s6_or_branch_standing_accepts_a_matched_in_graph_branch() {
+        use portage_solver::DepEntry;
+        // `package.use` enables `x`, like the S3 request below.
+        let req = pg34_s3_request(&["dev-libs/pg34-uapp"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let branch = DepEntry::parse("dev-libs/pg34-ulib[x]")
+            .expect("parses")
+            .into_iter()
+            .next()
+            .expect("one branch");
+        let member_use = ["x".to_string()].into_iter().collect();
+        let plan_ver = [("dev-libs/pg34-ulib".to_string(), "1".to_string())]
+            .into_iter()
+            .collect();
+        // The probe target itself requires `ulib`: in-graph trivially.
+        let root_cps = ["dev-libs/pg34-ulib".to_string()].into_iter().collect();
+        let standing = super::or_branch_standing(
+            &lazy,
+            &installed,
+            &branch,
+            "dev-libs/pg34-uapp",
+            &member_use,
+            &plan_ver,
+            &std::collections::HashSet::new(),
+            &root_cps,
+        );
+        assert!(
+            standing.qualifies,
+            "the matched in-graph branch with holding USE deps qualifies"
+        );
+    }
+
+    /// `or_member_view` reads a deep installed member's classes from the
+    /// vdb reader, not the repo md5-cache (S3 installed expansion).
+    #[test]
+    fn s6_or_member_view_reads_vdb_strings_under_deep() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-ulib"]);
+        req.root = root.clone();
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        // Deep, kept, never rebuilt: the vdb supplies the classes.
+        let kept = s6_kept(&["dev-libs/pg34-ulib-1"], &[], true);
+        let (classes, _) = super::or_member_view(
+            &lazy,
+            &kept,
+            &installed,
+            "dev-libs/pg34-ulib",
+            "1",
+            &super::OrChoiceOverrides::new(),
+        )
+        .expect("a deep kept member has a view");
+        // The staged vdb points at `pg34-cdep`; the repo ebuild gates
+        // `pg34-uextra` behind `x?`. The view follows the vdb.
+        let rdepend = &classes[1];
+        assert!(
+            rdepend
+                .iter()
+                .all(|entry| !matches!(entry, portage_solver::DepEntry::UseConditional { .. })),
+            "the vdb classes carry no USE gate: {rdepend:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `or_member_view` answers a rebuild member's USE from the config,
+    /// not the vdb: a package Portage rebuilds resolves its conditionals
+    /// with the current flags (S4 `desired_use` exemption).
+    #[test]
+    fn s6_or_member_view_answers_config_use_for_rebuilds() {
+        // `--newuse` rebuilds drifted `pg34-ulib` (S4 USE-drift arm).
+        let mut req = pg34_s4_request(&["dev-libs/pg34-uapp"]);
+        req.newuse = true;
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-ulib-1"),
+            "newuse rebuilds the drifted member: {:?}",
+            kept.rebuild
+        );
+        let (_, use_set) = super::or_member_view(
+            &lazy,
+            &kept,
+            &installed,
+            "dev-libs/pg34-ulib",
+            "1",
+            &super::OrChoiceOverrides::new(),
+        )
+        .expect("a rebuild member has a view");
+        assert!(
+            use_set.contains("x"),
+            "a rebuild resolves conditionals with the config USE: {use_set:?}"
+        );
+    }
+
+    /// One synthetic merge entry outside any resolve, for the mapping
+    /// helpers below (`discovery` stamps input order).
+    fn s6_test_entry(
+        category: &str,
+        package: &str,
+        _version: &str,
+        outcome: super::super::PretendOutcome,
+        deps: Vec<super::super::DepEdge>,
+    ) -> super::super::GraphEntry {
+        super::super::GraphEntry {
+            discovery: 0,
+            category: category.to_string(),
+            package: package.to_string(),
+            outcome,
+            blockers: Vec::new(),
+            slot: Some("0".to_string()),
+            sub_slot: Some("0".to_string()),
+            repo_name: Some("testrepo".to_string()),
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: Vec::new(),
+            source: super::super::CandidateSource::Ebuild,
+            provenance: super::super::VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps,
+        }
+    }
+
+    /// One synthetic dep edge onto `child`, with its buildtime bit.
+    fn s6_test_edge(
+        child_category: &str,
+        child_package: &str,
+        atom: &str,
+        buildtime: bool,
+        key: u8,
+    ) -> super::super::DepEdge {
+        super::super::DepEdge {
+            atom: atom.to_string(),
+            evaluated: atom.to_string(),
+            category: child_category.to_string(),
+            package: child_package.to_string(),
+            priority: super::super::DepPriority {
+                buildtime,
+                runtime: !buildtime,
+                runtime_post: false,
+                buildtime_slot_op: false,
+                runtime_slot_op: false,
+                optional: false,
+                satisfied: false,
+            },
+            disjunctive: false,
+            alt: None,
+            key,
+        }
+    }
+
+    /// The G2 pass with a deep request expands an installed member from
+    /// its vdb strings: `pg34-g2p-1` requires `pg34-ulib[x]` while the
+    /// installed `pg34-ulib-1` was built without it, and the config
+    /// enables it — the installed child reinstalls with the changed
+    /// flag (Portage `_select_atoms` re-evaluation).
+    #[test]
+    fn s6_parent_use_reinstalls_deep_expands_installed_strings() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-g2p"]);
+        req.root = root.clone();
+        req.deep = super::super::Deep::Unlimited;
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-ulib".to_string(), vec!["x".to_string()]));
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-g2p-1", "dev-libs/pg34-ulib-1"],
+            &["dev-libs/pg34-g2p-1"],
+            true,
+        );
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-g2p", "1")], &[]);
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-ulib-1"),
+            "the USE-pressured installed child rebuilds: {:?}",
+            kept.rebuild
+        );
+        assert_eq!(
+            kept.use_drift.get("dev-libs/pg34-ulib-1"),
+            Some(&vec!["x".to_string()]),
+            "the R row carries the changed flag: {:?}",
+            kept.use_drift
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Without deep a kept leaf contributes nothing, while a rebuild
+    /// member still expands the repo strings (Portage `_ignored_deps`
+    /// vs. the reinstalled ebuild node).
+    #[test]
+    fn s6_parent_use_reinstalls_leaf_members_stay_silent_without_deep() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-capp"]);
+        req.root = root.clone();
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "1")], &[]);
+        // Rebuild member: the repo `clib[f]` atom pressures the
+        // flag-less installed child.
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-capp-1", "dev-libs/pg34-clib-1"],
+            &["dev-libs/pg34-capp-1"],
+            false,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "a rebuild member still exerts USE pressure: {:?}",
+            kept.rebuild
+        );
+        // Kept leaf: `_ignored_deps` means no pressure at all.
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-capp-1", "dev-libs/pg34-clib-1"],
+            &[],
+            false,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "a kept leaf exerts no USE pressure: {:?}",
+            kept.rebuild
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The installed-member expansion follows the solved version's repo
+    /// record: a member with no record (an unoffered version) expands
+    /// nothing, while the exact record expands the repo strings.
+    #[test]
+    fn s6_parent_use_reinstalls_repo_record_selects_the_expansion_source() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-capp"]);
+        req.root = root.clone();
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        // `capp-99` has no repo record: nothing expands from it.
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "99")], &[]);
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-capp-99", "dev-libs/pg34-clib-1"],
+            &["dev-libs/pg34-capp-99"],
+            false,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "a record-less member exerts no USE pressure: {:?}",
+            kept.rebuild
+        );
+        // `capp-1` matches its record: the repo `clib[f]` atom applies.
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "1")], &[]);
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-capp-1", "dev-libs/pg34-clib-1"],
+            &["dev-libs/pg34-capp-1"],
+            false,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "the recorded member pressures its child: {:?}",
+            kept.rebuild
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A member version that merely resembles an installed one is still a
+    /// fresh member: only the solved version's own installed instance
+    /// expands from the vdb (a re-selected downgrade scans through the
+    /// fresh branch instead).
+    #[test]
+    fn s6_parent_use_reinstalls_unmatched_installed_versions_do_not_expand() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-ulib"]);
+        req.root = root.clone();
+        req.deep = super::super::Deep::Unlimited;
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        // Solved `1` matches `ulib-1`, whose staged vdb strings point at
+        // `pg34-cdep` (no USE deps): nothing is pressured even though a
+        // `ulib-2` with a `clib[f]` requirement is installed too.
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-ulib", "1")], &[]);
+        let mut kept = s6_kept(
+            &[
+                "dev-libs/pg34-ulib-1",
+                "dev-libs/pg34-ulib-2",
+                "dev-libs/pg34-clib-1",
+            ],
+            &["dev-libs/pg34-ulib-1", "dev-libs/pg34-ulib-2"],
+            true,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "only the solved version's strings exert pressure: {:?}",
+            kept.rebuild
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A re-selected member version scans through the fresh branch: a
+    /// solved version with no installed instance expands the solved
+    /// version's own repo strings, never a same-cp installed sibling's
+    /// (the G1-downgrade shape).
+    #[test]
+    fn s6_parent_use_reinstalls_fresh_versions_scan_their_own_strings() {
+        let root = s6_temp_vdb();
+        s6_mk_vdb(&root, "pg34-g2multi-1", "0", "", "", "");
+        let mut req = fixture_request(&["dev-libs/pg34-g2multi"]);
+        req.root = root.clone();
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
+        let mut repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (_dir, extra) = s6_temp_repo(&repos);
+        let dir = extra.location.parent().expect("repo parent").to_path_buf();
+        repos.push(extra);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        // Solved `2` is not installed (only `1` is): the pass reads the
+        // `2` strings, whose `clib[f]` atom pressures the flag-less
+        // installed child.
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-g2multi", "2")], &[]);
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-g2multi-1", "dev-libs/pg34-clib-1"],
+            &["dev-libs/pg34-g2multi-1"],
+            false,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "the fresh member pressures its child: {:?}",
+            kept.rebuild
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Blocker atoms never exert USE pressure: a `!!` branch with USE
+    /// deps is not a build edge (Portage diverts blockers away from the
+    /// graph).
+    #[test]
+    fn s6_parent_use_reinstalls_blocker_atoms_exert_no_use_pressure() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-g2p2"]);
+        req.root = root.clone();
+        req.deep = super::super::Deep::Unlimited;
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-g2p2", "1")], &[]);
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-g2p2-1", "dev-libs/pg34-clib-1"],
+            &["dev-libs/pg34-g2p2-1"],
+            true,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "a blocker with USE deps still exerts no pressure: {:?}",
+            kept.rebuild
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A `flag?` gate the parent USE does not satisfy contributes
+    /// nothing: untaken conditionals never pressure a child.
+    #[test]
+    fn s6_parent_use_reinstalls_unsatisfied_conditionals_contribute_nothing() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-g2p3"]);
+        req.root = root.clone();
+        req.deep = super::super::Deep::Unlimited;
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-g2p3", "1")], &[]);
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-g2p3-1", "dev-libs/pg34-clib-1"],
+            &["dev-libs/pg34-g2p3-1"],
+            true,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "the untaken gate contributes nothing: {:?}",
+            kept.rebuild
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Children already rebuilding (or downgrading) are never
+    /// re-pressured: the pass only adds new rebuilds.
+    #[test]
+    fn s6_parent_use_reinstalls_rebuilt_children_are_not_repressured() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-capp"]);
+        req.root = root.clone();
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "1")], &[]);
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-capp-1", "dev-libs/pg34-clib-1"],
+            &["dev-libs/pg34-capp-1", "dev-libs/pg34-clib-1"],
+            false,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert_eq!(
+            kept.use_drift.get("dev-libs/pg34-clib-1"),
+            None,
+            "a rebuilding child gains no new flags: {:?}",
+            kept.use_drift
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The same-version repo record must also match the slot: an
+    /// installed `ulib-99` (slot 0, no `99` record) is an upgrade
+    /// question, not a parent-USE reinstall.
+    #[test]
+    fn s6_parent_use_reinstalls_same_slot_wrong_version_records_do_not_satisfy() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-g2p"]);
+        req.root = root.clone();
+        req.deep = super::super::Deep::Unlimited;
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-ulib".to_string(), vec!["x".to_string()]));
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-g2p", "1")], &[]);
+        let mut kept = s6_kept(
+            &["dev-libs/pg34-g2p-1", "dev-libs/pg34-ulib-99"],
+            &["dev-libs/pg34-g2p-1"],
+            true,
+        );
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-ulib-99"),
+            "a version without a same-version record never reinstalls: {:?}",
+            kept.rebuild
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `apply_or_overrides_to_entries` numbers `||` groups in visit
+    /// order: an override addresses its own index, never its neighbour's.
+    #[test]
+    fn s6_apply_or_overrides_counts_groups_in_order() {
+        use portage_solver::DepEntry;
+        let group = |text: &str| {
+            DepEntry::parse(text)
+                .expect("parses")
+                .into_iter()
+                .next()
+                .expect("one group")
+        };
+        let key = |entry: &DepEntry| super::or_branch_key(entry);
+        let entries = vec![
+            group("|| ( dev-libs/pg34-a dev-libs/pg34-b )"),
+            group("|| ( dev-libs/pg34-c dev-libs/pg34-d )"),
+        ];
+        let live_first: Vec<String> = match &entries[0] {
+            DepEntry::AnyOf(children) => children.iter().map(key).collect(),
+            other => panic!("expected a || group: {other:?}"),
+        };
+        let live: Vec<String> = match &entries[1] {
+            DepEntry::AnyOf(children) => children.iter().map(key).collect(),
+            other => panic!("expected a || group: {other:?}"),
+        };
+        let mut fingerprint = live.clone();
+        fingerprint.sort();
+        let mut ordered = live.clone();
+        ordered.reverse();
+        let overrides = super::OrChoiceOverrides {
+            groups: [(
+                super::OrGroupKey {
+                    cpv: "dev-libs/pg34-t-1".to_string(),
+                    class: 1,
+                    index: 1,
+                },
+                super::OrGroupOrder {
+                    fingerprint,
+                    order: ordered.clone(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let mut next_index = 0;
+        let out = super::apply_or_overrides_to_entries(
+            &entries,
+            ("dev-libs/pg34-t-1", 1),
+            &overrides,
+            &mut next_index,
+        );
+        // The first group keeps its order; only the second is reordered.
+        let order_of = |entry: &DepEntry| match entry {
+            DepEntry::AnyOf(children) => children.iter().map(key).collect::<Vec<_>>(),
+            other => panic!("expected a || group: {other:?}"),
+        };
+        assert_eq!(
+            order_of(&out[0]),
+            live_first,
+            "the unaddressed group keeps its order"
+        );
+        assert_eq!(
+            order_of(&out[1]),
+            ordered,
+            "the addressed group is reordered"
+        );
+    }
+
+    /// `apply_or_overrides_to_entries` reaches a `||` nested in a plain,
+    /// conditional or choice group, while `^^`/`??` groups themselves
+    /// keep their kind (S5 task rule).
+    #[test]
+    fn s6_apply_or_overrides_reaches_nested_groups() {
+        use portage_solver::DepEntry;
+        let atom = |text: &str| {
+            DepEntry::parse(text)
+                .expect("parses")
+                .into_iter()
+                .next()
+                .expect("one atom")
+        };
+        let key = |entry: &DepEntry| super::or_branch_key(entry);
+        let reorder_second = |live: Vec<String>| {
+            let mut fingerprint = live.clone();
+            fingerprint.sort();
+            let mut order = live;
+            order.reverse();
+            super::OrChoiceOverrides {
+                groups: [(
+                    super::OrGroupKey {
+                        cpv: "dev-libs/pg34-t-1".to_string(),
+                        class: 1,
+                        index: 0,
+                    },
+                    super::OrGroupOrder { fingerprint, order },
+                )]
+                .into_iter()
+                .collect(),
+            }
+        };
+        let nested_order = |entry: &DepEntry| match entry {
+            DepEntry::AnyOf(children) => children.iter().map(key).collect::<Vec<_>>(),
+            other => panic!("expected the nested ||: {other:?}"),
+        };
+        let live = vec![key(&atom("dev-libs/pg34-a")), key(&atom("dev-libs/pg34-b"))];
+        let overrides = reorder_second(live.clone());
+        let mut expected = live.clone();
+        expected.reverse();
+        // Through a plain group.
+        let entries = vec![DepEntry::AllOf(vec![DepEntry::AnyOf(vec![
+            atom("dev-libs/pg34-a"),
+            atom("dev-libs/pg34-b"),
+        ])])];
+        let mut next_index = 0;
+        let out = super::apply_or_overrides_to_entries(
+            &entries,
+            ("dev-libs/pg34-t-1", 1),
+            &overrides,
+            &mut next_index,
+        );
+        let inner = match &out[..] {
+            [DepEntry::AllOf(children)] => children,
+            other => panic!("the plain group survives: {other:?}"),
+        };
+        assert_eq!(nested_order(&inner[0]), expected);
+        // Through a USE conditional.
+        let entries =
+            DepEntry::parse("f? ( || ( dev-libs/pg34-a dev-libs/pg34-b ) )").expect("parses");
+        let mut next_index = 0;
+        let out = super::apply_or_overrides_to_entries(
+            &entries,
+            ("dev-libs/pg34-t-1", 1),
+            &overrides,
+            &mut next_index,
+        );
+        let inner = match &out[..] {
+            [DepEntry::UseConditional { children, .. }] => children,
+            other => panic!("the conditional survives: {other:?}"),
+        };
+        assert_eq!(nested_order(&inner[0]), expected);
+        // Through a choice group (traversed, never reordered itself).
+        let entries = vec![DepEntry::ExactlyOneOf(vec![DepEntry::AnyOf(vec![
+            atom("dev-libs/pg34-a"),
+            atom("dev-libs/pg34-b"),
+        ])])];
+        let mut next_index = 0;
+        let out = super::apply_or_overrides_to_entries(
+            &entries,
+            ("dev-libs/pg34-t-1", 1),
+            &overrides,
+            &mut next_index,
+        );
+        let inner = match &out[..] {
+            [DepEntry::ExactlyOneOf(children)] => children,
+            other => panic!("the choice group survives: {other:?}"),
+        };
+        assert_eq!(nested_order(&inner[0]), expected);
+    }
+
+    /// `apply_or_overrides_to_entries` never changes a `^^` group into a
+    /// `??` one: choice groups keep their kind while nested `||` nodes
+    /// take overrides.
+    #[test]
+    fn s6_apply_or_overrides_preserves_choice_group_kinds() {
+        use portage_solver::DepEntry;
+        let atom = DepEntry::parse("dev-libs/pg34-a")
+            .expect("parses")
+            .into_iter()
+            .next()
+            .expect("one atom");
+        for entry in [
+            DepEntry::ExactlyOneOf(vec![atom.clone()]),
+            DepEntry::AtMostOneOf(vec![atom.clone()]),
+        ] {
+            let mut next_index = 0;
+            let out = super::apply_or_overrides_to_entries(
+                std::slice::from_ref(&entry),
+                ("dev-libs/pg34-t-1", 1),
+                &super::OrChoiceOverrides::new(),
+                &mut next_index,
+            );
+            match (&entry, &out[..]) {
+                (DepEntry::ExactlyOneOf(_), [DepEntry::ExactlyOneOf(_)]) => {}
+                (DepEntry::AtMostOneOf(_), [DepEntry::AtMostOneOf(_)]) => {}
+                _ => panic!("a choice group changed kind: {out:?}"),
+            }
+        }
+    }
+
+    /// `has_installed_parent` reads vdb edges only: blocker atoms are not
+    /// parents, so a block the solution bypasses stays satisfied.
+    #[test]
+    fn s6_has_installed_parent_ignores_blocker_atoms() {
+        let root = s6_temp_vdb();
+        let req = fixture_request(&["dev-libs/pg34-g2p5"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let mut req = req;
+        req.root = root.clone();
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        // The only edge onto `pg34-cdep` is the `!` block: no parent.
+        assert!(
+            !super::has_installed_parent(&root, &lazy, "dev-libs", "pg34-cdep", "1"),
+            "a blocker atom never parents the blocked package"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `unsolvable_with_installed_parent` keeps a satisfied uninstall for
+    /// an entry the run merges: a merge-bound entry for the same cp
+    /// replaces rather than removes, so that row already stands.
+    #[test]
+    fn s6_unsolvable_skips_a_merge_bound_owner() {
+        let req = fixture_request(&["dev-libs/pg34-snew"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        // Same package, another category, merged: the replacement row stands.
+        let entries = vec![s6_test_entry(
+            "sys-libs",
+            "pg34-smid",
+            "1",
+            super::super::PretendOutcome::New {
+                version: "1".to_string(),
+            },
+            Vec::new(),
+        )];
+        let mut conflicts = vec![super::super::FiledBlocker {
+            owner: ("dev-libs".to_string(), "pg34-snew".to_string()),
+            owner_version: "1".to_string(),
+            conflict: super::super::BlockerConflict {
+                atom_str: "!dev-libs/pg34-smid".to_string(),
+                strong: false,
+                matched_category: "dev-libs".to_string(),
+                matched_package: "pg34-smid".to_string(),
+                matched_version: "1".to_string(),
+                unsolvable: false,
+                satisfied_by: Some(super::super::BlockerSatisfiedBy::Uninstall {
+                    cpv: "dev-libs/pg34-smid-1".to_string(),
+                    anchor: ("dev-libs".to_string(), "pg34-snew".to_string()),
+                }),
+                tree_scheduled_uninstall: false,
+            },
+        }];
+        super::unsolvable_with_installed_parent(&req.root, &lazy, &entries, &mut conflicts);
+        assert!(
+            conflicts[0].conflict.unsolvable && conflicts[0].conflict.satisfied_by.is_none(),
+            "the installed parent keeps the block unresolved: {:?}",
+            conflicts[0].conflict.satisfied_by
+        );
+    }
+
+    /// `bridge_slot_operator_rebuilds` honours the ignore gate: with
+    /// `ignore_built_slot_operator_deps` no stale `:=` consumer
+    /// reinstalls, even over entries that rebuild without it.
+    #[test]
+    fn s6_bridge_slot_operator_rebuilds_honours_the_ignore_gate() {
+        let dir = portage_util::TempDir::new("portage-bridge-s6slotop").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        let mk = |name: &str, files: &[(&str, &str)]| {
+            let d = dir.join("var/db/pkg/dev-libs").join(name);
+            std::fs::create_dir_all(&d).unwrap();
+            s6_write_files(&d, files);
+        };
+        mk(
+            "slotbindtarget-1.0",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("SLOT", "2\n"),
+                ("repository", "testrepo\n"),
+            ],
+        );
+        mk(
+            "slotbindconsumer-1.0",
+            &[
+                ("CATEGORY", "dev-libs\n"),
+                ("SLOT", "0\n"),
+                ("repository", "testrepo\n"),
+                ("RDEPEND", "dev-libs/slotbindtarget:2/2=\n"),
+            ],
+        );
+        let mut req = fixture_request(&["dev-libs/slotbindtarget"]);
+        req.root = dir.to_path_buf();
+        req.solver = super::super::SolverKind::PubGrub;
+        req.rebuild_if_new_slot = true;
+        req.ignore_built_slot_operator_deps = true;
+        req.config.complete_seed_atoms = vec!["dev-libs/slotbindconsumer".to_string()];
+        let result = super::super::active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("slotbindtarget resolves");
+        assert!(
+            result
+                .entries
+                .iter()
+                .all(|e| e.package != "slotbindconsumer"),
+            "the stale consumer never rebuilds under the ignore gate: {:?}",
+            pg34_plan(&result)
+        );
+        assert!(
+            result.abi_rebuilds.is_empty(),
+            "no ABI rebuilds under the ignore gate: {:?}",
+            result.abi_rebuilds
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `bridge_circular_display` only hardens build-time edges nothing
+    /// installed satisfies: a runtime edge back into the cycle is soft,
+    /// so no notice fires (Portage `circular_dependency.py`).
+    #[test]
+    fn s6_bridge_circular_display_ignores_a_satisfied_runtime_edge() {
+        let req = fixture_request(&["dev-libs/newpkg"]);
+        // `g2a` build-depends on `g2b`; `g2b` only runtime-depends on
+        // `g2a`: the loop breaks at the soft edge.
+        let entries = vec![
+            s6_test_entry(
+                "dev-libs",
+                "pg34-g2a",
+                "1",
+                super::super::PretendOutcome::New {
+                    version: "1".to_string(),
+                },
+                vec![s6_test_edge(
+                    "dev-libs",
+                    "pg34-g2b",
+                    "dev-libs/pg34-g2b",
+                    true,
+                    0,
+                )],
+            ),
+            s6_test_entry(
+                "dev-libs",
+                "pg34-g2b",
+                "1",
+                super::super::PretendOutcome::New {
+                    version: "1".to_string(),
+                },
+                vec![s6_test_edge(
+                    "dev-libs",
+                    "pg34-g2a",
+                    "dev-libs/pg34-g2a",
+                    false,
+                    1,
+                )],
+            ),
+        ];
+        let (circular_deps, large_cycle_count, _) =
+            super::bridge_circular_display(&req, &entries, &[0, 1]);
+        assert!(
+            circular_deps.is_empty(),
+            "a runtime back edge breaks the hard cycle: {circular_deps:?}"
+        );
+        assert!(!large_cycle_count);
+    }
+
+    // --- #34 S6 throwaway-repo scaffolding --------------------------------
+    //
+    // Slot ties and `||` shapes no fixture pins get a synthetic repo next
+    // to the fixture one (same `TempDir` pattern as the vdb above): a
+    // couple of ebuilds plus real md5-cache entries, so `load_versions`
+    // serves them through the shared readers.
+
+    /// One synthetic ebuild plus its md5-cache entry (`_md5_` over the
+    /// exact ebuild bytes, like `egencache` writes).
+    #[allow(clippy::too_many_arguments)]
+    fn s6_repo_pkg(
+        repo: &std::path::Path,
+        package: &str,
+        version: &str,
+        slot: &str,
+        iuse: &str,
+        rdepend: &str,
+    ) {
+        use std::io::Write as _;
+        let dir = repo.join("dev-libs").join(package);
+        std::fs::create_dir_all(&dir).expect("pkg dir creates");
+        let mut ebuild =
+            format!("EAPI=8\nDESCRIPTION=\"s6 fixture\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+        if !iuse.is_empty() {
+            ebuild.push_str(&format!("IUSE=\"{iuse}\"\n"));
+        }
+        if !rdepend.is_empty() {
+            ebuild.push_str(&format!("RDEPEND=\"{rdepend}\"\n"));
+        }
+        let pf = format!("{package}-{version}");
+        let mut file =
+            std::fs::File::create(dir.join(format!("{pf}.ebuild"))).expect("ebuild creates");
+        file.write_all(ebuild.as_bytes()).expect("ebuild writes");
+        use md5::Digest as _;
+        let digest = format!("{:x}", md5::Md5::digest(ebuild.as_bytes()));
+        let mut cache = format!("DESCRIPTION=s6 fixture\nEAPI=8\nKEYWORDS=amd64\nSLOT={slot}\n");
+        if !iuse.is_empty() {
+            cache.push_str(&format!("IUSE={iuse}\n"));
+        }
+        if !rdepend.is_empty() {
+            cache.push_str(&format!("RDEPEND={rdepend}\n"));
+        }
+        cache.push_str(&format!("_md5_={digest}\n"));
+        let cache_dir = repo.join("metadata/md5-cache/dev-libs");
+        std::fs::create_dir_all(&cache_dir).expect("cache dir creates");
+        let mut file = std::fs::File::create(cache_dir.join(&pf)).expect("cache creates");
+        file.write_all(cache.as_bytes()).expect("cache writes");
+    }
+
+    /// A throwaway repo with the S6 slot/`||` shapes, appended after the
+    /// fixture repos. Returns the directory (for cleanup) and the extra
+    /// `RepoConfig` cloned off the fixture main repo.
+    fn s6_temp_repo(
+        repos: &[super::super::RepoConfig],
+    ) -> (std::path::PathBuf, super::super::RepoConfig) {
+        let dir = portage_util::TempDir::new("portage-bridge-s6repo").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        // Two slots racing at the top: slot 1 holds 1.0 and 2.0, slot 2
+        // holds 1.5 (per-slot maximum decides the target slot).
+        s6_repo_pkg(&repo, "pg34-g2max", "1.0", "1", "", "");
+        s6_repo_pkg(&repo, "pg34-g2max", "2.0", "1", "", "");
+        s6_repo_pkg(&repo, "pg34-g2max", "1.5", "2", "", "");
+        // A `vercmp` tie across slots: `1.0-r0` equals `1.0`.
+        s6_repo_pkg(&repo, "pg34-g2tie", "1.0", "1", "", "");
+        s6_repo_pkg(&repo, "pg34-g2tie", "1.0-r0", "2", "", "");
+        // Two versions with USE pressure only on the second.
+        s6_repo_pkg(&repo, "pg34-g2multi", "1", "0", "", "");
+        s6_repo_pkg(&repo, "pg34-g2multi", "2", "0", "", "dev-libs/pg34-clib[f]");
+        // An in-graph-vs-installed `||` alternative (S5 G5 shape).
+        s6_repo_pkg(
+            &repo,
+            "pg34-g2or",
+            "1",
+            "0",
+            "",
+            "|| ( dev-libs/pg34-ulib dev-libs/pg34-clib )",
+        );
+        // A USE-gated `||` (inactive without `y`).
+        s6_repo_pkg(
+            &repo,
+            "pg34-g2cond",
+            "1",
+            "0",
+            "y",
+            "y? ( || ( dev-libs/pg34-ga dev-libs/pg34-gb ) )",
+        );
+        let mut extra = repos[0].clone();
+        extra.name = "s6test".to_string();
+        extra.location = repo;
+        (dir, extra)
+    }
+
+    /// `target_slots` breaks a cross-slot `vercmp` tie by slot: with
+    /// `1.0-r0` equalling `1.0`, only the lower slot is the target, and an
+    /// installed equal slot never rejoins under `--update` (Portage
+    /// `_greedy_slots` keeps slots whose best is *lower* than the best).
+    #[test]
+    fn s6_target_slots_breaks_version_ties_by_slot() {
+        let req = fixture_request(&["dev-libs/pg34-g2tie"]);
+        let mut repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (_dir, extra) = s6_temp_repo(&repos);
+        let dir = extra.location.parent().expect("repo parent").to_path_buf();
+        repos.push(extra);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let slots = super::target_slots(
+            &lazy,
+            "dev-libs/pg34-g2tie",
+            &portage_atom_pubgrub::PortageVersionSet::any(),
+            &["2".to_string()],
+            true,
+        );
+        assert_eq!(
+            slots,
+            vec!["1".to_string()],
+            "the tied installed slot never rejoins: {slots:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `target_slots` takes each slot's own maximum: with slot 1 peaking
+    /// at 2.0 over slot 2's 1.5, the bare target selects slot 1 alone.
+    #[test]
+    fn s6_target_slots_picks_the_greatest_per_slot_version() {
+        let req = fixture_request(&["dev-libs/pg34-g2max"]);
+        let mut repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (_dir, extra) = s6_temp_repo(&repos);
+        let dir = extra.location.parent().expect("repo parent").to_path_buf();
+        repos.push(extra);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let slots = super::target_slots(
+            &lazy,
+            "dev-libs/pg34-g2max",
+            &portage_atom_pubgrub::PortageVersionSet::any(),
+            &[],
+            false,
+        );
+        assert_eq!(
+            slots,
+            vec!["1".to_string()],
+            "slot 1 peaks at 2.0: {slots:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `KeptInstalled::of` keeps each slot's own maximum: the installed
+    /// `g2max-1.0` is not the best accepted version of its slot (2.0
+    /// is), so it never joins the rebuild set.
+    #[test]
+    fn s6_kept_of_picks_the_greatest_same_slot_version() {
+        let root = s6_temp_vdb();
+        s6_mk_vdb(&root, "pg34-g2max-1.0", "1", "", "", "");
+        let mut req = fixture_request(&["dev-libs/pg34-g2max"]);
+        req.root = root.clone();
+        req.selective = false;
+        let mut repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (_dir, extra) = s6_temp_repo(&repos);
+        let dir = extra.location.parent().expect("repo parent").to_path_buf();
+        repos.push(extra);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-g2max-1.0"),
+            "a shadowed installed version never rebuilds: {:?}",
+            kept.rebuild
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `compute_or_overrides` moves the independently-selected branch
+    /// first but keeps every other branch: the engine's final fallback
+    /// is the first-listed alternative, and nothing here is installed.
+    #[test]
+    fn s6_compute_or_overrides_moves_the_desired_branch_first() {
+        use portage_solver::DepEntry;
+        let req = fixture_request(&["dev-libs/pg34-g2or"]);
+        let mut repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (_dir, extra) = s6_temp_repo(&repos);
+        let dir = extra.location.parent().expect("repo parent").to_path_buf();
+        repos.push(extra);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let kept = s6_kept(&[], &[], false);
+        let order = vec![
+            ("dev-libs/pg34-g2or".to_string(), "1".to_string()),
+            ("dev-libs/pg34-clib".to_string(), "1".to_string()),
+            ("dev-libs/pg34-ulib".to_string(), "1".to_string()),
+        ];
+        let parents = std::collections::HashMap::new();
+        let root_cps = ["dev-libs/pg34-clib".to_string()].into_iter().collect();
+        let overrides = super::compute_or_overrides(
+            &req,
+            &lazy,
+            &kept,
+            &[],
+            &order,
+            &parents,
+            &root_cps,
+            &super::OrChoiceOverrides::new(),
+        );
+        let group = overrides
+            .groups
+            .get(&super::OrGroupKey {
+                cpv: "dev-libs/pg34-g2or-1".to_string(),
+                class: 1,
+                index: 0,
+            })
+            .expect("the member || group is addressed");
+        // Live order lists `ulib` first; the desired `clib` moves ahead
+        // of it while every branch survives.
+        let branch = |text: &str| {
+            DepEntry::parse(text)
+                .expect("parses")
+                .into_iter()
+                .next()
+                .expect("one branch")
+        };
+        assert_eq!(
+            group.order,
+            vec![
+                super::or_branch_key(&branch("dev-libs/pg34-clib")),
+                super::or_branch_key(&branch("dev-libs/pg34-ulib")),
+            ],
+            "the desired branch moves first, nothing is dropped"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `compute_or_overrides` keeps a group with no independently-selected
+    /// branch verbatim: without a desired pick the engine and Portage
+    /// already agree, and dropping the installed branch would force the
+    /// untaken alternative instead (S5 G5 `xapp` guard).
+    #[test]
+    fn s6_compute_or_overrides_keeps_groups_without_a_desired_pick() {
+        use portage_solver::DepEntry;
+        let req = fixture_request(&["dev-libs/pg34-g2or"]);
+        let mut repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (_dir, extra) = s6_temp_repo(&repos);
+        let dir = extra.location.parent().expect("repo parent").to_path_buf();
+        repos.push(extra);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let kept = s6_kept(&[], &[], false);
+        // Neither branch is selected anywhere: no desired pick, while the
+        // installed `clib-1` satisfies its branch (installed-blocking).
+        let order = vec![("dev-libs/pg34-g2or".to_string(), "1".to_string())];
+        let parents = std::collections::HashMap::new();
+        let root_cps = std::collections::HashSet::new();
+        let overrides = super::compute_or_overrides(
+            &req,
+            &lazy,
+            &kept,
+            &installed,
+            &order,
+            &parents,
+            &root_cps,
+            &super::OrChoiceOverrides::new(),
+        );
+        let group = overrides
+            .groups
+            .get(&super::OrGroupKey {
+                cpv: "dev-libs/pg34-g2or-1".to_string(),
+                class: 1,
+                index: 0,
+            })
+            .expect("the member || group is addressed");
+        let branch = |text: &str| {
+            DepEntry::parse(text)
+                .expect("parses")
+                .into_iter()
+                .next()
+                .expect("one branch")
+        };
+        assert_eq!(
+            group.order,
+            vec![
+                super::or_branch_key(&branch("dev-libs/pg34-ulib")),
+                super::or_branch_key(&branch("dev-libs/pg34-clib")),
+            ],
+            "without a desired pick every branch survives in place"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `compute_or_overrides` skips groups behind an unsatisfied USE
+    /// gate: an inactive group emits no facts, so later passes cannot
+    /// chase a branch Portage never evaluates.
+    #[test]
+    fn s6_compute_or_overrides_skips_inactive_groups() {
+        let req = fixture_request(&["dev-libs/pg34-g2cond"]);
+        let mut repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (_dir, extra) = s6_temp_repo(&repos);
+        let dir = extra.location.parent().expect("repo parent").to_path_buf();
+        repos.push(extra);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let kept = s6_kept(&[], &[], false);
+        let order = vec![("dev-libs/pg34-g2cond".to_string(), "1".to_string())];
+        let parents = std::collections::HashMap::new();
+        let root_cps = std::collections::HashSet::new();
+        let overrides = super::compute_or_overrides(
+            &req,
+            &lazy,
+            &kept,
+            &[],
+            &order,
+            &parents,
+            &root_cps,
+            &super::OrChoiceOverrides::new(),
+        );
+        assert!(
+            overrides.groups.is_empty(),
+            "the gated group emits no facts: {:?}",
+            overrides.groups
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
