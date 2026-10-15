@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/c-c09-onlydeps-with-rdeps-portuale-seed/cfg ROOT=/var/tmp/s346/c-c09-onlydeps-with-rdeps-portuale-seed/cfg /var/tmp/s346/bin/emerge -p --package-moves=n --onlydeps-with-rdeps=x dev-libs/t341-dep

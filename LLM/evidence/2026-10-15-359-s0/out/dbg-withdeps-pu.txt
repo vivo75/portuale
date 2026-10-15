@@ -1,0 +1,86 @@
+### emerge --pretend --update --debug dev-libs/withdeps --color=n
+### delta=none
+[DEBUG] Using selector: EpollSelector
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+myaction None
+myopts {'--debug': True, '--pretend': True, '--update': True, '--color': 'n', '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+   ebuild: dev-libs/withdeps-1.0::testrepo
+   ebuild: dev-libs/withdeps-1.0::testrepo
+
+
+      Arg: dev-libs/withdeps
+     Atom: dev-libs/withdeps
+   ebuild: dev-libs/withdeps-1.0::testrepo
+
+Child:         (dev-libs/withdeps-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/withdeps
+
+Parent:    (dev-libs/withdeps-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/newpkg dev-libs/upgradepkg
+Priority:  runtime
+
+Parent:    (dev-libs/withdeps-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/newpkg dev-libs/upgradepkg
+Priority:  runtime
+Candidates: ['dev-libs/newpkg', 'dev-libs/upgradepkg']
+   ebuild: dev-libs/newpkg-1.0::testrepo
+   ebuild: dev-libs/upgradepkg-2.0::testrepo
+installed: dev-libs/upgradepkg-1.0::testrepo
+
+Child:         (dev-libs/newpkg-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/newpkg required by (dev-libs/withdeps-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Child:         (dev-libs/upgradepkg-1.0:0/0::testrepo, installed in '/tmp/st/fixtures/') USE=""
+Parent Dep:    dev-libs/upgradepkg required by (dev-libs/withdeps-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Exiting... (dev-libs/withdeps-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+digraph:
+
+(dev-libs/withdeps-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') depends on
+  (dev-libs/newpkg-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (runtime)
+  (dev-libs/upgradepkg-1.0:0/0::testrepo, installed in '/tmp/st/fixtures/') (runtime)
+dev-libs/withdeps depends on
+  (dev-libs/withdeps-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (soft)
+(dev-libs/newpkg-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (no children)
+(dev-libs/upgradepkg-1.0:0/0::testrepo, installed in '/tmp/st/fixtures/') (no children)
+
+[ebuild  N     ] dev-libs/newpkg-1.0 to /tmp/st/fixtures/
+[ebuild  N     ] dev-libs/withdeps-1.0 to /tmp/st/fixtures/
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+rc=0

@@ -1,0 +1,7 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 2.01 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/t341-dep-1 to /var/tmp/s346/u-u05-useforcemask-portage/cfg/ USE="(-x)" 

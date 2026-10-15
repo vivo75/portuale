@@ -1,0 +1,9 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.56 s (backtrack: 0/20).
+
+[binary  N    ~] dev-libs/t341-dep-1-2:0/1::t341 to /var/tmp/s346/b-b05-range-ignored-portage/cfg/ USE="-x" 0 KiB
+
+Total: 1 package (1 new, 1 binary), Size of downloads: 0 KiB

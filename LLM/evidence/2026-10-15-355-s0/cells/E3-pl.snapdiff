@@ -1,0 +1,18 @@
+9,14d8
+< dir ./usr
+< dir ./usr/share
+< dir ./usr/share/t355
+< dir ./usr/share/t355/a-real
+< obj ./usr/share/t355/a-real/f md5=9a8ad92c50cae39aa2c5604fd0ab6d8c mtime=1792105984 content=f|
+< sym ./usr/share/t355/z-link -> a-real mtime=1792105984
+20,29d13
+< ## vdb /var/tmp/t355/roots/E3-pl/var/db/pkg/app-misc/t355-e3-1/
+< BUILD_TIME CATEGORY CBUILD CFLAGS CHOST CONTENTS COUNTER DEFINED_PHASES DESCRIPTION EAPI HOMEPAGE IUSE IUSE_EFFECTIVE KEYWORDS LICENSE PF REPO_REVISIONS SIZE SLOT USE environment.bz2 metadata repository t355-e3-1.ebuild 
+< COUNTER=0
+< --- CONTENTS
+< dir /usr
+< dir /usr/share
+< dir /usr/share/t355
+< dir /usr/share/t355/a-real
+< sym /usr/share/t355/z-link -> a-real 1792105984
+< obj /usr/share/t355/a-real/f 9a8ad92c50cae39aa2c5604fd0ab6d8c 1792105984

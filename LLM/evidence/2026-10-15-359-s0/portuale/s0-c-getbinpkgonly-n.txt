@@ -1,0 +1,5 @@
+### emerge -pvuD --getbinpkgonly=n dev-libs/pg34-blib --color=n
+[ebuild     U  ] dev-libs/pg34-btool-2::testrepo [1::testrepo] to /var/tmp/s359/st-ptl/fixtures
+
+Total: 1 package (1 upgrade), Size of downloads: 0 KiB
+rc=0

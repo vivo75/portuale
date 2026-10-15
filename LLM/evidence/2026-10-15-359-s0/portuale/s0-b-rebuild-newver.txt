@@ -1,0 +1,4 @@
+### emerge --pretend -u --rebuild-if-new-ver dev-libs/rebuildtrigger --color=n
+[ebuild     U  ] dev-libs/rebuildtrigger-2.0 [1.0] to /var/tmp/s359/st-ptl/fixtures
+[ebuild   R    ] dev-libs/rebuildconsumer-1.0 to /var/tmp/s359/st-ptl/fixtures
+rc=0

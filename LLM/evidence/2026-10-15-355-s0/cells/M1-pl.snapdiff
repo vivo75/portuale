@@ -1,0 +1,11 @@
+9,10d8
+< dir ./etc/t355
+< obj ./etc/t355/mod.conf md5=2bc23aa4850e327cf76e66f8a6845564 mtime=1792106018 content=mod|admin edit|
+16,22d13
+< ## vdb /var/tmp/t355/roots/M1-pl/var/db/pkg/app-misc/t355-m1-1/
+< BUILD_TIME CATEGORY CBUILD CFLAGS CHOST CONTENTS COUNTER DEFINED_PHASES DESCRIPTION EAPI HOMEPAGE IUSE IUSE_EFFECTIVE KEYWORDS LICENSE PF REPO_REVISIONS SIZE SLOT USE environment.bz2 metadata repository t355-m1-1.ebuild 
+< COUNTER=0
+< --- CONTENTS
+< dir /etc
+< dir /etc/t355
+< obj /etc/t355/mod.conf 12ef5be68b9628aee6cbf6d3443477d5 1792106018

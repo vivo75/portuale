@@ -1,0 +1,28 @@
+Calculating dependencies ... done!
+Dependency resolution took 1.66 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) app-misc/s346-fetch-1::s346f for /var/tmp/s346/e-e07-portage/cfg/
+>>> Downloading 'http://10.48.0.229:8080/distfiles/layout.conf'
+--2026-10-15 23:07:12--  http://10.48.0.229:8080/distfiles/layout.conf
+Connecting to 10.48.0.229:8080... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 38 [text/plain]
+Saving to: ‘/var/tmp/s346/e-e07-portage/dist/.layout.conf.10.48.0.229.__download__’
+
+     0K                                                       100% 27.8M=0s
+
+2026-10-15 23:07:12 (27.8 MB/s) - ‘/var/tmp/s346/e-e07-portage/dist/.layout.conf.10.48.0.229.__download__’ saved [38/38]
+
+>>> Downloading 'http://10.48.0.229:8080/distfiles/d3/zc_lockfile-4.0.tar.gz'
+--2026-10-15 23:07:12--  http://10.48.0.229:8080/distfiles/d3/zc_lockfile-4.0.tar.gz
+Connecting to 10.48.0.229:8080... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 10956 (11K) [application/gzip]
+Saving to: ‘/var/tmp/s346/e-e07-portage/dist/zc_lockfile-4.0.tar.gz.__download__’
+
+     0K ..........                                            100% 2.14G=0s
+
+2026-10-15 23:07:12 (2.14 GB/s) - ‘/var/tmp/s346/e-e07-portage/dist/zc_lockfile-4.0.tar.gz.__download__’ saved [10956/10956]
+
+[32m * [39;49;00mzc_lockfile-4.0.tar.gz BLAKE2B SHA512 size ;-) ...                    [34;01m[ [39;49;00m[32;01mok[39;49;00m[34;01m ][39;49;00m

@@ -1,0 +1,28 @@
+
+>>> Using system located in ROOT tree /var/tmp/t355/roots/U1a-pg/
+
+ app-misc/t355-ign
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+All selected packages: =app-misc/t355-ign-1
+
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+
+>>> Waiting 5 seconds before starting...
+>>> (Control-C to abort)...
+>>> Unmerging in: 5 4 3 2 1
+>>> Unmerging (1 of 1) app-misc/t355-ign-1...
+--- cfgpro   obj /var/tmp/t355/roots/U1a-pg/usr/share/t355/ign/x
+<<<          obj /var/tmp/t355/roots/U1a-pg/lib/modules/t355/m.ko
+--- !empty   dir /var/tmp/t355/roots/U1a-pg/usr/share/t355/ign
+--- !empty   dir /var/tmp/t355/roots/U1a-pg/usr/share/t355
+--- !empty   dir /var/tmp/t355/roots/U1a-pg/usr/share
+--- !empty   dir /var/tmp/t355/roots/U1a-pg/usr
+<<<          dir /var/tmp/t355/roots/U1a-pg/lib/modules/t355
+<<<          dir /var/tmp/t355/roots/U1a-pg/lib/modules
+<<<          dir /var/tmp/t355/roots/U1a-pg/lib
+
+ * GNU info directory index is up-to-date.

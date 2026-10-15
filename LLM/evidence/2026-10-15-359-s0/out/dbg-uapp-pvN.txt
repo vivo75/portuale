@@ -1,0 +1,73 @@
+### emerge -pvN --getbinpkg=n --usepkg=n --debug dev-libs/pg34-uapp --color=n
+### delta=none
+[DEBUG] Using selector: EpollSelector
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+myaction None
+myopts {'--debug': True, '--newuse': True, '--pretend': True, '--color': 'n', '--getbinpkg': False, '--regex-search-auto': 'y', '--usepkg': False, '--verbose': True}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+
+
+      Arg: dev-libs/pg34-uapp
+     Atom: dev-libs/pg34-uapp
+   ebuild: dev-libs/pg34-uapp-1::testrepo
+
+Child:         (dev-libs/pg34-uapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/pg34-uapp
+
+Parent:    (dev-libs/pg34-uapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/pg34-ulib
+Priority:  runtime
+
+Parent:    (dev-libs/pg34-uapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/pg34-ulib
+Priority:  runtime
+Candidates: ['dev-libs/pg34-ulib']
+   ebuild: dev-libs/pg34-ulib-1::testrepo
+
+Exiting... (dev-libs/pg34-uapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+digraph:
+
+(dev-libs/pg34-uapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (no children)
+dev-libs/pg34-uapp depends on
+  (dev-libs/pg34-uapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (soft)
+
+[ebuild  N     ] dev-libs/pg34-uapp-1::testrepo to /tmp/st/fixtures/ 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+rc=0

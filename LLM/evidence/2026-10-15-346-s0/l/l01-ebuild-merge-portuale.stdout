@@ -1,0 +1,4 @@
+t348-b-phases configured ok
+mkdir -p "/var/tmp/s346/l-l01-ebuild-merge-portuale/tmp/portage/app-misc/t348-b-phases-7/image/usr/share/t348-b-phases"
+cp built.txt "/var/tmp/s346/l-l01-ebuild-merge-portuale/tmp/portage/app-misc/t348-b-phases-7/image/usr/share/t348-b-phases/built.txt"
+cp config.args "/var/tmp/s346/l-l01-ebuild-merge-portuale/tmp/portage/app-misc/t348-b-phases-7/image/usr/share/t348-b-phases/config.args"

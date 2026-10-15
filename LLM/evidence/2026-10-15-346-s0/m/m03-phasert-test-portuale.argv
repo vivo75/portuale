@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/m-m03-phasert-test-portuale/cfg PORTAGE_TMPDIR=/var/tmp/s346/m-m03-phasert-test-portuale/tmp DISTDIR=/var/tmp/s346/m-m03-phasert-test-portuale/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news\ test /var/tmp/s346/bin/ebuild /home/vivo/repo/PORTUALE/pmtest/fixtures/repo-348/app-misc/t348-b-phasert/t348-b-phasert-8.ebuild test

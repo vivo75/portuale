@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env -u PYTHONHASHSEED PORTAGE_CONFIGROOT=/var/tmp/s346/c-c09-onlydeps-with-rdeps-portuale-noseed/cfg ROOT=/var/tmp/s346/c-c09-onlydeps-with-rdeps-portuale-noseed/cfg /var/tmp/s346/bin/emerge -p --package-moves=n --onlydeps-with-rdeps=x dev-libs/t341-dep

@@ -1,0 +1,48 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.58 s (backtrack: 0/20).
+
+[ebuild  N     ] app-misc/t355-mid-1::t355 to /var/tmp/t355/roots/P1-pg/ 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t355-mid-1::t355 for /var/tmp/t355/roots/P1-pg/
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t355/scratch/P1-pg/tmp/portage/app-misc/t355-mid-1/work
+>>> Preparing source in /var/tmp/t355/scratch/P1-pg/tmp/portage/app-misc/t355-mid-1/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t355/scratch/P1-pg/tmp/portage/app-misc/t355-mid-1/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t355/scratch/P1-pg/tmp/portage/app-misc/t355-mid-1/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t355-mid-1
+
+>>> Install app-misc/t355-mid-1 into /var/tmp/t355/scratch/P1-pg/tmp/portage/app-misc/t355-mid-1/image
+ [32m*[0m t355-mid: image variant 1
+>>> Completed installing app-misc/t355-mid-1 into /var/tmp/t355/scratch/P1-pg/tmp/portage/app-misc/t355-mid-1/image
+
+ [32m*[0m Final size of build directory: 40 KiB
+ [32m*[0m Final size of installed tree:  16 KiB
+
+[33m * [39;49;00mQA Notice: Unresolved soname dependencies:
+[33m * [39;49;00m
+[33m * [39;49;00m	/usr/lib64/libt355mid.so.1: libc.so.6
+[33m * [39;49;00m
+
+>>> Installing (1 of 1) app-misc/t355-mid-1::t355 to /var/tmp/t355/roots/P1-pg/
+ [32;01m*[39;49;00m checking 2 files for package collisions
+>>> Merging app-misc/t355-mid-1 to /var/tmp/t355/roots/P1-pg/
+--- /var/tmp/t355/roots/P1-pg/usr/
+--- /var/tmp/t355/roots/P1-pg/usr/lib64/
+>>> /var/tmp/t355/roots/P1-pg/usr/lib64/libt355mid.so.1
+>>> /var/tmp/t355/roots/P1-pg/usr/lib64/libt355mid.so -> libt355mid.so.1
+>>> app-misc/t355-mid-1 merged.
+
+>>> Completed (1 of 1) app-misc/t355-mid-1::t355 to /var/tmp/t355/roots/P1-pg/
+
+ * GNU info directory index is up-to-date.

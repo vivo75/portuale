@@ -1,0 +1,16 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s346/m-m05-phases-minus-test-portage/tmp/portage/app-misc/t348-b-phases-8/work
+>>> Preparing source in /var/tmp/s346/m-m05-phases-minus-test-portage/tmp/portage/app-misc/t348-b-phases-8/work/t348-b-phases-8 ...
+ [32m*[0m Applying fix.patch ...
+[A[72C [34;01m[ [32;01mok[34;01m ][0m
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s346/m-m05-phases-minus-test-portage/tmp/portage/app-misc/t348-b-phases-8/work/t348-b-phases-8 ...
+./configure --prefix=/usr --host= --mandir=/usr/share/man --infodir=/usr/share/info --datadir=/usr/share --sysconfdir=/etc --localstatedir=/var/lib
+t348-b-phases configured ok
+>>> Source configured.
+>>> Compiling source in /var/tmp/s346/m-m05-phases-minus-test-portage/tmp/portage/app-misc/t348-b-phases-8/work/t348-b-phases-8 ...
+make -j32 
+>>> Source compiled.
+>>> Test phase: app-misc/t348-b-phases-8
+make -j32   check
+>>> Completed testing app-misc/t348-b-phases-8

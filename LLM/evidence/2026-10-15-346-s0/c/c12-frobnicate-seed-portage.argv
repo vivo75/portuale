@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/c-c12-frobnicate-portage-seed/cfg ROOT=/var/tmp/s346/c-c12-frobnicate-portage-seed/cfg emerge --frobnicate dev-libs/t341-dep

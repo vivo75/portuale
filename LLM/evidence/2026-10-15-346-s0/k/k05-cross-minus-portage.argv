@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/k-k05-cross-minus-portage/cfg ROOT=/var/tmp/s346/k-k05-cross-minus-portage/cfg emerge -p --package-moves=n dev-libs/bareacceptkeywordspkg

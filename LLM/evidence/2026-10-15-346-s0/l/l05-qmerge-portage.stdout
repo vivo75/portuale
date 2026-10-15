@@ -1,0 +1,21 @@
+ [32;01m*[39;49;00m checking 3 files for package collisions
+>>> Merging app-misc/t348-b-phases-8 to /var/tmp/s346/l-l05-qmerge-portage/root/
+--- /var/tmp/s346/l-l05-qmerge-portage/root/usr/
+--- /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/
+--- /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/t348-b-phases/
+=== /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/t348-b-phases/built.txt
+=== /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/t348-b-phases/config.args
+--- /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/doc/
+>>> /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/doc/t348-b-phases-8/
+>>> /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/doc/t348-b-phases-8/README.md
+>>> Safely unmerging already-installed instance...
+--- replaced obj /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/t348-b-phases/config.args
+--- replaced obj /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/t348-b-phases/built.txt
+--- replaced dir /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/t348-b-phases
+<<<          obj /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/doc/t348-b-phases-7/README.md
+--- replaced dir /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/doc
+--- replaced dir /var/tmp/s346/l-l05-qmerge-portage/root/usr/share
+--- replaced dir /var/tmp/s346/l-l05-qmerge-portage/root/usr
+<<<          dir /var/tmp/s346/l-l05-qmerge-portage/root/usr/share/doc/t348-b-phases-7
+>>> Original instance of package unmerged safely.
+>>> app-misc/t348-b-phases-8 merged.

@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/l-l00-nomoves-portuale/cfg ROOT=/var/tmp/s346/l-l00-nomoves-portuale/root PORTAGE_TMPDIR=/var/tmp/s346/l-l00-nomoves-portuale/tmp DISTDIR=/var/tmp/s346/l-l00-nomoves-portuale/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news /var/tmp/s346/bin/emerge --oneshot app-misc/t348-b-phases

@@ -1,0 +1,5 @@
+[ebuild  NS    ] dev-libs/pg367-s-2:2::testrepo [1:1::testrepo] to /var/tmp/s367/stage-run/fixtures
+[ebuild  N     ] dev-libs/pg367-top-1::testrepo to /var/tmp/s367/stage-run/fixtures
+
+Total: 2 packages (1 new, 1 in new slot), Size of downloads: 0 KiB
+rc=0 argv: /home/vivo/repo/PORTUALE/portuale/target/release/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg367-top

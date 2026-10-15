@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env -u PYTHONHASHSEED PORTAGE_CONFIGROOT=/var/tmp/s346/c-c11-autounmask-backtrack-portage-noseed/cfg ROOT=/var/tmp/s346/c-c11-autounmask-backtrack-portage-noseed/cfg emerge -p --package-moves=n --autounmask-backtrack=x dev-libs/t341-dep

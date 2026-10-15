@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env -u PORTAGE_TMPDIR -u DISTDIR -u FEATURES PORTAGE_CONFIGROOT=/var/tmp/s346/e-e07-portage/cfg ROOT=/var/tmp/s346/e-e07-portage/cfg emerge --oneshot --fetchonly --package-moves=n app-misc/s346-fetch

@@ -1,0 +1,43 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.55 s (backtrack: 0/20).
+
+[ebuild   R    ] app-misc/t355-drop-1::t355 to /var/tmp/t355/roots/B1a-pg/ 0 KiB
+
+Total: 1 package (1 reinstall), Size of downloads: 0 KiB
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t355-drop-1::t355 for /var/tmp/t355/roots/B1a-pg/
+
+>>> Install app-misc/t355-drop-1 into /var/tmp/t355/scratch/B1a-pg/tmp/portage/app-misc/t355-drop-1/image
+ [32m*[0m t355-drop: image variant 2
+>>> Completed installing app-misc/t355-drop-1 into /var/tmp/t355/scratch/B1a-pg/tmp/portage/app-misc/t355-drop-1/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (1 of 1) app-misc/t355-drop-1::t355 to /var/tmp/t355/roots/B1a-pg/
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging app-misc/t355-drop-1 to /var/tmp/t355/roots/B1a-pg/
+--- /var/tmp/t355/roots/B1a-pg/usr/
+--- /var/tmp/t355/roots/B1a-pg/usr/share/
+--- /var/tmp/t355/roots/B1a-pg/usr/share/t355/
+=== /var/tmp/t355/roots/B1a-pg/usr/share/t355/keep
+>>> Safely unmerging already-installed instance...
+--- replaced obj /var/tmp/t355/roots/B1a-pg/usr/share/t355/keep
+--- !mtime   obj /var/tmp/t355/roots/B1a-pg/usr/share/t355/droptouch
+--- !md5     obj /var/tmp/t355/roots/B1a-pg/usr/share/t355/dropmod
+--- replaced dir /var/tmp/t355/roots/B1a-pg/usr/share/t355
+--- replaced dir /var/tmp/t355/roots/B1a-pg/usr/share
+--- replaced dir /var/tmp/t355/roots/B1a-pg/usr
+>>> Original instance of package unmerged safely.
+>>> app-misc/t355-drop-1 merged.
+
+>>> Completed (1 of 1) app-misc/t355-drop-1::t355 to /var/tmp/t355/roots/B1a-pg/
+
+ * GNU info directory index is up-to-date.

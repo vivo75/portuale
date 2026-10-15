@@ -1,0 +1,9 @@
+19,26d18
+< ## vdb /var/tmp/t355/roots/D2-pl/var/db/pkg/app-misc/t355-d1-1/
+< BUILD_TIME CATEGORY CBUILD CFLAGS CHOST CONTENTS COUNTER DEFINED_PHASES DESCRIPTION EAPI HOMEPAGE IUSE IUSE_EFFECTIVE KEYWORDS LICENSE PF REPO_REVISIONS SIZE SLOT USE environment.bz2 metadata repository t355-d1-1.ebuild 
+< COUNTER=0
+< --- CONTENTS
+< dir /opt
+< dir /opt/t355
+< dir /opt/t355/d
+< obj /opt/t355/d/.keep_app-misc_t355-d1-0 d41d8cd98f00b204e9800998ecf8427e 1792106000

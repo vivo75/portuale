@@ -1,0 +1,44 @@
+Calculating dependencies ... done!
+Dependency resolution took 1.57 s (backtrack: 0/20).
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t348-b-phaseslim-8::t348 for /var/tmp/s346/l-cl01c-autoclean-leftover-portage/root/
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s346/l-cl01c-autoclean-leftover-portage/tmp/portage/app-misc/t348-b-phaseslim-8/work
+>>> Preparing source in /var/tmp/s346/l-cl01c-autoclean-leftover-portage/tmp/portage/app-misc/t348-b-phaseslim-8/work/t348-b-phaseslim-8 ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s346/l-cl01c-autoclean-leftover-portage/tmp/portage/app-misc/t348-b-phaseslim-8/work/t348-b-phaseslim-8 ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s346/l-cl01c-autoclean-leftover-portage/tmp/portage/app-misc/t348-b-phaseslim-8/work/t348-b-phaseslim-8 ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-b-phaseslim-8
+
+>>> Install app-misc/t348-b-phaseslim-8 into /var/tmp/s346/l-cl01c-autoclean-leftover-portage/tmp/portage/app-misc/t348-b-phaseslim-8/image
+>>> Completed installing app-misc/t348-b-phaseslim-8 into /var/tmp/s346/l-cl01c-autoclean-leftover-portage/tmp/portage/app-misc/t348-b-phaseslim-8/image
+
+ [32m*[0m Final size of build directory: 4 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (1 of 1) app-misc/t348-b-phaseslim-8::t348 to /var/tmp/s346/l-cl01c-autoclean-leftover-portage/root/
+
+>>> Completed (1 of 1) app-misc/t348-b-phaseslim-8::t348 to /var/tmp/s346/l-cl01c-autoclean-leftover-portage/root/
+>>> Auto-cleaning packages...
+
+>>> Using system located in ROOT tree /var/tmp/s346/l-cl01c-autoclean-leftover-portage/root/
+
+ app-misc/t348-b-phases
+    selected: 7 
+   protected: 8 
+     omitted: none 
+
+All selected packages: =app-misc/t348-b-phases-7
+
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+
+>>> Unmerging (1 of 1) app-misc/t348-b-phases-7...
+
+ * GNU info directory index is up-to-date.

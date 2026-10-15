@@ -1,0 +1,3 @@
+### emerge --pretend --update --package-moves=n dev-libs/slotmovepkg --color=n
+[ebuild  NS    ] dev-libs/slotmovepkg-1.0 [1.0] to /var/tmp/s359/st-ptl/fixtures
+rc=0

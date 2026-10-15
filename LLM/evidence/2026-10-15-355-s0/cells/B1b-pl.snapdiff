@@ -1,0 +1,18 @@
+9,14d8
+< dir ./usr
+< dir ./usr/share
+< dir ./usr/share/t355
+< obj ./usr/share/t355/dropmod md5=87831415f6701d9e010fd3c22472ab2c mtime=1792106068 content=dropmod|admin edit|
+< obj ./usr/share/t355/droptouch md5=2feeb448c30b8903b3fc606fd8f03044 mtime=978307200 content=droptouch|
+< obj ./usr/share/t355/keep md5=b260098afc93a054427d63c4de6be6a1 mtime=1792106068 content=keep|
+20,29d13
+< ## vdb /var/tmp/t355/roots/B1b-pl/var/db/pkg/app-misc/t355-drop-1/
+< BUILD_TIME CATEGORY CBUILD CFLAGS CHOST CONTENTS COUNTER DEFINED_PHASES DESCRIPTION EAPI HOMEPAGE IUSE IUSE_EFFECTIVE KEYWORDS LICENSE PF REPO_REVISIONS SIZE SLOT USE environment.bz2 metadata repository t355-drop-1.ebuild 
+< COUNTER=0
+< --- CONTENTS
+< dir /usr
+< dir /usr/share
+< dir /usr/share/t355
+< obj /usr/share/t355/dropmod 70bb093fc8785b90a66adb8095de42fa 1792106068
+< obj /usr/share/t355/droptouch 2feeb448c30b8903b3fc606fd8f03044 1792106068
+< obj /usr/share/t355/keep b260098afc93a054427d63c4de6be6a1 1792106068

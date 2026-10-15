@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/u-u14b-chainmask-only-portuale/cfg ROOT=/var/tmp/s346/u-u14b-chainmask-only-portuale/cfg /var/tmp/s346/bin/emerge -p --package-moves=n dev-libs/t341-dep

@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/u-u17-portage/cfg ROOT=/var/tmp/s346/u-u17-portage/cfg emerge --info --package-moves=n

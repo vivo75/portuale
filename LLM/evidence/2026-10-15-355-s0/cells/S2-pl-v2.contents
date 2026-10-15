@@ -1,0 +1,8 @@
+dir /usr
+dir /usr/share
+dir /usr/share/t355
+sym /usr/share/t355/c d -> a b.txt 1792106080
+obj /usr/share/t355/keep2 6c143cbada844d3ceced43bb040f8f83 1792106080
+sym /usr/share/t355/keep2link -> keep2 1792106080
+dir /usr/share/t355/sp dir
+obj /usr/share/t355/sp dir/f 9a8ad92c50cae39aa2c5604fd0ab6d8c 1792106080

@@ -1,0 +1,16 @@
+>>> WORKDIR is up-to-date, keeping...
+>>> It appears that 'pretend' has already executed for 't348-b-phases-8'; skipping.
+>>> Remove '/var/tmp/s346/s-chain-portage/tmp/portage/app-misc/t348-b-phases-8/.pretended' to force pretend.
+>>> It appears that 'setup' has already executed for 't348-b-phases-8'; skipping.
+>>> Remove '/var/tmp/s346/s-chain-portage/tmp/portage/app-misc/t348-b-phases-8/.setuped' to force setup.
+>>> It appears that 'unpack' has already executed for 't348-b-phases-8'; skipping.
+>>> Remove '/var/tmp/s346/s-chain-portage/tmp/portage/app-misc/t348-b-phases-8/.unpacked' to force unpack.
+>>> It appears that 'prepare' has already executed for 't348-b-phases-8'; skipping.
+>>> Remove '/var/tmp/s346/s-chain-portage/tmp/portage/app-misc/t348-b-phases-8/.prepared' to force prepare.
+>>> It appears that 'configure' has already executed for 't348-b-phases-8'; skipping.
+>>> Remove '/var/tmp/s346/s-chain-portage/tmp/portage/app-misc/t348-b-phases-8/.configured' to force configure.
+>>> It appears that 'compile' has already executed for 't348-b-phases-8'; skipping.
+>>> Remove '/var/tmp/s346/s-chain-portage/tmp/portage/app-misc/t348-b-phases-8/.compiled' to force compile.
+>>> Test phase: app-misc/t348-b-phases-8
+make -j32   check
+>>> Completed testing app-misc/t348-b-phases-8

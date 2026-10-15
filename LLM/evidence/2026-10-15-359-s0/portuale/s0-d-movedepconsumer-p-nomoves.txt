@@ -1,0 +1,11 @@
+### emerge --pretend --package-moves=n dev-libs/movedepconsumer --color=n
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+emerge: there are no ebuilds to satisfy "dev-libs/oldmovepkg".
+(dependency required by "dev-libs/movedepconsumer-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/movedepconsumer" [argument])
+rc=1

@@ -1,0 +1,12 @@
+9,11d8
+< sym ./lib -> lib64 mtime=1792105967
+< dir ./usr
+< sym ./usr/lib -> lib64 mtime=1792105967
+17,23d13
+< ## vdb /var/tmp/t355/roots/L1-pl/var/db/pkg/app-misc/t355-liblink-1/
+< BUILD_TIME CATEGORY CBUILD CFLAGS CHOST CONTENTS COUNTER DEFINED_PHASES DESCRIPTION EAPI HOMEPAGE IUSE IUSE_EFFECTIVE KEYWORDS LICENSE PF REPO_REVISIONS SIZE SLOT USE environment.bz2 metadata repository t355-liblink-1.ebuild 
+< COUNTER=0
+< --- CONTENTS
+< sym /lib -> lib64 1792105967
+< dir /usr
+< sym /usr/lib -> lib64 1792105967

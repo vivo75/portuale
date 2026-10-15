@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/u-u19-system-unstarred-portuale/cfg ROOT=/var/tmp/s346/u-u19-system-unstarred-portuale/cfg /var/tmp/s346/bin/emerge -p --package-moves=n @system

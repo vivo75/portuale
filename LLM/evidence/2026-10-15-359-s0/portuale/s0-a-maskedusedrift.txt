@@ -1,0 +1,12 @@
+### emerge -pvN --getbinpkg=n --usepkg=n dev-libs/needskeywordmaskeduse --color=n
+[ebuild   R   ~] dev-libs/keywordmaskedusepkg-2.0::testrepo to /var/tmp/s359/st-ptl-maskedusedrift/fixtures USE="flag" 
+[ebuild  N     ] dev-libs/needskeywordmaskeduse-1.0::testrepo to /var/tmp/s359/st-ptl-maskedusedrift/fixtures
+
+Total: 2 packages (1 new, 1 reinstall), Size of downloads: 0 KiB
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/needskeywordmaskeduse-1.0::testrepo
+# required by dev-libs/needskeywordmaskeduse (argument)
+>=dev-libs/keywordmaskedusepkg-2.0 flag
+rc=1

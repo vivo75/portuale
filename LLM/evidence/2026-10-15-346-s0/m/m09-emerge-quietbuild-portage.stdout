@@ -1,0 +1,17 @@
+Calculating dependencies ... done!
+Dependency resolution took 1.57 s (backtrack: 0/20).
+
+>>> Verifying ebuild manifests
+>>> Running pre-merge checks for app-misc/t348-b-phases-8
+>>> Jobs: 0 of 1 complete, 1 running                                    Load avg: 1.29, 1.88, 2.01
+>>> Emerging (1 of 1) app-misc/t348-b-phases-8::t348 for /var/tmp/s346/m-m09-emerge-quietbuild-portage/root/
+>>> Jobs: 0 of 1 complete, 1 running                                    Load avg: 1.29, 1.88, 2.01
+>>> Jobs: 0 of 1 complete                                               Load avg: 1.29, 1.88, 2.01
+>>> Installing (1 of 1) app-misc/t348-b-phases-8::t348 to /var/tmp/s346/m-m09-emerge-quietbuild-portage/root/
+>>> Jobs: 0 of 1 complete, 1 merge wait                                 Load avg: 1.29, 1.88, 2.01
+>>> Completed (1 of 1) app-misc/t348-b-phases-8::t348 to /var/tmp/s346/m-m09-emerge-quietbuild-portage/root/
+>>> Jobs: 0 of 1 complete                                               Load avg: 1.29, 1.88, 2.01
+>>> Jobs: 1 of 1 complete                                               Load avg: 1.29, 1.88, 2.01
+
+
+ * GNU info directory index is up-to-date.

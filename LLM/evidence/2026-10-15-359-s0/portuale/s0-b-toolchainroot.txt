@@ -1,0 +1,6 @@
+### emerge --pretend --update dev-libs/toolchainroot --color=n
+[ebuild  N     ] sys-libs/fakeglibc-2.0 to /var/tmp/s359/st-ptl/fixtures
+[ebuild     U  ] virtual/libc-2.0 [1.0] to /var/tmp/s359/st-ptl/fixtures
+[ebuild  N     ] dev-libs/plainleaf-1.0 to /var/tmp/s359/st-ptl/fixtures
+[ebuild  N     ] dev-libs/toolchainroot-1.0 to /var/tmp/s359/st-ptl/fixtures
+rc=0

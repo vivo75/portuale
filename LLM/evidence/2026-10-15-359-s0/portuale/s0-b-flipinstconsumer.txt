@@ -1,0 +1,10 @@
+### emerge --pretend --update dev-libs/flipinstconsumer --color=n
+[ebuild   R    ] dev-libs/flipinstdep-1.0 [1.0] to /var/tmp/s359/st-ptl/fixtures USE="wantflag*" 
+[ebuild  N     ] dev-libs/flipinstconsumer-1.0 to /var/tmp/s359/st-ptl/fixtures
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/flipinstconsumer-1.0::testrepo
+# required by dev-libs/flipinstconsumer (argument)
+>=dev-libs/flipinstdep-1.0 wantflag
+rc=1

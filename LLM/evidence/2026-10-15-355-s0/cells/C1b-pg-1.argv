@@ -1,0 +1,1 @@
+emerge --ignore-default-opts -v -1 =app-misc/t355-c1a-1

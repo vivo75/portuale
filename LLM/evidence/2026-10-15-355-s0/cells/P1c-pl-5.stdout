@@ -1,0 +1,28 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild   R    ] app-misc/t355-mid-1::t355 to /var/tmp/t355/roots/P1c-pl
+
+Total: 1 package (1 reinstall), Size of downloads: 0 KiB
+
+
+>>> Emerging (1 of 1) app-misc/t355-mid-1::t355 for /var/tmp/t355/roots/P1c-pl
+
+>>> Installing (1 of 1) app-misc/t355-mid-1::t355 to /var/tmp/t355/roots/P1c-pl
+>>> needed    obj /usr/lib64/libt355mid.so.1
+
+>>> Completed (1 of 1) app-misc/t355-mid-1::t355 to /var/tmp/t355/roots/P1c-pl
+
+ * GNU info directory index is up-to-date.
+
+!!! existing preserved libs:
+>>> package: app-misc/t355-base-2
+ *  - /usr/lib64/libt355base.so.1
+ *      used by /usr/bin/t355app (app-misc/t355-app-1)
+>>> package: app-misc/t355-mid-1
+ *  - /usr/lib64/libt355mid.so.1
+ *      used by /usr/bin/t355app (app-misc/t355-app-1)
+Use emerge @preserved-rebuild to rebuild packages using these libraries

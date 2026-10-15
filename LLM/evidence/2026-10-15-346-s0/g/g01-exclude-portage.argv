@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/g-g01-exclude-portage/cfg ROOT=/var/tmp/s346/g-g01-exclude-portage/cfg emerge -pv --package-moves=n --getbinpkg --getbinpkg-exclude app-misc/s346-gbin-a app-misc/s346-gbin-a app-misc/s346-gbin-b

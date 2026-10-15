@@ -1,0 +1,11 @@
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging (1 of 1) app-misc/t348-b-phases-8::t348 for /var/tmp/s346/m-m08-emerge-jobs2-portuale/root
+
+>>> Installing (1 of 1) app-misc/t348-b-phases-8::t348 to /var/tmp/s346/m-m08-emerge-jobs2-portuale/root
+
+>>> Completed (1 of 1) app-misc/t348-b-phases-8::t348 to /var/tmp/s346/m-m08-emerge-jobs2-portuale/root
+
+ * GNU info directory index is up-to-date.

@@ -1,0 +1,4 @@
+
+emerge: there are no ebuilds to satisfy "dev-libs/abort-nonexistent".
+(dependency required by "dev-libs/abort-unsat-last-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/abort-unsat-last" [argument])

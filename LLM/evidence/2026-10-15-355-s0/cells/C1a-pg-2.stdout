@@ -1,0 +1,32 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.92 s (backtrack: 0/20).
+
+[ebuild  N     ] app-misc/t355-c1b-1::t355 to /var/tmp/t355/roots/C1a-pg/ 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t355-c1b-1::t355 for /var/tmp/t355/roots/C1a-pg/
+
+>>> Install app-misc/t355-c1b-1 into /var/tmp/t355/scratch/C1a-pg/tmp/portage/app-misc/t355-c1b-1/image
+>>> Completed installing app-misc/t355-c1b-1 into /var/tmp/t355/scratch/C1a-pg/tmp/portage/app-misc/t355-c1b-1/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (1 of 1) app-misc/t355-c1b-1::t355 to /var/tmp/t355/roots/C1a-pg/
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging app-misc/t355-c1b-1 to /var/tmp/t355/roots/C1a-pg/
+--- /var/tmp/t355/roots/C1a-pg/bin/
+>>> /var/tmp/t355/roots/C1a-pg/bin/oth
+>>> app-misc/t355-c1b-1 merged.
+
+>>> Completed (1 of 1) app-misc/t355-c1b-1::t355 to /var/tmp/t355/roots/C1a-pg/
+
+ * GNU info directory index is up-to-date.

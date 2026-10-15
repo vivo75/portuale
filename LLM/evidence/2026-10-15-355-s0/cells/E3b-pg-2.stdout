@@ -1,0 +1,25 @@
+
+>>> Using system located in ROOT tree /var/tmp/t355/roots/E3b-pg/
+
+ app-misc/t355-e3
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+All selected packages: =app-misc/t355-e3-1
+
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+
+>>> Waiting 5 seconds before starting...
+>>> (Control-C to abort)...
+>>> Unmerging in: 5 4 3 2 1
+>>> Unmerging (1 of 1) app-misc/t355-e3-1...
+<<<          sym /var/tmp/t355/roots/E3b-pg/usr/share/t355/z-link
+<<<          obj /var/tmp/t355/roots/E3b-pg/usr/share/t355/a-real/f
+<<<          dir /var/tmp/t355/roots/E3b-pg/usr/share/t355/a-real
+<<<          dir /var/tmp/t355/roots/E3b-pg/usr/share/t355
+<<<          dir /var/tmp/t355/roots/E3b-pg/usr/share
+<<<          dir /var/tmp/t355/roots/E3b-pg/usr
+
+ * GNU info directory index is up-to-date.

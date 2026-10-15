@@ -1,0 +1,7 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.55 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/bareacceptkeywordspkg-1.0 to /var/tmp/s346/k-k03-chain-amd64-portage/cfg/

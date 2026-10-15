@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/g-g06-cli-overrides-repo-portage/cfg ROOT=/var/tmp/s346/g-g06-cli-overrides-repo-portage/cfg emerge -pv --package-moves=n --getbinpkg --getbinpkg-include app-misc/s346-gbin-b app-misc/s346-gbin-a app-misc/s346-gbin-b

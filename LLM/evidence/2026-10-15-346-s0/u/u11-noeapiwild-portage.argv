@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/u-u11-noeapiwild-portage/cfg ROOT=/var/tmp/s346/u-u11-noeapiwild-portage/cfg emerge -p --package-moves=n dev-libs/t341-dep

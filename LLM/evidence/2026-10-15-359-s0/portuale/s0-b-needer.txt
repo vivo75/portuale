@@ -1,0 +1,4 @@
+### emerge --pretend --update dev-libs/needer --color=n
+[ebuild     U  ] dev-libs/paired-2.0 [1.0] to /var/tmp/s359/st-ptl/fixtures
+[ebuild  N     ] dev-libs/needer-1.0 to /var/tmp/s359/st-ptl/fixtures
+rc=0

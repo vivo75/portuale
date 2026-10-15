@@ -1,0 +1,52 @@
+# #367 S0 oracle captures (2026-10-15): pg367-top / pg367-s / pg367-itop. Mechanical capture; each cap file is verbatim combined stdout+stderr; every rc=0 (rc + full argv appended as the last line of each cap file).
+# Fixtures live in pmtest, uncommitted (HEAD f8c4bff108c5d04015e1f6ebb69f1a479fb3f083; `git status` shows only the 9 intended pg367 paths).
+
+portuale HEAD: f221c03f53b69ac686dc270cbae995cfc329f40e (no product-code edits; no rebuild for this slice)
+portuale binary: /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+  mtime: 2026-10-15 19:18:07.096924881 +0000
+  (target/release/emerge is a symlink -> portuale)
+Portage (host): 3.0.82.2 (python 3.14.8, default/linux/amd64/23.0/desktop/plasma/systemd) -- the pinned oracle release
+
+--- Portage side (host emerge; container Q10 fallback) ---
+Capture source is the Q10 fallback, not the container default: no
+localhost/test-portuale:latest image exists on this host (only
+test-portuale-nopy / test-portuale-noportage / test-mrg-client tags),
+and host Portage is exactly the 3.0.82.2 oracle pin, so host `emerge`
+against a staged scratch copy of the fixture tree is equivalent input.
+Staging is /var/tmp/s367/stage-host.sh (scratch, deleted after the run),
+a line-for-line port of differential-test-bed/layers/l0-fixture-oracle/stage.sh
+steps 1-5 and 7-11 (absolute repos.conf locations, ${PORTAGE_CONFIGROOT}
+resolution, news dropped, common-1.0 staging-only staling, layout.conf
+masters, updates-comment drop, */<pkg> rewrite, repo_name fill,
+etc/portage/categories + per-repo profiles/categories, per-package
+Manifest). Deleted after the run per the /var/tmp scratch rule.
+Per-cell re-stage: EVERY cell re-stages the pristine fixture input first
+(02.359 S0 prescription, actions.py:3669-3682 -- Portage applies
+_global_updates to the target root: the first probe visibly renamed
+oldmovepkg-1.0 -> newmovepkg-1.0 and slot-moved slotmovepkg-1.0 0 -> 1
+inside the staged vdb, confirmed by diff against the committed tree).
+Cell env (all 12 Portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  GENTOO_MIRRORS=http://10.48.0.229:8080 EMERGE_DEFAULT_OPTS unset
+  PORTAGE_CONFIGROOT=/var/tmp/s367/stage-run/fixtures
+  ROOT=/var/tmp/s367/stage-run/fixtures
+  PORTAGE_RUNNING_ROOT=/var/tmp/s367/stage-run/fixtures
+  DISTDIR=/var/tmp/s367/stage-run/fixtures/distfiles
+Portage argv: /usr/bin/emerge -<mode> --getbinpkg=n --usepkg=n --color=n <atom>
+  (modes pv pvu pvD pvuD pve pvuDN; atoms dev-libs/pg367-top, dev-libs/pg367-itop)
+
+--- portuale side (host binary, same staged input) ---
+Same per-cell re-stage from the same committed fixtures, same env, same
+argv via target/release/emerge; pubgrub cells add --solver=pubgrub right
+after the binary (the pg34 precedent position). 24 cells, all rc=0.
+
+--- cell index (slug -> argv; rows are the [ebuild] lines inside) ---
+cap-top-pv-portage.txt      /usr/bin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg367-top
+cap-top-pvu-portage.txt     ... -pvu ... dev-libs/pg367-top
+cap-top-pvD-portage.txt     ... -pvD ... dev-libs/pg367-top
+cap-top-pvuD-portage.txt    ... -pvuD ... dev-libs/pg367-top
+cap-top-pve-portage.txt     ... -pve ... dev-libs/pg367-top
+cap-top-pvuDN-portage.txt   ... -pvuDN ... dev-libs/pg367-top
+cap-itop-{pv,pvu,pvD,pvuD,pve,pvuDN}-portage.txt  same six modes on dev-libs/pg367-itop
+cap-top-{pv,pvu,pvD,pvuD,pve,pvuDN}-{default,pubgrub}.txt
+cap-itop-{pv,pvu,pvD,pvuD,pve,pvuDN}-{default,pubgrub}.txt
+Runner: /var/tmp/s367/run-cells.sh (scratch, deleted after the run).

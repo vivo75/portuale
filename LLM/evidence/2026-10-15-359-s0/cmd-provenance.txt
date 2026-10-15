@@ -1,0 +1,63 @@
+# S0 provenance (plan 02.359, slice S0)
+
+Oracle: **Portage** 3.0.82.2 (never "real"). Container `localhost/test-portuale:latest`;
+in-run `portage-version.txt`: `Portage 3.0.82.2 (python 3.14.6-final-0,
+default/linux/amd64/23.0/systemd, gcc-15, glibc-2.43-r2, 6.18.39-serv x86_64)`.
+Pre-run check `emerge --version` (with `--entrypoint /bin/bash`, the image's
+`/init` intercepts plain args) gave the same version.
+
+## Revisions
+
+- portuale HEAD `f221c03f` (branch `plan/batch-2026-10-15`).
+  `git log 83a0375e..HEAD -- crates/` is EMPTY, so `target/release/portuale`
+  (mtime 2026-10-15 19:18:07 UTC, built after `83a0375e`) is current for all
+  product code. Invoked via the `target/release/emerge -> portuale` symlink.
+- pmtest HEAD `f8c4bff` (same branch) PLUS untracked files at capture time:
+  in-flight 04.367 S0 work (`fixtures/.../pg367-{s,top,itop}`, `LLM/evidence/2026-10-15-367-s0/`,
+  from a parallel slice executor) and this slice's 23 new `pg359-*` files
+  (listed in SUMMARY.md). Both sides stage the SAME tree, so captures are
+  self-consistent; no old or new cell's graph touches a `pg367-*` package
+  (none is in world nor in any named dep chain), so cross-comparison with the
+  53 old cells is unaffected.
+
+## Method (plan D3: fresh stage per cell, no --package-moves=n except group D argv)
+
+- Portage side: `run-s0-portage.sh` in this dir, one `podman run` (log tail:
+  `done 38 files`, `container-rc=0`). Per cell: fresh
+  `/TEST/layers/l0-fixture-oracle/stage.sh /tmp/st`, running-root setup
+  (`/var/db/pkg` + world replaced, as `run-portage.sh`), base env
+  `PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC CLEAN_DELAY=0
+  PORTAGE_CONFIGROOT=$FX ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles`
+  + `PORTAGE_REPOSITORIES` from the staged repos.conf, per-cell third-field
+  env from `cells-s0.txt`, `timeout 300`. Target eroot = stage, running
+  eroot = `/` (same convention as the old captures). No fetch happens
+  (`--pretend`; binhost is `file://`), so no `GENTOO_MIRRORS` was needed.
+- portuale side: `run-s0-portuale.sh`; stage built once with the saved
+  `stage-host.sh` copy (`../2026-10-15-plan-359/stage-host.sh`,
+  read-only for `--pretend`) at `/var/tmp/s359/st-ptl` (+ delta copy
+  `st-ptl-maskedusedrift` with `dev-libs/keywordmaskedusepkg -flag` appended
+  to `etc/portage/package.use`); `dbg-*` rows skipped (portuale has no
+  `--debug`, same convention as the old captures).
+- Scratch `/var/tmp/s359` (stages, podman log) deleted after the run.
+  Never wrote to `/dev/shm`. No rebuild (`cargo build` untouched).
+
+## Runner corrections (both documented, final files are from correct runs)
+
+1. First portuale pass used `target/release/portuale` directly: every cell
+   rc 1 `unrecognized applet "--pretend"`. Discarded; re-ran with the
+   `target/release/emerge` symlink (no script change; binary is `$3`).
+2. `run-s0-portuale.sh` built the delta stage path as `$FX-maskedusedrift`
+   (`.../fixtures-maskedusedrift`, nonexistent) → `s0-a-maskedusedrift`
+   rc 1 `no repos.conf found`. Re-ran that single cell with the correct
+   stage `/var/tmp/s359/st-ptl-maskedusedrift/fixtures` (same command shape
+   as the script); file overwritten. Script kept as-is with this note so the
+   evidence stays byte-honest about what ran.
+
+## Files
+
+- `cells-s0.txt` — 37 cells (`name | args | env`), 3 `dbg-*` Portage-only.
+- `out/` — 38 Portage files (37 cells + `portage-version.txt`), full argv in
+  the `### emerge ...` header, verbatim output.
+- `portuale/` — 34 portuale files (minus the 3 `dbg-*`).
+- `matrix.md` — one row per cell (this slice's verdicts).
+- `SUMMARY.md` — per-cell verdict vs plan prediction + STOP rules.

@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/l-l02-emerge-new-portage/cfg ROOT=/var/tmp/s346/l-l02-emerge-new-portage/root PORTAGE_TMPDIR=/var/tmp/s346/l-l02-emerge-new-portage/tmp DISTDIR=/var/tmp/s346/l-l02-emerge-new-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news emerge --oneshot --package-moves=n app-misc/t348-b-phases

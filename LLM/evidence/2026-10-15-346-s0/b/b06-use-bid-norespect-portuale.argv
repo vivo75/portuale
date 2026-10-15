@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/b-b06-use-bid-norespect-portuale/cfg ROOT=/var/tmp/s346/b-b06-use-bid-norespect-portuale/cfg /var/tmp/s346/bin/emerge -pv --package-moves=n --usepkgonly=y dev-libs/t341-dep

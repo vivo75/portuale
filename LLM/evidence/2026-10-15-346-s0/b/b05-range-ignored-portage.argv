@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/b-b05-range-ignored-portage/cfg ROOT=/var/tmp/s346/b-b05-range-ignored-portage/cfg emerge -pv --package-moves=n --usepkgonly=y dev-libs/t341-dep

@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env -u PYTHONHASHSEED PORTAGE_CONFIGROOT=/var/tmp/s346/c-c13-exclude-badatom-portuale-noseed/cfg ROOT=/var/tmp/s346/c-c13-exclude-badatom-portuale-noseed/cfg /var/tmp/s346/bin/emerge -p --package-moves=n --exclude =a/b-1 dev-libs/t341-dep

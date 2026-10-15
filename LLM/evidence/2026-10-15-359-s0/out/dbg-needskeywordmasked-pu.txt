@@ -1,0 +1,79 @@
+### emerge --pretend --update --debug dev-libs/needskeywordmasked --color=n
+### delta=none
+[DEBUG] Using selector: EpollSelector
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+myaction None
+myopts {'--debug': True, '--pretend': True, '--update': True, '--color': 'n', '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+   ebuild: dev-libs/needskeywordmasked-1.0::testrepo
+   ebuild: dev-libs/needskeywordmasked-1.0::testrepo
+
+
+      Arg: dev-libs/needskeywordmasked
+     Atom: dev-libs/needskeywordmasked
+   ebuild: dev-libs/needskeywordmasked-1.0::testrepo
+
+Child:         (dev-libs/needskeywordmasked-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/needskeywordmasked
+
+Parent:    (dev-libs/needskeywordmasked-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/keywordmaskedpkg
+Priority:  runtime
+
+Parent:    (dev-libs/needskeywordmasked-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/keywordmaskedpkg
+Priority:  runtime
+Candidates: ['dev-libs/keywordmaskedpkg']
+   ebuild: dev-libs/keywordmaskedpkg-1.0::testrepo
+installed: dev-libs/keywordmaskedpkg-2.0::testrepo
+
+Child:         (dev-libs/keywordmaskedpkg-2.0:0/0::testrepo, installed in '/tmp/st/fixtures/') USE=""
+Parent Dep:    dev-libs/keywordmaskedpkg required by (dev-libs/needskeywordmasked-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Exiting... (dev-libs/needskeywordmasked-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+digraph:
+
+(dev-libs/needskeywordmasked-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') depends on
+  (dev-libs/keywordmaskedpkg-2.0:0/0::testrepo, installed in '/tmp/st/fixtures/') (runtime)
+dev-libs/needskeywordmasked depends on
+  (dev-libs/needskeywordmasked-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (soft)
+(dev-libs/keywordmaskedpkg-2.0:0/0::testrepo, installed in '/tmp/st/fixtures/') (no children)
+
+[ebuild  N     ] dev-libs/needskeywordmasked-1.0 to /tmp/st/fixtures/
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+rc=0

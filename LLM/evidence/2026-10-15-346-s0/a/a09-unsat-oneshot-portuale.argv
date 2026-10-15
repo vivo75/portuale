@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/a-a09-unsat-oneshot-portuale/cfg ROOT=/var/tmp/s346/a-a09-unsat-oneshot-portuale/cfg /var/tmp/s346/bin/emerge --oneshot --package-moves=n dev-libs/abort-unsat-last

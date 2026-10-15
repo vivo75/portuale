@@ -1,0 +1,55 @@
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+
+!!! The following getbinpkg-exclude atoms for [s346gbin] have been overridden by the --getbinpkg-include option:
+
+    app-misc/s346-gbin-a
+
+!!! The following getbinpkg-include atoms for [s346gbin] have been overridden by the --getbinpkg-exclude option:
+
+    app-misc/s346-gbin-a
+
+!!! The following getbinpkg-exclude atoms for [gentoo] have been overridden by the --getbinpkg-include option:
+
+    app-misc/s346-gbin-a
+
+!!! The following getbinpkg-include atoms for [gentoo] have been overridden by the --getbinpkg-exclude option:
+
+    app-misc/s346-gbin-a
+[gentoo] Local copy of remote index is within TTL and will be used.
+
+!!! The following getbinpkg-exclude atoms for [f1r] have been overridden by the --getbinpkg-include option:
+
+    app-misc/s346-gbin-a
+
+!!! The following getbinpkg-include atoms for [f1r] have been overridden by the --getbinpkg-exclude option:
+
+    app-misc/s346-gbin-a
+[f1r] Local copy of remote index is up-to-date and will be used.
+
+!!! The following atoms appear in both the --getbinpkg-exclude and --getbinpkg-include command line arguments:
+
+    app-misc/s346-gbin-a
+WARNING: One or more repositories have missing repo_name entries:
+
+	/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/profiles/repo_name
+	/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+

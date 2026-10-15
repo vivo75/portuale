@@ -1,0 +1,11 @@
+.
+./cfg
+./cfg/etc
+./cfg/pkgdir
+./dist
+./logs
+./logs/env-pkg_pretend.log
+./logs/env-pkg_setup.log
+./root
+./tmp
+./tmp/portage

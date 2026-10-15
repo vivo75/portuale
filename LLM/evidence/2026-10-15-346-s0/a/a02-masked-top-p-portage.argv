@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/a-a02-masked-top-p-portage/cfg ROOT=/var/tmp/s346/a-a02-masked-top-p-portage/cfg emerge -p --package-moves=n dev-libs/bareacceptkeywordspkg

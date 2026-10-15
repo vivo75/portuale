@@ -1,0 +1,16 @@
+total 0
+drwxrwxrwx 3 portage portage  60 15 ott 23.07 .
+drwxrwxrwt 6 root    root    120 15 ott 22.56 ..
+drwxrwxr-x 3 vivo    portage  60 15 ott 23.07 app-misc
+/var/tmp/portage
+/var/tmp/portage/app-misc
+/var/tmp/portage/app-misc/t348-b-env-8
+/var/tmp/portage/app-misc/t348-b-env-8/.pretended
+/var/tmp/portage/app-misc/t348-b-env-8/.setuped
+/var/tmp/portage/app-misc/t348-b-env-8/empty
+/var/tmp/portage/app-misc/t348-b-env-8/files
+/var/tmp/portage/app-misc/t348-b-env-8/homedir
+/var/tmp/portage/app-misc/t348-b-env-8/image
+/var/tmp/portage/app-misc/t348-b-env-8/temp
+/var/tmp/portage/app-misc/t348-b-env-8/temp/environment
+/var/tmp/portage/app-misc/t348-b-env-8/temp/logging

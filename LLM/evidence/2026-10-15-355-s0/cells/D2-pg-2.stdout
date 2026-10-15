@@ -1,0 +1,54 @@
+
+>>> Using system located in ROOT tree /var/tmp/t355/roots/D2-pg/
+
+ app-misc/t355-d1
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+All selected packages: =app-misc/t355-d1-1
+
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+
+>>> Waiting 5 seconds before starting...
+>>> (Control-C to abort)...
+>>> Unmerging in: 5 4 3 2 1
+>>> Unmerging (1 of 1) app-misc/t355-d1-1...
+--- !found   obj /var/tmp/t355/roots/D2-pg/opt/t355/d/.keep_app-misc_t355-d1-0
+--- !empty   dir /var/tmp/t355/roots/D2-pg/opt/t355/d
+--- !empty   dir /var/tmp/t355/roots/D2-pg/opt/t355
+--- !empty   dir /var/tmp/t355/roots/D2-pg/opt
+ * 
+ * Directory symlink(s) may need protection:
+ * 
+ * 	/var/tmp/t355/roots/D2-pg/opt/t355/d
+ * 
+ * Use the UNINSTALL_IGNORE variable to exempt specific symlinks
+ * from the following search (see the make.conf man page).
+ * 
+ * Searching all installed packages for files installed via above symlink(s)...
+ * 
+ * The above directory symlink(s) are all safe to remove. Removing them now...
+ * 
+<<<          sym /var/tmp/t355/roots/D2-pg/opt/t355/d
+--- !empty   dir /var/tmp/t355/roots/D2-pg/opt/t355
+--- !empty   dir /var/tmp/t355/roots/D2-pg/opt
+
+ * Messages for package app-misc/t355-d1-1 merged to /var/tmp/t355/roots/D2-pg/:
+ * Log file: /var/tmp/t355/scratch/D2-pg/logs/app-misc:t355-d1-1:20261015-225756.log
+
+ * 
+ * Directory symlink(s) may need protection:
+ * 
+ * 	/var/tmp/t355/roots/D2-pg/opt/t355/d
+ * 
+ * Use the UNINSTALL_IGNORE variable to exempt specific symlinks
+ * from the following search (see the make.conf man page).
+ * 
+ * Searching all installed packages for files installed via above symlink(s)...
+ * 
+ * The above directory symlink(s) are all safe to remove. Removing them now...
+ * 
+
+ * GNU info directory index is up-to-date.

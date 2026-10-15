@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/s-s08-portage/cfg PORTAGE_TMPDIR=/var/tmp/s346/s-s08-portage/tmp DISTDIR=/var/tmp/s346/s-s08-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news ebuild /var/tmp/s346/s-s08-portage/ov/app-misc/t348-b-phases/t348-b-phases-8.ebuild unpack

@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/m-m08-emerge-jobs1-portage/cfg ROOT=/var/tmp/s346/m-m08-emerge-jobs1-portage/root PORTAGE_TMPDIR=/var/tmp/s346/m-m08-emerge-jobs1-portage/tmp DISTDIR=/var/tmp/s346/m-m08-emerge-jobs1-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news emerge --oneshot --package-moves=n --jobs=1 app-misc/t348-b-phases

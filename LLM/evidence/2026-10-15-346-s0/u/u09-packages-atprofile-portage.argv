@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/u-u09-packages-atprofile-portage/cfg ROOT=/var/tmp/s346/u-u09-packages-atprofile-portage/cfg emerge -p --package-moves=n @profile

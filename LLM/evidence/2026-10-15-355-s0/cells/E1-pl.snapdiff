@@ -1,0 +1,14 @@
+9,12d8
+< dir ./usr
+< dir ./usr/share
+< dir ./usr/share/t355
+< sym ./usr/share/t355/link -> real mtime=1792105973
+22,29d17
+< ## vdb /var/tmp/t355/roots/E1-pl/var/db/pkg/app-misc/t355-ea-1/
+< BUILD_TIME CATEGORY CBUILD CFLAGS CHOST CONTENTS COUNTER DEFINED_PHASES DESCRIPTION EAPI HOMEPAGE IUSE IUSE_EFFECTIVE KEYWORDS LICENSE PF REPO_REVISIONS SIZE SLOT USE environment.bz2 metadata repository t355-ea-1.ebuild 
+< COUNTER=0
+< --- CONTENTS
+< dir /usr
+< dir /usr/share
+< dir /usr/share/t355
+< sym /usr/share/t355/link -> real 1792105973

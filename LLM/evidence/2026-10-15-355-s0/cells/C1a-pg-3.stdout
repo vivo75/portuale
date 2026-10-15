@@ -1,0 +1,61 @@
+
+>>> Using system located in ROOT tree /var/tmp/t355/roots/C1a-pg/
+
+ app-misc/t355-c1a
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+All selected packages: =app-misc/t355-c1a-1
+
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+
+>>> Waiting 5 seconds before starting...
+>>> (Control-C to abort)...
+>>> Unmerging in: 5 4 3 2 1
+>>> Unmerging (1 of 1) app-misc/t355-c1a-1...
+<<<          obj /var/tmp/t355/roots/C1a-pg/bin/t355
+--- !empty   dir /var/tmp/t355/roots/C1a-pg/bin
+ * 
+ * Directory symlink(s) may need protection:
+ * 
+ * 	/var/tmp/t355/roots/C1a-pg/bin
+ * 
+ * Use the UNINSTALL_IGNORE variable to exempt specific symlinks
+ * from the following search (see the make.conf man page).
+ * 
+ * Searching all installed packages for files installed via above symlink(s)...
+ * 
+ * One or more symlinks to directories have been preserved in order to
+ * ensure that files installed via these symlinks remain accessible. This
+ * indicates that the mentioned symlink(s) may be obsolete remnants of an
+ * old install, and it may be appropriate to replace a given symlink with
+ * the directory that it points to.
+ * 
+ * 	/var/tmp/t355/roots/C1a-pg/bin
+ * 
+
+ * Messages for package app-misc/t355-c1a-1 merged to /var/tmp/t355/roots/C1a-pg/:
+ * Log file: /var/tmp/t355/scratch/C1a-pg/logs/app-misc:t355-c1a-1:20261015-225812.log
+
+ * 
+ * Directory symlink(s) may need protection:
+ * 
+ * 	/var/tmp/t355/roots/C1a-pg/bin
+ * 
+ * Use the UNINSTALL_IGNORE variable to exempt specific symlinks
+ * from the following search (see the make.conf man page).
+ * 
+ * Searching all installed packages for files installed via above symlink(s)...
+ * 
+ * One or more symlinks to directories have been preserved in order to
+ * ensure that files installed via these symlinks remain accessible. This
+ * indicates that the mentioned symlink(s) may be obsolete remnants of an
+ * old install, and it may be appropriate to replace a given symlink with
+ * the directory that it points to.
+ * 
+ * 	/var/tmp/t355/roots/C1a-pg/bin
+ * 
+
+ * GNU info directory index is up-to-date.

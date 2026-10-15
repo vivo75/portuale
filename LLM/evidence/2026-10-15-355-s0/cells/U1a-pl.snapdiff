@@ -1,0 +1,24 @@
+9,17d8
+< dir ./lib
+< dir ./lib/modules
+< dir ./lib/modules/t355
+< obj ./lib/modules/t355/m.ko md5=12ef5be68b9628aee6cbf6d3443477d5 mtime=1792105951 content=mod|
+< dir ./usr
+< dir ./usr/share
+< dir ./usr/share/t355
+< dir ./usr/share/t355/ign
+< obj ./usr/share/t355/ign/x md5=401b30e3b8b5d629635a5c613cdb7919 mtime=1792105951 content=x|
+23,35d13
+< ## vdb /var/tmp/t355/roots/U1a-pl/var/db/pkg/app-misc/t355-ign-1/
+< BUILD_TIME CATEGORY CBUILD CFLAGS CHOST CONTENTS COUNTER DEFINED_PHASES DESCRIPTION EAPI HOMEPAGE IUSE IUSE_EFFECTIVE KEYWORDS LICENSE PF REPO_REVISIONS SIZE SLOT USE environment.bz2 metadata repository t355-ign-1.ebuild 
+< COUNTER=0
+< --- CONTENTS
+< dir /lib
+< dir /usr
+< dir /usr/share
+< dir /usr/share/t355
+< dir /usr/share/t355/ign
+< obj /usr/share/t355/ign/x 401b30e3b8b5d629635a5c613cdb7919 1792105951
+< dir /lib/modules
+< dir /lib/modules/t355
+< obj /lib/modules/t355/m.ko 12ef5be68b9628aee6cbf6d3443477d5 1792105951

@@ -1,0 +1,92 @@
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+usage: emerge [--regen] [--version] [--rage-clean] [--search] [--check-news]
+              [--moo] [--unmerge] [--list-sets] [--depclean] [--metadata]
+              [--status] [--config] [--info] [--clean] [--prune] [--sync]
+              [--help] [--alphabetical] [--ask-enter-invalid] [--buildpkgonly]
+              [--changed-use] [--columns] [--debug] [--digest] [--emptytree]
+              [--verbose-conflicts] [--fetchonly] [--fetch-all-uri]
+              [--ignore-default-opts] [--noconfmem] [--newrepo] [--newuse]
+              [--nobindeps] [--nodeps] [--noreplace] [--nospinner] [--oneshot]
+              [--onlydeps] [--pretend] [--quiet-repo-display]
+              [--quiet-unmerge-warn] [--resume] [--searchdesc] [--skipfirst]
+              [--tree] [--unordered-display] [--update]
+              [--update-if-installed] [-1] [-B] [-c] [-C] [-d] [-e] [-f] [-F]
+              [-h] [-n] [-N] [-o] [-O] [-p] [-P] [-r] [-s] [-S] [-t] [-u] [-U]
+              [-V] [--cols] [--skip-first] [--alert {True,y,n}]
+              [--ask {True,y,n}] [--autounmask {True,y,n}]
+              [--autounmask-backtrack {y,n}]
+              [--autounmask-continue {True,y,n}]
+              [--autounmask-only {True,y,n}] [--autounmask-license {y,n}]
+              [--autounmask-unrestricted-atoms {True,y,n}]
+              [--autounmask-use {y,n}] [--autounmask-keep-keywords {True,y,n}]
+              [--autounmask-keep-masks {True,y,n}]
+              [--autounmask-write {True,y,n}]
+              [--accept-properties ACCEPT_PROPERTIES]
+              [--accept-restrict ACCEPT_RESTRICT] [--backtrack BACKTRACK]
+              [--binpkg-changed-deps {True,y,n}] [--buildpkg {True,y,n}]
+              [--buildpkg-exclude BUILDPKG_EXCLUDE]
+              [--changed-deps {True,y,n}] [--changed-deps-report {True,y,n}]
+              [--changed-slot {True,y,n}] [--config-root CONFIG_ROOT]
+              [--color {y,n}] [--complete-graph {True,y,n}]
+              [--complete-graph-if-new-use {y,n}]
+              [--complete-graph-if-new-ver {y,n}] [--deep DEEP]
+              [--depclean-lib-check {True,y,n}] [--deselect {True,y,n}]
+              [--dynamic-deps {y,n}] [--exclude EXCLUDE]
+              [--fail-clean {True,y,n}] [--fuzzy-search {True,y,n}]
+              [--ignore-built-slot-operator-deps {y,n}]
+              [--ignore-soname-deps {y,n}] [--ignore-world {True,y,n}]
+              [--implicit-system-deps {y,n}] [--jobs JOBS]
+              [--jobs-tmpdir-require-free-gb JOBS_TMPDIR_REQUIRE_FREE_GB]
+              [--keep-going {True,y,n}] [--load-average LOAD_AVERAGE]
+              [--misspell-suggestions {y,n}] [--with-bdeps {y,n}]
+              [--with-bdeps-auto {y,n}] [--reinstall {changed-use}]
+              [--reinstall-atoms REINSTALL_ATOMS]
+              [--binpkg-respect-use {True,y,n}] [--getbinpkg {True,y,n}]
+              [--getbinpkgonly {True,y,n}]
+              [--getbinpkg-exclude GETBINPKG_EXCLUDE]
+              [--getbinpkg-include GETBINPKG_INCLUDE]
+              [--usepkg-exclude USEPKG_EXCLUDE]
+              [--usepkg-include USEPKG_INCLUDE]
+              [--onlydeps-with-ideps {True,y,n}]
+              [--onlydeps-with-rdeps {True,y,n}]
+              [--rebuild-exclude REBUILD_EXCLUDE]
+              [--rebuild-ignore REBUILD_IGNORE] [--package-moves {True,y,n}]
+              [--prefix PREFIX] [--pkg-format PKG_FORMAT]
+              [--quickpkg-direct {y,n}]
+              [--quickpkg-direct-root QUICKPKG_DIRECT_ROOT]
+              [--quiet {True,y,n}] [--quiet-build {True,y,n}]
+              [--quiet-fail {True,y,n}] [--read-news {True,y,n}]
+              [--rebuild-if-new-slot {True,y,n}]
+              [--rebuild-if-new-rev {True,y,n}]
+              [--rebuild-if-new-ver {True,y,n}]
+              [--rebuild-if-unbuilt {True,y,n}]
+              [--rebuilt-binaries {True,y,n}]
+              [--rebuilt-binaries-timestamp REBUILT_BINARIES_TIMESTAMP]
+              [--regex-search-auto {y,n}] [--root ROOT]
+              [--root-deps {True,rdeps}] [--search-index {y,n}]
+              [--search-similarity SEARCH_SIMILARITY] [--select {True,y,n}]
+              [--selective {True,y,n}] [--sync-submodule {glsa,news,profiles}]
+              [--sysroot SYSROOT] [--use-ebuild-visibility {True,y,n}]
+              [--useoldpkg-atoms USEOLDPKG_ATOMS] [--usepkg {True,y,n}]
+              [--usepkgonly {True,y,n}] [--usepkg-exclude-live {True,y,n}]
+              [--verbose {True,y,n}] [--verbose-missing-ebuilds {True,y,n}]
+              [--verbose-slot-rebuilds {True,y,n}]
+              [--with-test-deps {True,y,n}]
+              [positional_args ...]
+emerge: error: Invalid --load-average parameter: 'x'
+

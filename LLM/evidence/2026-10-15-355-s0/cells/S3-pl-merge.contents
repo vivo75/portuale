@@ -1,0 +1,5 @@
+dir /usr
+dir /usr/share
+dir /usr/share/t355
+sym /usr/share/t355/arrow -> x -> y 1792106080
+obj /usr/share/t355/keep b260098afc93a054427d63c4de6be6a1 1792106080

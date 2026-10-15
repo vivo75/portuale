@@ -1,0 +1,18 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] app-misc/t355-m2-1::t355 to /var/tmp/t355/roots/M2-pl
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+
+
+>>> Emerging (1 of 1) app-misc/t355-m2-1::t355 for /var/tmp/t355/roots/M2-pl
+
+>>> Installing (1 of 1) app-misc/t355-m2-1::t355 to /var/tmp/t355/roots/M2-pl
+
+>>> Completed (1 of 1) app-misc/t355-m2-1::t355 to /var/tmp/t355/roots/M2-pl
+
+ * GNU info directory index is up-to-date.

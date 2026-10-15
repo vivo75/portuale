@@ -1,0 +1,63 @@
+Portage unavailable (python 3.14.8-final-0, default, gcc-16, unavailable, 6.18.39-serv x86_64)
+=================================================================
+System uname: Linux-6.18.39-serv-x86_64-AMD_Ryzen_9_5950X_16-Core_Processor-with-
+KiB Mem:   131806340 total, 106507088 free
+KiB Swap:          0 total,         0 free
+sh: bash
+coreutils: (GNU coreutils) 9.12
+ld: GNU ld (Gentoo 2.47 p1) 2.47.0
+Repositories:
+
+testrepo
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/repo
+    priority: -1000
+    volatile: True
+
+overlay
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/overlay
+    masters: testrepo
+    priority: 10
+    volatile: True
+
+independentoverlay
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay
+    masters: overlay
+    priority: 20
+    volatile: True
+
+layoutrenamed
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/layoutmasteroverlay
+    masters: overlay
+    priority: 30
+    aliases: layoutmasteroverlay
+    volatile: True
+
+repnamefromfile
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo
+    masters: testrepo
+    priority: 40
+    aliases: repnamesection
+    volatile: True
+
+t341
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/repo-341
+    priority: 50
+    volatile: True
+
+t348
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/repo-348
+    priority: 60
+    volatile: True
+
+ACCEPT_KEYWORDS="amd64"
+ACCEPT_LICENSE="* -SomeEula -CrossRepoNonfree"
+CONFIG_PROTECT="/usr/lib64/libreoffice/program/sofficerc /usr/share/config /usr/share/maven-bin-3.9/conf /var/bind"
+CONFIG_PROTECT_MASK="/etc/ca-certificates.conf /etc/dconf /etc/fonts/fonts.conf /etc/gentoo-release /etc/php/apache2-php8.5/ext-active/ /etc/php/cgi-php8.5/ext-active/ /etc/php/cli-php8.5/ext-active/ /etc/php/fpm-php8.5/ext-active/ /etc/php/phpdbg-php8.5/ext-active/ /etc/revdep-rebuild /etc/sandbox.d"
+DISTDIR="/var/tmp/s346/u-u17-portuale/dist"
+EMERGE_DEFAULT_OPTS=""
+FEATURES="-news"
+GENTOO_MIRRORS="http://10.48.0.229:8080"
+PKGDIR="/var/tmp/s346/u-u17-portuale/cfg/pkgdir"
+USE="amd64 baz foo globalforceflag" CPU_FLAGS_X86="sse2" ELIBC="glibc" LUA_SINGLE_TARGET="lua5-1" VIDEO_CARDS="nvidia"
+Unset:  CFLAGS, CHOST, CXXFLAGS, ENV_UNSET, PORTAGE_BINHOST, PORTAGE_BUNZIP2_COMMAND, PORTAGE_BZIP2_COMMAND, PORTAGE_TMPDIR
+

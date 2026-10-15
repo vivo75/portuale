@@ -1,0 +1,8 @@
+### emerge -pvu --getbinpkg=n --usepkg=n dev-libs/pg359-gsblk --color=n
+[ebuild  NS    ] dev-libs/pg359-gsblk-2:2::testrepo [1.0:1::testrepo] to /var/tmp/s359/st-ptl/fixtures
+[uninstall     ] dev-libs/pg359-gsblk-1.0:1::testrepo to /var/tmp/s359/st-ptl/fixtures
+[blocks b      ] dev-libs/pg359-gsblk:1 ("dev-libs/pg359-gsblk:1" is soft blocking dev-libs/pg359-gsblk-2)
+
+Total: 1 package (1 in new slot, 1 uninstall), Size of downloads: 0 KiB
+Conflict: 1 block (all satisfied)
+rc=0

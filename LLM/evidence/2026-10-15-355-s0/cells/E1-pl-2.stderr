@@ -1,0 +1,6 @@
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+ * The resume list contains packages that could not be merged.
+ * Use `emerge --resume` to retry, or `emerge --resume --skipfirst` to skip the first one.
+emerge: /var/tmp/t355/roots/E1-pl/usr/share/t355/link: File exists (os error 17)

@@ -1,0 +1,14 @@
+12d11
+< obj ./usr/share/t355/a md5=7850484a8394a2f74d72ac2d0db71c41 mtime=1792106074 content=decoy|
+22,32d20
+< ## vdb /var/tmp/t355/roots/S1-pl/var/db/pkg/app-misc/t355-space-1/
+< BUILD_TIME CATEGORY CBUILD CFLAGS CHOST CONTENTS COUNTER DEFINED_PHASES DESCRIPTION EAPI HOMEPAGE IUSE IUSE_EFFECTIVE KEYWORDS LICENSE PF REPO_REVISIONS SIZE SLOT USE environment.bz2 metadata repository t355-space-1.ebuild 
+< COUNTER=0
+< --- CONTENTS
+< dir /usr
+< dir /usr/share
+< dir /usr/share/t355
+< obj /usr/share/t355/a b.txt daa8075d6ac5ff8d0c6d4650adb4ef29 1792106074
+< sym /usr/share/t355/c d -> a b.txt 1792106074
+< dir /usr/share/t355/sp dir
+< obj /usr/share/t355/sp dir/f 9a8ad92c50cae39aa2c5604fd0ab6d8c 1792106074

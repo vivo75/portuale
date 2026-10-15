@@ -1,0 +1,8 @@
+### emerge -pv --getbinpkg=n --usepkg=n dev-libs/pg359-vapp --color=n
+[ebuild  N     ] dev-libs/pg359-vy-1::testrepo to /var/tmp/s359/st-ptl/fixtures
+[ebuild  N     ] dev-libs/pg359-vb-1::testrepo to /var/tmp/s359/st-ptl/fixtures
+[ebuild  N     ] virtual/pg359-v-1::testrepo to /var/tmp/s359/st-ptl/fixtures
+[ebuild  N     ] dev-libs/pg359-vapp-1::testrepo to /var/tmp/s359/st-ptl/fixtures
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+rc=0

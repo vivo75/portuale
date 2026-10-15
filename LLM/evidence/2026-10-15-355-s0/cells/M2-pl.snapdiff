@@ -1,0 +1,14 @@
+9,12d8
+< dir ./usr
+< dir ./usr/share
+< dir ./usr/share/t355
+< obj ./usr/share/t355/plain md5=55fb4253ad6cb9a803e7ae46603ea0a9 mtime=1792106023 content=plain|admin edit|
+18,25d13
+< ## vdb /var/tmp/t355/roots/M2-pl/var/db/pkg/app-misc/t355-m2-1/
+< BUILD_TIME CATEGORY CBUILD CFLAGS CHOST CONTENTS COUNTER DEFINED_PHASES DESCRIPTION EAPI HOMEPAGE IUSE IUSE_EFFECTIVE KEYWORDS LICENSE PF REPO_REVISIONS SIZE SLOT USE environment.bz2 metadata repository t355-m2-1.ebuild 
+< COUNTER=0
+< --- CONTENTS
+< dir /usr
+< dir /usr/share
+< dir /usr/share/t355
+< obj /usr/share/t355/plain 5839145a19c13f3ffb0a3b9527e0a912 1792106023

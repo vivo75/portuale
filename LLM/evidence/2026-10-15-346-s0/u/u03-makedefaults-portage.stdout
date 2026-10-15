@@ -1,0 +1,7 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.54 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/t341-dep-1 to /var/tmp/s346/u-u03-makedefaults-portage/cfg/ USE="x" 

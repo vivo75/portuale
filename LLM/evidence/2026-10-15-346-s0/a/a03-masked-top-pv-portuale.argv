@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/a-a03-masked-top-pv-portuale/cfg ROOT=/var/tmp/s346/a-a03-masked-top-pv-portuale/cfg /var/tmp/s346/bin/emerge -pv --package-moves=n dev-libs/bareacceptkeywordspkg

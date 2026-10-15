@@ -1,0 +1,63 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 4.89 s (backtrack: 0/20).
+
+[ebuild     U  ] app-misc/t355-mid-2::t355 [1::t355] to /var/tmp/t355/roots/P2-pg/ 0 KiB
+
+Total: 1 package (1 upgrade), Size of downloads: 0 KiB
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t355-mid-2::t355 for /var/tmp/t355/roots/P2-pg/
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/t355/scratch/P2-pg/tmp/portage/app-misc/t355-mid-2/work
+>>> Preparing source in /var/tmp/t355/scratch/P2-pg/tmp/portage/app-misc/t355-mid-2/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/t355/scratch/P2-pg/tmp/portage/app-misc/t355-mid-2/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/t355/scratch/P2-pg/tmp/portage/app-misc/t355-mid-2/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t355-mid-2
+
+>>> Install app-misc/t355-mid-2 into /var/tmp/t355/scratch/P2-pg/tmp/portage/app-misc/t355-mid-2/image
+>>> Completed installing app-misc/t355-mid-2 into /var/tmp/t355/scratch/P2-pg/tmp/portage/app-misc/t355-mid-2/image
+
+ [32m*[0m Final size of build directory: 40 KiB
+ [32m*[0m Final size of installed tree:  16 KiB
+
+[33m * [39;49;00mQA Notice: Unresolved soname dependencies:
+[33m * [39;49;00m
+[33m * [39;49;00m	/usr/lib64/libt355mid.so.2: libc.so.6 libt355base.so.1
+[33m * [39;49;00m
+
+>>> Installing (1 of 1) app-misc/t355-mid-2::t355 to /var/tmp/t355/roots/P2-pg/
+ [32;01m*[39;49;00m checking 2 files for package collisions
+>>> Merging app-misc/t355-mid-2 to /var/tmp/t355/roots/P2-pg/
+--- /var/tmp/t355/roots/P2-pg/usr/
+--- /var/tmp/t355/roots/P2-pg/usr/lib64/
+>>> /var/tmp/t355/roots/P2-pg/usr/lib64/libt355mid.so.2
+>>> /var/tmp/t355/roots/P2-pg/usr/lib64/libt355mid.so -> libt355mid.so.2
+>>> needed    obj /var/tmp/t355/roots/P2-pg/usr/lib64/libt355mid.so.1
+>>> Safely unmerging already-installed instance...
+--- replaced obj /var/tmp/t355/roots/P2-pg/usr/lib64/libt355mid.so.1
+--- replaced sym /var/tmp/t355/roots/P2-pg/usr/lib64/libt355mid.so
+--- replaced dir /var/tmp/t355/roots/P2-pg/usr/lib64
+--- replaced dir /var/tmp/t355/roots/P2-pg/usr
+>>> Original instance of package unmerged safely.
+>>> app-misc/t355-mid-2 merged.
+
+>>> Completed (1 of 1) app-misc/t355-mid-2::t355 to /var/tmp/t355/roots/P2-pg/
+
+ * GNU info directory index is up-to-date.
+
+!!! existing preserved libs:
+>>> package: app-misc/t355-base-2
+ *  - /usr/lib64/libt355base.so.1
+ *      used by /usr/lib64/libt355mid.so.2 (app-misc/t355-mid-2)
+>>> package: app-misc/t355-mid-2
+ *  - /usr/lib64/libt355mid.so.1
+ *      used by /usr/bin/t355app (app-misc/t355-app-1)
+Use emerge @preserved-rebuild to rebuild packages using these libraries

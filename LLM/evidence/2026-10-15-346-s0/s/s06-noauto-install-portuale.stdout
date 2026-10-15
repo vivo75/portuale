@@ -1,0 +1,3 @@
+mkdir -p "/var/tmp/s346/s-s06-portuale/tmp/portage/app-misc/t348-b-phases-8/image/usr/share/t348-b-phases"
+cp built.txt "/var/tmp/s346/s-s06-portuale/tmp/portage/app-misc/t348-b-phases-8/image/usr/share/t348-b-phases/built.txt"
+cp config.args "/var/tmp/s346/s-s06-portuale/tmp/portage/app-misc/t348-b-phases-8/image/usr/share/t348-b-phases/config.args"

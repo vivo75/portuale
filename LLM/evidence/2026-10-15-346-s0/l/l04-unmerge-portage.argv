@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/l-l04-unmerge-portage/cfg ROOT=/var/tmp/s346/l-l04-unmerge-portage/root PORTAGE_TMPDIR=/var/tmp/s346/l-l04-unmerge-portage/tmp DISTDIR=/var/tmp/s346/l-l04-unmerge-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news emerge -C --package-moves=n app-misc/t348-b-phases

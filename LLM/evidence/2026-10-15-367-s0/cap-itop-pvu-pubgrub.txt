@@ -1,0 +1,3 @@
+
+Total: 0 packages, Size of downloads: 0 KiB
+rc=0 argv: /home/vivo/repo/PORTUALE/portuale/target/release/emerge --solver=pubgrub -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg367-itop

@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env -u PORTAGE_TMPDIR -u DISTDIR -u FEATURES PORTAGE_CONFIGROOT=/var/tmp/s346/e-e01-full-portage/cfg T348_LOGDIR=/var/tmp/s346/e-e01-full-portage/logs ebuild /home/vivo/repo/PORTUALE/pmtest/fixtures/repo-348/app-misc/t348-b-env/t348-b-env-8.ebuild setup

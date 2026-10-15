@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/b-b03-use-bid2-respect-portage/cfg ROOT=/var/tmp/s346/b-b03-use-bid2-respect-portage/cfg emerge -pv --package-moves=n --usepkgonly=y --binpkg-respect-use=y dev-libs/t341-dep

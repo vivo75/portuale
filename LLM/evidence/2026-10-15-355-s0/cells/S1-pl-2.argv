@@ -1,0 +1,1 @@
+emerge --ignore-default-opts -v -C =app-misc/t355-space-1

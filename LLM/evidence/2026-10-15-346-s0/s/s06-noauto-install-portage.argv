@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/s-s06-portage/cfg PORTAGE_TMPDIR=/var/tmp/s346/s-s06-portage/tmp DISTDIR=/var/tmp/s346/s-s06-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news\ noauto ebuild /home/vivo/repo/PORTUALE/pmtest/fixtures/repo-348/app-misc/t348-b-phases/t348-b-phases-8.ebuild install

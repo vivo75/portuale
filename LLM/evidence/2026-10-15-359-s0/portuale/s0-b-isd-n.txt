@@ -1,0 +1,6 @@
+### emerge --pretend --update --implicit-system-deps=n @world --color=n
+[ebuild  N     ] dev-libs/newpkg-1.0 to /var/tmp/s359/st-ptl/fixtures
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0 to /var/tmp/s359/st-ptl/fixtures
+[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0] to /var/tmp/s359/st-ptl/fixtures
+[ebuild  N     ] dev-libs/withdeps-1.0 to /var/tmp/s359/st-ptl/fixtures
+rc=0

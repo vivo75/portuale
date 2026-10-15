@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env -u PYTHONHASHSEED PORTAGE_CONFIGROOT=/var/tmp/s346/c-c06-color-portuale-noseed/cfg ROOT=/var/tmp/s346/c-c06-color-portuale-noseed/cfg /var/tmp/s346/bin/emerge -p --package-moves=n --color=maybe dev-libs/t341-dep

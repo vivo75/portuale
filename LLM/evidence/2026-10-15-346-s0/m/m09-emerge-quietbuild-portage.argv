@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/m-m09-emerge-quietbuild-portage/cfg ROOT=/var/tmp/s346/m-m09-emerge-quietbuild-portage/root PORTAGE_TMPDIR=/var/tmp/s346/m-m09-emerge-quietbuild-portage/tmp DISTDIR=/var/tmp/s346/m-m09-emerge-quietbuild-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news emerge --oneshot --package-moves=n --quiet-build=y app-misc/t348-b-phases

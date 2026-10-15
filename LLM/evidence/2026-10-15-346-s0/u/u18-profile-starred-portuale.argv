@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/u-u18-profile-starred-portuale/cfg ROOT=/var/tmp/s346/u-u18-profile-starred-portuale/cfg /var/tmp/s346/bin/emerge -p --package-moves=n @profile

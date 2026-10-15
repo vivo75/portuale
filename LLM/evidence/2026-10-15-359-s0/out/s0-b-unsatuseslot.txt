@@ -1,0 +1,38 @@
+### emerge --pretend --update dev-libs/unsatuseslot --color=n
+### delta=none
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.13 s (backtrack: 0/20).
+
+[ebuild   R    ] dev-libs/unsatuseslotother-1.0 to /tmp/st/fixtures/ USE="unsatuseorflag*" 
+[ebuild  N     ] dev-libs/unsatuseslot-1.0 to /tmp/st/fixtures/
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/unsatuseslot-1.0::testrepo
+# required by dev-libs/unsatuseslot (argument)
+>=dev-libs/unsatuseslotother-1.0 unsatuseorflag
+rc=1

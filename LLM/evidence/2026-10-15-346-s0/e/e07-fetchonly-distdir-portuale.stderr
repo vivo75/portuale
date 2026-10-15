@@ -1,0 +1,1 @@
+emerge: option "--fetchonly" is a Portage emerge option, but is not yet implemented in portuale -- run "emerge --help" for the options and actions that are.

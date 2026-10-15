@@ -1,0 +1,49 @@
+# S0 cells for plan 02.359 (LLM/02.359-default-solver-update-parity.opus.md §2 S0).
+# Format: name | emerge-args (without --color=n; the runner appends it) | env-spec
+# env-spec: space-separated VAR=val applied on top of the base env;
+# DELTA=<tag> applies a documented staged-tree delta before the run.
+# Debug rows (dbg-*) are Portage-only (portuale has no --debug), mirroring
+# run-portage.sh in LLM/evidence/2026-10-15-plan-359/.
+# Every cell runs on a FRESH stage (D3); nothing is re-used across cells.
+# Existing cells reused without re-running (unaffected by global updates):
+#   362-dtop-pvu-deep1 (-pvu --deep=1 pg34-dtop control),
+#   362-withdeps-pu, 362-needer-pu, 362-needskeywordmasked-pu,
+#   362-toolchainroot-pu (corpus adjudication rows, §0.2.5),
+#   361-blib-pvuD-noflags (-pvuD pg34-blib plain control for group C).
+s0-a-gs-range | -pvu --getbinpkg=n --usepkg=n >=dev-libs/pg34-gs-1.0 |
+s0-a-maskedusedrift | -pvN --getbinpkg=n --usepkg=n dev-libs/needskeywordmaskeduse | DELTA=maskedusedrift
+dbg-withdeps-pu | --pretend --update --debug dev-libs/withdeps |
+dbg-needskeywordmasked-pu | --pretend --update --debug dev-libs/needskeywordmasked |
+dbg-uapp-pvN | -pvN --getbinpkg=n --usepkg=n --debug dev-libs/pg34-uapp |
+s0-b-world | --pretend --update @world |
+s0-b-selected | --pretend --update @selected |
+s0-b-system | --pretend --update @system |
+s0-b-flipinstconsumer | --pretend --update dev-libs/flipinstconsumer |
+s0-b-needer | --pretend --update dev-libs/needer |
+s0-b-needskeywordmasked | --pretend --update dev-libs/needskeywordmasked |
+s0-b-toolchainroot | --pretend --update dev-libs/toolchainroot |
+s0-b-unsatuseslot | --pretend --update dev-libs/unsatuseslot |
+s0-b-isd-bare | --pretend --update --implicit-system-deps @world |
+s0-b-isd-y | --pretend --update --implicit-system-deps=y @world |
+s0-b-isd-n | --pretend --update --implicit-system-deps=n @world |
+s0-b-rebuild-unbuilt | --pretend -u --rebuild-if-unbuilt dev-libs/rebuildtrigger |
+s0-b-rebuild-newver | --pretend -u --rebuild-if-new-ver dev-libs/rebuildtrigger |
+s0-b-rebuild-newrev | --pretend -u --rebuild-if-new-rev=y dev-libs/rebuildtrigger |
+s0-b-samepkg-selected | --pretend --update dev-libs/samepkg @selected |
+s0-c-usepkg | -pvuD --usepkg dev-libs/pg34-blib |
+s0-c-k | -pvuD -k dev-libs/pg34-blib |
+s0-c-usepkgonly-n | -pvuD --usepkgonly=n dev-libs/pg34-blib |
+s0-c-getbinpkgonly-n | -pvuD --getbinpkgonly=n dev-libs/pg34-blib |
+s0-c-env-usepkgn | -pvuD --getbinpkg=n dev-libs/pg34-blib | EMERGE_DEFAULT_OPTS=--usepkg=n
+s0-c-features-getbinpkg-off | -pvuD --getbinpkg=n dev-libs/pg34-blib | FEATURES=getbinpkg
+s0-c-features-getbinpkg | -pvuD dev-libs/pg34-blib | FEATURES=getbinpkg
+s0-d-movedepconsumer-deep | -pv --deep dev-libs/movedepconsumer |
+s0-d-movedepconsumer-deep-nomoves | -pv --package-moves=n --deep dev-libs/movedepconsumer |
+s0-d-movedepconsumer-p | --pretend dev-libs/movedepconsumer |
+s0-d-movedepconsumer-p-nomoves | --pretend --package-moves=n dev-libs/movedepconsumer |
+s0-d-slotmovepkg | --pretend --update dev-libs/slotmovepkg |
+s0-d-slotmovepkg-nomoves | --pretend --update --package-moves=n dev-libs/slotmovepkg |
+s0-e-gbapp-pvuD | -pvuD --getbinpkg=n --usepkg=n dev-libs/pg359-gbapp |
+s0-e-gbapp-pvuD-bdy | -pvuD --with-bdeps=y --getbinpkg=n --usepkg=n dev-libs/pg359-gbapp |
+s0-e-gsblk-pvu | -pvu --getbinpkg=n --usepkg=n dev-libs/pg359-gsblk |
+s0-e-vapp-pv | -pv --getbinpkg=n --usepkg=n dev-libs/pg359-vapp |

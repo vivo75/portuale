@@ -1,0 +1,2 @@
+cwd: /var/tmp/s346
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s346/c-c08-with-bdeps-auto-portage-seed/cfg ROOT=/var/tmp/s346/c-c08-with-bdeps-auto-portage-seed/cfg emerge -p --package-moves=n --with-bdeps-auto=x dev-libs/t341-dep

@@ -1,0 +1,6 @@
+### emerge -pv --deep dev-libs/movedepconsumer --color=n
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/s359/st-ptl/fixtures
+[ebuild  N     ] dev-libs/movedepconsumer-1.0::testrepo to /var/tmp/s359/st-ptl/fixtures
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+rc=0

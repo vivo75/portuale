@@ -1,0 +1,7 @@
+dir /usr
+dir /usr/share
+dir /usr/share/t355
+obj /usr/share/t355/a b.txt daa8075d6ac5ff8d0c6d4650adb4ef29 1792106111
+sym /usr/share/t355/c d -> a b.txt 1792106111
+dir /usr/share/t355/sp dir
+obj /usr/share/t355/sp dir/f 9a8ad92c50cae39aa2c5604fd0ab6d8c 1792106111

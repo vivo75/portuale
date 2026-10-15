@@ -1,0 +1,77 @@
+Portage 3.0.82.2 (python 3.14.8-final-0, default, gcc-16, unavailable, 6.18.39-serv x86_64)
+=================================================================
+System uname: Linux-6.18.39-serv-x86_64-AMD_Ryzen_9_5950X_16-Core_Processor-with-glibc2.44
+KiB Mem:   131806340 total, 106483656 free
+KiB Swap:          0 total,         0 free
+Timestamp of repository gentoo: Thu, 15 Oct 2026 13:45:44 +0000
+sh: bash 5.3_p20
+coreutils: (GNU coreutils) 9.12
+ld: GNU ld (Gentoo 2.47 p1) 2.47.0
+Repositories:
+
+testrepo
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/repo
+    priority: -1000
+    volatile: True
+
+gentoo
+    location: /.gentoo/repos/gentoo
+    sync-type: rsync
+    sync-uri: rsync://rsync.gentoo.org/gentoo-portage
+    volatile: True
+    sync-rsync-extra-opts: 
+    sync-rsync-verify-max-age: 3
+    sync-rsync-verify-metamanifest: yes
+    sync-rsync-verify-jobs: 1
+
+overlay
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/overlay
+    masters: testrepo
+    priority: 10
+    volatile: True
+
+independentoverlay
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay
+    masters: overlay
+    priority: 20
+    volatile: True
+
+layoutrenamed
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/layoutmasteroverlay
+    masters: overlay
+    priority: 30
+    aliases: layoutmasteroverlay
+    volatile: True
+
+repnamefromfile
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo
+    masters: testrepo
+    priority: 40
+    aliases: repnamesection
+    volatile: True
+
+t341
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/repo-341
+    priority: 50
+    volatile: True
+
+t348
+    location: /home/vivo/repo/PORTUALE/pmtest/fixtures/repo-348
+    priority: 60
+    volatile: True
+
+ACCEPT_KEYWORDS="amd64"
+ACCEPT_LICENSE="* -@EULA"
+CFLAGS=""
+CONFIG_PROTECT="/etc /usr/lib64/libreoffice/program/sofficerc /usr/share/config /usr/share/maven-bin-3.9/conf /var/bind"
+CONFIG_PROTECT_MASK="/etc/ca-certificates.conf /etc/dconf /etc/env.d /etc/fonts/fonts.conf /etc/gentoo-release /etc/php/apache2-php8.5/ext-active/ /etc/php/cgi-php8.5/ext-active/ /etc/php/cli-php8.5/ext-active/ /etc/php/fpm-php8.5/ext-active/ /etc/php/phpdbg-php8.5/ext-active/ /etc/revdep-rebuild /etc/sandbox.d"
+CXXFLAGS=""
+DISTDIR="/var/tmp/s346/u-u17-portage/dist"
+EMERGE_DEFAULT_OPTS=""
+FEATURES="assume-digests binpkg-docompress binpkg-dostrip binpkg-logs binpkg-multi-instance buildpkg-live compress-index config-protect-if-modified distlocks ebuild-locks fixlafiles ipc-sandbox merge-sync merge-wait multilib-strict network-sandbox parallel-fetch pid-sandbox pkgdir-index-trusted preserve-libs protect-owned qa-unresolved-soname-deps sandbox strict test unknown-features-warn unmerge-logs unmerge-orphans unprivileged userfetch userpriv usersandbox usersync xattr"
+GENTOO_MIRRORS="http://10.48.0.229:8080"
+PKGDIR="/var/tmp/s346/u-u17-portage/cfg/pkgdir"
+PORTAGE_TMPDIR="/var/tmp"
+USE="amd64 baz foo globalforceflag test x" CPU_FLAGS_X86="sse2" ELIBC="glibc" LUA_SINGLE_TARGET="lua5-1" VIDEO_CARDS="nvidia"
+Unset:  CHOST, ENV_UNSET, PORTAGE_BINHOST, PORTAGE_BUNZIP2_COMMAND
+
