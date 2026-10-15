@@ -1,0 +1,59 @@
+# #34 S5 G6 — shared method (trace + control probes, 2026-10-15)
+
+All runs use image `localhost/test-portuale:latest` (`5616d41d00cd`,
+Portage 3.0.82.2, gentoo tree `11c58b7a`, same 320-pkg VDB snapshot as the
+S5c bed runs) with the CURRENT-HEAD binary mounted over
+`/usr/local/bin/emerge`:
+
+```
+podman run --rm --security-opt seccomp=unconfined --cgroups=enabled \
+  --cgroupns=private \
+  -v /home/vivo/repo/PORTUALE/portuale/target/release/portuale:/usr/local/bin/emerge:ro \
+  -v /tmp/opencode/g6a:/out --entrypoint /bin/bash \
+  localhost/test-portuale:latest -c 'export PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  <cmd> > /out/<file> 2> /out/<file-trace>; echo rc=$?'
+```
+
+portuale binary: HEAD `5e0cc0c9` (rebuilt 2026-10-15, `target/release/emerge`
+is a symlink to `portuale`). Env on every run:
+`PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC` (bed-identical).
+
+Trace runs (`PORTUALE_PG_TRACE=1`, `pg-target/pg-edge/pg-plan` lines per the
+`pg_trace` code note; stderr only):
+
+- `PORTUALE_PG_TRACE=1 /usr/local/bin/emerge --solver=pubgrub -pv
+  --getbinpkg=n --usepkg=n --color=n kde-apps/kdecore-meta`
+  → `pg-pv.txt` (rc 0, reproduces the G6a `NS docbook-xml-dtd-4.3` row at
+  line 22) + `pg-pv-trace.txt` (536116 lines; 4 solve rounds — the G2
+  post-solve fixpoint).
+- Same with `-pve kde-apps/kdecore-meta` → `pg-pve.txt` (rc 0, reproduces
+  all 5 G6b rows) + `pg-pve-trace.txt` (305138 lines).
+- Same with `-pve app-editors/emacs` → `pg-pve-emacs.txt` (rc 0,
+  reproduces the G6c `R info-manual` row at line 60) +
+  `pg-pve-emacs-trace.txt` (292862 lines).
+
+Control probes (real Portage only — prove the downstream closure agrees
+given the parent, so the ONLY divergence is the parent's `||` pick):
+
+- `/usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n
+  gnome-base/gnome-keyring` → `real-gnome-keyring-pv.txt` (rc 1: G4a
+  freetype-harbuzz autounmask gate AFTER the list; the list itself shows
+  `[ebuild NS] app-text/docbook-xml-dtd-4.3-r2:4.3`).
+- `/usr/sbin/emerge -pve --getbinpkg=n --usepkg=n --color=n
+  gnome-base/gnome-keyring` → `real-gnome-keyring-pve.txt` (rc 1: UD
+  portage row + autounmask gate; the list itself shows all five G6b rows:
+  `R acct-group/sshd`, `R acct-user/sshd`, `R virtual/openssh USE="ssl"`,
+  `R sys-apps/shadow-4.19.4:0/5`, `R net-misc/openssh-10.4_p1-r1`,
+  plus the `NS docbook-xml-dtd-4.3` row — same versions/actions/USE as
+  portuale's kdecore extras).
+
+Read-only ebuild greps ran in throwaway containers against the same image
+(`/var/db/repos/gentoo`, tree `11c58b7a` — NOT the host tree).
+
+Bed runs referenced (pmtest `differential-test-bed/logs/`):
+`-pv l0-20261015T091741Z`, `-pve l0-20261015T094939Z`.
+
+No bed script was executed in this task (no `l0-resolver.sh` runs, no
+`resolve-compare.py` runs, no corpus bless). Raw trace/capture files live
+outside the repos (`/tmp/opencode/g6a/`); the decisive lines are quoted
+verbatim in `a/`, `b/`, `c/`.

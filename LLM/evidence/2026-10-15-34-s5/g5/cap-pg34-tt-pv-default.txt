@@ -1,0 +1,4 @@
+[ebuild  N     ] dev-libs/pg34-tx-1::testrepo to /var/tmp/pg34-s5e-fixcopy/fixtures
+[ebuild  N     ] dev-libs/pg34-tt-1::testrepo to /var/tmp/pg34-s5e-fixcopy/fixtures
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

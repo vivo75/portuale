@@ -1,0 +1,94 @@
+# #34 S5 G5/G6 fixture captures (2026-10-15): `||` prefers an alternative
+# already in the graph. Two shapes; EAPI 8, real md5-cache each.
+# Fixture set 1 (virtual/secret-service shape): `dev-libs/pg34-sv-1`
+# (`RDEPEND="|| ( dev-libs/pg34-sva dev-libs/pg34-svb )"`),
+# `dev-libs/pg34-sva-1` (`BDEPEND` pulling `dev-libs/pg34-svx-1`),
+# `dev-libs/pg34-svb-1`, and target `dev-libs/pg34-svt-1`
+# (`RDEPEND="dev-libs/pg34-sv dev-libs/pg34-svb"`, so svb is in the graph
+# and sva is first-listed), nothing installed.
+# Fixture set 2 (root-target shape): `dev-libs/pg34-tx-1`
+# (`RDEPEND="|| ( dev-libs/pg34-info dev-libs/pg34-tt )"`), target
+# `dev-libs/pg34-tt-1` (`BDEPEND="dev-libs/pg34-tx"`, the emacs-analog
+# build dependency on texinfo), `dev-libs/pg34-info-1` installed (the
+# info-manual analog).
+# Mechanical capture; each cap file is verbatim combined stdout+stderr; rc recorded below.
+# Fixtures live in pmtest (branch backlog/34-s5d, worktree files excluded
+# from git via /fixtures); the shared tree was never executed in place.
+# NOTE 1 (capture decides over the plan): Portage 3.0.82.2 plans
+#   `N svb + N sv + N svt`, rc 0, on pg34-svt -pv -- the `||` resolves to
+#   the in-graph svb, not first-listed sva (depgraph.py:778-793; bed `-pv
+#   kde-apps/kdecore-meta` takes kwallet-runtime over gnome-keyring the
+#   same way). Pre-fix pubgrub plans `N svb + N svx + N sva + N sv + N
+#   svt`: the engine's installed-preference finds nothing installed and
+#   falls back to the first-listed alternative (`provider/solve.rs`
+#   fallback `:258`, `max()` = first-listed via n-i numbering).
+#   Default agrees with Portage (hence the default pin).
+# NOTE 2 (capture decides over the plan): Portage 3.0.82.2 on pg34-tt
+#   prefers the in-graph target tt over installed first-listed info --
+#   the texinfo `|| ( info-manual emacs )` shape from bed `-pve
+#   app-editors/emacs` -- in BOTH -pv and -pve. Pre-fix pubgrub agrees
+#   on -pv (installed info stays a hidden kept leaf: `N tx + N tt`, no
+#   info row) and diverges on -pve (`R info-1 + N tx + N tt`: under
+#   `--emptytree` the wrong branch is a rebuild). Default agrees with
+#   Portage on -pv (hence the default pin) and prints the same `R info`
+#   row on -pve (no default pin there).
+# NOTE 3 (staged-ROOT BDEPEND split): Portage merges BDEPENDs into the host
+#   root, so the staged-ROOT (`ROOT=/tmp/...`, unlike the single-root bed)
+#   captures for pg34-tt carry host-root rows -- `N pg34-info-1` and `N
+#   pg34-tx-1` *without* the `to ROOT` suffix -- where the single root
+#   would satisfy (or, under -pve, never graph) info. The pins use the
+#   single-root sets (`N tx + N tt` in both modes; info satisfied-hidden
+#   under -pv, never-graphed under -pve), exactly like the G3
+#   `cap-pg34-self-*-portage.txt` staged-ROOT caveat (`g3/cmd.txt` NOTE 2):
+#   the host root lacks the staged `pg34-info-1` vdb entry, so the
+#   staged capture prints it `N` where the single root hides it.
+#   `pg34-svt` is RDEPEND-only and has no such artifact row.
+# NOTE 4 (host go shape, report only): the bed `-pv dev-lang/go` probe is
+#   the same in-graph/self-avoidance family already fixed bridge-side in
+#   G3 (`without_self_alternatives`); this slice covers the remaining
+#   `||` row-sets (gnome-keyring cluster + texinfo/emacs).
+
+image: localhost/test-portuale:latest  id 5616d41d00cdbef0aa8933476973dc5b9ca07e897b635bd7167dedf61c09cb5f
+image Portage: 3.0.82.2  (see portage-version line in the run log)
+portuale HEAD: 5e0cc0c962bf42767c058b1d32bdc2fe8e3d93de (G5/G6 unimplemented at capture time)
+portuale binary: /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+  mtime: 2026-10-15 10:29:26.914442801 -0000
+  (G3 behaviour verified on this binary: `--solver=pubgrub -pv dev-libs/pg34-self`
+   plans `N selfboot + N self`, rc 0)
+host Portage (unused for fixture cells): 3.0.82.2
+
+--- Portage side (container; never against the shared fixtures tree) ---
+staging: pmtest fixtures mounted read-only at /fixtures, staged with the unmodified
+  differential-test-bed/layers/l0-fixture-oracle/stage.sh to /tmp/pg34-s5e-stage (in-container path)
+container env (all portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/tmp/pg34-s5e-stage/fixtures ROOT=/tmp/pg34-s5e-stage/fixtures
+  PORTAGE_RUNNING_ROOT=/tmp/pg34-s5e-stage/fixtures DISTDIR=/tmp/pg34-s5e-stage/fixtures/distfiles
+  PORTAGE_REPOSITORIES=<contents of /tmp/pg34-s5e-stage/fixtures/etc/portage/repos.conf/repos.conf>
+podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+  -v <pmtest>/fixtures:/fixtures:ro -v <pmtest>/differential-test-bed:/TEST:ro
+  -v /tmp/pg34-s5e-out:/out
+  --entrypoint /bin/bash localhost/test-portuale:latest /out/run.sh  (stage.sh + the argv below)
+
+cap-pg34-svt-pv-portage.txt      rc=0  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-svt
+cap-pg34-tt-pv-portage.txt       rc=0  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-tt
+cap-pg34-tt-pve-portage.txt      rc=0  /usr/sbin/emerge -pve --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-tt
+
+--- portuale side (host binary, scratch copy /var/tmp/pg34-s5e-fixcopy) ---
+staging: cp of pmtest fixtures via /tmp/opencode/fixture-smith/stage-host.sh
+  (same deltas as stage.sh; see LLM/evidence/2026-10-15-34-s5/g1/cmd.txt)
+host env (all portuale captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/var/tmp/pg34-s5e-fixcopy/fixtures ROOT=/var/tmp/pg34-s5e-fixcopy/fixtures
+  PORTAGE_RUNNING_ROOT=/var/tmp/pg34-s5e-fixcopy/fixtures DISTDIR=/var/tmp/pg34-s5e-fixcopy/fixtures/distfiles
+  EMERGE_DEFAULT_OPTS unset
+
+cap-pg34-svt-pv-pg.txt       rc=0  .../target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-svt
+cap-pg34-svt-pv-default.txt  rc=0  .../target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-svt
+cap-pg34-tt-pv-pg.txt        rc=0  .../target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-tt
+cap-pg34-tt-pv-default.txt   rc=0  .../target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-tt
+cap-pg34-tt-pve-pg.txt       rc=0  .../target/release/emerge --solver=pubgrub -pve --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-tt
+cap-pg34-tt-pve-default.txt  rc=0  .../target/release/emerge -pve --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-tt
+
+--- row summary (ebuild plan rows only; Portage's license-mask footer omitted) ---
+svt -pv   : portage N(svb)+N(sv)+N(svt) | pg +N(sva)+N(svx) DIVERGES | default same as Portage
+tt  -pv   : portage N(tx)+N(tt) [single-root set; staged adds host-root N(info)] | pg same rows, rc 0 | default same rows
+tt  -pve  : portage N(tx)+N(tt) [single-root set; staged adds host-root N(info)] | pg R(info)+N(tx)+N(tt) DIVERGES | default same as pg (no default pin)

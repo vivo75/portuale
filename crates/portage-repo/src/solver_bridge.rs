@@ -1939,6 +1939,703 @@ fn changed_use_dep_flags(
     flags
 }
 
+// --- `||` in-graph preference (post-solve reorder fixpoint) ------------------
+
+/// One `||` group's address: the member version whose dep strings hold it,
+/// the dep class index (DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND = 0-4, the
+/// same order [`version_row`] consumes), and the group's pre-order index
+/// among the class's `||` nodes. The index is structural: reordering or
+/// dropping branches inside the node itself never moves it, so an override
+/// computed from one solve still addresses the same group on the next
+/// pass. The one shape that does move it (a nested `||` inside a dropped
+/// branch) is caught by the stored content fingerprint instead.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct OrGroupKey {
+    cpv: String,
+    class: usize,
+    index: usize,
+}
+
+/// The desired branch order for one [`OrGroupKey`]: `order` is the full
+/// branch-key sequence the engine should see (a branch missing from it is
+/// dropped from the facts), `fingerprint` the sorted branch keys the order
+/// was computed from. An entry whose group content changed addresses a
+/// different group and is skipped on apply.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct OrGroupOrder {
+    fingerprint: Vec<String>,
+    order: Vec<String>,
+}
+
+/// Per-solve `||` overrides for the pubgrub facts: which `||` groups read
+/// in a different branch order (or without a branch) than the ebuild lists
+/// them. Pubgrub-only: [`BridgeRepo::versions_for`] applies them, and the
+/// resolvo backend reads `record.deps` straight from [`LazyRepo` and never
+/// sees them, so the default/resolvo output does not move.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct OrChoiceOverrides {
+    groups: HashMap<OrGroupKey, OrGroupOrder>,
+}
+
+impl OrChoiceOverrides {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Deterministic rendering for the fixpoint's oscillation history
+    /// (fingerprint and order both: two passes can agree on the surviving
+    /// branch while disagreeing on what was dropped).
+    fn signature(&self) -> String {
+        let mut parts: Vec<String> = self
+            .groups
+            .iter()
+            .map(|(key, order)| {
+                format!(
+                    "{}|{}|{}={}|{}",
+                    key.cpv,
+                    key.class,
+                    key.index,
+                    order.fingerprint.join(","),
+                    order.order.join(",")
+                )
+            })
+            .collect();
+        parts.sort();
+        parts.join(";")
+    }
+}
+
+/// Structural key for one direct `||` branch: the atom's identity (cp,
+/// slot pin, version floor, USE deps) for [`portage_solver::DepEntry::Atom`]
+/// branches, the nested content for group branches. Two branches naming the
+/// same cp in different slots (`|| ( foo:1 foo:2 )`) key differently.
+fn or_branch_key(entry: &portage_solver::DepEntry) -> String {
+    match entry {
+        portage_solver::DepEntry::Atom(dep) => {
+            let version_part = match (&dep.op, &dep.version) {
+                (Some(op), Some(version)) => {
+                    format!("{op:?}{version:?}{}", if dep.glob { "*" } else { "" })
+                }
+                _ => String::new(),
+            };
+            let use_part = match &dep.use_deps {
+                None => String::new(),
+                Some(uds) => {
+                    let mut parts: Vec<String> =
+                        uds.iter().map(|item| format!("{item:?}")).collect();
+                    parts.sort();
+                    parts.join(",")
+                }
+            };
+            format!(
+                "atom:{}|{:?}|{}|{}",
+                dep.cpn, dep.slot_dep, version_part, use_part
+            )
+        }
+        portage_solver::DepEntry::AllOf(children) => format!(
+            "all({})",
+            children
+                .iter()
+                .map(or_branch_key)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        portage_solver::DepEntry::UseConditional {
+            flag,
+            negate,
+            children,
+        } => format!(
+            "use({}{}:{})",
+            if *negate { "!" } else { "" },
+            flag.as_str(),
+            children
+                .iter()
+                .map(or_branch_key)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        portage_solver::DepEntry::AnyOf(children) => format!(
+            "any({})",
+            children
+                .iter()
+                .map(or_branch_key)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        portage_solver::DepEntry::ExactlyOneOf(children) => format!(
+            "one({})",
+            children
+                .iter()
+                .map(or_branch_key)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        portage_solver::DepEntry::AtMostOneOf(children) => format!(
+            "maybe({})",
+            children
+                .iter()
+                .map(or_branch_key)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+    }
+}
+
+/// Whether any atom in `entries` (nested groups included) is a blocker:
+/// groups carrying blockers are never reordered or trimmed (the task's
+/// "must not alter blockers" rule).
+fn or_subtree_has_blocker(entries: &[portage_solver::DepEntry]) -> bool {
+    entries.iter().any(|entry| match entry {
+        portage_solver::DepEntry::Atom(dep) => dep.blocker.is_some(),
+        portage_solver::DepEntry::UseConditional { children, .. } => {
+            or_subtree_has_blocker(children)
+        }
+        portage_solver::DepEntry::AllOf(children)
+        | portage_solver::DepEntry::AnyOf(children)
+        | portage_solver::DepEntry::ExactlyOneOf(children)
+        | portage_solver::DepEntry::AtMostOneOf(children) => or_subtree_has_blocker(children),
+    })
+}
+
+/// Apply `overrides` to one dep class: every `||` node is visited in
+/// pre-order (the same traversal [`compute_or_overrides`] numbers groups
+/// with, so `index` lines up), then the stored order is enforced --
+/// branches missing from it are dropped, unknown stored keys ignored. The
+/// raw md5-cache strings (`raw_deps`, the merge-order/display source) are
+/// untouched: only the parsed facts the engine converts change.
+fn apply_or_overrides_to_entries(
+    entries: &[portage_solver::DepEntry],
+    key_prefix: (&str, usize),
+    overrides: &OrChoiceOverrides,
+    next_index: &mut usize,
+) -> Vec<portage_solver::DepEntry> {
+    use portage_solver::DepEntry;
+    entries
+        .iter()
+        .map(|entry| match entry {
+            DepEntry::AnyOf(children) => {
+                let index = *next_index;
+                *next_index += 1;
+                let reordered: Vec<DepEntry> = match overrides.groups.get(&OrGroupKey {
+                    cpv: key_prefix.0.to_string(),
+                    class: key_prefix.1,
+                    index,
+                }) {
+                    Some(want) => {
+                        let live: Vec<String> = children.iter().map(or_branch_key).collect();
+                        // A group whose content does not contain the stored
+                        // content is a different node (a nested `||` inside
+                        // a dropped branch moved the index onto it) and is
+                        // left alone. Otherwise the stored order is
+                        // enforced for the branches it names; live branches
+                        // missing from it were dropped on the analysis pass
+                        // and stay dropped, unknown stored keys are ignored.
+                        // (`live` is the base record content, which never
+                        // changes within a resolve, so a stored entry always
+                        // still addresses its own group here.)
+                        if !want.fingerprint.iter().all(|key| live.contains(key)) {
+                            children.clone()
+                        } else {
+                            let mut unused: Vec<&DepEntry> = children.iter().collect();
+                            let mut out = Vec::new();
+                            for key in &want.order {
+                                if let Some(pos) =
+                                    unused.iter().position(|c| &or_branch_key(c) == key)
+                                {
+                                    out.push(unused.remove(pos).clone());
+                                }
+                            }
+                            out
+                        }
+                    }
+                    None => children.clone(),
+                };
+                DepEntry::AnyOf(
+                    reordered
+                        .into_iter()
+                        .map(|child| {
+                            apply_or_overrides_to_entry(&child, key_prefix, overrides, next_index)
+                        })
+                        .collect(),
+                )
+            }
+            DepEntry::AllOf(children) => DepEntry::AllOf(
+                children
+                    .iter()
+                    .map(|child| {
+                        apply_or_overrides_to_entry(child, key_prefix, overrides, next_index)
+                    })
+                    .collect(),
+            ),
+            DepEntry::UseConditional {
+                flag,
+                negate,
+                children,
+            } => DepEntry::UseConditional {
+                flag: *flag,
+                negate: *negate,
+                children: children
+                    .iter()
+                    .map(|child| {
+                        apply_or_overrides_to_entry(child, key_prefix, overrides, next_index)
+                    })
+                    .collect(),
+            },
+            // `^^`/`??` groups are never reordered (task rule), but a
+            // nested `||` inside one still takes its own override.
+            DepEntry::ExactlyOneOf(children) | DepEntry::AtMostOneOf(children) => {
+                let reworked: Vec<DepEntry> = children
+                    .iter()
+                    .map(|child| {
+                        apply_or_overrides_to_entry(child, key_prefix, overrides, next_index)
+                    })
+                    .collect();
+                match entry {
+                    DepEntry::ExactlyOneOf(_) => DepEntry::ExactlyOneOf(reworked),
+                    _ => DepEntry::AtMostOneOf(reworked),
+                }
+            }
+            _ => entry.clone(),
+        })
+        .collect()
+}
+
+/// Apply `overrides` to all five dep classes: the traversal both
+/// [`BridgeRepo::versions_for`] (engine facts) and [`or_member_view`]
+/// (post-solve analysis) share, so a group index computed from one solve
+/// addresses the same group on the next pass. The `||` counter restarts
+/// per class (the class rides in the key); `^^`/`??` nodes are traversed
+/// but never reordered.
+fn apply_or_overrides_to_classes(
+    classes: &[Vec<portage_solver::DepEntry>; 5],
+    cpv: &str,
+    overrides: &OrChoiceOverrides,
+) -> [Vec<portage_solver::DepEntry>; 5] {
+    std::array::from_fn(|class| {
+        let mut next_index = 0;
+        apply_or_overrides_to_entries(&classes[class], (cpv, class), overrides, &mut next_index)
+    })
+}
+
+/// The [`apply_or_overrides_to_entries`] rule over one entry (for `||`
+/// children that are groups themselves).
+fn apply_or_overrides_to_entry(
+    entry: &portage_solver::DepEntry,
+    key_prefix: (&str, usize),
+    overrides: &OrChoiceOverrides,
+    next_index: &mut usize,
+) -> portage_solver::DepEntry {
+    apply_or_overrides_to_entries(
+        std::slice::from_ref(entry),
+        key_prefix,
+        overrides,
+        next_index,
+    )
+    .into_iter()
+    .next()
+    .expect("a one-entry override keeps one entry")
+}
+
+/// The engine's view of one solution member's dep classes: the same source
+/// [`BridgeRepo::versions_for`] hands the engine (repo md5-cache, or the
+/// vdb reader for a deep installed member), with the G3 self-cycle rule
+/// and the current `||` overrides applied, plus the member's effective USE
+/// (the same source [`BridgeRepo::desired_use`] answers). `None` for a
+/// kept leaf (the engine sees empty deps) or a member with no record.
+#[allow(clippy::too_many_arguments)]
+fn or_member_view(
+    lazy: &LazyRepo,
+    kept: &KeptInstalled,
+    installed: &[super::InstalledPackage],
+    cp: &str,
+    version: &str,
+    overrides: &OrChoiceOverrides,
+) -> Option<([Vec<portage_solver::DepEntry>; 5], HashSet<String>)> {
+    let cpv = format!("{cp}-{version}");
+    // Same leaf rule as `versions_for`: a kept non-rebuild member without
+    // deep contributes no edges, so none of its `||` groups is evaluated.
+    if !kept.deep && kept.installed.contains(&cpv) && !kept.rebuild.contains(&cpv) {
+        return None;
+    }
+    let loaded = lazy.load_versions(cp).ok()?;
+    let repo_record = loaded.iter().find(|record| record.version == version);
+    // Classes: the vdb reader for a deep installed member (like
+    // `versions_for`, including versions gone from the repo), otherwise
+    // the repo record.
+    let (classes, slot) = match (
+        kept.deep && kept.installed.contains(&cpv),
+        cp.split_once('/'),
+    ) {
+        (true, Some((category, package))) => {
+            let classes = lazy.installed_parsed_deps(category, package, version);
+            let slot = repo_record.map_or_else(
+                || {
+                    lazy.installed_record(category, package, version)
+                        .map(|record| record.slot)
+                        .unwrap_or_default()
+                },
+                |record| record.slot.clone(),
+            );
+            (classes, slot)
+        }
+        _ => {
+            let record = repo_record?;
+            (record.deps.clone(), record.slot.clone())
+        }
+    };
+    // USE: the vdb flags for a deep kept member, else the config USE of
+    // the repo record (like `desired_use`; an installed-only version with
+    // no repo record answers empty there too).
+    let use_set = if kept.deep && kept.installed.contains(&cpv) && !kept.rebuild.contains(&cpv) {
+        match cp.split_once('/') {
+            Some((category, package)) => {
+                installed_pkg_iuse_and_use(&lazy.root, category, package, version).1
+            }
+            None => HashSet::new(),
+        }
+    } else if let Some(record) = repo_record {
+        lazy.use_of(record)
+    } else {
+        HashSet::new()
+    };
+    // What the engine converts: the G3 self-cycle strip, then the current
+    // `||` overrides (the shared traversal, so group indices line up with
+    // the facts `versions_for` hands the engine).
+    let stripped = without_self_alternatives(cp, &slot, installed, &classes);
+    Some((
+        apply_or_overrides_to_classes(&stripped, &cpv, overrides),
+        use_set,
+    ))
+}
+
+/// Every atom under one `||` branch (direct or nested in a plain group).
+fn or_branch_atoms<'a>(
+    branch: &'a portage_solver::DepEntry,
+    out: &mut Vec<&'a portage_solver::Dep>,
+) {
+    match branch {
+        portage_solver::DepEntry::Atom(dep) => out.push(dep),
+        portage_solver::DepEntry::AllOf(children) => {
+            for child in children {
+                or_branch_atoms(child, out);
+            }
+        }
+        // A conditional or nested choice as a direct `||` branch: its atoms
+        // still name the packages the branch would merge.
+        portage_solver::DepEntry::UseConditional { children, .. } => {
+            for child in children {
+                or_branch_atoms(child, out);
+            }
+        }
+        portage_solver::DepEntry::AnyOf(children)
+        | portage_solver::DepEntry::ExactlyOneOf(children)
+        | portage_solver::DepEntry::AtMostOneOf(children) => {
+            for child in children {
+                or_branch_atoms(child, out);
+            }
+        }
+    }
+}
+
+/// Whether one `||` branch is the branch Portage would take: every package
+/// it names is selected independently of this group (in the plan *and*
+/// required from another parent or as a root target), its atoms match the
+/// planned versions (slot pins still bind), and its USE deps hold under
+/// the member's effective USE. `installed_blocking` names a direct atom
+/// branch an installed instance satisfies while it is not the desired one:
+/// the engine's installed-preference takes it regardless of branch order
+/// (`provider/solve.rs`), so reordering alone cannot fix the group and the
+/// branch is dropped from the facts instead.
+struct OrBranchStanding {
+    qualifies: bool,
+    installed_blocking: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn or_branch_standing(
+    lazy: &LazyRepo,
+    installed: &[super::InstalledPackage],
+    branch: &portage_solver::DepEntry,
+    member_cp: &str,
+    member_use: &HashSet<String>,
+    plan_ver: &HashMap<String, String>,
+    taken: &HashSet<(String, String)>,
+    root_cps: &HashSet<String>,
+) -> OrBranchStanding {
+    let not_qualifying = OrBranchStanding {
+        qualifies: false,
+        installed_blocking: false,
+    };
+    let mut atoms = Vec::new();
+    or_branch_atoms(branch, &mut atoms);
+    if atoms.is_empty() {
+        return not_qualifying;
+    }
+    let direct_atom = match branch {
+        portage_solver::DepEntry::Atom(dep) => Some(dep),
+        _ => None,
+    };
+    // Group branches (`( a b )`, conditionals) reorder only: dropping one
+    // of several packages is never faithful.
+    let mut installed_blocking = false;
+    if let Some(dep) = direct_atom {
+        let cp = format!("{}", dep.cpn);
+        if installed_satisfies_self(dep, &cp, installed) {
+            installed_blocking = true;
+        }
+    }
+    for atom in atoms {
+        let cp = format!("{}", atom.cpn);
+        // Independently selected: in the plan, and required from somewhere
+        // other than this group (another parent's edge, or the probe's own
+        // target). A package the solve merged only through this group
+        // (gnome-keyring via the virtual) is not.
+        let Some(plan_version) = plan_ver.get(&cp) else {
+            return OrBranchStanding {
+                qualifies: false,
+                installed_blocking,
+            };
+        };
+        if !root_cps.contains(&cp)
+            && !taken
+                .iter()
+                .any(|(parent, child)| child == &cp && parent != member_cp)
+        {
+            return OrBranchStanding {
+                qualifies: false,
+                installed_blocking,
+            };
+        }
+        // The atom must match the planned version: a slot pin naming
+        // another slot (or a version floor the plan does not satisfy) is a
+        // different choice, not this branch winning.
+        let plan_cpv = format!("{cp}-{plan_version}");
+        let Ok(cpv) = portage_solver::Cpv::parse(&plan_cpv) else {
+            return OrBranchStanding {
+                qualifies: false,
+                installed_blocking,
+            };
+        };
+        let slot = lazy
+            .load_versions(&cp)
+            .ok()
+            .and_then(|versions| {
+                versions
+                    .into_iter()
+                    .find(|record| record.version == *plan_version)
+            })
+            .map(|record| record.slot);
+        let Some(slot) = slot else {
+            return OrBranchStanding {
+                qualifies: false,
+                installed_blocking,
+            };
+        };
+        if !atom.matches_cpv(&cpv, Some(&slot)) {
+            return OrBranchStanding {
+                qualifies: false,
+                installed_blocking,
+            };
+        }
+        // USE deps still bind: a branch Portage would reject (or
+        // autounmask-gate) is not the faithful pick.
+        if let Some(uds) = atom.use_deps.as_ref()
+            && !uds.is_empty()
+        {
+            let record = lazy
+                .load_versions(&cp)
+                .ok()
+                .and_then(|versions| versions.into_iter().find(|r| r.version == *plan_version));
+            let Some(record) = record else {
+                return OrBranchStanding {
+                    qualifies: false,
+                    installed_blocking,
+                };
+            };
+            let repo_iuse: HashSet<String> = parse_iuse(&record.iuse).into_iter().collect();
+            if !use_deps_satisfied(uds, member_use, &repo_iuse, &lazy.use_of(&record)) {
+                return OrBranchStanding {
+                    qualifies: false,
+                    installed_blocking,
+                };
+            }
+        }
+    }
+    OrBranchStanding {
+        qualifies: true,
+        installed_blocking,
+    }
+}
+
+/// Visit every `||` node in one dep class in pre-order (the same traversal
+/// [`apply_or_overrides_to_entries`] numbers groups with): collected as
+/// `(index, children snapshot, active under the member USE)`. `^^`/`??`
+/// nodes are traversed but never collected.
+fn visit_or_groups(
+    entries: &[portage_solver::DepEntry],
+    member_use: &HashSet<String>,
+    active: bool,
+    next_index: &mut usize,
+    out: &mut Vec<(usize, Vec<portage_solver::DepEntry>, bool)>,
+) {
+    use portage_solver::DepEntry;
+    for entry in entries {
+        match entry {
+            DepEntry::AnyOf(children) => {
+                let index = *next_index;
+                *next_index += 1;
+                out.push((index, children.clone(), active));
+                for child in children {
+                    visit_or_groups(
+                        std::slice::from_ref(child),
+                        member_use,
+                        active,
+                        next_index,
+                        out,
+                    );
+                }
+            }
+            DepEntry::AllOf(children) => {
+                visit_or_groups(children, member_use, active, next_index, out);
+            }
+            DepEntry::UseConditional {
+                flag,
+                negate,
+                children,
+            } => {
+                let child_active = active && (member_use.contains(flag.as_str()) != *negate);
+                visit_or_groups(children, member_use, child_active, next_index, out);
+            }
+            DepEntry::ExactlyOneOf(children) | DepEntry::AtMostOneOf(children) => {
+                visit_or_groups(children, member_use, active, next_index, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The desired `||` facts for the next solve, from the solved plan: for
+/// every `||` group in the deps of a selected member (as the engine saw
+/// them, G3 strip and current overrides included), the first-listed
+/// independently-selected branch moves first (the engine's final fallback
+/// is the first-listed alternative), and an installed-satisfying direct
+/// branch that is not that pick is dropped (the engine's
+/// installed-preference ignores order, so keeping it would keep the wrong
+/// pick). Portage: atoms for already-in-graph packages preferred
+/// (`depgraph.py:778-793`), with the in-bin in-graph promotion over an
+/// installed-only alternative (`dep_check.py` `dep_zapdeps`). Groups with
+/// no independently-selected branch, with blockers, or behind an
+/// unsatisfied USE conditional keep their facts: the engine and Portage
+/// already agree there (first-listed fallback on both sides).
+#[allow(clippy::too_many_arguments)]
+fn compute_or_overrides(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    kept: &KeptInstalled,
+    installed: &[super::InstalledPackage],
+    order: &[(String, String)],
+    parents: &HashMap<String, Vec<(String, String)>>,
+    root_cps: &HashSet<String>,
+    current: &OrChoiceOverrides,
+) -> OrChoiceOverrides {
+    if req.nodeps {
+        return current.clone();
+    }
+    let taken = solution_taken_edges(parents);
+    let plan_ver: HashMap<String, String> = order
+        .iter()
+        .map(|(cp, version)| (cp.clone(), version.clone()))
+        .collect();
+    let mut member_list: Vec<&(String, String)> = order.iter().collect();
+    member_list.sort();
+    let mut groups = OrChoiceOverrides::new();
+    for (cp, version) in member_list {
+        let Some((classes, member_use)) =
+            or_member_view(lazy, kept, installed, cp, version, current)
+        else {
+            continue;
+        };
+        for (class, entries) in classes.iter().enumerate() {
+            let mut found = Vec::new();
+            let mut next_index = 0;
+            visit_or_groups(entries, &member_use, true, &mut next_index, &mut found);
+            for (index, children, active) in found {
+                if !active || children.is_empty() {
+                    continue;
+                }
+                if or_subtree_has_blocker(&children) {
+                    continue;
+                }
+                let keys: Vec<String> = children.iter().map(or_branch_key).collect();
+                let mut fingerprint = keys.clone();
+                fingerprint.sort();
+                let standings: Vec<OrBranchStanding> = children
+                    .iter()
+                    .map(|branch| {
+                        or_branch_standing(
+                            lazy,
+                            installed,
+                            branch,
+                            cp,
+                            &member_use,
+                            &plan_ver,
+                            &taken,
+                            root_cps,
+                        )
+                    })
+                    .collect();
+                let desired = standings.iter().position(|standing| standing.qualifies);
+                let mut ordered = Vec::new();
+                if let Some(first) = desired {
+                    ordered.push(keys[first].clone());
+                }
+                for (pos, key) in keys.iter().enumerate() {
+                    if Some(pos) == desired {
+                        continue;
+                    }
+                    // An installed-satisfying branch the faithful pick does
+                    // not need: the engine would take it over any order, so
+                    // it leaves the facts (like the G3 self-cycle drop; the
+                    // branch stays merged when another parent needs it).
+                    // Only when a desired pick exists: without one the
+                    // engine and Portage already agree on the installed
+                    // branch (the xapp/zlib shape), and dropping it would
+                    // force the untaken alternative instead.
+                    if desired.is_some() && standings[pos].installed_blocking {
+                        pg_trace(
+                            &mut std::io::stderr(),
+                            format_args!("pg-or-drop {cp}-{version} [{class}:{index}] {key}"),
+                        );
+                        continue;
+                    }
+                    ordered.push(key.clone());
+                }
+                if ordered.len() != children.len() || ordered.iter().ne(keys.iter()) {
+                    pg_trace(
+                        &mut std::io::stderr(),
+                        format_args!(
+                            "pg-or-group {cp}-{version} [{class}:{index}] -> {}",
+                            ordered.join(" | ")
+                        ),
+                    );
+                }
+                groups.groups.insert(
+                    OrGroupKey {
+                        cpv: format!("{cp}-{version}"),
+                        class,
+                        index,
+                    },
+                    OrGroupOrder {
+                        fingerprint,
+                        order: ordered,
+                    },
+                );
+            }
+        }
+    }
+    groups
+}
+
 // --- PubGrub backend -------------------------------------------------------
 
 /// Whether the pubgrub-bridge trace is active (`PORTUALE_PG_TRACE=1`).
@@ -1984,6 +2681,9 @@ struct BridgeRepo {
     /// instance satisfies is kept). Pubgrub only: resolvo reads
     /// `record.deps` straight from `LazyRepo` and never sees this.
     installed: Vec<super::InstalledPackage>,
+    /// #34 S5 G5/G6: the current `||` reorder/drop pass. Pubgrub only, for
+    /// the same reason as `installed`.
+    or_overrides: OrChoiceOverrides,
 }
 
 impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
@@ -2042,10 +2742,16 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
             // #34 S5 G3: drop a `||` alternative naming this candidate's own
             // cp-slot (a direct self-cycle Portage avoids at selection), so
             // the engine takes the sibling (go picks go-bootstrap).
+            // #34 S5 G5/G6: then the `||` reorder/drop pass (an
+            // already-in-graph alternative first, an installed wrong pick
+            // dropped), so the engine takes the in-graph branch Portage
+            // prefers (`depgraph.py:778-793`).
             let deps = if leaf {
                 empty
             } else {
-                without_self_alternatives(&cp, &record.slot, &self.installed, classes)
+                let stripped =
+                    without_self_alternatives(&cp, &record.slot, &self.installed, classes);
+                apply_or_overrides_to_classes(&stripped, &record.cpv(), &self.or_overrides)
             };
             if let Some(row) = version_row(record, deps) {
                 out.push(row);
@@ -2091,7 +2797,17 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                 if let Some(row) = version_row(
                     &record,
                     // #34 S5 G3: same self-cycle rule as the repo path above.
-                    without_self_alternatives(&cp, &record.slot, &self.installed, &record.deps),
+                    // #34 S5 G5/G6: same `||` reorder/drop pass.
+                    apply_or_overrides_to_classes(
+                        &without_self_alternatives(
+                            &cp,
+                            &record.slot,
+                            &self.installed,
+                            &record.deps,
+                        ),
+                        &record.cpv(),
+                        &self.or_overrides,
+                    ),
                 ) {
                     out.push(row);
                 }
@@ -2160,12 +2876,14 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
 /// The pubgrub provider over [`KeptInstalled`]: installed cpvs in
 /// `kept.rebuild` register `InstalledPolicy::Rebuild` instead of `Favor` -- without
 /// it the `R` row shows but the reinstalled package's DEPEND/BDEPEND never expand.
+#[allow(clippy::too_many_arguments)]
 fn pubgrub_provider(
     req: &ResolveRequest,
     lazy: &LazyRepo,
     kept: &KeptInstalled,
     installed: &[super::InstalledPackage],
     seed_cpns: &[portage_solver::Cpn],
+    overrides: &OrChoiceOverrides,
 ) -> portage_atom_pubgrub::PortageDependencyProvider {
     use portage_atom_pubgrub::{
         InstalledPackage as BridgeInstalled, InstalledPolicy, PortageDependencyProvider,
@@ -2178,6 +2896,7 @@ fn pubgrub_provider(
             lazy: lazy.clone(),
             kept: kept.clone(),
             installed: installed.to_vec(),
+            or_overrides: overrides.clone(),
         },
         seed_cpns.to_vec(),
     );
@@ -2309,6 +3028,24 @@ fn pubgrub_targets(
     Ok(targets)
 }
 
+/// One [`resolve_pubgrub`] round's solved plan in bridge terms: ordered
+/// `(cp, version)` members plus the child-cpv to requirers edge map.
+type SolvedRound = (
+    Vec<(String, String)>,
+    HashMap<String, Vec<(String, String)>>,
+);
+
+/// Bound on the `||` reorder/drop passes of one [`resolve_pubgrub`] run
+/// (the G2 parent-USE growth stays monotonic and unbounded, as before):
+/// real plans converge in one or two passes; past this the loop falls
+/// back to the previous plan instead of oscillating.
+const OR_FIXPOINT_MAX_PASSES: usize = 8;
+
+/// Absolute bound on the combined solve loop below (G2 growth plus `||`
+/// passes); a pathological flap falls back to the previous plan rather
+/// than solving forever.
+const PUBGRUB_FIXPOINT_MAX_ROUNDS: usize = 32;
+
 fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
     let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
     let (seeds, shallow) = closure_seeds(req)?;
@@ -2323,18 +3060,50 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
     // converted inside `new_for_targets`).
     let installed = all_installed_packages(&req.root);
     let mut kept = KeptInstalled::of(req, &lazy, &installed);
+    // Root-target cps for the `||` pass: an alternative naming the probe
+    // target itself is in-graph trivially (the texinfo/emacs shape).
+    let mut root_cps = HashSet::new();
+    for atom in &req.atoms {
+        let Ok(dep) = portage_solver::Dep::parse(atom) else {
+            continue;
+        };
+        if dep.blocker.is_some() {
+            continue;
+        }
+        root_cps.insert(format!("{}", dep.cpn));
+    }
     // #34 S5 G2 (round 2) fixpoint: the parent-USE reinstall pass needs
     // the solved plan -- only solution members whose deps expand exert
     // USE pressure on an installed child -- and each new rebuild
     // member's expanded deps can pull further parents in.
-    // `apply_parent_use_reinstalls` only grows `rebuild`, so the loop
-    // terminates when a pass adds nothing.
+    // `apply_parent_use_reinstalls` only grows `rebuild`, so that half of
+    // the loop terminates when a pass adds nothing.
+    // #34 S5 G5/G6: the `||` reorder/drop pass rides the same loop -- a
+    // solve whose `||` groups resolve away from the already-in-graph
+    // branch re-solves with that branch first (or the installed wrong
+    // pick dropped) until the override set stops changing. Overrides are
+    // not monotonic, so an override signature repeating means the loop
+    // oscillates and the previous plan wins.
+    let mut overrides = OrChoiceOverrides::new();
+    let mut seen_override_sigs: HashSet<String> = HashSet::new();
+    let mut previous: Option<SolvedRound> = None;
+    let mut rounds = 0;
     let (order, parents) = loop {
-        let mut provider = pubgrub_provider(req, &lazy, &kept, &installed, &seed_cpns);
+        rounds += 1;
+        let mut provider = pubgrub_provider(req, &lazy, &kept, &installed, &seed_cpns, &overrides);
         let targets = pubgrub_targets(req, &lazy, &installed, &provider)?;
-        let solution = provider
-            .resolve_targets(targets)
-            .map_err(portage_atom_pubgrub::format_solve_error)?;
+        let solution = match provider.resolve_targets(targets) {
+            Ok(solution) => solution,
+            Err(engine_error) => {
+                // An override pass that breaks the solve falls back to the
+                // previous plan (the dropped branch was load-bearing); the
+                // first pass has no previous plan and reports the error.
+                if let Some((order, parents)) = previous {
+                    break (order, parents);
+                }
+                return Err(portage_atom_pubgrub::format_solve_error(engine_error));
+            }
+        };
         let mut order = Vec::new();
         for (pkg, ver) in provider.install_order(&solution) {
             if let portage_atom_pubgrub::PortagePackage::Real { cpn, .. } = &pkg {
@@ -2367,9 +3136,40 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
             taken: solution_taken_edges(&parents),
         };
         kept.apply_parent_use_reinstalls(req, &lazy, &installed, &plan);
-        if kept.rebuild.len() == before {
+        let grew = kept.rebuild.len() != before;
+        let fresh = compute_or_overrides(
+            req, &lazy, &kept, &installed, &order, &parents, &root_cps, &overrides,
+        );
+        if !grew && fresh == overrides {
             break (order, parents);
         }
+        if fresh != overrides {
+            let signature = fresh.signature();
+            if !seen_override_sigs.insert(signature)
+                || seen_override_sigs.len() > OR_FIXPOINT_MAX_PASSES
+            {
+                pg_trace(
+                    &mut std::io::stderr(),
+                    format_args!("pg-or-oscillate fallback"),
+                );
+                if let Some((order, parents)) = previous {
+                    break (order, parents);
+                }
+                break (order, parents);
+            }
+            overrides = fresh;
+        }
+        if rounds >= PUBGRUB_FIXPOINT_MAX_ROUNDS {
+            pg_trace(
+                &mut std::io::stderr(),
+                format_args!("pg-or-round-cap fallback"),
+            );
+            if let Some((order, parents)) = previous {
+                break (order, parents);
+            }
+            break (order, parents);
+        }
+        previous = Some((order, parents));
     };
     Ok(graph_result_from_order(
         req,
@@ -3184,7 +3984,14 @@ mod tests {
             .chain(shallow.iter())
             .filter_map(|cp| portage_solver::Cpn::parse(cp).ok())
             .collect();
-        let provider = super::pubgrub_provider(&req, &lazy, &kept, &installed, &seed_cpns);
+        let provider = super::pubgrub_provider(
+            &req,
+            &lazy,
+            &kept,
+            &installed,
+            &seed_cpns,
+            &super::OrChoiceOverrides::new(),
+        );
         let slotted = |cp: &str, slot: &str| {
             portage_atom_pubgrub::PortagePackage::slotted(
                 portage_solver::Cpn::parse(cp).expect("cp parses"),
@@ -3204,7 +4011,14 @@ mod tests {
         // `-pvn`: selective through `--noreplace`.
         req.selective = true;
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
-        let provider = super::pubgrub_provider(&req, &lazy, &kept, &installed, &seed_cpns);
+        let provider = super::pubgrub_provider(
+            &req,
+            &lazy,
+            &kept,
+            &installed,
+            &seed_cpns,
+            &super::OrChoiceOverrides::new(),
+        );
         assert_eq!(
             provider.installed_policy(&slotted("dev-libs/pg34-arg", "0")),
             Some(InstalledPolicy::Favor),
@@ -3414,6 +4228,7 @@ mod tests {
             lazy,
             kept,
             installed: installed.clone(),
+            or_overrides: super::OrChoiceOverrides::new(),
         };
         let cpv = portage_solver::Cpv::parse("dev-libs/pg34-ulib-1").expect("cpv parses");
         let use_config = bridge.desired_use(&cpv);
@@ -3443,6 +4258,7 @@ mod tests {
             lazy,
             kept,
             installed: installed.clone(),
+            or_overrides: super::OrChoiceOverrides::new(),
         };
         let cpv = portage_solver::Cpv::parse("dev-libs/pg34-ulib-1").expect("cpv parses");
         let use_config = bridge.desired_use(&cpv);
@@ -3470,6 +4286,7 @@ mod tests {
             lazy,
             kept,
             installed: installed.clone(),
+            or_overrides: super::OrChoiceOverrides::new(),
         };
         let cpn = portage_solver::Cpn::parse("dev-libs/pg34-gone").expect("cpn parses");
         let rows = bridge.versions_for(&cpn);
@@ -4213,6 +5030,92 @@ mod tests {
         assert_eq!(
             pg34_plan(&result),
             ["dev-libs/pg34-self-1:0", "dev-libs/pg34-selfboot-1:0"]
+        );
+    }
+
+    /// #34 S5 G5: `-pv` on pg34-svt prefers the in-graph `||`
+    /// alternative. `pg34-sv-1` first-lists `pg34-sva` (nothing installed,
+    /// so the engine's installed-preference cannot decide and its final
+    /// fallback takes the first-listed branch), but the target also pulls
+    /// `pg34-svb` into the graph, so Portage resolves the group to `svb`
+    /// (`depgraph.py:778-793`; the `virtual/secret-service` shape from
+    /// bed `-pv kde-apps/kdecore-meta`). Portage plans `N svb + N sv +
+    /// N svt` (container capture
+    /// `LLM/evidence/2026-10-15-34-s5/g5/cap-pg34-svt-pv-portage.txt`);
+    /// pre-fix pubgrub additionally merges first-listed `sva` and its
+    /// `svx` subtree.
+    #[test]
+    fn pg34_svt_pubgrub_pv_prefers_in_graph_alternative() {
+        let mut req = fixture_request(&["dev-libs/pg34-svt"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        // `-pv`: not selective, no update, build deps on.
+        req.selective = false;
+        req.with_bdeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-svt resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            [
+                "dev-libs/pg34-sv-1:0",
+                "dev-libs/pg34-svb-1:0",
+                "dev-libs/pg34-svt-1:0"
+            ]
+        );
+    }
+
+    /// #34 S5 G5/G6c: `-pve` on pg34-tt prefers the in-graph target over
+    /// the installed first-listed `||` branch. `pg34-tx-1` carries
+    /// `|| ( pg34-info pg34-tt )` (the texinfo
+    /// `|| ( info-manual emacs )` shape from bed `-pve
+    /// app-editors/emacs`); `pg34-info-1` is installed, `pg34-tt` is the
+    /// probe target itself. Portage prefers the already-in-graph
+    /// alternative even over an installed one (`dep_check.py`
+    /// `dep_zapdeps` in-graph promotion) and prints no info row
+    /// (container capture
+    /// `LLM/evidence/2026-10-15-34-s5/g5/cap-pg34-stt-pve-portage.txt`,
+    /// single-root set: the staged-ROOT capture's `N info` row merges to
+    /// the host root, which lacks the installed instance); pre-fix
+    /// pubgrub's installed-preference takes `info` (`R info-1`).
+    #[test]
+    fn pg34_stt_pubgrub_pve_prefers_target_over_installed_branch() {
+        // `-pve`: the request level keeps selective (the walk clears it);
+        // `empty` alone drives the rebuild set.
+        let (mut req, _, _) = pg34_s2_parts(&["dev-libs/pg34-tt"]);
+        req.empty = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-tt resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-tt-1:0", "dev-libs/pg34-tx-1:0"]
+        );
+        assert!(
+            result.entries.iter().all(|e| e.package != "pg34-info"),
+            "no info-manual row: {:?}",
+            pg34_plan(&result)
+        );
+    }
+
+    /// #34 S5 G5/G6c: `-pv` on pg34-tt already agrees with Portage (the
+    /// installed `pg34-info-1` stays a hidden kept leaf, so the wrong
+    /// branch choice prints no row). Non-regression pin: the fix must not
+    /// add rows here (container capture
+    /// `LLM/evidence/2026-10-15-34-s5/g5/cap-pg34-stt-pv-portage.txt`,
+    /// single-root set).
+    #[test]
+    fn pg34_stt_pubgrub_pv_ignores_installed_alternative() {
+        let mut req = fixture_request(&["dev-libs/pg34-tt"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        // `-pv`: not selective, no update, build deps on.
+        req.selective = false;
+        req.with_bdeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-tt resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-tt-1:0", "dev-libs/pg34-tx-1:0"]
         );
     }
 
