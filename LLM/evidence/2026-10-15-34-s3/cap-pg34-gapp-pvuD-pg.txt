@@ -1,0 +1,3 @@
+[ebuild  N     ] dev-libs/pg34-gapp-1::testrepo to /var/tmp/pg34-s3-fixcopy/fixtures
+
+Total: 1 package (1 new), Size of downloads: 0 KiB

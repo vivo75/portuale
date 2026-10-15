@@ -1,0 +1,4 @@
+[ebuild  N     ] dev-libs/pg34-uextra-1::testrepo to /var/tmp/pg34-s3-fixcopy/fixtures
+[ebuild  N     ] dev-libs/pg34-uapp-1::testrepo to /var/tmp/pg34-s3-fixcopy/fixtures
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

@@ -27,9 +27,11 @@ use std::fmt;
 use std::io::Write;
 
 use super::{
-    Deep, EffectiveUseFlagsArgs, GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig,
-    ResolveRequest, Resolver as PortualeResolver, all_installed_packages, effective_use_flags,
-    find_repos, installed_pkg_iuse_and_use, is_visible, list_candidates, repo_aux_metadata,
+    Deep, EffectiveUseFlagsArgs, GraphEntry, GraphResult, InstalledDepStringArgs,
+    InstalledMetaLayer, InstalledRef, PretendOutcome, RepoConfig, ResolveRequest,
+    Resolver as PortualeResolver, all_installed_packages, effective_use_flags, find_repos,
+    installed_candidates, installed_dep_string, installed_pkg_iuse_and_use, is_visible,
+    list_candidates, live_metadata_for_installed, read_vdb_string, repo_aux_metadata, split_slot,
 };
 
 // --- Lazy fact loading -----------------------------------------------------
@@ -100,10 +102,15 @@ fn cp_exists(repos: &[RepoConfig], cp: &str) -> bool {
 struct LazyRepo {
     repos: Vec<RepoConfig>,
     config: portage_profile::Config,
+    root: std::path::PathBuf,
+    dynamic_deps: bool,
+    ignore_built_slot_operator_deps: bool,
     /// The closure: every CPN the solver may see (`all_packages`).
     closure: HashSet<String>,
     loaded: RefCell<HashMap<String, Vec<LoadedVersion>>>,
     uses: RefCell<HashMap<String, HashSet<String>>>,
+    /// Per-run memo for the installed-deps reader below.
+    installed_dep_memo: RefCell<HashMap<(String, String, String, String), String>>,
 }
 
 impl LazyRepo {
@@ -125,10 +132,19 @@ impl LazyRepo {
         let mut repo = Self {
             repos,
             config: req.config.clone(),
+            root: req.root.clone(),
+            dynamic_deps: req.dynamic_deps,
+            ignore_built_slot_operator_deps: req.ignore_built_slot_operator_deps,
             closure: HashSet::new(),
             loaded: RefCell::new(HashMap::new()),
             uses: RefCell::new(HashMap::new()),
+            installed_dep_memo: RefCell::new(HashMap::new()),
         };
+        // Under deep, an installed cpv's own vdb deps decide what it reaches
+        // (#34 S3) -- including versions gone from the repo -- so installed
+        // CPNs expand from the vdb here. Pubgrub only, like `seeds_first`:
+        // resolvo keeps the old order so its pool does not move.
+        let vdb_expand = seeds_first && (!matches!(req.deep, Deep::NotRequested) || req.empty);
         // `(cp, expand)`: targets expand, installed only load. Seeds queue last
         // when `seeds_first`, so LIFO `pop` expands the target cone first: a CPN
         // that is both a seed and installed expands instead of loading shallow.
@@ -158,6 +174,27 @@ impl LazyRepo {
             );
             if !expand {
                 repo.load_versions(&cp)?;
+                if vdb_expand && let Some((category, package)) = cp.split_once('/') {
+                    // The vdb (not the repo md5-cache) says what an installed
+                    // cpv reaches under deep; referenced CPNs expand like
+                    // seed-referenced ones so unslotted deps on them resolve.
+                    for (version, _, _) in installed_candidates(&req.root, category, package) {
+                        for text in &repo.installed_dep_strings(category, package, &version) {
+                            let Ok(parsed) = portage_solver::DepEntry::parse(text) else {
+                                continue;
+                            };
+                            let mut refs = Vec::new();
+                            referenced_cpns(&parsed, &mut refs);
+                            for dep_cp in refs {
+                                if !repo.closure.contains(&dep_cp)
+                                    && cp_exists(&repo.repos, &dep_cp)
+                                {
+                                    queue.push((dep_cp, true));
+                                }
+                            }
+                        }
+                    }
+                }
                 continue;
             }
             let versions = repo.load_versions(&cp)?;
@@ -236,6 +273,99 @@ impl LazyRepo {
     fn record(&self, cp: &str, version: &str) -> Option<LoadedVersion> {
         let versions = self.load_versions(cp).ok()?;
         versions.into_iter().find(|v| v.version == version)
+    }
+
+    /// One installed package's five dep strings through the default resolver's
+    /// own dynamic-deps reader (live repo metadata for the recorded repo plus
+    /// the vdb's own built `:=` atoms, moves applied), in
+    /// DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND order.
+    /// Portage: FakeVartree.py, _apply_dynamic_deps.
+    fn installed_dep_strings(&self, category: &str, package: &str, version: &str) -> [String; 5] {
+        let live = live_metadata_for_installed(&self.repos, &self.root, category, package, version);
+        let mut memo = self.installed_dep_memo.borrow_mut();
+        let mut one = |key: &str| {
+            installed_dep_string(InstalledDepStringArgs {
+                root: &self.root,
+                dynamic_deps: self.dynamic_deps,
+                ignore_built_slot_operator_deps: self.ignore_built_slot_operator_deps,
+                category,
+                package,
+                version,
+                live: live.as_deref(),
+                key,
+                layer: InstalledMetaLayer::Effective,
+                memo: &mut memo,
+            })
+        };
+        [
+            one("DEPEND"),
+            one("RDEPEND"),
+            one("BDEPEND"),
+            one("PDEPEND"),
+            one("IDEPEND"),
+        ]
+    }
+
+    /// The parsed form of [`LazyRepo::installed_dep_strings`]: unparsable
+    /// classes stay empty, like the repo path in [`LazyRepo::load_versions`].
+    fn installed_parsed_deps(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> [Vec<portage_solver::DepEntry>; 5] {
+        let mut deps: [Vec<portage_solver::DepEntry>; 5] = Default::default();
+        for (slot, text) in deps
+            .iter_mut()
+            .zip(self.installed_dep_strings(category, package, version))
+        {
+            if let Ok(parsed) = portage_solver::DepEntry::parse(&text) {
+                *slot = parsed;
+            }
+        }
+        deps
+    }
+
+    /// An installed version absent from the repo as a record with its vdb deps
+    /// (moves applied), so the engine sees Portage's vdb expansion instead of
+    /// the crate's empty-deps stub. `None` for a missing vdb entry or an
+    /// unparsable version. The vdb carries no keywords; the slot splits the
+    /// same way as every other installed-metadata reader.
+    /// Portage: FakeVartree.py, _aux_get_wrapper; resolve/installed_meta.rs:126-130.
+    fn installed_record(
+        &self,
+        category: &str,
+        package: &str,
+        version: &str,
+    ) -> Option<LoadedVersion> {
+        if read_vdb_string(&self.root, category, package, version, "CATEGORY").is_empty() {
+            return None;
+        }
+        if portage_solver::Cpv::parse(&format!("{category}/{package}-{version}")).is_err() {
+            return None;
+        }
+        let (slot, sub_slot) = split_slot(&read_vdb_string(
+            &self.root, category, package, version, "SLOT",
+        ));
+        let raw_deps = self.installed_dep_strings(category, package, version);
+        let mut deps: [Vec<portage_solver::DepEntry>; 5] = Default::default();
+        for (slot, text) in deps.iter_mut().zip(raw_deps.iter()) {
+            if let Ok(parsed) = portage_solver::DepEntry::parse(text) {
+                *slot = parsed;
+            }
+        }
+        Some(LoadedVersion {
+            category: category.to_string(),
+            package: package.to_string(),
+            version: version.to_string(),
+            slot,
+            sub_slot,
+            repo_name: read_vdb_string(&self.root, category, package, version, "repository"),
+            iuse: read_vdb_string(&self.root, category, package, version, "IUSE"),
+            keywords: Vec::new(),
+            deps,
+            raw_deps,
+        })
     }
 
     /// Resolved USE for one loaded version, memoized per cpv.
@@ -318,6 +448,52 @@ fn parse_iuse(iuse: &str) -> Vec<String> {
     out
 }
 
+/// One `(Cpv, PackageVersions)` row for a record whose dep classes are already
+/// chosen (repo md5-cache or the vdb reader): slot/sub-slot, repo, IUSE with
+/// defaults, and the five classes in DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND
+/// order. `None` for an unparsable cpv.
+fn version_row(
+    record: &LoadedVersion,
+    deps: [Vec<portage_solver::DepEntry>; 5],
+) -> Option<(portage_solver::Cpv, portage_atom_pubgrub::PackageVersions)> {
+    use portage_atom_pubgrub::{IUseDefault, PackageDeps, PackageVersions};
+    let cpv = portage_solver::Cpv::parse(&record.cpv()).ok()?;
+    let slot = if record.slot.is_empty() {
+        None
+    } else {
+        Some(interned(&record.slot))
+    };
+    let subslot = if record.sub_slot.is_empty() || record.sub_slot == record.slot {
+        None
+    } else {
+        Some(interned(&record.sub_slot))
+    };
+    let iuse: Vec<_> = parse_iuse(&record.iuse)
+        .into_iter()
+        .map(|flag| interned(&flag))
+        .collect();
+    let mut iuse_defaults = HashMap::new();
+    for token in record.iuse.split_whitespace() {
+        if let Some(flag) = token.strip_prefix('+') {
+            iuse_defaults.insert(interned(flag), IUseDefault::Enabled);
+        } else if let Some(flag) = token.strip_prefix('-') {
+            iuse_defaults.insert(interned(flag), IUseDefault::Disabled);
+        }
+    }
+    let [d0, d1, d2, d3, d4] = deps;
+    Some((
+        cpv,
+        PackageVersions {
+            slot,
+            subslot,
+            repo: Some(interned(&record.repo_name)),
+            iuse,
+            iuse_defaults,
+            deps: PackageDeps::new(d0, d1, d2, d3, d4),
+            required_use: None,
+        },
+    ))
+}
 /// `(category, package, slot) -> installed versions`, plus the
 /// `(category, package)` occupancy check behind `new_slot`.
 struct InstalledView {
@@ -380,7 +556,20 @@ fn graph_result_from_order(
     let mut pending_blockers: Vec<super::PendingBlocker> = Vec::new();
     let mut seen_blockers: HashSet<(String, String, String)> = HashSet::new();
     for (cp, version) in order {
-        let Some(record) = repo.record(cp, version) else {
+        // #34 S3: an installed-only pick has no repo record; map it from the
+        // vdb instead of dropping it (its entry renders `AlreadyInstalled`,
+        // hidden like any other kept package). Gated on the deep bridge: the
+        // stub path never offers these versions without deep, and resolvo
+        // (`kept: None`) keeps its skip.
+        let record = repo.record(cp, version).or_else(|| {
+            if kept.is_some_and(|kept| kept.deep) {
+                let (category, package) = cp.split_once('/')?;
+                repo.installed_record(category, package, version)
+            } else {
+                None
+            }
+        });
+        let Some(record) = record else {
             continue;
         };
         let use_set = repo.use_of(&record);
@@ -981,14 +1170,10 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
         &self,
         cpn: &portage_solver::Cpn,
     ) -> Vec<(portage_solver::Cpv, portage_atom_pubgrub::PackageVersions)> {
-        use portage_atom_pubgrub::{IUseDefault, PackageDeps, PackageVersions};
         let cp = format!("{cpn}");
         let versions = self.lazy.load_versions(&cp).unwrap_or_default();
         let mut out = Vec::new();
         for record in &versions {
-            let Ok(cpv) = portage_solver::Cpv::parse(&record.cpv()) else {
-                continue;
-            };
             // #34 S2: without deep, an installed package that is not being rebuilt
             // is a leaf: Portage sends its deps to `_ignored_deps` instead of
             // expanding them. The trace then shows no edges for it, like the engine.
@@ -996,11 +1181,28 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
             let leaf = !self.kept.deep
                 && self.kept.installed.contains(&record.cpv())
                 && !self.kept.rebuild.contains(&record.cpv());
+            // #34 S3: under deep, an installed cpv's deps come from the vdb
+            // (the default resolver's dynamic-deps reader), not the repo
+            // md5-cache: Portage expands the installed node with the flags it
+            // was built with. Portage: FakeVartree.py, _apply_dynamic_deps.
+            let vdb_classes;
+            let classes: &[Vec<portage_solver::DepEntry>; 5] = match (
+                self.kept.deep && self.kept.installed.contains(&record.cpv()),
+                cp.split_once('/'),
+            ) {
+                (true, Some((category, package))) => {
+                    vdb_classes =
+                        self.lazy
+                            .installed_parsed_deps(category, package, &record.version);
+                    &vdb_classes
+                }
+                _ => &record.deps,
+            };
             // One line per referenced CPN per dep class, for the S0 chain walk.
             if pg_trace_enabled() && !leaf {
                 const CLASSES: [&str; 5] = ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"];
                 let parent = record.cpv();
-                for (class, deps) in CLASSES.iter().zip(record.deps.iter()) {
+                for (class, deps) in CLASSES.iter().zip(classes.iter()) {
                     let mut refs = Vec::new();
                     referenced_cpns(deps, &mut refs);
                     for child in refs {
@@ -1011,66 +1213,46 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                     }
                 }
             }
-            let slot = if record.slot.is_empty() {
-                None
-            } else {
-                Some(interned(&record.slot))
-            };
-            let subslot = if record.sub_slot.is_empty() || record.sub_slot == record.slot {
-                None
-            } else {
-                Some(interned(&record.sub_slot))
-            };
-            let iuse: Vec<_> = parse_iuse(&record.iuse)
-                .into_iter()
-                .map(|flag| interned(&flag))
-                .collect();
-            let mut iuse_defaults = HashMap::new();
-            for token in record.iuse.split_whitespace() {
-                if let Some(flag) = token.strip_prefix('+') {
-                    iuse_defaults.insert(interned(flag), IUseDefault::Enabled);
-                } else if let Some(flag) = token.strip_prefix('-') {
-                    iuse_defaults.insert(interned(flag), IUseDefault::Disabled);
+            let empty: [Vec<portage_solver::DepEntry>; 5] = Default::default();
+            let deps = if leaf { empty } else { classes.clone() };
+            if let Some(row) = version_row(record, deps) {
+                out.push(row);
+            }
+        }
+        // #34 S3: installed versions absent from the repo are offered with
+        // their vdb deps, so the crate's empty-deps stub
+        // (`provider/mod.rs:742-753`) never stands in for them. Portage
+        // expands them from the vdb with moves applied
+        // (resolve/installed_meta.rs:126-130).
+        if self.kept.deep
+            && let Some((category, package)) = cp.split_once('/')
+        {
+            for (version, _, _) in installed_candidates(&self.lazy.root, category, package) {
+                if versions.iter().any(|v| v.version == version) {
+                    continue;
+                }
+                let Some(record) = self.lazy.installed_record(category, package, &version) else {
+                    continue;
+                };
+                if pg_trace_enabled() {
+                    const CLASSES: [&str; 5] =
+                        ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"];
+                    let parent = record.cpv();
+                    for (class, deps) in CLASSES.iter().zip(record.deps.iter()) {
+                        let mut refs = Vec::new();
+                        referenced_cpns(deps, &mut refs);
+                        for child in refs {
+                            pg_trace(
+                                &mut std::io::stderr(),
+                                format_args!("pg-edge {parent} -> {child} ({class})"),
+                            );
+                        }
+                    }
+                }
+                if let Some(row) = version_row(&record, record.deps.clone()) {
+                    out.push(row);
                 }
             }
-            out.push((
-                cpv,
-                PackageVersions {
-                    slot,
-                    subslot,
-                    repo: Some(interned(&record.repo_name)),
-                    iuse,
-                    iuse_defaults,
-                    deps: PackageDeps::new(
-                        if leaf {
-                            Vec::new()
-                        } else {
-                            record.deps[0].clone()
-                        },
-                        if leaf {
-                            Vec::new()
-                        } else {
-                            record.deps[1].clone()
-                        },
-                        if leaf {
-                            Vec::new()
-                        } else {
-                            record.deps[2].clone()
-                        },
-                        if leaf {
-                            Vec::new()
-                        } else {
-                            record.deps[3].clone()
-                        },
-                        if leaf {
-                            Vec::new()
-                        } else {
-                            record.deps[4].clone()
-                        },
-                    ),
-                    required_use: None,
-                },
-            ));
         }
         out
     }
@@ -1079,6 +1261,32 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
         use portage_atom_pubgrub::UseConfig;
         let cp_text = format!("{}", cpv.cpn);
         let version_text = format!("{}", cpv.version);
+        let cpv_str = format!("{cp_text}-{version_text}");
+        // #34 S3: under deep, an installed cpv keeps the USE it was built
+        // with (the vdb), whether or not its version is still in the repo:
+        // Portage expands the installed node with `_pkg_use_enabled`, while
+        // the config USE (`package.use` included) would wrongly switch its
+        // conditional deps on or off. Portage: depgraph.py, _pkg_use_enabled.
+        if self.kept.deep
+            && self.kept.installed.contains(&cpv_str)
+            && let Some((category, package)) = cp_text.split_once('/')
+        {
+            let (_iuse, use_set) =
+                installed_pkg_iuse_and_use(&self.lazy.root, category, package, &version_text);
+            let mut use_config = UseConfig::new();
+            for flag in &use_set {
+                use_config.enable(interned(flag));
+            }
+            if pg_trace_enabled() {
+                let mut flags: Vec<&str> = use_set.iter().map(String::as_str).collect();
+                flags.sort();
+                pg_trace(
+                    &mut std::io::stderr(),
+                    format_args!("pg-use {cpv_str} source=vdb {}", flags.join(" ")),
+                );
+            }
+            return use_config;
+        }
         let Some(record) = self.lazy.record(&cp_text, &version_text) else {
             return UseConfig::new();
         };
@@ -1087,7 +1295,6 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
         for flag in &use_set {
             use_config.enable(interned(flag));
         }
-        // Installed packages still report the config USE here; vdb USE is S3.
         if pg_trace_enabled() {
             let mut flags: Vec<&str> = use_set.iter().map(String::as_str).collect();
             flags.sort();
@@ -2263,5 +2470,183 @@ mod tests {
             .resolve(&req)
             .expect("pg34-app resolves");
         assert_eq!(pg34_plan(&result), ["dev-libs/pg34-app-1:0"]);
+    }
+
+    /// #34 S3: request for the `-pvuD` cells. `selective`/`update`/`deep` set
+    /// explicitly like the S2 helper; `dynamic_deps` on like the CLI default;
+    /// the fixture `package.use` line (`dev-libs/pg34-ulib x`) the container
+    /// captures were taken with (`fixture_request` builds a bare config, so
+    /// without it the config USE and the vdb USE agree and the test is vacuous).
+    fn pg34_s3_request(atoms: &[&str]) -> super::super::ResolveRequest {
+        use super::super::{Deep, SolverKind};
+        let mut req = fixture_request(atoms);
+        req.solver = SolverKind::PubGrub;
+        // `-pvuD`: selective through `--update`, unlimited deep, build deps on.
+        req.selective = true;
+        req.update = true;
+        req.deep = Deep::Unlimited;
+        req.with_bdeps = true;
+        req.dynamic_deps = true;
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-ulib".to_string(), vec!["x".to_string()]));
+        req
+    }
+
+    /// #34 S3: under deep, an installed cpv answers the vdb USE, not the
+    /// config USE. `pg34-ulib` is installed with `USE=""` while the config
+    /// enables `x` (`package.use`); without the vdb answer its `x?` dep on
+    /// `pg34-uextra` wrongly enters the `-pvuD` plan.
+    #[test]
+    fn pg34_uapp_desired_use_is_vdb_use_under_deep() {
+        use portage_atom_pubgrub::PackageRepository;
+        let req = pg34_s3_request(&["dev-libs/pg34-uapp"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(kept.deep, "the S3 request counts as deep");
+        let bridge = super::BridgeRepo { lazy, kept };
+        let cpv = portage_solver::Cpv::parse("dev-libs/pg34-ulib-1").expect("cpv parses");
+        let use_config = bridge.desired_use(&cpv);
+        assert!(
+            !use_config.enabled_flags().contains(&super::interned("x")),
+            "installed pg34-ulib was built with USE=\"\": x must stay off"
+        );
+    }
+
+    /// #34 S3: without deep the config USE still answers (the S2 leaf rule
+    /// empties the deps, so the flag value is unobservable there; this pins
+    /// the reader choice itself).
+    #[test]
+    fn pg34_uapp_desired_use_is_config_use_without_deep() {
+        use portage_atom_pubgrub::PackageRepository;
+        let mut req = pg34_s3_request(&["dev-libs/pg34-uapp"]);
+        req.deep = super::super::Deep::NotRequested;
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(!kept.deep, "no --deep in this request");
+        let bridge = super::BridgeRepo { lazy, kept };
+        let cpv = portage_solver::Cpv::parse("dev-libs/pg34-ulib-1").expect("cpv parses");
+        let use_config = bridge.desired_use(&cpv);
+        assert!(
+            use_config.enabled_flags().contains(&super::interned("x")),
+            "without deep the package.use x flag answers"
+        );
+    }
+
+    /// #34 S3: `versions_for` offers an installed version absent from the repo
+    /// with its vdb deps (`pg34-gone` → `pg34-gextra`), instead of leaving the
+    /// crate's empty-deps stub in place.
+    #[test]
+    fn pg34_gone_versions_for_offers_vdb_deps() {
+        use portage_atom_pubgrub::PackageRepository;
+        let req = pg34_s3_request(&["dev-libs/pg34-gapp"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        let bridge = super::BridgeRepo { lazy, kept };
+        let cpn = portage_solver::Cpn::parse("dev-libs/pg34-gone").expect("cpn parses");
+        let rows = bridge.versions_for(&cpn);
+        assert_eq!(rows.len(), 1, "the installed-only version is offered");
+        assert_eq!(format!("{}", rows[0].0), "dev-libs/pg34-gone-1");
+        assert_eq!(rows[0].1.slot, Some(super::interned("0")));
+        let mut refs = Vec::new();
+        super::referenced_cpns(&rows[0].1.deps.rdepend, &mut refs);
+        assert_eq!(refs, ["dev-libs/pg34-gextra"]);
+    }
+
+    /// #34 S3: `-pvuD` on pg34-uapp plans only the new target. The installed
+    /// dep keeps its vdb `USE=""`, so the `x?` dep on pg34-uextra stays off
+    /// (Portage `N pg34-uapp` only; pubgrub used to add `N pg34-uextra` from
+    /// the config USE).
+    #[test]
+    fn pg34_uapp_pubgrub_pvud_uses_vdb_use() {
+        let req = pg34_s3_request(&["dev-libs/pg34-uapp"]);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-uapp resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-uapp-1:0"]);
+    }
+
+    /// #34 S3: `-pvuD` on pg34-gapp plans the installed-only dep's own dep.
+    /// `pg34-gone` is installed but not in the repo; Portage expands it from
+    /// the vdb (`N pg34-gextra + N pg34-gapp`), pubgrub used to plan only
+    /// `N pg34-gapp`.
+    #[test]
+    fn pg34_gapp_pubgrub_pvud_expands_installed_only() {
+        let req = pg34_s3_request(&["dev-libs/pg34-gapp"]);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-gapp resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-gapp-1:0", "dev-libs/pg34-gextra-1:0"]
+        );
+    }
+
+    /// #34 S3 non-regression: `-pvuD` on pg34-app still plans the fresh dep
+    /// (`N pg34-extra + N pg34-app`, like Portage): S2's leaf rule stays off
+    /// under deep and the vdb reader agrees with the repo for pg34-lib.
+    #[test]
+    fn pg34_app_pubgrub_pvud_expands_fresh_dep() {
+        let req = pg34_s3_request(&["dev-libs/pg34-app"]);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-app resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-app-1:0", "dev-libs/pg34-extra-1:0"]
+        );
+    }
+
+    /// #34 S3 non-regression: `-pvuD` on pg34-blib plans nothing (Portage
+    /// `Total: 0`): an installed, already-built parent's BDEPEND is not
+    /// traversed for update when the parent itself is not merged. The
+    /// installed-BDEPEND fold stays cut pending bed evidence (code note).
+    #[test]
+    fn pg34_blib_pubgrub_pvud_plans_nothing() {
+        let req = pg34_s3_request(&["dev-libs/pg34-blib"]);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-blib resolves");
+        assert_eq!(pg34_plan(&result), Vec::<String>::new());
+        assert!(
+            result
+                .entries
+                .iter()
+                .all(|e| !format!("{}/{}", e.category, e.package).contains("pg34-btool")),
+            "no btool row in any outcome: {:?}",
+            result
+                .entries
+                .iter()
+                .map(|e| format!("{}/{} {:?}", e.category, e.package, e.outcome))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// #34 S3 non-regression: `-pvuD --with-bdeps=n` on pg34-blib plans
+    /// nothing either (Portage agrees; the ebuild DESCRIPTIONs record the
+    /// corrected guard).
+    #[test]
+    fn pg34_blib_pubgrub_pvud_nobdeps_plans_nothing() {
+        let mut req = pg34_s3_request(&["dev-libs/pg34-blib"]);
+        req.with_bdeps = false;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-blib resolves");
+        assert_eq!(pg34_plan(&result), Vec::<String>::new());
     }
 }

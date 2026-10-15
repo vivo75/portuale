@@ -1,0 +1,88 @@
+# #34 S3 fixture captures (2026-10-15): pg34-uapp/ulib/uextra (deep USE),
+# pg34-blib/btool (deep bdeps), pg34-gapp/gone/gextra (installed-only),
+# plus the S2 leaf control pg34-app under -pvuD.
+# Mechanical capture; each cap file is verbatim combined stdout+stderr; rc recorded below.
+# Fixtures live in pmtest (branch backlog/34-s3); the shared tree was never executed in place.
+# NOTE 1 (capture decides over the plan): the S3 plan predicted
+#   `-pvuD dev-libs/pg34-blib` -> `U pg34-btool` on Portage; Portage
+#   actually prints Total: 0 (an installed, already-built parent's
+#   BDEPEND is not traversed for update when the parent itself is not
+#   merged), identical to `-pvuD --with-bdeps=n`. The blib ebuild
+#   DESCRIPTIONs record the corrected guard: regressed = -pvuD plans U
+#   pg34-btool (over-merge) or --with-bdeps=n plans anything. The bdeps
+#   pair therefore guards S3's planned installed-BDEPEND fold against
+#   over-merging; it does not reproduce a pubgrub-vs-Portage divergence
+#   (both print Total: 0 on this binary).
+# NOTE 2: the uapp -pvuD cell DOES diverge as S3 predicted (Portage N
+#   uapp only vs pubgrub N uextra + N uapp: config USE instead of vdb
+#   USE). The uapp -pvuDN cell diverges in its S4 half (pubgrub misses
+#   the R ulib row; plan xfails it as S4). The gapp -pvuD cell diverges
+#   as predicted (pubgrub N gapp only, Portage N gextra + N gapp).
+#   The S2 leaf control pg34-app -pvuD agrees on both sides (N extra + N
+#   app): S2's kept-leaf rule must stay off under --deep.
+# NOTE 3: portuale's DEFAULT solver diverges from Portage on two new
+#   cells (pre-existing default behaviour, no pinned contract test
+#   covers them): blib -pvuD (default U btool-2 vs Portage Total: 0)
+#   and gapp -pvuD (default rc=1 "no ebuilds to satisfy pg34-gone" vs
+#   Portage N gextra + N gapp from the vdb).
+
+image: localhost/test-portuale:latest  id 5616d41d00cdbef0aa8933476973dc5b9ca07e897b635bd7167dedf61c09cb5f
+image Portage (no upgrade needed; already at the L0 pin): 3.0.82.2  (python 3.14.6-final-0, default/linux/amd64/23.0/systemd)
+portuale HEAD: 942a0ebd3281af75d4d505de9d8993ddd573016b (S3 unimplemented at capture time)
+portuale binary: /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+  mtime: 2026-10-14 23:15:02.302941252 +0000
+  (no cargo build run for this slice; target/release/emerge is a symlink -> portuale)
+host Portage (unused for fixture cells): 3.0.82.2
+
+--- Portage side (container; never against the shared fixtures tree) ---
+staging: pmtest fixtures mounted read-only at /fixtures, staged with the unmodified
+  differential-test-bed/layers/l0-fixture-oracle/stage.sh to /tmp/pg34-s3-stage (in-container path)
+container env (all seven portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/tmp/pg34-s3-stage/fixtures ROOT=/tmp/pg34-s3-stage/fixtures
+  PORTAGE_RUNNING_ROOT=/tmp/pg34-s3-stage/fixtures DISTDIR=/tmp/pg34-s3-stage/fixtures/distfiles
+  PORTAGE_REPOSITORIES=<contents of /tmp/pg34-s3-stage/fixtures/etc/portage/repos.conf/repos.conf>
+podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+  -v <pmtest>/fixtures:/fixtures:ro -v <pmtest>/differential-test-bed:/TEST:ro
+  --entrypoint /bin/bash localhost/test-portuale:latest  (then stage.sh + the seven argv below)
+
+cap-pg34-uapp-pvuD-portage.txt          rc=0  /usr/sbin/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-uapp
+cap-pg34-uapp-pvuDN-portage.txt        rc=0  /usr/sbin/emerge -pvuDN --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-uapp
+cap-pg34-blib-pvuD-portage.txt         rc=0  /usr/sbin/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-blib
+cap-pg34-blib-pvuD-nobdeps-portage.txt rc=0  /usr/sbin/emerge -pvuD --with-bdeps=n --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-blib
+cap-pg34-blib-pvu-portage.txt          rc=0  /usr/sbin/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-blib
+cap-pg34-gapp-pvuD-portage.txt         rc=0  /usr/sbin/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-gapp
+cap-pg34-app-pvuD-portage.txt          rc=0  /usr/sbin/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-app
+
+--- portuale side (host binary, scratch copy /var/tmp/pg34-s3-fixcopy) ---
+staging: cp of pmtest fixtures via /tmp/opencode/fixture-smith/stage-host.sh
+  (same deltas as stage.sh: absolute repos.conf locations, binrepos ${PORTAGE_CONFIGROOT} resolved,
+   etc/portage/categories + per-repo profiles/categories, Manifest per package dir, news dropped,
+   layout.conf masters, updates comments dropped, */<pkg> rewrite, repo_name fill, common-1.0 staled)
+host env (all fourteen portuale captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/var/tmp/pg34-s3-fixcopy/fixtures ROOT=/var/tmp/pg34-s3-fixcopy/fixtures
+  PORTAGE_RUNNING_ROOT=/var/tmp/pg34-s3-fixcopy/fixtures DISTDIR=/var/tmp/pg34-s3-fixcopy/fixtures/distfiles
+  EMERGE_DEFAULT_OPTS unset
+
+cap-pg34-uapp-pvuD-pg.txt          rc=0  .../target/release/emerge --solver=pubgrub -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-uapp
+cap-pg34-uapp-pvuDN-pg.txt         rc=0  .../target/release/emerge --solver=pubgrub -pvuDN --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-uapp
+cap-pg34-blib-pvuD-pg.txt          rc=0  .../target/release/emerge --solver=pubgrub -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-blib
+cap-pg34-blib-pvuD-nobdeps-pg.txt  rc=0  .../target/release/emerge --solver=pubgrub -pvuD --with-bdeps=n --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-blib
+cap-pg34-blib-pvu-pg.txt           rc=0  .../target/release/emerge --solver=pubgrub -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-blib
+cap-pg34-gapp-pvuD-pg.txt          rc=0  .../target/release/emerge --solver=pubgrub -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-gapp
+cap-pg34-app-pvuD-pg.txt           rc=0  .../target/release/emerge --solver=pubgrub -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-app
+cap-pg34-uapp-pvuD-default.txt          rc=0  .../target/release/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-uapp
+cap-pg34-uapp-pvuDN-default.txt         rc=0  .../target/release/emerge -pvuDN --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-uapp
+cap-pg34-blib-pvuD-default.txt          rc=0  .../target/release/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-blib
+cap-pg34-blib-pvuD-nobdeps-default.txt  rc=0  .../target/release/emerge -pvuD --with-bdeps=n --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-blib
+cap-pg34-blib-pvu-default.txt           rc=0  .../target/release/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-blib
+cap-pg34-gapp-pvuD-default.txt          rc=1  .../target/release/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-gapp
+cap-pg34-app-pvuD-default.txt           rc=0  .../target/release/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-app
+
+--- row summary (ebuild plan rows only; Portage's masked-packages footer and license noise omitted) ---
+uapp -pvuD  : portage 1x N(uapp)                    | pg N(uextra)+N(uapp) DIVERGES (S3 USE) | default 1x N(uapp)
+uapp -pvuDN : portage N(uextra)+R(ulib,x*)+N(uapp)  | pg N(uextra)+N(uapp) DIVERGES (S4 half: no R) | default same as portage
+blib -pvuD  : portage Total: 0                     | pg Total: 0 same (NO divergence) | default U(btool-2) DIFFERS from both
+blib -pvuD --with-bdeps=n : portage Total: 0       | pg Total: 0 same | default Total: 0
+blib -pvu   : portage Total: 0                     | pg Total: 0 same | default Total: 0
+gapp -pvuD  : portage N(gextra)+N(gapp)             | pg N(gapp) DIVERGES (installed-only) | default rc=1 no-ebuilds error DIFFERS
+app -pvuD   : portage N(extra)+N(app)              | pg N(extra)+N(app) same (S2 control) | default same
