@@ -1,0 +1,74 @@
+# #34 S5 G7 fixture captures (2026-10-15): installed soft-blocker of a fresh target.
+# Fixture: `dev-libs/pg34-snew-1` (fresh; `RDEPEND="dev-libs/pg34-shold
+# !dev-libs/pg34-sblk"`) over installed `pg34-shold-1` (`RDEPEND
+# pg34-smid`), installed `pg34-smid-1` (`RDEPEND pg34-sblk`), installed
+# `pg34-sblk-1` (no deps). The systemd-utils shape from triage.md G7:
+# snew ~ the new systemd-utils (declares the soft block), shold ~ installed
+# util-linux (kept leaf under -pv, in the solution), smid ~ installed
+# systemd (out of the engine solution, but in Portage's digraph via the
+# ignored-deps edges), sblk ~ installed gentoo-systemd-integration.
+# Mechanical capture; each cap file is verbatim combined stdout+stderr; rc recorded below.
+# Fixtures live in pmtest (branch backlog/34-s5c, worktree files excluded
+# from git via /fixtures); the shared tree was never executed in place.
+# NOTE 1 (capture decides over the plan): Portage 3.0.82.2 plans `N snew`
+#   plus `[blocks B] pg34-sblk` only -- `Conflict: 1 block (1 unsatisfied)`,
+#   rc 1, in -pv AND -pvuD. Its own "pulled in by" dump proves the mechanism:
+#   `dev-libs/pg34-sblk ... required by (dev-libs/pg34-smid-1 ..., installed
+#   ...)`. Pre-fix pubgrub under -pv instead schedules
+#   `[uninstall] pg34-sblk-1` and downgrades the row to `[blocks b]`
+#   (`Conflict: 1 block (all satisfied)`, rc 0). Under -pvuD pubgrub already
+#   agrees (deep expands installed smid into the solution, parenting sblk).
+# NOTE 2 (default solver): the default path agrees with Portage under -pvuD
+#   (rc 1, blocks-only) but keeps the satisfied-block rendering under -pv
+#   (rc 0, uninstall + `b`) -- its required-set closure (world/system seeds)
+#   misses the fixture chain, while on the real tree the system set reaches
+#   systemd and masks the same gap. Fixing the walk is out of scope (#34 S5
+#   fixes ride the pubgrub path only); no default pin for -pv, and no CASES
+#   entry where the default exit (0) differs from Portage's (1).
+# NOTE 3 (installed metadata consulted): the installed
+#   gentoo-systemd-integration-9-r2 in the bed tree carries
+#   `RDEPEND="acct-group/floppy acct-group/usb >=sys-apps/systemd-207"`;
+#   the parent edge Portage sees is the reverse (`sys-apps/systemd`
+#   `!vanilla? ( sys-apps/gentoo-systemd-integration )`, host-tree
+#   `systemd-260.1-r2.ebuild:166`), i.e. an installed package depending on
+#   the blocked one -- the fixture's smid/sblk edge is that shape.
+
+image: localhost/test-portuale:latest  id 5616d41d00cdbef0aa8933476973dc5b9ca07e897b635bd7167dedf61c09cb5f
+image Portage: 3.0.82.2  (see portage-version line in the run log)
+portuale HEAD: 0b38d6705fc53407ec67ab3822c323c01950b5d5 (G3/G7 unimplemented at capture time)
+portuale binary: /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+  mtime: 2026-10-15 07:18:23.256168958 -0000
+  (no cargo build run for this slice; target/release/emerge is a symlink -> portuale)
+host Portage (unused for fixture cells): 3.0.82.2
+
+--- Portage side (container; never against the shared fixtures tree) ---
+staging: pmtest fixtures mounted read-only at /fixtures, staged with the unmodified
+  differential-test-bed/layers/l0-fixture-oracle/stage.sh to /tmp/pg34-s5c-stage (in-container path)
+container env (all portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/tmp/pg34-s5c-stage/fixtures ROOT=/tmp/pg34-s5c-stage/fixtures
+  PORTAGE_RUNNING_ROOT=/tmp/pg34-s5c-stage/fixtures DISTDIR=/tmp/pg34-s5c-stage/fixtures/distfiles
+  PORTAGE_REPOSITORIES=<contents of /tmp/pg34-s5c-stage/fixtures/etc/portage/repos.conf/repos.conf>
+podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+  -v <pmtest>/fixtures:/fixtures:ro -v <pmtest>/differential-test-bed:/TEST:ro
+  -v /tmp/pg34-s5c-out:/out
+  --entrypoint /bin/bash localhost/test-portuale:latest /out/run.sh  (stage.sh + the argv below)
+
+cap-pg34-snew-pv-portage.txt       rc=1  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-snew
+cap-pg34-snew-pvuD-portage.txt    rc=1  /usr/sbin/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-snew
+
+--- portuale side (host binary, scratch copy /var/tmp/pg34-s5c-fixcopy) ---
+staging: cp of pmtest fixtures via /tmp/opencode/fixture-smith/stage-host.sh
+  (same deltas as stage.sh; see LLM/evidence/2026-10-15-34-s5/g1/cmd.txt)
+host env (all portuale captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/var/tmp/pg34-s5c-fixcopy/fixtures ROOT=/var/tmp/pg34-s5c-fixcopy/fixtures
+  PORTAGE_RUNNING_ROOT=/var/tmp/pg34-s5c-fixcopy/fixtures DISTDIR=/var/tmp/pg34-s5c-fixcopy/fixtures/distfiles
+  EMERGE_DEFAULT_OPTS unset
+
+cap-pg34-snew-pv-pg.txt       rc=0  .../target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-snew
+cap-pg34-snew-pvuD-pg.txt     rc=1  .../target/release/emerge --solver=pubgrub -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-snew
+cap-pg34-snew-pv-default.txt       rc=0  .../target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-snew
+cap-pg34-snew-pvuD-default.txt     rc=1  .../target/release/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-snew
+
+--- row summary (ebuild plan rows only; Portage's license-mask footer omitted) ---
+snew -pv    : portage N(snew)+[blocks B] 1-unsatisfied rc 1 | pg N(snew)+[uninstall sblk]+[blocks b] all-satisfied rc 0 DIVERGES | default same as pg (NOTE 2, out of scope)
+snew -pvuD  : portage N(snew)+[blocks B] 1-unsatisfied rc 1 | pg same | default same

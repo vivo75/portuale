@@ -109,6 +109,11 @@ struct LazyRepo {
     ignore_built_slot_operator_deps: bool,
     /// The closure: every CPN the solver may see (`all_packages`).
     closure: HashSet<String>,
+    /// The expanded cone inside it: seeds plus everything reached by expanding
+    /// dep trees (shallow installed loads excluded). What Portage could have
+    /// traversed to (USE-unevaluated superset); read by the G7 blocker
+    /// parent test, never by either engine.
+    expanded: HashSet<String>,
     loaded: RefCell<HashMap<String, Vec<LoadedVersion>>>,
     uses: RefCell<HashMap<String, HashSet<String>>>,
     /// Per-run memo for the installed-deps reader below.
@@ -138,6 +143,7 @@ impl LazyRepo {
             dynamic_deps: req.dynamic_deps,
             ignore_built_slot_operator_deps: req.ignore_built_slot_operator_deps,
             closure: HashSet::new(),
+            expanded: HashSet::new(),
             loaded: RefCell::new(HashMap::new()),
             uses: RefCell::new(HashMap::new()),
             installed_dep_memo: RefCell::new(HashMap::new()),
@@ -166,6 +172,9 @@ impl LazyRepo {
         while let Some((cp, expand)) = queue.pop() {
             if !repo.closure.insert(cp.clone()) {
                 continue;
+            }
+            if expand {
+                repo.expanded.insert(cp.clone());
             }
             pg_trace(
                 &mut std::io::stderr(),
@@ -399,6 +408,12 @@ impl LazyRepo {
             .collect();
         out.sort_by(|a, b| format!("{a}").cmp(&format!("{b}")));
         out
+    }
+
+    /// Whether `category/package` was reached by expanding dep trees (not a
+    /// shallow installed load): the G7 blocker parent test's traversal model.
+    fn expanded_contains(&self, category: &str, package: &str) -> bool {
+        self.expanded.contains(&format!("{category}/{package}"))
     }
 }
 
@@ -820,15 +835,35 @@ fn graph_result_from_order(
         });
     }
     // Blocker reporting via the shared walk-path helper, filed on owner entries.
-    let conflicts = super::resolve_blockers(
+    // #34 S5 G7: the pubgrub path passes the walk-identical required-set
+    // closure (blocker_retry_seed_atoms + request atoms + system, over
+    // installed deps) instead of an empty set, so a blocked installed
+    // package the world/system cone still needs stays unresolved like
+    // Portage's. Resolvo (`kept: None`) keeps the empty set: its output must
+    // not move. A satisfied uninstall with an installed parent in the
+    // expanded cone flips to unresolved next (Portage's digraph-parents
+    // veto, which the solution-member-only entries cannot see).
+    let blocker_retry_closure: std::collections::HashSet<(String, String)> = if kept.is_some() {
+        let mut seeds = req.config.blocker_retry_seed_atoms.clone();
+        seeds.extend(req.atoms.iter().cloned());
+        seeds.sort();
+        seeds.dedup();
+        super::required_set_reachable_cps(&req.root, &seeds, &req.config.system_packages)
+    } else {
+        // The bridge has no required-set closure of its own.
+        std::collections::HashSet::new()
+    };
+    let mut conflicts = super::resolve_blockers(
         &req.root,
         &pending_blockers,
         &entries,
-        // The bridge has no required-set closure of its own.
-        &std::collections::HashSet::new(),
+        &blocker_retry_closure,
         // Never runs under `--buildpkgonly`, so the gate is inert here.
         false,
     );
+    if kept.is_some() {
+        unsolvable_with_installed_parent(&req.root, repo, &entries, &mut conflicts);
+    }
     let mut orphan_blockers = Vec::new();
     super::file_blocker_conflicts(
         &mut entries,
@@ -1063,6 +1098,233 @@ fn root_target_slots(
             target_slots(lazy, &cp, versions, &installed_slots, req.update)
         }
     }
+}
+
+/// One dep class with direct self-cycle `||` alternatives removed: a `||`
+/// branch naming the candidate's own cp-slot is dropped unless an installed
+/// instance satisfies it (Portage then builds against the installed self, no
+/// cycle). A self atom outside `||`, in `^^`/`??`, or alone in its group
+/// stays, as does anything a bare `=`/`*` slot operator pins.
+// Portage: depgraph.py:778-793 (graph-added packages preferred, with the
+// gwydion-dylan self-or-bin precedent), dep_check circular handling
+fn without_self_alternatives(
+    cp: &str,
+    slot: &str,
+    installed: &[super::InstalledPackage],
+    classes: &[Vec<portage_solver::DepEntry>; 5],
+) -> [Vec<portage_solver::DepEntry>; 5] {
+    std::array::from_fn(|i| strip_self_from_entries(cp, slot, installed, &classes[i]))
+}
+
+/// The [`without_self_alternatives`] rule over one entry tree.
+fn strip_self_from_entries(
+    cp: &str,
+    slot: &str,
+    installed: &[super::InstalledPackage],
+    entries: &[portage_solver::DepEntry],
+) -> Vec<portage_solver::DepEntry> {
+    use portage_solver::DepEntry;
+    entries
+        .iter()
+        .map(|entry| match entry {
+            DepEntry::AnyOf(children) => {
+                let survivors: Vec<DepEntry> = children
+                    .iter()
+                    .filter(|child| !is_droppable_self(child, cp, slot, installed))
+                    .map(|child| strip_self_from_entry(cp, slot, installed, child))
+                    .collect();
+                if survivors.is_empty() {
+                    entry.clone()
+                } else {
+                    DepEntry::AnyOf(survivors)
+                }
+            }
+            DepEntry::AllOf(children) => {
+                DepEntry::AllOf(strip_self_from_entries(cp, slot, installed, children))
+            }
+            DepEntry::UseConditional {
+                flag,
+                negate,
+                children,
+            } => DepEntry::UseConditional {
+                flag: *flag,
+                negate: *negate,
+                children: strip_self_from_entries(cp, slot, installed, children),
+            },
+            _ => entry.clone(),
+        })
+        .collect()
+}
+
+/// The [`without_self_alternatives`] rule over one entry (for `||` children
+/// that are groups themselves, e.g. behind a USE conditional).
+fn strip_self_from_entry(
+    cp: &str,
+    slot: &str,
+    installed: &[super::InstalledPackage],
+    entry: &portage_solver::DepEntry,
+) -> portage_solver::DepEntry {
+    strip_self_from_entries(cp, slot, installed, std::slice::from_ref(entry))
+        .into_iter()
+        .next()
+        .expect("a one-entry strip keeps one entry")
+}
+
+/// Whether one `||` branch is the candidate's own cp-slot with no installed
+/// instance satisfying it: selecting it would build the candidate from
+/// itself. Blockers are not build edges and never count.
+fn is_droppable_self(
+    entry: &portage_solver::DepEntry,
+    cp: &str,
+    slot: &str,
+    installed: &[super::InstalledPackage],
+) -> bool {
+    let portage_solver::DepEntry::Atom(dep) = entry else {
+        return false;
+    };
+    if dep.blocker.is_some() || format!("{}", dep.cpn) != cp {
+        return false;
+    }
+    if !names_own_slot(dep, slot) {
+        return false;
+    }
+    !installed_satisfies_self(dep, cp, installed)
+}
+
+/// Whether the atom's `:slot` part names `slot`: unpinned always does; a bare
+/// `=`/`*` operator never does (kept conservatively); a named pin must equal
+/// it. Same reading as [`target_slot`], applied to a candidate slot.
+fn names_own_slot(dep: &portage_solver::Dep, slot: &str) -> bool {
+    if dep.slot_dep.is_none() {
+        return true;
+    }
+    target_slot(dep).is_some_and(|pin| pin == slot)
+}
+
+/// Whether some installed instance of `cp` satisfies the self atom, so
+/// Portage could build against it without a cycle: same slot reading as the
+/// drop rule, plus the version floor when the atom carries one. An
+/// unparsable installed version counts as satisfying (keeps old behaviour).
+fn installed_satisfies_self(
+    dep: &portage_solver::Dep,
+    cp: &str,
+    installed: &[super::InstalledPackage],
+) -> bool {
+    installed.iter().any(|inst| {
+        if format!("{}/{}", inst.category, inst.package) != cp {
+            return false;
+        }
+        if dep.slot_dep.is_some() && target_slot(dep).is_some_and(|pin| pin != inst.slot) {
+            return false;
+        }
+        match (&dep.op, &dep.version) {
+            (Some(op), Some(version)) => {
+                let Ok(installed_version) = portage_solver::Version::parse(&inst.version) else {
+                    return true;
+                };
+                portage_atom_pubgrub::PortageVersionSet::from_operator(
+                    *op,
+                    dep.glob,
+                    version.clone(),
+                )
+                .contains(&installed_version)
+            }
+            _ => true,
+        }
+    })
+}
+
+/// A satisfied-by-uninstall conflict the bridge must report unresolved instead:
+/// the removal target is installed, nothing this run merges in its cp, and an
+/// installed package the request expansion reached still depends on it. Portage's
+/// `_validate_blockers` never unmerges a blocked package pulled into the
+/// graph with parents; the bridge's entries only hold solution members, so an
+/// installed parent past the kept leaves (installed systemd behind kept
+/// util-linux) is invisible to `graph_has_parent`. The edge is read from the
+/// vdb with the built USE, like [`super::required_set_reachable_cps`].
+// Portage: depgraph.py, _validate_blockers (the digraph-contains-and-parents
+// veto on the uninstall scheduling)
+fn unsolvable_with_installed_parent(
+    root: &std::path::Path,
+    repo: &LazyRepo,
+    entries: &[super::GraphEntry],
+    conflicts: &mut [super::FiledBlocker],
+) {
+    use super::{BlockerSatisfiedBy, merge_bound_version};
+    for conflict in conflicts.iter_mut() {
+        let Some(BlockerSatisfiedBy::Uninstall { cpv, .. }) = &conflict.conflict.satisfied_by
+        else {
+            continue;
+        };
+        let Some((category, package, version)) = super::split_cpv(cpv) else {
+            continue;
+        };
+        // A merge-bound entry for the same cp replaces rather than removes;
+        // that Replacement row already stands.
+        if entries.iter().any(|e| {
+            e.category == category
+                && e.package == package
+                && merge_bound_version(&e.outcome).is_some()
+        }) {
+            continue;
+        }
+        if !has_installed_parent(root, repo, &category, &package, &version) {
+            continue;
+        }
+        conflict.conflict.unsolvable = true;
+        conflict.conflict.satisfied_by = None;
+    }
+}
+
+/// Whether an installed package other than `category/package` itself, reached
+/// by the request expansion, has a USE-evaluated vdb dep edge onto the
+/// `category/package-version` instance. Blocker atoms are not parents.
+fn has_installed_parent(
+    root: &std::path::Path,
+    repo: &LazyRepo,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> bool {
+    let (slot, sub_slot) = super::read_vdb_slot(root, category, package, version);
+    let candidate = format!("{category}/{package}-{version}:{slot}/{sub_slot}");
+    super::all_installed_packages(root)
+        .iter()
+        .filter(|inst| {
+            (inst.category.as_str(), inst.package.as_str()) != (category, package)
+                && repo.expanded_contains(&inst.category, &inst.package)
+        })
+        .any(|inst| {
+            let use_flags =
+                super::read_vdb_flag_set(root, &inst.category, &inst.package, &inst.version, "USE");
+            ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+                .iter()
+                .any(|key| {
+                    let depstr = super::read_vdb_string(
+                        root,
+                        &inst.category,
+                        &inst.package,
+                        &inst.version,
+                        key,
+                    );
+                    let Some(atoms) = super::flat_dep_atoms(&depstr, &use_flags) else {
+                        return false;
+                    };
+                    atoms.iter().any(|atom_str| {
+                        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+                            return false;
+                        };
+                        if atom.blocker != portage_dep::Blocker::None
+                            || atom.category != category
+                            || atom.package != package
+                        {
+                            return false;
+                        }
+                        portage_dep::match_from_list(atom_str, &[candidate.as_str()])
+                            .is_some_and(|matched| !matched.is_empty())
+                    })
+                })
+        })
 }
 
 /// Installed cpvs the bridge describes to the engine, computed before the provider
@@ -1718,6 +1980,10 @@ impl PortualeResolver for PubGrubResolver {
 struct BridgeRepo {
     lazy: LazyRepo,
     kept: KeptInstalled,
+    /// Installed cpvs for the G3 self-cycle rule (an alternative an installed
+    /// instance satisfies is kept). Pubgrub only: resolvo reads
+    /// `record.deps` straight from `LazyRepo` and never sees this.
+    installed: Vec<super::InstalledPackage>,
 }
 
 impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
@@ -1773,7 +2039,14 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                 }
             }
             let empty: [Vec<portage_solver::DepEntry>; 5] = Default::default();
-            let deps = if leaf { empty } else { classes.clone() };
+            // #34 S5 G3: drop a `||` alternative naming this candidate's own
+            // cp-slot (a direct self-cycle Portage avoids at selection), so
+            // the engine takes the sibling (go picks go-bootstrap).
+            let deps = if leaf {
+                empty
+            } else {
+                without_self_alternatives(&cp, &record.slot, &self.installed, classes)
+            };
             if let Some(row) = version_row(record, deps) {
                 out.push(row);
             }
@@ -1815,7 +2088,11 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                         }
                     }
                 }
-                if let Some(row) = version_row(&record, record.deps.clone()) {
+                if let Some(row) = version_row(
+                    &record,
+                    // #34 S5 G3: same self-cycle rule as the repo path above.
+                    without_self_alternatives(&cp, &record.slot, &self.installed, &record.deps),
+                ) {
                     out.push(row);
                 }
             }
@@ -1900,6 +2177,7 @@ fn pubgrub_provider(
         BridgeRepo {
             lazy: lazy.clone(),
             kept: kept.clone(),
+            installed: installed.to_vec(),
         },
         seed_cpns.to_vec(),
     );
@@ -3132,7 +3410,11 @@ mod tests {
         let installed = super::super::all_installed_packages(&req.root);
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
         assert!(kept.deep, "the S3 request counts as deep");
-        let bridge = super::BridgeRepo { lazy, kept };
+        let bridge = super::BridgeRepo {
+            lazy,
+            kept,
+            installed: installed.clone(),
+        };
         let cpv = portage_solver::Cpv::parse("dev-libs/pg34-ulib-1").expect("cpv parses");
         let use_config = bridge.desired_use(&cpv);
         assert!(
@@ -3157,7 +3439,11 @@ mod tests {
         let installed = super::super::all_installed_packages(&req.root);
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
         assert!(!kept.deep, "no --deep in this request");
-        let bridge = super::BridgeRepo { lazy, kept };
+        let bridge = super::BridgeRepo {
+            lazy,
+            kept,
+            installed: installed.clone(),
+        };
         let cpv = portage_solver::Cpv::parse("dev-libs/pg34-ulib-1").expect("cpv parses");
         let use_config = bridge.desired_use(&cpv);
         assert!(
@@ -3180,7 +3466,11 @@ mod tests {
             super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
         let installed = super::super::all_installed_packages(&req.root);
         let kept = super::KeptInstalled::of(&req, &lazy, &installed);
-        let bridge = super::BridgeRepo { lazy, kept };
+        let bridge = super::BridgeRepo {
+            lazy,
+            kept,
+            installed: installed.clone(),
+        };
         let cpn = portage_solver::Cpn::parse("dev-libs/pg34-gone").expect("cpn parses");
         let rows = bridge.versions_for(&cpn);
         assert_eq!(rows.len(), 1, "the installed-only version is offered");
@@ -3883,6 +4173,227 @@ mod tests {
             }
             other => panic!("expected Reinstall with changed flag f, got {other:?}"),
         }
+    }
+
+    /// #34 S5 G3: `-pv` on pg34-self avoids the direct self-cycle in the
+    /// `||` (the go/go-bootstrap shape) and picks the bootstrap sibling
+    /// (Portage `depgraph.py:778-793`); the bridge resolves the `||` to
+    /// itself and fails with a circular self-dependency instead.
+    #[test]
+    fn pg34_self_pubgrub_pv_picks_the_bootstrap_sibling() {
+        let mut req = fixture_request(&["dev-libs/pg34-self"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        // `-pv`: not selective, no update, build deps on.
+        req.selective = false;
+        req.with_bdeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-self resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-self-1:0", "dev-libs/pg34-selfboot-1:0"]
+        );
+    }
+
+    /// #34 S5 G3: `-pvuD` on pg34-self plans the same pair (deep changes
+    /// nothing with nothing installed; Portage plans both in every mode).
+    #[test]
+    fn pg34_self_pubgrub_pvud_picks_the_bootstrap_sibling() {
+        use super::super::Deep;
+        let mut req = fixture_request(&["dev-libs/pg34-self"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        // `-pvuD`: selective through `--update`, unlimited deep, build deps on.
+        req.selective = true;
+        req.update = true;
+        req.deep = Deep::Unlimited;
+        req.with_bdeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-self resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-self-1:0", "dev-libs/pg34-selfboot-1:0"]
+        );
+    }
+
+    /// #34 S5 G7: `-pv` on pg34-snew keeps the installed soft-block
+    /// unresolved: `N snew` plus an unsatisfied `[blocks B]` row, no
+    /// `[uninstall]` (Portage's "pulled in by installed pg34-smid" parent
+    /// keeps the block; the bridge invents the removal instead).
+    #[test]
+    fn pg34_snew_pubgrub_pv_keeps_soft_block_unresolved() {
+        let mut req = fixture_request(&["dev-libs/pg34-snew"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        // `-pv`: not selective, no update, build deps on.
+        req.selective = false;
+        req.with_bdeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-snew resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-snew-1:0"]);
+        assert!(
+            result
+                .entries
+                .iter()
+                .all(|e| !matches!(e.outcome, super::super::PretendOutcome::Uninstall { .. })),
+            "no package is scheduled for unmerge"
+        );
+        let snew = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-snew")
+            .expect("pg34-snew entry");
+        assert_eq!(snew.blockers.len(), 1, "the soft block is still reported");
+        assert!(
+            snew.blockers[0].unsolvable && snew.blockers[0].satisfied_by.is_none(),
+            "the block stays unresolved, like Portage's [blocks B]"
+        );
+    }
+
+    /// #34 S5 G7: `-pvuD` on pg34-snew already agrees (deep expands installed
+    /// pg34-smid into the solution, parenting pg34-sblk); non-regression pin.
+    #[test]
+    fn pg34_snew_pubgrub_pvud_keeps_soft_block_unresolved() {
+        use super::super::Deep;
+        let mut req = fixture_request(&["dev-libs/pg34-snew"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        // `-pvuD`: selective through `--update`, unlimited deep, build deps on.
+        req.selective = true;
+        req.update = true;
+        req.deep = Deep::Unlimited;
+        req.with_bdeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-snew resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-snew-1:0"]);
+        assert!(
+            result
+                .entries
+                .iter()
+                .all(|e| !matches!(e.outcome, super::super::PretendOutcome::Uninstall { .. })),
+            "no package is scheduled for unmerge"
+        );
+    }
+
+    /// #34 S5 G3: the `||` self-cycle rule keeps what it must: a bare self
+    /// atom outside any group, a `^^` self branch, and an all-self `||`
+    /// (emptying the group would invent a worse failure); an installed
+    /// instance satisfying the branch keeps it too (Portage builds against
+    /// the installed self, no cycle).
+    #[test]
+    fn pg34_self_cycle_rule_keeps_non_choice_self_edges() {
+        use super::super::InstalledPackage;
+        let no_installed: Vec<InstalledPackage> = Vec::new();
+        let parse = |text: &str| portage_solver::DepEntry::parse(text).expect("fixture dep parses");
+        let render = |entries: &[portage_solver::DepEntry]| {
+            entries
+                .iter()
+                .map(|e| format!("{e:?}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+
+        // Bare self outside `||` stays (a real cycle the engine must report).
+        let bare = parse("dev-libs/pg34-self");
+        let kept = super::without_self_alternatives(
+            "dev-libs/pg34-self",
+            "0",
+            &no_installed,
+            &[bare.clone(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        );
+        assert_eq!(render(&kept[0]), render(&bare));
+
+        // `^^` is not `||`: untouched even with an uninstalled self inside.
+        let exactly_one = parse("^^ ( dev-libs/pg34-self dev-libs/pg34-selfboot )");
+        let kept = super::without_self_alternatives(
+            "dev-libs/pg34-self",
+            "0",
+            &no_installed,
+            &[
+                exactly_one.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ],
+        );
+        assert_eq!(render(&kept[0]), render(&exactly_one));
+
+        // An all-self `||` keeps its form (nothing else to take).
+        let all_self = parse("|| ( dev-libs/pg34-self )");
+        let kept = super::without_self_alternatives(
+            "dev-libs/pg34-self",
+            "0",
+            &no_installed,
+            &[
+                all_self.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ],
+        );
+        assert_eq!(render(&kept[0]), render(&all_self));
+
+        // The choice itself drops the self branch, keeping the sibling.
+        let choice = parse("|| ( dev-libs/pg34-self dev-libs/pg34-selfboot )");
+        let kept = super::without_self_alternatives(
+            "dev-libs/pg34-self",
+            "0",
+            &no_installed,
+            &[
+                choice.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ],
+        );
+        assert_eq!(kept[0].len(), 1);
+        let portage_solver::DepEntry::AnyOf(survivors) = &kept[0][0] else {
+            panic!("the || group survives with one branch");
+        };
+        assert!(matches!(
+            &survivors[..],
+            [portage_solver::DepEntry::Atom(dep)] if format!("{}", dep.cpn) == "dev-libs/pg34-selfboot"
+        ));
+
+        // An installed self keeps the branch (no cycle to avoid).
+        let installed = vec![InstalledPackage {
+            category: "dev-libs".to_string(),
+            package: "pg34-self".to_string(),
+            version: "1".to_string(),
+            slot: "0".to_string(),
+        }];
+        let kept = super::without_self_alternatives(
+            "dev-libs/pg34-self",
+            "0",
+            &installed,
+            &[
+                choice.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ],
+        );
+        assert_eq!(render(&kept[0]), render(&choice));
+
+        // A self branch pinned to another slot is not this candidate.
+        let other_slot = parse("|| ( dev-libs/pg34-self:1 dev-libs/pg34-selfboot )");
+        let kept = super::without_self_alternatives(
+            "dev-libs/pg34-self",
+            "0",
+            &no_installed,
+            &[
+                other_slot.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ],
+        );
+        assert_eq!(render(&kept[0]), render(&other_slot));
     }
 
     /// #34 S5 G2 control: `-pvO` (`--nodeps`) on pg34-capp plans only

@@ -1,0 +1,6 @@
+[ebuild  N     ] dev-libs/pg34-snew-1::testrepo to /var/tmp/pg34-s5c-fixcopy/fixtures
+[uninstall     ] dev-libs/pg34-sblk-1::testrepo to /var/tmp/pg34-s5c-fixcopy/fixtures
+[blocks b      ] dev-libs/pg34-sblk ("dev-libs/pg34-sblk" is soft blocking dev-libs/pg34-snew-1)
+
+Total: 1 package (1 new, 1 uninstall), Size of downloads: 0 KiB
+Conflict: 1 block (all satisfied)
