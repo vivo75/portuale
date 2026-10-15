@@ -1,0 +1,6 @@
+[ebuild  N     ] dev-libs/pg366-y-1::testrepo to /var/tmp/pg366-fixcopy/fixtures
+[ebuild  N     ] dev-libs/pg366-b-1::testrepo to /var/tmp/pg366-fixcopy/fixtures
+[ebuild  N     ] dev-libs/pg366-a-1::testrepo to /var/tmp/pg366-fixcopy/fixtures
+[ebuild  N     ] dev-libs/pg366-rb-1::testrepo to /var/tmp/pg366-fixcopy/fixtures
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB

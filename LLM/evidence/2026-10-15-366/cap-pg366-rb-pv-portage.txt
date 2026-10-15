@@ -1,0 +1,13 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.13 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/pg366-y-1::testrepo to /tmp/pg366-stage/fixtures/ 0 KiB
+[ebuild  N     ] dev-libs/pg366-b-1::testrepo to /tmp/pg366-stage/fixtures/ 0 KiB
+[ebuild  N     ] dev-libs/pg366-a-1::testrepo to /tmp/pg366-stage/fixtures/ 0 KiB
+[ebuild  N     ] dev-libs/pg366-rb-1::testrepo to /tmp/pg366-stage/fixtures/ 0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB

@@ -2438,7 +2438,9 @@ fn or_branch_atoms<'a>(
 
 /// Whether one `||` branch is the branch Portage would take: every package
 /// it names is selected independently of this group (in the plan *and*
-/// required from another parent or as a root target), its atoms match the
+/// required from another parent or as a root target) *before* this group
+/// resolves in Portage's walk (a package added later, like util-linux
+/// behind the pager root, never won the group), its atoms match the
 /// planned versions (slot pins still bind), and its USE deps hold under
 /// the member's effective USE. `installed_blocking` names a direct atom
 /// branch an installed instance satisfies while it is not the desired one:
@@ -2456,6 +2458,10 @@ fn or_branch_standing(
     installed: &[super::InstalledPackage],
     branch: &portage_solver::DepEntry,
     member_cp: &str,
+    member_cpv: &str,
+    class: usize,
+    index: usize,
+    walk: &WalkOrder,
     member_use: &HashSet<String>,
     plan_ver: &HashMap<String, String>,
     taken: &HashSet<(String, String)>,
@@ -2500,6 +2506,24 @@ fn or_branch_standing(
                 .iter()
                 .any(|(parent, child)| child == &cp && parent != member_cp)
         {
+            return OrBranchStanding {
+                qualifies: false,
+                installed_blocking,
+            };
+        }
+        // Walk-ordered: in Portage's walk the group resolves against the
+        // graph as it stands then, so an alternative added only later (or
+        // never — a complete-mode latecomer the walk never reaches) cannot
+        // have won it. A member the walk never reaches keeps the old
+        // order-blind answer: there is no walk information to refine it.
+        let early = match (
+            walk.added.get(&cp),
+            walk.resolved.get(&(member_cpv.to_string(), class, index)),
+        ) {
+            (Some(added), Some(resolved)) => added < resolved,
+            _ => !walk.added.contains_key(member_cp),
+        };
+        if !early {
             return OrBranchStanding {
                 qualifies: false,
                 installed_blocking,
@@ -2613,6 +2637,170 @@ fn visit_or_groups(
     }
 }
 
+/// Portage's graph-fill order simulated over one solved plan: which
+/// packages are already in the digraph when each `||` group resolves.
+/// `added` maps `cp` to its `_add_pkg` step; `resolved` maps
+/// `(member cpv, dep class, group index)` to its disjunction-pop step.
+/// A member or alternative the walk never reaches (complete-mode
+/// latecomers) has no entry and counts as added last.
+/// // Portage: `_emerge/depgraph.py`, `_create_graph`.
+struct WalkOrder {
+    added: HashMap<String, usize>,
+    resolved: HashMap<(String, usize, usize), usize>,
+}
+
+/// Active plain (non-`||`) atoms of one dep class in written order: what
+/// `_queue_disjunctive_deps` yields for immediate `_add_dep` (`^^`/`??`
+/// groups are transparent there, as in `dep_zapdeps`; `||` branches are
+/// not collected — they enter at resolution time).
+fn walk_plain_children(
+    entries: &[portage_solver::DepEntry],
+    member_use: &HashSet<String>,
+    active: bool,
+    out: &mut Vec<String>,
+) {
+    use portage_solver::DepEntry;
+    for entry in entries {
+        match entry {
+            DepEntry::Atom(dep) => {
+                if active && dep.blocker.is_none() {
+                    out.push(format!("{}", dep.cpn));
+                }
+            }
+            DepEntry::AllOf(children) => {
+                walk_plain_children(children, member_use, active, out);
+            }
+            DepEntry::UseConditional {
+                flag,
+                negate,
+                children,
+            } => {
+                walk_plain_children(
+                    children,
+                    member_use,
+                    active && (member_use.contains(flag.as_str()) != *negate),
+                    out,
+                );
+            }
+            // A `||` branch's atoms enter only when the group resolves.
+            DepEntry::AnyOf(_) => {}
+            DepEntry::ExactlyOneOf(children) | DepEntry::AtMostOneOf(children) => {
+                walk_plain_children(children, member_use, active, out);
+            }
+        }
+    }
+}
+
+/// Dep classes in the order `_add_pkg_deps` processes them (build-time
+/// classes queue their disjunctions last, so those pop first).
+const WALK_CLASS_ORDER: [usize; 5] = [1, 4, 3, 0, 2];
+
+/// One queued disjunction frame: a member's `||` groups of one dep class
+/// in written order (frames pop LIFO across members and classes).
+struct WalkFrame {
+    member_cp: String,
+    member_cpv: String,
+    class: usize,
+    groups: Vec<(usize, Vec<portage_solver::DepEntry>)>,
+}
+
+/// Append-only walk add: first add wins (`previously_added` is never
+/// re-pushed), and only plan members enter the graph.
+fn walk_add(
+    walk: &mut WalkOrder,
+    step: &mut usize,
+    stack: &mut Vec<(String, String)>,
+    plan_ver: &HashMap<&str, &str>,
+    cp: &str,
+) {
+    if plan_ver.contains_key(cp) && !walk.added.contains_key(cp) {
+        walk.added.insert(cp.to_string(), *step);
+        *step += 1;
+        stack.push((cp.to_string(), plan_ver[cp].to_string()));
+    }
+}
+
+/// Simulate `_create_graph` over the solved plan: roots first (in
+/// request-atom order), then a LIFO package stack for plain deps plus a
+/// LIFO disjunction stack for `||` groups (drained only when the package
+/// stack empties). Taken children of a group resolve after every group
+/// of their frame (`_select_atoms` finishes before `_minimize_children`
+/// adds anything), so they never count as in-graph for their own frame.
+fn simulate_walk_order(
+    order: &[(String, String)],
+    parents: &HashMap<String, Vec<(String, String)>>,
+    root_order: &[String],
+    views: &HashMap<String, ([Vec<portage_solver::DepEntry>; 5], HashSet<String>)>,
+) -> WalkOrder {
+    let plan_ver: HashMap<&str, &str> = order
+        .iter()
+        .map(|(cp, version)| (cp.as_str(), version.as_str()))
+        .collect();
+    let taken = solution_taken_edges(parents);
+    let mut walk = WalkOrder {
+        added: HashMap::new(),
+        resolved: HashMap::new(),
+    };
+    let mut step: usize = 0;
+    let mut stack: Vec<(String, String)> = Vec::new();
+    for cp in root_order {
+        walk_add(&mut walk, &mut step, &mut stack, &plan_ver, cp);
+    }
+    // One frame per (member, class): its groups in written order.
+    let mut disj: Vec<WalkFrame> = Vec::new();
+    while !stack.is_empty() || !disj.is_empty() {
+        while let Some((cp, version)) = stack.pop() {
+            let cpv = format!("{cp}-{version}");
+            let Some((classes, use_set)) = views.get(&cpv) else {
+                continue;
+            };
+            for class in WALK_CLASS_ORDER {
+                let mut plain = Vec::new();
+                walk_plain_children(&classes[class], use_set, true, &mut plain);
+                for child in &plain {
+                    walk_add(&mut walk, &mut step, &mut stack, &plan_ver, child);
+                }
+                let mut found = Vec::new();
+                let mut next_index = 0;
+                visit_or_groups(&classes[class], use_set, true, &mut next_index, &mut found);
+                let frame: Vec<(usize, Vec<portage_solver::DepEntry>)> = found
+                    .into_iter()
+                    .filter(|(_, children, active)| *active && !children.is_empty())
+                    .map(|(index, children, _)| (index, children))
+                    .collect();
+                if !frame.is_empty() {
+                    disj.push(WalkFrame {
+                        member_cp: cp.clone(),
+                        member_cpv: cpv.clone(),
+                        class,
+                        groups: frame,
+                    });
+                }
+            }
+        }
+        if let Some(frame) = disj.pop() {
+            for (index, _) in &frame.groups {
+                walk.resolved
+                    .insert((frame.member_cpv.clone(), frame.class, *index), step);
+                step += 1;
+            }
+            for (_, children) in &frame.groups {
+                for branch in children {
+                    let mut atoms = Vec::new();
+                    or_branch_atoms(branch, &mut atoms);
+                    for atom in atoms {
+                        let child = format!("{}", atom.cpn);
+                        if taken.contains(&(frame.member_cp.clone(), child.clone())) {
+                            walk_add(&mut walk, &mut step, &mut stack, &plan_ver, &child);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    walk
+}
+
 /// The desired `||` facts for the next solve, from the solved plan: for
 /// every `||` group in the deps of a selected member (as the engine saw
 /// them, G3 strip and current overrides included), the first-listed
@@ -2645,19 +2833,43 @@ fn compute_or_overrides(
         .iter()
         .map(|(cp, version)| (cp.clone(), version.clone()))
         .collect();
-    let mut member_list: Vec<&(String, String)> = order.iter().collect();
-    member_list.sort();
-    let mut groups = OrChoiceOverrides::new();
-    for (cp, version) in member_list {
-        let Some((classes, member_use)) =
-            or_member_view(lazy, kept, installed, cp, version, current)
-        else {
+    // Request-atom order: the walk appends arguments in order (popped
+    // reversed), so every root is in the graph before any group resolves.
+    let mut root_order = Vec::new();
+    for atom in &req.atoms {
+        let Ok(dep) = portage_solver::Dep::parse(atom) else {
             continue;
         };
+        if dep.blocker.is_some() {
+            continue;
+        }
+        let cp = format!("{}", dep.cpn);
+        if !root_order.contains(&cp) {
+            root_order.push(cp);
+        }
+    }
+    let mut member_list: Vec<&(String, String)> = order.iter().collect();
+    member_list.sort();
+    // One engine-view per member, shared by the walk simulation and the
+    // group analysis so both see the same classes and USE.
+    let mut views: HashMap<String, ([Vec<portage_solver::DepEntry>; 5], HashSet<String>)> =
+        HashMap::new();
+    for (cp, version) in member_list.clone() {
+        if let Some(view) = or_member_view(lazy, kept, installed, cp, version, current) {
+            views.insert(format!("{cp}-{version}"), view);
+        }
+    }
+    let walk = simulate_walk_order(order, parents, &root_order, &views);
+    let mut groups = OrChoiceOverrides::new();
+    for (cp, version) in member_list {
+        let Some((classes, member_use)) = views.get(&format!("{cp}-{version}")) else {
+            continue;
+        };
+        let member_cpv = format!("{cp}-{version}");
         for (class, entries) in classes.iter().enumerate() {
             let mut found = Vec::new();
             let mut next_index = 0;
-            visit_or_groups(entries, &member_use, true, &mut next_index, &mut found);
+            visit_or_groups(entries, member_use, true, &mut next_index, &mut found);
             for (index, children, active) in found {
                 if !active || children.is_empty() {
                     continue;
@@ -2676,7 +2888,11 @@ fn compute_or_overrides(
                             installed,
                             branch,
                             cp,
-                            &member_use,
+                            &member_cpv,
+                            class,
+                            index,
+                            &walk,
+                            member_use,
                             &plan_ver,
                             &taken,
                             root_cps,
@@ -6393,11 +6609,25 @@ mod tests {
             .collect();
         // The probe target itself requires `ulib`: in-graph trivially.
         let root_cps = ["dev-libs/pg34-ulib".to_string()].into_iter().collect();
+        // Walk positions: the alternative is added (step 0, a seeded
+        // root) before the member's group resolves (step 1).
+        let walk = super::WalkOrder {
+            added: [("dev-libs/pg34-ulib".to_string(), 0)]
+                .into_iter()
+                .collect(),
+            resolved: [(("dev-libs/pg34-uapp-1".to_string(), 1, 0), 1)]
+                .into_iter()
+                .collect(),
+        };
         let standing = super::or_branch_standing(
             &lazy,
             &installed,
             &branch,
             "dev-libs/pg34-uapp",
+            "dev-libs/pg34-uapp-1",
+            1,
+            0,
+            &walk,
             &member_use,
             &plan_ver,
             &std::collections::HashSet::new(),
@@ -7340,6 +7570,42 @@ mod tests {
             "y",
             "y? ( || ( dev-libs/pg34-ga dev-libs/pg34-gb ) )",
         );
+        // #366 walk-order shapes (synthetic, no pmtest fixture): `a`
+        // first-lists `x`, but `x` pulls `b` which pulls `y` — Portage
+        // resolves the group with only `{r, a}` in the graph and takes
+        // `x`, while a plan-order-blind test takes the later `y`.
+        s6_repo_pkg(&repo, "pg366o-r", "1", "0", "", "dev-libs/pg366o-a");
+        s6_repo_pkg(
+            &repo,
+            "pg366o-a",
+            "1",
+            "0",
+            "",
+            "|| ( dev-libs/pg366o-x dev-libs/pg366o-y )",
+        );
+        s6_repo_pkg(&repo, "pg366o-x", "1", "0", "", "dev-libs/pg366o-b");
+        s6_repo_pkg(&repo, "pg366o-b", "1", "0", "", "dev-libs/pg366o-y");
+        s6_repo_pkg(&repo, "pg366o-y", "1", "0", "", "");
+        // #366 shape (a): the root pulls `b` (hence `y`) alongside `a`,
+        // so `y` is in the graph when `a`'s disjunction resolves.
+        s6_repo_pkg(
+            &repo,
+            "pg366o-t",
+            "1",
+            "0",
+            "",
+            "dev-libs/pg366o-a dev-libs/pg366o-b",
+        );
+        // #366 shape (b): `b` listed first; the disjunction still
+        // resolves after `b` is walked, so `y` wins here too.
+        s6_repo_pkg(
+            &repo,
+            "pg366o-tb",
+            "1",
+            "0",
+            "",
+            "dev-libs/pg366o-b dev-libs/pg366o-a",
+        );
         let mut extra = repos[0].clone();
         extra.name = "s6test".to_string();
         extra.location = repo;
@@ -7433,13 +7699,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `compute_or_overrides` moves the independently-selected branch
-    /// first but keeps every other branch: the engine's final fallback
-    /// is the first-listed alternative, and nothing here is installed.
+    /// `compute_or_overrides` moves the branch Portage's walk already holds
+    /// first: the root pulls `b` (hence `y`) alongside `a`, so `y` is in
+    /// the graph when `a`'s disjunction resolves (#366 shape (a)). The
+    /// engine's final fallback is the first-listed alternative, and
+    /// nothing here is installed.
     #[test]
     fn s6_compute_or_overrides_moves_the_desired_branch_first() {
         use portage_solver::DepEntry;
-        let req = fixture_request(&["dev-libs/pg34-g2or"]);
+        let req = fixture_request(&["dev-libs/pg366o-t"]);
         let mut repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (_dir, extra) = s6_temp_repo(&repos);
@@ -7449,13 +7717,35 @@ mod tests {
         let lazy =
             super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
         let kept = s6_kept(&[], &[], false);
+        // Round 1: the engine takes first-listed `x`; `y` rides in via `b`.
         let order = vec![
-            ("dev-libs/pg34-g2or".to_string(), "1".to_string()),
-            ("dev-libs/pg34-clib".to_string(), "1".to_string()),
-            ("dev-libs/pg34-ulib".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-t".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-a".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-x".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-b".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-y".to_string(), "1".to_string()),
         ];
-        let parents = std::collections::HashMap::new();
-        let root_cps = ["dev-libs/pg34-clib".to_string()].into_iter().collect();
+        let parents = [
+            (
+                "dev-libs/pg366o-a-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-t".to_string())],
+            ),
+            (
+                "dev-libs/pg366o-b-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-t".to_string())],
+            ),
+            (
+                "dev-libs/pg366o-x-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-a".to_string())],
+            ),
+            (
+                "dev-libs/pg366o-y-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-b".to_string())],
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let root_cps = ["dev-libs/pg366o-t".to_string()].into_iter().collect();
         let overrides = super::compute_or_overrides(
             &req,
             &lazy,
@@ -7469,13 +7759,13 @@ mod tests {
         let group = overrides
             .groups
             .get(&super::OrGroupKey {
-                cpv: "dev-libs/pg34-g2or-1".to_string(),
+                cpv: "dev-libs/pg366o-a-1".to_string(),
                 class: 1,
                 index: 0,
             })
             .expect("the member || group is addressed");
-        // Live order lists `ulib` first; the desired `clib` moves ahead
-        // of it while every branch survives.
+        // `y` is in the graph before the group resolves; it moves ahead
+        // of first-listed `x` while every branch survives.
         let branch = |text: &str| {
             DepEntry::parse(text)
                 .expect("parses")
@@ -7486,10 +7776,176 @@ mod tests {
         assert_eq!(
             group.order,
             vec![
-                super::or_branch_key(&branch("dev-libs/pg34-clib")),
-                super::or_branch_key(&branch("dev-libs/pg34-ulib")),
+                super::or_branch_key(&branch("dev-libs/pg366o-y")),
+                super::or_branch_key(&branch("dev-libs/pg366o-x")),
             ],
-            "the desired branch moves first, nothing is dropped"
+            "the in-graph branch moves first, nothing is dropped"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `compute_or_overrides` keeps the written order when the other
+    /// parent joins the graph only later: `x` pulls `b` which pulls `y`,
+    /// so Portage resolves `a`'s group with only `{r, a}` present and
+    /// takes first-listed `x` (#366 pager shape). A plan-order-blind
+    /// "selected anywhere" test moves `y` first instead.
+    #[test]
+    fn s6_compute_or_overrides_ignores_an_alternative_pulled_later() {
+        use portage_solver::DepEntry;
+        let req = fixture_request(&["dev-libs/pg366o-r"]);
+        let mut repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (_dir, extra) = s6_temp_repo(&repos);
+        let dir = extra.location.parent().expect("repo parent").to_path_buf();
+        repos.push(extra);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let kept = s6_kept(&[], &[], false);
+        // Round 1: the engine takes first-listed `x`; `y` arrives three
+        // edges later through `x` itself.
+        let order = vec![
+            ("dev-libs/pg366o-r".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-a".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-x".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-b".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-y".to_string(), "1".to_string()),
+        ];
+        let parents = [
+            (
+                "dev-libs/pg366o-a-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-r".to_string())],
+            ),
+            (
+                "dev-libs/pg366o-x-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-a".to_string())],
+            ),
+            (
+                "dev-libs/pg366o-b-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-x".to_string())],
+            ),
+            (
+                "dev-libs/pg366o-y-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-b".to_string())],
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let root_cps = ["dev-libs/pg366o-r".to_string()].into_iter().collect();
+        let overrides = super::compute_or_overrides(
+            &req,
+            &lazy,
+            &kept,
+            &[],
+            &order,
+            &parents,
+            &root_cps,
+            &super::OrChoiceOverrides::new(),
+        );
+        let group = overrides
+            .groups
+            .get(&super::OrGroupKey {
+                cpv: "dev-libs/pg366o-a-1".to_string(),
+                class: 1,
+                index: 0,
+            })
+            .expect("the member || group is addressed");
+        // Neither branch is in the graph at resolution: `x` is only the
+        // group's own pick, `y` arrives later — the written order stands.
+        let branch = |text: &str| {
+            DepEntry::parse(text)
+                .expect("parses")
+                .into_iter()
+                .next()
+                .expect("one branch")
+        };
+        assert_eq!(
+            group.order,
+            vec![
+                super::or_branch_key(&branch("dev-libs/pg366o-x")),
+                super::or_branch_key(&branch("dev-libs/pg366o-y")),
+            ],
+            "a later-pulled alternative never moves first"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `compute_or_overrides` resolves shape (b) like shape (a): with `b`
+    /// listed first, `a`'s disjunction still waits for the plain stack to
+    /// drain, so `y` is in the graph at resolution (#366).
+    #[test]
+    fn s6_compute_or_overrides_moves_the_desired_branch_first_reversed() {
+        use portage_solver::DepEntry;
+        let req = fixture_request(&["dev-libs/pg366o-tb"]);
+        let mut repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (_dir, extra) = s6_temp_repo(&repos);
+        let dir = extra.location.parent().expect("repo parent").to_path_buf();
+        repos.push(extra);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let kept = s6_kept(&[], &[], false);
+        let order = vec![
+            ("dev-libs/pg366o-tb".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-a".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-x".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-b".to_string(), "1".to_string()),
+            ("dev-libs/pg366o-y".to_string(), "1".to_string()),
+        ];
+        let parents = [
+            (
+                "dev-libs/pg366o-a-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-tb".to_string())],
+            ),
+            (
+                "dev-libs/pg366o-b-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-tb".to_string())],
+            ),
+            (
+                "dev-libs/pg366o-x-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-a".to_string())],
+            ),
+            (
+                "dev-libs/pg366o-y-1".to_string(),
+                vec![("dev-libs".to_string(), "pg366o-b".to_string())],
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let root_cps = ["dev-libs/pg366o-tb".to_string()].into_iter().collect();
+        let overrides = super::compute_or_overrides(
+            &req,
+            &lazy,
+            &kept,
+            &[],
+            &order,
+            &parents,
+            &root_cps,
+            &super::OrChoiceOverrides::new(),
+        );
+        let group = overrides
+            .groups
+            .get(&super::OrGroupKey {
+                cpv: "dev-libs/pg366o-a-1".to_string(),
+                class: 1,
+                index: 0,
+            })
+            .expect("the member || group is addressed");
+        let branch = |text: &str| {
+            DepEntry::parse(text)
+                .expect("parses")
+                .into_iter()
+                .next()
+                .expect("one branch")
+        };
+        assert_eq!(
+            group.order,
+            vec![
+                super::or_branch_key(&branch("dev-libs/pg366o-y")),
+                super::or_branch_key(&branch("dev-libs/pg366o-x")),
+            ],
+            "dep order never decides the winner: the in-graph branch moves first"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

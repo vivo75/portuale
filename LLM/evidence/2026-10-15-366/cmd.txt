@@ -1,0 +1,66 @@
+# #366 fixture captures (2026-10-15): `||` winner under both dep orders
+
+Fixtures (pmtest, branch `backlog/366-or-order`): `dev-libs/pg366-a-1`
+(`RDEPEND="|| ( dev-libs/pg366-x dev-libs/pg366-y )"`), `dev-libs/pg366-b-1`
+(`RDEPEND="dev-libs/pg366-y"`), leaves `dev-libs/pg366-x-1` /
+`dev-libs/pg366-y-1`, roots `dev-libs/pg366-ra-1`
+(`RDEPEND="dev-libs/pg366-a dev-libs/pg366-b"`, shape (a)) and
+`dev-libs/pg366-rb-1` (`RDEPEND="dev-libs/pg366-b dev-libs/pg366-a"`,
+shape (b)). EAPI 8, real md5-cache each. Nothing installed.
+
+## Portage side (container; never against the shared fixtures tree)
+
+image: localhost/test-portuale:latest  id 5616d41d00cdbef0aa8933476973dc5b9ca07e897b635bd7167dedf61c09cb5f
+image Portage: 3.0.82.2  (see `portage-version` line in the run log)
+staging: pmtest fixtures mounted read-only at /fixtures, staged with the
+  unmodified differential-test-bed/layers/l0-fixture-oracle/stage.sh to
+  /tmp/pg366-stage (in-container path); run script /tmp/pg366-out/run.sh
+container env (all Portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/tmp/pg366-stage/fixtures ROOT=/tmp/pg366-stage/fixtures
+  PORTAGE_RUNNING_ROOT=/tmp/pg366-stage/fixtures DISTDIR=/tmp/pg366-stage/fixtures/distfiles
+  PORTAGE_REPOSITORIES=<contents of /tmp/pg366-stage/fixtures/etc/portage/repos.conf/repos.conf>
+podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+  -v <pmtest>/fixtures:/fixtures:ro -v <pmtest>/differential-test-bed:/TEST:ro
+  -v /tmp/pg366-out:/out
+  --entrypoint /bin/bash localhost/test-portuale:latest /out/run.sh
+
+cap-pg366-ra-pv-portage.txt      rc=0  /usr/sbin/emerge -p -v --getbinpkg=n --usepkg=n --color=n dev-libs/pg366-ra
+cap-pg366-ra-pve-portage.txt    rc=0  /usr/sbin/emerge -p -v --emptytree --getbinpkg=n --usepkg=n --color=n dev-libs/pg366-ra
+cap-pg366-rb-pv-portage.txt     rc=0  /usr/sbin/emerge -p -v --getbinpkg=n --usepkg=n --color=n dev-libs/pg366-rb
+cap-pg366-rb-pve-portage.txt    rc=0  /usr/sbin/emerge -p -v --emptytree --getbinpkg=n --usepkg=n --color=n dev-libs/pg366-rb
+cap-pg366-ra-pv-debug-portage.txt  rc=0  same as -pv plus --debug (shows `b`
+  walked before `a`'s disjunction resolves; `Candidates: ['dev-libs/pg366-y']`)
+
+## Row summary (ebuild plan rows only)
+
+ra -pv / -pve : Portage `N y + N a + N b + N ra` (this display order)
+rb -pv / -pve : Portage `N y + N b + N a + N rb` (this display order)
+In all four: `pg366-x` absent, `pg366-y` present, rc 0. Both dep orders
+agree: the disjunction resolves only after the plain stack drains, so `y`
+is in the graph either way (see `walk-order.md`). The pair pins the
+LIFO-plus-deferral discipline, not a winner change.
+
+## portuale side (host binary, scratch copy /var/tmp/pg366-fixcopy)
+
+staging: cp of pmtest fixtures via /tmp/opencode/fixture-smith/stage-host.sh
+host env: PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/var/tmp/pg366-fixcopy/fixtures ROOT=/var/tmp/pg366-fixcopy/fixtures
+  PORTAGE_RUNNING_ROOT=/var/tmp/pg366-fixcopy/fixtures DISTDIR=/var/tmp/pg366-fixcopy/fixtures/distfiles
+portuale HEAD at pre-fix capture: 0804a022 (branch backlog/366-or-order)
+
+cap-pg366-ra-pv-pg-prefix.txt   `emerge --color=n -pv --solver=pubgrub --getbinpkg=n --usepkg=n dev-libs/pg366-ra`
+cap-pg366-ra-pve-pg-prefix.txt  `-pve` variant
+cap-pg366-rb-pv-pg-prefix.txt   `-pv` on rb
+cap-pg366-rb-pve-pg-prefix.txt  `-pve` on rb
+(`-prefix` = pre-fix binary: all four agree with Portage -- `y`, no `x`.
+The pre-fix divergence this slice fixes is the bed `-pve virtual/pager`
+probe, not these fixtures: pmtest
+`differential-test-bed/logs/l0-20261015T175938Z` (2 allowlisted missing
+rows, `sys-apps/less` + `app-misc/editor-wrapper`).)
+
+## Bed probes (step 5; temp atomlists, deleted after)
+
+pre-fix  `l0-20261015T175938Z`: `-pve --getbinpkg=n --usepkg=n virtual/pager`
+  with `--solver=pubgrub`: 2 missing rows (allowlisted
+  `pubgrub-or-order-blind-virtual-pager`), rc=1 (allowlist-carried).
+post-fix runs: see `report.md`.
