@@ -20,6 +20,8 @@
 //!   order only seeds positions.
 //! - Unparsable dep-string classes feed empty deps; unparsable versions and
 //!   top-level blocker atoms are skipped.
+//! - Binary candidates (`--usepkg`) are not offered; `--deep=N` counts as
+//!   unlimited; no `_greedy_slots` blocker lookahead (backlog #368).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

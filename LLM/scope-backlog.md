@@ -785,6 +785,11 @@ real-tree scale** (smoke-tested 2026-09-10, not fixed):
   non-trivial (`net-libs/nodejs`: 48 packages vs portage's 8). It appears
   to feed pubgrub the over-approximated reachability closure (both
   branches of every `flag?()` followed) as the actual dependency graph.
+  **FIXED 2026-10-15 (#34 S0–S6):** the bridge now plans the same
+  packages and N/S/U/D/R letters as Portage in the five pretend modes
+  (`-pv -pvu -pvuD -pvuDN -pve`); unexplained findings 0 after the
+  `l0-pubgrub` allowlist (residues #363–#368; numbers in
+  `LLM/evidence/2026-10-15-34-z.md`).
 - Bridge output carries the forced-flag `( )` USE markers (Tier 1 --
   same `forced_or_masked_flags` call as the walk).
 - `GraphResult`'s circular deps are wired from the bridge result (Tier
