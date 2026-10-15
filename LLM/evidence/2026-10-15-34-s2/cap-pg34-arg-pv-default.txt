@@ -1,0 +1,4 @@
+[ebuild  N     ] dev-libs/pg34-new-1::testrepo to /var/tmp/pg34-s2-fixcopy/fixtures
+[ebuild   R    ] dev-libs/pg34-arg-1::testrepo to /var/tmp/pg34-s2-fixcopy/fixtures
+
+Total: 2 packages (1 new, 1 reinstall), Size of downloads: 0 KiB

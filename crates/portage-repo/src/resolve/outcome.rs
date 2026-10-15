@@ -23,8 +23,10 @@ pub enum PretendOutcome {
     /// Already installed at this version, but scheduled for reinstall: effective USE,
     /// recorded deps, recorded slot, binary build time, providing repo, or built
     /// slot-operator ABI binding changed. The reasons combine freely; `changed_flags`
-    /// is display-only. At least one of the six is always set; a `Reinstall` with
-    /// none is never constructed. `slot_operator_rebuild` is only ever standalone.
+    /// is display-only. A reason-less `Reinstall` (all six empty/false) is also
+    /// constructed: for `--emptytree` (`resolve/pretend.rs:170-179`) and now for the
+    /// pubgrub bridge's kept/rebuild root targets (`solver_bridge.rs`).
+    /// `slot_operator_rebuild` is only ever standalone.
     Reinstall {
         version: String,
         changed_flags: Vec<String>,

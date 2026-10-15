@@ -1,0 +1,651 @@
+
+ * Always study the list of packages to be cleaned for any obvious
+ * mistakes. Packages that are part of the world set will always
+ * be kept.  They can be manually added to this set with
+ * `emerge --noreplace <atom>`.  Packages that are listed in
+ * package.provided (see portage(5)) will be removed by
+ * depclean, even if they are part of the world set.
+ * 
+ * As a safety measure, depclean will not remove any packages
+ * unless *all* required dependencies have been resolved.  As a
+ * consequence of this, it often becomes necessary to run 
+ * `emerge --update --newuse --deep @world` prior to depclean.
+>>> Checking for lib consumers...
+>>> Calculating removal order...
+>>> These are the packages that would be unmerged:
+!!! Not unmerging package sys-apps/portage-1.0 since there is no valid reason for Portage to unmerge itself.
+
+ dev-libs/withbdepspkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/whtarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/whpuller
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/usemaskreinstallpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/upgradeusepkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/upgradepkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/unsatuseslotother
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/unsatuseslotalt
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/unsatuseinst
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/unmergepkg
+    selected: 1.0 2.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/tworepotarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/tworepoowner
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/stalesnapshot
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/slotopdepspkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/slotmovepkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/slotdedup
+    selected: 1.0 2.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/samerepopkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rootdepsprovider
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/revdepslottarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/revdepslotconsumer
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/revdepconsumer
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/reinstslottarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/reinstslotconsumer
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/reinstslotbound
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/reinstdropiusepkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/reinstallpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/redundantbracketdepspkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rebuiltbinarypkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rebuildnochangeconsumer
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rebuildconsumer
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rdisjowner
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rdctarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rdcpuller
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/r25up
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/r25mid
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/r25lib
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/r25consumer
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/r135parent
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/pg34-multi
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/pg34-lib
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/pg34-gs
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/pg34-arg
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/p2btarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/p2bowner
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/orupgradealt
+    selected: 1.0 2.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/oringraphinstalled
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/orderchangeddepspkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/oranyslotalt
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/opartlya
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/omaskedinstalled
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/ofuzzyinstalled
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/nomowner
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/newslotpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/newrepopkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/newmovepkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/multilinevdb
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/movedkeydepspkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/libcnoisepkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/keywordmaskedusepkg
+    selected: 2.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/keywordmaskedpkg
+    selected: 2.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/keeperroot
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/interactiveinstalledpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/infoinstpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/infoforcedpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/infoenvpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/infodashphases
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/igw0a
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/foo-bar
+    selected: 2.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/flipinstdep
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/downgradepkg
+    selected: 2.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/disjowner
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deepvdbusepkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deepusedepparent
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deepusedepokparent
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deepusedepfparent
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deepusedepbparent
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deeprootdepparent
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deeppkg2
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deeppkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/completegraphpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/changedusepkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/changedslotpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/changeddepspkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/cgp1a
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/cgp0q
+    selected: 4.8.2 
+   protected: none 
+     omitted: none 
+
+ dev-libs/ccr0r
+    selected: 1.46.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/builtusedivergedep
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/builtbindpkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/blockusedeptarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/blk1x
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/blk0y
+    selected: 1 2 3 
+   protected: none 
+     omitted: none 
+
+ dev-libs/bkt4z
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/bkt1b
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/anyofreorderdepspkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/altprov
+    selected: 1.1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/abk0b
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ app-misc/abicons
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ virtual/libc
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/whblocker
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/slotoptarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/samepkg
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/revdeptarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/reorderdepb
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/reorderdepa
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rebuildtrigger
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rebuildnochange
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rdisjtarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/rdcblocker
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/r135leaf
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/nomtarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/keeper
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/igw0x
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/disjtarget
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deepusedepfchild
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deepusedepchild
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deepusedepbchild
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/deeprootdepchild
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/cgp1x
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/cgp0x
+    selected: 2.8.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/bkt1a
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/abk0a
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/paired
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/abk0c
+    selected: 1 
+   protected: none 
+     omitted: none 
+
+ dev-libs/instcycleb
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/instcyclea
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+All selected packages: =app-misc/abicons-1 =dev-libs/abk0a-1 =dev-libs/abk0b-1 =dev-libs/abk0c-1 =dev-libs/altprov-1.1 =dev-libs/anyofreorderdepspkg-1.0 =dev-libs/bkt1a-1 =dev-libs/bkt1b-1 =dev-libs/bkt4z-1 =dev-libs/blk0y-1 =dev-libs/blk0y-2 =dev-libs/blk0y-3 =dev-libs/blk1x-1 =dev-libs/blockusedeptarget-1.0 =dev-libs/builtbindpkg-1.0 =dev-libs/builtusedivergedep-1.0 =dev-libs/ccr0r-1.46.0 =dev-libs/cgp0q-4.8.2 =dev-libs/cgp0x-2.8.0 =dev-libs/cgp1a-1 =dev-libs/cgp1x-1 =dev-libs/changeddepspkg-1.0 =dev-libs/changedslotpkg-1.0 =dev-libs/changedusepkg-1.0 =dev-libs/completegraphpkg-1.0 =dev-libs/deeppkg-1.0 =dev-libs/deeppkg2-1.0 =dev-libs/deeprootdepchild-1.0 =dev-libs/deeprootdepparent-1.0 =dev-libs/deepusedepbchild-1.0 =dev-libs/deepusedepbparent-1.0 =dev-libs/deepusedepchild-1.0 =dev-libs/deepusedepfchild-1.0 =dev-libs/deepusedepfparent-1.0 =dev-libs/deepusedepokparent-1.0 =dev-libs/deepusedepparent-1.0 =dev-libs/deepvdbusepkg-1.0 =dev-libs/disjowner-1.0 =dev-libs/disjtarget-1.0 =dev-libs/downgradepkg-2.0 =dev-libs/flipinstdep-1.0 =dev-libs/foo-bar-2.0 =dev-libs/igw0a-1 =dev-libs/igw0x-1 =dev-libs/infodashphases-1.0 =dev-libs/infoenvpkg-1.0 =dev-libs/infoforcedpkg-1.0 =dev-libs/infoinstpkg-1.0 =dev-libs/instcyclea-1.0 =dev-libs/instcycleb-1.0 =dev-libs/interactiveinstalledpkg-1.0 =dev-libs/keeper-1.0 =dev-libs/keeperroot-1.0 =dev-libs/keywordmaskedpkg-2.0 =dev-libs/keywordmaskedusepkg-2.0 =dev-libs/libcnoisepkg-1.0 =dev-libs/movedkeydepspkg-1.0 =dev-libs/multilinevdb-1.0 =dev-libs/newmovepkg-1.0 =dev-libs/newrepopkg-1.0 =dev-libs/newslotpkg-1.0 =dev-libs/nomowner-1.0 =dev-libs/nomtarget-1.0 =dev-libs/ofuzzyinstalled-1.0 =dev-libs/omaskedinstalled-1.0 =dev-libs/opartlya-1.0 =dev-libs/oranyslotalt-1.0 =dev-libs/orderchangeddepspkg-1.0 =dev-libs/oringraphinstalled-1.0 =dev-libs/orupgradealt-1.0 =dev-libs/orupgradealt-2.0 =dev-libs/p2bowner-1.0 =dev-libs/p2btarget-1.0 =dev-libs/paired-1.0 =dev-libs/pg34-arg-1 =dev-libs/pg34-gs-1.0 =dev-libs/pg34-lib-1 =dev-libs/pg34-multi-1 =dev-libs/r135leaf-1.0 =dev-libs/r135parent-1.0 =dev-libs/r25consumer-1.0 =dev-libs/r25lib-1.0 =dev-libs/r25mid-1.0 =dev-libs/r25up-1.0 =dev-libs/rdcblocker-1.0 =dev-libs/rdcpuller-1.0 =dev-libs/rdctarget-1.0 =dev-libs/rdisjowner-1.0 =dev-libs/rdisjtarget-1.0 =dev-libs/rebuildconsumer-1.0 =dev-libs/rebuildnochange-1.0 =dev-libs/rebuildnochangeconsumer-1.0 =dev-libs/rebuildtrigger-1.0 =dev-libs/rebuiltbinarypkg-1.0 =dev-libs/redundantbracketdepspkg-1.0 =dev-libs/reinstallpkg-1.0 =dev-libs/reinstdropiusepkg-1.0 =dev-libs/reinstslotbound-1.0 =dev-libs/reinstslotconsumer-1.0 =dev-libs/reinstslottarget-1.0 =dev-libs/reorderdepa-1.0 =dev-libs/reorderdepb-1.0 =dev-libs/revdepconsumer-1.0 =dev-libs/revdepslotconsumer-1.0 =dev-libs/revdepslottarget-1.0 =dev-libs/revdeptarget-1.0 =dev-libs/rootdepsprovider-1.0 =dev-libs/samepkg-1.0 =dev-libs/samerepopkg-1.0 =dev-libs/slotdedup-1.0 =dev-libs/slotdedup-2.0 =dev-libs/slotmovepkg-1.0 =dev-libs/slotopdepspkg-1.0 =dev-libs/slotoptarget-1.0 =dev-libs/stalesnapshot-1.0 =dev-libs/tworepoowner-1.0 =dev-libs/tworepotarget-1.0 =dev-libs/unmergepkg-1.0 =dev-libs/unmergepkg-2.0 =dev-libs/unsatuseinst-1.0 =dev-libs/unsatuseslotalt-1.0 =dev-libs/unsatuseslotother-1.0 =dev-libs/upgradepkg-1.0 =dev-libs/upgradeusepkg-1.0 =dev-libs/usemaskreinstallpkg-1.0 =dev-libs/whblocker-1.0 =dev-libs/whpuller-1.0 =dev-libs/whtarget-1.0 =dev-libs/withbdepspkg-1.0 =virtual/libc-1.0
+
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+Packages installed:   135
+Packages in world:    5
+Packages in system:   3
+Required packages:    4
+Number to remove:     131

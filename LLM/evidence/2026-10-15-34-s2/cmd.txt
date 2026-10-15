@@ -1,0 +1,111 @@
+# #34 S2 fixture captures (2026-10-15): pg34-app (kept leaf) + pg34-arg (named reinstall).
+# Mechanical capture; each cap file is verbatim combined stdout+stderr; every rc=0.
+# Fixtures live in pmtest (branch backlog/34-s2, HEAD 543c40c); the shared tree was never executed in place.
+# NOTE: the pg34-app -pv/-pvu cells do NOT diverge on this binary (pubgrub plans
+#   only N pg34-app, like Portage); the predicted extra pg34-extra row appears on
+#   neither side. The same fixture DOES diverge under -pvuD (diagnostic only, not
+#   saved: Portage N pg34-extra + N pg34-app vs pubgrub N pg34-app). The pg34-arg
+#   -pv/-pve cells diverge as predicted (Portage N+R vs pubgrub Total: 0).
+
+image: localhost/test-portuale:latest  id 5616d41d00cdbef0aa8933476973dc5b9ca07e897b635bd7167dedf61c09cb5f
+image Portage (no upgrade needed; already at the L0 pin): 3.0.82.2  (python 3.14.6, default/linux/amd64/23.0/systemd)
+portuale HEAD: f2d29237 (S2 unimplemented at capture time)
+portuale binary: /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+  mtime: 2026-10-14 21:25:07.839346699 +0000
+  (no cargo build run for this slice; target/release/emerge is a symlink -> portuale;
+   no cargo/rustc process was running when the captures were taken)
+host Portage (unused for fixture cells): 3.0.82.2
+
+--- Portage side (container; never against the shared fixtures tree) ---
+staging: pmtest fixtures mounted read-only at /fixtures, staged with the unmodified
+  differential-test-bed/layers/l0-fixture-oracle/stage.sh to /tmp/pg34-stage (in-container path)
+container env (all six portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/tmp/pg34-stage/fixtures ROOT=/tmp/pg34-stage/fixtures
+  PORTAGE_RUNNING_ROOT=/tmp/pg34-stage/fixtures DISTDIR=/tmp/pg34-stage/fixtures/distfiles
+  PORTAGE_REPOSITORIES=<contents of /tmp/pg34-stage/fixtures/etc/portage/repos.conf/repos.conf>
+podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+  -v <pmtest>/fixtures:/fixtures:ro -v <pmtest>/differential-test-bed:/TEST:ro
+  --entrypoint /bin/bash localhost/test-portuale:latest  (then stage.sh + the six argv below)
+
+cap-pg34-app-pv-portage.txt    rc=0  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-app
+cap-pg34-app-pvu-portage.txt   rc=0  /usr/sbin/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-app
+cap-pg34-arg-pv-portage.txt    rc=0  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-arg-pvn-portage.txt   rc=0  /usr/sbin/emerge -pvn --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-arg-pvu-portage.txt   rc=0  /usr/sbin/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-arg-pve-portage.txt   rc=0  /usr/sbin/emerge -pve --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+
+--- portuale side (host binary, scratch copy /var/tmp/pg34-s2-fixcopy) ---
+staging: cp of pmtest fixtures via /tmp/opencode/fixture-smith/stage-host.sh
+  (same deltas as stage.sh: absolute repos.conf locations, binrepos ${PORTAGE_CONFIGROOT} resolved,
+  etc/portage/categories + per-repo profiles/categories, Manifest per package dir, news dropped,
+  layout.conf masters, updates comments dropped, */<pkg> rewrite, repo_name fill, common-1.0 staled)
+host env (all twelve portuale captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/var/tmp/pg34-s2-fixcopy/fixtures ROOT=/var/tmp/pg34-s2-fixcopy/fixtures
+  PORTAGE_RUNNING_ROOT=/var/tmp/pg34-s2-fixcopy/fixtures DISTDIR=/var/tmp/pg34-s2-fixcopy/fixtures/distfiles
+  EMERGE_DEFAULT_OPTS unset
+
+cap-pg34-app-pv-pg.txt       rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-app
+cap-pg34-app-pvu-pg.txt      rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge --solver=pubgrub -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-app
+cap-pg34-arg-pv-pg.txt       rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-arg-pvn-pg.txt      rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge --solver=pubgrub -pvn --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-arg-pvu-pg.txt      rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge --solver=pubgrub -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-arg-pve-pg.txt      rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge --solver=pubgrub -pve --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-app-pv-default.txt  rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-app
+cap-pg34-app-pvu-default.txt rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-app
+cap-pg34-arg-pv-default.txt  rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-arg-pvn-default.txt rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge -pvn --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-arg-pvu-default.txt rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+cap-pg34-arg-pve-default.txt rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge -pve --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-arg
+
+--- row summary (ebuild plan rows only; Portage's masked-packages footer and license noise omitted) ---
+pg34-app -pv/-pvu : portage 1x N(app)              | pg 1x N(app) same (NO divergence) | default 1x N(app)
+pg34-arg -pv      : portage N(new)+R(arg)           | pg Total: 0 DIVERGES             | default N(new)+R(arg)
+pg34-arg -pvn     : portage Total: 0                | pg Total: 0 same                 | default Total: 0
+pg34-arg -pvu     : portage Total: 0                | pg Total: 0 same                 | default Total: 0
+pg34-arg -pve     : portage N(new)+R(arg)           | pg Total: 0 DIVERGES             | default N(new)+R(arg)
+
+--- #34 S2 prune probe (2026-10-15): pg34-lib-1 + pg34-arg-1 installed, RDEPENDs not installed ---
+# Mechanical capture; each prune-* file is verbatim combined stdout+stderr; rc recorded below.
+# Fixtures live in pmtest (HEAD 543c40c, fixtures/ clean); the shared tree was never executed in place.
+# portuale HEAD: f2d29237 (same as the S2 captures above)
+# portuale binary: /home/vivo/repo/PORTUALE/portuale/target/release/emerge (symlink -> portuale), default solver
+#   mtime: 2026-10-14 23:15:02.302941252 +0000
+#   (no cargo build run for this probe)
+# image: localhost/test-portuale:latest  id 5616d41d00cd (same image as above)
+# image Portage: 3.0.82.2  (python 3.14.6-final-0, default/linux/amd64/23.0/systemd)
+
+--- Portage side (container; never against the shared fixtures tree) ---
+# staging: pmtest fixtures mounted read-only at /fixtures, staged with the unmodified
+#   differential-test-bed/layers/l0-fixture-oracle/stage.sh to /tmp/pg34-stage (in-container path)
+# container env (all three portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+#   PORTAGE_CONFIGROOT=/tmp/pg34-stage/fixtures ROOT=/tmp/pg34-stage/fixtures
+#   PORTAGE_RUNNING_ROOT=/tmp/pg34-stage/fixtures DISTDIR=/tmp/pg34-stage/fixtures/distfiles
+#   PORTAGE_REPOSITORIES=<contents of /tmp/pg34-stage/fixtures/etc/portage/repos.conf/repos.conf>
+# podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+#   -v <pmtest>/fixtures:/fixtures:ro -v <pmtest>/differential-test-bed:/TEST:ro
+#   --entrypoint /bin/bash localhost/test-portuale:latest
+#   -c '/TEST/layers/l0-fixture-oracle/stage.sh /tmp/pg34-stage >/dev/null 2>&1;
+#       FX=/tmp/pg34-stage/fixtures; export PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+#       PORTAGE_CONFIGROOT="$FX" ROOT="$FX" PORTAGE_RUNNING_ROOT="$FX" DISTDIR="$FX/distfiles";
+#       export PORTAGE_REPOSITORIES="$(cat "$FX/etc/portage/repos.conf/repos.conf")";
+#       exec /usr/sbin/emerge ARGV'  (stdout+stderr of the execed emerge is the cap file)
+
+--- portuale side (host binary, scratch copy /var/tmp/pg34-fixcopy) ---
+# staging: cp of pmtest fixtures via /tmp/opencode/fixture-smith/stage-host.sh
+#   <pmtest>/fixtures /var/tmp/pg34-fixcopy (same deltas as stage.sh)
+# host env (all three portuale captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+#   PORTAGE_CONFIGROOT=/var/tmp/pg34-fixcopy/fixtures ROOT=/var/tmp/pg34-fixcopy/fixtures
+#   PORTAGE_RUNNING_ROOT=/var/tmp/pg34-fixcopy/fixtures DISTDIR=/var/tmp/pg34-fixcopy/fixtures/distfiles
+#   EMERGE_DEFAULT_OPTS unset
+
+# prune-prune-portage.txt                          rc=1  /usr/sbin/emerge --pretend --prune --getbinpkg=n --usepkg=n --color=n
+# prune-prune-portuale.txt                         rc=1  /home/vivo/repo/PORTUALE/portuale/target/release/emerge --pretend --prune --getbinpkg=n --usepkg=n --color=n
+# prune-prune-depclean-lib-check-n-portage.txt     rc=1  /usr/sbin/emerge --pretend --prune --depclean-lib-check=n --getbinpkg=n --usepkg=n --color=n
+# prune-prune-depclean-lib-check-n-portuale.txt    rc=1  /home/vivo/repo/PORTUALE/portuale/target/release/emerge --pretend --prune --depclean-lib-check=n --getbinpkg=n --usepkg=n --color=n
+# prune-depclean-portage.txt                       rc=0  /usr/sbin/emerge --pretend --depclean --getbinpkg=n --usepkg=n --color=n
+# prune-depclean-portuale.txt                      rc=0  /home/vivo/repo/PORTUALE/portuale/target/release/emerge --pretend --depclean --getbinpkg=n --usepkg=n --color=n
+
+--- row summary (no normalisation; Portage-only license/global-updates preamble excluded from counts) ---
+# --pretend --prune: portage rc=1 (20 unsatisfied deps incl. pg34-extra/pg34-new) | portuale rc=1 (5 unsatisfied deps incl. pg34-extra/pg34-new) -- same abort shape, different lists
+# --pretend --prune --depclean-lib-check=n: byte-identical to --pretend --prune on BOTH sides (flag inert on this tree)
+# --pretend --depclean: portage rc=0 vs portuale rc=0 -- same rc, removal-list ordering/selection differ

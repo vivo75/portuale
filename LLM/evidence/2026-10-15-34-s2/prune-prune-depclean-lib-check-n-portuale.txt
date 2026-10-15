@@ -1,0 +1,32 @@
+ * Dependencies could not be completely resolved due to
+ * the following required packages not being installed:
+ * 
+ *   app-misc/abiprov:0/1= pulled in by:
+ *     app-misc/abicons-1
+ * 
+ *   dev-libs/builtbindtarget:0/1= pulled in by:
+ *     dev-libs/builtbindpkg-1.0
+ * 
+ *   dev-libs/pg34-extra pulled in by:
+ *     dev-libs/pg34-lib-1
+ * 
+ *   dev-libs/pg34-new pulled in by:
+ *     dev-libs/pg34-arg-1
+ * 
+ *   dev-libs/slotdedupmarker pulled in by:
+ *     dev-libs/slotdedup-2.0
+ * 
+ * Have you forgotten to do a complete update prior to depclean? The
+ * most comprehensive command for this purpose is as follows:
+ * 
+ *   emerge --update --newuse --deep --with-bdeps=y @world
+ * 
+ * Note that the --with-bdeps=y option is not required in many
+ * situations. Refer to the emerge manual page (run `man emerge`)
+ * for more information about --with-bdeps.
+ * 
+ * Also, note that it may be necessary to manually uninstall
+ * packages that no longer exist in the repository, since it may not
+ * be possible to satisfy their dependencies.
+ * 
+ * If you would like to ignore dependencies then use --nodeps.

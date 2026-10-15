@@ -27,7 +27,7 @@ use std::fmt;
 use std::io::Write;
 
 use super::{
-    EffectiveUseFlagsArgs, GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig,
+    Deep, EffectiveUseFlagsArgs, GraphEntry, GraphResult, InstalledRef, PretendOutcome, RepoConfig,
     ResolveRequest, Resolver as PortualeResolver, all_installed_packages, effective_use_flags,
     find_repos, installed_pkg_iuse_and_use, is_visible, list_candidates, repo_aux_metadata,
 };
@@ -109,11 +109,18 @@ struct LazyRepo {
 impl LazyRepo {
     /// Build the closure from `seeds` (target CPNs, fully expanded) and `shallow`
     /// (installed CPNs: loaded but not expanded): BFS over parsed dep trees.
+    ///
+    /// `seeds_first` queues the expanding seeds above the shallow installed
+    /// entries, so `Vec::pop` drains the whole target cone before any installed
+    /// CPN loads shallow. Pubgrub only (#34 S2: an installed target must expand,
+    /// else its deps never enter `closure`); resolvo keeps the old order so its
+    /// pool -- and its output -- does not move.
     fn build(
         req: &ResolveRequest,
         repos: Vec<RepoConfig>,
         seeds: &[String],
         shallow: &[String],
+        seeds_first: bool,
     ) -> Result<Self, super::Error> {
         let mut repo = Self {
             repos,
@@ -122,12 +129,22 @@ impl LazyRepo {
             loaded: RefCell::new(HashMap::new()),
             uses: RefCell::new(HashMap::new()),
         };
-        // `(cp, expand)`: targets expand, installed only load.
-        let mut queue: Vec<(String, bool)> = seeds
-            .iter()
-            .map(|cp| (cp.clone(), true))
-            .chain(shallow.iter().map(|cp| (cp.clone(), false)))
-            .collect();
+        // `(cp, expand)`: targets expand, installed only load. Seeds queue last
+        // when `seeds_first`, so LIFO `pop` expands the target cone first: a CPN
+        // that is both a seed and installed expands instead of loading shallow.
+        let mut queue: Vec<(String, bool)> = if seeds_first {
+            shallow
+                .iter()
+                .map(|cp| (cp.clone(), false))
+                .chain(seeds.iter().map(|cp| (cp.clone(), true)))
+                .collect()
+        } else {
+            seeds
+                .iter()
+                .map(|cp| (cp.clone(), true))
+                .chain(shallow.iter().map(|cp| (cp.clone(), false)))
+                .collect()
+        };
         while let Some((cp, expand)) = queue.pop() {
             if !repo.closure.insert(cp.clone()) {
                 continue;
@@ -343,12 +360,20 @@ fn newest_installed(versions: &[String]) -> &str {
 /// Shared `Plan -> GraphResult` mapping: ordered selections plus parent edges
 /// become entries with walk-derived `deps`, re-sorted through the walk's own
 /// merge order.
+///
+/// `kept` is the pubgrub bridge's kept/rebuild set: a same-slot same-version pick
+/// in `kept.rebuild` is a `Reinstall` (Portage's bare, reasonless `[ebuild R]`),
+/// resolvo passes `None` and its output does not move.
+// S6 owns the `graph_result_from_order` split; until then the sixth parameter
+// rides an explicit allow instead of a one-use args struct.
+#[allow(clippy::too_many_arguments)]
 fn graph_result_from_order(
     req: &ResolveRequest,
     repos: &[RepoConfig],
     repo: &LazyRepo,
     order: &[(String, String)],
     parents: &HashMap<String, Vec<(String, String)>>,
+    kept: Option<&KeptInstalled>,
 ) -> GraphResult {
     let installed = InstalledView::of(req);
     let mut entries = Vec::new();
@@ -365,13 +390,27 @@ fn graph_result_from_order(
             record.slot.clone(),
         ));
         let (outcome, oldbest, new_slot) = match slot_versions {
-            Some(versions) if versions.iter().any(|v| v == version) => (
-                PretendOutcome::AlreadyInstalled {
-                    version: version.clone(),
-                },
-                Vec::new(),
-                false,
-            ),
+            Some(versions) if versions.iter().any(|v| v == version) => {
+                // #34 S2: a same-version pick the bridge asked to rebuild is a
+                // bare, reasonless `Reinstall` (precedent `resolve/pretend.rs:170-179`).
+                let outcome = match kept {
+                    Some(kept) if kept.rebuild.contains(&format!("{cp}-{version}")) => {
+                        PretendOutcome::Reinstall {
+                            version: version.clone(),
+                            changed_flags: Vec::new(),
+                            deps_changed: false,
+                            slot_changed: false,
+                            rebuilt_binary: false,
+                            new_repo: false,
+                            slot_operator_rebuild: false,
+                        }
+                    }
+                    _ => PretendOutcome::AlreadyInstalled {
+                        version: version.clone(),
+                    },
+                };
+                (outcome, Vec::new(), false)
+            }
             Some(versions) => {
                 let from = newest_installed(versions).to_string();
                 let outcome = match portage_versions::vercmp(version, &from) {
@@ -781,6 +820,115 @@ fn target_slots(
     slots
 }
 
+/// Root-target slots for one request atom: a named `:slot` pins one, else S1's
+/// Portage `_greedy_slots` choice. Shared by the target list and `KeptInstalled`
+/// so the rebuild set follows the exact slot decision the solve runs under.
+// Portage: depgraph.py, _greedy_slots
+fn root_target_slots(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    installed: &[super::InstalledPackage],
+    dep: &portage_solver::Dep,
+    versions: &portage_atom_pubgrub::PortageVersionSet,
+) -> Vec<String> {
+    match target_slot(dep) {
+        Some(slot) => vec![slot],
+        None => {
+            let cp = format!("{}", dep.cpn);
+            let installed_slots: Vec<String> = installed
+                .iter()
+                .filter(|i| format!("{}/{}", i.category, i.package) == cp)
+                .map(|i| i.slot.clone())
+                .collect();
+            target_slots(lazy, &cp, versions, &installed_slots, req.update)
+        }
+    }
+}
+
+/// Installed cpvs the bridge describes to the engine, computed before the provider
+/// exists (deps are converted inside `new_for_targets`, provider/mod.rs:443-560).
+#[derive(Clone)]
+struct KeptInstalled {
+    /// Every installed `category/package-version`.
+    installed: HashSet<String>,
+    /// Installed cpvs registered `InstalledPolicy::Rebuild`, rendered `R`.
+    rebuild: HashSet<String>,
+    /// Deep expansion requested (`--deep` or `--emptytree`): no leaf rule.
+    deep: bool,
+}
+
+impl KeptInstalled {
+    /// The kept/rebuild set for one request: every installed cpv when `empty`;
+    /// else the installed cpv that is the best accepted version of a root target
+    /// (after S1's slot choice) when the resolve is not selective. A kept named
+    /// argument under `-pvu` is a leaf too: Portage sends the deps of an installed
+    /// node selected at depth 0 without deep to `_ignored_deps`.
+    // Portage: depgraph.py:3815-3824 (`_ignored_deps`), :7359-7375 (`_too_deep`)
+    fn of(req: &ResolveRequest, lazy: &LazyRepo, installed: &[super::InstalledPackage]) -> Self {
+        let mut all = HashSet::new();
+        for inst in installed {
+            all.insert(inst.cpv());
+        }
+        let deep = !matches!(req.deep, Deep::NotRequested) || req.empty;
+        let mut rebuild = HashSet::new();
+        if req.empty {
+            rebuild.extend(all.iter().cloned());
+        } else if !(req.selective && !req.empty) {
+            for atom in &req.atoms {
+                let Ok(dep) = portage_solver::Dep::parse(atom) else {
+                    continue;
+                };
+                // Top-level blockers are an unmerge action, not a merge target.
+                if dep.blocker.is_some() {
+                    continue;
+                }
+                let versions = match (&dep.op, &dep.version) {
+                    (Some(op), Some(version)) => {
+                        portage_atom_pubgrub::PortageVersionSet::from_operator(
+                            *op,
+                            dep.glob,
+                            version.clone(),
+                        )
+                    }
+                    _ => portage_atom_pubgrub::PortageVersionSet::any(),
+                };
+                let cp = format!("{}", dep.cpn);
+                let Ok(loaded) = lazy.load_versions(&cp) else {
+                    continue;
+                };
+                for slot in root_target_slots(req, lazy, installed, &dep, &versions) {
+                    let mut best: Option<portage_solver::Version> = None;
+                    for record in &loaded {
+                        if record.slot != slot {
+                            continue;
+                        }
+                        let Ok(version) = portage_solver::Version::parse(&record.version) else {
+                            continue;
+                        };
+                        if !versions.contains(&version) {
+                            continue;
+                        }
+                        if best.as_ref().is_none_or(|top| version > *top) {
+                            best = Some(version);
+                        }
+                    }
+                    if let Some(best) = best {
+                        let cpv = format!("{cp}-{best}");
+                        if all.contains(&cpv) {
+                            rebuild.insert(cpv);
+                        }
+                    }
+                }
+            }
+        }
+        Self {
+            installed: all,
+            rebuild,
+            deep,
+        }
+    }
+}
+
 // --- PubGrub backend -------------------------------------------------------
 
 /// Whether the pubgrub-bridge trace is active (`PORTUALE_PG_TRACE=1`).
@@ -796,9 +944,12 @@ fn pg_trace(out: &mut dyn Write, line: fmt::Arguments) {
 }
 
 /// One `pg-installed` line for an installed package.
-fn pg_installed_line(inst: &super::InstalledPackage) -> String {
+fn pg_installed_line(
+    inst: &super::InstalledPackage,
+    policy: portage_atom_pubgrub::InstalledPolicy,
+) -> String {
     format!(
-        "pg-installed {} slot={} policy=Favor",
+        "pg-installed {} slot={} policy={policy:?}",
         inst.cpv(),
         inst.slot
     )
@@ -818,6 +969,7 @@ impl PortualeResolver for PubGrubResolver {
 /// provider only ever pays for the closure.
 struct BridgeRepo {
     lazy: LazyRepo,
+    kept: KeptInstalled,
 }
 
 impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
@@ -837,8 +989,15 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
             let Ok(cpv) = portage_solver::Cpv::parse(&record.cpv()) else {
                 continue;
             };
+            // #34 S2: without deep, an installed package that is not being rebuilt
+            // is a leaf: Portage sends its deps to `_ignored_deps` instead of
+            // expanding them. The trace then shows no edges for it, like the engine.
+            // Portage: depgraph.py:3815-3824, :7359-7375
+            let leaf = !self.kept.deep
+                && self.kept.installed.contains(&record.cpv())
+                && !self.kept.rebuild.contains(&record.cpv());
             // One line per referenced CPN per dep class, for the S0 chain walk.
-            if pg_trace_enabled() {
+            if pg_trace_enabled() && !leaf {
                 const CLASSES: [&str; 5] = ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"];
                 let parent = record.cpv();
                 for (class, deps) in CLASSES.iter().zip(record.deps.iter()) {
@@ -883,11 +1042,31 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                     iuse,
                     iuse_defaults,
                     deps: PackageDeps::new(
-                        record.deps[0].clone(),
-                        record.deps[1].clone(),
-                        record.deps[2].clone(),
-                        record.deps[3].clone(),
-                        record.deps[4].clone(),
+                        if leaf {
+                            Vec::new()
+                        } else {
+                            record.deps[0].clone()
+                        },
+                        if leaf {
+                            Vec::new()
+                        } else {
+                            record.deps[1].clone()
+                        },
+                        if leaf {
+                            Vec::new()
+                        } else {
+                            record.deps[2].clone()
+                        },
+                        if leaf {
+                            Vec::new()
+                        } else {
+                            record.deps[3].clone()
+                        },
+                        if leaf {
+                            Vec::new()
+                        } else {
+                            record.deps[4].clone()
+                        },
                     ),
                     required_use: None,
                 },
@@ -924,25 +1103,32 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
     }
 }
 
-fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
+/// The pubgrub provider over [`KeptInstalled`]: installed cpvs in
+/// `kept.rebuild` register `InstalledPolicy::Rebuild` instead of `Favor` -- without
+/// it the `R` row shows but the reinstalled package's DEPEND/BDEPEND never expand.
+fn pubgrub_provider(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    kept: &KeptInstalled,
+    installed: &[super::InstalledPackage],
+    seed_cpns: &[portage_solver::Cpn],
+) -> portage_atom_pubgrub::PortageDependencyProvider {
     use portage_atom_pubgrub::{
         InstalledPackage as BridgeInstalled, InstalledPolicy, PortageDependencyProvider,
-        PortagePackage, PortageVersionSet,
+        PortagePackage,
     };
-    let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
-    let (seeds, shallow) = closure_seeds(req)?;
-    let seed_cpns: Vec<portage_solver::Cpn> = seeds
-        .iter()
-        .chain(shallow.iter())
-        .filter_map(|cp| portage_solver::Cpn::parse(cp).ok())
-        .collect();
-    let lazy = LazyRepo::build(req, repos, &seeds, &shallow)
-        .map_err(|e| format!("reading repo facts: {e}"))?;
     // Reachable conversion, not whole-tree; the provider takes a clone while the
     // mapping keeps the original (memoized maps make the copy cheap).
-    let mut provider =
-        PortageDependencyProvider::new_for_targets(BridgeRepo { lazy: lazy.clone() }, seed_cpns);
-    let installed = all_installed_packages(&req.root);
+    let mut provider = PortageDependencyProvider::new_for_targets(
+        BridgeRepo {
+            lazy: lazy.clone(),
+            kept: kept.clone(),
+        },
+        seed_cpns.to_vec(),
+    );
+    // #34 S2 (moved here from S4): without it `-pve` keeps old installed versions
+    // where Portage shows `U`.
+    provider.set_rebuild_tree(req.empty);
     for inst in installed.iter().cloned() {
         let cpn = match portage_solver::Cpn::parse(&format!("{}/{}", inst.category, inst.package)) {
             Ok(cpn) => cpn,
@@ -959,18 +1145,42 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
         };
         let (iuse_set, use_set) =
             installed_pkg_iuse_and_use(&req.root, &inst.category, &inst.package, &inst.version);
+        let policy = if kept.rebuild.contains(&inst.cpv()) {
+            InstalledPolicy::Rebuild
+        } else {
+            InstalledPolicy::Favor
+        };
         provider.add_installed(BridgeInstalled {
             package,
             version,
-            policy: InstalledPolicy::Favor,
+            policy,
             active_use: use_set.into_iter().map(|f| interned(&f)).collect(),
             iuse: iuse_set.into_iter().map(|f| interned(&f)).collect(),
         });
         pg_trace(
             &mut std::io::stderr(),
-            format_args!("{}", pg_installed_line(&inst)),
+            format_args!("{}", pg_installed_line(&inst, policy)),
         );
     }
+    provider
+}
+
+fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
+    use portage_atom_pubgrub::{PortagePackage, PortageVersionSet};
+    let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
+    let (seeds, shallow) = closure_seeds(req)?;
+    let seed_cpns: Vec<portage_solver::Cpn> = seeds
+        .iter()
+        .chain(shallow.iter())
+        .filter_map(|cp| portage_solver::Cpn::parse(cp).ok())
+        .collect();
+    let lazy = LazyRepo::build(req, repos, &seeds, &shallow, true)
+        .map_err(|e| format!("reading repo facts: {e}"))?;
+    // The kept/rebuild set is computed before the provider exists (deps are
+    // converted inside `new_for_targets`).
+    let installed = all_installed_packages(&req.root);
+    let kept = KeptInstalled::of(req, &lazy, &installed);
+    let mut provider = pubgrub_provider(req, &lazy, &kept, &installed, &seed_cpns);
     let mut targets = Vec::new();
     for atom in &req.atoms {
         let dep = portage_solver::Dep::parse(atom)
@@ -996,13 +1206,7 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
             }
             None => {
                 let nodes = provider.packages_for_cpn(&dep.cpn);
-                let cp = format!("{}", dep.cpn);
-                let installed_slots: Vec<String> = installed
-                    .iter()
-                    .filter(|i| format!("{}/{}", i.category, i.package) == cp)
-                    .map(|i| i.slot.clone())
-                    .collect();
-                let slots = target_slots(&lazy, &cp, &versions, &installed_slots, req.update);
+                let slots = root_target_slots(req, &lazy, &installed, &dep, &versions);
                 let picked: Vec<PortagePackage> = slots
                     .iter()
                     .map(|slot| PortagePackage::slotted(dep.cpn, interned(slot)))
@@ -1065,6 +1269,7 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
         &lazy,
         &order,
         &parents,
+        Some(&kept),
     ))
 }
 
@@ -1087,7 +1292,9 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
     };
     let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
     let (seeds, shallow) = closure_seeds(req)?;
-    let lazy = LazyRepo::build(req, repos, &seeds, &shallow)
+    // Old queue order: S2's seeds-first reorder stays behind the pubgrub path,
+    // so the resolvo pool -- and its output -- does not move.
+    let lazy = LazyRepo::build(req, repos, &seeds, &shallow, false)
         .map_err(|e| format!("reading repo facts: {e}"))?;
     // The pool is inherently whole-input, so the input is the closure.
     let mut repo = InMemoryRepository::new();
@@ -1208,12 +1415,14 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
             .or_default()
             .push((from_cat, from_pkg));
     }
+    // Resolvo has no kept/rebuild set: its output does not move.
     Ok(graph_result_from_order(
         req,
         &lazy.repos,
         &lazy,
         &order,
         &parents,
+        None,
     ))
 }
 
@@ -1347,7 +1556,13 @@ mod tests {
         }
         let mut buf = Vec::new();
         for inst in &installed {
-            super::pg_trace(&mut buf, format_args!("{}", super::pg_installed_line(inst)));
+            super::pg_trace(
+                &mut buf,
+                format_args!(
+                    "{}",
+                    super::pg_installed_line(inst, portage_atom_pubgrub::InstalledPolicy::Favor)
+                ),
+            );
         }
         unsafe {
             std::env::remove_var("PORTUALE_PG_TRACE");
@@ -1360,7 +1575,13 @@ mod tests {
         // Silent without the env var.
         let mut buf = Vec::new();
         for inst in &installed {
-            super::pg_trace(&mut buf, format_args!("{}", super::pg_installed_line(inst)));
+            super::pg_trace(
+                &mut buf,
+                format_args!(
+                    "{}",
+                    super::pg_installed_line(inst, portage_atom_pubgrub::InstalledPolicy::Favor)
+                ),
+            );
         }
         assert!(buf.is_empty(), "trace leaked without PORTUALE_PG_TRACE=1");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1375,7 +1596,8 @@ mod tests {
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
         assert!(seeds.contains(&"dev-libs/newpkg".to_string()));
-        let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow).expect("closure builds");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
         let closure: std::collections::HashSet<String> = lazy
             .closure_cpns()
             .into_iter()
@@ -1391,7 +1613,8 @@ mod tests {
         let req = fixture_request(&["dev-libs/diamond"]);
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow).expect("closure builds");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
         let closure: std::collections::HashSet<String> = lazy
             .closure_cpns()
             .into_iter()
@@ -1422,7 +1645,8 @@ mod tests {
         let req = fixture_request(&["dev-libs/maskedpkg"]);
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
-        let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow).expect("closure builds");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
         assert!(
             lazy.load_versions("dev-libs/maskedpkg")
                 .expect("loads maskedpkg")
@@ -1768,5 +1992,276 @@ mod tests {
             pg34_plan(&result),
             ["dev-libs/pg34-gs-1.1:1", "dev-libs/pg34-gs-2:2"]
         );
+    }
+
+    /// #34 S2: request + closure + installed set for the pg34 arg/app fixtures.
+    /// `with_bdeps` on (like `-pv`); each test sets `selective`/`update`/`empty`
+    /// explicitly before resolving or computing `KeptInstalled::of`, mirroring
+    /// the CLI fold (`resolve_plan.rs`: selective = update||newuse||…||noreplace
+    /// ||newrepo; `-pve` keeps request-level selective, the walk clears it).
+    /// `fixture_request` defaults `selective` and `with_bdeps` to `false`.
+    fn pg34_s2_parts(
+        atoms: &[&str],
+    ) -> (
+        super::super::ResolveRequest,
+        super::LazyRepo,
+        Vec<super::super::InstalledPackage>,
+    ) {
+        use super::super::{SolverKind, find_repos};
+        let mut req = fixture_request(atoms);
+        req.solver = SolverKind::PubGrub;
+        // Build deps on in every mode; selective/update/empty per test.
+        req.with_bdeps = true;
+        let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        (req, lazy, installed)
+    }
+
+    /// #34 S2: the kept/rebuild cpv set. Non-selective `-pv` rebuilds the
+    /// installed best accepted version of the root target; selective `-pvn`
+    /// rebuilds nothing; `-pve` rebuilds every installed cpv.
+    #[test]
+    fn pg34_arg_kept_rebuild_set_follows_selectivity() {
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-arg"]);
+        // `-pv`: not selective, no update.
+        req.selective = false;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.installed.contains("dev-libs/pg34-arg-1"),
+            "the vdb cpv is kept"
+        );
+        assert_eq!(
+            kept.rebuild,
+            std::collections::HashSet::from(["dev-libs/pg34-arg-1".to_string()]),
+            "only the named installed target rebuilds under -pv"
+        );
+        assert!(!kept.deep, "no --deep under -pv");
+
+        // `-pvn`: selective through `--noreplace`.
+        req.selective = true;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.rebuild.is_empty(),
+            "selective -pvn rebuilds nothing: {:?}",
+            kept.rebuild
+        );
+
+        // `-pve`: the request level keeps selective (the walk clears it);
+        // `empty` alone drives the rebuild set.
+        req.empty = true;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-arg-1")
+                && kept.rebuild.contains("dev-libs/pg34-lib-1"),
+            "emptytree rebuilds every installed cpv"
+        );
+        assert!(kept.deep, "--emptytree counts as deep");
+    }
+
+    /// #34 S2: the named installed target registers `InstalledPolicy::Rebuild`
+    /// (a selective resolve keeps `Favor`); an installed non-target stays `Favor`.
+    #[test]
+    fn pg34_arg_installed_policy_rebuild_for_named_target_only() {
+        use portage_atom_pubgrub::InstalledPolicy;
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-arg"]);
+        // `-pv`: not selective, no update.
+        req.selective = false;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let seed_cpns: Vec<portage_solver::Cpn> = seeds
+            .iter()
+            .chain(shallow.iter())
+            .filter_map(|cp| portage_solver::Cpn::parse(cp).ok())
+            .collect();
+        let provider = super::pubgrub_provider(&req, &lazy, &kept, &installed, &seed_cpns);
+        let slotted = |cp: &str, slot: &str| {
+            portage_atom_pubgrub::PortagePackage::slotted(
+                portage_solver::Cpn::parse(cp).expect("cp parses"),
+                super::interned(slot),
+            )
+        };
+        assert_eq!(
+            provider.installed_policy(&slotted("dev-libs/pg34-arg", "0")),
+            Some(InstalledPolicy::Rebuild)
+        );
+        assert_eq!(
+            provider.installed_policy(&slotted("dev-libs/pg34-lib", "0")),
+            Some(InstalledPolicy::Favor),
+            "an installed non-target is kept, not rebuilt"
+        );
+
+        // `-pvn`: selective through `--noreplace`.
+        req.selective = true;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        let provider = super::pubgrub_provider(&req, &lazy, &kept, &installed, &seed_cpns);
+        assert_eq!(
+            provider.installed_policy(&slotted("dev-libs/pg34-arg", "0")),
+            Some(InstalledPolicy::Favor),
+            "selective -pvn keeps Favor"
+        );
+    }
+
+    /// #34 S2: `-pv` on the installed named argument plans `N pg34-new` +
+    /// a bare, reasonless `R pg34-arg` (Portage `depgraph.py` named-argument
+    /// reinstall); the rebuilt target's RDEPEND expands, so pg34-new appears.
+    #[test]
+    fn pg34_arg_pubgrub_pv_reinstalls_named_argument() {
+        let (mut req, _, _) = pg34_s2_parts(&["dev-libs/pg34-arg"]);
+        // `-pv`: not selective, no update, build deps on.
+        req.selective = false;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-arg resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-arg-1:0", "dev-libs/pg34-new-1:0"]
+        );
+        let new = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-new")
+            .expect("pg34-new entry");
+        assert!(
+            matches!(new.outcome, super::super::PretendOutcome::New { .. }),
+            "unexpected outcome: {:?}",
+            new.outcome
+        );
+        let arg = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-arg")
+            .expect("pg34-arg entry");
+        match &arg.outcome {
+            super::super::PretendOutcome::Reinstall {
+                version,
+                changed_flags,
+                deps_changed,
+                slot_changed,
+                rebuilt_binary,
+                new_repo,
+                slot_operator_rebuild,
+            } => {
+                assert_eq!(version, "1");
+                assert!(changed_flags.is_empty());
+                assert!(
+                    !deps_changed
+                        && !slot_changed
+                        && !rebuilt_binary
+                        && !new_repo
+                        && !slot_operator_rebuild,
+                    "bare reinstall carries no reason"
+                );
+            }
+            other => panic!("expected bare Reinstall, got {other:?}"),
+        }
+    }
+
+    /// #34 S2: selective `-pvn` on the up-to-date named argument plans nothing:
+    /// the kept target is a leaf, so its not-installed dep never enters the plan.
+    #[test]
+    fn pg34_arg_pubgrub_pvn_selective_stays_empty() {
+        // `-pvn`: selective through `--noreplace`, build deps on.
+        let (mut req, _, _) = pg34_s2_parts(&["dev-libs/pg34-arg"]);
+        // `-pvn`: selective through `--noreplace`, build deps on.
+        req.selective = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-arg resolves");
+        assert!(
+            result.entries.iter().all(|e| matches!(
+                e.outcome,
+                super::super::PretendOutcome::AlreadyInstalled { .. }
+            )),
+            "nothing merges under -pvn: {:?}",
+            result
+                .entries
+                .iter()
+                .map(|e| format!("{}/{} {:?}", e.category, e.package, e.outcome))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// #34 S2: `-pvu` on the up-to-date named argument plans nothing either.
+    #[test]
+    fn pg34_arg_pubgrub_pvu_update_stays_empty() {
+        // `-pvu`: selective through `--update`, build deps on.
+        let (mut req, _, _) = pg34_s2_parts(&["dev-libs/pg34-arg"]);
+        // `-pvu`: selective through `--update`, build deps on.
+        req.selective = true;
+        req.update = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-arg resolves");
+        assert!(
+            result.entries.iter().all(|e| matches!(
+                e.outcome,
+                super::super::PretendOutcome::AlreadyInstalled { .. }
+            )),
+            "nothing merges under -pvu: {:?}",
+            result
+                .entries
+                .iter()
+                .map(|e| format!("{}/{} {:?}", e.category, e.package, e.outcome))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// #34 S2: `-pve` rebuilds the named argument and its new dep.
+    #[test]
+    fn pg34_arg_pubgrub_pve_emptytree_reinstalls() {
+        // `-pve`: the request level keeps selective (the walk clears it);
+        // `empty` alone drives the rebuild set.
+        let (mut req, _, _) = pg34_s2_parts(&["dev-libs/pg34-arg"]);
+        // `-pve`: `empty` alone drives the rebuild set.
+        req.empty = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-arg resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-arg-1:0", "dev-libs/pg34-new-1:0"]
+        );
+        let arg = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-arg")
+            .expect("pg34-arg entry");
+        assert!(
+            matches!(arg.outcome, super::super::PretendOutcome::Reinstall { .. }),
+            "unexpected outcome: {:?}",
+            arg.outcome
+        );
+    }
+
+    /// #34 S2: `-pv` on pg34-app plans only the new target. The installed dep
+    /// pg34-lib is a kept leaf, so transitive pg34-extra never enters the plan
+    /// (non-regression pin: this cell already matches Portage).
+    #[test]
+    fn pg34_app_pubgrub_pv_keeps_installed_dep_a_leaf() {
+        // `-pv`: not selective, no update, build deps on.
+        let (mut req, _, _) = pg34_s2_parts(&["dev-libs/pg34-app"]);
+        // `-pv`: not selective, no update, build deps on.
+        req.selective = false;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-app resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-app-1:0"]);
+    }
+
+    /// #34 S2: `-pvu` on pg34-app plans only the new target (non-regression pin).
+    #[test]
+    fn pg34_app_pubgrub_pvu_keeps_installed_dep_a_leaf() {
+        // `-pvu`: selective through `--update`, build deps on.
+        let (mut req, _, _) = pg34_s2_parts(&["dev-libs/pg34-app"]);
+        // `-pvu`: selective through `--update`, build deps on.
+        req.selective = true;
+        req.update = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-app resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-app-1:0"]);
     }
 }
