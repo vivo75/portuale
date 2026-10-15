@@ -1,0 +1,79 @@
+# #34 S5 G1 fixture captures (2026-10-15): installed version newer than the
+# best visible (downgrade probe). Fixture: stable `dev-libs/pg34-downer-1`
+# (`RDEPEND="dev-libs/pg34-dep"`) + `~amd64`-masked `pg34-downer-2`,
+# `pg34-downer-2` in the vdb, `pg34-dep-1` stable and not installed.
+# Mechanical capture; each cap file is verbatim combined stdout+stderr; rc recorded below.
+# Fixtures live in pmtest (branch backlog/34-s5a, untracked worktree files);
+# the shared tree was never executed in place.
+# NOTE 1 (capture decides over the plan): every Portage cell plans
+#   `N pg34-dep-1 + UD pg34-downer-1 [2]` (`Total: 2 packages (1 downgrade,
+#   1 new)`), rc 0 -- the named target is always update-wanted, so the
+#   downgrade probe fires in all five modes, and the re-selected `-1`
+#   expands its `RDEPEND` even without `--deep`.
+# NOTE 2 (divergences reproduced, binary predates the G1 fix): pubgrub
+#   diverges from Portage on all five cells -- -pv/-pvu plan nothing
+#   (`Total: 0`; the crate's empty-deps installed stub keeps masked `-2`
+#   even for the named target), -pvuD/-pvuDN plan only `N dep` (installed
+#   `-2` offered with vdb deps and kept via `prefer_update`, staying
+#   hidden), -pve plans `R downer-2 + N dep` (installed-only `-2` wins
+#   `max()` under `rebuild_tree`). All default cells agree with Portage
+#   (hence the default pins), so the default-solver output does not move.
+# NOTE 3 (corpus shape): this is the fixture shape of triage G1
+#   (`LLM/evidence/2026-10-15-34-s5/triage.md`): there `sys-apps/portage`
+#   3.0.82.2 is installed while best-visible is 3.0.81.3 -- `-pv`/`-pvu`
+#   show `UD` alone (deps installed), `-pvuD`/`-pvuDN` show it among the
+#   rows, `-pve` shows `R`-at-installed-version with stub deps here vs
+#   `UD` + the 9-row subtree there.
+
+image: localhost/test-portuale:latest  id 5616d41d00cdbef0aa8933476973dc5b9ca07e897b635bd7167dedf61c09cb5f
+image Portage (no upgrade needed; already at the L0 pin): 3.0.82.2  (python 3.14.6-final-0, default/linux/amd64/23.0/systemd)
+portuale HEAD: 22ba8c3d527852fb434d5c45b0d30d77a23684a0 (G1 unimplemented at capture time)
+portuale binary: /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+  mtime: 2026-10-15 02:23:45.867500149 -0000
+  (no cargo build run for this slice; target/release/emerge is a symlink -> portuale)
+host Portage (unused for fixture cells): 3.0.82.2
+
+--- Portage side (container; never against the shared fixtures tree) ---
+staging: pmtest fixtures mounted read-only at /fixtures, staged with the unmodified
+  differential-test-bed/layers/l0-fixture-oracle/stage.sh to /tmp/pg34-s5a-g1-stage (in-container path)
+container env (all five portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/tmp/pg34-s5a-g1-stage/fixtures ROOT=/tmp/pg34-s5a-g1-stage/fixtures
+  PORTAGE_RUNNING_ROOT=/tmp/pg34-s5a-g1-stage/fixtures DISTDIR=/tmp/pg34-s5a-g1-stage/fixtures/distfiles
+  PORTAGE_REPOSITORIES=<contents of /tmp/pg34-s5a-g1-stage/fixtures/etc/portage/repos.conf/repos.conf>
+podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+  -v <pmtest>/fixtures:/fixtures:ro -v <pmtest>/differential-test-bed:/TEST:ro
+  --entrypoint /bin/bash localhost/test-portuale:latest  (then stage.sh + the five argv below)
+
+cap-pg34-downer-pv-portage.txt       rc=0  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pvu-portage.txt     rc=0  /usr/sbin/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pvuD-portage.txt    rc=0  /usr/sbin/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pvuDN-portage.txt   rc=0  /usr/sbin/emerge -pvuDN --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pve-portage.txt     rc=0  /usr/sbin/emerge -pve --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+
+--- portuale side (host binary, scratch copy /var/tmp/pg34-s5a-fixcopy) ---
+staging: cp of pmtest fixtures via /tmp/opencode/fixture-smith/stage-host.sh
+  (same deltas as stage.sh: absolute repos.conf locations, binrepos ${PORTAGE_CONFIGROOT} resolved,
+   etc/portage/categories + per-repo profiles/categories, Manifest per package dir, news dropped,
+   layout.conf masters, updates comments dropped, */<pkg> rewrite, repo_name fill, common-1.0 staled)
+host env (all ten portuale captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/var/tmp/pg34-s5a-fixcopy/fixtures ROOT=/var/tmp/pg34-s5a-fixcopy/fixtures
+  PORTAGE_RUNNING_ROOT=/var/tmp/pg34-s5a-fixcopy/fixtures DISTDIR=/var/tmp/pg34-s5a-fixcopy/fixtures/distfiles
+  EMERGE_DEFAULT_OPTS unset
+
+cap-pg34-downer-pv-pg.txt       rc=0  .../target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pvu-pg.txt      rc=0  .../target/release/emerge --solver=pubgrub -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pvuD-pg.txt     rc=0  .../target/release/emerge --solver=pubgrub -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pvuDN-pg.txt    rc=0  .../target/release/emerge --solver=pubgrub -pvuDN --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pve-pg.txt      rc=0  .../target/release/emerge --solver=pubgrub -pve --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pv-default.txt       rc=0  .../target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pvu-default.txt      rc=0  .../target/release/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pvuD-default.txt     rc=0  .../target/release/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pvuDN-default.txt    rc=0  .../target/release/emerge -pvuDN --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+cap-pg34-downer-pve-default.txt      rc=0  .../target/release/emerge -pve --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-downer
+
+--- row summary (ebuild plan rows only; Portage's license-group noise and masked-packages footer omitted) ---
+downer -pv    : portage N(dep)+UD(downer-1)  | pg Total: 0 DIVERGES (keeps masked -2) | default same as portage
+downer -pvu   : portage N(dep)+UD(downer-1)  | pg Total: 0 DIVERGES (keeps masked -2) | default same as portage
+downer -pvuD  : portage N(dep)+UD(downer-1)  | pg N(dep) DIVERGES (installed -2 hidden) | default same as portage
+downer -pvuDN : portage N(dep)+UD(downer-1)  | pg N(dep) DIVERGES (installed -2 hidden) | default same as portage
+downer -pve   : portage N(dep)+UD(downer-1)  | pg N(dep)+R(downer-2) DIVERGES (stub-deps reinstall) | default same as portage

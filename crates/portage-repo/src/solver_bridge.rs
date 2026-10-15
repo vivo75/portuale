@@ -1073,6 +1073,10 @@ struct KeptInstalled {
     installed: HashSet<String>,
     /// Installed cpvs registered `InstalledPolicy::Rebuild`, rendered `R`.
     rebuild: HashSet<String>,
+    /// Installed cpvs the engine must not keep: no visible same-slot version
+    /// is `>=` the installed one, so Portage re-selects the best visible
+    /// version (`UD`) instead of keeping the installed instance.
+    downgrade: HashSet<String>,
     /// Changed USE flags per rebuilt cpv (`--newuse`/`--changed-use` drift),
     /// carried into the `R` row's `Reinstall.changed_flags`.
     use_drift: HashMap<String, Vec<String>>,
@@ -1187,7 +1191,72 @@ impl KeptInstalled {
             rebuild,
             use_drift,
             deep,
+            downgrade: Self::downgrade_set(req, lazy, installed, deep),
         }
+    }
+
+    /// Installed cpvs with no visible same-slot version `>=` the installed one
+    /// that Portage would re-select away from: a named target (`arg_atoms`),
+    /// under emptytree (complete mode re-resolves everything from the repo),
+    /// or under `--update` with deep (the deep walk reaches the node with
+    /// `want_update` true). Without update/deep Portage keeps the installed
+    /// instance (`_want_update_pkg` false → the installed early return), so
+    /// the set stays empty there and registration/offering are unchanged.
+    /// Portage: depgraph.py:2946-2957 (`_downgrade_probe`), :3805-3809
+    /// (`want_update`), :7304-7333 (`_want_update_pkg`).
+    fn downgrade_set(
+        req: &ResolveRequest,
+        lazy: &LazyRepo,
+        installed: &[super::InstalledPackage],
+        deep: bool,
+    ) -> HashSet<String> {
+        let mut named = HashSet::new();
+        for atom in &req.atoms {
+            let Ok(dep) = portage_solver::Dep::parse(atom) else {
+                continue;
+            };
+            // Top-level blockers are an unmerge action, not a merge target.
+            if dep.blocker.is_some() {
+                continue;
+            }
+            named.insert(format!("{}", dep.cpn));
+        }
+        let update_walk = req.empty || (req.update && deep);
+        let mut downgrade = HashSet::new();
+        for inst in installed {
+            let cp = format!("{}/{}", inst.category, inst.package);
+            if !named.contains(&cp) && !update_walk {
+                continue;
+            }
+            let Ok(installed_ver) = portage_solver::Version::parse(&inst.version) else {
+                continue;
+            };
+            let Ok(loaded) = lazy.load_versions(&cp) else {
+                continue;
+            };
+            let mut any_visible = false;
+            let mut newer_or_equal = false;
+            for record in &loaded {
+                if record.slot != inst.slot {
+                    continue;
+                }
+                let Ok(visible) = portage_solver::Version::parse(&record.version) else {
+                    continue;
+                };
+                any_visible = true;
+                if visible >= installed_ver {
+                    newer_or_equal = true;
+                    break;
+                }
+            }
+            // With no visible version at all there is nothing to re-select
+            // to, so the installed instance stays (like `_downgrade_probe`
+            // returning false when nothing is available).
+            if any_visible && !newer_or_equal {
+                downgrade.insert(inst.cpv());
+            }
+        }
+        downgrade
     }
 }
 
@@ -1302,6 +1371,13 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
         {
             for (version, _, _) in installed_candidates(&self.lazy.root, category, package) {
                 if versions.iter().any(|v| v.version == version) {
+                    continue;
+                }
+                // #34 S5 G1: never offer a masked installed-only version
+                // Portage downgrades away from: the crate's `max()` would
+                // keep it, where Portage re-selects the best visible
+                // version (`UD`) and expands that version's deps.
+                if self.kept.downgrade.contains(&format!("{cp}-{version}")) {
                     continue;
                 }
                 let Some(record) = self.lazy.installed_record(category, package, &version) else {
@@ -1422,6 +1498,13 @@ fn pubgrub_provider(
     provider.set_prefer_update(req.update && deep && !req.empty);
     provider.set_selective_no_update(selective && !req.update);
     for inst in installed.iter().cloned() {
+        // #34 S5 G1: a masked installed version Portage downgrades is not
+        // registered at all: Favor (or the crate's empty-deps installed
+        // stub, provider/mod.rs:742-753) would keep it even for a named
+        // target, where Portage re-selects the best visible version (`UD`).
+        if kept.downgrade.contains(&inst.cpv()) {
+            continue;
+        }
         let cpn = match portage_solver::Cpn::parse(&format!("{}/{}", inst.category, inst.package)) {
             Ok(cpn) => cpn,
             Err(_) => continue,
@@ -2971,5 +3054,152 @@ mod tests {
             pg34_plan(&result),
             ["dev-libs/pg34-gs-1.1:1", "dev-libs/pg34-gs-2:2"]
         );
+    }
+
+    /// #34 S5 G1: the installed version is keyword-masked, so no visible
+    /// version is `>=` it and Portage re-selects the best visible one
+    /// (`_downgrade_probe`, `depgraph.py:2946-2957`, gated on `want_update`,
+    /// `:3805-3809`). `pg34-downer-2` is installed and `~amd64`-only while
+    /// `-1` is stable; every `-pv`/`-pvu`/`-pvuD`/`-pvuDN`/`-pve` cell on the
+    /// named target plans `UD downer-1 + N dep-1` (container captures in
+    /// `LLM/evidence/2026-10-15-34-s5/g1/`). Pubgrub keeps the installed
+    /// version instead (omitted, or `R -2` with stub deps under `-e`).
+    fn pg34_downer_downgrade_outcome(result: &super::super::GraphResult) {
+        let downer = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-downer")
+            .expect("pg34-downer entry");
+        match &downer.outcome {
+            super::super::PretendOutcome::Downgrade { from, to } => {
+                assert_eq!(from, "2");
+                assert_eq!(to, "1");
+            }
+            other => panic!("expected Downgrade 2 -> 1, got {other:?}"),
+        }
+    }
+
+    /// #34 S5 G1: the downgrade-probe set follows Portage's `want_update`
+    /// gate. `pg34-downer-2` is installed with only stable `-1` visible
+    /// (nothing `>=` it); `pg34-dlib-1` is installed with `-2` visible
+    /// (never a downgrade).
+    #[test]
+    fn pg34_downer_downgrade_set_follows_update_walk() {
+        // Named target without update or deep: a re-select (`arg_atoms`).
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-downer"]);
+        req.selective = false;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.downgrade.contains("dev-libs/pg34-downer-2"),
+            "named masked-installed target downgrades: {:?}",
+            kept.downgrade
+        );
+        assert!(
+            !kept.downgrade.contains("dev-libs/pg34-dlib-1"),
+            "a version with a visible upgrade never downgrades: {:?}",
+            kept.downgrade
+        );
+
+        // Unrelated target, no update, no deep: Portage keeps the instance.
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-app"]);
+        req.selective = false;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.downgrade.is_empty(),
+            "nothing downgrades without a walk: {:?}",
+            kept.downgrade
+        );
+
+        // Update without deep still keeps an installed dep (`_too_deep`).
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-app"]);
+        req.selective = true;
+        req.update = true;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.downgrade.is_empty(),
+            "no downgrade without deep: {:?}",
+            kept.downgrade
+        );
+
+        // Update with deep reaches the masked dep (`want_update` true).
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-app"]);
+        req.selective = true;
+        req.update = true;
+        req.deep = super::super::Deep::Unlimited;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.downgrade.contains("dev-libs/pg34-downer-2"),
+            "deep update downgrades the masked dep: {:?}",
+            kept.downgrade
+        );
+
+        // Emptytree re-resolves everything from the repo.
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-app"]);
+        req.empty = true;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            kept.downgrade.contains("dev-libs/pg34-downer-2"),
+            "emptytree downgrades the masked dep: {:?}",
+            kept.downgrade
+        );
+    }
+
+    /// #34 S5 G1: `-pv` on the named masked-installed target downgrades to
+    /// the best visible version (Portage `UD downer-1 + N dep-1`; pubgrub
+    /// used to plan nothing).
+    #[test]
+    fn pg34_downer_pubgrub_pv_downgrades_masked_installed() {
+        // `-pv`: not selective, no update, no deep, build deps on.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-downer"]);
+        req.selective = false;
+        req.update = false;
+        req.deep = super::super::Deep::NotRequested;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-downer resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-dep-1:0", "dev-libs/pg34-downer-1:0"]
+        );
+        pg34_downer_downgrade_outcome(&result);
+    }
+
+    /// #34 S5 G1: `-pvuD` on the named masked-installed target downgrades
+    /// (Portage `UD downer-1 + N dep-1`; pubgrub used to plan only `N dep-1`
+    /// while the installed `-2` stayed hidden).
+    #[test]
+    fn pg34_downer_pubgrub_pvud_downgrades_masked_installed() {
+        // `-pvuD`: selective through `--update`, unlimited deep, build deps on.
+        let req = pg34_s4_request(&["dev-libs/pg34-downer"]);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-downer resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-dep-1:0", "dev-libs/pg34-downer-1:0"]
+        );
+        pg34_downer_downgrade_outcome(&result);
+    }
+
+    /// #34 S5 G1: `-pve` on the named masked-installed target downgrades and
+    /// expands the re-selected version's deps (Portage `UD downer-1 +
+    /// N dep-1`; pubgrub used to plan `R downer-2` with stub deps + `N dep-1`).
+    #[test]
+    fn pg34_downer_pubgrub_pve_downgrades_masked_installed() {
+        // `-pve`: the request level keeps selective unset (the CLI fold sets
+        // it only through update/newuse/…); `empty` alone drives the set.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-downer"]);
+        req.selective = false;
+        req.update = false;
+        req.deep = super::super::Deep::NotRequested;
+        req.empty = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-downer resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-dep-1:0", "dev-libs/pg34-downer-1:0"]
+        );
+        pg34_downer_downgrade_outcome(&result);
     }
 }

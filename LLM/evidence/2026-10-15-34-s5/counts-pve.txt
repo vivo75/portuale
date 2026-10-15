@@ -1,0 +1,257 @@
+# L0 resolver-parity report
+
+## environment
+  date_utc	2026-10-15T04:35:46Z
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  repo_gentoo	11c58b7af1df0fbc3e9f2560a82c4355231967a6
+  repo_buildovl	3b1df68114f4c486520864338b1b6a42efcaec7e
+  repo_porttest	b4b5d17a6cff60bbe260bcfea0e37f5ed82a91be
+  profile	default/linux/amd64/23.0/systemd
+  python	Python 3.14.6
+  fs	overlayfs
+  Portage 3.0.82.2 (python 3.14.6-final-0, default/linux/amd64/23.0/systemd, gcc-15, glibc-2.43-r2, 6.18.39-serv x86_64)
+
+## summary
+  probes           : 117
+  clean            : 81
+  parity_rate      : 0.692
+  explained        : 8
+  UNEXPLAINED      : 113
+    advice       : 31
+    error        : 27
+    exit         : 30
+    extra        : 10
+    order        : 11
+    totals       : 2
+    truncated    : 2
+
+## unexplained findings
+
+### app-shells_bash
+  [order] merge order diverges at #0: real sys-libs/ncurses vs portuale virtual/libintl
+
+### app-portage_gentoolkit
+  [order] merge order diverges at #273: real sys-auth/pambase vs portuale sys-apps/portage
+
+### dev-lang_ruby
+  [order] merge order diverges at #209: real dev-ruby/did_you_mean vs portuale dev-ruby/matrix
+
+### dev-ruby_rake
+  [order] merge order diverges at #209: real dev-ruby/did_you_mean vs portuale dev-ruby/matrix
+
+### dev-lang_go
+  [exit] real rc=0 portuale rc=1
+  [exit] merge-list comparison suppressed: real 2 lines / Total 2, portuale 2 lines / Total 1
+
+### app-containers_podman
+  [advice] real-only: use-change: >=net-firewall/iptables-1.8.13 nftables
+  [truncated] autounmask backtracking terminated early (real Total 8 / 8 lines, portuale Total 351 / 359 lines) -- merge-list set/order/totals comparison suppressed
+
+### app-containers_runc
+  [exit] real rc=0 portuale rc=1
+  [exit] merge-list comparison suppressed: real 325 lines / Total 325, portuale 327 lines / Total 324
+
+### sys-cluster_nerdctl
+  [error] real-only message: emerge: Maybe you meant any of these: sys-cluster/virtctl, sys-cluster/kubectl, sys-cluster/gasnet?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "sys-cluster/nerdctl".
+  [error] portuale-only message: emerge: the requested targets depends on sys-cluster/nerdctl
+
+### dev-qt_qtcore_5
+  [error] real-only message: emerge: Maybe you meant any of these: dev-qt/qt-creator, dev-qt/qtcharts, dev-qt/qtbase?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "dev-qt/qtcore:5".
+  [error] portuale-only message: emerge: the requested targets depends on dev-qt/qtcore:5
+
+### kde-plasma_plasma-meta
+  [advice] real-only: use-change: >=dev-qt/qtbase-6.11.1 cups vulkan
+  [advice] real-only: use-change: >=kde-frameworks/kimageformats-6.27.0 avif
+  [advice] real-only: use-change: >=kde-plasma/kwin-6.6.6 lock
+  [advice] real-only: use-change: >=kde-plasma/kwin-x11-6.6.6 lock
+  [advice] real-only: use-change: >=x11-base/xwayland-24.1.13 libei
+  [truncated] autounmask backtracking terminated early (real Total 4 / 4 lines, portuale Total 755 / 759 lines) -- merge-list set/order/totals comparison suppressed
+
+### kde-apps_kdecore-meta
+  [extra] ebuild acct-user/sshd-0-r3 present for portuale, absent for real
+  [extra] ebuild app-crypt/p11-kit-0.26.2 present for portuale, absent for real
+  [extra] ebuild acct-group/sshd-0-r3 present for portuale, absent for real
+  [extra] ebuild sys-apps/shadow-4.19.4:0/5 present for portuale, absent for real
+  [extra] ebuild virtual/openssh-0-r1 present for portuale, absent for real
+  [extra] ebuild app-text/docbook-xml-dtd-4.3-r2:4.3 present for portuale, absent for real
+  [extra] ebuild app-crypt/gcr-3.41.2-r2:0/1 present for portuale, absent for real
+  [extra] ebuild net-misc/openssh-10.4_p1-r1 present for portuale, absent for real
+  [extra] ebuild gnome-base/gnome-keyring-48.0-r1 present for portuale, absent for real
+  [order] merge order diverges at #4: real sys-apps/baselayout vs portuale acct-group/root
+  [totals] real Total 535 vs portuale Total 544
+
+### media-libs_phonon
+  [error] real-only message: emerge: Maybe you meant any of these: media-libs/phat, media-libs/oidn, media-libs/coin?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "media-libs/phonon".
+  [error] portuale-only message: emerge: the requested targets depends on media-libs/phonon
+
+### gui-libs_gtk_4
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 412 lines / Total 412, portuale 412 lines / Total 412
+
+### x11-libs_gtk__3
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 401 lines / Total 401, portuale 401 lines / Total 401
+
+### gnome-base_gnome-shell
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 735 lines / Total 735, portuale 729 lines / Total 729
+
+### gnome-base_nautilus
+  [advice] real-only: use-change: >=app-crypt/gcr-3.41.2-r2:0 gtk
+  [advice] real-only: use-change: >=app-text/poppler-26.05.0-r1 cairo
+  [advice] real-only: use-change: >=dev-libs/libportal-0.9.1 gtk
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 483 lines / Total 483, portuale 483 lines / Total 483
+
+### app-editors_gedit
+  [advice] real-only: use-change: >=app-crypt/gcr-3.41.2-r2:0 gtk
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 440 lines / Total 440, portuale 440 lines / Total 440
+
+### media-libs_mesa
+  [order] merge order diverges at #181: real app-crypt/libb2 vs portuale app-crypt/rhash-1.4.6-r1:0/1
+
+### app-emulation_wine-vanilla
+  [advice] real-only: required-use: The following REQUIRED_USE flag constraints are unsatisfied:
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 0 lines / Total None, portuale 434 lines / Total 434
+  [error] real-only message: !!! The ebuild selected to satisfy "media-libs/libsdl2[haptic,joystick,abi_x86_32(-)?,abi_x86_64(-)?]" has unmet requirements.
+  [error] real-only message: The following REQUIRED_USE flag constraints are unsatisfied:
+
+### app-emulation_wine-staging
+  [advice] real-only: masked-atom: app-emulation/wine-staging
+  [advice] real-only: masked: !!! All ebuilds that could satisfy "app-emulation/wine-staging" have been masked.
+  [advice] real-only: masked: !!! One of the following masked packages is required to complete your request:
+  [error] real-only message: !!! All ebuilds that could satisfy "app-emulation/wine-staging" have been masked.
+  [error] real-only message: !!! One of the following masked packages is required to complete your request:
+  [error] portuale-only message: emerge: the requested targets depends on app-emulation/wine-staging
+
+### virtual_pager
+  [order] merge order diverges at #188: real virtual/pager vs portuale dev-libs/libuv
+
+### virtual_rust
+  [error] real-only message: emerge: Maybe you meant any of these: virtual/rubygems, virtual/ruby-ssl, virtual/ssh?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "virtual/rust".
+  [error] portuale-only message: emerge: the requested targets depends on virtual/rust
+
+### www-client_firefox
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [advice] real-only: use-change: >=media-libs/libvpx-1.16.0 postproc
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 444 lines / Total 444, portuale 444 lines / Total 444
+
+### mail-client_thunderbird
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [advice] real-only: use-change: >=media-libs/libvpx-1.16.0 postproc
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 447 lines / Total 447, portuale 447 lines / Total 447
+
+### app-office_libreoffice
+  [advice] real-only: use-change: >=dev-libs/xmlsec-1.3.11-r1 nss
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 511 lines / Total 511, portuale 511 lines / Total 511
+
+### media-gfx_gimp
+  [advice] real-only: use-change: >=app-text/poppler-26.05.0-r1 cairo
+  [advice] real-only: use-change: >=media-libs/babl-0.1.126 lcms
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [advice] real-only: use-change: >=media-libs/gegl-0.4.70 cairo lcms
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 469 lines / Total 469, portuale 469 lines / Total 469
+
+### www-servers_nginx
+  [advice] real-only: use-change: >=app-misc/mime-types-2.1.54 nginx
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 324 lines / Total 324, portuale 324 lines / Total 324
+
+### app-editors_emacs
+  [extra] ebuild app-doc/info-manual-30.2 present for portuale, absent for real
+  [totals] real Total 329 vs portuale Total 330
+
+### net-analyzer_wireshark
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 442 lines / Total 442, portuale 442 lines / Total 442
+
+### media-sound_pulseaudio
+  [error] real-only message: emerge: Maybe you meant any of these: media-sound/pulseaudio-ctl, media-sound/pulseaudio-daemon, media-sound/apulse?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "media-sound/pulseaudio".
+  [error] portuale-only message: emerge: the requested targets depends on media-sound/pulseaudio
+
+### x11-base_xorg-server
+  [order] merge order diverges at #47: real app-text/sgml-common vs portuale app-crypt/libmd
+
+### x11-wm_i3
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 357 lines / Total 357, portuale 357 lines / Total 357
+
+### __app-shells_bash-5.2
+  [order] merge order diverges at #0: real sys-libs/ncurses vs portuale virtual/libintl
+
+### _sys-apps_coreutils-9.7_
+  [error] real-only message: emerge: there are no ebuilds to satisfy "=sys-apps/coreutils-9.7*".
+  [error] portuale-only message: emerge: the requested targets depends on sys-apps/coreutils:0 >=9.7, <9.8
+
+### _system
+  [order] merge order diverges at #211: real virtual/pager vs portuale dev-libs/libuv
+
+### _world
+  [order] merge order diverges at #8: real app-i18n/gnulib-l10n vs portuale dev-libs/xxhash
+
+## explained (allowlisted) findings
+
+### gnome-base_gnome-shell
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=app-crypt/gcr-3.41.2-r2:0 gtk
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=gnome-base/gnome-control-center-49.7 networkmanager
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=media-libs/libcanberra-0.30-r8 pulseaudio
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=media-plugins/alsa-plugins-1.2.12 pulseaudio
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=net-fs/samba-4.24.4 client
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=net-libs/ngtcp2-1.24.0 gnutls
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=x11-base/xwayland-24.1.13 libei
+
+## allowlist entries that matched nothing (candidates for removal)
+  gedit-nautilus-cluster-a-rewalk-abort
+
+## counts (--count-categories missing,extra,version,action,exit, unexplained only)
+missing	0
+extra	10
+version	0
+action	0
+exit	30
+
+## counts by probe
+app-containers_runc	exit	2
+app-editors_emacs	extra	1
+app-editors_gedit	exit	2
+app-emulation_wine-vanilla	exit	2
+app-office_libreoffice	exit	2
+dev-lang_go	exit	2
+gnome-base_gnome-shell	exit	2
+gnome-base_nautilus	exit	2
+gui-libs_gtk_4	exit	2
+kde-apps_kdecore-meta	extra	9
+mail-client_thunderbird	exit	2
+media-gfx_gimp	exit	2
+net-analyzer_wireshark	exit	2
+www-client_firefox	exit	2
+www-servers_nginx	exit	2
+x11-libs_gtk__3	exit	2
+x11-wm_i3	exit	2
+
+
+wrote differential-test-bed/logs/l0-20261015T043546Z/l0-report.txt and differential-test-bed/logs/l0-20261015T043546Z/l0-report.json

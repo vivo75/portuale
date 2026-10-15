@@ -1,0 +1,4 @@
+[ebuild  N     ] dev-libs/pg34-dep-1::testrepo to /var/tmp/pg34-s5a-fixcopy/fixtures
+[ebuild     UD ] dev-libs/pg34-downer-1::testrepo [2::testrepo] to /var/tmp/pg34-s5a-fixcopy/fixtures
+
+Total: 2 packages (1 downgrade, 1 new), Size of downloads: 0 KiB
