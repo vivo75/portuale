@@ -1,0 +1,806 @@
+# L0 resolver-parity report
+
+## environment
+  date_utc	2026-10-15T03:08:38Z
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  repo_gentoo	11c58b7af1df0fbc3e9f2560a82c4355231967a6
+  repo_buildovl	3b1df68114f4c486520864338b1b6a42efcaec7e
+  repo_porttest	b4b5d17a6cff60bbe260bcfea0e37f5ed82a91be
+  profile	default/linux/amd64/23.0/systemd
+  python	Python 3.14.6
+  fs	overlayfs
+  Portage 3.0.82.2 (python 3.14.6-final-0, default/linux/amd64/23.0/systemd, gcc-15, glibc-2.43-r2, 6.18.39-serv x86_64)
+
+## summary
+  probes           : 117
+  clean            : 14
+  parity_rate      : 0.120
+  explained        : 0
+  UNEXPLAINED      : 551
+    extra        : 448
+    order        : 91
+    totals       : 8
+    truncated    : 4
+
+## unexplained findings
+
+### sys-apps_portage
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-devel_gcc
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-libs_glibc
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-devel_binutils
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-build_make
+  [extra] ebuild virtual/libelf-3-r1:0/1 present for portuale, absent for real
+  [extra] ebuild app-portage/portage-utils-0.97.1 present for portuale, absent for real
+  [extra] ebuild dev-python/scikit-build-core-1.0.3 present for portuale, absent for real
+  [extra] ebuild x11-base/xcb-proto-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/libatomic_ops-7.10.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libICE-1.1.2 present for portuale, absent for real
+  [extra] ebuild sys-apps/dbus-1.16.2 present for portuale, absent for real
+  [extra] ebuild acct-user/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild dev-cpp/eigen-3.4.0-r3:3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXdmcp-1.1.5 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp3-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pyproject-metadata-0.12.1 present for portuale, absent for real
+  [extra] ebuild gnome-base/dconf-0.40.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/icu-78.3:0/78 present for portuale, absent for real
+  [extra] ebuild dev-python/pillow-12.3.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pygments-2.19.2 present for portuale, absent for real
+  [extra] ebuild app-text/xmlto-0.0.28-r11 present for portuale, absent for real
+  [extra] ebuild app-crypt/libb2-0.98.1-r3 present for portuale, absent for real
+  [extra] ebuild dev-python/pybind11-3.0.4 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp2-1.69.0:0/1.14 present for portuale, absent for real
+  [extra] ebuild sys-apps/systemd-260.1-r2:0/2 present for portuale, absent for real
+  [extra] ebuild sys-devel/gettext-0.23.2 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXext-1.3.7 present for portuale, absent for real
+  [extra] ebuild dev-db/sqlite-3.53.3:3 present for portuale, absent for real
+  [extra] ebuild net-misc/curl-8.21.0-r1 present for portuale, absent for real
+  [extra] ebuild dev-libs/boehm-gc-8.2.12 present for portuale, absent for real
+  [extra] ebuild www-client/w3m-0.5.6 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-common-1.86.0 present for portuale, absent for real
+  [extra] ebuild sys-libs/zlib-1.3.2-r1:0/1 present for portuale, absent for real
+  [extra] ebuild media-libs/libjpeg-turbo-3.1.4.1:0/0.2 present for portuale, absent for real
+  [extra] ebuild dev-util/glib-utils-2.88.2 present for portuale, absent for real
+  [extra] ebuild x11-misc/shared-mime-info-2.4-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXau-1.0.12 present for portuale, absent for real
+  [extra] ebuild dev-lang/nasm-3.02 present for portuale, absent for real
+  [extra] ebuild x11-base/xorg-proto-2025.1 present for portuale, absent for real
+  [extra] ebuild app-crypt/pinentry-1.3.2-r1 present for portuale, absent for real
+  [extra] ebuild dev-python/docutils-0.23 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-1.86.0 present for portuale, absent for real
+  [extra] ebuild virtual/w3m-1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libSM-1.2.6 present for portuale, absent for real
+  [extra] ebuild dev-lang/duktape-2.7.0-r3:0/2.7.0 present for portuale, absent for real
+  [extra] ebuild dev-python/olefile-0.47 present for portuale, absent for real
+  [extra] ebuild sys-apps/portage-3.0.81.3 present for portuale, absent for real
+  [extra] ebuild x11-misc/compose-tables-1.8.13 present for portuale, absent for real
+  [extra] ebuild net-libs/ngtcp2-1.24.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libX11-1.8.13 present for portuale, absent for real
+  [extra] ebuild dev-util/desktop-file-utils-0.28-r1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXt-1.3.1-r1 present for portuale, absent for real
+  [extra] ebuild acct-group/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/xtrans-1.6.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libxcb-1.17.0:0/1.12 present for portuale, absent for real
+  [extra] ebuild net-libs/libpsl-0.21.5 present for portuale, absent for real
+  [extra] ebuild dev-libs/libxml2-2.15.3:2/16 present for portuale, absent for real
+  [extra] ebuild dev-libs/glib-2.88.2:2 present for portuale, absent for real
+  [extra] ebuild dev-util/gdbus-codegen-2.88.2 present for portuale, absent for real
+  [extra] ebuild sys-auth/polkit-126-r3 present for portuale, absent for real
+  [totals] real Total 0 vs portuale Total 56
+
+### dev-build_cmake
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-build_meson
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-build_autoconf
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-build_automake
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-build_libtool
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-apps_coreutils
+  [extra] ebuild virtual/libelf-3-r1:0/1 present for portuale, absent for real
+  [extra] ebuild app-portage/portage-utils-0.97.1 present for portuale, absent for real
+  [extra] ebuild dev-python/scikit-build-core-1.0.3 present for portuale, absent for real
+  [extra] ebuild x11-base/xcb-proto-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/libatomic_ops-7.10.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libICE-1.1.2 present for portuale, absent for real
+  [extra] ebuild sys-apps/dbus-1.16.2 present for portuale, absent for real
+  [extra] ebuild acct-user/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild dev-cpp/eigen-3.4.0-r3:3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXdmcp-1.1.5 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp3-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pyproject-metadata-0.12.1 present for portuale, absent for real
+  [extra] ebuild gnome-base/dconf-0.40.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/icu-78.3:0/78 present for portuale, absent for real
+  [extra] ebuild dev-python/pillow-12.3.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pygments-2.19.2 present for portuale, absent for real
+  [extra] ebuild app-text/xmlto-0.0.28-r11 present for portuale, absent for real
+  [extra] ebuild app-crypt/libb2-0.98.1-r3 present for portuale, absent for real
+  [extra] ebuild dev-python/pybind11-3.0.4 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp2-1.69.0:0/1.14 present for portuale, absent for real
+  [extra] ebuild sys-apps/systemd-260.1-r2:0/2 present for portuale, absent for real
+  [extra] ebuild sys-devel/gettext-0.23.2 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXext-1.3.7 present for portuale, absent for real
+  [extra] ebuild dev-db/sqlite-3.53.3:3 present for portuale, absent for real
+  [extra] ebuild net-misc/curl-8.21.0-r1 present for portuale, absent for real
+  [extra] ebuild dev-libs/boehm-gc-8.2.12 present for portuale, absent for real
+  [extra] ebuild www-client/w3m-0.5.6 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-common-1.86.0 present for portuale, absent for real
+  [extra] ebuild sys-libs/zlib-1.3.2-r1:0/1 present for portuale, absent for real
+  [extra] ebuild media-libs/libjpeg-turbo-3.1.4.1:0/0.2 present for portuale, absent for real
+  [extra] ebuild dev-util/glib-utils-2.88.2 present for portuale, absent for real
+  [extra] ebuild x11-misc/shared-mime-info-2.4-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXau-1.0.12 present for portuale, absent for real
+  [extra] ebuild dev-lang/nasm-3.02 present for portuale, absent for real
+  [extra] ebuild x11-base/xorg-proto-2025.1 present for portuale, absent for real
+  [extra] ebuild app-crypt/pinentry-1.3.2-r1 present for portuale, absent for real
+  [extra] ebuild dev-python/docutils-0.23 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-1.86.0 present for portuale, absent for real
+  [extra] ebuild virtual/w3m-1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libSM-1.2.6 present for portuale, absent for real
+  [extra] ebuild dev-lang/duktape-2.7.0-r3:0/2.7.0 present for portuale, absent for real
+  [extra] ebuild dev-python/olefile-0.47 present for portuale, absent for real
+  [extra] ebuild sys-apps/portage-3.0.81.3 present for portuale, absent for real
+  [extra] ebuild x11-misc/compose-tables-1.8.13 present for portuale, absent for real
+  [extra] ebuild net-libs/ngtcp2-1.24.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libX11-1.8.13 present for portuale, absent for real
+  [extra] ebuild dev-util/desktop-file-utils-0.28-r1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXt-1.3.1-r1 present for portuale, absent for real
+  [extra] ebuild acct-group/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/xtrans-1.6.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libxcb-1.17.0:0/1.12 present for portuale, absent for real
+  [extra] ebuild net-libs/libpsl-0.21.5 present for portuale, absent for real
+  [extra] ebuild dev-libs/libxml2-2.15.3:2/16 present for portuale, absent for real
+  [extra] ebuild dev-libs/glib-2.88.2:2 present for portuale, absent for real
+  [extra] ebuild dev-util/gdbus-codegen-2.88.2 present for portuale, absent for real
+  [extra] ebuild sys-auth/polkit-126-r3 present for portuale, absent for real
+  [totals] real Total 0 vs portuale Total 56
+
+### sys-apps_util-linux
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-apps_systemd
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-apps_systemd-utils
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-libs_zlib
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-libs_openssl
+  [extra] ebuild virtual/libelf-3-r1:0/1 present for portuale, absent for real
+  [extra] ebuild app-portage/portage-utils-0.97.1 present for portuale, absent for real
+  [extra] ebuild dev-python/scikit-build-core-1.0.3 present for portuale, absent for real
+  [extra] ebuild x11-base/xcb-proto-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/libatomic_ops-7.10.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libICE-1.1.2 present for portuale, absent for real
+  [extra] ebuild sys-apps/dbus-1.16.2 present for portuale, absent for real
+  [extra] ebuild acct-user/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild dev-cpp/eigen-3.4.0-r3:3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXdmcp-1.1.5 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp3-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pyproject-metadata-0.12.1 present for portuale, absent for real
+  [extra] ebuild gnome-base/dconf-0.40.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/icu-78.3:0/78 present for portuale, absent for real
+  [extra] ebuild dev-python/pillow-12.3.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pygments-2.19.2 present for portuale, absent for real
+  [extra] ebuild app-text/xmlto-0.0.28-r11 present for portuale, absent for real
+  [extra] ebuild app-crypt/libb2-0.98.1-r3 present for portuale, absent for real
+  [extra] ebuild dev-python/pybind11-3.0.4 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp2-1.69.0:0/1.14 present for portuale, absent for real
+  [extra] ebuild sys-apps/systemd-260.1-r2:0/2 present for portuale, absent for real
+  [extra] ebuild sys-devel/gettext-0.23.2 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXext-1.3.7 present for portuale, absent for real
+  [extra] ebuild dev-db/sqlite-3.53.3:3 present for portuale, absent for real
+  [extra] ebuild net-misc/curl-8.21.0-r1 present for portuale, absent for real
+  [extra] ebuild dev-libs/boehm-gc-8.2.12 present for portuale, absent for real
+  [extra] ebuild www-client/w3m-0.5.6 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-common-1.86.0 present for portuale, absent for real
+  [extra] ebuild sys-libs/zlib-1.3.2-r1:0/1 present for portuale, absent for real
+  [extra] ebuild media-libs/libjpeg-turbo-3.1.4.1:0/0.2 present for portuale, absent for real
+  [extra] ebuild dev-util/glib-utils-2.88.2 present for portuale, absent for real
+  [extra] ebuild x11-misc/shared-mime-info-2.4-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXau-1.0.12 present for portuale, absent for real
+  [extra] ebuild dev-lang/nasm-3.02 present for portuale, absent for real
+  [extra] ebuild x11-base/xorg-proto-2025.1 present for portuale, absent for real
+  [extra] ebuild app-crypt/pinentry-1.3.2-r1 present for portuale, absent for real
+  [extra] ebuild dev-python/docutils-0.23 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-1.86.0 present for portuale, absent for real
+  [extra] ebuild virtual/w3m-1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libSM-1.2.6 present for portuale, absent for real
+  [extra] ebuild dev-lang/duktape-2.7.0-r3:0/2.7.0 present for portuale, absent for real
+  [extra] ebuild dev-python/olefile-0.47 present for portuale, absent for real
+  [extra] ebuild sys-apps/portage-3.0.81.3 present for portuale, absent for real
+  [extra] ebuild x11-misc/compose-tables-1.8.13 present for portuale, absent for real
+  [extra] ebuild net-libs/ngtcp2-1.24.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libX11-1.8.13 present for portuale, absent for real
+  [extra] ebuild dev-util/desktop-file-utils-0.28-r1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXt-1.3.1-r1 present for portuale, absent for real
+  [extra] ebuild acct-group/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/xtrans-1.6.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libxcb-1.17.0:0/1.12 present for portuale, absent for real
+  [extra] ebuild net-libs/libpsl-0.21.5 present for portuale, absent for real
+  [extra] ebuild dev-libs/libxml2-2.15.3:2/16 present for portuale, absent for real
+  [extra] ebuild dev-libs/glib-2.88.2:2 present for portuale, absent for real
+  [extra] ebuild dev-util/gdbus-codegen-2.88.2 present for portuale, absent for real
+  [extra] ebuild sys-auth/polkit-126-r3 present for portuale, absent for real
+  [totals] real Total 0 vs portuale Total 56
+
+### dev-lang_python_3.14
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-python_setuptools
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-python_pip
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-python_cython
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-python_jinja2
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-python_lxml
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-python_pyyaml
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-python_certifi
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-portage_gentoolkit
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-portage_eix
+  [order] merge order diverges at #7: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-build_ninja
+  [extra] ebuild virtual/libelf-3-r1:0/1 present for portuale, absent for real
+  [extra] ebuild app-portage/portage-utils-0.97.1 present for portuale, absent for real
+  [extra] ebuild dev-python/scikit-build-core-1.0.3 present for portuale, absent for real
+  [extra] ebuild x11-base/xcb-proto-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/libatomic_ops-7.10.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libICE-1.1.2 present for portuale, absent for real
+  [extra] ebuild sys-apps/dbus-1.16.2 present for portuale, absent for real
+  [extra] ebuild acct-user/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild dev-cpp/eigen-3.4.0-r3:3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXdmcp-1.1.5 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp3-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pyproject-metadata-0.12.1 present for portuale, absent for real
+  [extra] ebuild gnome-base/dconf-0.40.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/icu-78.3:0/78 present for portuale, absent for real
+  [extra] ebuild dev-python/pillow-12.3.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pygments-2.19.2 present for portuale, absent for real
+  [extra] ebuild app-text/xmlto-0.0.28-r11 present for portuale, absent for real
+  [extra] ebuild app-crypt/libb2-0.98.1-r3 present for portuale, absent for real
+  [extra] ebuild dev-python/pybind11-3.0.4 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp2-1.69.0:0/1.14 present for portuale, absent for real
+  [extra] ebuild sys-apps/systemd-260.1-r2:0/2 present for portuale, absent for real
+  [extra] ebuild sys-devel/gettext-0.23.2 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXext-1.3.7 present for portuale, absent for real
+  [extra] ebuild dev-db/sqlite-3.53.3:3 present for portuale, absent for real
+  [extra] ebuild net-misc/curl-8.21.0-r1 present for portuale, absent for real
+  [extra] ebuild dev-libs/boehm-gc-8.2.12 present for portuale, absent for real
+  [extra] ebuild www-client/w3m-0.5.6 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-common-1.86.0 present for portuale, absent for real
+  [extra] ebuild sys-libs/zlib-1.3.2-r1:0/1 present for portuale, absent for real
+  [extra] ebuild media-libs/libjpeg-turbo-3.1.4.1:0/0.2 present for portuale, absent for real
+  [extra] ebuild dev-util/glib-utils-2.88.2 present for portuale, absent for real
+  [extra] ebuild x11-misc/shared-mime-info-2.4-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXau-1.0.12 present for portuale, absent for real
+  [extra] ebuild dev-lang/nasm-3.02 present for portuale, absent for real
+  [extra] ebuild x11-base/xorg-proto-2025.1 present for portuale, absent for real
+  [extra] ebuild app-crypt/pinentry-1.3.2-r1 present for portuale, absent for real
+  [extra] ebuild dev-python/docutils-0.23 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-1.86.0 present for portuale, absent for real
+  [extra] ebuild virtual/w3m-1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libSM-1.2.6 present for portuale, absent for real
+  [extra] ebuild dev-lang/duktape-2.7.0-r3:0/2.7.0 present for portuale, absent for real
+  [extra] ebuild dev-python/olefile-0.47 present for portuale, absent for real
+  [extra] ebuild sys-apps/portage-3.0.81.3 present for portuale, absent for real
+  [extra] ebuild x11-misc/compose-tables-1.8.13 present for portuale, absent for real
+  [extra] ebuild net-libs/ngtcp2-1.24.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libX11-1.8.13 present for portuale, absent for real
+  [extra] ebuild dev-util/desktop-file-utils-0.28-r1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXt-1.3.1-r1 present for portuale, absent for real
+  [extra] ebuild acct-group/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/xtrans-1.6.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libxcb-1.17.0:0/1.12 present for portuale, absent for real
+  [extra] ebuild net-libs/libpsl-0.21.5 present for portuale, absent for real
+  [extra] ebuild dev-libs/libxml2-2.15.3:2/16 present for portuale, absent for real
+  [extra] ebuild dev-libs/glib-2.88.2:2 present for portuale, absent for real
+  [extra] ebuild dev-util/gdbus-codegen-2.88.2 present for portuale, absent for real
+  [extra] ebuild sys-auth/polkit-126-r3 present for portuale, absent for real
+  [totals] real Total 0 vs portuale Total 56
+
+### dev-python_pygments
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-lang_perl
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-perl_XML-Parser
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-perl_Locale-gettext
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-admin_perl-cleaner
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### virtual_perl-ExtUtils-MakeMaker
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-lang_ruby
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-ruby_rake
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-admin_sudo
+  [order] merge order diverges at #4: real dev-libs/gobject-introspection-common vs portuale acct-user/nullmail
+
+### app-containers_podman
+  [truncated] autounmask backtracking terminated early (real Total 8 / 8 lines, portuale Total 83 / 83 lines) -- merge-list set/order/totals comparison suppressed
+
+### app-containers_runc
+  [extra] ebuild virtual/libelf-3-r1:0/1 present for portuale, absent for real
+  [extra] ebuild app-portage/portage-utils-0.97.1 present for portuale, absent for real
+  [extra] ebuild dev-python/scikit-build-core-1.0.3 present for portuale, absent for real
+  [extra] ebuild x11-base/xcb-proto-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/libatomic_ops-7.10.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libICE-1.1.2 present for portuale, absent for real
+  [extra] ebuild sys-apps/dbus-1.16.2 present for portuale, absent for real
+  [extra] ebuild acct-user/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild dev-cpp/eigen-3.4.0-r3:3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXdmcp-1.1.5 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp3-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pyproject-metadata-0.12.1 present for portuale, absent for real
+  [extra] ebuild gnome-base/dconf-0.40.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/icu-78.3:0/78 present for portuale, absent for real
+  [extra] ebuild dev-python/pillow-12.3.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pygments-2.19.2 present for portuale, absent for real
+  [extra] ebuild app-text/xmlto-0.0.28-r11 present for portuale, absent for real
+  [extra] ebuild app-crypt/libb2-0.98.1-r3 present for portuale, absent for real
+  [extra] ebuild dev-python/pybind11-3.0.4 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp2-1.69.0:0/1.14 present for portuale, absent for real
+  [extra] ebuild sys-apps/systemd-260.1-r2:0/2 present for portuale, absent for real
+  [extra] ebuild sys-devel/gettext-0.23.2 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXext-1.3.7 present for portuale, absent for real
+  [extra] ebuild dev-db/sqlite-3.53.3:3 present for portuale, absent for real
+  [extra] ebuild net-misc/curl-8.21.0-r1 present for portuale, absent for real
+  [extra] ebuild dev-libs/boehm-gc-8.2.12 present for portuale, absent for real
+  [extra] ebuild www-client/w3m-0.5.6 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-common-1.86.0 present for portuale, absent for real
+  [extra] ebuild sys-libs/zlib-1.3.2-r1:0/1 present for portuale, absent for real
+  [extra] ebuild media-libs/libjpeg-turbo-3.1.4.1:0/0.2 present for portuale, absent for real
+  [extra] ebuild dev-util/glib-utils-2.88.2 present for portuale, absent for real
+  [extra] ebuild x11-misc/shared-mime-info-2.4-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXau-1.0.12 present for portuale, absent for real
+  [extra] ebuild dev-lang/nasm-3.02 present for portuale, absent for real
+  [extra] ebuild x11-base/xorg-proto-2025.1 present for portuale, absent for real
+  [extra] ebuild app-crypt/pinentry-1.3.2-r1 present for portuale, absent for real
+  [extra] ebuild dev-python/docutils-0.23 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-1.86.0 present for portuale, absent for real
+  [extra] ebuild virtual/w3m-1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libSM-1.2.6 present for portuale, absent for real
+  [extra] ebuild dev-lang/duktape-2.7.0-r3:0/2.7.0 present for portuale, absent for real
+  [extra] ebuild dev-python/olefile-0.47 present for portuale, absent for real
+  [extra] ebuild sys-apps/portage-3.0.81.3 present for portuale, absent for real
+  [extra] ebuild x11-misc/compose-tables-1.8.13 present for portuale, absent for real
+  [extra] ebuild net-libs/ngtcp2-1.24.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libX11-1.8.13 present for portuale, absent for real
+  [extra] ebuild dev-util/desktop-file-utils-0.28-r1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXt-1.3.1-r1 present for portuale, absent for real
+  [extra] ebuild acct-group/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/xtrans-1.6.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libxcb-1.17.0:0/1.12 present for portuale, absent for real
+  [extra] ebuild net-libs/libpsl-0.21.5 present for portuale, absent for real
+  [extra] ebuild dev-libs/libxml2-2.15.3:2/16 present for portuale, absent for real
+  [extra] ebuild dev-libs/glib-2.88.2:2 present for portuale, absent for real
+  [extra] ebuild dev-util/gdbus-codegen-2.88.2 present for portuale, absent for real
+  [extra] ebuild sys-auth/polkit-126-r3 present for portuale, absent for real
+  [totals] real Total 4 vs portuale Total 60
+
+### dev-lang_rust
+  [order] merge order diverges at #8: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-lang_rust-bin
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-shells_starship
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-apps_ripgrep
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-apps_bat
+  [order] merge order diverges at #6: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-apps_fd
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-qt_qtbase_6
+  [order] merge order diverges at #5: real sys-libs/mtdev vs portuale net-libs/nghttp3
+
+### kde-frameworks_kcoreaddons
+  [order] merge order diverges at #7: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### kde-plasma_plasma-meta
+  [truncated] autounmask backtracking terminated early (real Total 4 / 4 lines, portuale Total 478 / 478 lines) -- merge-list set/order/totals comparison suppressed
+
+### kde-apps_kdecore-meta
+  [order] merge order diverges at #11: real dev-libs/libltdl vs portuale sys-libs/libutempter
+
+### gui-libs_gtk_4
+  [order] merge order diverges at #9: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### x11-libs_gtk__3
+  [order] merge order diverges at #9: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### gnome-base_gnome-shell
+  [truncated] autounmask backtracking terminated early (real Total 463 / 463 lines, portuale Total 6 / 6 lines) -- merge-list set/order/totals comparison suppressed
+
+### gnome-base_nautilus
+  [truncated] autounmask backtracking terminated early (real Total 211 / 211 lines, portuale Total 6 / 7 lines) -- merge-list set/order/totals comparison suppressed
+
+### app-editors_gedit
+  [order] merge order diverges at #10: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### media-libs_gstreamer
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### media-libs_mesa
+  [order] merge order diverges at #7: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-libs_glibc_multilib_
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-libs_glib
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### media-libs_libpng
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### media-libs_freetype
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-apps_dbus
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### net-misc_networkmanager
+  [order] merge order diverges at #8: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-fs_lvm2
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-auth_polkit
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-crypt_gnupg
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-text_texlive
+  [order] merge order diverges at #8: real net-libs/nghttp3 vs portuale sci-libs/mpfi
+
+### app-text_texlive-core
+  [order] merge order diverges at #5: real net-libs/nghttp3 vs portuale sci-libs/mpfi
+
+### dev-texlive_texlive-latex
+  [order] merge order diverges at #5: real net-libs/nghttp3 vs portuale sci-libs/mpfi
+
+### virtual_libc
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### virtual_editor
+  [extra] ebuild virtual/libelf-3-r1:0/1 present for portuale, absent for real
+  [extra] ebuild app-portage/portage-utils-0.97.1 present for portuale, absent for real
+  [extra] ebuild dev-python/scikit-build-core-1.0.3 present for portuale, absent for real
+  [extra] ebuild x11-base/xcb-proto-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/libatomic_ops-7.10.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libICE-1.1.2 present for portuale, absent for real
+  [extra] ebuild sys-apps/dbus-1.16.2 present for portuale, absent for real
+  [extra] ebuild acct-user/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild dev-cpp/eigen-3.4.0-r3:3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXdmcp-1.1.5 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp3-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pyproject-metadata-0.12.1 present for portuale, absent for real
+  [extra] ebuild gnome-base/dconf-0.40.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/icu-78.3:0/78 present for portuale, absent for real
+  [extra] ebuild dev-python/pillow-12.3.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pygments-2.19.2 present for portuale, absent for real
+  [extra] ebuild app-text/xmlto-0.0.28-r11 present for portuale, absent for real
+  [extra] ebuild app-crypt/libb2-0.98.1-r3 present for portuale, absent for real
+  [extra] ebuild dev-python/pybind11-3.0.4 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp2-1.69.0:0/1.14 present for portuale, absent for real
+  [extra] ebuild sys-apps/systemd-260.1-r2:0/2 present for portuale, absent for real
+  [extra] ebuild sys-devel/gettext-0.23.2 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXext-1.3.7 present for portuale, absent for real
+  [extra] ebuild dev-db/sqlite-3.53.3:3 present for portuale, absent for real
+  [extra] ebuild net-misc/curl-8.21.0-r1 present for portuale, absent for real
+  [extra] ebuild dev-libs/boehm-gc-8.2.12 present for portuale, absent for real
+  [extra] ebuild www-client/w3m-0.5.6 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-common-1.86.0 present for portuale, absent for real
+  [extra] ebuild sys-libs/zlib-1.3.2-r1:0/1 present for portuale, absent for real
+  [extra] ebuild media-libs/libjpeg-turbo-3.1.4.1:0/0.2 present for portuale, absent for real
+  [extra] ebuild dev-util/glib-utils-2.88.2 present for portuale, absent for real
+  [extra] ebuild x11-misc/shared-mime-info-2.4-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXau-1.0.12 present for portuale, absent for real
+  [extra] ebuild dev-lang/nasm-3.02 present for portuale, absent for real
+  [extra] ebuild x11-base/xorg-proto-2025.1 present for portuale, absent for real
+  [extra] ebuild app-crypt/pinentry-1.3.2-r1 present for portuale, absent for real
+  [extra] ebuild dev-python/docutils-0.23 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-1.86.0 present for portuale, absent for real
+  [extra] ebuild virtual/w3m-1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libSM-1.2.6 present for portuale, absent for real
+  [extra] ebuild dev-lang/duktape-2.7.0-r3:0/2.7.0 present for portuale, absent for real
+  [extra] ebuild dev-python/olefile-0.47 present for portuale, absent for real
+  [extra] ebuild sys-apps/portage-3.0.81.3 present for portuale, absent for real
+  [extra] ebuild x11-misc/compose-tables-1.8.13 present for portuale, absent for real
+  [extra] ebuild net-libs/ngtcp2-1.24.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libX11-1.8.13 present for portuale, absent for real
+  [extra] ebuild dev-util/desktop-file-utils-0.28-r1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXt-1.3.1-r1 present for portuale, absent for real
+  [extra] ebuild acct-group/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/xtrans-1.6.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libxcb-1.17.0:0/1.12 present for portuale, absent for real
+  [extra] ebuild net-libs/libpsl-0.21.5 present for portuale, absent for real
+  [extra] ebuild dev-libs/libxml2-2.15.3:2/16 present for portuale, absent for real
+  [extra] ebuild dev-libs/glib-2.88.2:2 present for portuale, absent for real
+  [extra] ebuild dev-util/gdbus-codegen-2.88.2 present for portuale, absent for real
+  [extra] ebuild sys-auth/polkit-126-r3 present for portuale, absent for real
+  [totals] real Total 0 vs portuale Total 56
+
+### virtual_pager
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### virtual_mta
+  [order] merge order diverges at #7: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### virtual_cron
+  [order] merge order diverges at #5: real dev-libs/gobject-introspection-common vs portuale acct-user/cron
+
+### app-alternatives_awk
+  [extra] ebuild virtual/libelf-3-r1:0/1 present for portuale, absent for real
+  [extra] ebuild app-portage/portage-utils-0.97.1 present for portuale, absent for real
+  [extra] ebuild dev-python/scikit-build-core-1.0.3 present for portuale, absent for real
+  [extra] ebuild x11-base/xcb-proto-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/libatomic_ops-7.10.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libICE-1.1.2 present for portuale, absent for real
+  [extra] ebuild sys-apps/dbus-1.16.2 present for portuale, absent for real
+  [extra] ebuild acct-user/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild dev-cpp/eigen-3.4.0-r3:3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXdmcp-1.1.5 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp3-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pyproject-metadata-0.12.1 present for portuale, absent for real
+  [extra] ebuild gnome-base/dconf-0.40.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/icu-78.3:0/78 present for portuale, absent for real
+  [extra] ebuild dev-python/pillow-12.3.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pygments-2.19.2 present for portuale, absent for real
+  [extra] ebuild app-text/xmlto-0.0.28-r11 present for portuale, absent for real
+  [extra] ebuild app-crypt/libb2-0.98.1-r3 present for portuale, absent for real
+  [extra] ebuild dev-python/pybind11-3.0.4 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp2-1.69.0:0/1.14 present for portuale, absent for real
+  [extra] ebuild sys-apps/systemd-260.1-r2:0/2 present for portuale, absent for real
+  [extra] ebuild sys-devel/gettext-0.23.2 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXext-1.3.7 present for portuale, absent for real
+  [extra] ebuild dev-db/sqlite-3.53.3:3 present for portuale, absent for real
+  [extra] ebuild net-misc/curl-8.21.0-r1 present for portuale, absent for real
+  [extra] ebuild dev-libs/boehm-gc-8.2.12 present for portuale, absent for real
+  [extra] ebuild www-client/w3m-0.5.6 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-common-1.86.0 present for portuale, absent for real
+  [extra] ebuild sys-libs/zlib-1.3.2-r1:0/1 present for portuale, absent for real
+  [extra] ebuild media-libs/libjpeg-turbo-3.1.4.1:0/0.2 present for portuale, absent for real
+  [extra] ebuild dev-util/glib-utils-2.88.2 present for portuale, absent for real
+  [extra] ebuild x11-misc/shared-mime-info-2.4-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXau-1.0.12 present for portuale, absent for real
+  [extra] ebuild dev-lang/nasm-3.02 present for portuale, absent for real
+  [extra] ebuild x11-base/xorg-proto-2025.1 present for portuale, absent for real
+  [extra] ebuild app-crypt/pinentry-1.3.2-r1 present for portuale, absent for real
+  [extra] ebuild dev-python/docutils-0.23 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-1.86.0 present for portuale, absent for real
+  [extra] ebuild virtual/w3m-1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libSM-1.2.6 present for portuale, absent for real
+  [extra] ebuild dev-lang/duktape-2.7.0-r3:0/2.7.0 present for portuale, absent for real
+  [extra] ebuild dev-python/olefile-0.47 present for portuale, absent for real
+  [extra] ebuild sys-apps/portage-3.0.81.3 present for portuale, absent for real
+  [extra] ebuild x11-misc/compose-tables-1.8.13 present for portuale, absent for real
+  [extra] ebuild net-libs/ngtcp2-1.24.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libX11-1.8.13 present for portuale, absent for real
+  [extra] ebuild dev-util/desktop-file-utils-0.28-r1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXt-1.3.1-r1 present for portuale, absent for real
+  [extra] ebuild acct-group/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/xtrans-1.6.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libxcb-1.17.0:0/1.12 present for portuale, absent for real
+  [extra] ebuild net-libs/libpsl-0.21.5 present for portuale, absent for real
+  [extra] ebuild dev-libs/libxml2-2.15.3:2/16 present for portuale, absent for real
+  [extra] ebuild dev-libs/glib-2.88.2:2 present for portuale, absent for real
+  [extra] ebuild dev-util/gdbus-codegen-2.88.2 present for portuale, absent for real
+  [extra] ebuild sys-auth/polkit-126-r3 present for portuale, absent for real
+  [totals] real Total 0 vs portuale Total 56
+
+### virtual_jpeg
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### virtual_libudev
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-libs_icu
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-libs_boost
+  [order] merge order diverges at #6: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### net-libs_nodejs
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### media-video_ffmpeg
+  [order] merge order diverges at #8: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-db_sqlite
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### www-client_firefox
+  [order] merge order diverges at #11: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### mail-client_thunderbird
+  [order] merge order diverges at #11: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-office_libreoffice
+  [order] merge order diverges at #14: real dev-libs/libltdl vs portuale acct-user/libreoffice
+
+### media-gfx_gimp
+  [order] merge order diverges at #10: real x11-themes/hicolor-icon-theme vs portuale media-libs/libnsgif-1.0.0-r1:0/1.0.0
+
+### net-misc_openssh
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### www-servers_nginx
+  [order] merge order diverges at #8: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### www-servers_apache
+  [order] merge order diverges at #7: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### dev-db_postgresql
+  [order] merge order diverges at #5: real sys-libs/liburing vs portuale dev-libs/gobject-introspection-common
+
+### dev-db_mariadb
+  [order] merge order diverges at #7: real sys-libs/liburing vs portuale dev-libs/gobject-introspection-common
+
+### app-misc_tmux
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-editors_vim
+  [order] merge order diverges at #6: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-editors_neovim
+  [order] merge order diverges at #14: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### app-editors_emacs
+  [order] merge order diverges at #7: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-process_htop
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### sys-apps_pciutils
+  [order] merge order diverges at #6: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### net-analyzer_wireshark
+  [order] merge order diverges at #10: real sys-libs/mtdev vs portuale dev-libs/vala-common
+
+### media-video_vlc
+  [order] merge order diverges at #8: real dev-libs/gobject-introspection-common vs portuale media-libs/libsamplerate
+
+### x11-base_xorg-server
+  [order] merge order diverges at #2: real llvm-core/llvm-common vs portuale app-crypt/libmd
+
+### x11-wm_i3
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### _dev-lang_python-3.15
+  [order] merge order diverges at #5: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### _dev-libs_libevent-2.1.12
+  [extra] ebuild virtual/libelf-3-r1:0/1 present for portuale, absent for real
+  [extra] ebuild app-portage/portage-utils-0.97.1 present for portuale, absent for real
+  [extra] ebuild dev-python/scikit-build-core-1.0.3 present for portuale, absent for real
+  [extra] ebuild x11-base/xcb-proto-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/libatomic_ops-7.10.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libICE-1.1.2 present for portuale, absent for real
+  [extra] ebuild sys-apps/dbus-1.16.2 present for portuale, absent for real
+  [extra] ebuild acct-user/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild dev-cpp/eigen-3.4.0-r3:3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXdmcp-1.1.5 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp3-1.17.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pyproject-metadata-0.12.1 present for portuale, absent for real
+  [extra] ebuild gnome-base/dconf-0.40.0 present for portuale, absent for real
+  [extra] ebuild dev-libs/icu-78.3:0/78 present for portuale, absent for real
+  [extra] ebuild dev-python/pillow-12.3.0 present for portuale, absent for real
+  [extra] ebuild dev-python/pygments-2.19.2 present for portuale, absent for real
+  [extra] ebuild app-text/xmlto-0.0.28-r11 present for portuale, absent for real
+  [extra] ebuild app-crypt/libb2-0.98.1-r3 present for portuale, absent for real
+  [extra] ebuild dev-python/pybind11-3.0.4 present for portuale, absent for real
+  [extra] ebuild net-libs/nghttp2-1.69.0:0/1.14 present for portuale, absent for real
+  [extra] ebuild sys-apps/systemd-260.1-r2:0/2 present for portuale, absent for real
+  [extra] ebuild sys-devel/gettext-0.23.2 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXext-1.3.7 present for portuale, absent for real
+  [extra] ebuild dev-db/sqlite-3.53.3:3 present for portuale, absent for real
+  [extra] ebuild net-misc/curl-8.21.0-r1 present for portuale, absent for real
+  [extra] ebuild dev-libs/boehm-gc-8.2.12 present for portuale, absent for real
+  [extra] ebuild www-client/w3m-0.5.6 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-common-1.86.0 present for portuale, absent for real
+  [extra] ebuild sys-libs/zlib-1.3.2-r1:0/1 present for portuale, absent for real
+  [extra] ebuild media-libs/libjpeg-turbo-3.1.4.1:0/0.2 present for portuale, absent for real
+  [extra] ebuild dev-util/glib-utils-2.88.2 present for portuale, absent for real
+  [extra] ebuild x11-misc/shared-mime-info-2.4-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXau-1.0.12 present for portuale, absent for real
+  [extra] ebuild dev-lang/nasm-3.02 present for portuale, absent for real
+  [extra] ebuild x11-base/xorg-proto-2025.1 present for portuale, absent for real
+  [extra] ebuild app-crypt/pinentry-1.3.2-r1 present for portuale, absent for real
+  [extra] ebuild dev-python/docutils-0.23 present for portuale, absent for real
+  [extra] ebuild dev-libs/gobject-introspection-1.86.0 present for portuale, absent for real
+  [extra] ebuild virtual/w3m-1 present for portuale, absent for real
+  [extra] ebuild x11-libs/libSM-1.2.6 present for portuale, absent for real
+  [extra] ebuild dev-lang/duktape-2.7.0-r3:0/2.7.0 present for portuale, absent for real
+  [extra] ebuild dev-python/olefile-0.47 present for portuale, absent for real
+  [extra] ebuild sys-apps/portage-3.0.81.3 present for portuale, absent for real
+  [extra] ebuild x11-misc/compose-tables-1.8.13 present for portuale, absent for real
+  [extra] ebuild net-libs/ngtcp2-1.24.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libX11-1.8.13 present for portuale, absent for real
+  [extra] ebuild x11-libs/libXt-1.3.1-r1 present for portuale, absent for real
+  [extra] ebuild dev-util/desktop-file-utils-0.28-r1 present for portuale, absent for real
+  [extra] ebuild acct-group/polkitd-0-r3 present for portuale, absent for real
+  [extra] ebuild x11-libs/xtrans-1.6.0 present for portuale, absent for real
+  [extra] ebuild x11-libs/libxcb-1.17.0:0/1.12 present for portuale, absent for real
+  [extra] ebuild net-libs/libpsl-0.21.5 present for portuale, absent for real
+  [extra] ebuild dev-libs/libxml2-2.15.3:2/16 present for portuale, absent for real
+  [extra] ebuild dev-libs/glib-2.88.2:2 present for portuale, absent for real
+  [extra] ebuild dev-util/gdbus-codegen-2.88.2 present for portuale, absent for real
+  [extra] ebuild sys-auth/polkit-126-r3 present for portuale, absent for real
+  [totals] real Total 1 vs portuale Total 57
+
+### _system
+  [order] merge order diverges at #6: real net-libs/ngtcp2 vs portuale x11-libs/xtrans
+
+### _world
+  [order] merge order diverges at #2: real app-shells/push vs portuale app-arch/ncompress
+
+## allowlist entries that matched nothing (candidates for removal)
+  gedit-nautilus-cluster-a-rewalk-abort
+  gnome-shell-cluster-a-abort
+
+## counts (--count-categories missing,extra,version,action,exit, unexplained only)
+missing	0
+extra	448
+version	0
+action	0
+exit	0
+
+## counts by probe
+_dev-libs_libevent-2.1.12	extra	56
+app-alternatives_awk	extra	56
+app-containers_runc	extra	56
+dev-build_make	extra	56
+dev-build_ninja	extra	56
+dev-libs_openssl	extra	56
+sys-apps_coreutils	extra	56
+virtual_editor	extra	56
+
+
+wrote differential-test-bed/logs/l0-20261015T030838Z/l0-report.txt and differential-test-bed/logs/l0-20261015T030838Z/l0-report.json

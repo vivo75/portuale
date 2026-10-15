@@ -1,0 +1,4 @@
+[ebuild     U  ] dev-libs/pg34-dlib-2::testrepo [1::testrepo] to /var/tmp/pg34-s4-fixcopy/fixtures
+[ebuild  N     ] dev-libs/pg34-dtop-1::testrepo to /var/tmp/pg34-s4-fixcopy/fixtures
+
+Total: 2 packages (1 upgrade, 1 new), Size of downloads: 0 KiB

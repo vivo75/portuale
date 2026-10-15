@@ -1,0 +1,1803 @@
+# L0 resolver-parity report
+
+## environment
+  date_utc	2026-10-15T02:56:14Z
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  repo_gentoo	11c58b7af1df0fbc3e9f2560a82c4355231967a6
+  repo_buildovl	3b1df68114f4c486520864338b1b6a42efcaec7e
+  repo_porttest	b4b5d17a6cff60bbe260bcfea0e37f5ed82a91be
+  profile	default/linux/amd64/23.0/systemd
+  python	Python 3.14.6
+  fs	overlayfs
+  Portage 3.0.82.2 (python 3.14.6-final-0, default/linux/amd64/23.0/systemd, gcc-15, glibc-2.43-r2, 6.18.39-serv x86_64)
+
+## summary
+  probes           : 117
+  clean            : 3
+  parity_rate      : 0.026
+  explained        : 8
+  UNEXPLAINED      : 1236
+    action       : 88
+    advice       : 31
+    error        : 27
+    exit         : 30
+    extra        : 10
+    missing      : 785
+    order        : 88
+    totals       : 87
+    truncated    : 2
+    version      : 88
+
+## unexplained findings
+
+### sys-apps_portage
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### sys-devel_gcc
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### sys-libs_glibc
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### sys-devel_binutils
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-build_make
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-build_cmake
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-build_meson
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-build_autoconf
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-build_automake
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-build_libtool
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### sys-apps_coreutils
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### sys-apps_util-linux
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### sys-apps_systemd
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### sys-apps_systemd-utils
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 323 vs portuale Total 314
+
+### app-shells_bash
+  [order] merge order diverges at #0: real sys-libs/ncurses vs portuale virtual/libintl
+
+### sys-libs_zlib
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-libs_openssl
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-lang_python_3.14
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-python_setuptools
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-python_pip
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [totals] real Total 341 vs portuale Total 338
+
+### dev-python_cython
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-python_jinja2
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-python_lxml
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-python_pyyaml
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 323 vs portuale Total 314
+
+### dev-python_certifi
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [totals] real Total 321 vs portuale Total 313
+
+### app-portage_gentoolkit
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 322 vs portuale Total 313
+
+### app-portage_eix
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #176: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 324 vs portuale Total 315
+
+### dev-build_ninja
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-python_pygments
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-lang_perl
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-perl_XML-Parser
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #199: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 352 vs portuale Total 343
+
+### dev-perl_Locale-gettext
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### app-admin_perl-cleaner
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### virtual_perl-ExtUtils-MakeMaker
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-lang_ruby
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #186: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 380 vs portuale Total 371
+
+### dev-ruby_rake
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #186: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 380 vs portuale Total 371
+
+### app-admin_sudo
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #179: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 331 vs portuale Total 322
+
+### dev-lang_go
+  [exit] real rc=0 portuale rc=1
+  [exit] merge-list comparison suppressed: real 2 lines / Total 2, portuale 2 lines / Total 1
+
+### app-containers_podman
+  [advice] real-only: use-change: >=net-firewall/iptables-1.8.13 nftables
+  [truncated] autounmask backtracking terminated early (real Total 8 / 8 lines, portuale Total 342 / 350 lines) -- merge-list set/order/totals comparison suppressed
+
+### app-containers_runc
+  [exit] real rc=0 portuale rc=1
+  [exit] merge-list comparison suppressed: real 325 lines / Total 325, portuale 318 lines / Total 315
+
+### sys-cluster_nerdctl
+  [error] real-only message: emerge: Maybe you meant any of these: sys-cluster/virtctl, sys-cluster/kubectl, sys-cluster/gasnet?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "sys-cluster/nerdctl".
+  [error] portuale-only message: emerge: the requested targets depends on sys-cluster/nerdctl
+
+### dev-lang_rust
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #180: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 332 vs portuale Total 323
+
+### dev-lang_rust-bin
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #176: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 324 vs portuale Total 315
+
+### app-shells_starship
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #177: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 325 vs portuale Total 316
+
+### sys-apps_ripgrep
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #178: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 325 vs portuale Total 316
+
+### sys-apps_bat
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #178: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 329 vs portuale Total 320
+
+### sys-apps_fd
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #177: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 326 vs portuale Total 317
+
+### dev-qt_qtbase_6
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #178: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 360 vs portuale Total 351
+
+### dev-qt_qtcore_5
+  [error] real-only message: emerge: Maybe you meant any of these: dev-qt/qt-creator, dev-qt/qtcharts, dev-qt/qtbase?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "dev-qt/qtcore:5".
+  [error] portuale-only message: emerge: the requested targets depends on dev-qt/qtcore:5
+
+### kde-frameworks_kcoreaddons
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #178: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 367 vs portuale Total 358
+
+### kde-plasma_plasma-meta
+  [advice] real-only: use-change: >=dev-qt/qtbase-6.11.1 cups vulkan
+  [advice] real-only: use-change: >=kde-frameworks/kimageformats-6.27.0 avif
+  [advice] real-only: use-change: >=kde-plasma/kwin-6.6.6 lock
+  [advice] real-only: use-change: >=kde-plasma/kwin-x11-6.6.6 lock
+  [advice] real-only: use-change: >=x11-base/xwayland-24.1.13 libei
+  [truncated] autounmask backtracking terminated early (real Total 4 / 4 lines, portuale Total 746 / 750 lines) -- merge-list set/order/totals comparison suppressed
+
+### kde-apps_kdecore-meta
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [extra] ebuild acct-group/sshd-0-r3 present for portuale, absent for real
+  [extra] ebuild app-text/docbook-xml-dtd-4.3-r2:4.3 present for portuale, absent for real
+  [extra] ebuild acct-user/sshd-0-r3 present for portuale, absent for real
+  [extra] ebuild app-crypt/p11-kit-0.26.2 present for portuale, absent for real
+  [extra] ebuild net-misc/openssh-10.4_p1-r1 present for portuale, absent for real
+  [extra] ebuild app-crypt/gcr-3.41.2-r2:0/1 present for portuale, absent for real
+  [extra] ebuild sys-apps/shadow-4.19.4:0/5 present for portuale, absent for real
+  [extra] ebuild gnome-base/gnome-keyring-48.0-r1 present for portuale, absent for real
+  [extra] ebuild virtual/openssh-0-r1 present for portuale, absent for real
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #4: real sys-apps/baselayout vs portuale acct-group/root
+
+### media-libs_phonon
+  [error] real-only message: emerge: Maybe you meant any of these: media-libs/phat, media-libs/oidn, media-libs/coin?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "media-libs/phonon".
+  [error] portuale-only message: emerge: the requested targets depends on media-libs/phonon
+
+### gui-libs_gtk_4
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 412 lines / Total 412, portuale 403 lines / Total 403
+
+### x11-libs_gtk__3
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 401 lines / Total 401, portuale 392 lines / Total 392
+
+### gnome-base_gnome-shell
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 735 lines / Total 735, portuale 726 lines / Total 726
+
+### gnome-base_nautilus
+  [advice] real-only: use-change: >=app-crypt/gcr-3.41.2-r2:0 gtk
+  [advice] real-only: use-change: >=app-text/poppler-26.05.0-r1 cairo
+  [advice] real-only: use-change: >=dev-libs/libportal-0.9.1 gtk
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 483 lines / Total 483, portuale 474 lines / Total 474
+
+### app-editors_gedit
+  [advice] real-only: use-change: >=app-crypt/gcr-3.41.2-r2:0 gtk
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 440 lines / Total 440, portuale 431 lines / Total 431
+
+### media-libs_gstreamer
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 324 vs portuale Total 315
+
+### media-libs_mesa
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #180: real app-crypt/libb2 vs portuale app-crypt/rhash-1.4.6-r1:0/1
+  [totals] real Total 359 vs portuale Total 350
+
+### sys-libs_glibc_multilib_
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-libs_glib
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### media-libs_libpng
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #175: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 322 vs portuale Total 313
+
+### media-libs_freetype
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #175: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 323 vs portuale Total 314
+
+### app-emulation_wine-vanilla
+  [advice] real-only: required-use: The following REQUIRED_USE flag constraints are unsatisfied:
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 0 lines / Total None, portuale 425 lines / Total 425
+  [error] real-only message: !!! The ebuild selected to satisfy "media-libs/libsdl2[haptic,joystick,abi_x86_32(-)?,abi_x86_64(-)?]" has unmet requirements.
+  [error] real-only message: The following REQUIRED_USE flag constraints are unsatisfied:
+
+### app-emulation_wine-staging
+  [advice] real-only: masked-atom: app-emulation/wine-staging
+  [advice] real-only: masked: !!! All ebuilds that could satisfy "app-emulation/wine-staging" have been masked.
+  [advice] real-only: masked: !!! One of the following masked packages is required to complete your request:
+  [error] real-only message: !!! All ebuilds that could satisfy "app-emulation/wine-staging" have been masked.
+  [error] real-only message: !!! One of the following masked packages is required to complete your request:
+  [error] portuale-only message: emerge: the requested targets depends on app-emulation/wine-staging
+
+### sys-apps_dbus
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### net-misc_networkmanager
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #179: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 358 vs portuale Total 349
+
+### sys-fs_lvm2
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 322 vs portuale Total 313
+
+### sys-auth_polkit
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### app-crypt_gnupg
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### app-text_texlive
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #228: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 434 vs portuale Total 425
+
+### app-text_texlive-core
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #223: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 391 vs portuale Total 382
+
+### dev-texlive_texlive-latex
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #224: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 394 vs portuale Total 385
+
+### virtual_libc
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 322 vs portuale Total 313
+
+### virtual_editor
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #176: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 323 vs portuale Total 314
+
+### virtual_pager
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #175: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 324 vs portuale Total 315
+
+### virtual_mta
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #177: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 327 vs portuale Total 318
+
+### virtual_cron
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #178: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 328 vs portuale Total 319
+
+### app-alternatives_awk
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### virtual_jpeg
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 322 vs portuale Total 313
+
+### virtual_libudev
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### virtual_rust
+  [error] real-only message: emerge: Maybe you meant any of these: virtual/rubygems, virtual/ruby-ssl, virtual/ssh?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "virtual/rust".
+  [error] portuale-only message: emerge: the requested targets depends on virtual/rust
+
+### dev-libs_icu
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### dev-libs_boost
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #175: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 323 vs portuale Total 314
+
+### net-libs_nodejs
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #175: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 327 vs portuale Total 318
+
+### media-video_ffmpeg
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #180: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 347 vs portuale Total 338
+
+### dev-db_sqlite
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### www-client_firefox
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [advice] real-only: use-change: >=media-libs/libvpx-1.16.0 postproc
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 444 lines / Total 444, portuale 435 lines / Total 435
+
+### mail-client_thunderbird
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [advice] real-only: use-change: >=media-libs/libvpx-1.16.0 postproc
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 447 lines / Total 447, portuale 438 lines / Total 438
+
+### app-office_libreoffice
+  [advice] real-only: use-change: >=dev-libs/xmlsec-1.3.11-r1 nss
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 511 lines / Total 511, portuale 502 lines / Total 502
+
+### media-gfx_gimp
+  [advice] real-only: use-change: >=app-text/poppler-26.05.0-r1 cairo
+  [advice] real-only: use-change: >=media-libs/babl-0.1.126 lcms
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [advice] real-only: use-change: >=media-libs/gegl-0.4.70 cairo lcms
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 469 lines / Total 469, portuale 460 lines / Total 460
+
+### net-misc_openssh
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #176: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 325 vs portuale Total 316
+
+### www-servers_nginx
+  [advice] real-only: use-change: >=app-misc/mime-types-2.1.54 nginx
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 324 lines / Total 324, portuale 315 lines / Total 315
+
+### www-servers_apache
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #176: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 329 vs portuale Total 320
+
+### dev-db_postgresql
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #181: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 332 vs portuale Total 323
+
+### dev-db_mariadb
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #184: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 340 vs portuale Total 331
+
+### app-misc_tmux
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #175: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 323 vs portuale Total 314
+
+### app-editors_vim
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #177: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 329 vs portuale Total 320
+
+### app-editors_neovim
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #187: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 341 vs portuale Total 332
+
+### app-editors_emacs
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [extra] ebuild app-doc/info-manual-30.2 present for portuale, absent for real
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #179: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 329 vs portuale Total 321
+
+### sys-process_htop
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 324 vs portuale Total 315
+
+### sys-apps_pciutils
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #175: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 323 vs portuale Total 314
+
+### net-analyzer_wireshark
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 442 lines / Total 442, portuale 433 lines / Total 433
+
+### media-sound_pulseaudio
+  [error] real-only message: emerge: Maybe you meant any of these: media-sound/pulseaudio-ctl, media-sound/pulseaudio-daemon, media-sound/apulse?
+  [error] real-only message: emerge: searching for similar names...
+  [error] real-only message: emerge: there are no ebuilds to satisfy "media-sound/pulseaudio".
+  [error] portuale-only message: emerge: the requested targets depends on media-sound/pulseaudio
+
+### media-video_vlc
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #183: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 402 vs portuale Total 393
+
+### x11-base_xorg-server
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #46: real app-text/sgml-common vs portuale app-crypt/libmd
+  [totals] real Total 388 vs portuale Total 379
+
+### x11-wm_i3
+  [advice] real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [exit] real rc=1 portuale rc=0
+  [exit] merge-list comparison suppressed: real 357 lines / Total 357, portuale 348 lines / Total 348
+
+### __app-shells_bash-5.2
+  [order] merge order diverges at #0: real sys-libs/ncurses vs portuale virtual/libintl
+
+### _sys-apps_coreutils-9.7_
+  [error] real-only message: emerge: there are no ebuilds to satisfy "=sys-apps/coreutils-9.7*".
+  [error] portuale-only message: emerge: the requested targets depends on sys-apps/coreutils:0 >=9.7, <9.8
+
+### _dev-lang_python-3.15
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #174: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 321 vs portuale Total 312
+
+### _dev-libs_libevent-2.1.12
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #175: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 322 vs portuale Total 313
+
+### _system
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #198: real app-misc/ca-certificates vs portuale app-misc/pax-utils
+  [totals] real Total 368 vs portuale Total 359
+
+### _world
+  [missing] ebuild sys-apps/sandbox-2.49 present for real, absent for portuale
+  [missing] ebuild dev-python/urllib3-2.7.0 present for real, absent for portuale
+  [missing] ebuild sys-apps/install-xattr-0.13 present for real, absent for portuale
+  [missing] ebuild dev-python/charset-normalizer-3.4.9 present for real, absent for portuale
+  [missing] ebuild dev-python/requests-2.34.2 present for real, absent for portuale
+  [missing] ebuild dev-python/pysocks-1.7.1-r2 present for real, absent for portuale
+  [missing] ebuild dev-python/certifi-3024.7.22 present for real, absent for portuale
+  [missing] ebuild app-portage/gemato-20.12 present for real, absent for portuale
+  [missing] ebuild dev-python/idna-3.18 present for real, absent for portuale
+  [version] sys-apps/portage: real 3.0.81.3 vs portuale 3.0.82.2
+  [action] sys-apps/portage: real action [UD] vs portuale [R]
+  [order] merge order diverges at #8: real app-i18n/gnulib-l10n vs portuale dev-libs/xxhash
+  [totals] real Total 375 vs portuale Total 366
+
+## explained (allowlisted) findings
+
+### gnome-base_gnome-shell
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=app-crypt/gcr-3.41.2-r2:0 gtk
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=gnome-base/gnome-control-center-49.7 networkmanager
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=media-libs/freetype-2.14.3 harfbuzz
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=media-libs/libcanberra-0.30-r8 pulseaudio
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=media-plugins/alsa-plugins-1.2.12 pulseaudio
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=net-fs/samba-4.24.4 client
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=net-libs/ngtcp2-1.24.0 gnutls
+  [advice] (gnome-shell-cluster-a-abort) real-only: use-change: >=x11-base/xwayland-24.1.13 libei
+
+## allowlist entries that matched nothing (candidates for removal)
+  gedit-nautilus-cluster-a-rewalk-abort
+
+## counts (--count-categories missing,extra,version,action,exit, unexplained only)
+missing	785
+extra	10
+version	88
+action	88
+exit	30
+
+## counts by probe
+_dev-lang_python-3.15	missing	9
+_dev-lang_python-3.15	version	1
+_dev-lang_python-3.15	action	1
+_dev-libs_libevent-2.1.12	missing	9
+_dev-libs_libevent-2.1.12	version	1
+_dev-libs_libevent-2.1.12	action	1
+_system	missing	9
+_system	version	1
+_system	action	1
+_world	missing	9
+_world	version	1
+_world	action	1
+app-admin_perl-cleaner	missing	9
+app-admin_perl-cleaner	version	1
+app-admin_perl-cleaner	action	1
+app-admin_sudo	missing	9
+app-admin_sudo	version	1
+app-admin_sudo	action	1
+app-alternatives_awk	missing	9
+app-alternatives_awk	version	1
+app-alternatives_awk	action	1
+app-containers_runc	exit	2
+app-crypt_gnupg	missing	9
+app-crypt_gnupg	version	1
+app-crypt_gnupg	action	1
+app-editors_emacs	missing	9
+app-editors_emacs	extra	1
+app-editors_emacs	version	1
+app-editors_emacs	action	1
+app-editors_gedit	exit	2
+app-editors_neovim	missing	9
+app-editors_neovim	version	1
+app-editors_neovim	action	1
+app-editors_vim	missing	9
+app-editors_vim	version	1
+app-editors_vim	action	1
+app-emulation_wine-vanilla	exit	2
+app-misc_tmux	missing	9
+app-misc_tmux	version	1
+app-misc_tmux	action	1
+app-office_libreoffice	exit	2
+app-portage_eix	missing	9
+app-portage_eix	version	1
+app-portage_eix	action	1
+app-portage_gentoolkit	missing	9
+app-portage_gentoolkit	version	1
+app-portage_gentoolkit	action	1
+app-shells_starship	missing	9
+app-shells_starship	version	1
+app-shells_starship	action	1
+app-text_texlive	missing	9
+app-text_texlive	version	1
+app-text_texlive	action	1
+app-text_texlive-core	missing	9
+app-text_texlive-core	version	1
+app-text_texlive-core	action	1
+dev-build_autoconf	missing	9
+dev-build_autoconf	version	1
+dev-build_autoconf	action	1
+dev-build_automake	missing	9
+dev-build_automake	version	1
+dev-build_automake	action	1
+dev-build_cmake	missing	9
+dev-build_cmake	version	1
+dev-build_cmake	action	1
+dev-build_libtool	missing	9
+dev-build_libtool	version	1
+dev-build_libtool	action	1
+dev-build_make	missing	9
+dev-build_make	version	1
+dev-build_make	action	1
+dev-build_meson	missing	9
+dev-build_meson	version	1
+dev-build_meson	action	1
+dev-build_ninja	missing	9
+dev-build_ninja	version	1
+dev-build_ninja	action	1
+dev-db_mariadb	missing	9
+dev-db_mariadb	version	1
+dev-db_mariadb	action	1
+dev-db_postgresql	missing	9
+dev-db_postgresql	version	1
+dev-db_postgresql	action	1
+dev-db_sqlite	missing	9
+dev-db_sqlite	version	1
+dev-db_sqlite	action	1
+dev-lang_go	exit	2
+dev-lang_perl	missing	9
+dev-lang_perl	version	1
+dev-lang_perl	action	1
+dev-lang_python_3.14	missing	9
+dev-lang_python_3.14	version	1
+dev-lang_python_3.14	action	1
+dev-lang_ruby	missing	9
+dev-lang_ruby	version	1
+dev-lang_ruby	action	1
+dev-lang_rust	missing	9
+dev-lang_rust	version	1
+dev-lang_rust	action	1
+dev-lang_rust-bin	missing	9
+dev-lang_rust-bin	version	1
+dev-lang_rust-bin	action	1
+dev-libs_boost	missing	9
+dev-libs_boost	version	1
+dev-libs_boost	action	1
+dev-libs_glib	missing	9
+dev-libs_glib	version	1
+dev-libs_glib	action	1
+dev-libs_icu	missing	9
+dev-libs_icu	version	1
+dev-libs_icu	action	1
+dev-libs_openssl	missing	9
+dev-libs_openssl	version	1
+dev-libs_openssl	action	1
+dev-perl_Locale-gettext	missing	9
+dev-perl_Locale-gettext	version	1
+dev-perl_Locale-gettext	action	1
+dev-perl_XML-Parser	missing	9
+dev-perl_XML-Parser	version	1
+dev-perl_XML-Parser	action	1
+dev-python_certifi	missing	8
+dev-python_certifi	version	1
+dev-python_certifi	action	1
+dev-python_cython	missing	9
+dev-python_cython	version	1
+dev-python_cython	action	1
+dev-python_jinja2	missing	9
+dev-python_jinja2	version	1
+dev-python_jinja2	action	1
+dev-python_lxml	missing	9
+dev-python_lxml	version	1
+dev-python_lxml	action	1
+dev-python_pip	missing	3
+dev-python_pip	version	1
+dev-python_pip	action	1
+dev-python_pygments	missing	9
+dev-python_pygments	version	1
+dev-python_pygments	action	1
+dev-python_pyyaml	missing	9
+dev-python_pyyaml	version	1
+dev-python_pyyaml	action	1
+dev-python_setuptools	missing	9
+dev-python_setuptools	version	1
+dev-python_setuptools	action	1
+dev-qt_qtbase_6	missing	9
+dev-qt_qtbase_6	version	1
+dev-qt_qtbase_6	action	1
+dev-ruby_rake	missing	9
+dev-ruby_rake	version	1
+dev-ruby_rake	action	1
+dev-texlive_texlive-latex	missing	9
+dev-texlive_texlive-latex	version	1
+dev-texlive_texlive-latex	action	1
+gnome-base_gnome-shell	exit	2
+gnome-base_nautilus	exit	2
+gui-libs_gtk_4	exit	2
+kde-apps_kdecore-meta	missing	9
+kde-apps_kdecore-meta	extra	9
+kde-apps_kdecore-meta	version	1
+kde-apps_kdecore-meta	action	1
+kde-frameworks_kcoreaddons	missing	9
+kde-frameworks_kcoreaddons	version	1
+kde-frameworks_kcoreaddons	action	1
+mail-client_thunderbird	exit	2
+media-gfx_gimp	exit	2
+media-libs_freetype	missing	9
+media-libs_freetype	version	1
+media-libs_freetype	action	1
+media-libs_gstreamer	missing	9
+media-libs_gstreamer	version	1
+media-libs_gstreamer	action	1
+media-libs_libpng	missing	9
+media-libs_libpng	version	1
+media-libs_libpng	action	1
+media-libs_mesa	missing	9
+media-libs_mesa	version	1
+media-libs_mesa	action	1
+media-video_ffmpeg	missing	9
+media-video_ffmpeg	version	1
+media-video_ffmpeg	action	1
+media-video_vlc	missing	9
+media-video_vlc	version	1
+media-video_vlc	action	1
+net-analyzer_wireshark	exit	2
+net-libs_nodejs	missing	9
+net-libs_nodejs	version	1
+net-libs_nodejs	action	1
+net-misc_networkmanager	missing	9
+net-misc_networkmanager	version	1
+net-misc_networkmanager	action	1
+net-misc_openssh	missing	9
+net-misc_openssh	version	1
+net-misc_openssh	action	1
+sys-apps_bat	missing	9
+sys-apps_bat	version	1
+sys-apps_bat	action	1
+sys-apps_coreutils	missing	9
+sys-apps_coreutils	version	1
+sys-apps_coreutils	action	1
+sys-apps_dbus	missing	9
+sys-apps_dbus	version	1
+sys-apps_dbus	action	1
+sys-apps_fd	missing	9
+sys-apps_fd	version	1
+sys-apps_fd	action	1
+sys-apps_pciutils	missing	9
+sys-apps_pciutils	version	1
+sys-apps_pciutils	action	1
+sys-apps_portage	missing	9
+sys-apps_portage	version	1
+sys-apps_portage	action	1
+sys-apps_ripgrep	missing	9
+sys-apps_ripgrep	version	1
+sys-apps_ripgrep	action	1
+sys-apps_systemd	missing	9
+sys-apps_systemd	version	1
+sys-apps_systemd	action	1
+sys-apps_systemd-utils	missing	9
+sys-apps_systemd-utils	version	1
+sys-apps_systemd-utils	action	1
+sys-apps_util-linux	missing	9
+sys-apps_util-linux	version	1
+sys-apps_util-linux	action	1
+sys-auth_polkit	missing	9
+sys-auth_polkit	version	1
+sys-auth_polkit	action	1
+sys-devel_binutils	missing	9
+sys-devel_binutils	version	1
+sys-devel_binutils	action	1
+sys-devel_gcc	missing	9
+sys-devel_gcc	version	1
+sys-devel_gcc	action	1
+sys-fs_lvm2	missing	9
+sys-fs_lvm2	version	1
+sys-fs_lvm2	action	1
+sys-libs_glibc	missing	9
+sys-libs_glibc	version	1
+sys-libs_glibc	action	1
+sys-libs_glibc_multilib_	missing	9
+sys-libs_glibc_multilib_	version	1
+sys-libs_glibc_multilib_	action	1
+sys-libs_zlib	missing	9
+sys-libs_zlib	version	1
+sys-libs_zlib	action	1
+sys-process_htop	missing	9
+sys-process_htop	version	1
+sys-process_htop	action	1
+virtual_cron	missing	9
+virtual_cron	version	1
+virtual_cron	action	1
+virtual_editor	missing	9
+virtual_editor	version	1
+virtual_editor	action	1
+virtual_jpeg	missing	9
+virtual_jpeg	version	1
+virtual_jpeg	action	1
+virtual_libc	missing	9
+virtual_libc	version	1
+virtual_libc	action	1
+virtual_libudev	missing	9
+virtual_libudev	version	1
+virtual_libudev	action	1
+virtual_mta	missing	9
+virtual_mta	version	1
+virtual_mta	action	1
+virtual_pager	missing	9
+virtual_pager	version	1
+virtual_pager	action	1
+virtual_perl-ExtUtils-MakeMaker	missing	9
+virtual_perl-ExtUtils-MakeMaker	version	1
+virtual_perl-ExtUtils-MakeMaker	action	1
+www-client_firefox	exit	2
+www-servers_apache	missing	9
+www-servers_apache	version	1
+www-servers_apache	action	1
+www-servers_nginx	exit	2
+x11-base_xorg-server	missing	9
+x11-base_xorg-server	version	1
+x11-base_xorg-server	action	1
+x11-libs_gtk__3	exit	2
+x11-wm_i3	exit	2
+
+
+wrote differential-test-bed/logs/l0-20261015T025613Z/l0-report.txt and differential-test-bed/logs/l0-20261015T025613Z/l0-report.json

@@ -28,10 +28,12 @@ use std::io::Write;
 
 use super::{
     Deep, EffectiveUseFlagsArgs, GraphEntry, GraphResult, InstalledDepStringArgs,
-    InstalledMetaLayer, InstalledRef, PretendOutcome, RepoConfig, ResolveRequest,
-    Resolver as PortualeResolver, all_installed_packages, effective_use_flags, find_repos,
-    installed_candidates, installed_dep_string, installed_pkg_iuse_and_use, is_visible,
-    list_candidates, live_metadata_for_installed, read_vdb_string, repo_aux_metadata, split_slot,
+    InstalledMetaLayer, InstalledRef, InstalledUseState, PretendOutcome,
+    ReinstallFlagsForUseChangeArgs, RepoConfig, ResolveRequest, Resolver as PortualeResolver,
+    all_installed_packages, effective_use_flags, find_repos, installed_candidates,
+    installed_dep_string, installed_pkg_iuse_and_use, is_visible, list_candidates,
+    live_metadata_for_installed, read_vdb_flag_set, read_vdb_string,
+    reinstall_flags_for_use_change, repo_aux_metadata, split_slot,
 };
 
 // --- Lazy fact loading -----------------------------------------------------
@@ -582,18 +584,18 @@ fn graph_result_from_order(
             Some(versions) if versions.iter().any(|v| v == version) => {
                 // #34 S2: a same-version pick the bridge asked to rebuild is a
                 // bare, reasonless `Reinstall` (precedent `resolve/pretend.rs:170-179`).
+                // #34 S4: a USE-drift rebuild carries its changed flags.
+                let cpv = format!("{cp}-{version}");
                 let outcome = match kept {
-                    Some(kept) if kept.rebuild.contains(&format!("{cp}-{version}")) => {
-                        PretendOutcome::Reinstall {
-                            version: version.clone(),
-                            changed_flags: Vec::new(),
-                            deps_changed: false,
-                            slot_changed: false,
-                            rebuilt_binary: false,
-                            new_repo: false,
-                            slot_operator_rebuild: false,
-                        }
-                    }
+                    Some(kept) if kept.rebuild.contains(&cpv) => PretendOutcome::Reinstall {
+                        version: version.clone(),
+                        changed_flags: kept.use_drift.get(&cpv).cloned().unwrap_or_default(),
+                        deps_changed: false,
+                        slot_changed: false,
+                        rebuilt_binary: false,
+                        new_repo: false,
+                        slot_operator_rebuild: false,
+                    },
                     _ => PretendOutcome::AlreadyInstalled {
                         version: version.clone(),
                     },
@@ -657,7 +659,6 @@ fn graph_result_from_order(
                 (flag, on)
             })
             .collect();
-        let empty: HashSet<String> = HashSet::new();
         // Forced/masked-flag `( )` markers via the walk's own helper, with the same
         // candidate spelling the walk resolves under.
         let candidate_str = format!(
@@ -675,23 +676,53 @@ fn graph_result_from_order(
             config: &req.config,
         });
         // Same `all_flags` split `pretend.rs` uses for `-pv` vs `-p`.
+        // #34 S4: an `R` row diffs against the vdb USE like the walk's own
+        // display (`InstalledUseState`, `USE` intersected with `IUSE`), so a
+        // drifted flag renders `x*`; anything else keeps no markers. Gated
+        // on the outcome, so resolvo (which never yields `Reinstall`) and
+        // every non-`R` row do not move.
+        let (installed_state, reinst_flags): (Option<InstalledUseState>, HashSet<String>) =
+            match &outcome {
+                PretendOutcome::Reinstall { changed_flags, .. } => {
+                    let old_iuse = read_vdb_flag_set(
+                        &req.root,
+                        &record.category,
+                        &record.package,
+                        version,
+                        "IUSE",
+                    );
+                    let mut old_use = read_vdb_flag_set(
+                        &req.root,
+                        &record.category,
+                        &record.package,
+                        version,
+                        "USE",
+                    );
+                    old_use.retain(|flag| old_iuse.contains(flag));
+                    (
+                        Some(InstalledUseState { old_use, old_iuse }),
+                        changed_flags.iter().cloned().collect(),
+                    )
+                }
+                _ => (None, HashSet::new()),
+            };
         let use_expand_display =
             super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
                 use_flags_display: &use_flags_display,
                 config: &req.config,
-                installed: None,
+                installed: installed_state.as_ref(),
                 forced: &forced,
                 all_flags: true,
-                reinst_flags: &empty,
+                reinst_flags: &reinst_flags,
             });
         let use_expand_display_p =
             super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
                 use_flags_display: &use_flags_display,
                 config: &req.config,
-                installed: None,
+                installed: installed_state.as_ref(),
                 forced: &forced,
                 all_flags: false,
-                reinst_flags: &empty,
+                reinst_flags: &reinst_flags,
             });
         let cpv = format!("{cp}-{version}");
         let mut required_by: Vec<(String, String)> = parents.get(&cpv).cloned().unwrap_or_default();
@@ -1042,6 +1073,9 @@ struct KeptInstalled {
     installed: HashSet<String>,
     /// Installed cpvs registered `InstalledPolicy::Rebuild`, rendered `R`.
     rebuild: HashSet<String>,
+    /// Changed USE flags per rebuilt cpv (`--newuse`/`--changed-use` drift),
+    /// carried into the `R` row's `Reinstall.changed_flags`.
+    use_drift: HashMap<String, Vec<String>>,
     /// Deep expansion requested (`--deep` or `--emptytree`): no leaf rule.
     deep: bool,
 }
@@ -1110,9 +1144,48 @@ impl KeptInstalled {
                 }
             }
         }
+        // #34 S4: USE-drift `Rebuild`. Under `--newuse`/`--changed-use` an
+        // installed cpv whose effective USE drifted from the vdb rebuilds
+        // (Portage's `R` with the changed flags), so it joins `rebuild`
+        // before the provider is built. The adapter re-lists the repo
+        // candidate for that cpv (`LoadedVersion` drops it); an installed
+        // version gone from the repo has no candidate to compare, so it
+        // stays out. `--changed-deps`, `--changed-slot` and `--newrepo`
+        // triggers are out of scope (no corpus mode sets them).
+        // Portage: depgraph.py, _reinstall_for_flags.
+        let mut use_drift = HashMap::new();
+        if req.newuse || req.changed_use {
+            for inst in installed {
+                let cpv = inst.cpv();
+                if rebuild.contains(&cpv) {
+                    continue;
+                }
+                let Ok(candidates) = list_candidates(&lazy.repos, &inst.category, &inst.package)
+                else {
+                    continue;
+                };
+                let Some(candidate) = candidates.iter().find(|c| c.version == inst.version) else {
+                    continue;
+                };
+                if let Some(flags) =
+                    reinstall_flags_for_use_change(ReinstallFlagsForUseChangeArgs {
+                        root: &req.root,
+                        category: &inst.category,
+                        package: &inst.package,
+                        candidate,
+                        config: &req.config,
+                        newuse: req.newuse,
+                    })
+                {
+                    rebuild.insert(cpv.clone());
+                    use_drift.insert(cpv, flags);
+                }
+            }
+        }
         Self {
             installed: all,
             rebuild,
+            use_drift,
             deep,
         }
     }
@@ -1267,8 +1340,12 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
         // Portage expands the installed node with `_pkg_use_enabled`, while
         // the config USE (`package.use` included) would wrongly switch its
         // conditional deps on or off. Portage: depgraph.py, _pkg_use_enabled.
+        // #34 S4: except a rebuild member, which Portage rebuilds with the
+        // current config USE (its `x?` deps switch on for the rebuild, e.g.
+        // `R pg34-ulib` pulling `N pg34-uextra`).
         if self.kept.deep
             && self.kept.installed.contains(&cpv_str)
+            && !self.kept.rebuild.contains(&cpv_str)
             && let Some((category, package)) = cp_text.split_once('/')
         {
             let (_iuse, use_set) =
@@ -1336,6 +1413,14 @@ fn pubgrub_provider(
     // #34 S2 (moved here from S4): without it `-pve` keeps old installed versions
     // where Portage shows `U`.
     provider.set_rebuild_tree(req.empty);
+    // Ported from portage-cli src/query/depgraph/round.rs (MIT, Luca Barbato)
+    let deep = !matches!(req.deep, Deep::NotRequested);
+    // The walk clears selective for `-e` (resolve/pretend.rs:407-408).
+    let selective = req.selective && !req.empty;
+    provider.set_nodeps(req.nodeps);
+    provider.set_prefer_newest_slot(deep || req.empty);
+    provider.set_prefer_update(req.update && deep && !req.empty);
+    provider.set_selective_no_update(selective && !req.update);
     for inst in installed.iter().cloned() {
         let cpn = match portage_solver::Cpn::parse(&format!("{}/{}", inst.category, inst.package)) {
             Ok(cpn) => cpn,
@@ -2648,5 +2733,243 @@ mod tests {
             .resolve(&req)
             .expect("pg34-blib resolves");
         assert_eq!(pg34_plan(&result), Vec::<String>::new());
+    }
+
+    /// #34 S4 request: like the S3 `-pvuD` folds, plus the S4 engine-switch
+    /// inputs (`newuse`, `empty`, `nodeps`) set explicitly per test, mirroring
+    /// the CLI fold (`resolve_plan.rs`: selective = update||newuse||…; the
+    /// walk clears selective for `-e`; `-O` sets `nodeps`).
+    /// `fixture_request` defaults every one of these to `false`/`NotRequested`.
+    fn pg34_s4_request(atoms: &[&str]) -> super::super::ResolveRequest {
+        let mut req = pg34_s3_request(atoms);
+        req.newuse = false;
+        req.empty = false;
+        req.nodeps = false;
+        req
+    }
+
+    /// #34 S4: `-pvuD` upgrades an installed dep in its slot
+    /// (`set_prefer_update(update && deep && !empty)`). `pg34-dlib-1` is
+    /// installed with `-2` in the repo; Portage plans `U pg34-dlib-2 +
+    /// N pg34-dtop`, pubgrub used to plan only `N pg34-dtop`.
+    #[test]
+    fn pg34_dtop_pubgrub_pvud_upgrades_installed_dep() {
+        // `-pvuD`: selective through `--update`, unlimited deep, build deps on.
+        let req = pg34_s4_request(&["dev-libs/pg34-dtop"]);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-dtop resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-dlib-2:0", "dev-libs/pg34-dtop-1:0"]
+        );
+        let dlib = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-dlib")
+            .expect("pg34-dlib entry");
+        assert!(
+            matches!(dlib.outcome, super::super::PretendOutcome::Upgrade { .. }),
+            "unexpected outcome: {:?}",
+            dlib.outcome
+        );
+    }
+
+    /// #34 S4: `-pvu` without `-D` updates a named target but not its
+    /// installed dep. `pg34-dtop` is new (plans `N`), its installed dep
+    /// `pg34-dlib-1` stays (`prefer_update` needs deep); naming
+    /// `pg34-dlib` directly still upgrades it to `-2` (a root target is
+    /// never favored).
+    #[test]
+    fn pg34_dtop_pubgrub_pvu_updates_named_target_not_installed_dep() {
+        // `-pvu`: selective through `--update`, no deep, build deps on.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-dtop"]);
+        req.deep = super::super::Deep::NotRequested;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-dtop resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-dtop-1:0"]);
+
+        let mut req = pg34_s4_request(&["dev-libs/pg34-dlib"]);
+        req.deep = super::super::Deep::NotRequested;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-dlib resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-dlib-2:0"]);
+    }
+
+    /// #34 S4: the USE-drift kept/rebuild set. Under `--newuse` the installed
+    /// `pg34-ulib-1` (vdb `USE=""`, config `x`) joins `rebuild` with its
+    /// changed flags; without `--newuse`/`--changed-use` it stays kept.
+    #[test]
+    fn pg34_ulib_kept_rebuild_set_gains_use_drift() {
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-uapp"]);
+        // `-pvuDN`: selective through `--update`, unlimited deep, newuse.
+        req.selective = true;
+        req.update = true;
+        req.deep = super::super::Deep::Unlimited;
+        req.newuse = true;
+        req.dynamic_deps = true;
+        req.config
+            .package_use
+            .push(("dev-libs/pg34-ulib".to_string(), vec!["x".to_string()]));
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert_eq!(
+            kept.use_drift.get("dev-libs/pg34-ulib-1"),
+            Some(&vec!["x".to_string()]),
+            "USE drift flags: {:?}",
+            kept.use_drift
+        );
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-ulib-1"),
+            "drifted cpv rebuilds: {:?}",
+            kept.rebuild
+        );
+
+        // Same request without `--newuse`: no drift, no rebuild.
+        req.newuse = false;
+        let kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-ulib-1"),
+            "no drift without --newuse: {:?}",
+            kept.rebuild
+        );
+        assert!(kept.use_drift.is_empty());
+    }
+
+    /// #34 S4: `-pvuDN` on pg34-uapp plans `N uextra + R ulib + N uapp`. The
+    /// drifted dep rebuilds with the config USE, so its `x?` dep switches on
+    /// (Portage `USE="x*"`); pubgrub used to plan only `N uapp` (S3's xfail).
+    #[test]
+    fn pg34_uapp_pubgrub_pvudn_rebuilds_use_drift() {
+        // `-pvuDN`: the S4 request plus `--newuse`.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-uapp"]);
+        req.newuse = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-uapp resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            [
+                "dev-libs/pg34-uapp-1:0",
+                "dev-libs/pg34-uextra-1:0",
+                "dev-libs/pg34-ulib-1:0"
+            ]
+        );
+        let ulib = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-ulib")
+            .expect("pg34-ulib entry");
+        match &ulib.outcome {
+            super::super::PretendOutcome::Reinstall { changed_flags, .. } => {
+                assert_eq!(changed_flags, &["x".to_string()]);
+            }
+            other => panic!("expected USE-drift Reinstall, got {other:?}"),
+        }
+    }
+
+    /// #34 S4: `-pvN` on the installed named target plans `N uextra +
+    /// R ulib` (Portage; pubgrub used to plan nothing). `selective_no_update`
+    /// without `--update` keeps the satisfied target at its installed
+    /// version instead of upgrading, and the drift rebuild carries the flags.
+    #[test]
+    fn pg34_ulib_pubgrub_pvn_newuse_rebuilds_named_target() {
+        // `-pvN`: selective through `--newuse`, no update, no deep.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-ulib"]);
+        req.selective = true;
+        req.update = false;
+        req.deep = super::super::Deep::NotRequested;
+        req.newuse = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-ulib resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-uextra-1:0", "dev-libs/pg34-ulib-1:0"]
+        );
+        let ulib = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-ulib")
+            .expect("pg34-ulib entry");
+        match &ulib.outcome {
+            super::super::PretendOutcome::Reinstall { changed_flags, .. } => {
+                assert_eq!(changed_flags, &["x".to_string()]);
+            }
+            other => panic!("expected USE-drift Reinstall, got {other:?}"),
+        }
+    }
+
+    /// #34 S4: `-pve` on pg34-uapp plans `N uextra + R ulib + N uapp`
+    /// (Portage; pubgrub used to plan `R ulib + N uapp` with no `uextra`).
+    /// Under emptytree every installed cpv rebuilds with the config USE.
+    #[test]
+    fn pg34_uapp_pubgrub_pve_rebuilds_with_config_use() {
+        // `-pve`: the request level keeps selective unset (the CLI fold sets
+        // it only through update/newuse/…); `empty` alone drives the set.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-uapp"]);
+        req.selective = false;
+        req.update = false;
+        req.deep = super::super::Deep::NotRequested;
+        req.empty = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-uapp resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            [
+                "dev-libs/pg34-uapp-1:0",
+                "dev-libs/pg34-uextra-1:0",
+                "dev-libs/pg34-ulib-1:0"
+            ]
+        );
+        let ulib = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-ulib")
+            .expect("pg34-ulib entry");
+        assert!(
+            matches!(ulib.outcome, super::super::PretendOutcome::Reinstall { .. }),
+            "unexpected outcome: {:?}",
+            ulib.outcome
+        );
+    }
+
+    /// #34 S4: `-pvO` (`--nodeps`) plans the target only. Both cells already
+    /// matched Portage; the switch (`set_nodeps`) pins them against
+    /// dependency expansion.
+    #[test]
+    fn pg34_nodeps_pubgrub_pvo_plans_target_only() {
+        for atom in ["dev-libs/pg34-dtop", "dev-libs/pg34-app"] {
+            // `-pvO`: not selective, no update, no deep, nodeps.
+            let mut req = pg34_s4_request(&[atom]);
+            req.selective = false;
+            req.update = false;
+            req.deep = super::super::Deep::NotRequested;
+            req.nodeps = true;
+            let result = active_resolver_for(super::super::SolverKind::PubGrub)
+                .resolve(&req)
+                .expect("target resolves");
+            let package = atom.split('/').nth(1).expect("cat/pkg");
+            assert_eq!(pg34_plan(&result), [format!("dev-libs/{package}-1:0")]);
+        }
+    }
+
+    /// #34 S4 non-regression: `-pvuDN` on pg34-gs still plans
+    /// `NS gs-2 + U gs-1.1` like Portage (this cell already matched; the new
+    /// switches must not move it).
+    #[test]
+    fn pg34_gs_pubgrub_pvudn_stays_equal() {
+        // `-pvuDN`: the S4 request plus `--newuse`.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-gs"]);
+        req.newuse = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-gs resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg34-gs-1.1:1", "dev-libs/pg34-gs-2:2"]
+        );
     }
 }

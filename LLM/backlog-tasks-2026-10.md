@@ -174,6 +174,8 @@ live"). The Python mirror was removed 2026-09-15 —
 
 361. **(filed 2026-10-15, #34 S3 fixtures) — the default solver updates a build dependency of an installed package that Portage leaves alone.** Fixture `pg34-blib` (installed, `BDEPEND="dev-libs/pg34-btool"`, `pg34-btool-1` installed, `-2` in the repo): `emerge -pvuD dev-libs/pg34-blib` prints `Total: 0` in Portage (an installed parent that is not merged does not drag its BDEPEND into the update), the default solver prints `U pg34-btool-2`. Captures: `LLM/evidence/2026-10-15-34-s3/cap-pg34-blib-pvuD-{portage,default,pg}.txt`. Not part of #34.
 
+362. **(filed 2026-10-15, #34 S4 fixtures) — the default solver updates a dependency of a new package without `--deep`; Portage does not.** Fixture `pg34-dtop` (new, `RDEPEND="dev-libs/pg34-dlib"`, `pg34-dlib-1` installed, `-2` in the repo): `emerge -pvu dev-libs/pg34-dtop` prints `N pg34-dtop` in Portage and `N pg34-dtop` + `U pg34-dlib-2` in the default solver. The same class as #359 appears with `-pvuDN dev-libs/pg34-gs`: Portage `NS pg34-gs-2` + `U pg34-gs-1.1`, the default solver only `NS pg34-gs-2`. Captures: `LLM/evidence/2026-10-15-34-s4/cap-pg34-dtop-pvu-*.txt`, `cap-pg34-gs-pvuDN-*.txt`. Not part of #34.
+
 ## Deliberate cuts — do NOT pick these
 
 - Not porting the ebuild IPC daemon for `has_version`/`best_version`: they are answered by `portageq-wrapper` and give the same results as Portage in every captured case (including `-b`/`-d`/`-r` and `--host-root`), so `ebuild-ipc` exiting 127 has no observable effect at EAPI 7/8 — #348 S0.8 (matrix X1). `ebuild <f> clean`/`depend` stay documented dry-run no-ops (X6). Prefix (`EPREFIX`) rows could not be reproduced without a prefix profile.

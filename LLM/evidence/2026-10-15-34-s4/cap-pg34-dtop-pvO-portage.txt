@@ -1,0 +1,7 @@
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+[ebuild  N     ] dev-libs/pg34-dtop-1::testrepo to /tmp/pg34-s4-stage/fixtures/ 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
