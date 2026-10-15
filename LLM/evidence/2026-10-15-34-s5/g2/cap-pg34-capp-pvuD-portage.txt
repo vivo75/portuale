@@ -1,0 +1,15 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.45 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/pg34-cdep-1::testrepo to /tmp/pg34-s5b-g2-stage/fixtures/ 0 KiB
+[ebuild   R    ] dev-libs/pg34-clib-1::testrepo to /tmp/pg34-s5b-g2-stage/fixtures/ USE="f*" 0 KiB
+[ebuild  N     ] dev-libs/pg34-capp-1::testrepo to /tmp/pg34-s5b-g2-stage/fixtures/ 0 KiB
+
+Total: 3 packages (2 new, 1 reinstall), Size of downloads: 0 KiB
+
+ * IMPORTANT: 11 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

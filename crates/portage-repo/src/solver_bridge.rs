@@ -1186,12 +1186,52 @@ impl KeptInstalled {
                 }
             }
         }
+        // #34 S5 G1: hoisted so the G2 pass below can skip children Portage
+        // re-selects away from (their version changes; a USE atom against
+        // the installed version no longer applies).
+        let downgrade = Self::downgrade_set(req, lazy, installed, deep);
         Self {
             installed: all,
             rebuild,
             use_drift,
             deep,
-            downgrade: Self::downgrade_set(req, lazy, installed, deep),
+            downgrade,
+        }
+    }
+
+    /// #34 S5 G2 (round 2): parent-driven USE reinstall, applied
+    /// post-solve by `resolve_pubgrub`'s fixpoint. A USE-dep atom in a
+    /// dependency of a *solution member* whose deps expand (fresh members
+    /// and rebuild members; under deep also kept installed members, whose
+    /// vdb deps Portage expands) that the installed instance's USE does
+    /// not satisfy, while the same-version repo ebuild reaches the
+    /// required flags under the current config, makes that installed cpv
+    /// a rebuild member (`InstalledPolicy::Rebuild`, an `R` row with the
+    /// changed flags, its deps expanded). Only unions into
+    /// `rebuild`/`use_drift` (never overwrites S4's); skipped under
+    /// `--nodeps` (deps never expand, so no parent USE pressure exists).
+    /// Portage: `_select_atoms`/`dep_check` re-evaluation, which only ever
+    /// evaluates atoms of graph members (`depgraph.py:6030-6110` region),
+    /// and `_ignored_deps` (`:3815-3824`).
+    fn apply_parent_use_reinstalls(
+        &mut self,
+        req: &ResolveRequest,
+        lazy: &LazyRepo,
+        installed: &[super::InstalledPackage],
+        plan: &SolvedPlan,
+    ) {
+        if req.nodeps {
+            return;
+        }
+        for (cpv, flags) in parent_use_reinstalls(req, lazy, installed, self, plan) {
+            self.rebuild.insert(cpv.clone());
+            let entry = self.use_drift.entry(cpv).or_default();
+            for flag in flags {
+                if !entry.contains(&flag) {
+                    entry.push(flag);
+                }
+            }
+            entry.sort();
         }
     }
 
@@ -1258,6 +1298,383 @@ impl KeptInstalled {
         }
         downgrade
     }
+}
+
+/// #34 S5 G2 (round 2): installed `(cpv, changed flags)` pairs a planned
+/// parent reinstalls through a USE-dep atom (`dev-libs/pg34-clib[f]`
+/// required by `pg34-capp` while installed `clib-1` was built `USE=""`):
+/// the installed instance's USE does not satisfy the atom, but the
+/// same-version repo ebuild reaches the required flags under the current
+/// config, so Portage re-selects the repo ebuild (`R` with the changed
+/// flags) and expands its deps. When the repo ebuild cannot satisfy the
+/// atom either (a default-off flag with no `package.use` line), Portage
+/// stops at the autounmask gate instead (rc 1, triage G4a) and no pair is
+/// reported.
+///
+/// `plan` is the solved plan: only atoms from solution members whose deps
+/// expand are evaluated, because Portage only re-evaluates atoms of graph
+/// members. A USE atom carried by a package the solve never selects (an
+/// unselected version, a reachable-but-unmerged cp such as
+/// `dev-qt/qtwebengine` for an `app-editors/vim` probe) must not force a
+/// reinstall: round 1 evaluated every reachable cp's strings pre-solve and
+/// rebuilt `libxml2`/`systemd`/`dbus`/`xmlto`/`curl` on dozens of unrelated
+/// probes (bed delta +1208 extras in `-pv`). Fresh members contribute the
+/// solved version's strings (the picked version is known post-solve);
+/// installed members only when Portage would expand them -- rebuilt
+/// members with the config USE (repo strings), kept ones only under deep
+/// with the vdb strings/USE (`installed_parsed_deps`,
+/// `installed_pkg_iuse_and_use`), skipped as kept leaves without deep
+/// (`_ignored_deps`, `depgraph.py:3815-3824`) -- with the same USE source
+/// `desired_use` answers them with. `AllOf` groups and satisfied `flag?`
+/// conditionals are transparent; `||`/`^^`/`??` choice groups resolve to
+/// the taken branch (alternatives the solve edged from the parent, e.g.
+/// `virtual/minizip`'s `|| ( zlib[minizip] minizip-ng )` taking installed
+/// `zlib`), so a USE atom on an untaken branch (triage G5) never forces a
+/// reinstall while a taken one does. A downgraded parent's version changes
+/// out from under its strings, so it is skipped.
+/// Portage: `depgraph.py:6030-6110` region (`_select_atoms`/`dep_check`
+/// re-evaluation), `:3815-3824` (`_ignored_deps`).
+/// The solved plan's shape [`parent_use_reinstalls`] evaluates USE-dep
+/// atoms against: which `(cp, version)` pairs the solve selected, and
+/// which `(parent cp, child cp)` edges it recorded (choice-group branch
+/// resolution: an alternative the solve edged from the parent is taken).
+struct SolvedPlan {
+    members: HashSet<(String, String)>,
+    taken: HashSet<(String, String)>,
+}
+
+/// Invert one [`resolve_pubgrub`] round's `parents` map
+/// (`child cpv -> [(requiring category, package)]`) into the
+/// `(parent cp, child cp)` edge set [`SolvedPlan::taken`] records.
+fn solution_taken_edges(
+    parents: &HashMap<String, Vec<(String, String)>>,
+) -> HashSet<(String, String)> {
+    let mut taken = HashSet::new();
+    for (child_cpv, froms) in parents {
+        let Ok(child) = portage_solver::Cpv::parse(child_cpv) else {
+            continue;
+        };
+        let child_cp = format!("{}", child.cpn);
+        for (category, package) in froms {
+            taken.insert((format!("{category}/{package}"), child_cp.clone()));
+        }
+    }
+    taken
+}
+
+fn parent_use_reinstalls(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    installed: &[super::InstalledPackage],
+    kept: &KeptInstalled,
+    plan: &SolvedPlan,
+) -> Vec<(String, Vec<String>)> {
+    let deep = !matches!(req.deep, Deep::NotRequested) || req.empty;
+    // Under emptytree every installed cpv already rebuilds; with nothing
+    // installed there is no child to reinstall.
+    if req.empty || installed.is_empty() {
+        return Vec::new();
+    }
+    // Installed instances by cp (a cp may hold several installed slots).
+    let mut by_cp: HashMap<String, Vec<&super::InstalledPackage>> = HashMap::new();
+    for inst in installed {
+        by_cp
+            .entry(format!("{}/{}", inst.category, inst.package))
+            .or_default()
+            .push(inst);
+    }
+    // USE-dep atoms grouped by target cp, with the requiring parent's
+    // effective USE (for the `?`/`=` kinds, which read the parent's flags).
+    let mut wanted: HashMap<String, Vec<(portage_solver::Dep, HashSet<String>)>> = HashMap::new();
+    let mut push_entries =
+        |entries: &[portage_solver::DepEntry], parent_use: &HashSet<String>, parent_cp: &str| {
+            let mut stack: Vec<&portage_solver::DepEntry> = entries.iter().collect();
+            while let Some(entry) = stack.pop() {
+                match entry {
+                    portage_solver::DepEntry::Atom(dep) => {
+                        if dep.blocker.is_none()
+                            && dep.use_deps.as_ref().is_some_and(|uds| !uds.is_empty())
+                        {
+                            wanted
+                                .entry(format!("{}", dep.cpn))
+                                .or_default()
+                                .push((dep.clone(), parent_use.clone()));
+                        }
+                    }
+                    portage_solver::DepEntry::UseConditional {
+                        flag,
+                        negate,
+                        children,
+                    } => {
+                        if parent_use.contains(flag.as_str()) != *negate {
+                            stack.extend(children.iter());
+                        }
+                    }
+                    portage_solver::DepEntry::AllOf(children) => stack.extend(children.iter()),
+                    // Choice groups resolve to the taken branch: an
+                    // alternative the solve edged from this parent counts (a
+                    // USE atom there is really evaluated), an untaken one
+                    // stays out (triage G5). See the fn doc.
+                    portage_solver::DepEntry::AnyOf(children)
+                    | portage_solver::DepEntry::ExactlyOneOf(children)
+                    | portage_solver::DepEntry::AtMostOneOf(children) => {
+                        for child in children {
+                            let mut refs = Vec::new();
+                            referenced_cpns(std::slice::from_ref(child), &mut refs);
+                            if refs
+                                .iter()
+                                .any(|cp| plan.taken.contains(&(parent_cp.to_string(), cp.clone())))
+                            {
+                                stack.push(child);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    // Member-driven parent scan: only solution members whose deps
+    // expand contribute USE-dep atoms. Sorted for a stable visit order
+    // (`wanted`/`out` downstream are order-insensitive).
+    let mut member_list: Vec<&(String, String)> = plan.members.iter().collect();
+    member_list.sort();
+    for (cp, version) in member_list {
+        // Installed member: the version Portage expands -- vdb strings
+        // under deep (like `versions_for`, including versions gone from
+        // the repo), repo strings otherwise -- with the USE source
+        // `desired_use` answers (config USE for rebuild members, vdb USE
+        // for kept ones). A downgraded instance's version changes out
+        // from under its strings, so it is skipped here (its solved
+        // version scans through the fresh branch below); a kept leaf's
+        // deps go to `_ignored_deps` without deep, so it contributes
+        // nothing.
+        if let Some(inst) = by_cp
+            .get(cp)
+            .and_then(|cands| cands.iter().find(|i| i.version == *version))
+        {
+            let cpv = inst.cpv();
+            if kept.downgrade.contains(&cpv) {
+                continue;
+            }
+            let is_rebuild = kept.rebuild.contains(&cpv);
+            if !deep && !is_rebuild {
+                continue;
+            }
+            let Ok(loaded) = lazy.load_versions(cp) else {
+                continue;
+            };
+            let repo_record = loaded
+                .iter()
+                .find(|r| r.version == inst.version && r.slot == inst.slot);
+            if deep {
+                let parsed =
+                    lazy.installed_parsed_deps(&inst.category, &inst.package, &inst.version);
+                let vdb_use = installed_pkg_iuse_and_use(
+                    &lazy.root,
+                    &inst.category,
+                    &inst.package,
+                    &inst.version,
+                )
+                .1;
+                let parent_use = if is_rebuild {
+                    match repo_record {
+                        Some(record) => lazy.use_of(record),
+                        None => {
+                            match lazy.installed_record(
+                                &inst.category,
+                                &inst.package,
+                                &inst.version,
+                            ) {
+                                Some(record) => lazy.use_of(&record),
+                                None => vdb_use.clone(),
+                            }
+                        }
+                    }
+                } else {
+                    vdb_use
+                };
+                for classes in &parsed {
+                    push_entries(
+                        classes,
+                        &parent_use,
+                        &format!("{}/{}", inst.category, inst.package),
+                    );
+                }
+            } else if let Some(record) = repo_record {
+                let parent_use = lazy.use_of(record);
+                for classes in &record.deps {
+                    push_entries(
+                        classes,
+                        &parent_use,
+                        &format!("{}/{}", inst.category, inst.package),
+                    );
+                }
+            }
+            continue;
+        }
+        // Fresh member (or a re-selected one, e.g. a G1 downgrade): the
+        // solved version's repo strings with the config USE. A solved
+        // version with no record cannot happen (offered versions come
+        // from these records); skip rather than fall back to every
+        // version's strings.
+        let Ok(loaded) = lazy.load_versions(cp) else {
+            continue;
+        };
+        let Some(record) = loaded.iter().find(|r| r.version == *version) else {
+            continue;
+        };
+        // Defensive: a member version that is also installed expands from
+        // the vdb above, never here.
+        if by_cp
+            .get(cp)
+            .is_some_and(|cands| cands.iter().any(|i| i.cpv() == record.cpv()))
+        {
+            continue;
+        }
+        let parent_use = lazy.use_of(record);
+        for classes in &record.deps {
+            push_entries(classes, &parent_use, cp);
+        }
+    }
+    // One load per target cp; union the changed flags across parents.
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for (cp, atoms) in &wanted {
+        let Some(cands) = by_cp.get(cp) else {
+            continue;
+        };
+        let Ok(loaded) = lazy.load_versions(cp) else {
+            continue;
+        };
+        for (atom, parent_use) in atoms {
+            let Some(uds) = atom.use_deps.as_ref() else {
+                continue;
+            };
+            for inst in cands {
+                let child_cpv = inst.cpv();
+                if kept.rebuild.contains(&child_cpv) || kept.downgrade.contains(&child_cpv) {
+                    continue;
+                }
+                let Ok(cpv) = portage_solver::Cpv::parse(&child_cpv) else {
+                    continue;
+                };
+                // Named-slot and version restrictions still bind: an atom
+                // the installed version does not match is an upgrade
+                // question, not a parent-USE reinstall.
+                if !atom.matches_cpv(&cpv, Some(inst.slot.as_str())) {
+                    continue;
+                }
+                let (vdb_iuse, vdb_use) = installed_pkg_iuse_and_use(
+                    &lazy.root,
+                    &inst.category,
+                    &inst.package,
+                    &inst.version,
+                );
+                if use_deps_satisfied(uds, parent_use, &vdb_iuse, &vdb_use) {
+                    continue;
+                }
+                // The same-version repo ebuild under the current config.
+                let Some(record) = loaded
+                    .iter()
+                    .find(|r| r.version == inst.version && r.slot == inst.slot)
+                else {
+                    continue;
+                };
+                let effective = lazy.use_of(record);
+                let repo_iuse: HashSet<String> = parse_iuse(&record.iuse).into_iter().collect();
+                if !use_deps_satisfied(uds, parent_use, &repo_iuse, &effective) {
+                    continue;
+                }
+                let flags = changed_use_dep_flags(uds, parent_use, &vdb_use, &effective);
+                let entry = out.entry(child_cpv).or_default();
+                for flag in flags {
+                    if !entry.contains(&flag) {
+                        entry.push(flag);
+                    }
+                }
+            }
+        }
+    }
+    let mut out: Vec<(String, Vec<String>)> = out.into_iter().collect();
+    for (_, flags) in &mut out {
+        flags.sort();
+    }
+    out
+}
+
+/// Whether a USE-dep list holds for `child_use` (with `child_iuse` for the
+/// `(+/-)` fallback when the flag is undefined), given the requiring
+/// parent's effective USE. Mirrors the engine's own check
+/// (`portage-atom-pubgrub-0.8.0/src/validate.rs`, `resolve_flag_state`
+/// plus the per-kind match), including its PMS 8.2.6.4 `[!flag?]`
+/// reading (parent off ⇒ the target's flag must be *disabled*).
+fn use_deps_satisfied(
+    uds: &[portage_atom::UseDep],
+    parent_use: &HashSet<String>,
+    child_iuse: &HashSet<String>,
+    child_use: &HashSet<String>,
+) -> bool {
+    use portage_atom::UseDepKind;
+    uds.iter().all(|ud| {
+        let flag = ud.flag.as_str();
+        // Portage: `vardb.match` falls back to the `(+/-)` default only
+        // when the flag is not in IUSE (`installed_pkg_iuse_and_use` doc).
+        let target_on = if child_iuse.contains(flag) {
+            child_use.contains(flag)
+        } else {
+            ud.default == Some(portage_atom::UseDefault::Enabled)
+        };
+        let parent_on = parent_use.contains(flag);
+        match ud.kind {
+            UseDepKind::Enabled => target_on,
+            UseDepKind::Disabled => !target_on,
+            UseDepKind::Conditional => {
+                if parent_on {
+                    target_on
+                } else {
+                    true
+                }
+            }
+            UseDepKind::ConditionalInverse => {
+                if parent_on {
+                    true
+                } else {
+                    !target_on
+                }
+            }
+            UseDepKind::Equal => target_on == parent_on,
+            UseDepKind::EqualInverse => target_on != parent_on,
+        }
+    })
+}
+
+/// The required flags that flip between the installed USE and the repo
+/// ebuild's effective USE, for the `R` row's `*` paint (same
+/// `use_drift` channel S4 fills).
+fn changed_use_dep_flags(
+    uds: &[portage_atom::UseDep],
+    parent_use: &HashSet<String>,
+    vdb_use: &HashSet<String>,
+    effective_use: &HashSet<String>,
+) -> Vec<String> {
+    use portage_atom::UseDepKind;
+    let mut flags = Vec::new();
+    for ud in uds {
+        let flag = ud.flag.as_str();
+        let vdb_on = vdb_use.contains(flag);
+        let eff_on = effective_use.contains(flag);
+        let parent_on = parent_use.contains(flag);
+        let flipped = match ud.kind {
+            UseDepKind::Enabled => !vdb_on && eff_on,
+            UseDepKind::Disabled => vdb_on && !eff_on,
+            UseDepKind::Conditional => parent_on && !vdb_on && eff_on,
+            UseDepKind::ConditionalInverse => !parent_on && vdb_on && !eff_on,
+            UseDepKind::Equal => vdb_on != eff_on && eff_on == parent_on,
+            UseDepKind::EqualInverse => vdb_on != eff_on && eff_on != parent_on,
+        };
+        if flipped {
+            flags.push(flag.to_string());
+        }
+    }
+    flags
 }
 
 // --- PubGrub backend -------------------------------------------------------
@@ -1540,22 +1957,23 @@ fn pubgrub_provider(
     provider
 }
 
-fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
+/// Root solve targets for one [`resolve_pubgrub`] round: a named `:slot`
+/// pins one slotted node, otherwise every slotted node (falling back to
+/// the whole slotted-node fan-out, D-target-all-slots, when the slot
+/// decision finds nothing).
+fn pubgrub_targets(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    installed: &[super::InstalledPackage],
+    provider: &portage_atom_pubgrub::PortageDependencyProvider,
+) -> Result<
+    Vec<(
+        portage_atom_pubgrub::PortagePackage,
+        portage_atom_pubgrub::PortageVersionSet,
+    )>,
+    String,
+> {
     use portage_atom_pubgrub::{PortagePackage, PortageVersionSet};
-    let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
-    let (seeds, shallow) = closure_seeds(req)?;
-    let seed_cpns: Vec<portage_solver::Cpn> = seeds
-        .iter()
-        .chain(shallow.iter())
-        .filter_map(|cp| portage_solver::Cpn::parse(cp).ok())
-        .collect();
-    let lazy = LazyRepo::build(req, repos, &seeds, &shallow, true)
-        .map_err(|e| format!("reading repo facts: {e}"))?;
-    // The kept/rebuild set is computed before the provider exists (deps are
-    // converted inside `new_for_targets`).
-    let installed = all_installed_packages(&req.root);
-    let kept = KeptInstalled::of(req, &lazy, &installed);
-    let mut provider = pubgrub_provider(req, &lazy, &kept, &installed, &seed_cpns);
     let mut targets = Vec::new();
     for atom in &req.atoms {
         let dep = portage_solver::Dep::parse(atom)
@@ -1581,7 +1999,7 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
             }
             None => {
                 let nodes = provider.packages_for_cpn(&dep.cpn);
-                let slots = root_target_slots(req, &lazy, &installed, &dep, &versions);
+                let slots = root_target_slots(req, lazy, installed, &dep, &versions);
                 let picked: Vec<PortagePackage> = slots
                     .iter()
                     .map(|slot| PortagePackage::slotted(dep.cpn, interned(slot)))
@@ -1610,34 +2028,71 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
             }
         }
     }
-    let solution = provider
-        .resolve_targets(targets)
-        .map_err(portage_atom_pubgrub::format_solve_error)?;
-    let mut order = Vec::new();
-    for (pkg, ver) in provider.install_order(&solution) {
-        if let portage_atom_pubgrub::PortagePackage::Real { cpn, .. } = &pkg {
-            pg_trace(&mut std::io::stderr(), format_args!("pg-plan {cpn}-{ver}"));
-            order.push((format!("{cpn}"), format!("{ver}")));
+    Ok(targets)
+}
+
+fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
+    let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
+    let (seeds, shallow) = closure_seeds(req)?;
+    let seed_cpns: Vec<portage_solver::Cpn> = seeds
+        .iter()
+        .chain(shallow.iter())
+        .filter_map(|cp| portage_solver::Cpn::parse(cp).ok())
+        .collect();
+    let lazy = LazyRepo::build(req, repos, &seeds, &shallow, true)
+        .map_err(|e| format!("reading repo facts: {e}"))?;
+    // The kept/rebuild set is computed before the provider exists (deps are
+    // converted inside `new_for_targets`).
+    let installed = all_installed_packages(&req.root);
+    let mut kept = KeptInstalled::of(req, &lazy, &installed);
+    // #34 S5 G2 (round 2) fixpoint: the parent-USE reinstall pass needs
+    // the solved plan -- only solution members whose deps expand exert
+    // USE pressure on an installed child -- and each new rebuild
+    // member's expanded deps can pull further parents in.
+    // `apply_parent_use_reinstalls` only grows `rebuild`, so the loop
+    // terminates when a pass adds nothing.
+    let (order, parents) = loop {
+        let mut provider = pubgrub_provider(req, &lazy, &kept, &installed, &seed_cpns);
+        let targets = pubgrub_targets(req, &lazy, &installed, &provider)?;
+        let solution = provider
+            .resolve_targets(targets)
+            .map_err(portage_atom_pubgrub::format_solve_error)?;
+        let mut order = Vec::new();
+        for (pkg, ver) in provider.install_order(&solution) {
+            if let portage_atom_pubgrub::PortagePackage::Real { cpn, .. } = &pkg {
+                pg_trace(&mut std::io::stderr(), format_args!("pg-plan {cpn}-{ver}"));
+                order.push((format!("{cpn}"), format!("{ver}")));
+            }
         }
-    }
-    let mut parents: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for edge in provider.dependency_graph(&solution) {
-        let portage_atom_pubgrub::PortagePackage::Real { cpn: from_cpn, .. } = &edge.from.0 else {
-            continue;
+        let mut parents: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for edge in provider.dependency_graph(&solution) {
+            let portage_atom_pubgrub::PortagePackage::Real { cpn: from_cpn, .. } = &edge.from.0
+            else {
+                continue;
+            };
+            let (portage_atom_pubgrub::PortagePackage::Real { cpn: to_cpn, .. }, to_ver) = &edge.to
+            else {
+                continue;
+            };
+            let (from_cat, from_pkg) = match format!("{from_cpn}").split_once('/') {
+                Some(pair) => (pair.0.to_string(), pair.1.to_string()),
+                None => continue,
+            };
+            parents
+                .entry(format!("{to_cpn}-{to_ver}"))
+                .or_default()
+                .push((from_cat, from_pkg));
+        }
+        let before = kept.rebuild.len();
+        let plan = SolvedPlan {
+            members: order.iter().cloned().collect(),
+            taken: solution_taken_edges(&parents),
         };
-        let (portage_atom_pubgrub::PortagePackage::Real { cpn: to_cpn, .. }, to_ver) = &edge.to
-        else {
-            continue;
-        };
-        let (from_cat, from_pkg) = match format!("{from_cpn}").split_once('/') {
-            Some(pair) => (pair.0.to_string(), pair.1.to_string()),
-            None => continue,
-        };
-        parents
-            .entry(format!("{to_cpn}-{to_ver}"))
-            .or_default()
-            .push((from_cat, from_pkg));
-    }
+        kept.apply_parent_use_reinstalls(req, &lazy, &installed, &plan);
+        if kept.rebuild.len() == before {
+            break (order, parents);
+        }
+    };
     Ok(graph_result_from_order(
         req,
         &lazy.repos,
@@ -3201,5 +3656,248 @@ mod tests {
             ["dev-libs/pg34-dep-1:0", "dev-libs/pg34-downer-1:0"]
         );
         pg34_downer_downgrade_outcome(&result);
+    }
+
+    /// Round-2 helper: a [`super::SolvedPlan`] from `(cp, version)` members
+    /// and `(parent cp, child cp)` taken edges.
+    fn pg34_solved_plan(members: &[(&str, &str)], taken: &[(&str, &str)]) -> super::SolvedPlan {
+        super::SolvedPlan {
+            members: members
+                .iter()
+                .map(|(cp, version)| (cp.to_string(), version.to_string()))
+                .collect(),
+            taken: taken
+                .iter()
+                .map(|(parent, child)| (parent.to_string(), child.to_string()))
+                .collect(),
+        }
+    }
+
+    /// #34 S5 G2 (round 2): the parent-USE reinstall pass over an explicit
+    /// solution-member set. `pg34-capp-1` (not installed) requires
+    /// `dev-libs/pg34-clib[f]` while the installed `pg34-clib-1` was built
+    /// with `USE=""` and the repo ebuild carries `IUSE="+f"`
+    /// (default-on): Portage re-selects the repo ebuild (`R` with the
+    /// changed flag) and expands `f? ( pg34-cdep )` even without `--deep`
+    /// (`depgraph.py:6030-6110` region; triage G2). Pubgrub kept the
+    /// installed child as a hidden S2 leaf instead, dropping the `R` row
+    /// and the subtree.
+    ///
+    /// Round 1 evaluated every reachable cp's strings pre-solve, so a USE
+    /// atom from a package the solve never selects (an untaken `||`
+    /// branch, an unselected version) rebuilt the installed child anyway
+    /// (`dev-qt/qtwebengine` rebuilding `dev-libs/libxml2` for an
+    /// `app-editors/vim` probe: bed delta +1208 extras in `-pv`). The pass
+    /// now only reads solution members' strings: the out-of-plan arm below
+    /// pins that a non-member parent contributes nothing.
+    #[test]
+    fn pg34_capp_kept_parent_use_atom_reinstalls_child() {
+        // `-pv`: not selective, no update, no deep. The base set knows no
+        // G2 rebuilds; the pass with the merged parent as a member
+        // evaluates its `clib[f]` atom against the installed instance.
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-capp"]);
+        req.selective = false;
+        let mut kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "base set carries no parent-USE rebuilds: {:?}",
+            kept.rebuild
+        );
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "1")], &[]);
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "parent-required clib[f] rebuilds the flag-less installed child: {:?}",
+            kept.rebuild
+        );
+        assert_eq!(
+            kept.use_drift.get("dev-libs/pg34-clib-1"),
+            Some(&vec!["f".to_string()]),
+            "the R row carries the changed flag: {:?}",
+            kept.use_drift
+        );
+
+        // Round-2 regression pin: the same pass with the parent NOT a
+        // solution member (an untaken branch, an unselected version, a
+        // reachable-but-unmerged cp) contributes nothing, even though the
+        // `clib[f]` atom sits in the reachable cone.
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-capp"]);
+        req.selective = false;
+        let mut kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        let plan = pg34_solved_plan(&[], &[]);
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "an out-of-plan parent's USE atom must not reinstall the child: {:?}",
+            kept.rebuild
+        );
+
+        // `-pvu` (selective through `--update`, no deep): Portage
+        // re-evaluates the merged parent's dep the same way (container
+        // capture `cap-pg34-capp-pvu-portage.txt` shows the same R row).
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-capp"]);
+        req.selective = true;
+        req.update = true;
+        let mut kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "1")], &[]);
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "selective -pvu still rebuilds the USE-pressured child: {:?}",
+            kept.rebuild
+        );
+
+        // `-pvO` (`--nodeps`): deps never expand, so no parent USE
+        // pressure exists and nothing rebuilds.
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-capp"]);
+        req.selective = false;
+        req.nodeps = true;
+        let mut kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-capp", "1")], &[]);
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-clib-1"),
+            "nodeps plans the target only: {:?}",
+            kept.rebuild
+        );
+
+        // Config-change variant: `pg34-nlib` carries `IUSE="f"`
+        // (default-off) and the config does not enable it, so the repo
+        // ebuild cannot satisfy `nlib[f]` under the current config --
+        // Portage stops at the autounmask gate (rc 1, G4a) instead of a
+        // plain R. No G2 rebuild (capture only, no fix).
+        let (mut req, lazy, installed) = pg34_s2_parts(&["dev-libs/pg34-napp"]);
+        req.selective = false;
+        let mut kept = super::KeptInstalled::of(&req, &lazy, &installed);
+        let plan = pg34_solved_plan(&[("dev-libs/pg34-napp", "1")], &[]);
+        kept.apply_parent_use_reinstalls(&req, &lazy, &installed, &plan);
+        assert!(
+            !kept.rebuild.contains("dev-libs/pg34-nlib-1"),
+            "an unsatisfiable-under-config USE atom is not a G2 rebuild: {:?}",
+            kept.rebuild
+        );
+    }
+
+    /// #34 S5 G2: `-pv` on pg34-capp plans `N cdep + R clib + N capp`
+    /// (Portage `cap-pg34-capp-pv-portage.txt`; pubgrub used to plan only
+    /// `N capp`).
+    #[test]
+    fn pg34_capp_pubgrub_pv_reinstalls_use_atom_child() {
+        // `-pv`: not selective, no update, no deep, build deps on.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-capp"]);
+        req.selective = false;
+        req.update = false;
+        req.deep = super::super::Deep::NotRequested;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-capp resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            [
+                "dev-libs/pg34-capp-1:0",
+                "dev-libs/pg34-cdep-1:0",
+                "dev-libs/pg34-clib-1:0"
+            ]
+        );
+        let clib = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-clib")
+            .expect("pg34-clib entry");
+        match &clib.outcome {
+            super::super::PretendOutcome::Reinstall { changed_flags, .. } => {
+                assert_eq!(changed_flags, &["f".to_string()]);
+            }
+            other => panic!("expected Reinstall with changed flag f, got {other:?}"),
+        }
+    }
+
+    /// #34 S5 G2: `-pvu` on pg34-capp plans the same `N cdep + R clib +
+    /// N capp` (Portage `cap-pg34-capp-pvu-portage.txt`; pubgrub used to
+    /// plan only `N capp`).
+    #[test]
+    fn pg34_capp_pubgrub_pvu_reinstalls_use_atom_child() {
+        // `-pvu`: selective through `--update`, no deep, build deps on.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-capp"]);
+        req.deep = super::super::Deep::NotRequested;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-capp resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            [
+                "dev-libs/pg34-capp-1:0",
+                "dev-libs/pg34-cdep-1:0",
+                "dev-libs/pg34-clib-1:0"
+            ]
+        );
+    }
+
+    /// #34 S5 G2: `-pvuD` on pg34-capp plans the same `N cdep + R clib +
+    /// N capp` (Portage `cap-pg34-capp-pvuD-portage.txt`; pubgrub used to
+    /// plan only `N capp`).
+    #[test]
+    fn pg34_capp_pubgrub_pvud_reinstalls_use_atom_child() {
+        // `-pvuD`: selective through `--update`, unlimited deep, build deps on.
+        let req = pg34_s4_request(&["dev-libs/pg34-capp"]);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-capp resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            [
+                "dev-libs/pg34-capp-1:0",
+                "dev-libs/pg34-cdep-1:0",
+                "dev-libs/pg34-clib-1:0"
+            ]
+        );
+    }
+
+    /// #34 S5 G2 control: `-pvuDN` already plans the triple through S4's
+    /// USE-drift arm (Portage `cap-pg34-capp-pvuDN-portage.txt`); the G2
+    /// arm must union its flags, not overwrite them.
+    #[test]
+    fn pg34_capp_pubgrub_pvudn_keeps_use_drift_triple() {
+        // `-pvuDN`: the S3 folds plus `--newuse`.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-capp"]);
+        req.newuse = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-capp resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            [
+                "dev-libs/pg34-capp-1:0",
+                "dev-libs/pg34-cdep-1:0",
+                "dev-libs/pg34-clib-1:0"
+            ]
+        );
+        let clib = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg34-clib")
+            .expect("pg34-clib entry");
+        match &clib.outcome {
+            super::super::PretendOutcome::Reinstall { changed_flags, .. } => {
+                assert_eq!(changed_flags, &["f".to_string()]);
+            }
+            other => panic!("expected Reinstall with changed flag f, got {other:?}"),
+        }
+    }
+
+    /// #34 S5 G2 control: `-pvO` (`--nodeps`) on pg34-capp plans only
+    /// `N capp` (Portage behaviour for nodeps; the G2 arm stays quiet).
+    #[test]
+    fn pg34_capp_pubgrub_pvo_plans_target_only() {
+        // `-pvO`: the S4 request with `nodeps` on, no deep.
+        let mut req = pg34_s4_request(&["dev-libs/pg34-capp"]);
+        req.selective = false;
+        req.update = false;
+        req.deep = super::super::Deep::NotRequested;
+        req.nodeps = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg34-capp resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-capp-1:0"]);
     }
 }

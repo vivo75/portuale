@@ -1,0 +1,5 @@
+[ebuild   R    ] dev-libs/pg34-zlib-1::testrepo to /var/tmp/pg34-s5b-r2-fixcopy/fixtures USE="mz*" 
+[ebuild  N     ] dev-libs/pg34-zpar-1::testrepo to /var/tmp/pg34-s5b-r2-fixcopy/fixtures
+[ebuild  N     ] dev-libs/pg34-ztop-1::testrepo to /var/tmp/pg34-s5b-r2-fixcopy/fixtures
+
+Total: 3 packages (2 new, 1 reinstall), Size of downloads: 0 KiB

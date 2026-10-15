@@ -1,0 +1,107 @@
+# #34 S5 G2 round-2 fixture captures (2026-10-15): the bed regression.
+# Round 1 (`parent_use_reinstalls` pre-solve over the seed-reachable cone)
+# fixed the 23 G2 `missing` rows (triage.md G2) but added ~1200 `extra`
+# findings per mode in -pv/-pvu/-pvuD: any USE-dep atom anywhere in the
+# cone rebuilt the installed child, even from parents the solve never
+# selects. Ground truth for `-pv app-editors/vim` (container, bed tree
+# 11c58b7a, VDB snapshot): 128 trigger lines, ALL from out-of-plan
+# parents -- `dev-qt/qtwebengine-6.11.1 -> dev-libs/libxml2`,
+# `sys-auth/polkit-126-r3 -> sys-apps/systemd`
+# (`systemd? ( sys-apps/systemd:0=[policykit] )`),
+# `dev-lang/rust-* (25 versions) -> net-misc/curl`,
+# `x11-misc/xdg-utils -> app-text/xmlto`, `app-i18n/ibus`,
+# `gnome-base/gnome-session*`, `kde-plasma/kdesu-gui -> sys-apps/dbus`.
+# Only qtwebengine->libxml2 rendered (libxml2 sits in the solution via
+# xcb-proto's bare BDEPEND as a hidden Favor leaf; Rebuild made it
+# visible + expanded `icu?`); the other triggers stayed hidden because
+# nothing in the solution references those children.
+# Two fixtures pin the round-2 rule (plan-aware parents + taken `||`
+# branches, post-solve fixpoint in `resolve_pubgrub`):
+# - pg34-xapp (untaken `||`): target `|| ( pg34-xq pg34-xalt )` + bare
+#   `pg34-xlib`; xalt installed (taken), xq not installed (requires
+#   `xlib[f]`), xlib-1 installed USE="" with repo `IUSE="+f"`.
+#   Portage: `N xapp` only, rc 0, in -pv AND -pvuD. Round-1 pubgrub
+#   planned `N xdep + R xlib USE="f*" + N xapp` (verified on a
+#   TEMP-CONTROL emulation build, since discarded).
+# - pg34-ztop (taken `||`, the corpus `zlib[minizip]` shape):
+#   `ztop -> zpar -> || ( zlib[mz] zalt )` with installed zlib-1 USE=""
+#   and repo `IUSE="+mz"`. Portage: `R zlib USE="mz*" + N zpar + N ztop`,
+#   rc 0. Skipping every choice group (round 1) plans only `N zpar +
+#   N ztop` (verified on a TEMP-CONTROL `||`-skip build, since
+#   discarded) -- this row is the 23rd G2 row round 1 never restored
+#   (`-pv kdecore-meta` S5b `missing sys-libs/zlib-1.3.2-r1`).
+# Mechanical capture; each cap file is verbatim combined stdout+stderr; rc recorded below.
+# Fixtures live in pmtest (branch backlog/34-s5b, worktree files excluded
+# from git via .git/info/exclude, like the G2 fixtures); the shared tree
+# was never executed in place.
+# NOTE (capture decides over the plan): every Portage cell below is the
+# pinned expectation for the pmtest contract tests
+# (`test_pg34_xapp_*`, `test_pg34_ztop_*`); only the `[ebuild]` rows are
+# pinned, not the license/news footer.
+
+image: localhost/test-portuale:latest  id 5616d41d00cdbef0aa8933476973dc5b9ca07e897b635bd7167dedf61c09cb5f
+image Portage: 3.0.82.2  (see portage-version line in the run log)
+portuale HEAD: 188ecb57335d243dd8f323622d342dad061f8a59 (plus the uncommitted
+  backlog/34-s5b work: G1, G2-round-1, and this round-2 fix)
+portuale binary: /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+  (rebuilt 2026-10-15 ~07:10 UTC with the round-2 fix;
+   target/release/emerge is a symlink -> portuale)
+host Portage (unused for fixture cells): 3.0.82.2
+
+--- Portage side (container; never against the shared fixtures tree) ---
+staging: pmtest fixtures mounted read-only at /fixtures, staged with the unmodified
+  differential-test-bed/layers/l0-fixture-oracle/stage.sh to /tmp/pg34-s5b-r2-stage (in-container path)
+container env (all three portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/tmp/pg34-s5b-r2-stage/fixtures ROOT=/tmp/pg34-s5b-r2-stage/fixtures
+  PORTAGE_RUNNING_ROOT=/tmp/pg34-s5b-r2-stage/fixtures DISTDIR=/tmp/pg34-s5b-r2-stage/fixtures/distfiles
+  PORTAGE_REPOSITORIES=<contents of /tmp/pg34-s5b-r2-stage/fixtures/etc/portage/repos.conf/repos.conf>
+podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+  -v <pmtest>/fixtures:/fixtures:ro -v <pmtest>/differential-test-bed:/TEST:ro
+  -v /tmp/pg34-s5b-r2-out:/out
+  --entrypoint /bin/bash localhost/test-portuale:latest /out/run.sh  (stage.sh + the three argv below)
+
+cap-pg34-xapp-pv-portage.txt       rc=0  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-xapp
+cap-pg34-xapp-pvuD-portage.txt    rc=0  /usr/sbin/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-xapp
+cap-pg34-ztop-pv-portage.txt      rc=0  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-ztop
+
+--- portuale side (host binary, scratch copy /var/tmp/pg34-s5b-r2-fixcopy) ---
+staging: cp of pmtest fixtures via /tmp/opencode/fixture-smith/stage-host.sh
+  (same deltas as stage.sh; see LLM/evidence/2026-10-15-34-s5/g2/cmd.txt)
+host env (all five portuale captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/var/tmp/pg34-s5b-r2-fixcopy/fixtures ROOT=/var/tmp/pg34-s5b-r2-fixcopy/fixtures
+  PORTAGE_RUNNING_ROOT=/var/tmp/pg34-s5b-r2-fixcopy/fixtures DISTDIR=/var/tmp/pg34-s5b-r2-fixcopy/fixtures/distfiles
+  EMERGE_DEFAULT_OPTS unset
+
+cap-pg34-xapp-pv-pg.txt       rc=0  .../target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-xapp
+cap-pg34-xapp-pvuD-pg.txt     rc=0  .../target/release/emerge --solver=pubgrub -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-xapp
+cap-pg34-xapp-pv-default.txt  rc=0  .../target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-xapp
+cap-pg34-ztop-pv-pg.txt       rc=0  .../target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-ztop
+cap-pg34-ztop-pv-default.txt  rc=0  .../target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-ztop
+
+--- row summary (ebuild plan rows only) ---
+xapp -pv    : portage N(xapp) | pg same | default same
+xapp -pvuD  : portage N(xapp) | pg same
+ztop -pv    : portage R(zlib,mz*)+N(zpar)+N(ztop) | pg same | default same
+
+--- targeted bed-tree re-verification (same image/VDB/tree as the S5b runs) ---
+fresh host binary mounted at /xbin, `emerge --solver=pubgrub <mode> <atom>`
+compared per-probe against the S5b run dirs' real/*.txt (row sets + Total):
+-pv (S5b l0-20261015T053625Z): MATCH app-editors/vim, sys-apps/ripgrep,
+  app-shells/starship, dev-build/cmake, sys-apps/systemd,
+  x11-base/xorg-server, virtual/libudev, dev-lang/rust,
+  net-misc/networkmanager, sys-auth/polkit, kde-frameworks/kcoreaddons,
+  media-video/vlc; kde-apps/kdecore-meta differs only by the 4 known
+  non-G2 rows (G5 gnome-keyring/gcr/p11-kit + G6 docbook NS), with the
+  S5b-missing zlib R row restored.
+-pvu (S5b l0-20261015T054453Z): MATCH app-editors/vim, sys-apps/ripgrep,
+  dev-lang/rust-bin, dev-ruby/rake, app-admin/sudo, dev-lang/rust,
+  kde-frameworks/kcoreaddons, media-video/vlc, net-misc/networkmanager,
+  sys-auth/polkit; kdecore-meta same 4 known rows only.
+-pvuD (S5b l0-20261015T055257Z): MATCH app-editors/vim, sys-apps/ripgrep,
+  sys-apps/portage, dev-libs/icu, dev-lang/rust, kde-frameworks/kcoreaddons,
+  media-video/vlc, net-misc/networkmanager, sys-auth/polkit,
+  dev-lang/python:3.14, sys-libs/glibc, virtual/libc, sys-devel/gcc,
+  media-libs/mesa, virtual/mta, sys-apps/dbus; kdecore-meta same 4 rows.
+-pvuDN (S5b l0-20261015T060359Z): MATCH app-admin/sudo; kdecore-meta same
+  4 known rows (unchanged from S5a: the fixpoint adds nothing under
+  --newuse, where S4 already rebuilds every drifted cpv).

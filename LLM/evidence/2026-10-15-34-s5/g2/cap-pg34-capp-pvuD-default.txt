@@ -1,0 +1,5 @@
+[ebuild  N     ] dev-libs/pg34-cdep-1::testrepo to /var/tmp/pg34-s5b-fixcopy/fixtures
+[ebuild   R    ] dev-libs/pg34-clib-1::testrepo to /var/tmp/pg34-s5b-fixcopy/fixtures USE="f*" 
+[ebuild  N     ] dev-libs/pg34-capp-1::testrepo to /var/tmp/pg34-s5b-fixcopy/fixtures
+
+Total: 3 packages (2 new, 1 reinstall), Size of downloads: 0 KiB

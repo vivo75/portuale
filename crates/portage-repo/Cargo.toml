@@ -48,6 +48,10 @@ bzip2 = "0.6"
 portage-solver = "=0.3.0"
 portage-atom-pubgrub = "=0.8.0"
 portage-atom-resolvo = "=0.8.1"
+# Direct (not just transitive via the solver crates): the #34 S5 G2
+# parent-USE pre-pass matches on `UseDepKind` itself. Same locked
+# `=0.11.1` the solver crates use; no version moves.
+portage-atom = "=0.11.1"
 # Direct (not just transitive via `portage-atom-resolvo`): the resolvo
 # backend drives `resolvo::Problem`/`Solver` itself.
 resolvo = "=0.12.1"

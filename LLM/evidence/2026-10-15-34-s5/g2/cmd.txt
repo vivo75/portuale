@@ -1,0 +1,94 @@
+# #34 S5 G2 fixture captures (2026-10-15): a parent dependency atom with a
+# USE dep that the installed child does not satisfy. Main fixture: installed
+# `dev-libs/pg34-clib-1` (vdb `IUSE=f`, `USE=` empty, unevaluated vdb
+# `RDEPEND="f? ( dev-libs/pg34-cdep )"`), repo ebuild `IUSE="+f"`
+# (default-on) with `RDEPEND="f? ( dev-libs/pg34-cdep )"`,
+# `dev-libs/pg34-cdep-1` repo-only, `dev-libs/pg34-capp-1` not installed with
+# `RDEPEND="dev-libs/pg34-clib[f]"` (EAPI 8, real md5-cache entries).
+# Mechanical capture; each cap file is verbatim combined stdout+stderr; rc recorded below.
+# Fixtures live in pmtest (branch backlog/34-s5b, uncommitted worktree files);
+# the shared tree was never executed in place.
+# NOTE 1 (capture decides over the plan): every Portage cell on pg34-capp plans
+#   `N pg34-cdep-1 + R pg34-clib-1 USE="f*" + N pg34-capp-1`
+#   (`Total: 3 packages (2 new, 1 reinstall)`), rc 0 -- the parent's
+#   `clib[f]` atom does not match the installed flag-less instance, so
+#   Portage re-selects the repo ebuild (R with the changed flag) and the
+#   reinstalled clib expands `f? ( cdep )` even without `--deep`. This is the
+#   fixture shape of triage G2 (`LLM/evidence/2026-10-15-34-s5/triage.md`):
+#   there `net-misc/curl[http2]` required by `dev-lang/rust`,
+#   `xmlto[text]`, `systemd[policykit]`, `zlib[minizip]` reinstall the
+#   installed child the same way (the `*` marks flags differing from the
+#   installed instance; rc 0 because the ebuild's own defaults satisfy the
+#   requirement).
+# NOTE 2 (divergences reproduced, binary predates the G2 fix): pubgrub
+#   diverges from Portage on `-pv`/`-pvu`/`-pvuD` (plans only `N capp`;
+#   the installed clib stays a hidden S2 leaf and cdep never enters the
+#   plan) and agrees on `-pvuDN` (there S4's USE-drift arm already rebuilds
+#   clib: effective USE has `f` via `+f`, vdb USE is empty). All default
+#   cells agree with Portage (hence the default pins), so the
+#   default-solver output does not move.
+# NOTE 3 (config-change variant, capture only, no fix): `dev-libs/pg34-nlib`
+#   is the same shape with `IUSE="f"` (default-OFF). Portage prints the same
+#   3 rows (`N ndep + R nlib USE="f*" + N napp`) and then exits 1 on
+#   "The following USE changes are necessary to proceed:
+#   `>=dev-libs/pg34-nlib-1 f`" (the G4a autounmask gate; `triage.md` G4a,
+#   live example `www-servers_nginx`/`mime-types[nginx]`). Pubgrub plans only
+#   `N napp`, rc 0. The G2 fix deliberately covers only the satisfiable
+#   case (repo ebuild reaches the required flags under the current config);
+#   the config-change case stays a G4a allowlist item. The default solver
+#   matches Portage on the variant too (same rows + USE block, rc 1).
+
+image: localhost/test-portuale:latest  id 5616d41d00cdbef0aa8933476973dc5b9ca07e897b635bd7167dedf61c09cb5f
+image Portage (no upgrade needed; already at the L0 pin): 3.0.82.2  (python 3.14.6-final-0, default/linux/amd64/23.0/systemd)
+portuale HEAD: 188ecb57335d243dd8f323622d342dad061f8a59 (G2 unimplemented at capture time)
+portuale binary: /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+  mtime: 2026-10-15 04:03:01.745445903 -0000
+  (no cargo build run for this slice before these captures; target/release/emerge is a symlink -> portuale)
+host Portage (unused for fixture cells): 3.0.82.2
+
+--- Portage side (container; never against the shared fixtures tree) ---
+staging: pmtest fixtures mounted read-only at /fixtures, staged with the unmodified
+  differential-test-bed/layers/l0-fixture-oracle/stage.sh to /tmp/pg34-s5b-g2-stage (in-container path)
+container env (all five portage captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/tmp/pg34-s5b-g2-stage/fixtures ROOT=/tmp/pg34-s5b-g2-stage/fixtures
+  PORTAGE_RUNNING_ROOT=/tmp/pg34-s5b-g2-stage/fixtures DISTDIR=/tmp/pg34-s5b-g2-stage/fixtures/distfiles
+  PORTAGE_REPOSITORIES=<contents of /tmp/pg34-s5b-g2-stage/fixtures/etc/portage/repos.conf/repos.conf>
+podman run --rm --security-opt seccomp=unconfined --cgroups=enabled --cgroupns=private
+  -v <pmtest>/fixtures:/fixtures:ro -v <pmtest>/differential-test-bed:/TEST:ro
+  -v /tmp/pg34-s5b-g2-out:/out
+  --entrypoint /bin/bash localhost/test-portuale:latest /out/run.sh  (stage.sh + the five argv below;
+  run.sh also records the image Portage version line)
+
+cap-pg34-capp-pv-portage.txt       rc=0  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pvu-portage.txt     rc=0  /usr/sbin/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pvuD-portage.txt    rc=0  /usr/sbin/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pvuDN-portage.txt   rc=0  /usr/sbin/emerge -pvuDN --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-napp-pv-portage.txt      rc=1  /usr/sbin/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-napp
+
+--- portuale side (host binary, scratch copy /var/tmp/pg34-s5b-fixcopy) ---
+staging: cp of pmtest fixtures via /tmp/opencode/fixture-smith/stage-host.sh
+  (same deltas as stage.sh: absolute repos.conf locations, binrepos ${PORTAGE_CONFIGROOT} resolved,
+   etc/portage/categories + per-repo profiles/categories, Manifest per package dir, news dropped,
+   layout.conf masters, updates comments dropped, */<pkg> rewrite, repo_name fill, common-1.0 staled)
+host env (all ten portuale captures): PYTHONHASHSEED=0 LC_ALL=C.UTF-8 TZ=UTC
+  PORTAGE_CONFIGROOT=/var/tmp/pg34-s5b-fixcopy/fixtures ROOT=/var/tmp/pg34-s5b-fixcopy/fixtures
+  PORTAGE_RUNNING_ROOT=/var/tmp/pg34-s5b-fixcopy/fixtures DISTDIR=/var/tmp/pg34-s5b-fixcopy/fixtures/distfiles
+  EMERGE_DEFAULT_OPTS unset
+
+cap-pg34-capp-pv-pg.txt       rc=0  .../target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pvu-pg.txt      rc=0  .../target/release/emerge --solver=pubgrub -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pvuD-pg.txt     rc=0  .../target/release/emerge --solver=pubgrub -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pvuDN-pg.txt    rc=0  .../target/release/emerge --solver=pubgrub -pvuDN --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pv-default.txt       rc=0  .../target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pvu-default.txt      rc=0  .../target/release/emerge -pvu --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pvuD-default.txt     rc=0  .../target/release/emerge -pvuD --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-capp-pvuDN-default.txt    rc=0  .../target/release/emerge -pvuDN --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-capp
+cap-pg34-napp-pv-pg.txt       rc=0  .../target/release/emerge --solver=pubgrub -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-napp
+cap-pg34-napp-pv-default.txt  rc=1  .../target/release/emerge -pv --getbinpkg=n --usepkg=n --color=n dev-libs/pg34-napp
+
+--- row summary (ebuild plan rows only; Portage's license-group noise and masked-packages footer omitted) ---
+capp -pv    : portage N(cdep)+R(clib,f*)+N(capp) | pg N(capp) DIVERGES (kept leaf) | default same as portage
+capp -pvu   : portage N(cdep)+R(clib,f*)+N(capp) | pg N(capp) DIVERGES (kept leaf) | default same as portage
+capp -pvuD  : portage N(cdep)+R(clib,f*)+N(capp) | pg N(capp) DIVERGES (kept leaf) | default same as portage
+capp -pvuDN : portage N(cdep)+R(clib,f*)+N(capp) | pg same as portage (S4 USE-drift rebuild) | default same as portage
+napp -pv    : portage N(ndep)+R(nlib,f*)+N(napp) + USE-changes block, rc=1 | pg N(napp) rc=0 DIVERGES (capture only; G4a gate, no fix) | default same rows + USE block, rc=1

@@ -1,0 +1,11 @@
+[ebuild  N     ] dev-libs/pg34-ndep-1::testrepo to /var/tmp/pg34-s5b-fixcopy/fixtures
+[ebuild   R    ] dev-libs/pg34-nlib-1::testrepo to /var/tmp/pg34-s5b-fixcopy/fixtures USE="f*" 
+[ebuild  N     ] dev-libs/pg34-napp-1::testrepo to /var/tmp/pg34-s5b-fixcopy/fixtures
+
+Total: 3 packages (2 new, 1 reinstall), Size of downloads: 0 KiB
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/pg34-napp-1::testrepo
+# required by dev-libs/pg34-napp (argument)
+>=dev-libs/pg34-nlib-1 f
