@@ -28,3 +28,8 @@ the `||` is processed (depth-first order); `util-linux` enters the graph after
 independently selected package as "in the graph", so it is order-blind. Net effect of S5e:
 -14 extras (4+4+4+4+10 -> 0) against +2 missing in one probe. Filed as #366
 (`owner: portuale-bug`), not fixed here: a faithful fix needs Portage's processing order.
+
+## After the allowlist (pmtest `known-divergences.yaml`, layer `l0-pubgrub`)
+
+Re-graded the same run dirs: missing/extra/version/action/exit = 0/0/0/0/0 in all five
+modes. 13 exit probes -> #363 (9), #364 (3), #365 (1); `virtual_pager` -> #366.
