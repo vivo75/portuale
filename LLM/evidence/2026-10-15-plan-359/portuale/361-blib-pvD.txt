@@ -1,0 +1,5 @@
+### emerge -pvD --getbinpkg=n --usepkg=n dev-libs/pg34-blib --color=n
+[ebuild   R    ] dev-libs/pg34-blib-1::testrepo to /var/tmp/plan359/stage/fixtures
+
+Total: 1 package (1 reinstall), Size of downloads: 0 KiB
+rc=0

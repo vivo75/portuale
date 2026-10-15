@@ -1,0 +1,3 @@
+### emerge --pretend --update dev-libs/pg34-multi --color=n
+[ebuild  NS    ] dev-libs/pg34-multi-2 [1] to /var/tmp/plan359/stage/fixtures
+rc=0

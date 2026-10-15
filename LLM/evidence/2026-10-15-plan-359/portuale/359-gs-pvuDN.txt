@@ -1,0 +1,5 @@
+### emerge -pvuDN --getbinpkg=n --usepkg=n dev-libs/pg34-gs --color=n
+[ebuild  NS    ] dev-libs/pg34-gs-2:2::testrepo [1.0:1::testrepo] to /var/tmp/plan359/stage/fixtures
+
+Total: 1 package (1 in new slot), Size of downloads: 0 KiB
+rc=0

@@ -1,0 +1,6 @@
+### emerge -pvu --deep=1 --getbinpkg=n --usepkg=n dev-libs/pg34-dtop --color=n
+[ebuild     U  ] dev-libs/pg34-dlib-2::testrepo [1::testrepo] to /var/tmp/plan359/stage/fixtures
+[ebuild  N     ] dev-libs/pg34-dtop-1::testrepo to /var/tmp/plan359/stage/fixtures
+
+Total: 2 packages (1 upgrade, 1 new), Size of downloads: 0 KiB
+rc=0

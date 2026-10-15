@@ -1,0 +1,4 @@
+### emerge --pretend --update dev-libs/needskeywordmasked --color=n
+[ebuild     UD ] dev-libs/keywordmaskedpkg-1.0 [2.0] to /var/tmp/plan359/stage/fixtures
+[ebuild  N     ] dev-libs/needskeywordmasked-1.0 to /var/tmp/plan359/stage/fixtures
+rc=0

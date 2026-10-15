@@ -1,0 +1,6 @@
+### emerge -pvuD --getbinpkg=n --usepkg=n dev-libs/pg34-gone --color=n
+emerge: there are no ebuilds to satisfy "dev-libs/pg34-gone".
+
+emerge: searching for similar names...
+emerge: Maybe you meant any of these: dev-libs/pg34-new, dev-libs/pg34-downer, dev-libs/pg34-snew?
+rc=1

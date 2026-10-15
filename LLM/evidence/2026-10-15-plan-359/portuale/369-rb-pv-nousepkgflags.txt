@@ -1,0 +1,9 @@
+### emerge -pv dev-libs/pg366-rb --color=n
+[ebuild  N     ] dev-libs/pg366-y-1::testrepo to /var/tmp/plan359/stage/fixtures
+[ebuild  N     ] dev-libs/pg366-x-1::testrepo to /var/tmp/plan359/stage/fixtures
+[ebuild  N     ] dev-libs/pg366-b-1::testrepo to /var/tmp/plan359/stage/fixtures
+[ebuild  N     ] dev-libs/pg366-a-1::testrepo to /var/tmp/plan359/stage/fixtures
+[ebuild  N     ] dev-libs/pg366-rb-1::testrepo to /var/tmp/plan359/stage/fixtures
+
+Total: 5 packages (5 new), Size of downloads: 0 KiB
+rc=0

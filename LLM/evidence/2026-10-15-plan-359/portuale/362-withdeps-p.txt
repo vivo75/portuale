@@ -1,0 +1,4 @@
+### emerge --pretend dev-libs/withdeps --color=n
+[ebuild  N     ] dev-libs/newpkg-1.0 to /var/tmp/plan359/stage/fixtures
+[ebuild  N     ] dev-libs/withdeps-1.0 to /var/tmp/plan359/stage/fixtures
+rc=0

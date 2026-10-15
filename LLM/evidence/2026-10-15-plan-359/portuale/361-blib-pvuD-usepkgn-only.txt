@@ -1,0 +1,5 @@
+### emerge -pvuD --usepkg=n dev-libs/pg34-blib --color=n
+[ebuild     U  ] dev-libs/pg34-btool-2::testrepo [1::testrepo] to /var/tmp/plan359/stage/fixtures
+
+Total: 1 package (1 upgrade), Size of downloads: 0 KiB
+rc=0

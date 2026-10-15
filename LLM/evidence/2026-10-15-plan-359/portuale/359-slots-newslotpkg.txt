@@ -1,0 +1,3 @@
+### emerge --pretend --update dev-libs/newslotpkg --color=n
+[ebuild  NS    ] dev-libs/newslotpkg-2.0 [1.0] to /var/tmp/plan359/stage/fixtures
+rc=0

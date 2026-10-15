@@ -1,0 +1,14 @@
+### emerge -pvDN --getbinpkg=n --usepkg=n dev-libs/pg34-uapp --color=n
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.13 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/pg34-uextra-1::testrepo to /tmp/st/fixtures/ 0 KiB
+[ebuild   R    ] dev-libs/pg34-ulib-1::testrepo to /tmp/st/fixtures/ USE="x*" 0 KiB
+[ebuild  N     ] dev-libs/pg34-uapp-1::testrepo to /tmp/st/fixtures/ 0 KiB
+
+Total: 3 packages (2 new, 1 reinstall), Size of downloads: 0 KiB
+rc=0

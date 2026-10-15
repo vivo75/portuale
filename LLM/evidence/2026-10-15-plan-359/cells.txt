@@ -1,0 +1,54 @@
+# name | argv (both sides; --color=n appended by the runner)
+359-gs-pv | -pv --getbinpkg=n --usepkg=n dev-libs/pg34-gs
+359-gs-pvu | -pvu --getbinpkg=n --usepkg=n dev-libs/pg34-gs
+359-gs-pvuD | -pvuD --getbinpkg=n --usepkg=n dev-libs/pg34-gs
+359-gs-pvuDN | -pvuDN --getbinpkg=n --usepkg=n dev-libs/pg34-gs
+359-gs-pvu-slot2 | -pvu --getbinpkg=n --usepkg=n dev-libs/pg34-gs:2
+359-gs-pvu-eq2 | -pvu --getbinpkg=n --usepkg=n =dev-libs/pg34-gs-2
+359-slots-dualslotpkg | --pretend --update dev-libs/dualslotpkg
+359-slots-newslotpkg | --pretend --update dev-libs/newslotpkg
+359-slots-oranyslotalt | --pretend --update dev-libs/oranyslotalt
+359-slots-orupgradealt | --pretend --update dev-libs/orupgradealt
+359-slots-slotmovepkg | --pretend --update dev-libs/slotmovepkg
+359-slots-unsatuseslotalt | --pretend --update dev-libs/unsatuseslotalt
+359-slots-blk0y | --pretend --update dev-libs/blk0y
+359-slots-slotdedup | --pretend --update dev-libs/slotdedup
+359-slots-pg34-multi | --pretend --update dev-libs/pg34-multi
+359-slots-altprov | --pretend --update dev-libs/altprov
+360-gapp-pv | -pv --getbinpkg=n --usepkg=n dev-libs/pg34-gapp
+360-gapp-pvu | -pvu --getbinpkg=n --usepkg=n dev-libs/pg34-gapp
+360-gapp-pvuD | -pvuD --getbinpkg=n --usepkg=n dev-libs/pg34-gapp
+360-gapp-pvuD-bdn | -pvuD --getbinpkg=n --usepkg=n --with-bdeps=n dev-libs/pg34-gapp
+360-gone-pv | -pv --getbinpkg=n --usepkg=n dev-libs/pg34-gone
+360-gone-pvu | -pvu --getbinpkg=n --usepkg=n dev-libs/pg34-gone
+360-gone-pvuD | -pvuD --getbinpkg=n --usepkg=n dev-libs/pg34-gone
+360-movedepconsumer-p | --pretend dev-libs/movedepconsumer
+361-blib-pvu | -pvu --getbinpkg=n --usepkg=n dev-libs/pg34-blib
+361-blib-pvuD | -pvuD --getbinpkg=n --usepkg=n dev-libs/pg34-blib
+361-blib-pvuD-bdy | -pvuD --with-bdeps=y --getbinpkg=n --usepkg=n dev-libs/pg34-blib
+361-blib-pvD | -pvD --getbinpkg=n --usepkg=n dev-libs/pg34-blib
+361-blib-pvuD-nousepkgflag | -pvuD --getbinpkg=n dev-libs/pg34-blib
+361-blib-pvuD-noflags | -pvuD dev-libs/pg34-blib
+361-blib-pvuD-usepkgn-only | -pvuD --usepkg=n dev-libs/pg34-blib
+362-dtop-pv | -pv --getbinpkg=n --usepkg=n dev-libs/pg34-dtop
+362-dtop-pvu | -pvu --getbinpkg=n --usepkg=n dev-libs/pg34-dtop
+362-dtop-pvuD | -pvuD --getbinpkg=n --usepkg=n dev-libs/pg34-dtop
+362-dtop-pvuN | -pvuN --getbinpkg=n --usepkg=n dev-libs/pg34-dtop
+362-dtop-pvD | -pvD --getbinpkg=n --usepkg=n dev-libs/pg34-dtop
+362-dtop-pvu-deep1 | -pvu --deep=1 --getbinpkg=n --usepkg=n dev-libs/pg34-dtop
+362-dtop-pvu-argdlib | -pvu --getbinpkg=n --usepkg=n dev-libs/pg34-dtop dev-libs/pg34-dlib
+362-uapp-pvu | -pvu --getbinpkg=n --usepkg=n dev-libs/pg34-uapp
+362-uapp-pvN | -pvN --getbinpkg=n --usepkg=n dev-libs/pg34-uapp
+362-uapp-pvuN | -pvuN --getbinpkg=n --usepkg=n dev-libs/pg34-uapp
+362-uapp-pvDN | -pvDN --getbinpkg=n --usepkg=n dev-libs/pg34-uapp
+362-withdeps-pu | --pretend --update dev-libs/withdeps
+362-withdeps-p | --pretend dev-libs/withdeps
+362-withdeps-puD | --pretend --update --deep dev-libs/withdeps
+362-withdeps-pu-argupgradepkg | --pretend --update dev-libs/withdeps dev-libs/upgradepkg
+362-needer-pu | --pretend --update dev-libs/needer
+362-needskeywordmasked-pu | --pretend --update dev-libs/needskeywordmasked
+362-toolchainroot-pu | --pretend --update dev-libs/toolchainroot
+369-rb-pv | -pv --getbinpkg=n --usepkg=n dev-libs/pg366-rb
+369-rb-pve | -pve --getbinpkg=n --usepkg=n dev-libs/pg366-rb
+369-ra-pv | -pv --getbinpkg=n --usepkg=n dev-libs/pg366-ra
+369-rb-pv-nousepkgflags | -pv dev-libs/pg366-rb

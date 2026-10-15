@@ -1,0 +1,5 @@
+### emerge --pretend --update dev-libs/withdeps dev-libs/upgradepkg --color=n
+[ebuild     U  ] dev-libs/upgradepkg-2.0 [1.0] to /var/tmp/plan359/stage/fixtures
+[ebuild  N     ] dev-libs/newpkg-1.0 to /var/tmp/plan359/stage/fixtures
+[ebuild  N     ] dev-libs/withdeps-1.0 to /var/tmp/plan359/stage/fixtures
+rc=0

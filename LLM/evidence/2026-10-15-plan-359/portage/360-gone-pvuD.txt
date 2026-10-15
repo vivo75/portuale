@@ -1,0 +1,12 @@
+### emerge -pvuD --getbinpkg=n --usepkg=n dev-libs/pg34-gone --color=n
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/pg34-gextra-1::testrepo to /tmp/st/fixtures/ 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+rc=0

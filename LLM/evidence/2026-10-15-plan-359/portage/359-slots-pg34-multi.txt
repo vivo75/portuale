@@ -1,0 +1,10 @@
+### emerge --pretend --update dev-libs/pg34-multi --color=n
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.14 s (backtrack: 0/20).
+
+[ebuild  NS    ] dev-libs/pg34-multi-2 [1] to /tmp/st/fixtures/
+rc=0

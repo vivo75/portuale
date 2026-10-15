@@ -1,0 +1,2 @@
+### emerge --pretend --update dev-libs/altprov --color=n
+rc=0

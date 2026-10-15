@@ -1,0 +1,11 @@
+### emerge -pv --getbinpkg=n --usepkg=n dev-libs/pg34-gone --color=n
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.11 s (backtrack: 0/20).
+
+
+emerge: there are no ebuilds to satisfy "dev-libs/pg34-gone" for /tmp/st/fixtures/.
+rc=1

@@ -1,0 +1,25 @@
+contract.json cases 1057 #362-candidates 14 #361-candidates 0
+  362: tests/test_emerge_pretend_contract.py::test_implicit_system_deps_n_skips_the_system_first_merge_order_bias#0
+  362: tests/test_emerge_pretend_contract.py::test_implicit_system_deps_n_skips_the_system_first_merge_order_bias#1
+  362: tests/test_emerge_pretend_contract.py::test_implicit_system_deps_n_skips_the_system_first_merge_order_bias#2
+  362: tests/test_emerge_pretend_contract.py::test_implicit_system_deps_n_skips_the_system_first_merge_order_bias#3
+  362: tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--implicit-system-deps bare counts as y-args53-0]#0
+  362: tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--implicit-system-deps=n skips the @system-first merge-order bias-args54-0]#0
+  362: tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--implicit-system-deps=y is the default (bias on)-args52-0]#0
+  362: tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--rebuild-if-new-rev inline form-args69-0]#0
+  362: tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--rebuild-if-new-ver: same as unbuilt for a version bump-args68-0]#0
+  362: tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--rebuild-if-unbuilt: a build-dep upgrade rebuilds its installed consumer-args67-0]#0
+  362: tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--update threads through dependency recursion, not just top-level-args498-0]#0
+  362: tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[@selected combined with an explicit atom too-args478-0]#0
+  362: tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[@selected expands to the world file (not @system, unlike @world)-args473-0]#0
+  362: tests/test_emerge_pretend_contract.py::test_rebuild_if_star_rebuilds_an_installed_consumer_of_a_merged_build_dep#0
+expanded.json cases 4900 #362-candidates 9 #361-candidates 0
+  362: --pretend --update @selected
+  362: --pretend --update @system
+  362: --pretend --update @world
+  362: --pretend --update dev-libs/flipinstconsumer
+  362: --pretend --update dev-libs/needer
+  362: --pretend --update dev-libs/needskeywordmasked
+  362: --pretend --update dev-libs/toolchainroot
+  362: --pretend --update dev-libs/unsatuseslot
+  362: --pretend --update dev-libs/withdeps

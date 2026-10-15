@@ -1,0 +1,3 @@
+Undefined license group 'FREE'
+target_eroot /tmp/st/fixtures/ running_eroot /
+vdb pg34-blib-1 EAPI/BDEPEND ['0', 'dev-libs/pg34-btool']

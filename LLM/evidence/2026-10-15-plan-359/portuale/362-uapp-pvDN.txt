@@ -1,0 +1,7 @@
+### emerge -pvDN --getbinpkg=n --usepkg=n dev-libs/pg34-uapp --color=n
+[ebuild  N     ] dev-libs/pg34-uextra-1::testrepo to /var/tmp/plan359/stage/fixtures
+[ebuild   R    ] dev-libs/pg34-ulib-1::testrepo to /var/tmp/plan359/stage/fixtures USE="x*" 
+[ebuild  N     ] dev-libs/pg34-uapp-1::testrepo to /var/tmp/plan359/stage/fixtures
+
+Total: 3 packages (2 new, 1 reinstall), Size of downloads: 0 KiB
+rc=0

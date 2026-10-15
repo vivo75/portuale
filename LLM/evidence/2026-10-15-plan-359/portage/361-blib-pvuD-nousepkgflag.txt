@@ -1,0 +1,12 @@
+### emerge -pvuD --getbinpkg=n dev-libs/pg34-blib --color=n
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.13 s (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/pg34-btool-2::testrepo [1::testrepo] 0 KiB
+
+Total: 1 package (1 upgrade), Size of downloads: 0 KiB
+rc=0

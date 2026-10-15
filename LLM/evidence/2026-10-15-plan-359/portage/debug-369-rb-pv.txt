@@ -1,0 +1,101 @@
+[DEBUG] Using selector: EpollSelector
+Undefined license group 'FREE'
+myaction None
+myopts {'--debug': True, '--pretend': True, '--color': 'n', '--getbinpkg': False, '--regex-search-auto': 'y', '--usepkg': False, '--verbose': True}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+
+
+      Arg: dev-libs/pg366-rb
+     Atom: dev-libs/pg366-rb
+   ebuild: dev-libs/pg366-rb-1::testrepo
+
+Child:         (dev-libs/pg366-rb-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/pg366-rb
+
+Parent:    (dev-libs/pg366-rb-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/pg366-b dev-libs/pg366-a
+Priority:  runtime
+
+Parent:    (dev-libs/pg366-rb-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/pg366-b dev-libs/pg366-a
+Priority:  runtime
+Candidates: ['dev-libs/pg366-b', 'dev-libs/pg366-a']
+   ebuild: dev-libs/pg366-b-1::testrepo
+   ebuild: dev-libs/pg366-a-1::testrepo
+
+Child:         (dev-libs/pg366-b-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/pg366-b required by (dev-libs/pg366-rb-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Child:         (dev-libs/pg366-a-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/pg366-a required by (dev-libs/pg366-rb-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Exiting... (dev-libs/pg366-rb-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Parent:    (dev-libs/pg366-a-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: || ( dev-libs/pg366-x dev-libs/pg366-y )
+Priority:  runtime
+
+Parent:    (dev-libs/pg366-b-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/pg366-y
+Priority:  runtime
+
+Parent:    (dev-libs/pg366-b-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/pg366-y
+Priority:  runtime
+Candidates: ['dev-libs/pg366-y']
+   ebuild: dev-libs/pg366-y-1::testrepo
+
+Child:         (dev-libs/pg366-y-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/pg366-y required by (dev-libs/pg366-b-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Exiting... (dev-libs/pg366-b-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Parent:    (dev-libs/pg366-a-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: || ( dev-libs/pg366-x dev-libs/pg366-y )
+Priority:  runtime
+   ebuild: dev-libs/pg366-x-1::testrepo
+   ebuild: dev-libs/pg366-x-1::testrepo
+   ebuild: dev-libs/pg366-y-1::testrepo
+   ebuild: dev-libs/pg366-y-1::testrepo
+Candidates: ['dev-libs/pg366-y']
+   ebuild: dev-libs/pg366-y-1::testrepo
+
+Child:         (dev-libs/pg366-y-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/pg366-y required by (dev-libs/pg366-a-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Exiting... (dev-libs/pg366-a-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+digraph:
+
+(dev-libs/pg366-rb-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') depends on
+  (dev-libs/pg366-b-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (runtime)
+  (dev-libs/pg366-a-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (runtime)
+dev-libs/pg366-rb depends on
+  (dev-libs/pg366-rb-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (soft)
+(dev-libs/pg366-b-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') depends on
+  (dev-libs/pg366-y-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (runtime)
+(dev-libs/pg366-a-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') depends on
+  (dev-libs/pg366-y-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (runtime)
+(dev-libs/pg366-y-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (no children)
+
+[ebuild  N     ] dev-libs/pg366-y-1::testrepo to /tmp/st/fixtures/ 0 KiB
+[ebuild  N     ] dev-libs/pg366-b-1::testrepo to /tmp/st/fixtures/ 0 KiB
+[ebuild  N     ] dev-libs/pg366-a-1::testrepo to /tmp/st/fixtures/ 0 KiB
+[ebuild  N     ] dev-libs/pg366-rb-1::testrepo to /tmp/st/fixtures/ 0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+

@@ -1,0 +1,116 @@
+[DEBUG] Using selector: EpollSelector
+Undefined license group 'FREE'
+myaction None
+myopts {'--debug': True, '--pretend': True, '--update': True, '--color': 'n', '--deep': True, '--with-bdeps': 'y', '--getbinpkg': False, '--regex-search-auto': 'y', '--usepkg': False, '--verbose': True}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'y', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'deep': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+   ebuild: dev-libs/pg34-blib-1::testrepo
+installed: dev-libs/pg34-blib-1::testrepo
+   ebuild: dev-libs/pg34-blib-1::testrepo
+installed: dev-libs/pg34-blib-1::testrepo
+
+
+      Arg: dev-libs/pg34-blib
+     Atom: dev-libs/pg34-blib
+   ebuild: dev-libs/pg34-blib-1::testrepo
+installed: dev-libs/pg34-blib-1::testrepo
+
+Child:         (dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/') USE=""
+Parent Dep:    dev-libs/pg34-blib
+
+Parent:    (dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/')
+Depstring: dev-libs/pg34-btool
+Priority:  optional
+
+Parent:    (dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/')
+Depstring: dev-libs/pg34-btool
+Priority:  optional
+Candidates: ['dev-libs/pg34-btool']
+   ebuild: dev-libs/pg34-btool-2::testrepo
+installed: dev-libs/pg34-btool-1::testrepo
+
+Child:         (dev-libs/pg34-btool-2:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+Parent Dep:    dev-libs/pg34-btool required by (dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/')
+
+Exiting... (dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/')
+
+Child:         (dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/') USE=""
+Parent Dep:    dev-libs/pg34-blib
+
+Child:         (dev-libs/systempkg-1.0:0/0::testrepo, installed in '/tmp/st/fixtures/') USE=""
+Parent Dep:    dev-libs/systempkg required by @system
+
+Child:         (dev-libs/nestedsetpkg-1.0:0/0::testrepo, installed in '/tmp/st/fixtures/') USE=""
+Parent Dep:    dev-libs/nestedsetpkg required by @nestedtestset
+
+Child:         (dev-libs/dualslotpkg-2.0:2/2::testrepo, installed in '/tmp/st/fixtures/') USE=""
+Parent Dep:    dev-libs/dualslotpkg required by @dualslotset
+
+Child:         (virtual/libc-1.0:0/0::testrepo, installed) USE=""
+Parent Dep:    virtual/libc required by @system
+
+Parent:    (virtual/libc-1.0:0/0::testrepo, installed)
+Depstring: || ( sys-libs/glibc sys-libs/musl )
+Priority:  runtime
+
+Parent:    (virtual/libc-1.0:0/0::testrepo, installed)
+Depstring: || ( sys-libs/glibc sys-libs/musl )
+Priority:  runtime
+Candidates: ['sys-libs/glibc']
+
+Exiting... (virtual/libc-1.0:0/0::testrepo, installed)
+
+digraph:
+
+(dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/') depends on
+  (dev-libs/pg34-btool-2:0/0::testrepo, ebuild scheduled for merge) (optional)
+dev-libs/pg34-blib depends on
+  (dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/') (soft)
+(dev-libs/pg34-btool-2:0/0::testrepo, ebuild scheduled for merge) (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected depends on
+  @dualslotset (blocker)
+  @nestedtestset (blocker)
+@system depends on
+  (dev-libs/systempkg-1.0:0/0::testrepo, installed in '/tmp/st/fixtures/') (soft)
+(dev-libs/systempkg-1.0:0/0::testrepo, installed in '/tmp/st/fixtures/') (no children)
+@dualslotset depends on
+  (dev-libs/dualslotpkg-2.0:2/2::testrepo, installed in '/tmp/st/fixtures/') (soft)
+@nestedtestset depends on
+  (dev-libs/nestedsetpkg-1.0:0/0::testrepo, installed in '/tmp/st/fixtures/') (soft)
+  @innernestedset (blocker)
+(dev-libs/nestedsetpkg-1.0:0/0::testrepo, installed in '/tmp/st/fixtures/') (no children)
+@innernestedset depends on
+  @nestedtestset (blocker)
+(dev-libs/dualslotpkg-2.0:2/2::testrepo, installed in '/tmp/st/fixtures/') (no children)
+@world depends on
+  @profile (blocker)
+  @selected (blocker)
+  @system (blocker)
+@profile (no children)
+@selected (no children)
+@system depends on
+  (virtual/libc-1.0:0/0::testrepo, installed) (soft)
+(virtual/libc-1.0:0/0::testrepo, installed) (no children)
+
+[ebuild     U  ] dev-libs/pg34-btool-2::testrepo [1::testrepo] 0 KiB
+
+Total: 1 package (1 upgrade), Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+

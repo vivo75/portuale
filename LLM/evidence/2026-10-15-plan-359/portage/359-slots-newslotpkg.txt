@@ -1,0 +1,10 @@
+### emerge --pretend --update dev-libs/newslotpkg --color=n
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.13 s (backtrack: 0/20).
+
+[ebuild  NS    ] dev-libs/newslotpkg-2.0 [1.0] to /tmp/st/fixtures/
+rc=0

@@ -1,0 +1,11 @@
+### emerge -pvuD --usepkg=n dev-libs/pg34-blib --color=n
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.12 s (backtrack: 0/20).
+
+
+Total: 0 packages, Size of downloads: 0 KiB
+rc=0

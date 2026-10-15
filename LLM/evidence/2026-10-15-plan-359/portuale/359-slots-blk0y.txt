@@ -1,0 +1,2 @@
+### emerge --pretend --update dev-libs/blk0y --color=n
+rc=0

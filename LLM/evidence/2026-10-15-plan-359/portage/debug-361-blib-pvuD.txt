@@ -1,0 +1,42 @@
+[DEBUG] Using selector: EpollSelector
+Undefined license group 'FREE'
+myaction None
+myopts {'--debug': True, '--pretend': True, '--update': True, '--color': 'n', '--deep': True, '--getbinpkg': False, '--regex-search-auto': 'y', '--usepkg': False, '--verbose': True}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'deep': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+   ebuild: dev-libs/pg34-blib-1::testrepo
+installed: dev-libs/pg34-blib-1::testrepo
+   ebuild: dev-libs/pg34-blib-1::testrepo
+installed: dev-libs/pg34-blib-1::testrepo
+
+
+      Arg: dev-libs/pg34-blib
+     Atom: dev-libs/pg34-blib
+   ebuild: dev-libs/pg34-blib-1::testrepo
+installed: dev-libs/pg34-blib-1::testrepo
+
+Child:         (dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/') USE=""
+Parent Dep:    dev-libs/pg34-blib
+
+digraph:
+
+(dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/') (no children)
+dev-libs/pg34-blib depends on
+  (dev-libs/pg34-blib-1:0/0::testrepo, installed in '/tmp/st/fixtures/') (soft)
+
+
+Total: 0 packages, Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+

@@ -1,0 +1,2 @@
+### emerge --pretend --update dev-libs/dualslotpkg --color=n
+rc=0

@@ -1,0 +1,75 @@
+[DEBUG] Using selector: EpollSelector
+Undefined license group 'FREE'
+myaction None
+myopts {'--debug': True, '--pretend': True, '--update': True, '--color': 'n', '--deep': True, '--getbinpkg': False, '--regex-search-auto': 'y', '--usepkg': False, '--verbose': True}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'selective': True, 'deep': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+   ebuild: dev-libs/pg34-gapp-1::testrepo
+   ebuild: dev-libs/pg34-gapp-1::testrepo
+
+
+      Arg: dev-libs/pg34-gapp
+     Atom: dev-libs/pg34-gapp
+   ebuild: dev-libs/pg34-gapp-1::testrepo
+
+Child:         (dev-libs/pg34-gapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/pg34-gapp
+
+Parent:    (dev-libs/pg34-gapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/pg34-gone
+Priority:  runtime
+
+Parent:    (dev-libs/pg34-gapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+Depstring: dev-libs/pg34-gone
+Priority:  runtime
+Candidates: ['dev-libs/pg34-gone']
+installed: dev-libs/pg34-gone-1::testrepo
+
+Child:         (dev-libs/pg34-gone-1:0/0::testrepo, installed in '/tmp/st/fixtures/') USE=""
+Parent Dep:    dev-libs/pg34-gone required by (dev-libs/pg34-gapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Exiting... (dev-libs/pg34-gapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/')
+
+Parent:    (dev-libs/pg34-gone-1:0/0::testrepo, installed in '/tmp/st/fixtures/')
+Depstring: dev-libs/pg34-gextra
+Priority:  runtime
+
+Parent:    (dev-libs/pg34-gone-1:0/0::testrepo, installed in '/tmp/st/fixtures/')
+Depstring: dev-libs/pg34-gextra
+Priority:  runtime
+Candidates: ['dev-libs/pg34-gextra']
+   ebuild: dev-libs/pg34-gextra-1::testrepo
+
+Child:         (dev-libs/pg34-gextra-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/pg34-gextra required by (dev-libs/pg34-gone-1:0/0::testrepo, installed in '/tmp/st/fixtures/')
+
+Exiting... (dev-libs/pg34-gone-1:0/0::testrepo, installed in '/tmp/st/fixtures/')
+
+digraph:
+
+(dev-libs/pg34-gapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') depends on
+  (dev-libs/pg34-gone-1:0/0::testrepo, installed in '/tmp/st/fixtures/') (runtime)
+dev-libs/pg34-gapp depends on
+  (dev-libs/pg34-gapp-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (soft)
+(dev-libs/pg34-gone-1:0/0::testrepo, installed in '/tmp/st/fixtures/') depends on
+  (dev-libs/pg34-gextra-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (runtime)
+(dev-libs/pg34-gextra-1:0/0::testrepo, ebuild scheduled for merge to '/tmp/st/fixtures/') (no children)
+
+[ebuild  N     ] dev-libs/pg34-gextra-1::testrepo to /tmp/st/fixtures/ 0 KiB
+[ebuild  N     ] dev-libs/pg34-gapp-1::testrepo to /tmp/st/fixtures/ 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
