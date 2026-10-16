@@ -3578,6 +3578,7 @@ mod env_roots;
 mod feedback;
 mod force_scan;
 mod graph;
+mod greedy_slots;
 mod info_pkgs;
 mod installed;
 mod installed_meta;

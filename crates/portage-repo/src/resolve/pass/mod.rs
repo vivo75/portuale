@@ -79,7 +79,16 @@ pub(crate) fn run_pass(
             resolver_trace::tr!("\n      Arg: {a}\n     Atom: {a}\n");
         }
     }
-    seed_queue(ctx, &mut state, bp);
+    seed_queue(
+        ctx,
+        &mut state,
+        bp,
+        &greedy_slot_atoms(GreedySlotsArgs {
+            ctx,
+            config,
+            union_constraints: &union_constraints,
+        }),
+    );
     state.seeds_left = state.queue.len();
 
     let pprovided_refs: Vec<&str> = config.package_provided.iter().map(String::as_str).collect();

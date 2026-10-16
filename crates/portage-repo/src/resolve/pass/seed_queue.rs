@@ -2,8 +2,15 @@
 
 use crate::resolve::pass::*;
 
-/// Seed the walk queue with the top-level and auto-replace atoms.
-pub(crate) fn seed_queue(ctx: &ResolveCtx<'_>, state: &mut PassState, bp: &BacktrackParams) {
+/// Seed the walk queue with the top-level and auto-replace atoms, plus the
+/// greedy installed-slot atoms (`greedy`), which resolve after the arguments
+/// that produced them.
+pub(crate) fn seed_queue(
+    ctx: &ResolveCtx<'_>,
+    state: &mut PassState,
+    bp: &BacktrackParams,
+    greedy: &[String],
+) {
     for a in ctx.atoms.iter().rev() {
         // A top-level atom has no parent to flip a flag on, so no unevaluated
         // form (Portage never suggests a parent-flag fix for one either).
@@ -12,6 +19,23 @@ pub(crate) fn seed_queue(ctx: &ResolveCtx<'_>, state: &mut PassState, bp: &Backt
         // already-graphed satisfier, making order visible.
         state.queue.push_back(QueueItem {
             atom: a.clone(),
+            depth: 0,
+            owner: None,
+            owner_targets_running_root: false,
+            unevaluated: None,
+            targets_running_root: false,
+            buildtime_hard: false,
+            from_disjunction: false,
+        });
+    }
+    // The greedy installed-slot atoms ride as roots after the user args: one
+    // `cp:slot` per installed slot below the best match, like Portage's
+    // appended `AtomArg`s. `depth: 0` keeps them arguments (Portage's greedy
+    // atoms reset depth through the same `DependencyArg`).
+    // Portage: depgraph.py, select_files
+    for g in greedy {
+        state.queue.push_back(QueueItem {
+            atom: g.clone(),
             depth: 0,
             owner: None,
             owner_targets_running_root: false,

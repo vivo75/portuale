@@ -1695,7 +1695,7 @@ pub(crate) fn classify_best_against_installed(
 }
 
 /// Whether the candidate satisfies every extra constraint of the request.
-fn satisfies_extra_constraints(
+pub(crate) fn satisfies_extra_constraints(
     c: &Candidate,
     atom: &portage_dep::Atom,
     extra_constraints: &[String],

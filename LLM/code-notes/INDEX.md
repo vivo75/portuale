@@ -115,6 +115,7 @@
 - [crates/portage-repo/src/resolve/feedback/solvable_slot_conflicts.rs](portage-repo/resolve/feedback/solvable_slot_conflicts.md) — Config-feedback retry when one version satisfies every atom behind a slot conflict.
 - [crates/portage-repo/src/resolve/feedback/unsatisfied_dead_end.rs](portage-repo/resolve/feedback/unsatisfied_dead_end.md) — Settle-tail trigger scans: the slot-operator rebuild trigger, prune-rebuilds, and eliminate-rebuilds.
 - [crates/portage-repo/src/resolve/graph_lookup.rs](portage-repo/resolve/graph_lookup.md) — Whether an atom is installed or already in the graph: the `||`-preference predicates.
+- [crates/portage-repo/src/resolve/greedy_slots.rs](portage-repo/resolve/greedy_slots.md) — 
 - [crates/portage-repo/src/resolve/installed_meta.rs](portage-repo/resolve/installed_meta.md) — Installed packages' metadata as the resolver sees it: raw vdb records vs the dynamic-deps overlay.
 - [crates/portage-repo/src/resolve/merge_bound.rs](portage-repo/resolve/merge_bound.md) — Lookups over the entries a run will merge.
 - [crates/portage-repo/src/resolve/or_preference.rs](portage-repo/resolve/or_preference.md) — Which alternative of an `||` group to prefer: Portage `dep_zapdeps`'s choice bins and in-bin ordering.

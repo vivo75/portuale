@@ -1163,15 +1163,18 @@ fn target_slots(
         return Vec::new();
     };
     let (top_slot, top) = (top_slot.to_string(), top.clone());
-    let mut slots = vec![top_slot];
-    if update {
-        for slot in installed_slots {
-            if !slots.contains(slot) && best.get(slot.as_str()).is_some_and(|v| *v < top) {
-                slots.push(slot.clone());
-            }
-        }
-    }
-    slots
+    let pairs: Vec<(&str, &portage_solver::Version)> = best.iter().map(|(s, v)| (*s, v)).collect();
+    // The slot filter is shared with the default solver's greedy expansion.
+    super::greedy_slots_below_best(
+        super::GreedySlotsBelowBestArgs {
+            top_slot: &top_slot,
+            top: &top,
+            per_slot_best: &pairs,
+            installed_slots,
+            update,
+        },
+        |a, b| a < b,
+    )
 }
 
 /// Root-target slots for one request atom: a named `:slot` pins one, else S1's
