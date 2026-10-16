@@ -3223,7 +3223,7 @@ fn pubgrub_provider(
     // The walk clears selective for `-e` (resolve/pretend.rs:407-408).
     let selective = req.selective && !req.empty;
     provider.set_nodeps(req.nodeps);
-    provider.set_prefer_newest_slot(deep || req.empty);
+    provider.set_prefer_newest_slot((deep && req.update) || req.empty);
     provider.set_prefer_update(req.update && deep && !req.empty);
     provider.set_selective_no_update(selective && !req.update);
     for inst in installed.iter().cloned() {
@@ -4756,6 +4756,83 @@ mod tests {
             .resolve(&req)
             .expect("pg34-dlib resolves");
         assert_eq!(pg34_plan(&result), ["dev-libs/pg34-dlib-2:0"]);
+    }
+
+    /// #367: `-pvuD` on the new parent takes the newest slot. Expected from
+    /// Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pvuD-portage.txt`
+    /// plans `NS s-2 + N top`), never from portuale output.
+    #[test]
+    fn pg367_top_pubgrub_pvud_takes_the_newest_slot() {
+        // `-pvuD`: selective through `--update`, unlimited deep, build deps on.
+        let req = pg34_s4_request(&["dev-libs/pg367-top"]);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg367-top resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg367-s-2:2", "dev-libs/pg367-top-1:0"]
+        );
+        let slot = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg367-s")
+            .expect("pg367-s entry");
+        assert!(
+            matches!(slot.outcome, super::super::PretendOutcome::New { .. }) && slot.new_slot,
+            "NS renders New in a new slot: {:?} new_slot={}",
+            slot.outcome,
+            slot.new_slot
+        );
+    }
+
+    /// #367: `-pvD` (deep without update) keeps the installed slot. Expected
+    /// from Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pvD-portage.txt`
+    /// plans `N top` only), never from portuale output.
+    #[test]
+    fn pg367_top_pubgrub_pvd_keeps_the_installed_slot() {
+        // `-pvD`: deep without update is not selective.
+        let mut req = pg34_s4_request(&["dev-libs/pg367-top"]);
+        req.selective = false;
+        req.update = false;
+        req.deep = super::super::Deep::Unlimited;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg367-top resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg367-top-1:0"]);
+    }
+
+    /// #367: `-pvu` without deep keeps the installed slot. Expected from
+    /// Portage 3.0.82.2 (`LLM/evidence/2026-10-15-367-s0/cap-top-pvu-portage.txt`
+    /// plans `N top` only), never from portuale output.
+    #[test]
+    fn pg367_top_pubgrub_pvu_keeps_the_installed_slot() {
+        // `-pvu`: selective through `--update`, no deep, build deps on.
+        let mut req = pg34_s4_request(&["dev-libs/pg367-top"]);
+        req.deep = super::super::Deep::NotRequested;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg367-top resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg367-top-1:0"]);
+    }
+
+    /// #367: `-pve` takes the newest slot. Expected from Portage 3.0.82.2
+    /// (`LLM/evidence/2026-10-15-367-s0/cap-top-pve-portage.txt` plans
+    /// `NS s-2 + N top`), never from portuale output.
+    #[test]
+    fn pg367_top_pubgrub_pve_takes_the_newest_slot() {
+        // `-pve`: the request level keeps selective unset; `empty` drives it.
+        let mut req = pg34_s4_request(&["dev-libs/pg367-top"]);
+        req.selective = false;
+        req.update = false;
+        req.deep = super::super::Deep::NotRequested;
+        req.empty = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("pg367-top resolves");
+        assert_eq!(
+            pg34_plan(&result),
+            ["dev-libs/pg367-s-2:2", "dev-libs/pg367-top-1:0"]
+        );
     }
 
     /// #34 S4: the USE-drift kept/rebuild set. Under `--newuse` the installed
