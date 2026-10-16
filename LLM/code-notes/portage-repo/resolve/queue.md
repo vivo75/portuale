@@ -47,5 +47,7 @@ The walk queue.
 - The edge from `owner` to this atom's `cat/pkg` is an unsatisfied **build-time** dep (`DEPEND`/`BDEPEND`) with no run-time alternative -- Portage `DepPriority` `buildtime && !runtime`.
 - Such an edge is unbreakable in `topological_merge_order`'s cycle fallback, and a cycle made entirely of them is the fatal `* Error: circular dependencies:` Portage reports (`_serialize_tasks`'s `ignore_priority` scan can drop an unsatisfied run-time edge but never an unsatisfied build-time one).
 
+- Since #360 S4 (02.359) this flag no longer gates the installed-only keep: Portage keeps an installed package that no repository offers for a `BDEPEND` edge too (`depgraph.py:825`, `_iter_match_pkgs_any` `:7085`; S0 capture `s0-e-gbapp-pvuD`). It is still threaded through the queue items (`resolve_outcome.rs`, `root_deps.rs`) for the cycle fallback above.
+
 ## field EnqueueFlatDepsArgs::running_atoms
 - Track X Slice B (#242): `dep_running_tags` over the same dependency string -- an atom in this set resolves against the running root (its `QueueItem::targets_running_root`).

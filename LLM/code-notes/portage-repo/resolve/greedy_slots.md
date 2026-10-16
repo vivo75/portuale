@@ -49,4 +49,4 @@ Greedy installed-slot arguments for the default solver (backlog #359 S3).
   lookahead: pass 1 alone plans `U gsblk-1.1` with an unsatisfied block
   (rc 1); with the lookahead the output is byte-identical to Portage
   (`NS` + uninstall + `blocks b`, `Conflict: 1 block (all satisfied)`).
-  Residue #394 (lookahead unneeded) is therefore not filed.
+  The plan's conditional residue for a missing lookahead is therefore not filed (its number #394 was reused on 2026-10-16 for the unrelated `--rebuild-if-*` re-walk gap).
