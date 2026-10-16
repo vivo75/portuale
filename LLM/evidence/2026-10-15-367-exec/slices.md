@@ -281,3 +281,95 @@ Surprises:
 Left undone and why: nothing for S3. S4 (gates + 2 pubgrub bed modes)
 and S5 (docs) belong to other slices; the pmtest suite run belongs to
 the coordinator. Nothing committed (no grant).
+
+## S4 note + S5 — docs and close-out (portuale + pmtest docs, 2026-10-16)
+
+Arrival state (differs from the brief in one point): portuale HEAD is
+already `7a6eb2cf` (the S3 commit, "pin the walk-order functions with
+nine new tests (#370)"), i.e. S3 is committed, not "in the working
+tree". The portuale tree was clean on arrival, so `solver_bridge.rs`
+needed no touch. pmtest HEAD is `7606111` (the S0+S2 commit named in
+the brief); its only untracked paths are other plans' `pg359-*`
+fixtures, left alone.
+
+Files (portuale):
+- `LLM/what-this-proves.md` — one appended paragraph (#367 DONE,
+  `-pvD --solver=pubgrub dev-libs/pg367-top`), with the live output
+  pasted below and the binary provenance stated honestly.
+- `LLM/backlog-tasks-2026-10.md` — new `## Tier 4` section (per batch
+  plan G2, "Tier 4 (da creare)"): #367 and #370 rewritten as
+  `DONE 2026-10-16` with branch + commit shas (portuale `8bb24c01`
+  S1 / `7a6eb2cf` S3, pmtest `7606111` S0+S2; original entries kept
+  after "Original entry follows"), moved out from under
+  `## Deliberate cuts` (old lines deleted; #363–#366, #368, #369 stay).
+  Residues filed after a cross-tier scan (`grep -nE '^[0-9]+\. \*\*'`
+  over `LLM/backlog-tasks*.md`: max was #370, no dupes; 371–373 left
+  free for 02.346): **#374** the two pubgrub L0 bed modes not run (no
+  image), **#375** `--update-if-installed` accepted but ignored (plan
+  G7; the S1 code note already promised its number at S5). The
+  default-solver `-pvu` new-slot divergence takes no new number (same
+  class as #362, pinned as strict xfail `reason="#362"` in S2).
+- `LLM/code-notes/portage-repo/solver_bridge.md` — the three S5
+  bullets were verified, not rewritten: `## fn resolve_pubgrub`
+  already carries the #367 delta with all three Portage citations
+  (`depgraph.py:8452-8457`, `:7304-7334`, `:7859-7865`); `## S6
+  mutants` "Uncovered" line already corrected by S1; `## #370 mutants`
+  (added by the S3 worker) is coherent with this file's S3 section
+  (41 listed, 13 missed / 24 caught / 2 unviable / 2 timeouts; 9
+  killed, 4 equivalent, none uncovered). Only edit: the dangling
+  "residue, numbered at S5" pointer now reads "#375". Then
+  `python3 LLM/tools/code_notes_index.py` (rc=0, index unchanged).
+- `LLM/04.367-pubgrub-mutants.opus.md` — Status header flipped to
+  `done 2026-10-16` with slice range S0–S5, branch and commits (the
+  only plan edit; AGENTS.md rule 11).
+
+Files (pmtest):
+- `differential-test-bed/findings/l0-pubgrub.md` — appended the dated
+  S4 entry: #367 changes the switch value only for deep-without-update,
+  both bed modes have update=true so counted categories are unchanged
+  by construction, the run itself is NOT done (no bed image) and is
+  left for the owner (#374).
+
+Commands run and results:
+- Live example (no build, per brief; existing release binary
+  `target/release/portuale`, mtime 2026-10-16 11:00 UTC — after the S1
+  fix commit 01:49, while the later S3 commit 11:50 adds unit tests
+  only, so the binary matches HEAD behaviorally; the output itself
+  confirms the fix is in):
+  `PORTAGE_CONFIGROOT=$F ROOT=$F PORTAGE_RUNNING_ROOT=$F
+  DISTDIR=$F/distfiles target/release/emerge --solver=pubgrub -pvD
+  --getbinpkg=n --usepkg=n dev-libs/pg367-top` (`F=../pmtest/fixtures`)
+  → rc=0,
+  `[ebuild  N     ] dev-libs/pg367-top-1::testrepo to …/fixtures`,
+  `Total: 1 package (1 new), Size of downloads: 0 KiB` —
+  Portage's S0 row for the same argv (`cap-top-pvD-portage.txt`).
+- `python3 LLM/tools/code_notes_index.py` → rc=0.
+- `graft build` → rc=0 (8706 nodes, 18774 edges, 538 cards).
+- Number-freedom scans (two greps above) → max #370 pre-filing, no
+  duplicate numbers after filing (#374, #375 new, in-block).
+- No `cargo` / `pytest` / bed runs in this slice: docs-only, no product
+  file touched, and the brief forbids builds and bed runs. S1/S2/S3
+  gates stay as recorded above in this file.
+
+Surprises:
+- The brief's "S3 is in the working tree" was stale on arrival: S3 was
+  already committed (`7a6eb2cf`), so per the brief's "S3 commit (see
+  git log) placeholder if unknown" the #370 DONE entry cites the real
+  sha instead of a placeholder.
+- The brief's S5(b) residue list names only the bed run; #375
+  (`--update-if-installed`) was additionally filed because the plan
+  cuts section demands a real number for it and the S1 code note
+  already promised "numbered at S5" — leaving it unnumbered would
+  dangle. Flagged for the coordinator in case a single-residue reading
+  was intended (deleting #375 is one line).
+
+Left undone and why:
+- Commits (both repos): no grant — the coordinator reviews and commits.
+  Portuale tree: the 4 files above modified, nothing else (no
+  `solver_bridge.rs` touch, no `git add`). pmtest tree: only
+  `findings/l0-pubgrub.md` modified, plus the pre-existing other-plan
+  `pg359-*` untracked fixtures (untouched).
+- The #374 bed run itself: no `test-portuale:latest` image on this
+  host — left for the owner, by design.
+- Scratch: none created (no `/var/tmp/<tag>` used; the live run reads
+  the committed fixture tree and the binary only, writing nothing).
