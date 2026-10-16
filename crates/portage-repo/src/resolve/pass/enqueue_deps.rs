@@ -514,7 +514,7 @@ pub(crate) struct FilterRootDepsArgs<'a> {
 /// Apply the `--root-deps` existence split: atoms one root satisfies never
 /// reach the ordinary queue, atoms neither satisfies become their own
 /// running-root entries. No-op unless cross-root with a split root.
-pub(crate) fn filter_root_deps(args: FilterRootDepsArgs<'_>) -> Vec<String> {
+pub(crate) fn filter_root_deps(args: FilterRootDepsArgs<'_>) -> FilterRootDepsOut {
     let FilterRootDepsArgs {
         flat_deps,
         ctx,
@@ -598,7 +598,20 @@ pub(crate) fn filter_root_deps(args: FilterRootDepsArgs<'_>) -> Vec<String> {
             ));
         }
     }
-    flat_deps
+    FilterRootDepsOut {
+        flat_deps,
+        satisfied: root_deps_satisfied,
+        unsatisfied: root_deps_unsatisfied,
+    }
+}
+
+/// What [`filter_root_deps`] hands back to its caller: the surviving atoms
+/// plus the existence-split sets, which a deferred `||` entry reuses at
+/// pop time.
+pub(crate) struct FilterRootDepsOut {
+    pub(crate) flat_deps: Vec<String>,
+    pub(crate) satisfied: HashSet<String>,
+    pub(crate) unsatisfied: Vec<String>,
 }
 
 /// The values [`record_slot_pullers_and_enqueue`] reads from its caller.
@@ -808,8 +821,15 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         .circ_with_pullers
         .as_ref()
         .unwrap_or(&bp.circular_dependency);
+    // Portage never chooses an `||` branch while expanding the owner: the
+    // plain tokens flatten now, every `||` group defers to the drained graph
+    // (`state.disjunctive_stack`, popped in `run_pass`). With no groups the
+    // flatten below never invokes its closures, so group-free expansions are
+    // byte-identical to the pre-deferral walk.
+    // Portage: depgraph.py, _queue_disjunctive_deps
+    let (plains, groups) = split_off_disjunctions(&tokens, use_flags);
     let ControlFlow::Continue(flat_deps) = flatten_dep_string(FlattenDepStringArgs {
-        tokens: &tokens,
+        tokens: &plains,
         use_flags,
         metadata,
         cross_running_root: scope.cross_running_root,
@@ -824,7 +844,11 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     }) else {
         return;
     };
-    let flat_deps = filter_root_deps(FilterRootDepsArgs {
+    let FilterRootDepsOut {
+        flat_deps,
+        satisfied,
+        unsatisfied,
+    } = filter_root_deps(FilterRootDepsArgs {
         flat_deps,
         ctx,
         config,
@@ -834,6 +858,28 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         state: &mut *state,
         cross_running_root: scope.cross_running_root,
     });
+    if !groups.is_empty() {
+        state.disjunctive_stack.push(DeferredDisjunction {
+            groups,
+            use_flags: use_flags.clone(),
+            empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+                metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
+            owner: (*key).clone(),
+            owner_version: version.to_string(),
+            depth,
+            owner_targets_running_root: state.entries[entry_idx].targets_running_root,
+            site: DeferredSite::Main {
+                buildtime_atoms: buildtime_atoms.clone(),
+                runtime_atoms: runtime_atoms.clone(),
+                bdepend_atoms: bdepend_atoms.clone(),
+                or_universe: or_group_universe(&tokens),
+                running_tags: scope.running_tags.clone(),
+                root_deps_satisfied: satisfied,
+                root_deps_unsatisfied: unsatisfied,
+            },
+        });
+    }
     record_slot_pullers_and_enqueue(RecordSlotPullersAndEnqueueArgs {
         flat_deps,
         key,

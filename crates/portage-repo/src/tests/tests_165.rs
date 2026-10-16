@@ -1610,7 +1610,7 @@ struct Enqueue165Args<'a> {
     pending: &'a mut Vec<PendingBlocker>,
 }
 
-fn enqueue_165(args: Enqueue165Args<'_>) -> SlotPullers {
+fn enqueue_165(args: Enqueue165Args<'_>) -> (SlotPullers, Vec<DeferredDisjunction>) {
     let Enqueue165Args {
         repos,
         root,
@@ -1626,6 +1626,7 @@ fn enqueue_165(args: Enqueue165Args<'_>) -> SlotPullers {
     let mut seen = HashSet::new();
     let mut memo = HashMap::new();
     let mut pullers = HashMap::new();
+    let mut disjunctive_stack = Vec::new();
     enqueue_dependencies(
         &SelectSource {
             repos,
@@ -1655,10 +1656,11 @@ fn enqueue_165(args: Enqueue165Args<'_>) -> SlotPullers {
             root_deps_build_seen: &mut seen,
             installed_meta_memo: &mut memo,
             slot_pullers: &mut pullers,
+            disjunctive_stack: &mut disjunctive_stack,
         },
         &HashMap::new(),
     );
-    pullers
+    (pullers, disjunctive_stack)
 }
 
 /// A plain RDEPEND on an installed package is queued (not skipped).
@@ -1683,7 +1685,7 @@ fn enqueue_dependencies_queues_a_plain_dep_on_an_installed_package() {
     let mut entries = Vec::new();
     let mut queue = std::collections::VecDeque::new();
     let mut pending = Vec::new();
-    let pullers = enqueue_165(Enqueue165Args {
+    let (pullers, _) = enqueue_165(Enqueue165Args {
         repos: &repos,
         root: &root,
         config: &cfg_165(),
@@ -1871,7 +1873,11 @@ fn enqueue_dependencies_records_the_unevaluated_form_of_a_conditional_dep() {
 }
 
 /// Plains queue before `||` choices (the main walk's
-/// plains-reversed + `||`-last split).
+/// plains-reversed + `||`-last split). Portage queues the plain deps at
+/// `_add_pkg_deps` time and pushes the `||` group onto
+/// `_dep_disjunctive_stack` for the drained graph (`_pop_disjunction`), so a
+/// direct `enqueue_dependencies` call queues the plain atom and holds the
+/// choice on the stack.
 #[test]
 fn enqueue_dependencies_queues_plains_before_disjunction_choices() {
     let root = dir_165("enqueue-order");
@@ -1893,7 +1899,7 @@ fn enqueue_dependencies_queues_plains_before_disjunction_choices() {
     let mut entries = Vec::new();
     let mut queue = std::collections::VecDeque::new();
     let mut pending = Vec::new();
-    enqueue_165(Enqueue165Args {
+    let (_, stack) = enqueue_165(Enqueue165Args {
         repos: &repos,
         root: &root,
         config: &cfg_165(),
@@ -1907,6 +1913,16 @@ fn enqueue_dependencies_queues_plains_before_disjunction_choices() {
     });
     assert!(pending.is_empty());
     let atoms: Vec<String> = queue.iter().map(|q| q.atom.clone()).collect();
-    assert_eq!(atoms, vec!["dev-libs/plain", "dev-libs/only"]);
+    assert_eq!(atoms, vec!["dev-libs/plain"]);
+    assert_eq!(stack.len(), 1);
+    assert_eq!(
+        stack[0].groups,
+        vec![vec![
+            "||".to_string(),
+            "(".to_string(),
+            "dev-libs/only".to_string(),
+            ")".to_string(),
+        ]]
+    );
     let _ = std::fs::remove_dir_all(&root);
 }

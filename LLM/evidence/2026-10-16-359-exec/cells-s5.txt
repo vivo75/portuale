@@ -1,0 +1,5 @@
+s5-ra-pve | --pretend -v --emptytree dev-libs/pg366-ra |
+s5-rb-pve | --pretend -v --emptytree dev-libs/pg366-rb |
+s5-rb-pv | --pretend -v dev-libs/pg366-rb |
+s5-ra-pv | --pretend -v dev-libs/pg366-ra |
+s5-vapp-pv | --pretend -v dev-libs/pg359-vapp |

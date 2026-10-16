@@ -172,6 +172,11 @@ pub(crate) struct PassState {
     /// package)` that pushed it if any (`None` for a top-level atom; only consulted
     /// for `GraphEntry::required_by`).
     pub(crate) queue: VecDeque<QueueItem>,
+    /// Deferred `||` groups, one entry per expansion (newest pops first).
+    /// Popped only when `queue` and `held_blocks` are both drained, so the
+    /// branch choice sees the graph as it stands at that moment.
+    // Portage: depgraph.py, _dep_disjunctive_stack
+    pub(crate) disjunctive_stack: Vec<DeferredDisjunction>,
     /// Seeds not yet popped: while positive, each pop closes the previous
     /// seed's whole-subtree block, so Portage's LIFO `_dep_stack` order holds
     /// (the last argument's subtree walks first). Set from the seeded queue
