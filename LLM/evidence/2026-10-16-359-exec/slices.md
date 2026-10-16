@@ -435,3 +435,184 @@ Portage 3.0.82.2 (`_emerge/depgraph.py`, `select_files` + `_greedy_slots`;
   (`expanded.json.xz`); the paired portuale commit carries the code +
   unit tests + notes. The two host Portage captures
   (`s3-orupgradealt-pu*.txt`) are evidence here, not fixtures.
+
+---
+
+# 02.359 S4 (#360 installed-only candidates; `buildtime_hard` lifted) — slice log
+
+Branch `backlog/359-default-solver-update` in both repos (pre-existing, not
+switched). Nothing committed, pushed, added, stashed, reset or cleaned
+(coordinator reviews and commits; `git add` never run). No `/dev/shm`
+writes. Host config untouched (all Portage captures ran in
+`localhost/test-portuale:latest`; `/etc/make.local` never touched).
+Scratch `/var/tmp/x359d` (+ `/var/tmp/x359d-oracle233`, `/tmp/oracle233.log`
+transiently) removed at the end with separate `sudo rm -rf` commands
+(the suite's `--basetemp` leaves root-owned crud behind, same as S2/S3).
+No bed script while cargo built; no rebuild during the bed run.
+
+## Product change (portuale repo, uncommitted)
+
+Installed-only packages as candidates for the default solver, ported from
+host Portage 3.0.82.2 (`depgraph.py` vardb-as-`"installed"` `:825`,
+`_iter_match_pkgs_any` `:7085`, `_show_unsatisfied_dep` `:6471-6503` /
+`:7018-7040`, all re-read). The S0 `pg359-gbapp` verdict answers plan Q4
+YES (Portage `N gextra + N gbapp` rc 0 with AND without `--with-bdeps=y`),
+so the `buildtime_hard` gate is lifted everywhere:
+
+- `resolve/graph_lookup.rs` — new `cp_has_tree_or_binary_candidate`
+  (any repo ebuild or local-binary candidate for the cp, masked or not).
+- `pass/outcome_fallbacks.rs` — the dependency fallback keeps the
+  slot/slot-operator rule as-is (installed match suffices; #233's stale
+  `:0/1` probe) and extends the keep to bare/version-range atoms under
+  the new pools-empty condition (masked ebuilds keep their diagnostics);
+  the `!buildtime_hard` gate is gone; `!from_disjunction`/`!empty` stay.
+  New top-level arm: an argument under `--update --selective` with no
+  tree/binary candidate but an installed satisfier settles
+  `AlreadyInstalled` (`Total: 0`); without `--update` the miss stands.
+- `pass/initial_outcome.rs` — the minimize-prediction copy follows the
+  same union condition.
+- `resolve/pretend.rs` — site-A installed-only fallback drops its
+  `!buildtime_hard` gate (plus the now-unused destructure binding);
+  `SelectOptions::buildtime_hard` doc rewritten (field itself stays:
+  still threaded through the queue items and read by the fallbacks).
+- `resolve/installed_meta.rs` — new `installed_walk_metadata`: live
+  ebuild view while the version has an ebuild, else the vdb-recorded
+  `*DEPEND` snapshot (moves applied) for an installed-only package.
+  Without this the deep walk stranded: `live_metadata_for_installed` is
+  `None` with no ebuild, and the old early-returns skipped the walk
+  (found live: `gapp -pvuD` kept `gone` but printed no `gextra` row).
+- `resolve/enqueue.rs` + `pass/unresolved_dep.rs` — both installed-walk
+  sites read through the new helper (queued children and the
+  `--debug`/`--tree` `deps` display share one view).
+- `portuale/src/pretend/config_action.rs` (+ call sites
+  `resolve_phases.rs`, `info.rs`) — `misspell_suggestion_block` takes the
+  target root and suppresses the similar-names block when the cp is
+  installed (`cp_exists` via the installed db).
+- Unit tests: 3 walk-level in `tests/graph.rs` (gapp `-pvuD` both bdeps
+  shapes, gbapp `-pvuD` both bdeps shapes, gone `-pvu`/`-pvuD`), 2
+  helper-level in `tests/pretend.rs` (pools probe incl. the masked-ebuild
+  `true` case; `buildtime_hard` site-A keep). Re-grounded 2 `root_deps`
+  tests (plain keep + `||` installed-branch keep) to the S4 rule, one
+  renamed; both cite the gbapp capture.
+- Code notes: S4 sections in `resolve/pretend.md`,
+  `resolve/pass/outcome_fallbacks.md` (incl. the stale "reported, not
+  satisfied" scoping rewrite), `resolve/installed_meta.md` (new helper +
+  two stale-reader fixes), `portuale/pretend/config_action.md`;
+  `python3 LLM/tools/code_notes_index.py` clean.
+
+## pmtest change (pmtest repo, uncommitted; corpus blessed here)
+
+- `CASES`: 9 new rc entries (4 gapp, 3 gone incl. the rc-1 `-pv`, 2 gbapp).
+- 9 new default-solver pins (same cells, `[ebuild]` rows) + 1 rc-1 pin
+  (`gone -pv`: bare line, no similar-names block). Every docstring names
+  its Portage 3.0.82.2 capture, never portuale's output. No new
+  fixtures: S4 uses S0's `pg359-gbapp` tree as the plan provides.
+- Rewritten to Portage rows (all equal to fresh container captures
+  taken for this slice, same staging/env as S0, fresh stage per cell):
+  `test_root_deps_pinned_output`, `test_bdepend_routes_...` (same-root
+  control only; cross-root half unchanged),
+  `test_root_deps_disjunctive_branch_selection_pinned_output`.
+- `PORTUALE_CORPUS_BLESS=1` full run accepted 3 contract + 16 expanded
+  drift entries, each reviewed below (rows == capture rows; rc
+  unchanged; oldmovepkg modulo the out-of-scope ` for <root>` suffix,
+  #395). Changed files: `test_emerge_pretend_contract.py`,
+  `corpus/contract.json.xz`, `corpus/expanded.json.xz`.
+
+### Bless table (every entry ↔ its capture)
+
+- `test_root_deps_pinned_output#0` (rc 1→0, `N rootdepspkg`) ↔
+  `s4-rootdeps-pkg.txt` (`--pretend dev-libs/rootdepspkg`, fresh stage).
+- `test_root_deps_disjunctive_branch_selection_pinned_output#0`
+  (rc 1→0, `N rootdepsorpkg`) ↔ `s4-rootdeps-orpkg.txt`.
+- `test_profiles_updates_package_moves_pinned_output[args6]`
+  (`-pv --package-moves=n dev-libs/oldmovepkg`: rc stays 1, similar-names
+  block dropped) ↔ `s4-oldmovepkg-pv-nomoves.txt` (rc 1, bare line, no
+  `Maybe you meant` block). This is the oldmovepkg-as-argument shape,
+  not a movedepconsumer pin: the plan's "moves only to S0 (d)" binds
+  args2/args4/args8 (`movedepconsumer` argv), which did NOT drift here;
+  the installed-cp suppression rule is S0-backed (`360-gone-pv`) and
+  this argv now has its own exact-argv capture.
+- Expanded `--pretend [--json/--quiet/--verbose] rootdeps{,orpkg}` +
+  plain: projections of the two plain captures above (format flags do
+  not change resolution).
+- Expanded `--pretend --tree rootdeps{,orpkg}` ↔
+  `s4-rootdeps-{pkg,orpkg}-tree.txt`.
+- Expanded `--pretend --update rootdeps{,orpkg}` ↔
+  `s4-rootdeps-{pkg,orpkg}-pu.txt`; `--update --deep rootdepspkg` ↔
+  `s4-rootdeps-pkg-puD.txt`; `--update --deep --newuse rootdepspkg` ↔
+  `s4-rootdeps-pkg-puDN.txt` (all `N rootdepspkg` rc 0: installed-only,
+  nothing to update it to).
+- Runner + cells files (`run-s4-portage.sh`, `cells-s4rootdeps.txt`,
+  `cells-s4more.txt`) are stored beside the captures in this evidence
+  dir for reproducibility.
+
+## Commands and results
+
+- `cargo fmt --check` — clean. `cargo clippy --release --all-targets` —
+  0 warnings (one unused-destructure binding removed with `..`).
+- `timeout 2400 cargo test --release -- --test-threads=2` (whole
+  workspace) — all green, 0 failures (portage-repo lib 1107 passed:
+  1102 pre-existing incl. S3's 8, +5 new S4).
+- Live binary vs oracle (fixture env, `target/release`): all seven
+  `360-gapp/gone` cells and both `gbapp` cells row-identical to their
+  captures (rc included); `gone -pv` rc 1 with no similar-names block.
+- Full pmtest suite WITHOUT bless (first run): 3937 passed, 2 failed
+  (`test_profiles_updates_package_moves_pinned_output[args6]`,
+  `test_oracle_233_...`, both adjudicated below), 37 skipped,
+  2 xfailed + the drift list above.
+- `PORTUALE_CORPUS_BLESS=1` full run: **3939 passed, 37 skipped,
+  2 xfailed** (baseline 3921/37/2; +9 CASES, +9 pins). Post-bless clean
+  re-run (no bless): **3939 passed, 37 skipped, 2 xfailed**, zero drift
+  warnings.
+- `differential-test-bed/run/l0-fixture-oracle.sh` (plan §2.G) —
+  explained 19, **UNEXPLAINED 4**, byte-identical to S3's run (all
+  `skipped-updates` USE-paint rows on `--backtrack=0 blk0{a,b,c}`
+  orders): pre-existing, owner to adjudicate, no allowlist touched.
+- `sudo rm -rf /var/tmp/x359d` (+ oracle233 scratch, one stray
+  `/tmp/oracle233.log`) — separate commands, done last.
+
+## Surprises
+
+- The vdb deep-walk did NOT work with no ebuild out of the box (the
+  plan's "verify that it works" step): `live_metadata_for_installed`
+  returns `None` for installed-only packages and both walk sites
+  early-returned on it. The keep fired (rc 0) but silently walked
+  nothing. Fixed with `installed_walk_metadata` (raw vdb snapshot,
+  moves applied); the `||`-installed and running-root paths already
+  covered by ebuilds are byte-identical (they still take the live arm).
+- The first widening (pools-empty for ALL atoms) broke
+  `test_oracle_233_...` (rc 1, stale `:0/1` dep of an installed world
+  member): slot atoms with ebuilds elsewhere must keep the old
+  installed-match rule (#233's probe). Restored as a union
+  (slot/slot-op OR pools-empty); the test is green unmodified, and the
+  `stale_built_slot_operator_dep...` unit test guards the union's slot
+  arm. The masked-diagnostics concern that motivated pools-empty
+  applies to bare atoms; for slot atoms Portage's `:7972-7979`
+  masked-installed keep (S2) already blesses the silent keep, and
+  top-level slot args still report (top-level arm requires pools-empty).
+- The 3 rewritten `rootdeps*` pins are the SAME rule as gbapp, not new
+  scope: `BDEPEND` of a merging package on an installed-only dep
+  (`rootdepsprovider` has no repo dir, like `gone`). Fresh `--pretend`
+  captures confirm Portage prints the lone `N` row rc 0 on both.
+- `test_bdepend_routes_...` cross-root half is untouched by S4 (running-
+  root satisfaction path unchanged); only its same-root control moved
+  (target-vdb satisfaction instead of the miss report).
+- One mid-task self-caught bug: a `//`-style comment slipped into a
+  Python docstring edit; fixed before any test ran.
+
+## Left undone and why
+
+- The 4 bed UNEXPLAINED rows (above): pre-existing (task brief confirms),
+  owner to adjudicate; bless/allowlist forbidden to this slice.
+- `s0-d-slotmovepkg-nomoves` leftover (S2-flagged, portuale `NS` vs
+  Portage EMPTY): still no pin covers the argv; untouched by S4, left
+  for the owner/S5.
+- `--usepkgonly=n` residual: still diverges (S0 STOP-2, S1/S2 out of
+  scope); untouched.
+- In-graph installed parents never rebuild via `--rebuild-if-*`
+  (S2-flagged, no backlog number): untouched.
+- `LLM/what-this-proves.md`: untouched (plan assigns it to Z).
+- Full-suite green depends on the bless in this slice's pmtest commit
+  (`contract.json.xz` + `expanded.json.xz`); the paired portuale commit
+  carries the code + unit tests + notes + this evidence dir. The 9
+  fresh container captures (`s4-*.txt`) are evidence here, not fixtures.

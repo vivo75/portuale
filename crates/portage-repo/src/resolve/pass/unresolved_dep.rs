@@ -353,49 +353,44 @@ pub(crate) fn enqueue_installed_deps(args: EnqueueInstalledDepsArgs<'_>) -> Vec<
         && ctx.deep.recurses_at(depth)
     {
         // `deps` reads the same installed-metadata view the recursion walks, so
-        // `--debug`/`--tree` can't contradict the queued child.
-        if let Some(metadata) =
-            live_metadata_for_installed(&ctx.repos, atom_root, &key.0, &key.1, version)
-        {
-            // Installed recorded USE, not effective profile USE, so a `flag?`-gated
-            // dep shown here matches what the recursion queued.
-            let use_flags = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "USE");
-            let portage_order_keys: &[&str] = if ctx.with_bdeps {
-                &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
-            } else {
-                &["RDEPEND", "IDEPEND", "PDEPEND"]
-            };
-            let layer = if ctx.dynamic_deps {
-                InstalledMetaLayer::Effective
-            } else {
-                InstalledMetaLayer::Raw
-            };
-            let mut effective: HashMap<String, String> = HashMap::new();
-            for k in portage_order_keys {
-                let s = installed_dep_string(InstalledDepStringArgs {
-                    root: atom_root,
-                    dynamic_deps: ctx.dynamic_deps,
-                    ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
-                    category: &key.0,
-                    package: &key.1,
-                    version,
-                    live: Some(&metadata),
-                    key: k,
-                    layer,
-                    memo: &mut state.installed_meta_memo,
-                });
-                if !s.trim().is_empty() {
-                    effective.insert((*k).to_string(), s);
-                }
+        // `--debug`/`--tree` can't contradict the queued child: the live ebuild
+        // view while the version still has an ebuild, else the vdb-recorded
+        // snapshot for an installed-only package.
+        let metadata = installed_walk_metadata(&ctx.repos, atom_root, &key.0, &key.1, version);
+        // Installed recorded USE, not effective profile USE, so a `flag?`-gated
+        // dep shown here matches what the recursion queued.
+        let use_flags = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "USE");
+        let portage_order_keys: &[&str] = if ctx.with_bdeps {
+            &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+        } else {
+            &["RDEPEND", "IDEPEND", "PDEPEND"]
+        };
+        let layer = if ctx.dynamic_deps {
+            InstalledMetaLayer::Effective
+        } else {
+            InstalledMetaLayer::Raw
+        };
+        let mut effective: HashMap<String, String> = HashMap::new();
+        for k in portage_order_keys {
+            let s = installed_dep_string(InstalledDepStringArgs {
+                root: atom_root,
+                dynamic_deps: ctx.dynamic_deps,
+                ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
+                category: &key.0,
+                package: &key.1,
+                version,
+                live: Some(&metadata),
+                key: k,
+                layer,
+                memo: &mut state.installed_meta_memo,
+            });
+            if !s.trim().is_empty() {
+                effective.insert((*k).to_string(), s);
             }
-            // An installed package is `pkg.built`: build-time deps are `optional`.
-            already_installed_deps = merge_order::dep_edges_from_metadata(
-                &effective,
-                &use_flags,
-                portage_order_keys,
-                true,
-            );
         }
+        // An installed package is `pkg.built`: build-time deps are `optional`.
+        already_installed_deps =
+            merge_order::dep_edges_from_metadata(&effective, &use_flags, portage_order_keys, true);
         enqueue_dependencies(
             &SelectSource {
                 repos: &ctx.repos,

@@ -1,0 +1,7 @@
+s4-oldmovepkg-pv-nomoves | -pv --package-moves=n dev-libs/oldmovepkg |
+s4-rootdeps-pkg-tree | --pretend --tree dev-libs/rootdepspkg |
+s4-rootdeps-orpkg-tree | --pretend --tree dev-libs/rootdepsorpkg |
+s4-rootdeps-pkg-pu | --pretend --update dev-libs/rootdepspkg |
+s4-rootdeps-orpkg-pu | --pretend --update dev-libs/rootdepsorpkg |
+s4-rootdeps-pkg-puD | --pretend --update --deep dev-libs/rootdepspkg |
+s4-rootdeps-pkg-puDN | --pretend --update --deep --newuse dev-libs/rootdepspkg |

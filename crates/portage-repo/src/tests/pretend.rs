@@ -436,3 +436,50 @@ fn update_skips_an_installed_use_dep_satisfier_unknown_to_the_tree() {
         PretendOutcome::NoVisibleCandidate
     );
 }
+
+/// The installed-only fallback keys on the cp having no tree or binary
+/// candidate at all (masked or not): `pg34-gone` is installed-only, while
+/// `pg34-gapp` and the keyword-masked `keywordmaskedpkg` both have ebuilds.
+#[test]
+fn tree_or_binary_candidate_probe_sees_ebuilds_but_not_installed_only() {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let index = build_local_binpkg_index(&test_config());
+    let probe =
+        |package: &str| cp_has_tree_or_binary_candidate(&repos, &index, "dev-libs", package);
+    assert!(!probe("pg34-gone"));
+    assert!(probe("pg34-gapp"));
+    assert!(probe("keywordmaskedpkg"));
+}
+
+/// A build-time-only edge to an installed-only package satisfies from the
+/// installed instance too (Portage consults the installed db for every dep
+/// kind; the S0 `s0-e-gbapp-pvuD` capture pins `N gextra + N gbapp` for a
+/// `BDEPEND` on installed-only `pg34-gone`).
+#[test]
+fn update_without_deep_keeps_an_installed_only_build_time_dependency() {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let outcome = resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &test_config(),
+            local_binpkg: &build_local_binpkg_index(&test_config()),
+        },
+        "dev-libs/pg34-gone",
+        &SelectOptions {
+            update: true,
+            depth: 1,
+            buildtime_hard: true,
+            ..SelectOptions::default()
+        },
+    )
+    .expect("resolve_pretend(dev-libs/pg34-gone) failed");
+    assert_eq!(
+        outcome,
+        PretendOutcome::AlreadyInstalled {
+            version: "1".to_string()
+        }
+    );
+}

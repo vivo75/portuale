@@ -170,6 +170,7 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
 pub(crate) fn misspell_suggestion_block(
     message: &str,
     repos: &[portage_repo::RepoConfig],
+    root: &Path,
     enabled: bool,
 ) -> Option<String> {
     if !enabled {
@@ -187,6 +188,12 @@ pub(crate) fn misspell_suggestion_block(
         .map(|c| c.is_empty())
         .unwrap_or(true)
     {
+        return None;
+    }
+    // An installed-only cp (`cp_exists` via the installed db) reports no
+    // similar-names block (the S0-backed `360-gone-pv` capture).
+    // Portage: depgraph.py, _show_unsatisfied_dep.
+    if !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty() {
         return None;
     }
     let target = format!("{}/{}", atom.category, atom.package);

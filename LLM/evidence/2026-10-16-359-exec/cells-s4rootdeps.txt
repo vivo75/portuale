@@ -1,0 +1,2 @@
+s4-rootdeps-pkg | --pretend dev-libs/rootdepspkg |
+s4-rootdeps-orpkg | --pretend dev-libs/rootdepsorpkg |

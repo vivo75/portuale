@@ -1,15 +1,20 @@
 use super::*;
 
 #[test]
-fn without_root_deps_a_bdepend_only_satisfiable_on_the_running_root_is_no_visible_candidate() {
-    // Without `--root-deps` a BDEPEND with no ebuild anywhere reports
-    // like any other unresolvable dependency (a dep, not a top atom).
+fn without_root_deps_a_bdepend_on_an_installed_only_package_is_kept() {
+    // Without `--root-deps` a BDEPEND on an installed-only package is kept
+    // from the installed db (Portage consults it for every dep kind of a
+    // package being merged): `AlreadyInstalled`, not a miss. Oracle:
+    // Portage 3.0.82.2 S0 `s0-e-gbapp-pvuD` (#360 S4: `N gextra + N gbapp`
+    // for a `BDEPEND` on installed-only `pg34-gone`).
     assert_eq!(
         graph_root_deps("dev-libs/rootdepspkg", None),
         vec![
             (
                 "dev-libs/rootdepsprovider".to_string(),
-                PretendOutcome::NoVisibleCandidate
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
             ),
             (
                 "dev-libs/rootdepspkg".to_string(),
@@ -41,13 +46,19 @@ fn root_deps_drops_a_bdepend_already_satisfied_by_the_running_root() {
 #[test]
 fn root_deps_feeds_running_root_satisfiability_into_disjunctive_branch_selection() {
     // Neither `||` branch has an ebuild, but the installed branch
-    // outranks (`other_installed` over `other`) so only it is queued.
+    // outranks (`other_installed` over `other`) so only it is queued — and
+    // the queued installed-only branch is kept from the installed db, like
+    // any other installed-only dep (Portage `dep_zapdeps` all-installed
+    // pick plus the vardb match; oracle for the keep: Portage 3.0.82.2 S0
+    // `s0-e-gbapp-pvuD`, #360 S4).
     assert_eq!(
         graph_root_deps("dev-libs/rootdepsorpkg", None),
         vec![
             (
                 "dev-libs/rootdepsprovider".to_string(),
-                PretendOutcome::NoVisibleCandidate
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
             ),
             (
                 "dev-libs/rootdepsorpkg".to_string(),

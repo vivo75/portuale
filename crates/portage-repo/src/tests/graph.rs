@@ -4195,3 +4195,122 @@ fn newuse_with_deep_keeps_a_use_drift_reinstall_of_an_unwanted_dep() {
         ]
     );
 }
+
+/// An installed-only dependency under `--update --deep` is kept, and the
+/// deep walk reads its vdb-recorded deps though no ebuild exists: `N gextra
+/// + N gapp`. Oracle: Portage 3.0.82.2 `360-gapp-pvuD` (and
+/// `360-gapp-pvuD-bdn` with `--with-bdeps=n`, same rows).
+#[test]
+fn deep_update_walks_the_vdb_deps_of_an_installed_only_dependency() {
+    for with_bdeps in [true, false] {
+        let entries = graph_with("dev-libs/pg34-gapp", |r| {
+            r.update = true;
+            r.deep = Deep::Unlimited;
+            r.with_bdeps = with_bdeps;
+        });
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/pg34-gextra".to_string(),
+                    PretendOutcome::New {
+                        version: "1".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/pg34-gone".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/pg34-gapp".to_string(),
+                    PretendOutcome::New {
+                        version: "1".to_string()
+                    }
+                ),
+            ],
+            "with_bdeps={with_bdeps}"
+        );
+    }
+}
+
+/// An installed-only `BDEPEND` edge satisfies a package being merged, with
+/// or without `--with-bdeps`: Portage consults the installed db for every
+/// dep kind. Oracle: Portage 3.0.82.2 S0 `s0-e-gbapp-pvuD` (and
+/// `s0-e-gbapp-pvuD-bdy` with `--with-bdeps=y`, same rows).
+#[test]
+fn deep_update_keeps_an_installed_only_build_time_dependency() {
+    for with_bdeps in [true, false] {
+        let entries = graph_with("dev-libs/pg359-gbapp", |r| {
+            r.update = true;
+            r.deep = Deep::Unlimited;
+            r.with_bdeps = with_bdeps;
+        });
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/pg34-gextra".to_string(),
+                    PretendOutcome::New {
+                        version: "1".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/pg34-gone".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/pg359-gbapp".to_string(),
+                    PretendOutcome::New {
+                        version: "1".to_string()
+                    }
+                ),
+            ],
+            "with_bdeps={with_bdeps}"
+        );
+    }
+}
+
+/// An installed-only top-level argument under `--update --selective` is
+/// already installed (`Total: 0`); under `--deep` its vdb deps still walk.
+/// Oracle: Portage 3.0.82.2 `360-gone-pvu` (`[]`) and `360-gone-pvuD`
+/// (`N gextra`).
+#[test]
+fn update_selective_keeps_an_installed_only_argument() {
+    let entries = graph_with("dev-libs/pg34-gone", |r| {
+        r.update = true;
+    });
+    assert_eq!(
+        entries,
+        vec![(
+            "dev-libs/pg34-gone".to_string(),
+            PretendOutcome::AlreadyInstalled {
+                version: "1".to_string()
+            }
+        ),]
+    );
+    let entries = graph_with("dev-libs/pg34-gone", |r| {
+        r.update = true;
+        r.deep = Deep::Unlimited;
+    });
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/pg34-gextra".to_string(),
+                PretendOutcome::New {
+                    version: "1".to_string()
+                }
+            ),
+            (
+                "dev-libs/pg34-gone".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1".to_string()
+                }
+            ),
+        ]
+    );
+}

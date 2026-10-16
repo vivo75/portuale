@@ -12,10 +12,41 @@ pub(crate) enum InstalledMetaLayer {
     Effective,
 }
 
+/// The metadata view an installed package's own deps walk against: the live
+/// ebuild metadata while the version still has an ebuild, else the
+/// vdb-recorded snapshot (moves applied) for an installed-only package.
+/// Portage walks the vardb in both cases (the S0 `s0-e-gbapp-pvuD`
+/// capture walks installed-only `pg34-gone`'s `RDEPEND`).
+/// Portage: FakeVartree.py, _aux_get_wrapper.
+pub(crate) fn installed_walk_metadata(
+    repos: &[RepoConfig],
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> std::sync::Arc<HashMap<String, String>> {
+    if let Some(live) = live_metadata_for_installed(repos, root, category, package, version) {
+        return live;
+    }
+    let mut map = HashMap::new();
+    for key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND", "EAPI"] {
+        let raw = read_vdb_string(root, category, package, version, key);
+        if raw.trim().is_empty() {
+            continue;
+        }
+        map.insert(
+            key.to_string(),
+            apply_updates_to_dep_string(&raw).unwrap_or(raw),
+        );
+    }
+    std::sync::Arc::new(map)
+}
+
 /// The live ebuild metadata for one installed `cat/pkg-version`, always from the
 /// repo the vdb says it was built from, never from a repo-priority search. `None`
-/// when the version is gone from the recorded repo. One shared helper, so the four
-/// installed-metadata readers can never disagree on which repo is authoritative.
+/// when the version is gone from the recorded repo. One shared helper, so the
+/// installed-metadata readers agree on which repo is authoritative
+/// ([`installed_walk_metadata`] falls back to the vdb snapshot on `None`).
 /// Portage: FakeVartree.py, _aux_get_wrapper.
 pub(crate) fn live_metadata_for_installed(
     repos: &[RepoConfig],

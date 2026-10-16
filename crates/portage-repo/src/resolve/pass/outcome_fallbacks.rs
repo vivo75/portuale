@@ -74,21 +74,47 @@ pub(crate) fn apply_outcome_fallbacks(
         outcome = PretendOutcome::AlreadyInstalled { version: kept };
     }
 
-    // A slot-operator dependency no ebuild satisfies but an installed instance
+    // A dependency no ebuild or binary satisfies but an installed instance
     // does settles `AlreadyInstalled`, never a miss (Portage iterates the
-    // installed db on every resolve). Scoped to genuine non-build-time
-    // dependency edges; `||`-chosen edges keep their miss (the disjunction
-    // layer classifies installed-ness itself); bare and version-range atoms
-    // stay on the old path. Match requires the installed USE to satisfy the
+    // installed db on every resolve). Slot and slot-operator atoms keep the
+    // long-standing rule (an installed match suffices: #233's probe has a
+    // stale `:0/1` matching the installed instance in vartree); bare and
+    // version-range atoms additionally require the cp to have no tree or
+    // binary candidate at all, so a package whose ebuilds are all masked
+    // keeps its masked-package diagnostics. Scoped to genuine dependency
+    // edges; `||`-chosen edges keep their miss (the disjunction layer
+    // classifies installed-ness itself). Build-time-only edges satisfy here
+    // too (Portage consults the installed db for every dep kind: the S0
+    // `s0-e-gbapp-pvuD` capture keeps installed-only `pg34-gone` for a
+    // `BDEPEND` edge). Match requires the installed USE to satisfy the
     // atom's use-deps, and reads this atom's own resolving root.
     // Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp.
     if matches!(outcome, PretendOutcome::NoVisibleCandidate)
         && owner.is_some()
         && depth != 0
-        && !buildtime_hard
         && !from_disjunction
         && !ctx.empty
-        && (atom.slot.is_some() || atom.slot_operator.is_some())
+        && (atom.slot.is_some()
+            || atom.slot_operator.is_some()
+            || !cp_has_tree_or_binary_candidate(&ctx.repos, &ctx.local_binpkg, &key.0, &key.1))
+        && let Some(version) = best_installed_matching(atom_root, current_atom, config)
+    {
+        outcome = PretendOutcome::AlreadyInstalled { version };
+    }
+    // A top-level argument under `--update --selective` with no tree or
+    // binary candidate at all but an installed satisfier is already
+    // installed (`Total: 0`); without `--update` (or with `--selective=n`)
+    // it stays a miss (Portage wants the reinstall and fails: the S0-backed
+    // `360-gone-pv` capture).
+    // Portage: depgraph.py, select_files argument handling.
+    if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+        && owner.is_none()
+        && depth == 0
+        && !from_disjunction
+        && ctx.update
+        && ctx.selective
+        && !ctx.empty
+        && !cp_has_tree_or_binary_candidate(&ctx.repos, &ctx.local_binpkg, &key.0, &key.1)
         && let Some(version) = best_installed_matching(atom_root, current_atom, config)
     {
         outcome = PretendOutcome::AlreadyInstalled { version };

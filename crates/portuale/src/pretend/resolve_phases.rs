@@ -233,7 +233,8 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             } else {
                 eprint!("emerge: {msg}");
             }
-            if let Some(extra) = misspell_suggestion_block(&msg, repos, misspell_suggestions) {
+            if let Some(extra) = misspell_suggestion_block(&msg, repos, root, misspell_suggestions)
+            {
                 eprint!("{extra}");
             }
             eprintln!();

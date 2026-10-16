@@ -35,6 +35,23 @@ pub(crate) fn atom_matches_installed(
     best_installed_matching(root, atom_str, config).is_some()
 }
 
+/// Whether any repo ebuild or local-binary candidate exists for `cat/pkg`
+/// at all, masked or not: `false` means the cp is installed-only (or
+/// unknown). The installed-only fallback keys on exactly this, so a cp
+/// whose ebuilds are all masked keeps its masked-package diagnostics.
+/// Portage: depgraph.py, _iter_match_pkgs_any (the vardb half of `dbs`).
+pub(crate) fn cp_has_tree_or_binary_candidate(
+    repos: &[RepoConfig],
+    local_binpkg: &BinaryIndex,
+    category: &str,
+    package: &str,
+) -> bool {
+    list_candidates(repos, category, package)
+        .map(|c| !c.is_empty())
+        .unwrap_or(false)
+        || !list_binary_candidates(local_binpkg, category, package).is_empty()
+}
+
 /// The highest installed version matching `atom_str` whose recorded vdb `USE`
 /// satisfies its `[use]` deps -- the version `atom_matches_installed` reports. Split
 /// out so `resolve_pretend` can return that exact version, not merely existence.

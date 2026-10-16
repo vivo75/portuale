@@ -387,7 +387,8 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                 color.c("INFORM", &xinfo)
             );
             let msg = format!("there are no ebuilds to satisfy \"{atom_str}\".");
-            if let Some(extra) = misspell_suggestion_block(&msg, repos, misspell_suggestions) {
+            if let Some(extra) = misspell_suggestion_block(&msg, repos, root, misspell_suggestions)
+            {
                 eprintln!("{extra}");
             }
             return ExitCode::from(1);

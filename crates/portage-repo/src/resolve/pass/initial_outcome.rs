@@ -106,13 +106,20 @@ pub(crate) fn resolve_initial_outcome(
                     })?
                 };
                 // The installed fallback below, applied to the prediction too
-                // (each sibling resolves against its own root).
+                // (each sibling resolves against its own root): a slot atom
+                // with an installed match, or no tree or binary candidate
+                // at all with an installed satisfier.
                 if matches!(out, PretendOutcome::NoVisibleCandidate)
                     && depth != 0
-                    && !bh
                     && !ctx.empty
-                    && portage_dep::parse_atom(a)
+                    && (portage_dep::parse_atom(a)
                         .is_some_and(|p| p.slot.is_some() || p.slot_operator.is_some())
+                        || !cp_has_tree_or_binary_candidate(
+                            &ctx.repos,
+                            &ctx.local_binpkg,
+                            &key.0,
+                            &key.1,
+                        ))
                     && let Some(version) = best_installed_matching(
                         if *running {
                             ctx.cross_root()

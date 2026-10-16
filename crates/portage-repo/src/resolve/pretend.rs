@@ -543,9 +543,9 @@ pub struct SelectOptions<'a> {
     pub arg_atoms: &'a [String],
     /// The edge from the owner to this atom is an unsatisfied build-time
     /// dep with no run-time alternative (`QueueItem::buildtime_hard`): an
-    /// installed-only instance never satisfies it here (that gate is S4's
-    /// `#360` business: Portage consults the *running* root, which this
-    /// level cannot see).
+    /// installed-only instance still satisfies it here (the S0
+    /// `s0-e-gbapp-pvuD` capture: Portage keeps installed-only `pg34-gone`
+    /// for a `BDEPEND` edge of a package being merged).
     pub buildtime_hard: bool,
 }
 
@@ -675,7 +675,7 @@ pub fn resolve_pretend(
         deep,
         complete_mode,
         arg_atoms,
-        buildtime_hard,
+        ..
     } = *opts;
     // Portage: create_depgraph_params.py (`--emptytree` pops `selective`).
     let selective = selective && !empty;
@@ -784,9 +784,7 @@ pub fn resolve_pretend(
                     best_binary_build_time(&candidates, &installed_best.version),
                 );
             }
-        } else if !buildtime_hard
-            && let Some(inst_version) = best_installed_matching(root, atom_str, config)
-        {
+        } else if let Some(inst_version) = best_installed_matching(root, atom_str, config) {
             // No tree candidate sits at an installed version (an installed
             // version with no ebuild, e.g. a removed tree version): Portage
             // still keeps the installed instance when it does not want it
@@ -794,8 +792,8 @@ pub fn resolve_pretend(
             // with no reinstall comparison at all (no same-cpv ebuild is
             // ever compared at `:8311-8329`). A wanted instance falls
             // through to the ordinary search below. Build-time-only edges
-            // never satisfy here (that gate is S4's `#360` business: the
-            // running root owns them, invisible at this level).
+            // satisfy here too (the S0 `s0-e-gbapp-pvuD` capture keeps
+            // installed-only `pg34-gone` for a `BDEPEND` edge).
             let (slot, sub_slot) = installed_candidates(root, &atom.category, &atom.package)
                 .into_iter()
                 .find(|(v, _, _)| v == &inst_version)

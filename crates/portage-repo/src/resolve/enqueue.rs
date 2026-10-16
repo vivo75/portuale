@@ -100,11 +100,10 @@ pub(crate) fn enqueue_dependencies(
         installed_meta_memo,
         slot_pullers,
     } = sinks;
-    // The vdb-recorded repo's current metadata (never a priority search).
-    let Some(metadata) = live_metadata_for_installed(repos, root, category, package, version)
-    else {
-        return;
-    };
+    // The installed package's own dependency metadata: the live ebuild view
+    // while the version still has an ebuild, else the vdb-recorded snapshot
+    // for an installed-only package (never a priority search, never absent).
+    let metadata = installed_walk_metadata(repos, root, category, package, version);
 
     let dep_keys: &[&str] = if with_bdeps {
         &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
