@@ -1182,9 +1182,11 @@ fn reinstall_atoms_accepts_a_wildcard_atom() {
 }
 
 #[test]
-fn rebuild_if_unbuilt_reinstalls_a_consumer_of_a_merged_build_dep() {
-    // Installed with a vdb DEPEND on the trigger; upgrading the trigger then
-    // schedules the consumer for a rebuild.
+fn rebuild_if_unbuilt_does_not_rebuild_a_consumer_missing_from_the_graph() {
+    // Portage `_rebuild_config.add` records a rebuild edge only for a parent
+    // already in the graph; `rebuildconsumer` is reached by nothing here, so
+    // even with the trigger merging it gets no `R` row. Oracle: Portage
+    // 3.0.82.2 `s0-b-rebuild-unbuilt` (`U rebuildtrigger-2.0` alone).
     let g = graph_rebuild_if(GraphRebuildIfArgs {
         atom_str: "dev-libs/rebuildtrigger",
         unbuilt: true,
@@ -1194,14 +1196,13 @@ fn rebuild_if_unbuilt_reinstalls_a_consumer_of_a_merged_build_dep() {
         rebuild_ignore: &[],
     });
     assert!(
-        g.iter().any(|(n, o)| n == "dev-libs/rebuildconsumer"
-            && matches!(
-                o,
-                PretendOutcome::Reinstall {
-                    slot_operator_rebuild: false,
-                    ..
-                }
-            )),
+        !g.iter().any(|(n, _)| n == "dev-libs/rebuildconsumer"),
+        "{g:?}"
+    );
+    assert!(
+        g.iter()
+            .any(|(n, o)| n == "dev-libs/rebuildtrigger"
+                && matches!(o, PretendOutcome::Upgrade { .. })),
         "{g:?}"
     );
 }
@@ -2067,9 +2068,12 @@ fn recursion_keeps_an_installed_dependency_whose_use_dep_flag_is_only_in_its_bui
 }
 
 #[test]
-fn recursion_basic_chain_with_update_upgrades_the_dependency() {
-    // Same fixture with --update, reached only as a dependency: still upgrades,
-    // proving `update` threads through the whole BFS.
+fn recursion_basic_chain_with_update_keeps_the_dependency() {
+    // Same fixture with --update, reached only as a dependency: Portage
+    // does NOT want it updated (`_want_update_pkg` false without `--deep`:
+    // `depgraph.py:7304-7333`), so the `:8445-8458` return keeps the
+    // installed instance and no `U` row prints. Oracle: Portage 3.0.82.2
+    // `362-withdeps-pu` (`N newpkg`, `N withdeps`).
     let entries = graph_update("dev-libs/withdeps");
     assert_eq!(
         entries,
@@ -2082,9 +2086,8 @@ fn recursion_basic_chain_with_update_upgrades_the_dependency() {
             ),
             (
                 "dev-libs/upgradepkg".to_string(),
-                PretendOutcome::Upgrade {
-                    from: "1.0".to_string(),
-                    to: "2.0".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
                 }
             ),
             (
@@ -2094,6 +2097,93 @@ fn recursion_basic_chain_with_update_upgrades_the_dependency() {
                 }
             )
         ]
+    );
+}
+
+#[test]
+fn update_without_deep_keeps_a_masked_installed_dependency_silent() {
+    // The `:7972-7979` masked-installed keep needs no visibility check, so
+    // the dep stays installed (silent in display) instead of downgrading.
+    // Oracle: Portage 3.0.82.2 `s0-b-needskeywordmasked`
+    // (`N needskeywordmasked` as the only row).
+    let entries = graph_update("dev-libs/needskeywordmasked");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/keywordmaskedpkg".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "2.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/needskeywordmasked".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn update_without_deep_keeps_an_installed_virtual_provider_silent() {
+    // The installed `virtual/libc-1.0` has no tree candidate left (the repo
+    // holds only 2.0), but Portage walks the vardb independently and keeps
+    // it (`:8445-8458`), so neither the `U` nor the `N fakeglibc` row
+    // prints (the kept dep itself is display-silent). Oracle: Portage
+    // 3.0.82.2 `s0-b-toolchainroot` (`N plainleaf`, `N toolchainroot` as the
+    // only rows).
+    let entries = graph_update("dev-libs/toolchainroot");
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/plainleaf".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "virtual/libc".to_string(),
+                PretendOutcome::AlreadyInstalled {
+                    version: "1.0".to_string()
+                }
+            ),
+            (
+                "dev-libs/toolchainroot".to_string(),
+                PretendOutcome::New {
+                    version: "1.0".to_string()
+                }
+            )
+        ]
+    );
+}
+
+#[test]
+fn an_argument_upgrades_even_when_also_reached_as_a_dependency() {
+    // A second argument (like an `@world` member: `reset_depth` defaults to
+    // true) resets the update depth to 0, so the dependency visit wants the
+    // update too. Oracle: Portage 3.0.82.2 `362-dtop-pvu-argdlib`
+    // (`U pg34-dlib-2`, `N pg34-dtop`).
+    let entries = graph_update_entries(
+        &["dev-libs/pg34-dtop", "dev-libs/pg34-dlib"],
+        &test_config(),
+    );
+    assert!(
+        entries.iter().any(|e| e.category == "dev-libs"
+            && e.package == "pg34-dlib"
+            && matches!(
+                &e.outcome,
+                PretendOutcome::Upgrade { from, to } if from == "1" && to == "2"
+            )),
+        "{entries:?}"
+    );
+    assert!(
+        entries.iter().any(|e| e.category == "dev-libs"
+            && e.package == "pg34-dtop"
+            && matches!(&e.outcome, PretendOutcome::New { .. })),
+        "{entries:?}"
     );
 }
 
@@ -4029,4 +4119,79 @@ fn exact_version_update_keeps_arg_pinned_provider() {
         "slot-atom control still upgrades the provider"
     );
     let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn newuse_without_deep_discards_a_use_drift_reinstall_of_an_unwanted_dep() {
+    // `pg34-ulib-1` is installed without `x` while the config enables it, so
+    // `--newuse` hides the installed instance — but Portage then drops the
+    // edge (`reinstall=True` plus `_ignore_dependency`): display prints
+    // `N pg34-uapp` alone (the discarded edge leaves a silent
+    // `AlreadyInstalled` entry). Oracle: Portage 3.0.82.2 `dbg-uapp-pvN`
+    // and `362-uapp-pvN`.
+    for update in [false, true] {
+        let entries = graph_real_with("dev-libs/pg34-uapp", |r| {
+            r.newuse = true;
+            r.update = update;
+        });
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "dev-libs/pg34-ulib".to_string(),
+                    PretendOutcome::AlreadyInstalled {
+                        version: "1".to_string()
+                    }
+                ),
+                (
+                    "dev-libs/pg34-uapp".to_string(),
+                    PretendOutcome::New {
+                        version: "1".to_string()
+                    }
+                ),
+            ],
+            "update={update}"
+        );
+    }
+}
+
+#[test]
+fn newuse_with_deep_keeps_a_use_drift_reinstall_of_an_unwanted_dep() {
+    // Same shape with `--deep`: the walk recurses into the installed
+    // subtree (`recurse_satisfied`), so the edge survives and the `R` plus
+    // the `N pg34-uextra` rows print. Oracle: Portage 3.0.82.2
+    // `362-uapp-pvDN` (the `-pvuD` and `-pvuDN` controls share these rows).
+    let entries = graph_real_with("dev-libs/pg34-uapp", |r| {
+        r.newuse = true;
+        r.deep = Deep::Unlimited;
+    });
+    assert_eq!(
+        entries,
+        vec![
+            (
+                "dev-libs/pg34-uextra".to_string(),
+                PretendOutcome::New {
+                    version: "1".to_string()
+                }
+            ),
+            (
+                "dev-libs/pg34-ulib".to_string(),
+                PretendOutcome::Reinstall {
+                    version: "1".to_string(),
+                    changed_flags: vec!["x".to_string()],
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                }
+            ),
+            (
+                "dev-libs/pg34-uapp".to_string(),
+                PretendOutcome::New {
+                    version: "1".to_string()
+                }
+            ),
+        ]
+    );
 }

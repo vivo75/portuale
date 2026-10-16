@@ -1263,6 +1263,11 @@ fn resolve_163(
             autounmask_license: o.autounmask_license,
             autounmask_masks: o.autounmask_masks,
             extra_constraints: &o.extra_constraints,
+            depth: 0,
+            deep: Deep::NotRequested,
+            complete_mode: false,
+            arg_atoms: &[],
+            buildtime_hard: false,
         },
     )
     .unwrap_or_else(|e| panic!("resolve_163({atom}) failed: {e}"))

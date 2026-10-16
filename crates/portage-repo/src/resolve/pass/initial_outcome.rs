@@ -102,6 +102,7 @@ pub(crate) fn resolve_initial_outcome(
                         key,
                         atom_text: a,
                         running: *running,
+                        buildtime_hard: *bh,
                     })?
                 };
                 // The installed fallback below, applied to the prediction too
@@ -156,6 +157,7 @@ pub(crate) fn resolve_initial_outcome(
             key,
             atom_text: current_atom,
             running: item_targets_running_root,
+            buildtime_hard,
         })?
     };
     Ok(ControlFlow::Continue(outcome))

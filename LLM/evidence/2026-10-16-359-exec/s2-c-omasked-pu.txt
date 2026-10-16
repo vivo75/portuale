@@ -1,0 +1,43 @@
+### emerge --pretend --update dev-libs/omasked --color=n
+### fresh host stage per cell (S0 procedure incl. PORTAGE_REPOSITORIES); host Portage 3.0.82.2; host make.profile symlinked to the staged fixture default for the run (else the running profile cannot parse with testrepo-only repos; cells have no BDEPENDs so it does not shape rows); /etc/make.local emptied for the run (both host files restored after)
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/var/tmp/x359b/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.14 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/omasked-1.0 to /var/tmp/x359b/st/fixtures/
+
+!!! The following installed packages are masked:
+- dev-libs/omaskedinstalled-1.0::testrepo (masked by: package.mask)
+/var/tmp/x359b/st/fixtures/repo/profiles/package.mask:
+# repo-level package.mask (the real Gentoo tree's own security/arch-mask
+# mechanism) -- stacked ahead of the profile chain's own package.mask
+# files and the user-level /etc/portage/package.mask, with -atom removal
+# applying across all three sources, not just within one file.
+# masters: an overlay with no explicit "masters =" implicitly masters
+# this (the main) repo alone -- these two entries mask packages that
+# exist ONLY in the overlay (never in this repo), so the only way
+# either can end up masked is via that implicit master inheritance,
+# not an ordinary same-repo mask.
+# explicit masters= (repos.conf): independentoverlay declares
+# "masters = overlay", NOT this (the main) repo -- this entry must NOT
+# mask independentmastermainonlypkg (which exists only there), proving
+# masters is no longer an unconditional "every overlay masters main"
+# blanket rule.
+# fixture: backlog #22 slice 4 (other_installed bin) -- masked despite
+# being genuinely installed; see dev-libs/omasked's || group.
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+rc=0

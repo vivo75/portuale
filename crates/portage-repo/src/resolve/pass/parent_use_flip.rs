@@ -17,6 +17,7 @@ pub(crate) struct ParentUseFlipArgs<'a> {
     pub(crate) state: &'a mut PassState,
     pub(crate) config: &'a Config,
     pub(crate) key: &'a (String, String),
+    pub(crate) buildtime_hard: bool,
 }
 
 /// A dependency only a parent's USE flip can satisfy: record the flip and re-walk.
@@ -35,6 +36,7 @@ pub(crate) fn parent_use_flip(
         state,
         config,
         key,
+        buildtime_hard,
     } = args;
     if !(matches!(outcome, PretendOutcome::NoVisibleCandidate)
         && bp.autounmask_suggest_use
@@ -80,6 +82,8 @@ pub(crate) fn parent_use_flip(
         &re_atom,
         &SelectOptions {
             is_top_level: depth == 0,
+            depth,
+            buildtime_hard,
             ..ctx.select_options(bp)
         },
     )?;

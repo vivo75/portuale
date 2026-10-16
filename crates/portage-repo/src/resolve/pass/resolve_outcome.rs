@@ -13,6 +13,7 @@ pub(crate) struct ResolveQueueAtomArgs<'a> {
     pub(crate) key: &'a (String, String),
     pub(crate) atom_text: &'a str,
     pub(crate) running: bool,
+    pub(crate) buildtime_hard: bool,
 }
 
 /// One `resolve_pretend` call against the pass-constant constraints.
@@ -29,6 +30,7 @@ pub(crate) fn resolve_queue_atom(args: ResolveQueueAtomArgs<'_>) -> Result<Prete
         key,
         atom_text,
         running,
+        buildtime_hard,
     } = args;
     let empty_constraints: Vec<String> = Vec::new();
     let extra_constraints = union_constraints.get(key).unwrap_or(&empty_constraints);
@@ -48,6 +50,11 @@ pub(crate) fn resolve_queue_atom(args: ResolveQueueAtomArgs<'_>) -> Result<Prete
         atom_text,
         &SelectOptions {
             is_top_level: depth == 0,
+            depth,
+            deep: ctx.deep,
+            complete_mode: ctx.complete,
+            arg_atoms: ctx.atoms,
+            buildtime_hard,
             extra_constraints,
             ..ctx.select_options(bp)
         },

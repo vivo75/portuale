@@ -226,6 +226,7 @@ pub(crate) fn resolve_root_deps_build_entries(
             empty: false,
             getbinpkg: false,
             autounmask_keywords: false,
+            buildtime_hard: true,
             ..SelectOptions::default()
         },
     ) else {

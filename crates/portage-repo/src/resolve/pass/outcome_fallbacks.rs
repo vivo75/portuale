@@ -134,6 +134,7 @@ pub(crate) fn apply_outcome_fallbacks(
             key,
             atom_text: &format!("={}/{}-{target}", key.0, key.1),
             running: item_targets_running_root,
+            buildtime_hard,
         })?;
         if !matches!(forced, PretendOutcome::NoVisibleCandidate) {
             outcome = forced;

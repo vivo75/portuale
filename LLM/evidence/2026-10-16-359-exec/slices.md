@@ -120,3 +120,173 @@ the host's Portage 3.0.82.2 for this slice):
   business; only named in the fixed docstrings.
 - `LLM/what-this-proves.md` untouched (plan assigns it to Z).
 - Full pmtest suite + corpus bless: coordinator's gate, per the brief.
+
+---
+
+# 02.359 S2 (#362 `_want_update_pkg` + `_too_deep`) — slice log
+
+Branch `backlog/359-default-solver-update` in both repos (pre-existing, not
+switched). Nothing committed, pushed, added, stashed, reset or cleaned
+(coordinator reviews and commits; `git add` never run). No bed scripts run
+(plan S2 needs none beyond the workspace + contract gates). No `/dev/shm`
+writes. Host files touched transiently for Portage captures only
+(`/etc/make.local` emptied, `/etc/portage/make.profile` repointed; both
+restored and checksummed after each batch — details below). Scratch
+`/var/tmp/x359b` (+ `/var/tmp/x359b-delta`, `/var/tmp/x359b/st`) removed at
+the end with a separate `sudo rm -rf` (plus `mkdir` for the next run);
+per-run root-owned basetemp crud forced one mid-task clean before the final
+full-suite passes.
+
+## Product change (portuale repo, uncommitted)
+
+`_want_update_pkg` + `_too_deep` for default-solver dependency selection,
+ported from host Portage 3.0.82.2 (`/usr/lib/python3.14/site-packages/`).
+
+- `crates/portage-repo/src/resolve/pretend.rs`
+  - `SelectOptions` += `depth: u32`, `deep: Deep`, `complete_mode: bool`,
+    `arg_atoms: &[String]`, `buildtime_hard: bool` (+ `Default`, all
+    neutral). New helpers `update_too_deep` (D1 direct definition, NOT
+    negated `recurses_at`), `update_recurse_satisfied`
+    (`_wrapped_add_pkg_dep_string`'s flag), `installed_matches_argument`
+    (+ `InstalledArgumentMatchArgs`), `installed_probe_satisfies_extra_constraints`,
+    `tree_knows_use_dep_flags`, `avoid_update_outcome`.
+  - Site-A (`:468`) rewrite: for a dependency atom with an installed
+    match, `want = !complete && (arg || update) && !too_deep(arg ? 0 :
+    depth)`; `!want` returns `avoid_update_outcome` (installed kept with
+    no reinstall flip and no visibility filter; a pending reinstall is
+    discarded exactly when Portage drops the edge, else kept);
+    `want && !update` keeps the old flip (argument without `--update`);
+    `want && update` falls through as before. `--exclude` keeps the
+    pre-existing gate (no S0 cell distinguishes). New case-2: an installed
+    version with no tree candidate is still kept when unwanted
+    (`best_installed_matching` + extra-constraints probe), gated on
+    `!buildtime_hard` (S4's `#360` gate untouched) and on the tree knowing
+    every positively-required USE flag (else Portage `Missing IUSE`
+    errors). Top-level atoms keep today's path.
+- `resolve/pass/resolve_outcome.rs` populates the five fields per queued
+  atom (`is_top_level = depth == 0` unchanged); `buildtime_hard` threaded
+  through `ResolveQueueAtomArgs`, the minimize-group prediction (per
+  sibling), the forced-upgrade flip, `ParentUseFlipArgs`, and the
+  running-root build walk (`root_deps.rs`, marked build-time).
+- `slot_operator/eliminate.rs` (`rebuild_if_entries`): Portage
+  `_rebuild_config` only rebuilds parents already in the graph, so
+  packages no entry reaches are never rebuilt (S0 `s0-b-rebuild-*`;
+  fresh `s2-fresh-ub`). Reached parents keep the walked outcome (the
+  restart-to-rebuild re-walk is a separate, unfiled gap).
+- `tests_163.rs`: exhaustive literal gains the new fields (neutral).
+- Unit tests: 8 new in `tests/pretend.rs` (too_deep table, arg match,
+  plain/masked/USE/installed-only keeps, arg reset, deep=1, tree-USE
+  gate); `tests/graph.rs`: `recursion_basic_chain_with_update…` re-grounded
+  to `AlreadyInstalled`, new masked/virtual/arg-reset twins, two
+  real-config uapp tests (drop without deep, keep with deep),
+  `rebuild_if_unbuilt…` rewritten to absence.
+- Code notes: `portage-repo/resolve/pretend.md` (S2 section),
+  `…/pass/resolve_outcome.md` (plumbing), `…/slot_operator/eliminate.md`
+  (gate); `python3 LLM/tools/code_notes_index.py` clean.
+
+## pmtest change (pmtest repo, uncommitted; corpus blessed here)
+
+- Rewritten to Portage rows: `test_update_threads…` (now keeps),
+  `test_rebuild_if_star…` (trigger U-only; nochange-ub R-trigger-only),
+  world/system expands+combines, onlydeps ×2, isd-n lists, libc asap,
+  or_group stderr (opartlyb-only); relabeled `CASES :2569`; converted the
+  `test_pg367_top_default_pvu…` strict xfail (`reason="#362"`, batch D7)
+  to a normal pin (solver now prints the asserted rows).
+- New default-solver pins: dtop `-pvu`/`-pvuN`, uapp `-pvN`/`-pvuN`,
+  needskeywordmasked `--update`, toolchainroot `--update` (all with the
+  Portage capture named in the docstring).
+- `PORTUALE_CORPUS_BLESS=1` full run accepted 25 drift entries, each
+  reviewed below (rows == capture rows modulo framing; `for <root>`
+  suffix stays omitted per #395). Changed files:
+  `test_emerge_pretend_contract.py`, `corpus/contract.json.xz`,
+  `corpus/expanded.json.xz`.
+
+### Bless table (every entry ↔ its capture)
+
+- `s0-b-world/-selected/-system/-isd-n`, `362-withdeps-pu`,
+  `362-needskeywordmasked-pu`, `362-dtop-pvu/-pvuN`,
+  `362-uapp-pvN/-pvuN`, `s0-b-rebuild-unbuilt`,
+  `s0-d-movedepconsumer-deep-nomoves`: S0
+  (`LLM/evidence/2026-10-15-359-s0/out/`, old-plan cells via S0 matrix).
+- `s2-fresh-ub` (`--rebuild-if-unbuilt rebuildnochange` → R trigger
+  alone), `s2-c-onlydeps-pu`, `s2-c-samepkg-world-pu`,
+  `s2-c-samepkg-system-pu`, `s2-c-toolchainroot-p/-pv/-tree`,
+  `s2-c-opartly-p/-pv/-pu/-tree`, `s2-c-omasked-pu`,
+  `s2-c-needsbuilt-pu`: fresh host Portage 3.0.82.2 captures taken for
+  this slice (same options + staged fixture config as S0; stored here).
+  `--json`/`--quiet` drifts are projections of the same rows (abort atom
+  `opartlyb`; entries with `libc already_installed`); `--tree` drifts
+  match the two `--tree` captures.
+- `s2-probe-changeddeps.txt` (staged-only `cdparent` parent):
+  `--changed-deps` without `--deep` prints the parent alone, with
+  `--deep` the `R` + new dep — grounds the hide/drop boundary (never
+  committed anywhere).
+- Bare `--implicit-system-deps` keeps rc 0 while Portage errors (rc 2):
+  pre-existing argparse divergence, S0 STOP-1, owner decision — rows
+  follow `s0-b-isd-n`, rc untouched.
+
+## Commands and results
+
+- `cargo fmt --check` — clean. `cargo clippy --release --all-targets` —
+  0 warnings (one `too_many_arguments` fixed via an args struct).
+- `timeout 2400 cargo test --release -- --test-threads=2` (whole
+  workspace) — all green (incl. portage-repo lib 1093 passed; the default
+  thread count flakes on fixed-tempdir tests, hence the mandated flag).
+- `python3 -m pytest pytests-contract-suite -q
+  --basetemp=/var/tmp/x359b -p no:cacheprovider -rf` — final bless run:
+  **3916 passed, 37 skipped, 3 xfailed** (baseline 3909/37/4; +6 new pins,
+  +1 converted xfail; mid-task runs: 11 failed → all rewritten/converted,
+  then 1 failed (args8, blessed) → 0 failed).
+- `sudo rm -rf /var/tmp/x359b` — separate command, done (after the bless
+  run; logs were copied out first).
+
+## Surprises
+
+- The rebuild `R` came from `rebuild_if_entries` (assemble synthesis),
+  not the walk: the consumer is unreachable (trigger has no deps), and
+  Portage's `_rebuild_config.add` only records edges for parents already
+  in the graph (read at `depgraph.py:424-442/531-573`). Fixing it needed
+  one fresh capture (`s2-fresh-ub`), which also corrected the
+  rebuildnochange half of the pin.
+- `--changed-deps` without `--deep` prints the parent alone in Portage
+  too (staged `cdparent` probe): the installed `break` at `:8291-8307`
+  is followed by an `_ignore_dependency` drop. The pre-existing 163
+  unit test expecting the `R` without deep encoded non-Portage
+  behaviour; the probe grounded the hide/drop split.
+- `builtusedivergedep[divergedflag]` (vdb USE has the flag, no ebuild
+  IUSE does) errors in Portage (`Missing IUSE`) while a same-shaped
+  keep is correct for `keywordmaskedusepkg[flag]` (tree IUSE has it):
+  told apart by `tree_knows_use_dep_flags` (fresh `s2-c-needsbuilt-pu`).
+- Host captures need three host-quirk workarounds (all restored after):
+  `/etc/make.local` emptied (else `EMERGE_DEFAULT_OPTS` with
+  `--usepkg=n --getbinpkg=y` leaks in), `/etc/portage/make.profile`
+  symlinked into the staged fixture default (else the running profile
+  cannot parse with testrepo-only repos), and `PORTAGE_REPOSITORIES`
+  set (else the `/usr/share` default gentoo repo at the existing
+  `/var/db/repos/gentoo` leaks providers into virtual resolution, as
+  seen first with `virtual/libc` → host glibc). `PORTDIR=` override is
+  NOT a substitute (it unloads the main repo). Cells have no BDEPENDs,
+  so the running profile does not shape rows. Two capture attempts
+  with a broken stage (script wiped by a basetemp clean) produced
+  config-error output and were deleted, re-staged and re-taken.
+- G4 bonus inside S2's mechanism: `gapp -pv`/`-pvu` (rc 1 → 0, `N gapp`)
+  and both moves-off `movedepconsumer` cells (rc 1 → 0) now match their
+  captures via the installed-direct fallback. `-pvuD` shapes and
+  `gone`-as-argument stay S4's.
+
+## Left undone and why
+
+- `s0-d-slotmovepkg-nomoves` (`--update --package-moves=n
+  dev-libs/slotmovepkg`: Portage EMPTY, portuale `NS`): top-level
+  same-version slot-mismatch; the plan keeps top-level atoms on today's
+  path, so S2 does not touch it. No pin or corpus entry covers the argv
+  (nothing fails); flagged for the owner/S3–S5.
+- `--usepkgonly=n` residual: still diverges (`U` vs Portage `Total: 0`
+  via the ebuild-db drop at `depgraph.py:809`); S0 STOP-2 left #396
+  unfiled and S2 keeps the `excluded.is_empty()` gate — out of scope.
+- In-graph installed parents never rebuild via `--rebuild-if-*`
+  (portuale lacks Portage's restart-to-rebuild re-walk); no backlog
+  number filed (S2 authorizes none) — owner/Z to decide.
+- `LLM/what-this-proves.md`: untouched (plan assigns it to Z).
+- Full-suite green depends on the bless in this slice's pmtest commit;
+  the paired portuale commit carries the code + unit tests + notes.

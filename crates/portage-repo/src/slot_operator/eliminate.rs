@@ -425,6 +425,20 @@ pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEnt
     let mut out: Vec<GraphEntry> = Vec::new();
     for pkg in all_installed_packages(root) {
         let cp = (pkg.category.clone(), pkg.package.clone());
+        // Portage `_rebuild_config.add` records a rebuild edge only for a
+        // parent already in the graph (an installed node with a buildtime
+        // edge to the dep); `trigger_rebuilds` walks that graph alone. A
+        // package this run never reaches is therefore never rebuilt, even
+        // when its vdb build-dep names a merged package (S0: `-u
+        // --rebuild-if-* dev-libs/rebuildtrigger` merges the trigger alone;
+        // the unreached `rebuildconsumer` gets no `R` row).
+        if !in_graph.contains(&cp) {
+            continue;
+        }
+        // A reached package keeps the outcome the walk gave it: flipping it
+        // post-walk would skip walking its own deps, while Portage restarts
+        // the whole walk to rebuild it. That re-walk is a separate gap, so
+        // neither arm synthesises anything today.
         if in_graph.contains(&cp) {
             continue;
         }

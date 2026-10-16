@@ -195,6 +195,241 @@ pub(crate) fn already_installed_or_reinstall(
     })
 }
 
+/// Portage `_too_deep` for `_want_update_pkg` (`depgraph.py:7359-7375`),
+/// defined directly: with no `--deep` any dep depth counts as too deep,
+/// unlimited `--deep` never does, `--deep=N` counts past `N`. Deliberately
+/// not negated `Deep::recurses_at`: that answers whether an installed
+/// package's own deps are walked, a different question (never, for the
+/// default) with a different signature.
+pub(crate) fn update_too_deep(deep: Deep, depth: u32) -> bool {
+    match deep {
+        Deep::NotRequested => depth > 0,
+        Deep::Unlimited => false,
+        Deep::Bounded(n) => depth > n,
+    }
+}
+
+/// Portage `_wrapped_add_pkg_dep_string`'s `recurse_satisfied`
+/// (`depgraph.py:4474`): with unlimited `--deep`, or the dep's own depth
+/// within a bounded `--deep`, the installed satisfier's subtree is walked,
+/// so `_ignore_dependency` never drops the edge.
+pub(crate) fn update_recurse_satisfied(deep: Deep, depth: u32) -> bool {
+    match deep {
+        Deep::Unlimited => true,
+        Deep::Bounded(n) => depth <= n,
+        Deep::NotRequested => depth == 0,
+    }
+}
+
+/// The values [`installed_matches_argument`] reads from its caller.
+pub(crate) struct InstalledArgumentMatchArgs<'a> {
+    pub(crate) arg_atoms: &'a [String],
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) sub_slot: &'a str,
+    pub(crate) repo_name: &'a str,
+}
+
+/// Whether the installed `category/package-version` matches a top-level
+/// argument atom: Portage `_iter_atoms_for_pkg` minus the higher-slot guard
+/// (greedy-slot territory, owned by #359 S3) and the internal-set
+/// `reset_depth=False` cases (slot-operator seeds never sit in `arg_atoms`).
+/// A match resets the update depth to 0.
+pub(crate) fn installed_matches_argument(args: InstalledArgumentMatchArgs<'_>) -> bool {
+    let InstalledArgumentMatchArgs {
+        arg_atoms,
+        category,
+        package,
+        version,
+        slot,
+        sub_slot,
+        repo_name,
+    } = args;
+    let probe = format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}");
+    arg_atoms.iter().any(|arg| {
+        let (cat, pkg) = match portage_dep::parse_atom(arg) {
+            Some(parsed) => (parsed.category, parsed.package),
+            None => return false,
+        };
+        if cat != category || pkg != package {
+            return false;
+        }
+        portage_dep::match_from_list(arg, &[probe.as_str()]).is_some_and(|r| !r.is_empty())
+    })
+}
+
+/// Whether every positively-required USE-dep flag of `atom` appears in some
+/// *visible* tree candidate's IUSE: without that, Portage reports the dep
+/// unsatisfiable (`Missing IUSE`) instead of keeping an installed instance
+/// whose own recorded USE happens to carry the flag. Checked against the
+/// tree, not the vdb, so an installed-only flag carrier still errors.
+fn tree_knows_use_dep_flags(
+    candidates: &[Candidate],
+    atom: &portage_dep::Atom,
+    config: &portage_profile::Config,
+) -> bool {
+    let Some(deps) = atom.use_deps.as_deref() else {
+        return true;
+    };
+    deps.iter()
+        .filter(|d| d.op == portage_dep::UseDepOp::Enabled)
+        .all(|need| {
+            candidates.iter().any(|c| {
+                is_visible(c, &atom.category, &atom.package, config)
+                    && candidate_iuse_and_use(c, &atom.category, &atom.package, config)
+                        .is_some_and(|(iuse, _)| iuse.contains(&need.flag))
+            })
+        })
+}
+
+/// Whether an installed `cat/pkg-version` string satisfies every extra
+/// constraint of the request: the string twin of
+/// [`satisfies_extra_constraints`] for installed instances with no tree
+/// candidate to build the string from.
+fn installed_probe_satisfies_extra_constraints(probe: &str, extra_constraints: &[String]) -> bool {
+    extra_constraints
+        .iter()
+        .all(|ec| match ec.strip_prefix('!') {
+            Some(_) if is_instance_only_mask(ec) => true,
+            Some(neg) => {
+                !portage_dep::match_from_list(neg, &[probe]).is_some_and(|r| !r.is_empty())
+            }
+            None => portage_dep::match_from_list(ec, &[probe]).is_some_and(|r| !r.is_empty()),
+        })
+}
+
+/// The values [`avoid_update_outcome`] reads from its caller.
+pub(crate) struct AvoidUpdateOutcomeArgs<'a> {
+    pub(crate) source: &'a SelectSource<'a>,
+    pub(crate) opts: &'a SelectOptions<'a>,
+    pub(crate) atom: &'a portage_dep::Atom,
+    pub(crate) candidates: &'a [Candidate],
+    pub(crate) installed_best: &'a Candidate,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
+/// What a dependency atom resolves to when Portage would not want it
+/// updated (`!_want_update_pkg`): the installed instance is kept without
+/// the `--newuse`/`--changed-use` reinstall flip and without the visibility
+/// filter (`:8445-8458` return, `:7972-7979` masked-installed keep), unless a
+/// reinstall genuinely hides the vardb and Portage keeps the ebuild child
+/// (invisible satisfier, recursion, or an argument naming it).
+// Portage: lib/_emerge/depgraph.py, _wrapped_select_pkg_highest_available_imp;
+// _want_update_pkg; _ignore_dependency
+pub(crate) fn avoid_update_outcome(
+    args: AvoidUpdateOutcomeArgs<'_>,
+) -> Result<PretendOutcome, Error> {
+    let AvoidUpdateOutcomeArgs {
+        source,
+        opts,
+        atom,
+        candidates,
+        installed_best,
+        config,
+    } = args;
+    let SelectOptions {
+        newuse,
+        changed_use,
+        changed_deps,
+        with_bdeps,
+        changed_slot,
+        newrepo,
+        deep,
+        depth,
+        arg_atoms,
+        ..
+    } = *opts;
+    // A pending reinstall hides the vardb in Portage only for a same-cpv
+    // ebuild USE-drift comparison (`:8311-8329`, gated on
+    // `cpv in vardb.match(atom)`), `--newrepo`, or the installed-side
+    // `break` for `--changed-deps`/`--changed-slot` (`:8291-8307`: the
+    // installed instance is skipped, the ebuild child selected). A masked
+    // installed package has no visible same-cpv ebuild, so its USE drift
+    // never hides it. (`--reinstall-atoms` is deliberately not a hiding
+    // trigger here: the pass fallback flips the kept instance back to
+    // `Reinstall` afterwards. `--rebuilt-binaries` never hides the vardb
+    // either: a drifting binary is skipped, the installed instance kept.)
+    let use_drift = (newuse || changed_use)
+        && reinstall_flags_for_use_change(ReinstallFlagsForUseChangeArgs {
+            root: source.root,
+            category: &atom.category,
+            package: &atom.package,
+            candidate: installed_best,
+            config,
+            newuse,
+        })
+        .is_some_and(|flags| !flags.is_empty());
+    let same_cpv_visible = candidates.iter().any(|c| {
+        c.version == installed_best.version && is_visible(c, &atom.category, &atom.package, config)
+    });
+    let newrepo_fires = newrepo
+        && new_repo_changed(
+            source.root,
+            &atom.category,
+            &atom.package,
+            &installed_best.version,
+            &installed_best.repo_name,
+        );
+    let deps_changed_fires = changed_deps
+        && deps_changed(DepsChangedArgs {
+            root: source.root,
+            repos: source.repos,
+            category: &atom.category,
+            package: &atom.package,
+            version: &installed_best.version,
+            with_bdeps,
+        });
+    let slot_changed_fires = changed_slot
+        && slot_changed(
+            source.root,
+            source.repos,
+            &atom.category,
+            &atom.package,
+            &installed_best.version,
+        );
+    let flip = already_installed_or_reinstall(
+        source,
+        opts,
+        atom,
+        installed_best,
+        best_binary_build_time(candidates, &installed_best.version),
+    )?;
+    if !matches!(flip, PretendOutcome::Reinstall { .. }) {
+        return Ok(flip);
+    }
+    if !(use_drift && same_cpv_visible)
+        && !newrepo_fires
+        && !deps_changed_fires
+        && !slot_changed_fires
+    {
+        return Ok(PretendOutcome::AlreadyInstalled {
+            version: installed_best.version.clone(),
+        });
+    }
+    // The vardb is hidden and the ebuild child selected; Portage drops that
+    // edge (`_ignore_dependency`) unless an argument names the child, the
+    // installed satisfier is invisible, or the walk recurses into it. The
+    // reinstall and the child share one version by construction, so the
+    // argument test reuses the installed instance.
+    let arg_match = installed_matches_argument(InstalledArgumentMatchArgs {
+        arg_atoms,
+        category: &atom.category,
+        package: &atom.package,
+        version: &installed_best.version,
+        slot: &installed_best.slot,
+        sub_slot: &installed_best.sub_slot,
+        repo_name: &installed_best.repo_name,
+    });
+    if !arg_match && same_cpv_visible && !update_recurse_satisfied(deep, depth) {
+        return Ok(PretendOutcome::AlreadyInstalled {
+            version: installed_best.version.clone(),
+        });
+    }
+    Ok(flip)
+}
+
 // Reads one `slot_operator_mask_built` negative in binary-marked form
 // (`!=cat/pkg-ver[binary]`). Portage keys the mask by package object so only the
 // binary instance hides; portuale's string readers match both, so the marker keeps
@@ -267,6 +502,10 @@ pub struct SelectSource<'a> {
 /// The emerge options that shape one [`resolve_pretend`] selection.
 /// `Default` is emerge with no option given (`--with-bdeps` and
 /// `--selective` on, everything else off) for a dependency atom.
+/// `depth`/`deep`/`complete_mode`/`arg_atoms` are walk state for Portage's
+/// `_want_update_pkg` (`_depth_increment` reset included): direct callers
+/// resolving a dependency set `depth` to the dep's own depth (top-level
+/// atoms resolve at depth 0 through the walk, never through `Default`).
 #[derive(Debug, Clone, Copy)]
 pub struct SelectOptions<'a> {
     pub newuse: bool,
@@ -293,6 +532,21 @@ pub struct SelectOptions<'a> {
     pub autounmask_license: bool,
     pub autounmask_masks: bool,
     pub extra_constraints: &'a [String],
+    /// The queued depth of the atom being resolved (0 for a top-level atom).
+    pub depth: u32,
+    /// The run's `--deep` setting, for `_too_deep`.
+    pub deep: Deep,
+    /// Portage's `_complete_mode`: nothing is ever wanted for update in it.
+    pub complete_mode: bool,
+    /// The run's top-level atom texts (set members included), for the
+    /// `_iter_atoms_for_pkg` argument match (a match resets depth to 0).
+    pub arg_atoms: &'a [String],
+    /// The edge from the owner to this atom is an unsatisfied build-time
+    /// dep with no run-time alternative (`QueueItem::buildtime_hard`): an
+    /// installed-only instance never satisfies it here (that gate is S4's
+    /// `#360` business: Portage consults the *running* root, which this
+    /// level cannot see).
+    pub buildtime_hard: bool,
 }
 
 impl Default for SelectOptions<'_> {
@@ -322,6 +576,11 @@ impl Default for SelectOptions<'_> {
             autounmask_license: false,
             autounmask_masks: false,
             extra_constraints: &[],
+            depth: 0,
+            deep: Deep::NotRequested,
+            complete_mode: false,
+            arg_atoms: &[],
+            buildtime_hard: false,
         }
     }
 }
@@ -367,6 +626,11 @@ impl ResolveCtx<'_> {
             autounmask_masks: bp.autounmask_suggest_masks,
             is_top_level: false,
             extra_constraints: &[],
+            depth: 0,
+            deep: Deep::NotRequested,
+            complete_mode: false,
+            arg_atoms: &[],
+            buildtime_hard: false,
         }
     }
 }
@@ -407,6 +671,11 @@ pub fn resolve_pretend(
         autounmask_license,
         autounmask_masks,
         extra_constraints,
+        depth,
+        deep,
+        complete_mode,
+        arg_atoms,
+        buildtime_hard,
     } = *opts;
     // Portage: create_depgraph_params.py (`--emptytree` pops `selective`).
     let selective = selective && !empty;
@@ -465,7 +734,7 @@ pub fn resolve_pretend(
     // dependency `avoid_update` early return below can never fire (its pool holds no
     // installed instance).
     // Portage: depgraph.py
-    if !update && !empty && !is_top_level && excluded.is_empty() {
+    if !empty && !is_top_level && excluded.is_empty() {
         let installed = installed_candidates(root, &atom.category, &atom.package);
         if let Some(installed_best) =
             dependency_avoid_update_candidate(DependencyAvoidUpdateCandidateArgs {
@@ -478,13 +747,85 @@ pub fn resolve_pretend(
             })
             .filter(|c| satisfies_extra_constraints(c, &atom, extra_constraints))
         {
-            return already_installed_or_reinstall(
-                source,
-                opts,
-                &atom,
-                installed_best,
-                best_binary_build_time(&candidates, &installed_best.version),
+            // Portage `_want_update_pkg` (`depgraph.py:7304-7333`): no
+            // complete mode, an argument (depth reset to 0) or `--update`,
+            // and the effective depth not `_too_deep`. `--exclude`d packages
+            // count as not-wanted there too, but the pre-existing
+            // `excluded.is_empty()` gate above keeps those on the older
+            // path (no S0 cell distinguishes them).
+            let arg_match = installed_matches_argument(InstalledArgumentMatchArgs {
+                arg_atoms,
+                category: &atom.category,
+                package: &atom.package,
+                version: &installed_best.version,
+                slot: &installed_best.slot,
+                sub_slot: &installed_best.sub_slot,
+                repo_name: &installed_best.repo_name,
+            });
+            let want_update = !complete_mode
+                && (arg_match || update)
+                && !update_too_deep(deep, if arg_match { 0 } else { depth });
+            if !want_update && tree_knows_use_dep_flags(&candidates, &atom, config) {
+                return avoid_update_outcome(AvoidUpdateOutcomeArgs {
+                    source,
+                    opts,
+                    atom: &atom,
+                    candidates: &candidates,
+                    installed_best,
+                    config,
+                });
+            }
+            if !update {
+                return already_installed_or_reinstall(
+                    source,
+                    opts,
+                    &atom,
+                    installed_best,
+                    best_binary_build_time(&candidates, &installed_best.version),
+                );
+            }
+        } else if !buildtime_hard
+            && let Some(inst_version) = best_installed_matching(root, atom_str, config)
+        {
+            // No tree candidate sits at an installed version (an installed
+            // version with no ebuild, e.g. a removed tree version): Portage
+            // still keeps the installed instance when it does not want it
+            // updated (`:8445-8458`, the vardb half of `matched_packages`),
+            // with no reinstall comparison at all (no same-cpv ebuild is
+            // ever compared at `:8311-8329`). A wanted instance falls
+            // through to the ordinary search below. Build-time-only edges
+            // never satisfy here (that gate is S4's `#360` business: the
+            // running root owns them, invisible at this level).
+            let (slot, sub_slot) = installed_candidates(root, &atom.category, &atom.package)
+                .into_iter()
+                .find(|(v, _, _)| v == &inst_version)
+                .map(|(_, s, ss)| (s, ss))
+                .unwrap_or_default();
+            let repo = installed_pkg_repo(root, &atom.category, &atom.package, &inst_version);
+            let probe = format!(
+                "{}/{}-{inst_version}:{slot}/{sub_slot}::{repo}",
+                atom.category, atom.package
             );
+            if installed_probe_satisfies_extra_constraints(&probe, extra_constraints) {
+                let arg_match = installed_matches_argument(InstalledArgumentMatchArgs {
+                    arg_atoms,
+                    category: &atom.category,
+                    package: &atom.package,
+                    version: &inst_version,
+                    slot: &slot,
+                    sub_slot: &sub_slot,
+                    repo_name: &repo,
+                });
+                let want_update = !complete_mode
+                    && (arg_match || update)
+                    && !update_too_deep(deep, if arg_match { 0 } else { depth });
+                if !want_update {
+                    return Ok(PretendOutcome::AlreadyInstalled {
+                        version: inst_version,
+                    });
+                }
+            }
+            // Otherwise falls through to the ordinary search below.
         }
     }
 

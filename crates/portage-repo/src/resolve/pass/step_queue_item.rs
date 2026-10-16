@@ -135,6 +135,7 @@ pub(crate) fn step_queue_item(args: StepQueueItemArgs<'_>) -> Result<ControlFlow
         state: &mut *state,
         config,
         key: &key,
+        buildtime_hard,
     })?
     else {
         return Ok(ControlFlow::Break(()));

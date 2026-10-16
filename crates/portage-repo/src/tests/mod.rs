@@ -108,6 +108,29 @@ fn resolve(category: &str, package: &str) -> PretendOutcome {
     .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
 }
 
+/// Like `resolve_as_dependency`, but with `--update` at depth 1 and no
+/// `--deep`: the `_want_update_pkg` shape (a non-argument dep without
+/// `--deep` is never wanted for update).
+fn resolve_dep_update(atom_str: &str) -> PretendOutcome {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &test_config(),
+            local_binpkg: &build_local_binpkg_index(&test_config()),
+        },
+        atom_str,
+        &SelectOptions {
+            update: true,
+            depth: 1,
+            ..SelectOptions::default()
+        },
+    )
+    .unwrap_or_else(|e| panic!("resolve_pretend({atom_str}) failed: {e}"))
+}
+
 /// Like `resolve`, but with `--emptytree`/`-e` enabled.
 fn resolve_empty(category: &str, package: &str) -> PretendOutcome {
     let root = fixtures_root();

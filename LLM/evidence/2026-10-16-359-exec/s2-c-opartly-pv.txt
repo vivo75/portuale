@@ -1,0 +1,22 @@
+### emerge --pretend --verbose dev-libs/opartly --color=n
+### fresh host stage per cell (S0 procedure incl. PORTAGE_REPOSITORIES); host Portage 3.0.82.2; host make.profile symlinked to the staged fixture default for the run (else the running profile cannot parse with testrepo-only repos; cells have no BDEPENDs so it does not shape rows); /etc/make.local emptied for the run (both host files restored after)
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/var/tmp/x359b/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.83 s (backtrack: 1/20).
+
+
+emerge: there are no ebuilds to satisfy "dev-libs/opartlyb" for /var/tmp/x359b/st/fixtures/.
+(dependency required by "dev-libs/opartly-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/opartly" [argument])
+rc=1
