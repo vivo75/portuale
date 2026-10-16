@@ -79,6 +79,7 @@ Parsing `emerge` arguments into `EmergeOpts`. Context moved out of the code comm
 
 ## fn parse_binpkg_opts
 - Owns `--usepkg`, `--usepkgonly`, `--getbinpkg`, `--getbinpkgonly`, `--binpkg-respect-use`, `--rebuilt-binaries` (each bare + `=y`/`=n`), in source order; see `## flags: binary packages`.
+- Given-ness (#361 S1): every `--usepkg`/`-k` spelling (bare, `=y`/`=n`, separate `y`/`n` word, bundled `-k`) sets `usepkg_given`, and every `--getbinpkg`/`-g` spelling sets `getbinpkg_given`, because Portage's `bdeps=auto` rule and its `FEATURES=getbinpkg` fold test key presence (`"--usepkg" not in myopts`, `opts.get("--getbinpkg") is not False`). `EMERGE_DEFAULT_OPTS` needs no separate handling: it prepends to argv and parses through this same function.
 
 ## fn parse_quickpkg_opts
 - Owns `--rebuilt-binaries-timestamp`, `--quickpkg-direct`, `--quickpkg-direct-root` (each bare + `=`), in source order; see `## flags: binary packages`.

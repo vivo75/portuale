@@ -103,8 +103,17 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) autounmask_continue: Option<bool>,
     pub(crate) autounmask_backtrack: Option<bool>,
     pub(crate) usepkg: bool,
+    // Whether `--usepkg`/`-k` was given (any value, incl. `=n` and via
+    // `EMERGE_DEFAULT_OPTS`, which parses through the same function).
+    // Portage tests key presence (`"--usepkg" not in myopts`), so an
+    // explicit `=n` still turns bdeps-auto off; the value alone cannot.
+    pub(crate) usepkg_given: bool,
     pub(crate) usepkgonly: bool,
     pub(crate) getbinpkg: bool,
+    // Whether `--getbinpkg`/`-g` was given (any value). Only read to tell
+    // an explicit `=n` (which vetoes the `FEATURES=getbinpkg` fold) apart
+    // from the untouched default.
+    pub(crate) getbinpkg_given: bool,
     pub(crate) getbinpkgonly: bool,
     pub(crate) binpkg_respect_use: Option<bool>,
     pub(crate) quickpkg_direct: Option<bool>,
@@ -336,10 +345,12 @@ impl<'a> Default for EmergeOpts<'a> {
             // --usepkg/-k, --usepkgonly/-K, --binpkg-respect-use. The respect-use
             // default ("auto", effectively on without `--usepkgonly`) resolves below.
             usepkg: false,
+            usepkg_given: false,
             usepkgonly: false,
             // --getbinpkg/-g, --getbinpkgonly/-G: folded into `usepkg`/`usepkgonly`;
             // `getbinpkg` additionally turns on *remote* candidate loading.
             getbinpkg: false,
+            getbinpkg_given: false,
             getbinpkgonly: false,
             binpkg_respect_use: None,
             // --quickpkg-direct (+ REQUIRED value) + --quickpkg-direct-root: when
@@ -2095,6 +2106,7 @@ fn parse_binpkg_opts<'a>(
     arg: &'a str,
 ) -> Result<bool, ExitCode> {
     if arg == "--usepkg" || arg == "-k" {
+        opts.usepkg_given = true;
         match args.get(*idx + 1).map(String::as_str) {
             Some("y") => {
                 opts.usepkg = true;
@@ -2111,10 +2123,12 @@ fn parse_binpkg_opts<'a>(
         }
         Ok(true)
     } else if arg == "--usepkg=y" {
+        opts.usepkg_given = true;
         opts.usepkg = true;
         *idx += 1;
         Ok(true)
     } else if arg == "--usepkg=n" {
+        opts.usepkg_given = true;
         opts.usepkg = false;
         *idx += 1;
         Ok(true)
@@ -2144,6 +2158,7 @@ fn parse_binpkg_opts<'a>(
         Ok(true)
     } else if arg == "--getbinpkg" || arg == "-g" {
         // Folded into `usepkg`, plus `getbinpkg` for remote candidates.
+        opts.getbinpkg_given = true;
         match args.get(*idx + 1).map(String::as_str) {
             Some("y") => {
                 opts.getbinpkg = true;
@@ -2160,10 +2175,12 @@ fn parse_binpkg_opts<'a>(
         }
         Ok(true)
     } else if arg == "--getbinpkg=y" {
+        opts.getbinpkg_given = true;
         opts.getbinpkg = true;
         *idx += 1;
         Ok(true)
     } else if arg == "--getbinpkg=n" {
+        opts.getbinpkg_given = true;
         opts.getbinpkg = false;
         *idx += 1;
         Ok(true)
@@ -2359,9 +2376,15 @@ fn parse_tail_opts<'a>(
                 'd' => opts.debug = true,
                 'D' => opts.deep = portage_repo::Deep::Unlimited,
                 'e' => opts.emptytree = true,
-                'k' => opts.usepkg = true,
+                'k' => {
+                    opts.usepkg = true;
+                    opts.usepkg_given = true;
+                }
                 'K' => opts.usepkgonly = true,
-                'g' => opts.getbinpkg = true,
+                'g' => {
+                    opts.getbinpkg = true;
+                    opts.getbinpkg_given = true;
+                }
                 'G' => opts.getbinpkgonly = true,
                 'W' => opts.deselect = true,
                 'C' => opts.unmerge = true,

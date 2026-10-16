@@ -637,6 +637,7 @@ static INFO_SCALAR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 mod atoms;
 mod attrs;
+mod bdeps_presence;
 mod blockers;
 mod circular;
 mod conflicts;

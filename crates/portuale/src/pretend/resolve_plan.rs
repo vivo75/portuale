@@ -40,6 +40,29 @@ pub(crate) struct PlanResolveArgs<'a, 'o> {
     pub(crate) color: &'a Colorizer,
 }
 
+/// Whether build-time deps of built packages are traversed: Portage's
+/// `bdeps=auto` as a key-presence test on the post-implication options.
+/// An explicit `--with-bdeps` always wins; otherwise `bdeps` is "auto"
+/// only when `--with-bdeps-auto` is not `n` and the `--usepkg` key is
+/// absent — absent meaning neither given on the command line (any value,
+/// `=n` included, `EMERGE_DEFAULT_OPTS` included) nor implied `True` by
+/// `--getbinpkg`/`--getbinpkgonly`/`--usepkgonly` or the
+/// `FEATURES=getbinpkg` fold (which an explicit `--getbinpkg=n` vetoes).
+/// When `bdeps` is left unset, Portage drops DEPEND/BDEPEND for every
+/// built package, so `false` here means "do not traverse".
+/// Portage: create_depgraph_params.py:97-103, _emerge/main.py:1109-1121,
+/// _emerge/actions.py:3709-3723
+pub(crate) fn plan_with_bdeps(opts: &EmergeOpts<'_>, features: &[String]) -> bool {
+    if opts.with_bdeps_given {
+        return opts.with_bdeps;
+    }
+    let getbinpkg = opts.getbinpkg
+        || (features.iter().any(|t| t == "getbinpkg")
+            && !(opts.getbinpkg_given && !opts.getbinpkg));
+    opts.with_bdeps_auto
+        && !(opts.usepkg_given || opts.usepkgonly || getbinpkg || opts.getbinpkgonly)
+}
+
 /// The resolver parameters derived from the options: bdeps, selective, autounmask, binary packages, rebuild and complete-graph switches, seed atoms.
 pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan, ExitCode> {
     let PlanResolveArgs {
@@ -50,10 +73,10 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
         config_root,
         color,
     } = args;
+    // `--with-bdeps` resolves before the destructure below borrows `opts`.
+    let with_bdeps = plan_with_bdeps(opts, &config_features_list(config));
     let &mut EmergeOpts {
-        with_bdeps_given,
         with_bdeps: ref mut with_bdeps_out,
-        with_bdeps_auto,
         usepkg,
         usepkgonly,
         getbinpkg,
@@ -93,15 +116,7 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
         read_news,
         ..
     } = opts;
-    let mut with_bdeps = *with_bdeps_out;
-    // `--with-bdeps`: an explicit flag always wins; otherwise build-time
-    // deps of built packages are kept unless a `--usepkg`-family flag is
-    // on (which implies `--usepkg`).
-    // Portage: create_depgraph_params.py, depgraph.py
-    if !with_bdeps_given {
-        with_bdeps = with_bdeps_auto && !(usepkg || usepkgonly || getbinpkg || getbinpkgonly);
-    }
-
+    // `--with-bdeps` already resolved above (`plan_with_bdeps`).
     // `selective` follows Portage's own trigger flags (see
     // `resolve_pretend_graph` for the full grounding). An explicit
     // `--selective=n` unconditionally cancels it, checked last.
