@@ -416,6 +416,20 @@ L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
   differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
 ```
 
+The third invocation below is required for any change to the **unmerge**
+half of the merge path (`remove_contents`, the replace loop): it
+re-merges with `INSTALL_MASK` set to documentation trees only, so both
+PMs delete real files on the live container and the diff sees deletions
+(backlog #358; without it a file one PM deletes and the other keeps is
+invisible, and the reinstall gate re-merging identical images drops
+nothing anyway):
+
+```sh
+# from ../pmtest
+L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 L1_CONSUME_INSTALL_MASK="/usr/share/doc /usr/share/info /usr/share/man" \
+  differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
+```
+
 The gate runs with **no Portage checkout**: every phase helper is
 native since #326 S2–S7 (the `portuale-python` dispatcher,
 `chmod-lite`, `filter-bash-environment`, the gpkg/xpak writers,
