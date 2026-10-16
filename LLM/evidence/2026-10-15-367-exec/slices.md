@@ -181,3 +181,103 @@ verification of the reconciled tree, all in the foreground:
 
 Final tree matches the close-out inventory above; nothing committed
 (no grant), no branches created, no other plans' fixtures touched.
+
+## S3 — #370 scoped mutation pass (portuale repo, 2026-10-16)
+
+Preconditions (plan S3, all met): portuale tree clean (`git diff --quiet`,
+HEAD `8bb24c01` = committed S1); no pmtest suite, bed, or other cargo
+process running (only my own `oc-x367b` session scope; the leftover
+`oc-s0-367` scope holds infra only, no builders); sha256 of
+`crates/portage-repo/src/solver_bridge.rs` before = after the scoped run
+(`03649334…`, == S1 committed state); backup copy kept at
+`/var/tmp/x367b/solver_bridge.rs.bak` in case a SIGTERM-mangled tree had
+needed a non-git restore (not needed). cargo-mutants 27.1.0. `--list`
+first: **41 mutants** (19+3+4+8+7, exactly the plan's count; far below the
+200 stop line). Full list: `s3-list.txt`; command + provenance: `s3-cmd.txt`.
+
+Files:
+- `crates/portage-repo/src/solver_bridge.rs` — +189 lines, test-only
+  (0 deletions): 3 new tests (see below). No product line touched.
+- `LLM/code-notes/portage-repo/solver_bridge.md` — new `## #370 mutants`
+  section (plan Q7); `python3 LLM/tools/code_notes_index.py` re-run.
+- This dir: `s3-cmd.txt`, `s3-list.txt`, `s3-run.txt`, `s3-caught.txt`
+  (24), `s3-missed.txt` (13), `s3-timeout.txt` (2), `s3-unviable.txt` (2),
+  `s3-rerun-targeted.txt`, `s3-rerun-or-branch-standing.txt`,
+  `s3-rerun-walk-plain-children.txt`, `s3-rerun-simulate-walk-order.txt`.
+- pmtest: untouched (only the other plans' pre-existing untracked
+  `pg359-*` fixture paths, left alone). No pmtest file added, so no
+  pmtest commit pairs with this slice.
+
+Scoped run (foreground, `timeout 3600`, `--timeout 300`):
+`41 mutants tested in 15m: 13 missed, 24 caught, 2 unviable, 2 timeouts`
+(exit 3 = missed found, expected). The 15 min (vs ~5 predicted) is the
+two 300 s timeouts. Missed: 5× `or_branch_standing` (2507:53 `&&→||`,
+2507:46 `==→!=`, 2523:52 `<→<=`, 2524:18 `delete !`, 2566:16 `delete !`),
+3× `walk_plain_children` (2666:27, 2681:28 `&&→||`, 2681:67 `!=→==`),
+3× `simulate_walk_order` (2768:61 `&&→||`, 2785:22 `+=→-=`/`*=`) and
+2× `compute_or_overrides` (2928:52 `||→&&`, 2928:34 `!=→==`).
+Timeouts (= caught per plan Q8): `walk_add` 2716:34 `&&→||` and
+`simulate_walk_order` 2751:32 `delete !`. Unviable: `or_branch_standing`
+2480:9 match-arm deletion and 2566:13 let-chain `&&→||` (do not build).
+
+Triage (Q5: record each claim, no cap needed — 4/13 equivalent, not
+equivalence-heavy, no flag; continue, never stop to ask):
+- Killable → killed (9, each failing-first verified): one direct
+  `or_branch_standing` test with two calls
+  (`s6_or_branch_standing_weighs_taken_edges_and_unreached_members`:
+  self-edged + non-root does not qualify, killing 2507:53; other-parent
+  edge + empty walk qualifies, killing 2507:46 and the fallback-arm
+  2524:18; docstring cites Portage `depgraph.py:778-793`, never portuale
+  output); one direct `walk_plain_children` test
+  (`s6_walk_plain_children_collects_only_active_plain_atoms`, "internal,
+  no oracle": inactive/blocker/`||`/USE-off dropped, `!flag?` negated —
+  kills 2666:27, 2681:28, 2681:67); one direct `simulate_walk_order`
+  test over hand-built views
+  (`s6_simulate_walk_order_steps_roots_then_frames`, "internal, no
+  oracle": exact `added={m:0,a:2,b:3}` / `resolved={(m-1,1,1):1}` with an
+  inactive group sharing the class — kills 2768:61 via the shifted extra
+  resolution, and 2785 `-=`/`*=` via the collapsed step counts).
+- Equivalent (one-line reason each, in the code note): 2523:52 `<→<=`
+  (one counter hands out every add/resolve step, equality never
+  happens); 2566:16 (inner record lookup repeats the earlier same-query
+  slot lookup, empty `uds` is vacuously satisfied); 2928:34 + 2928:52
+  (trace-gate only, inserted facts identical).
+- Uncovered: none. No residue number needed (nothing to file; backlog
+  files untouched per the brief).
+- Timeouts inspected, not pinned: 2716:34 hangs (every in-plan
+  `walk_add` re-pushes, the stack never drains — the plan predicted a
+  kill, the mechanism is a hang instead, still caught); 2751:32 is the
+  predicted instant spin.
+
+Verification of the kills: targeted `--re`
+`2507:(46|53)|2524:18|2666:27|2681:(28|67)|2768:61|2785:22` → **9/9
+caught** (`s3-rerun-targeted.txt`); per-function `--re`: or_branch_standing
+19 → 15 caught / 2 missed-equivalent / 2 unviable; walk_plain_children 3
+→ 3 caught; simulate_walk_order 8 → 7 caught + 1 timeout, **0 missed**.
+`mutants.out/` (and the rotated `mutants.out.old/`) removed.
+
+Gate (slice gate only; pmtest suite left to the coordinator):
+- `cargo fmt --check` → clean (one `cargo fmt` reflow of the new tests).
+- `cargo clippy --release --all-targets` → `Finished`, zero
+  warning/error lines.
+- `cargo test --release -p portage-repo` → **1080 passed, 0 failed**
+  (1077 pre-S3 + the 3 new tests).
+
+Surprises:
+- The plan predicted 2768:64 `delete !` caught and 2847:12 `delete !`
+  caught — both held (in the 24 caught, not in missed).
+- The plan predicted 2785:22 `+=→*=` equivalent and `+=→-=` a possible
+  panic; both were MISSED (no panic: the step is ≥1 at every resolve
+  insert, so no underflow) and both turned out killable via exact step
+  counts — the equivalence argument I first sketched (uniform shift)
+  fails once a multi-group frame lands between an add and a later
+  resolve, so a test was written instead of a claim.
+- The plan predicted 2716:34 `&&→||` killable ("a re-add moves the step
+  later"); it actually hangs the simulation (re-push loop) and counts as
+  caught via timeout instead.
+- cargo-mutants 27.1.0 rotates the previous output to `mutants.out.old/`
+  instead of overwriting — both dirs were removed.
+
+Left undone and why: nothing for S3. S4 (gates + 2 pubgrub bed modes)
+and S5 (docs) belong to other slices; the pmtest suite run belongs to
+the coordinator. Nothing committed (no grant).

@@ -1,0 +1,2 @@
+crates/portage-repo/src/solver_bridge.rs:2480:9: delete match arm portage_solver::DepEntry::Atom(dep) in or_branch_standing
+crates/portage-repo/src/solver_bridge.rs:2566:13: replace && with || in or_branch_standing

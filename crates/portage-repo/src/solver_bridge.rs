@@ -6358,6 +6358,120 @@ mod tests {
         assert_eq!(found[0].0, 0);
     }
 
+    /// `walk_plain_children` collects only active, non-blocker plain
+    /// atoms in written order: inactive atoms never enter, blockers add
+    /// no package, `||` branches wait for resolution time, and the USE
+    /// gate follows `member_use` (negated for `!flag?`). Internal, no
+    /// oracle: this pins the walk input filter, not an emerge row.
+    #[test]
+    fn s6_walk_plain_children_collects_only_active_plain_atoms() {
+        use portage_solver::DepEntry;
+        let collect = |text: &str, use_flags: &[&str], active: bool| {
+            let parsed = DepEntry::parse(text).expect("parses");
+            let member_use = use_flags
+                .iter()
+                .map(|flag| flag.to_string())
+                .collect::<std::collections::HashSet<_>>();
+            let mut out = Vec::new();
+            super::walk_plain_children(&parsed, &member_use, active, &mut out);
+            out
+        };
+        // Active plain atoms, in written order; the `||` branch waits
+        // for resolution and the blocker adds no package.
+        assert_eq!(
+            collect(
+                "dev-libs/pg34-a || ( dev-libs/pg34-b ) !dev-libs/pg34-c",
+                &[],
+                true
+            ),
+            vec!["dev-libs/pg34-a".to_string()],
+            "only the active plain atom enters"
+        );
+        // An inactive atom never enters, even without a blocker.
+        assert!(
+            collect("dev-libs/pg34-a", &[], false).is_empty(),
+            "an inactive atom is skipped"
+        );
+        // The USE gate follows the member USE ...
+        assert_eq!(
+            collect("f? ( dev-libs/pg34-a )", &["f"], true),
+            vec!["dev-libs/pg34-a".to_string()],
+            "a satisfied gate collects"
+        );
+        assert!(
+            collect("f? ( dev-libs/pg34-a )", &[], true).is_empty(),
+            "an unsatisfied gate drops"
+        );
+        // ... negated for `!flag?`.
+        assert_eq!(
+            collect("!f? ( dev-libs/pg34-a )", &[], true),
+            vec!["dev-libs/pg34-a".to_string()],
+            "a satisfied negated gate collects"
+        );
+        assert!(
+            collect("!f? ( dev-libs/pg34-a )", &["f"], true).is_empty(),
+            "an unsatisfied negated gate drops"
+        );
+    }
+
+    /// `simulate_walk_order` seeds roots first, then resolves one frame
+    /// per member and class in LIFO order: every group takes its own
+    /// step, taken children enter after their frame's groups, and an
+    /// inactive group leaves no resolution behind. Internal, no oracle:
+    /// this pins the simulated step counts, not an emerge row.
+    #[test]
+    fn s6_simulate_walk_order_steps_roots_then_frames() {
+        use portage_solver::DepEntry;
+        let order = [
+            ("dev-libs/wa-m".to_string(), "1".to_string()),
+            ("dev-libs/wa-a".to_string(), "1".to_string()),
+            ("dev-libs/wa-b".to_string(), "1".to_string()),
+        ];
+        let parents = [
+            (
+                "dev-libs/wa-a-1".to_string(),
+                vec![("dev-libs".to_string(), "wa-m".to_string())],
+            ),
+            (
+                "dev-libs/wa-b-1".to_string(),
+                vec![("dev-libs".to_string(), "wa-m".to_string())],
+            ),
+        ]
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+        let mut classes: [Vec<DepEntry>; 5] = std::array::from_fn(|_| Vec::new());
+        classes[1] =
+            DepEntry::parse("z? ( || ( dev-libs/wa-a ) ) || ( dev-libs/wa-a dev-libs/wa-b )")
+                .expect("parses");
+        let views = [(
+            "dev-libs/wa-m-1".to_string(),
+            (classes, std::collections::HashSet::new()),
+        )]
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+        let walk =
+            super::simulate_walk_order(&order, &parents, &["dev-libs/wa-m".to_string()], &views);
+        // The root seeds step 0; the inactive `z?` group (index 0)
+        // resolves nothing, so the live group takes step 1 and the taken
+        // children follow it.
+        let added = [
+            ("dev-libs/wa-m".to_string(), 0),
+            ("dev-libs/wa-a".to_string(), 2),
+            ("dev-libs/wa-b".to_string(), 3),
+        ]
+        .into_iter()
+        .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(walk.added, added, "adds follow the frame: {:?}", walk.added);
+        let resolved = [(("dev-libs/wa-m-1".to_string(), 1, 1), 1)]
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+        assert_eq!(
+            walk.resolved, resolved,
+            "only the live group resolves: {:?}",
+            walk.resolved
+        );
+    }
+
     // --- #34 S6 throwaway-vdb scaffolding --------------------------------
     //
     // `parent_use_reinstalls` and the `||` analysis read installed deps
@@ -6713,6 +6827,81 @@ mod tests {
         assert!(
             standing.qualifies,
             "the matched in-graph branch with holding USE deps qualifies"
+        );
+    }
+
+    /// `or_branch_standing` weighs the taken edges, not just the roots: a
+    /// branch edged only from the member itself is merged solely through
+    /// this group and does not qualify, while one edged from another
+    /// parent qualifies even with an empty walk (no walk information
+    /// keeps the old order-blind answer). Portage prefers the
+    /// already-in-graph alternative (`depgraph.py:778-793`); the expected
+    /// standings mirror that rule, never portuale's own output.
+    #[test]
+    fn s6_or_branch_standing_weighs_taken_edges_and_unreached_members() {
+        use portage_solver::DepEntry;
+        // Same member, branch and USE as the accepts test above.
+        let req = pg34_s3_request(&["dev-libs/pg34-uapp"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let installed = super::super::all_installed_packages(&req.root);
+        let branch = DepEntry::parse("dev-libs/pg34-ulib[x]")
+            .expect("parses")
+            .into_iter()
+            .next()
+            .expect("one branch");
+        let member_use = ["x".to_string()].into_iter().collect();
+        let plan_ver = [("dev-libs/pg34-ulib".to_string(), "1".to_string())]
+            .into_iter()
+            .collect();
+        // No roots, no walk entries: the fallback arm answers.
+        let root_cps: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let walk = super::WalkOrder {
+            added: std::collections::HashMap::new(),
+            resolved: std::collections::HashMap::new(),
+        };
+        let standing_for = |taken: std::collections::HashSet<(String, String)>| {
+            super::or_branch_standing(
+                &lazy,
+                &installed,
+                &branch,
+                "dev-libs/pg34-uapp",
+                "dev-libs/pg34-uapp-1",
+                1,
+                0,
+                &walk,
+                &member_use,
+                &plan_ver,
+                &taken,
+                &root_cps,
+            )
+        };
+        // Edged only from the member itself: merged solely through this
+        // group, so it does not qualify.
+        let self_edged = [(
+            "dev-libs/pg34-uapp".to_string(),
+            "dev-libs/pg34-ulib".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        assert!(
+            !standing_for(self_edged).qualifies,
+            "a self-edged branch is not independently selected"
+        );
+        // Edged from another parent: independently selected, and the
+        // empty walk keeps the order-blind answer.
+        let other_edged = [(
+            "dev-libs/pg34-other".to_string(),
+            "dev-libs/pg34-ulib".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        assert!(
+            standing_for(other_edged).qualifies,
+            "an other-parent edge with no walk history still qualifies"
         );
     }
 

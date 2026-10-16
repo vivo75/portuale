@@ -1,0 +1,2 @@
+crates/portage-repo/src/solver_bridge.rs:2716:34: replace && with || in walk_add
+crates/portage-repo/src/solver_bridge.rs:2751:32: delete ! in simulate_walk_order

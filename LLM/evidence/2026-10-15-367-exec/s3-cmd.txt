@@ -1,0 +1,21 @@
+# S3 cmd (2026-10-16, branch backlog/367-370-pubgrub-mutants, portuale 8bb24c01)
+
+Preconditions (plan S3):
+- `git diff --quiet` → clean (TREE-CLEAN); `git status` clean in portuale.
+- No pmtest suite, bed, or other cargo process running (checked via ps: none).
+- sha256 before: 03649334480d478293dca26279ab70d0ac8f69f6a8e565e71a5fc8fe6b4d9be1
+  (== S1 committed state; backup at /var/tmp/x367b/solver_bridge.rs.bak).
+- cargo-mutants 27.1.0. Machine otherwise idle (only my own opencode session
+  in oc-x367b.scope; oc-s0-367.scope holds infra only, no builders).
+
+List (count first):
+cargo mutants --in-place -f crates/portage-repo/src/solver_bridge.rs \
+  --re 'in (walk_plain_children|walk_add|simulate_walk_order|or_branch_standing|compute_or_overrides)$' \
+  --list
+→ 41 mutants (matches the plan's 19+3+4+8+7; well under the 200 stop line).
+Full output: s3-list.txt (this dir).
+
+Run (foreground, hard cap 60 min, per-mutant timeout 300 s):
+timeout 3600 cargo mutants --in-place -f crates/portage-repo/src/solver_bridge.rs \
+  --re 'in (walk_plain_children|walk_add|simulate_walk_order|or_branch_standing|compute_or_overrides)$' \
+  --timeout 300 2>&1 | tee LLM/evidence/2026-10-15-367-exec/s3-run.txt

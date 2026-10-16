@@ -1,0 +1,4 @@
+Found 8 mutants to test
+ok       Unmutated baseline in 5s build + 1s test
+TIMEOUT  crates/portage-repo/src/solver_bridge.rs:2751:32: delete ! in simulate_walk_order in 5s build + 300s test
+8 mutants tested in 6m: 7 caught, 1 timeouts
