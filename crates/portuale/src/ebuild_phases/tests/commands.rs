@@ -1090,3 +1090,80 @@ fn open_log_file_gzip_pump_round_trips() {
     assert_eq!(std::fs::read_to_string(&plain).unwrap(), "plain\n");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// S5 end-to-end: a stamped `unpack` prints Portage's skip pair on stdout
+/// and the phase body does not run again. One subprocess per invocation
+/// (the `ebuild_test_forces_src_test_without_features_test` pattern in
+/// `phase_runs.rs`): output assertions need a real process, and the binary
+/// path also covers `ebuild.rs`'s per-command loop.
+/// Portage 3.0.82.2, S0 cells `s01-unpack`/`s02-unpack-again` (full argv
+/// `ebuild t348-b-phases-8.ebuild unpack`, both rc 0).
+#[test]
+fn stamped_unpack_prints_the_skip_pair_and_does_not_rerun_the_body() {
+    let tmp = TempDir::new("ebuild-phases-test-stamped-unpack-skips");
+    let pkg_dir = tmp.join("pkg/dev-libs/stamptestpkg");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let ebuild = pkg_dir.join("stamptestpkg-1.0.ebuild");
+    std::fs::write(
+        &ebuild,
+        "EAPI=8\nSLOT=\"0\"\nS=\"${WORKDIR}\"\n\
+         src_unpack() { echo ran >> \"${T}/unpack-ran\" || die; }\n",
+    )
+    .unwrap();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let portage_tmpdir = tmp.join("tmp");
+    let builddir = portage_tmpdir.join("portage/dev-libs/stamptestpkg-1.0");
+    let marker = builddir.join("temp/unpack-ran");
+    let binary = portuale_exe();
+    let run = || {
+        std::process::Command::new(&binary)
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("HOME", std::env::var("HOME").unwrap_or_default())
+            .env("ROOT", &root)
+            .env("PORTAGE_TMPDIR", &portage_tmpdir)
+            .args(["ebuild", ebuild.to_str().unwrap(), "unpack"])
+            .output()
+            .expect("portuale ebuild spawns")
+    };
+    let ran_lines = || {
+        std::fs::read_to_string(&marker)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+    let first = run();
+    assert!(
+        first.status.success(),
+        "first unpack: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(ran_lines(), 1, "the body runs once");
+    let second = run();
+    assert!(
+        second.status.success(),
+        "stamped unpack: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&second.stdout);
+    assert!(
+        stdout.contains(">>> WORKDIR is up-to-date, keeping..."),
+        "the WORKDIR line comes first, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            ">>> It appears that 'unpack' has already executed for \
+             'stamptestpkg-1.0'; skipping."
+        ),
+        "the skip pair, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            ">>> Remove '{}' to force unpack.",
+            builddir.join(".unpacked").display()
+        )),
+        "the force line names the stamp, got:\n{stdout}"
+    );
+    assert_eq!(ran_lines(), 1, "the stamped body must not run again");
+}

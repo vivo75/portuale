@@ -38,12 +38,7 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
         build_env,
     } = args;
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
-    create_directories(&env)?;
 
-    let chain: Vec<&str> = commands
-        .iter()
-        .flat_map(|&c| phase_prerequisites(c))
-        .collect();
     // The actual distdir goes in as `DISTDIR`; `phase_env_vars` remaps it the
     // way Portage's `config.environ` does: the actual directory becomes
     // `PORTAGE_ACTUAL_DISTDIR` and `DISTDIR` the per-package fake.
@@ -58,26 +53,6 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
         .map_or("", |(_, v)| v.as_str())
         .to_string();
     let features = features_string(&extra_env);
-    let a = if chain.contains(&"unpack") {
-        let (a, _aa) = fetch_sources(FetchSourcesArgs {
-            env: &env,
-            root,
-            distdir,
-            debug,
-            config_root,
-            shell,
-            features: &features,
-            use_flags: &use_flags,
-        })
-        .await?;
-        // Portage exports `A` for EAPI 4+ but never `AA`
-        // (`exports_AA` ends at 3); the floor here is EAPI 5+.
-        // `AA`'s absence is enforced centrally in `apply_eapi_phase_env`.
-        extra_env.push(("A".to_string(), a.join(" ")));
-        Some(a)
-    } else {
-        None
-    };
     // A direct `ebuild <file> <phase>` run is a source merge
     // (`EMERGE_FROM=ebuild` rides in `phase_env_vars` already):
     // `MERGE_TYPE=source`, like `doebuild()` sets for `tree == "porttree"`.
@@ -90,19 +65,61 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
     // Portage: doebuild.py, doebuild — the fake distdir is prepared unless the
     // command is bare `setup` (FEATURES=noauto excepted); `install`/`unpack`
     // chains always need it. The first test is over the command, not the chain.
-    if (commands.iter().any(|&c| c != "setup")
-        && !features.split_whitespace().any(|f| f == "noauto"))
-        || chain.iter().any(|&p| p == "install" || p == "unpack")
-    {
-        let alist = match a {
-            Some(a) => a,
-            None => package_a(&env, &use_flags)?,
-        };
-        prepare_fake_distdir(&env, distdir, &alist)?;
-    }
-
     for &command in commands {
-        for phase in phase_prerequisites(command) {
+        let chain_here = phase_prerequisites(command);
+        // Portage: doebuild.py, the WORKDIR block — one check per command
+        // (`bin/ebuild` calls `doebuild` once per arg), before any of its
+        // directories exist, and only when its chain contains `unpack`.
+        if chain_here.contains(&"unpack") {
+            let alist = package_a(&env, &use_flags)?;
+            if let WorkdirCheck::Lines(lines) =
+                check_workdir(env.portage_builddir(), &env.workdir(), distdir, &alist)
+            {
+                for line in &lines {
+                    emit_phase_line(line, log_file);
+                }
+            }
+        }
+        create_directories(&env)?;
+        let a = if chain_here.contains(&"unpack") {
+            let (a, _aa) = fetch_sources(FetchSourcesArgs {
+                env: &env,
+                root,
+                distdir,
+                debug,
+                config_root,
+                shell,
+                features: &features,
+                use_flags: &use_flags,
+            })
+            .await?;
+            // Portage exports `A` for EAPI 4+ but never `AA`
+            // (`exports_AA` ends at 3); the floor here is EAPI 5+.
+            // `AA`'s absence is enforced centrally in `apply_eapi_phase_env`.
+            extra_env.push(("A".to_string(), a.join(" ")));
+            Some(a)
+        } else {
+            None
+        };
+        if (command != "setup" && !features.split_whitespace().any(|f| f == "noauto"))
+            || chain_here.iter().any(|&p| p == "install" || p == "unpack")
+        {
+            let alist = match a {
+                Some(a) => a,
+                None => package_a(&env, &use_flags)?,
+            };
+            prepare_fake_distdir(&env, distdir, &alist)?;
+        }
+
+        for phase in chain_here {
+            // Portage: doebuild.py, spawnebuild — a stamped phase prints the
+            // skip pair and never spawns (`install` re-runs under `noauto`).
+            if is_stamped(env.portage_builddir(), phase, &features) {
+                for line in stamp_skip_lines(phase, &env.split.pf, env.portage_builddir()) {
+                    emit_phase_line(&line, log_file);
+                }
+                continue;
+            }
             let status = run_one_phase(RunOnePhaseArgs {
                 env: &env,
                 root,
@@ -151,6 +168,26 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
         }
     }
     Ok(0)
+}
+
+/// One Rust-side phase line: stdout on the direct path, appended to the
+/// build log when the merge Scheduler owns the run (Portage's child
+/// stdout is the log there).
+/// Portage: doebuild.py (writemsg_stdout), _emerge/EbuildPhase.py
+pub(crate) fn emit_phase_line(line: &str, log_file: Option<&Path>) {
+    match log_file {
+        None => println!("{line}"),
+        Some(path) => {
+            // The phase log's own append machinery, so `.gz` logs stay
+            // valid members too. The write end drops (and the pump joins)
+            // before this returns.
+            if let Ok(sink) = open_log_file(path) {
+                use std::io::Write as _;
+                let mut out = sink.out;
+                let _ = writeln!(out, "{line}");
+            }
+        }
+    }
 }
 
 pub struct RunCommandsArgs<'a> {

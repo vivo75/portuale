@@ -376,6 +376,27 @@ pub(crate) fn run_real_commands(
     // One command at a time: neither `merge`/`unmerge` nor `package`
     // is a phase, so a mixed list needs per-command routing (like
     // `bin/ebuild`'s own per-argument `doebuild` loop).
+    //
+    // Portage `bin/ebuild`'s stale-env notice, once per invocation before
+    // the first command: `clean` absent, `noauto` off, a build-dir command
+    // requested, and `${T}/environment` left from a previous run. stderr,
+    // like `portage.writemsg` (which defaults there), with a literal `${T}`.
+    // Portage: bin/ebuild:363-389 (stale_env_warning)
+    if !commands.contains(&"clean")
+        && !merge_options
+            .features
+            .split_whitespace()
+            .any(|t| t == "noauto")
+        && commands
+            .iter()
+            .any(|c| ebuild_phases::BUILD_DIR_PHASES.contains(c))
+        && let Ok(notice_env) = ebuild_phases::compute_environment(ebuild_path, &portage_tmpdir)
+        && notice_env.t().join("environment").is_file()
+    {
+        for line in ebuild_phases::stale_env_lines(&notice_env.split.pf) {
+            eprintln!(">>> {line}");
+        }
+    }
     for &cmd in commands {
         let result = if ebuild_merge::is_merge_command(cmd) {
             ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options, None)

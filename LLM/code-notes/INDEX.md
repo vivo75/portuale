@@ -318,6 +318,7 @@
 - [crates/portuale/src/ebuild_phases/sandbox.rs](portuale/ebuild_phases/sandbox.md) — The phase shell backend, the calling-environment filter, and sandbox/isolation.
 - [crates/portuale/src/ebuild_phases/scheduler_registry.rs](portuale/ebuild_phases/scheduler_registry.md) — Child processes registered for the build scheduler to kill.
 - [crates/portuale/src/ebuild_phases/single_phase.rs](portuale/ebuild_phases/single_phase.md) — Single phases, clean, instprep, and phases run from a saved environment.
+- [crates/portuale/src/ebuild_phases/stamp_skip.rs](portuale/ebuild_phases/stamp_skip.md) — Portage's short-circuit lines around the phase chain (S5, #351 351-STAMP).
 - [crates/portuale/src/ebuild_phases/standalone_config.rs](portuale/ebuild_phases/standalone_config.md) — Configuration for standalone `ebuild` phases and unmerge.
 - [crates/portuale/src/ebuild_phases/tests/commands.rs](portuale/ebuild_phases/tests/commands.md) — Phase-command end-to-end tests.
 - [crates/portuale/src/ebuild_phases/tests/environment.rs](portuale/ebuild_phases/tests/environment.md) — Environment-setup unit tests (md5-cache reads, FILESDIR/distdir links, builddir layout).

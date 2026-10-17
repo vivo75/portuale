@@ -242,11 +242,16 @@ pub(crate) fn prepare_fake_distdir(
 }
 
 pub(crate) fn create_directories(env: &Environment) -> Result<(), String> {
-    // `S` is deliberately not created: only `unpack` extracting an archive or the
-    // ebuild itself may bring it to life, so a source-less ebuild still fails the `[[ -d ${S} ]]` check.
+    // `WORKDIR` is created up front like the rest: Portage's
+    // `prepare_build_dirs` (`_prepare_workdir`) brings it to life for every
+    // build-dir phase, which is what lets a later `unpack` notice it
+    // predates `.unpacked`. `S` stays uncreated: only `unpack` extracting an
+    // archive or the ebuild itself may bring it to life, so a source-less
+    // ebuild still fails the `[[ -d ${S} ]]` check.
     for dir in [
         env.t(),
         env.d(),
+        env.workdir(),
         env.home(),
         env.filesdir(),
         // `bin/ebuild.sh` sources into `${PORTAGE_BUILDDIR}/empty` when it exists
