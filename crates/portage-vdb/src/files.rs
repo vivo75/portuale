@@ -301,10 +301,10 @@ impl FilesDb {
     }
 }
 
-/// The claims of one entry's `CONTENTS` text: a line whose first two
-/// words are a kind (`obj`, `sym`, `dir`, `dev`, `fif`, `bin`) and a path
-/// claims that path; one leading `/` is ignored on both sides. Each claim
-/// pairs the first of `paths` it matches with `key`.
+/// The claims of one entry's `CONTENTS` text: a parsable line (see
+/// [`crate::contents`]) claims its path; one leading `/` is ignored on
+/// both sides. Each claim pairs the first of `paths` it matches with
+/// `key`.
 pub(crate) fn claim_paths(
     text: &str,
     key: &EntryKey,
@@ -312,13 +312,11 @@ pub(crate) fn claim_paths(
     out: &mut Vec<(Vec<u8>, EntryKey)>,
 ) {
     for line in text.lines() {
-        let mut words = line.split_whitespace();
-        let path = match (words.next(), words.next()) {
-            (Some("obj" | "sym" | "dir" | "dev" | "fif" | "bin"), Some(path)) => {
-                path.strip_prefix('/').unwrap_or(path)
-            }
-            _ => continue,
+        let Some(entry) = crate::contents::parse_line(line) else {
+            continue;
         };
+        let path = entry.path();
+        let path = path.strip_prefix('/').unwrap_or(path);
         if let Some(p) = wanted.get(path.as_bytes()) {
             out.push((p.to_vec(), key.clone()));
         }

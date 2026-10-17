@@ -1144,6 +1144,51 @@ mod suite {
         }
     }
 
+    /// Space paths (Portage 3.0.82.2, S0 cell S1 shapes), on every
+    /// backend: each kind claims its full path, a truncation of one owns
+    /// nothing, and an unowned prefix decoy (`/usr/share/t355/a`) owns
+    /// nothing. The slashless spelling is asked first, so it is the one
+    /// reported for the shared normal form.
+    pub fn owners_claim_paths_with_spaces(f: Factory, _c: &Caps) {
+        let ctx = Ctx::new(f, "owners-spaces");
+        let a = key("app-misc", "a-1");
+        put(
+            &ctx,
+            &a,
+            &[(
+                "CONTENTS",
+                b"dir /usr\n\
+                  dir /usr/share\n\
+                  dir /usr/share/t355\n\
+                  obj /usr/share/t355/a b.txt daa8075d6ac5ff8d0c6d4650adb4ef29 1792105216\n\
+                  sym /usr/share/t355/c d -> a b.txt 1792105216\n\
+                  dir /usr/share/t355/sp dir\n\
+                  obj /usr/share/t355/sp dir/f 9a8ad92c50cae39aa2c5604fd0ab6d8c 1792105216\n",
+            )],
+            false,
+        );
+        let q: &[&[u8]] = &[
+            b"usr/share/t355/a b.txt",
+            b"/usr/share/t355/a b.txt",
+            b"/usr/share/t355/c d",
+            b"/usr/share/t355/sp dir",
+            b"/usr/share/t355/sp dir/f",
+            b"/usr/share/t355/a",
+            b"/usr/share/t355/c",
+        ];
+        let got = ctx.db.owners(q).unwrap();
+        let want = vec![
+            (b"usr/share/t355/a b.txt".to_vec(), a.clone()),
+            (b"/usr/share/t355/c d".to_vec(), a.clone()),
+            (b"/usr/share/t355/sp dir".to_vec(), a.clone()),
+            (b"/usr/share/t355/sp dir/f".to_vec(), a.clone()),
+        ];
+        assert_eq!(
+            got, want,
+            "every kind claims its full space path; the decoy and the truncation own nothing"
+        );
+    }
+
     /// The edge cases of the path rule, on every backend (the
     /// database backends answer from the `owner` index): one leading `/`
     /// ignored on both sides, a path written without it, `//`, a repeated
@@ -1676,6 +1721,7 @@ macro_rules! conformance_suite {
                 config_memory_round_trips_and_is_written_unconditionally
                 generation_changes_after_entry_commits_and_is_stable_across_reads
                 owners_report_the_entries_that_claim_paths
+                owners_claim_paths_with_spaces
                 read_file_all_lists_every_live_entry_with_none_for_a_missing_file
                 categories_and_category_entries_list_live_entries
                 reverse_dependents_is_supported_or_names_its_step

@@ -28,17 +28,24 @@ struct ContentsEntry {
     mtime: Option<i64>,
 }
 
-/// Parses a `CONTENTS` file's lines (see `ebuild_merge::format_contents_line`).
+/// Parses a `CONTENTS` file's lines: a thin map over
+/// [`portage_vdb::parse_line`], keeping only the kind, the absolute path
+/// and (for `obj`/`sym`) the mtime `remove_contents` compares.
 fn parse_contents(text: &str) -> Vec<ContentsEntry> {
     text.lines()
         .filter_map(|line| {
-            let fields: Vec<&str> = line.split(' ').collect();
-            let node_type = (*fields.first()?).to_string();
-            let abs_path = (*fields.get(1)?).to_string();
-            let mtime = fields.last().and_then(|s| s.parse::<i64>().ok());
+            let entry = portage_vdb::parse_line(line)?;
+            let (node_type, mtime) = match entry {
+                portage_vdb::ContentsLine::Obj { mtime, .. } => ("obj", Some(mtime)),
+                portage_vdb::ContentsLine::Sym { mtime, .. } => ("sym", Some(mtime)),
+                portage_vdb::ContentsLine::Dir { .. } => ("dir", None),
+                portage_vdb::ContentsLine::Dev { .. } => ("dev", None),
+                portage_vdb::ContentsLine::Fif { .. } => ("fif", None),
+                portage_vdb::ContentsLine::Bin { .. } => ("bin", None),
+            };
             Some(ContentsEntry {
-                node_type,
-                abs_path,
+                node_type: node_type.to_string(),
+                abs_path: entry.path().to_string(),
                 mtime,
             })
         })
@@ -529,9 +536,8 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
     // the old instance's linkmap data is excluded, and the replacing
     // package's `NEEDED` lines feed explicitly (see
     // `ebuild_merge::find_unused_preserved_libs`).
-    let being_unmerged: std::collections::BTreeSet<String> = contents_text
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+    let being_unmerged: std::collections::BTreeSet<String> = portage_vdb::paths(&contents_text)
+        .map(|(_, p)| p.to_string())
         .collect();
     // The unmerged instance itself, plus (database backends) the same-slot
     // instances this replace loop already unmerged: their entries stay
@@ -700,6 +706,23 @@ mod tests {
         assert_eq!(entries[1].abs_path, "/usr/hello.txt");
         assert_eq!(entries[2].node_type, "sym");
         assert_eq!(entries[2].abs_path, "/usr/link");
+    }
+
+    #[test]
+    fn parse_contents_keeps_spaces_in_paths_and_skips_junk() {
+        // Portage 3.0.82.2, S0 cell S1 shapes (#357): the shared parser
+        // keeps the full path; a non-matching line is skipped.
+        let text = "obj /usr/share/t355/a b.txt abc123 100\n\
+                    sym /usr/share/t355/c d -> a b.txt 100\n\
+                    junk line here\n";
+        let entries = parse_contents(text);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].node_type, "obj");
+        assert_eq!(entries[0].abs_path, "/usr/share/t355/a b.txt");
+        assert_eq!(entries[0].mtime, Some(100));
+        assert_eq!(entries[1].node_type, "sym");
+        assert_eq!(entries[1].abs_path, "/usr/share/t355/c d");
+        assert_eq!(entries[1].mtime, Some(100));
     }
 
     #[test]

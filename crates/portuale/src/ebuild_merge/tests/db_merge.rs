@@ -1347,6 +1347,81 @@ fn fixture_reverse_dependents_are_identical_on_every_backend() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The S1 shape of
+/// `run_merge::a_contents_path_with_spaces_is_removed_and_the_prefix_decoy_is_kept`
+/// on every database backend: the merge derives the `owner` rows with the
+/// shared parser, and the unmerge removes the space paths while keeping
+/// the decoy. (The S2 shape runs on `files` only; the replace loop reads
+/// the same derived rows here.)
+#[test]
+fn a_contents_path_with_spaces_is_removed_and_the_prefix_decoy_is_kept_on_databases() {
+    for kind in db_kinds() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let ptmp = tmp.join("ptmp");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&ptmp).unwrap();
+        let _db = use_db(kind, &root, &tmp.join("vdb.db"));
+
+        let repo355 =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo-355");
+        let ebuild = repo355.join("app-misc/t355-space/t355-space-1.ebuild");
+        assert_eq!(
+            run_merge(&ebuild, &root, &ptmp, &MergeOptions::default(), None).unwrap(),
+            0,
+            "{kind:?}"
+        );
+        let key = EntryKey::new("app-misc", "t355-space-1");
+        let contents = String::from_utf8(
+            portage_vdb::for_root(&root)
+                .read_file(&key, "CONTENTS")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            contents.contains("obj /usr/share/t355/a b.txt "),
+            "{kind:?}"
+        );
+        // The derived `owner` rows claim the full space paths too, not
+        // the decoy prefix (S0 cell S1 `portageq owners` shape).
+        let owners = |p: &[u8]| portage_vdb::for_root(&root).owners(&[p]).unwrap();
+        assert_eq!(owners(b"/usr/share/t355/a b.txt").len(), 1, "{kind:?}");
+        assert!(owners(b"/usr/share/t355/a").is_empty(), "{kind:?}");
+
+        std::fs::write(root.join("usr/share/t355/a"), b"decoy").unwrap();
+        unmerge_one_installed(UnmergeOneInstalledArgs {
+            root: &root,
+            category: "app-misc",
+            package: "t355-space",
+            pf: "t355-space-1",
+            also_keep: &[],
+            scratch_dir: &ptmp.join("scratch"),
+            portage_tmpdir: &ptmp,
+            options: &MergeOptions::default(),
+            backup: None,
+            is_replacement: false,
+            replaced_by_version: None,
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+            deferred_delete: None,
+        })
+        .expect("unmerge succeeds");
+        assert!(!root.join("usr/share/t355/a b.txt").exists(), "{kind:?}");
+        assert!(
+            std::fs::symlink_metadata(root.join("usr/share/t355/c d")).is_err(),
+            "{kind:?}"
+        );
+        assert!(!root.join("usr/share/t355/sp dir/f").exists(), "{kind:?}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("usr/share/t355/a")).unwrap(),
+            "decoy",
+            "{kind:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
 /// A same-version reinstall with a smaller image removes the dropped files on
 /// every backend: the replacing package's ownership comes from its pending
 /// entry, not from the live entry it replaces (#354).

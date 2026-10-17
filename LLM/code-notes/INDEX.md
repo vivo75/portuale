@@ -237,6 +237,7 @@
 - [crates/portage-util/src/temp_dir.rs](portage-util/temp_dir.md) — A scratch directory that removes itself, plus a process-level stale sweep.
 
 ## portage-vdb
+- [crates/portage-vdb/src/contents.rs](portage-vdb/contents.md) — One shared `CONTENTS` line parser (#357); every backend and caller uses it.
 - [crates/portage-vdb/src/convert.rs](portage-vdb/convert.md) — Generic copy and comparison between two installed databases.
 - [crates/portage-vdb/src/dep_cp.rs](portage-vdb/dep_cp.md) — Conservative `category/package` extraction behind the `dep_atom` prefilter index.
 - [crates/portage-vdb/src/error.rs](portage-vdb/error.md) — Hand-written error type for the VDB crate (no dependencies, no `thiserror`).

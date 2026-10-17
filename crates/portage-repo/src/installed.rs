@@ -147,18 +147,8 @@ pub fn installed_contents_files(
         .unwrap_or_default();
     text.lines()
         .filter_map(|line| {
-            let mut words = line.split_whitespace();
-            match (words.next(), words.next()) {
-                (Some("obj"), Some(path))
-                | (Some("sym"), Some(path))
-                | (Some("dir"), Some(path))
-                | (Some("dev"), Some(path))
-                | (Some("fif"), Some(path))
-                | (Some("bin"), Some(path)) => {
-                    Some(path.strip_prefix('/').unwrap_or(path).to_string())
-                }
-                _ => None,
-            }
+            let path = portage_vdb::parse_line(line)?.path();
+            Some(path.strip_prefix('/').unwrap_or(path).to_string())
         })
         .collect()
 }

@@ -64,17 +64,17 @@ pub(crate) fn remove_from_contents_into(
     let new_text: String = text
         .lines()
         .filter(|line| {
-            let mut parts = line.split_whitespace();
-            parts.next();
-            let abs_path = parts.next();
-            if matches!(abs_path, Some(p) if paths.contains(p)) {
-                removed = true;
-                false
-            } else {
-                if let Some(p) = abs_path {
-                    surviving_paths.insert(p.to_string());
+            match portage_vdb::parse_line(line) {
+                Some(entry) if paths.contains(entry.path()) => {
+                    removed = true;
+                    false
                 }
-                true
+                Some(entry) => {
+                    surviving_paths.insert(entry.path().to_string());
+                    true
+                }
+                // An unparsable line is kept, like before.
+                None => true,
             }
         })
         .map(|l| format!("{l}\n"))
@@ -265,9 +265,8 @@ pub(crate) fn find_preserve_paths_for_merge(
     let old_pf = installed_instance_pf(root, category, package, main_slot)?;
     let old_contents_text =
         read_entry_text(root, category, &old_pf, "CONTENTS").unwrap_or_default();
-    let old_contents: Vec<String> = old_contents_text
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+    let old_contents: Vec<String> = portage_vdb::paths(&old_contents_text)
+        .map(|(_, path)| path.to_string())
         .collect();
     if old_contents.is_empty() {
         return None;
@@ -308,19 +307,18 @@ pub(crate) fn inject_preserved_libs_into_contents(
     let mut lines = String::new();
     let mut surviving = BTreeSet::new();
     for f in preserve_paths {
-        let Some(entry) = old_contents_text.lines().find(|line| {
-            let mut parts = line.split_whitespace();
-            parts.next();
-            parts.next() == Some(f.as_str())
+        let Some(entry) = old_contents_text.lines().find_map(|line| {
+            let entry = portage_vdb::parse_line(line)?;
+            (entry.path() == f.as_str()).then_some((line, entry.kind()))
         }) else {
             eprintln!("!!! File '{f}' will not be preserved due to missing contents entry");
             continue;
         };
         surviving.insert(f.clone());
-        let obj_type = entry.split_whitespace().next().unwrap_or("obj");
+        let (line, obj_type) = entry;
         println!(">>> needed    {obj_type} {f}");
         if !new_image_paths.contains(f) {
-            lines.push_str(entry);
+            lines.push_str(line);
             lines.push('\n');
         }
     }

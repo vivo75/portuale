@@ -174,9 +174,8 @@ pub(crate) fn merge_after_install(
     // still-needed libraries are selected now (the new entry still sits
     // in its temporary) and carried into the new `CONTENTS`; the record
     // lands after the replace loop.
-    let new_image_paths: BTreeSet<String> = contents
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+    let new_image_paths: BTreeSet<String> = portage_vdb::paths(&contents)
+        .map(|(_, path)| path.to_string())
         .collect();
     let mut preserve_paths = BTreeSet::new();
     if let Some((paths, old_contents_text)) =

@@ -7,6 +7,17 @@ fn shadow_parsers_read_contents_and_filemeta_shapes() {
         contents_owned_paths("obj /a/b 0123 456\ndir /a\nsym /c -> /d 789\njunk\n"),
         vec!["/a/b".to_string(), "/c".to_string()]
     );
+    // Space paths survive whole (#357): the decoy prefix owns nothing.
+    assert_eq!(
+        contents_owned_paths(
+            "obj /usr/share/t355/a b.txt daa8075d6ac5ff8d0c6d4650adb4ef29 1792105216\n\
+             sym /usr/share/t355/c d -> a b.txt 1792105216\n"
+        ),
+        vec![
+            "/usr/share/t355/a b.txt".to_string(),
+            "/usr/share/t355/c d".to_string(),
+        ]
+    );
     // filemeta keeps kind + rel; garbage lines drop out.
     assert_eq!(
         parse_filemeta_paths(

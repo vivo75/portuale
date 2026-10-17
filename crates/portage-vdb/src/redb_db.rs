@@ -470,7 +470,9 @@ impl RedbDb {
         } else {
             check_version(&handle, &path)?;
         }
-        Ok(Self::with_handle(path, handle))
+        let db = Self::with_handle(path, handle);
+        write::migrate_contents_parser(&db)?;
+        Ok(db)
     }
 
     /// Open an existing database read-only (`redb::ReadOnlyDatabase`: a
@@ -487,7 +489,20 @@ impl RedbDb {
         let db = ReadOnlyDatabase::open(&path).map_err(|e| rerr(&path, e.into()))?;
         let handle = Handle::Ro(db);
         check_version(&handle, &path)?;
-        Ok(Self::with_handle(path, handle))
+        let db = Self::with_handle(path, handle);
+        // Never writes: a stale index stays stale until a writer opens
+        // the database, and a space path may be missed by `owners`.
+        if write::contents_parser_version(&db).unwrap_or(0) < write::CONTENTS_PARSER_VERSION {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "portuale: warning: {}: the owner index predates the shared CONTENTS parser; \
+                     `owners` may miss paths with spaces until a writer opens the database (#357)",
+                    db.path.display()
+                );
+            });
+        }
+        Ok(db)
     }
 
     fn with_handle(path: PathBuf, handle: Handle) -> Self {
@@ -585,6 +600,10 @@ fn seed(handle: &Handle, path: &Path) -> Result<()> {
             meta.insert("generation", 0u64.to_le_bytes().as_slice())?;
             meta.insert("counter_hwm", (-1i64).to_le_bytes().as_slice())?;
             meta.insert("created_at", now.to_le_bytes().as_slice())?;
+            meta.insert(
+                "contents_parser",
+                write::CONTENTS_PARSER_VERSION.to_le_bytes().as_slice(),
+            )?;
         }
         txn.commit()?;
         Ok(())
@@ -2498,6 +2517,112 @@ bad line\nX86_64;/usr/bin/x;;  -  ;liba.so.1\n";
         drop(RedbDb::open(ro_dir.db()).unwrap());
         let ro = RedbDb::open_readonly(ro_dir.db()).unwrap();
         assert!(matches!(ro.begin_write(), Err(Error::Invalid(_))));
+    }
+
+    /// Expected values from Portage 3.0.82.2, S0 cell S1 (not from
+    /// portuale output): `a b.txt`, `c d` and `sp dir/f` are claimed,
+    /// the decoy `/usr/share/t355/a` is not.
+    ///
+    /// A database whose `owner` rows were derived with the old
+    /// whitespace split answers `owners` for space paths correctly
+    /// after a writable reopen: the open re-derives the index once
+    /// under `meta.contents_parser = 2`. A read-only open never
+    /// writes and keeps serving the stale rows.
+    #[test]
+    fn reopening_an_old_split_database_rederives_owners_with_the_shared_parser() {
+        const CONTENTS: &[u8] = b"dir /usr/share/t355\n\
+            obj /usr/share/t355/a b.txt daa8075d6ac5ff8d0c6d4650adb4ef29 1792105216\n\
+            sym /usr/share/t355/c d -> a b.txt 1792105216\n\
+            dir /usr/share/t355/sp dir\n\
+            obj /usr/share/t355/sp dir/f 9a8ad92c50cae39aa2c5604fd0ab6d8c 1792105216\n";
+        let t = Tmp::new();
+        let a = EntryKey::new("app-misc", "a-1");
+        {
+            let db = RedbDb::open(t.db()).unwrap();
+            merge(&db, &a, &[("SLOT", b"0\n"), ("CONTENTS", CONTENTS)], true);
+            assert_eq!(
+                db.meta_get("contents_parser").unwrap().unwrap(),
+                2u64.to_le_bytes()
+            );
+            // The old split claimed the decoy prefix and truncated every
+            // space path: rebuild that observable state by hand (the old
+            // code itself is gone).
+            let id = id_of(&db, &a, INSTALLED).unwrap();
+            {
+                let txn = rw(&db).begin_write().unwrap();
+                let doomed: Vec<(Vec<u8>, Vec<u8>)> = {
+                    let owner = txn.open_multimap_table(OWNER).unwrap();
+                    let mut doomed = Vec::new();
+                    for item in owner.iter().unwrap() {
+                        let (k, vs) = item.unwrap();
+                        for v in vs {
+                            let vb = v.unwrap().value().to_vec();
+                            if vb.len() >= 8
+                                && u64::from_le_bytes(vb[..8].try_into().unwrap()) == id
+                            {
+                                doomed.push((k.value().to_vec(), vb));
+                            }
+                        }
+                    }
+                    doomed
+                };
+                {
+                    let mut owner = txn.open_multimap_table(OWNER).unwrap();
+                    for (k, v) in &doomed {
+                        owner.remove(k.as_slice(), v.as_slice()).unwrap();
+                    }
+                    owner
+                        .insert(
+                            b"/usr/share/t355/a".as_slice(),
+                            Enc::default().u64(id).u32(0).str("obj").u8(0).0.as_slice(),
+                        )
+                        .unwrap();
+                    owner
+                        .insert(
+                            b"/usr/share/t355/c".as_slice(),
+                            Enc::default().u64(id).u32(1).str("sym").u8(0).0.as_slice(),
+                        )
+                        .unwrap();
+                }
+                txn.open_table(META)
+                    .unwrap()
+                    .remove("contents_parser")
+                    .unwrap();
+                txn.commit().unwrap();
+            }
+            db.invalidate();
+        }
+        // Read-only: stale rows, no write (the space paths miss, the
+        // decoy hits).
+        {
+            let ro = RedbDb::open_readonly(t.db()).unwrap();
+            assert!(ro.is_readonly());
+            let owners = |p: &[u8]| ro.owners(&[p]).unwrap();
+            assert!(owners(b"/usr/share/t355/a b.txt").is_empty());
+            assert_eq!(owners(b"/usr/share/t355/a").len(), 1);
+            assert!(ro.meta_get("contents_parser").unwrap().is_none());
+        }
+        // Writable: one migration, then the Portage answers.
+        {
+            let db = RedbDb::open(t.db()).unwrap();
+            assert_eq!(
+                db.meta_get("contents_parser").unwrap().unwrap(),
+                2u64.to_le_bytes()
+            );
+            let owners = |p: &[u8]| db.owners(&[p]).unwrap();
+            assert_eq!(owners(b"/usr/share/t355/a b.txt").len(), 1);
+            assert_eq!(owners(b"/usr/share/t355/c d").len(), 1);
+            assert_eq!(owners(b"/usr/share/t355/sp dir").len(), 1);
+            assert_eq!(owners(b"/usr/share/t355/sp dir/f").len(), 1);
+            assert!(owners(b"/usr/share/t355/a").is_empty());
+            assert!(owners(b"/usr/share/t355/c").is_empty());
+        }
+        // Idempotent: a second open changes nothing.
+        {
+            let before = index_dump(&RedbDb::open(t.db()).unwrap());
+            let db = RedbDb::open(t.db()).unwrap();
+            assert_eq!(index_dump(&db), before);
+        }
     }
 
     #[test]

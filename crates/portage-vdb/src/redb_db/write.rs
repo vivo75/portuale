@@ -686,6 +686,38 @@ fn file_names(t: &WriteTransaction, id: u64) -> Tx<Vec<String>> {
     Ok(out)
 }
 
+/// The `CONTENTS` line-parser generation the `owner` rows were derived
+/// with: 1 is the old whitespace split (an absent key reads the same),
+/// 2 the shared [`crate::contents`] parser. A meta key, not a schema
+/// version: existing databases are migrated, never refused.
+pub(super) const CONTENTS_PARSER_VERSION: u64 = 2;
+
+/// Reads `meta.contents_parser`: 0 when the key is absent or not an
+/// 8-byte number (an old database).
+pub(super) fn contents_parser_version(db: &RedbDb) -> Result<u64> {
+    Ok(db
+        .meta_get("contents_parser")?
+        .and_then(|b| <[u8; 8]>::try_from(b).ok().map(u64::from_le_bytes))
+        .unwrap_or(0))
+}
+
+/// On a writable open: when the stamp is absent or old, re-derive the
+/// index once and write the new key in the same transaction, so a crash
+/// leaves the old key and the next open retries. Idempotent: a stamped
+/// database skips. Read-only opens never call this (they warn and use
+/// the stale rows).
+pub(super) fn migrate_contents_parser(db: &RedbDb) -> Result<()> {
+    if contents_parser_version(db)? >= CONTENTS_PARSER_VERSION {
+        return Ok(());
+    }
+    let mut txn = RedbTxn::begin(db)?;
+    txn.rebuild_index()?;
+    txn.op(true, |t| {
+        set_meta(t, "contents_parser", &CONTENTS_PARSER_VERSION.to_le_bytes())
+    })?;
+    Box::new(txn).commit()
+}
+
 /// Store one file of a pending entry. A file added to an entry whose stamp
 /// is `valid` makes it `stale`, as a new name in the directory moves its
 /// mtime on `files`; overwriting a name does not.
@@ -867,11 +899,10 @@ fn derive_columns(t: &WriteTransaction, key: &EntryKey, id: u64) -> Tx<Option<i6
     Ok(counter)
 }
 
-/// `(path, value)` of the `owner` rows of `CONTENTS`, with the line rule of
-/// `files::claim_paths` (and sqlite's `derive_owner`): whitespace-separated
-/// words, the first a recorded kind (`obj`, `sym`, `dir`, `dev`, `fif`,
-/// `bin`), the second the path. `seq` counts recorded lines. A `CONTENTS`
-/// that is not UTF-8 gives no rows.
+/// `(path, value)` of the `owner` rows of `CONTENTS`, with the line
+/// rule of [`crate::contents`] (and sqlite's `derive_owner`): the path
+/// as written. `seq` counts recorded lines. A `CONTENTS` that is not
+/// UTF-8 gives no rows.
 fn owner_rows(id: u64, contents: Option<&[u8]>) -> Vec<(Vec<u8>, Vec<u8>)> {
     let Some(text) = contents.and_then(|b| std::str::from_utf8(b).ok()) else {
         return Vec::new();
@@ -879,24 +910,22 @@ fn owner_rows(id: u64, contents: Option<&[u8]>) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut out = Vec::new();
     let mut seq = 0_u32;
     for line in text.lines() {
-        let mut words = line.split_whitespace();
-        let (kind, path) = match (words.next(), words.next()) {
-            (Some(k @ ("obj" | "sym" | "dir" | "dev" | "fif" | "bin")), Some(path)) => (k, path),
-            _ => continue,
+        let Some(entry) = crate::contents::parse_line(line) else {
+            continue;
         };
-        let rest: Vec<&str> = words.collect();
-        let (md5, mtime, target) = match kind {
-            "obj" => (
-                rest.first().copied(),
-                rest.get(1).and_then(|m| m.parse::<i64>().ok()),
-                None,
-            ),
-            "sym" if rest.first() == Some(&"->") => (
-                None,
-                rest.get(2).and_then(|m| m.parse::<i64>().ok()),
-                rest.get(1).copied(),
-            ),
-            _ => (None, None, None),
+        let (kind, path, md5, mtime, target) = match entry {
+            crate::contents::ContentsLine::Obj { path, md5, mtime } => {
+                ("obj", path, Some(md5), Some(mtime), None)
+            }
+            crate::contents::ContentsLine::Sym {
+                path,
+                target,
+                mtime,
+            } => ("sym", path, None, Some(mtime), Some(target)),
+            crate::contents::ContentsLine::Dir { path } => ("dir", path, None, None, None),
+            crate::contents::ContentsLine::Dev { path } => ("dev", path, None, None, None),
+            crate::contents::ContentsLine::Fif { path } => ("fif", path, None, None, None),
+            crate::contents::ContentsLine::Bin { path } => ("bin", path, None, None, None),
         };
         let mut e = Enc::default()
             .u64(id)

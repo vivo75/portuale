@@ -152,6 +152,8 @@ impl FilesDb {
             .and_then(|path| fs::read_to_string(path).ok())
         {
             for line in text.lines() {
+                // Not CONTENTS: Portage reads the config memory with
+                // `grabdict` (whitespace-split), so spaces break there too.
                 let mut parts = line.split_whitespace();
                 if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
                     entries.insert(key.to_string(), value.to_string());

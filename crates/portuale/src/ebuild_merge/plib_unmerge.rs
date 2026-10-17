@@ -79,9 +79,8 @@ pub(crate) fn preserve_libs_on_unmerge_into(
     let preserved = if is_replacement || !instance_owns_files {
         BTreeSet::new()
     } else {
-        let old_contents: Vec<String> = contents_text
-            .lines()
-            .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+        let old_contents: Vec<String> = portage_vdb::paths(contents_text)
+            .map(|(_, path)| path.to_string())
             .collect();
 
         let owner_entries = owner_entries_with_preserved_orphans(root, &registry.preserved_libs());

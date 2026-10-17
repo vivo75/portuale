@@ -158,19 +158,14 @@ pub(crate) fn owns_path_pf(root: &Path, category: &str, pf: &str, abs_path: &str
 
 /// Whether a `CONTENTS` text lists `abs_path`.
 pub(crate) fn contents_text_owns(text: &str, abs_path: &str) -> bool {
-    text.lines().any(|line| {
-        let mut parts = line.split_whitespace();
-        parts.next();
-        parts.next() == Some(abs_path)
-    })
+    portage_vdb::paths(text).any(|(_, path)| path == abs_path)
 }
 
 /// The node type a `CONTENTS` text records for `abs_path`.
 pub(crate) fn contents_text_node_type(text: &str, abs_path: &str) -> Option<String> {
     text.lines().find_map(|line| {
-        let mut parts = line.split_whitespace();
-        let node_type = parts.next()?;
-        (parts.next() == Some(abs_path)).then(|| node_type.to_string())
+        let entry = portage_vdb::parse_line(line)?;
+        (entry.path() == abs_path).then(|| entry.kind().to_string())
     })
 }
 
@@ -201,18 +196,16 @@ pub(crate) fn owned_node_value_pf(
 ) -> Option<(String, String)> {
     let text = read_contents_pf(root, category, pf)?;
     text.lines().find_map(|line| {
-        let mut parts = line.split_whitespace();
-        let node_type = parts.next()?;
-        if parts.next() != Some(abs_path) {
+        let entry = portage_vdb::parse_line(line)?;
+        if entry.path() != abs_path {
             return None;
         }
-        match node_type {
-            "obj" => Some((node_type.to_string(), parts.next()?.to_string())),
-            "sym" => {
-                if parts.next() != Some("->") {
-                    return None;
-                }
-                Some((node_type.to_string(), parts.next()?.to_string()))
+        match entry {
+            portage_vdb::ContentsLine::Obj { md5, .. } => {
+                Some(("obj".to_string(), md5.to_string()))
+            }
+            portage_vdb::ContentsLine::Sym { target, .. } => {
+                Some(("sym".to_string(), target.to_string()))
             }
             _ => None,
         }

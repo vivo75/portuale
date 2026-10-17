@@ -1428,17 +1428,17 @@ pub(crate) fn stage_contents_for_quickpkg(
     config_protect_mask: &str,
 ) -> Result<(), String> {
     for line in contents.lines() {
-        let mut fields = line.split_whitespace();
-        let (Some(kind), Some(abs)) = (fields.next(), fields.next()) else {
+        let Some(entry) = portage_vdb::parse_line(line) else {
             continue;
         };
+        let abs = entry.path();
         let src = root.join(abs.trim_start_matches('/'));
         let dst = image.join(abs.trim_start_matches('/'));
-        match kind {
-            "dir" => {
+        match entry {
+            portage_vdb::ContentsLine::Dir { .. } => {
                 std::fs::create_dir_all(&dst).map_err(|e| format!("{}: {e}", dst.display()))?;
             }
-            "obj" => {
+            portage_vdb::ContentsLine::Obj { .. } => {
                 if ebuild_merge::is_protected(root, config_protect, config_protect_mask, &src) {
                     continue;
                 }
@@ -1449,7 +1449,7 @@ pub(crate) fn stage_contents_for_quickpkg(
                 std::fs::copy(&src, &dst)
                     .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
             }
-            "sym" => {
+            portage_vdb::ContentsLine::Sym { .. } => {
                 let target = std::fs::read_link(&src)
                     .map_err(|e| format!("quickpkg: {}: {e}", src.display()))?;
                 if let Some(parent) = dst.parent() {
@@ -1459,7 +1459,7 @@ pub(crate) fn stage_contents_for_quickpkg(
                 std::os::unix::fs::symlink(&target, &dst)
                     .map_err(|e| format!("quickpkg: {}: {e}", dst.display()))?;
             }
-            // "fif"/"dev": documented cut (needs CAP_MKNOD).
+            // "fif"/"dev"/"bin": documented cut ("fif"/"dev" need CAP_MKNOD).
             _ => {}
         }
     }

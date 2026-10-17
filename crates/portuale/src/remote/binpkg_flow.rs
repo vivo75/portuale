@@ -25,14 +25,9 @@ pub(crate) struct VdbShadow {
 /// `sym <path> -> <target> <mtime>`). `dir` lines merge freely
 /// client-side, so they never gate a pre-check.
 pub(crate) fn contents_owned_paths(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|line| {
-            let mut words = line.split_whitespace();
-            match (words.next(), words.next()) {
-                (Some("obj"), Some(path)) | (Some("sym"), Some(path)) => Some(path.to_string()),
-                _ => None,
-            }
-        })
+    portage_vdb::paths(text)
+        .filter(|(kind, _)| *kind == "obj" || *kind == "sym")
+        .map(|(_, path)| path.to_string())
         .collect()
 }
 
@@ -87,6 +82,8 @@ impl VdbShadow {
 pub(crate) fn parse_filemeta_paths(text: &str) -> Vec<(String, String)> {
     text.lines()
         .filter_map(|line| {
+            // Not CONTENTS: FILEMETA fields are whitespace-free by
+            // bundle-build construction, so the split stays.
             let mut words = line.split_whitespace();
             let kind = words.next()?.to_string();
             if !matches!(kind.as_str(), "obj" | "sym" | "dir") {

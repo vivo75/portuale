@@ -253,12 +253,14 @@ impl SqliteDb {
         } else {
             create(&conn, &path)?;
         }
-        Ok(SqliteDb {
+        let db = SqliteDb {
             path,
             conn: Mutex::new(conn),
             cache: Mutex::new(CacheState::default()),
             readonly: false,
-        })
+        };
+        write::migrate_contents_parser(&db)?;
+        Ok(db)
     }
 
     /// Open an existing database read-only. A missing file is
@@ -278,12 +280,25 @@ impl SqliteDb {
             .and_then(|()| conn.execute_batch("PRAGMA foreign_keys=ON;"))
             .map_err(|e| db_err(&path, e))?;
         check_version(&conn, &path)?;
-        Ok(SqliteDb {
+        let db = SqliteDb {
             path,
             conn: Mutex::new(conn),
             cache: Mutex::new(CacheState::default()),
             readonly: true,
-        })
+        };
+        // Never writes: a stale index stays stale until a writer opens
+        // the database, and a space path may be missed by `owners`.
+        if write::contents_parser_version(&db).unwrap_or(0) < write::CONTENTS_PARSER_VERSION {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "portuale: warning: {}: the owner index predates the shared CONTENTS parser; \
+                     `owners` may miss paths with spaces until a writer opens the database (#357)",
+                    db.path.display()
+                );
+            });
+        }
+        Ok(db)
     }
 
     /// The database file.
@@ -311,6 +326,10 @@ fn create(conn: &Connection, path: &Path) -> Result<()> {
         ("generation", "0".to_string()),
         ("counter_hwm", "-1".to_string()),
         ("created_at", now.to_string()),
+        (
+            "contents_parser",
+            write::CONTENTS_PARSER_VERSION.to_string(),
+        ),
     ] {
         tx.execute("INSERT INTO meta (key, value) VALUES (?1, ?2)", (k, v))
             .map_err(wrap)?;
@@ -2192,6 +2211,80 @@ bad line\nX86_64;/usr/bin/x;;  -  ;liba.so.1\n";
             (owners(b"/usr/bin/b"), owners(b"/etc/passwd"), rdeps()),
             (1, 0, 1)
         );
+    }
+
+    /// Expected values from Portage 3.0.82.2, S0 cell S1 (not from
+    /// portuale output): `a b.txt`, `c d` and `sp dir/f` are claimed,
+    /// the decoy `/usr/share/t355/a` is not.
+    ///
+    /// A database whose `owner` rows were derived with the old
+    /// whitespace split answers `owners` for space paths correctly
+    /// after a writable reopen: the open re-derives the index once
+    /// under `meta.contents_parser = 2`. A read-only open never
+    /// writes and keeps serving the stale rows.
+    #[test]
+    fn reopening_an_old_split_database_rederives_owners_with_the_shared_parser() {
+        const CONTENTS: &[u8] = b"dir /usr/share/t355\n\
+            obj /usr/share/t355/a b.txt daa8075d6ac5ff8d0c6d4650adb4ef29 1792105216\n\
+            sym /usr/share/t355/c d -> a b.txt 1792105216\n\
+            dir /usr/share/t355/sp dir\n\
+            obj /usr/share/t355/sp dir/f 9a8ad92c50cae39aa2c5604fd0ab6d8c 1792105216\n";
+        let t = Tmp::new();
+        let a = EntryKey::new("app-misc", "a-1");
+        {
+            let db = SqliteDb::open(t.db()).unwrap();
+            let mut tx = db.begin_write().unwrap();
+            tx.begin_entry(&a).unwrap();
+            tx.put_entry_file(&a, "CONTENTS", CONTENTS).unwrap();
+            tx.put_entry_file(&a, "SLOT", b"0\n").unwrap();
+            tx.finish_entry(&a).unwrap();
+            tx.commit().unwrap();
+            assert_eq!(meta(&db, "contents_parser").as_deref(), Some("2"));
+            // The old split claimed the decoy prefix and truncated every
+            // space path: rebuild that observable state by hand (the old
+            // code itself is gone).
+            let id = id_of(&db, &a, "installed").unwrap();
+            db.conn
+                .lock()
+                .unwrap()
+                .execute_batch(&format!(
+                    "DELETE FROM owner WHERE entry_id = {id};
+                     INSERT INTO owner (entry_id, seq, path, kind) VALUES
+                         ({id}, 0, CAST('/usr/share/t355/a' AS BLOB), 'obj'),
+                         ({id}, 1, CAST('/usr/share/t355/c' AS BLOB), 'sym'),
+                         ({id}, 2, CAST('/usr/share/t355/sp' AS BLOB), 'dir');
+                     DELETE FROM meta WHERE key = 'contents_parser';"
+                ))
+                .unwrap();
+        }
+        // Read-only: stale rows, no write (the space paths miss, the
+        // decoy hits).
+        {
+            let ro = SqliteDb::open_readonly(t.db()).unwrap();
+            assert!(ro.is_readonly());
+            let owners = |p: &[u8]| ro.owners(&[p]).unwrap();
+            assert!(owners(b"/usr/share/t355/a b.txt").is_empty());
+            assert_eq!(owners(b"/usr/share/t355/a").len(), 1);
+            assert!(meta(&ro, "contents_parser").is_none());
+        }
+        // Writable: one migration, then the Portage answers.
+        {
+            let db = SqliteDb::open(t.db()).unwrap();
+            assert_eq!(meta(&db, "contents_parser").as_deref(), Some("2"));
+            let owners = |p: &[u8]| db.owners(&[p]).unwrap();
+            assert_eq!(owners(b"/usr/share/t355/a b.txt").len(), 1);
+            assert_eq!(owners(b"/usr/share/t355/c d").len(), 1);
+            assert_eq!(owners(b"/usr/share/t355/sp dir").len(), 1);
+            assert_eq!(owners(b"/usr/share/t355/sp dir/f").len(), 1);
+            assert!(owners(b"/usr/share/t355/a").is_empty());
+            assert!(owners(b"/usr/share/t355/c").is_empty());
+        }
+        // Idempotent: a second open changes nothing.
+        {
+            let before = index_dump(&SqliteDb::open(t.db()).unwrap());
+            let db = SqliteDb::open(t.db()).unwrap();
+            assert_eq!(index_dump(&db), before);
+        }
     }
 
     #[test]

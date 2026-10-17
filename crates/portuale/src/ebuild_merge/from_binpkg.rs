@@ -340,9 +340,8 @@ pub fn merge_binpkg(
         xattrs: &XattrPolicy::from_options(options),
     })?;
     // Pre-replace-loop preserve-libs, identical to `merge_after_install`.
-    let new_image_paths: BTreeSet<String> = contents
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(1).map(String::from))
+    let new_image_paths: BTreeSet<String> = portage_vdb::paths(&contents)
+        .map(|(_, path)| path.to_string())
         .collect();
     merge_binpkg_finish(MergeBinpkgFinishArgs {
         root,

@@ -578,6 +578,50 @@ impl WriteTxn for SqliteTxn<'_> {
 
 // ------------------------------------------------------------- derived data
 
+/// The `CONTENTS` line-parser generation the `owner` rows were derived
+/// with: 1 is the old whitespace split (an absent key reads the same),
+/// 2 the shared [`crate::contents`] parser. A meta key, not a schema
+/// version: existing databases are migrated, never refused.
+pub(super) const CONTENTS_PARSER_VERSION: u32 = 2;
+
+/// Reads `meta.contents_parser`: 0 when the key is absent or not a
+/// number (an old database).
+pub(super) fn contents_parser_version(db: &SqliteDb) -> Result<u32> {
+    let cur: Option<String> = db
+        .with(|c| {
+            c.query_row(
+                "SELECT value FROM meta WHERE key = 'contents_parser'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+        })?
+        .flatten();
+    Ok(cur.and_then(|v| v.parse::<u32>().ok()).unwrap_or(0))
+}
+
+/// On a writable open: when the stamp is absent or old, re-derive the
+/// index once and write the new key in the same transaction, so a crash
+/// leaves the old key and the next open retries. Idempotent: a stamped
+/// database skips. Read-only opens never call this (they warn and use
+/// the stale rows).
+pub(super) fn migrate_contents_parser(db: &SqliteDb) -> Result<()> {
+    if contents_parser_version(db)? >= CONTENTS_PARSER_VERSION {
+        return Ok(());
+    }
+    let p = db.path.clone();
+    let mut txn = SqliteTxn::begin(db)?;
+    txn.rebuild_index()?;
+    txn.conn
+        .execute(
+            "INSERT INTO meta (key, value) VALUES ('contents_parser', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [CONTENTS_PARSER_VERSION.to_string()],
+        )
+        .be(&p)?;
+    Box::new(txn).commit()
+}
+
 /// Refill every derived part of entry `id`; returns its `COUNTER`.
 pub(super) fn derive_all(c: &Connection, id: i64) -> rusqlite::Result<Option<i64>> {
     let counter = derive_columns(c, id)?;
@@ -629,11 +673,9 @@ fn derive_columns(c: &Connection, id: i64) -> rusqlite::Result<Option<i64>> {
     Ok(counter)
 }
 
-/// `owner` from `CONTENTS`, with the line rule of `files::claim_paths`:
-/// whitespace-separated words, the first a recorded kind (`obj`, `sym`,
-/// `dir`, `dev`, `fif`, `bin`), the second the path (stored as given,
-/// leading `/` included). `obj` adds `md5` and `mtime`, `sym` (`path ->
-/// target mtime`) `target` and `mtime`. `seq` counts recorded lines, so
+/// `owner` from `CONTENTS`, with the line rule of [`crate::contents`]:
+/// the path as written (leading `/` included), `obj` adding `md5` and
+/// `mtime`, `sym` `target` and `mtime`. `seq` counts recorded lines, so
 /// `CONTENTS` order survives. A `CONTENTS` that is not UTF-8 contributes
 /// no rows, as it owns nothing on `files`.
 fn derive_owner(c: &Connection, id: i64) -> rusqlite::Result<()> {
@@ -647,24 +689,22 @@ fn derive_owner(c: &Connection, id: i64) -> rusqlite::Result<()> {
     )?;
     let mut seq = 0_i64;
     for line in text.lines() {
-        let mut words = line.split_whitespace();
-        let (kind, path) = match (words.next(), words.next()) {
-            (Some(k @ ("obj" | "sym" | "dir" | "dev" | "fif" | "bin")), Some(path)) => (k, path),
-            _ => continue,
+        let Some(entry) = crate::contents::parse_line(line) else {
+            continue;
         };
-        let rest: Vec<&str> = words.collect();
-        let (md5, mtime, target) = match kind {
-            "obj" => (
-                rest.first().copied(),
-                rest.get(1).and_then(|m| m.parse::<i64>().ok()),
-                None,
-            ),
-            "sym" if rest.first() == Some(&"->") => (
-                None,
-                rest.get(2).and_then(|m| m.parse::<i64>().ok()),
-                rest.get(1).copied(),
-            ),
-            _ => (None, None, None),
+        let (kind, path, md5, mtime, target) = match entry {
+            crate::contents::ContentsLine::Obj { path, md5, mtime } => {
+                ("obj", path, Some(md5), Some(mtime), None)
+            }
+            crate::contents::ContentsLine::Sym {
+                path,
+                target,
+                mtime,
+            } => ("sym", path, None, Some(mtime), Some(target)),
+            crate::contents::ContentsLine::Dir { path } => ("dir", path, None, None, None),
+            crate::contents::ContentsLine::Dev { path } => ("dev", path, None, None, None),
+            crate::contents::ContentsLine::Fif { path } => ("fif", path, None, None, None),
+            crate::contents::ContentsLine::Bin { path } => ("bin", path, None, None, None),
         };
         stmt.execute(params![
             id,

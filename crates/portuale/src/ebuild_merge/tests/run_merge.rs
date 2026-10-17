@@ -365,6 +365,98 @@ fn reinstalling_the_same_version_removes_files_the_new_image_dropped() {
     assert!(!contents.contains("mergepkg-extra"));
 }
 
+/// Backlog #357 S3: `CONTENTS` paths with spaces are removed on
+/// unmerge (S1 shape) and on a same-version reinstall that drops one
+/// (S2 shape), while an unowned prefix decoy is kept in both.
+///
+/// Expected values from Portage 3.0.82.2, S0 cells S1/S2 (not from
+/// portuale output): variant 1 records `a b.txt`, `c d -> a b.txt` and
+/// `sp dir/f`; `emerge -C` removes all three and keeps the
+/// admin-created decoy `/usr/share/t355/a`. Variant 2 drops `a b.txt`;
+/// reinstalling removes it through the replace loop and keeps the
+/// decoy. Pre-fix portuale removed the decoy and leaked the space
+/// paths in both shapes.
+#[test]
+fn a_contents_path_with_spaces_is_removed_and_the_prefix_decoy_is_kept() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let portage_tmpdir = tmp.join("tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+    let repo355 = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo-355");
+    let original =
+        std::fs::read_to_string(repo355.join("app-misc/t355-space/t355-space-1.ebuild")).unwrap();
+    let dir = tmp.join("repo/app-misc/t355-space");
+    std::fs::create_dir_all(&dir).unwrap();
+    let ebuild = dir.join("t355-space-1.ebuild");
+    std::fs::write(&ebuild, &original).unwrap();
+    let merge = || {
+        run_merge(
+            &ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+    };
+    let unmerge = || {
+        unmerge_one_installed(UnmergeOneInstalledArgs {
+            root: &root,
+            category: "app-misc",
+            package: "t355-space",
+            pf: "t355-space-1",
+            also_keep: &[],
+            scratch_dir: &tmp.join("scratch"),
+            portage_tmpdir: &portage_tmpdir,
+            options: &MergeOptions::default(),
+            backup: None,
+            is_replacement: false,
+            replaced_by_version: None,
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+            deferred_delete: None,
+        })
+        .expect("unmerge succeeds")
+    };
+
+    // S1 shape: merge, check the CONTENTS bytes, plant the decoy, `-C`.
+    assert_eq!(merge().unwrap(), 0);
+    let contents =
+        std::fs::read_to_string(root.join("var/db/pkg/app-misc/t355-space-1/CONTENTS")).unwrap();
+    assert!(contents.contains("obj /usr/share/t355/a b.txt "));
+    assert!(contents.contains("sym /usr/share/t355/c d -> a b.txt "));
+    assert!(contents.contains("obj /usr/share/t355/sp dir/f "));
+    std::fs::write(root.join("usr/share/t355/a"), b"decoy").unwrap();
+    unmerge();
+    assert!(!root.join("usr/share/t355/a b.txt").exists());
+    assert!(std::fs::symlink_metadata(root.join("usr/share/t355/c d")).is_err());
+    assert!(!root.join("usr/share/t355/sp dir/f").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("usr/share/t355/a")).unwrap(),
+        "decoy"
+    );
+
+    // S2 shape: merge variant 1 again, plant the decoy, reinstall with
+    // variant 2 (drops `a b.txt`); the replace loop removes it and keeps
+    // the decoy and the kept entries.
+    assert_eq!(merge().unwrap(), 0);
+    std::fs::write(root.join("usr/share/t355/a"), b"decoy").unwrap();
+    std::fs::write(&ebuild, original.replace("${T355_V:-1}", "${T355_V:-2}")).unwrap();
+    assert_eq!(merge().unwrap(), 0);
+    assert!(!root.join("usr/share/t355/a b.txt").exists());
+    assert!(root.join("usr/share/t355/keep2").is_file());
+    assert_eq!(
+        std::fs::read_link(root.join("usr/share/t355/c d")).unwrap(),
+        PathBuf::from("a b.txt")
+    );
+    assert!(root.join("usr/share/t355/sp dir/f").is_file());
+    assert_eq!(
+        std::fs::read_to_string(root.join("usr/share/t355/a")).unwrap(),
+        "decoy"
+    );
+}
+
 /// An upgrade publishes the new version's vdb entry only after unmerging the
 /// replaced same-slot version (Portage's `treewalk` position, after the replace loop).
 #[test]

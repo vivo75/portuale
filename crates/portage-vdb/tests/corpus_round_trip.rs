@@ -148,11 +148,8 @@ fn index_queries_match_the_scan(name: &str, src: &FilesDb, dbs: &[(&str, &dyn In
     let mut paths: Vec<Vec<u8>> = Vec::new();
     for (_, data) in src.read_file_all("CONTENTS").unwrap() {
         for line in String::from_utf8_lossy(&data.unwrap_or_default()).lines() {
-            let mut w = line.split_whitespace();
-            if let (Some("obj" | "sym" | "dir" | "dev" | "fif" | "bin"), Some(p)) =
-                (w.next(), w.next())
-            {
-                paths.push(p.as_bytes().to_vec());
+            if let Some(entry) = portage_vdb::parse_line(line) {
+                paths.push(entry.path().as_bytes().to_vec());
             }
         }
     }
