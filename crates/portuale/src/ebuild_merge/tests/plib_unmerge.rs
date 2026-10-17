@@ -196,6 +196,74 @@ fn prune_sees_just_preserved_files_missing_from_every_needed_elf2() {
     );
 }
 
+/// On a same-version reinstall the replaced and replacing cpvs are the same
+/// string, so the just-preserved feed is keyed by an excluded cpv: the
+/// exclusion must not drop it, or a registry-preserved lib whose only
+/// consumer is the just-preserved lib is wrongly judged unneeded (#355).
+/// Expected from Portage 3.0.82.2, S0 cell P1: `libt355base.so.1` kept.
+/// Portage: `LinkageMapELF.rebuild` (`LinkageMapELF.py:180`, `preserve_paths`
+/// unconditional, `exclude_pkgs` registry-only).
+#[test]
+fn prune_keeps_a_lib_whose_only_consumer_was_just_preserved_on_a_same_version_reinstall() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    compile_linked_pair(&tmp, &root);
+    // `libB` is in no `NEEDED.ELF.2`; only the `preserve_paths` feed can
+    // show it to the prune.
+    let vdb_prov = root.join("var/db/pkg/dev-libs/provider-1.0");
+    std::fs::create_dir_all(&vdb_prov).unwrap();
+    std::fs::write(
+        vdb_prov.join("CONTENTS"),
+        "obj /usr/lib/libA.so.1.0.0 def 1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vdb_prov.join("NEEDED.ELF.2"),
+        "X86_64;/usr/lib/libA.so.1.0.0;libA.so.1;;\n",
+    )
+    .unwrap();
+    let mut entries = BTreeMap::new();
+    entries.insert(
+        "dev-libs/provider:0".to_string(),
+        (
+            "dev-libs/provider-1.0".to_string(),
+            "4".to_string(),
+            vec!["/usr/lib/libA.so.1.0.0".to_string()],
+        ),
+    );
+    write_plib_registry(
+        &root,
+        &PlibRegistry {
+            entries,
+            orig_entries: BTreeMap::new(),
+        },
+    )
+    .expect("seeding the registry succeeds");
+
+    // Same-version reinstall: the feed owner and the excluded cpv are the
+    // same string.
+    let feed: BTreeMap<String, Vec<String>> = BTreeMap::from([(
+        "dev-libs/newapp-2.0".to_string(),
+        vec!["/usr/lib/libB.so.1.0.0".to_string()],
+    )]);
+    let unneeded = find_unused_preserved_libs(FindUnusedPreservedLibsArgs {
+        root: &root,
+        unmerge_no_replacement: false,
+        being_unmerged: &|_| false,
+        exclude_cpvs: &["dev-libs/newapp-2.0".to_string()],
+        replacement_preserved: &feed,
+        replacement_needed: &[],
+    });
+    assert!(
+        unneeded.is_empty(),
+        "the just-preserved consumer keeps the lib alive even when its cpv is excluded: {unneeded:?}"
+    );
+    assert!(
+        root.join("usr/lib/libA.so.1.0.0").is_file(),
+        "nothing was deleted by the read-only probe above"
+    );
+}
+
 /// Two preserved libs that only consume each other are both unneeded; one
 /// outside consumer keeps the pair.
 #[test]

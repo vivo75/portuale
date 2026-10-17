@@ -144,6 +144,29 @@ pub(crate) fn register_preserved_libs(args: RegisterPreservedLibsArgs<'_>) {
     }
 }
 
+/// The registry-orphan scan input [`linkage_owner_entries`] scans: the
+/// `exclude_cpvs` removal applies to the registry map first, then the
+/// just-preserved feed merges in untouched, so a feed key equal to an
+/// excluded cpv (a same-version reinstall) survives.
+// Portage: LinkageMapELF.py, LinkageMapELF.rebuild
+pub(crate) fn preserved_scan_input(
+    preserved: &BTreeMap<String, Vec<String>>,
+    exclude_cpvs: &[String],
+    replacement_preserved: &BTreeMap<String, Vec<String>>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut scan_input = preserved.clone();
+    for excluded in exclude_cpvs {
+        scan_input.remove(excluded);
+    }
+    for (owner, paths) in replacement_preserved {
+        scan_input
+            .entry(owner.clone())
+            .or_default()
+            .extend(paths.iter().cloned());
+    }
+    scan_input
+}
+
 /// Shared `LinkageMap` input for the preserve-libs computations: vdb entries plus
 /// registry-orphan scan results. `exclude_cpvs` drops unmerging instances; the
 /// `replacement_*` feeds cover data that enumeration skips.
@@ -167,16 +190,7 @@ pub(crate) fn linkage_owner_entries(
             owner_entries.push((owner.clone(), entries.clone()));
         }
     }
-    let mut scan_input = preserved.clone();
-    for (owner, paths) in replacement_preserved {
-        scan_input
-            .entry(owner.clone())
-            .or_default()
-            .extend(paths.iter().cloned());
-    }
-    for excluded in exclude_cpvs {
-        scan_input.remove(excluded);
-    }
+    let scan_input = preserved_scan_input(preserved, exclude_cpvs, replacement_preserved);
     if scan_input.is_empty() {
         return owner_entries;
     }

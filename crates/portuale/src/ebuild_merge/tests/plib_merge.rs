@@ -1,5 +1,58 @@
 use super::*;
 
+/// Excluded registry keys drop out, but the same key in the just-preserved
+/// feed survives: on a same-version reinstall the two are the same string.
+/// Expected from Portage 3.0.82.2 (`LinkageMapELF.rebuild` adds
+/// `preserve_paths` unconditionally, `exclude_pkgs` registry-only), S0 cell P1.
+/// Portage: `LinkageMapELF.py`, `LinkageMapELF.rebuild`.
+#[test]
+fn preserved_scan_input_excludes_the_registry_but_keeps_the_just_preserved_feed() {
+    let preserved: BTreeMap<String, Vec<String>> = BTreeMap::from([
+        (
+            "dev-libs/oldapp-1.0".to_string(),
+            vec!["/usr/lib/stale.so".to_string()],
+        ),
+        (
+            "dev-libs/provider-1.0".to_string(),
+            vec!["/usr/lib/keep.so".to_string()],
+        ),
+    ]);
+    let feed: BTreeMap<String, Vec<String>> = BTreeMap::from([
+        (
+            "dev-libs/oldapp-1.0".to_string(),
+            vec!["/usr/lib/just.so".to_string()],
+        ),
+        (
+            "dev-libs/other-1.0".to_string(),
+            vec!["/usr/lib/extra.so".to_string()],
+        ),
+    ]);
+    let got = preserved_scan_input(&preserved, &["dev-libs/oldapp-1.0".to_string()], &feed);
+    assert_eq!(
+        got,
+        BTreeMap::from([
+            (
+                "dev-libs/provider-1.0".to_string(),
+                vec!["/usr/lib/keep.so".to_string()],
+            ),
+            (
+                "dev-libs/oldapp-1.0".to_string(),
+                vec!["/usr/lib/just.so".to_string()],
+            ),
+            (
+                "dev-libs/other-1.0".to_string(),
+                vec!["/usr/lib/extra.so".to_string()],
+            ),
+        ]),
+        "the excluded registry entry drops, the same-key feed entry stays"
+    );
+    assert_eq!(
+        preserved.len(),
+        2,
+        "the registry map itself is never mutated"
+    );
+}
+
 /// Empty-`paths` unregisters only when the stored `cpv` and `counter` still
 /// match; a different package or a stale counter survives untouched.
 /// Portage: `PreservedLibsRegistry.py`, `unregister`.
