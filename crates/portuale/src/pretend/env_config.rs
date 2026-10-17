@@ -311,12 +311,34 @@ pub(crate) fn config_features_list(config: &portage_profile::Config) -> Vec<Stri
     config_features_opt(config).unwrap_or_default()
 }
 
-/// Whether the `$PKGDIR` scan trusts the `Packages` index; `None` (nothing
-/// configured) stays trusted. Same resolved chain as every other read.
+/// Whether the `$PKGDIR` scan trusts the `Packages` index: trusted unless
+/// some layer negates or clears the token without re-adding it. A layer
+/// silent on the token (including the synthetic base seeded when no
+/// `make.globals` is read) is not a negation. Same resolved chain as every
+/// other read.
 /// Portage: bintree.py, populate
 pub(crate) fn pkgdir_index_trusted(config: &portage_profile::Config) -> bool {
-    config_features_opt(config)
-        .is_none_or(|features| features.iter().any(|t| t == "pkgdir-index-trusted"))
+    const TOKEN: &str = "pkgdir-index-trusted";
+    match config.resolved_incremental("FEATURES") {
+        // Nothing stacked: the raw value, if any, decides as written;
+        // wholly unconfigured stays trusted.
+        None => config
+            .other_vars
+            .get("FEATURES")
+            .is_none_or(|f| f.split_whitespace().any(|t| t == TOKEN)),
+        Some(folded) => {
+            folded.iter().any(|t| t == TOKEN)
+                || !config
+                    .incremental_sources
+                    .get("FEATURES")
+                    .is_some_and(|layers| {
+                        layers
+                            .iter()
+                            .flatten()
+                            .any(|t| t == TOKEN || t == "-pkgdir-index-trusted" || t == "-*")
+                    })
+        }
+    }
 }
 
 /// Resolved merge-time `FEATURES`, space-joined; shared with the remote server.

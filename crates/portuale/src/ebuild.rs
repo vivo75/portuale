@@ -390,13 +390,18 @@ pub(crate) fn unmerge_and_package_options(
     distdir: &Path,
 ) -> UnmergeAndPackageOptionsOut {
     let default_unmerge_options = ebuild_unmerge::UnmergeOptions::default();
-    let unmerge_orphans = std::env::var("FEATURES")
-        .map(|features| {
-            features
+    // `unmerge-orphans` from the resolved `FEATURES` when a config
+    // resolves (the same folded chain `emerge -C` reads, synthetic base
+    // included); else the incremental fold of the calling env.
+    // Portage: dbapi/vartree.py:2913, `"unmerge-orphans" in self.settings.features`
+    let config_root = portage_repo::config_root_from_env();
+    let unmerge_orphans = ebuild_phases::resolve_unmerge_config(&config_root, root)
+        .map(|config| {
+            crate::pretend::config_features_string(&config)
                 .split_whitespace()
                 .any(|tok| tok == "unmerge-orphans")
         })
-        .unwrap_or(default_unmerge_options.unmerge_orphans);
+        .unwrap_or_else(ebuild_unmerge::unmerge_orphans_from_env);
     let unmerge_options = ebuild_unmerge::UnmergeOptions {
         debug,
         shell,

@@ -12,7 +12,7 @@ use crate::ebuild_merge;
 use crate::ebuild_phases;
 use crate::env_update;
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 /// Whether `command` is the unmerge command this module implements --
@@ -26,6 +26,8 @@ struct ContentsEntry {
     abs_path: String,
     /// Present for `obj`/`sym` lines; `None` for `dir` (no trailing field).
     mtime: Option<i64>,
+    /// Present for `obj` lines; compared by the `!md5` arm.
+    md5: Option<String>,
 }
 
 /// Parses a `CONTENTS` file's lines: a thin map over
@@ -35,21 +37,40 @@ fn parse_contents(text: &str) -> Vec<ContentsEntry> {
     text.lines()
         .filter_map(|line| {
             let entry = portage_vdb::parse_line(line)?;
-            let (node_type, mtime) = match entry {
-                portage_vdb::ContentsLine::Obj { mtime, .. } => ("obj", Some(mtime)),
-                portage_vdb::ContentsLine::Sym { mtime, .. } => ("sym", Some(mtime)),
-                portage_vdb::ContentsLine::Dir { .. } => ("dir", None),
-                portage_vdb::ContentsLine::Dev { .. } => ("dev", None),
-                portage_vdb::ContentsLine::Fif { .. } => ("fif", None),
-                portage_vdb::ContentsLine::Bin { .. } => ("bin", None),
+            let (node_type, mtime, md5) = match entry {
+                portage_vdb::ContentsLine::Obj { mtime, md5, .. } => {
+                    ("obj", Some(mtime), Some(md5.to_string()))
+                }
+                portage_vdb::ContentsLine::Sym { mtime, .. } => ("sym", Some(mtime), None),
+                portage_vdb::ContentsLine::Dir { .. } => ("dir", None, None),
+                portage_vdb::ContentsLine::Dev { .. } => ("dev", None, None),
+                portage_vdb::ContentsLine::Fif { .. } => ("fif", None, None),
+                portage_vdb::ContentsLine::Bin { .. } => ("bin", None, None),
             };
             Some(ContentsEntry {
                 node_type: node_type.to_string(),
                 abs_path: entry.path().to_string(),
                 mtime,
+                md5,
             })
         })
         .collect()
+}
+
+/// `unmerge-orphans` from the calling env alone: the default-on token
+/// folded with the incremental semantics, so `-unmerge-orphans` removes
+/// it and `-*` clears it (a bare `FEATURES=buildpkg` keeps it on).
+/// The fallback wherever no resolved config is available.
+/// Portage: const.py:130, incremental FEATURES
+pub fn unmerge_orphans_from_env() -> bool {
+    let env_tokens: Vec<String> = std::env::var("FEATURES")
+        .map(|f| f.split_whitespace().map(String::from).collect())
+        .unwrap_or_default();
+    let base = ["unmerge-orphans".to_string()];
+    let layers: Vec<&[String]> = vec![&base, &env_tokens];
+    portage_profile::fold_token_layers(&layers)
+        .iter()
+        .any(|t| t == "unmerge-orphans")
 }
 
 /// Orphaned symlinks by live target directory `(dev, ino)`; grouped so
@@ -75,10 +96,14 @@ struct RemoveContentsArgs<'a> {
     contents_text: &'a str,
 }
 
-/// Deletes every `CONTENTS`-listed entry from `root`, deepest paths first.
-/// Skips entries another same-slot instance owns, `obj`/`sym` entries whose
-/// live mtime changed (unless `unmerge_orphans`), and defers literal `dir`
-/// entries to `remove_dirs`. Removed paths still remembered by `cfgfiledict`
+/// Deletes every `CONTENTS`-listed entry from `root`, deepest paths first,
+/// in Portage's arm order: missing lstat skips, the `is_owned`/symlink-orphan
+/// check, the orphan arm for any non-directory (any recorded kind), the
+/// mtime check for kinds other than `dir`/`fif`/`dev`, then the `!dir`,
+/// `!sym`, `!obj`+`!md5`, `!fif` type guards. A `dir` entry that is a live
+/// symlink stays on the old path (deferred to `remove_dirs`, which keeps
+/// it): R3 moves with R2/R4/R4b so no commit can unlink `/bin` on a
+/// merged-usr `emerge -C`. Removed paths still remembered by `cfgfiledict`
 /// are collected into `stale_confmem`; `preserved_paths` are filtered first.
 /// Portage: dbapi/vartree.py, _unmerge_pkgfiles.
 fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
@@ -116,13 +141,25 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
         .collect();
 
     for entry in entries {
+        let relative = entry.abs_path.trim_start_matches('/');
+        let dest = root.join(relative);
+
+        // A missing lstat skips before anything else (a path under a
+        // replaced directory reports ENOTDIR here too, not only ENOENT).
+        // Portage: dbapi/vartree.py, `--- !found`.
+        let lstat = match std::fs::symlink_metadata(&dest) {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        let islink = lstat.file_type().is_symlink();
+        // The followed stat: `None` includes a dangling symlink.
+        let stat = std::fs::metadata(&dest).ok();
+        let stat_is_dir = stat.as_ref().is_some_and(|m| m.is_dir());
+
         let is_owned = owner_texts
             .iter()
             .flatten()
             .any(|text| ebuild_merge::contents_text_owns(text, &entry.abs_path));
-
-        let relative = entry.abs_path.trim_start_matches('/');
-        let dest = root.join(relative);
 
         // A live symlink-to-directory claimed as a literal `dir` entry
         // elsewhere defers to `remove_dirs` (Portage: _unmerge_pkgfiles).
@@ -154,58 +191,107 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
             stale_confmem.push(entry.abs_path.clone());
         }
 
-        // `FEATURES=unmerge-orphans`: delete a non-protected `obj`/`sym`
-        // entry unconditionally, except a symlink to a directory (which
-        // falls through to the mtime-checked removal instead).
+        // `FEATURES=unmerge-orphans`: delete any non-directory that is
+        // not a symlink to a directory and not protected, whatever the
+        // recorded kind (`obj`/`sym`, but also `fif`/`dev` nodes and a
+        // `dir` entry that is live a regular file).
+        // Portage: dbapi/vartree.py, _unmerge_pkgfiles.
         if unmerge_orphans
-            && matches!(entry.node_type.as_str(), "obj" | "sym")
+            && !lstat.is_dir()
+            && !(islink && stat_is_dir)
             && !ebuild_merge::is_protected(root, config_protect, config_protect_mask, &dest)
         {
-            let symlink_to_dir = entry.node_type == "sym"
-                && std::fs::metadata(&dest)
-                    .map(|m| m.is_dir())
-                    .unwrap_or(false);
-            if !symlink_to_dir {
-                if let Err(e) = std::fs::remove_file(&dest)
-                    && e.kind() != std::io::ErrorKind::NotFound
-                {
-                    return Err(format!("{}: {e}", dest.display()));
-                }
+            unlink_tolerant(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+            continue;
+        }
+
+        // The mtime check covers every kind but `dir`/`fif`/`dev`.
+        if !matches!(entry.node_type.as_str(), "dir" | "fif" | "dev")
+            && let Some(recorded_mtime) = entry.mtime
+        {
+            let current_mtime = ebuild_merge::mtime_secs(&lstat)?;
+            if current_mtime != recorded_mtime {
+                // Locally modified since the merge that recorded
+                // this entry -- leave it in place.
                 continue;
             }
         }
 
         match entry.node_type.as_str() {
-            "obj" | "sym" => {
-                if let (Some(recorded_mtime), Ok(meta)) =
-                    (entry.mtime, std::fs::symlink_metadata(&dest))
+            "obj" | "bin" => {
+                // `!obj`: the followed target must be a regular file
+                // (an `obj` replaced by a directory skips instead of
+                // aborting the whole unmerge with EISDIR).
+                if !stat.as_ref().is_some_and(|m| m.is_file()) {
+                    continue;
+                }
+                // `!md5`: an `obj` that survives this far (protected, or
+                // `-unmerge-orphans`) is removed only when its md5 still
+                // matches `CONTENTS`. A file that vanished mid-unmerge
+                // reads as `!obj`.
+                if entry.node_type == "obj"
+                    && let Some(recorded_md5) = entry.md5.as_deref()
                 {
-                    let current_mtime = ebuild_merge::mtime_secs(&meta)?;
-                    if current_mtime != recorded_mtime {
-                        // Locally modified since the merge that recorded
-                        // this entry -- leave it in place.
+                    let live_md5 = match ebuild_merge::md5_hex(&dest) {
+                        Ok(md5) => md5,
+                        Err(_) => continue,
+                    };
+                    if live_md5 != recorded_md5.to_lowercase() {
                         continue;
                     }
                 }
-                if let Err(e) = std::fs::remove_file(&dest)
-                    && e.kind() != std::io::ErrorKind::NotFound
-                {
-                    return Err(format!("{}: {e}", dest.display()));
+                unlink_tolerant(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+            }
+            "sym" => {
+                // `!sym`: a recorded symlink that is not a live symlink
+                // stays (a `dir` entry that is a live symlink never
+                // reaches here: R3 moves with R2/R4/R4b, so it stays on
+                // the old deferred path below).
+                if !islink {
+                    continue;
                 }
+                unlink_tolerant(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
             }
             "dir" => {
-                if let Ok(meta) = std::fs::symlink_metadata(&dest) {
-                    dirs.push((dest, (meta.dev(), meta.ino())));
+                // `!dir`: a recorded directory that is not a live
+                // directory stays (the mtime arm never ran for it).
+                if lstat.is_dir() && !islink {
+                    dirs.push((dest, (lstat.dev(), lstat.ino())));
+                } else if islink {
+                    // A live symlink (R3, not this slice): today's path.
+                    dirs.push((dest, (lstat.dev(), lstat.ino())));
                 }
             }
+            "fif" if !lstat.file_type().is_fifo() => {
+                // `!fif`: a recorded fifo that is not a live fifo stays.
+            }
+            "fif" => {
+                // A live fifo was already unlinked by the orphan arm under
+                // default FEATURES; reaching here keeps it.
+            }
             _ => {
-                // `fif`/`dev` entries are never unlinked, matching Portage.
+                // `dev` entries are kept, matching Portage.
             }
         }
     }
     remove_dirs(root, dirs, &mut protected_symlinks, infodirs_inodes);
     // Entries `remove_dirs` didn't resolve stay in place with no warning.
     Ok(())
+}
+
+/// `remove_file` tolerating what Portage's `unlink()` tolerates beyond
+/// "already gone": the type-confusion pair (a path that changed kind
+/// mid-unmerge), so a stale `CONTENTS` line can never abort the removal.
+/// Portage: dbapi/vartree.py, `_ignored_unlink_errnos`.
+fn unlink_tolerant(dest: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(dest) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) if matches!(e.raw_os_error(), Some(n) if n == libc::EISDIR || n == libc::ENOTDIR) => {
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Filenames the install-info index leaves behind.
@@ -741,11 +827,13 @@ mod tests {
             &std::fs::symlink_metadata(root.join("usr/share/x/link.txt")).unwrap(),
         )
         .unwrap();
+        // Real md5s: the `!md5` arm keeps an entry whose content drifted.
+        let hello_md5 = ebuild_merge::md5_hex(&root.join("usr/share/x/hello.txt")).unwrap();
         let contents = format!(
             "dir /usr\n\
              dir /usr/share\n\
              dir /usr/share/x\n\
-             obj /usr/share/x/hello.txt abc123 {file_mtime}\n\
+             obj /usr/share/x/hello.txt {hello_md5} {file_mtime}\n\
              sym /usr/share/x/link.txt -> hello.txt {link_mtime}\n"
         );
 
@@ -987,9 +1075,12 @@ mod tests {
         )
         .unwrap();
 
+        // Real md5s: the `!md5` arm keeps an entry whose content drifted.
+        let shared_md5 = ebuild_merge::md5_hex(&root.join("usr/share/shared.txt")).unwrap();
+        let mine_md5 = ebuild_merge::md5_hex(&root.join("usr/share/only-mine.txt")).unwrap();
         let contents = format!(
-            "obj /usr/share/shared.txt abc123 {shared_mtime}\n\
-             obj /usr/share/only-mine.txt abc123 {mine_mtime}\n"
+            "obj /usr/share/shared.txt {shared_md5} {shared_mtime}\n\
+             obj /usr/share/only-mine.txt {mine_md5} {mine_mtime}\n"
         );
         remove_contents(RemoveContentsArgs {
             root: &root,
@@ -1032,7 +1123,9 @@ mod tests {
         cfgfiledict.insert("/etc.conf".to_string(), "deadbeef".to_string());
         cfgfiledict.insert("/untouched.conf".to_string(), "cafebabe".to_string());
 
-        let contents = format!("obj /etc.conf abc123 {mtime}\n");
+        // A real md5: the path is genuinely removed (not `!md5`-kept).
+        let md5 = ebuild_merge::md5_hex(&root.join("etc.conf")).unwrap();
+        let contents = format!("obj /etc.conf {md5} {mtime}\n");
         let mut stale_confmem = Vec::new();
         remove_contents(RemoveContentsArgs {
             root: &root,
@@ -1521,6 +1614,440 @@ mod tests {
         assert_eq!(unmerge_v2_status, 0);
         assert!(!root.join("usr/share/othersinslotpkg/shared.txt").exists());
         assert!(!vdb_v2.exists());
+    }
+
+    #[test]
+    fn an_obj_whose_md5_changed_but_mtime_restored_survives_without_unmerge_orphans() {
+        // Portage 3.0.82.2, S0 cells M1/M2 (not from portuale output): the
+        // content edited with its mtime put back differs only in md5, so
+        // Portage keeps it (`--- !md5`).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("etc/t355")).unwrap();
+        let live = root.join("etc/t355/mod.conf");
+        std::fs::write(&live, b"v1").unwrap();
+        let mtime = ebuild_merge::mtime_secs(&std::fs::metadata(&live).unwrap()).unwrap();
+        let md5_v1 = ebuild_merge::md5_hex(&live).unwrap();
+        std::fs::write(&live, b"admin edit").unwrap();
+        filetime::set_file_mtime(&live, filetime::FileTime::from_unix_time(mtime, 0)).unwrap();
+
+        let contents = format!("obj /etc/t355/mod.conf {md5_v1} {mtime}\n");
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            others_in_slot: &[],
+            replacing: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            live.is_file(),
+            "an md5-only drift must survive without unmerge-orphans"
+        );
+    }
+
+    #[test]
+    fn an_obj_replaced_by_a_directory_is_skipped_not_fatal() {
+        // Portage 3.0.82.2, S0 cell T1b (`--- !obj`, rc 0): the recorded
+        // mtime matches, so the `!obj` guard skips instead of aborting the
+        // whole unmerge with EISDIR.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let dir = root.join("usr/share/t355/o");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mtime = ebuild_merge::mtime_secs(&std::fs::metadata(&dir).unwrap()).unwrap();
+        std::fs::write(dir.join("f"), b"admin file").unwrap();
+        filetime::set_file_mtime(&dir, filetime::FileTime::from_unix_time(mtime, 0)).unwrap();
+
+        let contents = format!("obj /usr/share/t355/o abc123 {mtime}\n");
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            others_in_slot: &[],
+            replacing: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("a type-changed obj must skip, not fail");
+
+        assert!(
+            dir.join("f").is_file(),
+            "the replacement directory must survive"
+        );
+    }
+
+    #[test]
+    fn a_sym_replaced_by_a_regular_file_is_kept_without_unmerge_orphans() {
+        // Portage 3.0.82.2, S0 cell T2 (`--- !sym`, kept): the recorded
+        // mtime restored, unmerged with `-unmerge-orphans`.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/t355")).unwrap();
+        std::fs::write(root.join("usr/share/t355/keep"), b"keep").unwrap();
+        std::os::unix::fs::symlink("keep", root.join("usr/share/t355/s")).unwrap();
+        let link = root.join("usr/share/t355/s");
+        let mtime = ebuild_merge::mtime_secs(&std::fs::symlink_metadata(&link).unwrap()).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        std::fs::write(&link, b"admin file").unwrap();
+        filetime::set_file_mtime(&link, filetime::FileTime::from_unix_time(mtime, 0)).unwrap();
+        let keep_mtime =
+            ebuild_merge::mtime_secs(&std::fs::metadata(root.join("usr/share/t355/keep")).unwrap())
+                .unwrap();
+        let keep_md5 = ebuild_merge::md5_hex(&root.join("usr/share/t355/keep")).unwrap();
+
+        let contents = format!(
+            "obj /usr/share/t355/keep {keep_md5} {keep_mtime}\n\
+             sym /usr/share/t355/s -> keep {mtime}\n"
+        );
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            others_in_slot: &[],
+            replacing: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            link.is_file() && !link.symlink_metadata().unwrap().file_type().is_symlink(),
+            "a sym replaced by a file must survive without unmerge-orphans"
+        );
+        assert!(
+            !root.join("usr/share/t355/keep").exists(),
+            "the untouched entry still unmerges normally"
+        );
+    }
+
+    #[test]
+    fn a_sym_replaced_by_a_regular_file_is_unlinked_by_the_orphan_arm() {
+        // Default FEATURES: the live regular file is a non-directory that
+        // is not protected, so the orphan arm takes it whatever the
+        // recorded kind (S0 cell T2's default-FEATURES shape).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/t355")).unwrap();
+        std::fs::write(root.join("usr/share/t355/keep"), b"keep").unwrap();
+        std::os::unix::fs::symlink("keep", root.join("usr/share/t355/s")).unwrap();
+        let link = root.join("usr/share/t355/s");
+        let mtime = ebuild_merge::mtime_secs(&std::fs::symlink_metadata(&link).unwrap()).unwrap();
+        std::fs::remove_file(&link).unwrap();
+        std::fs::write(&link, b"admin file").unwrap();
+        filetime::set_file_mtime(&link, filetime::FileTime::from_unix_time(mtime, 0)).unwrap();
+
+        let contents = format!("sym /usr/share/t355/s -> keep {mtime}\n");
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            others_in_slot: &[],
+            replacing: &[],
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            link.symlink_metadata().is_err(),
+            "the orphan arm unlinks any non-directory under default FEATURES"
+        );
+    }
+
+    #[test]
+    fn a_dir_replaced_by_a_regular_file_follows_the_orphan_arm() {
+        // Portage 3.0.82.2, S0 cells T3a/T3b: default FEATURES unlinks the
+        // file through the orphan arm; `-unmerge-orphans` keeps it (`--- !dir`).
+        for unmerge_orphans in [true, false] {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let dir = root.join("usr/share/t355/dd");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::remove_dir(&dir).unwrap();
+            std::fs::write(&dir, b"admin file").unwrap();
+
+            let contents = "dir /usr/share/t355/dd\n";
+            remove_contents(RemoveContentsArgs {
+                root: &root,
+                category: "app-misc",
+                others_in_slot: &[],
+                replacing: &[],
+                config_protect: "/etc",
+                config_protect_mask: "",
+                unmerge_orphans,
+                infodirs_inodes: &BTreeSet::new(),
+                cfgfiledict: &BTreeMap::new(),
+                stale_confmem: &mut Vec::new(),
+                preserved_paths: &BTreeSet::new(),
+                contents_text: contents,
+            })
+            .expect("a type-changed dir must never abort the unmerge");
+
+            assert_eq!(
+                dir.symlink_metadata().is_err(),
+                unmerge_orphans,
+                "unmerge_orphans={unmerge_orphans}: the file goes exactly then"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fifo_is_unlinked_under_unmerge_orphans_and_kept_without_them() {
+        // Portage 3.0.82.2, S0 cells F1a/F1b: default FEATURES unlinks the
+        // fifo (`<<< fif`); `-unmerge-orphans` keeps it (`--- fif`).
+        for unmerge_orphans in [true, false] {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            std::fs::create_dir_all(root.join("usr/share/t355")).unwrap();
+            let fifo = root.join("usr/share/t355/p");
+            let status = std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .expect("mkfifo runs unprivileged");
+            assert!(status.success());
+
+            let contents = "fif /usr/share/t355/p\n";
+            remove_contents(RemoveContentsArgs {
+                root: &root,
+                category: "app-misc",
+                others_in_slot: &[],
+                replacing: &[],
+                config_protect: "/etc",
+                config_protect_mask: "",
+                unmerge_orphans,
+                infodirs_inodes: &BTreeSet::new(),
+                cfgfiledict: &BTreeMap::new(),
+                stale_confmem: &mut Vec::new(),
+                preserved_paths: &BTreeSet::new(),
+                contents_text: contents,
+            })
+            .expect("remove_contents succeeds");
+
+            assert_eq!(
+                fifo.symlink_metadata().is_err(),
+                unmerge_orphans,
+                "unmerge_orphans={unmerge_orphans}: the fifo goes exactly then"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dev_entry_is_always_kept() {
+        // Portage keeps `dev` nodes under both FEATURES modes (`---`); a
+        // live node would go through the orphan arm under default
+        // FEATURES (the F2 source verdict), so a live directory proves
+        // the `dev` arm itself keeps in both modes (creating a real node
+        // needs privileges).
+        for unmerge_orphans in [true, false] {
+            let tmp = tempdir();
+            let root = tmp.join("root");
+            let live = root.join("dev/node");
+            std::fs::create_dir_all(&live).unwrap();
+
+            let contents = "dev /dev/node\n";
+            remove_contents(RemoveContentsArgs {
+                root: &root,
+                category: "app-misc",
+                others_in_slot: &[],
+                replacing: &[],
+                config_protect: "/etc",
+                config_protect_mask: "",
+                unmerge_orphans,
+                infodirs_inodes: &BTreeSet::new(),
+                cfgfiledict: &BTreeMap::new(),
+                stale_confmem: &mut Vec::new(),
+                preserved_paths: &BTreeSet::new(),
+                contents_text: contents,
+            })
+            .expect("remove_contents succeeds");
+
+            assert!(
+                live.is_dir(),
+                "unmerge_orphans={unmerge_orphans}: a dev entry is always kept"
+            );
+        }
+    }
+
+    #[test]
+    fn merged_usr_dir_entries_survive_a_standalone_unmerge() {
+        // Portage 3.0.82.2, S0 cell C1a (not from portuale output): on a
+        // merged-usr ROOT, `emerge -C` of a package recording `dir /bin`
+        // must leave `/bin` and `/lib64` in place. Failing-first from S4:
+        // green at every commit.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::create_dir_all(root.join("usr/lib64")).unwrap();
+        std::os::unix::fs::symlink("usr/bin", root.join("bin")).unwrap();
+        std::os::unix::fs::symlink("usr/lib64", root.join("lib64")).unwrap();
+        std::fs::write(root.join("usr/bin/u1"), b"untracked").unwrap();
+        std::fs::write(root.join("usr/lib64/u2"), b"untracked").unwrap();
+        let live = root.join("bin/t355");
+        std::fs::write(&live, b"a").unwrap();
+        let mtime = ebuild_merge::mtime_secs(&std::fs::metadata(&live).unwrap()).unwrap();
+        let md5 = ebuild_merge::md5_hex(&live).unwrap();
+
+        let vdb = root.join("var/db/pkg/app-misc/t355-c1a-1");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(
+            vdb.join("CONTENTS"),
+            format!("dir /bin\nobj /bin/t355 {md5} {mtime}\n"),
+        )
+        .unwrap();
+
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        crate::ebuild_merge::unmerge_one_installed(crate::ebuild_merge::UnmergeOneInstalledArgs {
+            root: &root,
+            category: "app-misc",
+            package: "t355-c1a",
+            pf: "t355-c1a-1",
+            also_keep: &[],
+            scratch_dir: &tmp.join("scratch"),
+            portage_tmpdir: &portage_tmpdir,
+            options: &crate::ebuild_merge::MergeOptions::default(),
+            backup: None,
+            is_replacement: false,
+            replaced_by_version: None,
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+            deferred_delete: None,
+        })
+        .expect("unmerge_one_installed succeeds");
+
+        assert!(
+            !root.join("bin/t355").exists(),
+            "the package's own file is removed"
+        );
+        assert!(
+            root.join("bin")
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink()),
+            "/bin must survive"
+        );
+        assert!(
+            root.join("lib64")
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink()),
+            "/lib64 must survive"
+        );
+        assert!(root.join("usr/bin/u1").is_file());
+        assert!(root.join("usr/lib64/u2").is_file());
+    }
+
+    #[test]
+    fn unmerge_one_installed_honours_a_disabled_orphan_arm() {
+        // Portage 3.0.82.2, S0 cell B1b: with `FEATURES=-unmerge-orphans`
+        // an md5-only drift and an mtime drift both survive `emerge -C`,
+        // while an untouched file still goes.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/t355")).unwrap();
+        let keep = root.join("usr/share/t355/keep");
+        let dropmod = root.join("usr/share/t355/dropmod");
+        let droptouch = root.join("usr/share/t355/droptouch");
+        std::fs::write(&keep, b"keep").unwrap();
+        std::fs::write(&dropmod, b"v1").unwrap();
+        std::fs::write(&droptouch, b"touch").unwrap();
+        let keep_stat = || {
+            let mtime = ebuild_merge::mtime_secs(&std::fs::metadata(&keep).unwrap()).unwrap();
+            (mtime, ebuild_merge::md5_hex(&keep).unwrap())
+        };
+        let (keep_mtime, keep_md5) = keep_stat();
+        let dropmod_mtime =
+            ebuild_merge::mtime_secs(&std::fs::metadata(&dropmod).unwrap()).unwrap();
+        let dropmod_md5 = ebuild_merge::md5_hex(&dropmod).unwrap();
+        let droptouch_mtime =
+            ebuild_merge::mtime_secs(&std::fs::metadata(&droptouch).unwrap()).unwrap();
+        let droptouch_md5 = ebuild_merge::md5_hex(&droptouch).unwrap();
+        // dropmod: content edited, mtime restored (md5-only drift).
+        std::fs::write(&dropmod, b"admin edit").unwrap();
+        filetime::set_file_mtime(
+            &dropmod,
+            filetime::FileTime::from_unix_time(dropmod_mtime, 0),
+        )
+        .unwrap();
+        // droptouch: mtime moved.
+        filetime::set_file_mtime(
+            &droptouch,
+            filetime::FileTime::from_unix_time(droptouch_mtime + 100, 0),
+        )
+        .unwrap();
+
+        let vdb = root.join("var/db/pkg/app-misc/t355-drop-1");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(
+            vdb.join("CONTENTS"),
+            format!(
+                "dir /usr/share\n\
+                 dir /usr/share/t355\n\
+                 obj /usr/share/t355/keep {keep_md5} {keep_mtime}\n\
+                 obj /usr/share/t355/dropmod {dropmod_md5} {dropmod_mtime}\n\
+                 obj /usr/share/t355/droptouch {droptouch_md5} {droptouch_mtime}\n"
+            ),
+        )
+        .unwrap();
+
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        let options = crate::ebuild_merge::MergeOptions {
+            unmerge_orphans: false,
+            ..crate::ebuild_merge::MergeOptions::default()
+        };
+        crate::ebuild_merge::unmerge_one_installed(crate::ebuild_merge::UnmergeOneInstalledArgs {
+            root: &root,
+            category: "app-misc",
+            package: "t355-drop",
+            pf: "t355-drop-1",
+            also_keep: &[],
+            scratch_dir: &tmp.join("scratch"),
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            backup: None,
+            is_replacement: false,
+            replaced_by_version: None,
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+            deferred_delete: None,
+        })
+        .expect("unmerge_one_installed succeeds");
+
+        assert!(
+            !keep.exists(),
+            "an untouched file still unmerges without the orphan arm"
+        );
+        assert!(
+            dropmod.is_file(),
+            "an md5-only drift survives without the orphan arm"
+        );
+        assert!(
+            droptouch.is_file(),
+            "an mtime drift survives without the orphan arm"
+        );
     }
 
     #[test]

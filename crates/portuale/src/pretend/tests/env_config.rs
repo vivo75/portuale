@@ -48,6 +48,15 @@ fn pkgdir_index_trusted_folds_the_resolved_features_chain() {
         vec!["pkgdir-index-trusted"],
         vec!["-*"],
     ])));
+    // #356 S4 Q3: a base layer silent on the token (the synthetic base
+    // seeded when no `make.globals` is read) is not a negation.
+    assert!(pkgdir_index_trusted(&layered(vec![vec![
+        "unmerge-orphans"
+    ]])));
+    assert!(pkgdir_index_trusted(&layered(vec![
+        vec!["unmerge-orphans"],
+        vec!["-sandbox"],
+    ])));
     let mut fallback_on = portage_profile::Config::default();
     fallback_on.other_vars.insert(
         "FEATURES".to_string(),

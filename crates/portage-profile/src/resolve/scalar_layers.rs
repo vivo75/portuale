@@ -91,6 +91,19 @@ pub(crate) fn load_scalar_layers(
         let snapshot = IncrementalSnapshot::take(config);
         process_lines(&text, &mut *scalars, &mut *config, AcceptRawLayer::Globals);
         snapshot.restore(&mut *config);
+    } else {
+        // No `make.globals` under this config root (hermetic test roots):
+        // seed Portage's two unmerge defaults under the stack, before
+        // `make.conf` expansion, so later layers fold as on a real system
+        // (`-*`/`-unmerge-orphans` drop the token, a literal
+        // `UNINSTALL_IGNORE=` replaces the paths, and
+        // `UNINSTALL_IGNORE="${UNINSTALL_IGNORE} …"` appends through the
+        // seeded scalar). When the real file is read this is skipped: its
+        // own assignments already carry both values.
+        // Portage: cnf/make.globals:77-84, FEATURES `unmerge-orphans`;
+        // cnf/make.globals:93, UNINSTALL_IGNORE `/lib/modules/*`.
+        note_incremental(&mut *config, "FEATURES", "unmerge-orphans");
+        scalars.insert("UNINSTALL_IGNORE".to_string(), "/lib/modules/*".to_string());
     }
 
     let make_profile = config_root.join("etc/portage/make.profile");

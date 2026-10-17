@@ -69,3 +69,88 @@ fn env_over_config_scalar_follows_the_calling_env_over_make_conf_chain() {
         assert_eq!(env_over_config_scalar(&c, "BINPKG_FORMAT"), None);
     });
 }
+
+#[test]
+fn a_missing_make_globals_seeds_the_unmerge_defaults_under_the_stack() {
+    // Backlog #356 S4 (Q3): with no `make.globals` under the config root
+    // (the hermetic-root shape), Portage's two unmerge defaults seed the
+    // bottom of the stack before `make.conf` expansion, so later layers
+    // fold as on a real system. Expected behaviour from Portage 3.0.82.2
+    // (`cnf/make.globals:77-84` `unmerge-orphans`, `:93`
+    // `UNINSTALL_IGNORE=/lib/modules/*`).
+    let root = TempDir::new("portage-profile-test-synthetic-unmerge-base").keep();
+    let repo = root.join("repo");
+    let prof = repo.join("profiles/default");
+    let portage_dir = root.join("etc/portage");
+    fs::create_dir_all(&prof).unwrap();
+    fs::create_dir_all(&portage_dir).unwrap();
+    fs::write(
+        prof.join("make.defaults"),
+        "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&prof, portage_dir.join("make.profile")).unwrap();
+    let resolve = || {
+        resolve_config(ResolveConfigArgs {
+            config_root: &root,
+            main_repo_location: &repo,
+            overlay_repos: &[],
+            repo_aliases: &[],
+            main_repo_name: "testrepo",
+            repo_masters: &HashMap::new(),
+            eroot: &root,
+        })
+        .expect("resolves")
+    };
+
+    // Bare `make.conf`: the base token folds in, the default paths land.
+    fs::write(portage_dir.join("make.conf"), "CFLAGS=\"-O2\"\n").unwrap();
+    with_test_env(&[], || {
+        let c = resolve();
+        assert!(
+            c.resolved_incremental("FEATURES")
+                .is_some_and(|f| f.iter().any(|t| t == "unmerge-orphans")),
+            "the synthetic base must carry unmerge-orphans"
+        );
+        assert_eq!(
+            c.other_vars.get("UNINSTALL_IGNORE").map(String::as_str),
+            Some("/lib/modules/*")
+        );
+    });
+
+    // An explicit `-unmerge-orphans` drops the token; a literal
+    // `UNINSTALL_IGNORE=` replaces the paths.
+    fs::write(
+        portage_dir.join("make.conf"),
+        "FEATURES=\"-unmerge-orphans\"\nUNINSTALL_IGNORE=\"/x/*\"\n",
+    )
+    .unwrap();
+    with_test_env(&[], || {
+        let c = resolve();
+        assert!(
+            c.resolved_incremental("FEATURES")
+                .is_none_or(|f| !f.iter().any(|t| t == "unmerge-orphans")),
+            "a make.conf negation must beat the synthetic base"
+        );
+        assert_eq!(
+            c.other_vars.get("UNINSTALL_IGNORE").map(String::as_str),
+            Some("/x/*")
+        );
+    });
+
+    // The append form expands through the seeded scalar, as in Portage.
+    fs::write(
+        portage_dir.join("make.conf"),
+        "UNINSTALL_IGNORE=\"${UNINSTALL_IGNORE} /usr/share/t355/ign/*\"\n",
+    )
+    .unwrap();
+    with_test_env(&[], || {
+        let c = resolve();
+        assert_eq!(
+            c.other_vars.get("UNINSTALL_IGNORE").map(String::as_str),
+            Some("/lib/modules/* /usr/share/t355/ign/*")
+        );
+    });
+    let _ = std::fs::remove_dir_all(&root);
+}

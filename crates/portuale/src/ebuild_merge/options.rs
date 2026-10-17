@@ -17,6 +17,12 @@ pub struct MergeOptions {
     /// True when `FEATURES` carries `protect-owned` (on by default), a
     /// separate abort condition from `collision_protect`.
     pub protect_owned: bool,
+    /// True when `FEATURES` carries `unmerge-orphans` (on by default):
+    /// the unmerge orphan arm bypasses the `!mtime` staleness check.
+    /// `from_env` folds the calling env over the default-on token;
+    /// `set_resolved_features` re-derives it from the resolved list.
+    /// Portage: dbapi/vartree.py, `"unmerge-orphans" in self.settings.features`
+    pub unmerge_orphans: bool,
     /// Re-protect every already-offered update instead of reusing it
     /// (`NOCONFMEM` presence, off by default).
     pub noconfmem: bool,
@@ -65,6 +71,7 @@ impl Default for MergeOptions {
             collision_protect: false,
             resolved_config: None,
             protect_owned: true,
+            unmerge_orphans: true,
             noconfmem: false,
             protect_if_modified: true,
             // Impossible path: blocker resolution then degrades to empty
@@ -100,6 +107,9 @@ impl MergeOptions {
             &std::env::var("INSTALL_MASK").unwrap_or_default(),
             &env_features,
         );
+        // `unmerge-orphans` is default-on: fold the calling env over the
+        // default token (see `ebuild_unmerge::unmerge_orphans_from_env`).
+        let unmerge_orphans = crate::ebuild_unmerge::unmerge_orphans_from_env();
         Self {
             debug,
             shell,
@@ -114,6 +124,7 @@ impl MergeOptions {
             protect_owned: std::env::var("FEATURES")
                 .map(|f| f.split_whitespace().any(|t| t == "protect-owned"))
                 .unwrap_or(d.protect_owned),
+            unmerge_orphans,
             protect_if_modified: std::env::var("FEATURES")
                 .map(|f| {
                     f.split_whitespace()
@@ -142,6 +153,7 @@ impl MergeOptions {
         self.collision_protect = has("collision-protect");
         self.protect_owned = has("protect-owned");
         self.protect_if_modified = has("config-protect-if-modified");
+        self.unmerge_orphans = has("unmerge-orphans");
         self.gpg_verify = crate::binpkg::GpgVerify::from_features(features);
         self.features = features.to_string();
     }

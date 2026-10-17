@@ -76,9 +76,11 @@ fn placed_config_root_covers_both_placements() {
         assert!(repos.iter().any(|r| r.is_main));
         let (mask, _) = crate::pretend::config_install_mask(&config);
         assert_eq!(mask, "/usr/share/porttest/im/drop.txt *.la");
+        // `unmerge-orphans` rides along from the synthetic base (no
+        // `make.globals` on these placed roots; #356 S4 Q3).
         assert_eq!(
             crate::pretend::config_features_string(&config),
-            "merge-time sandbox"
+            "merge-time sandbox unmerge-orphans"
         );
         assert_eq!(crate::pretend::config_bzip2_command(&config), "lbzip2");
         if matches!(placement, ConfigPlacement::Client(_)) {
@@ -424,9 +426,10 @@ fn remote_binpkg_path_resolves_the_placed_client_config() {
     let (mask, prunes_usr_share) = crate::pretend::config_install_mask(&config);
     assert_eq!(mask, "/usr/share/porttest/im/drop.txt *.la");
     assert!(!prunes_usr_share);
+    // Same synthetic base as above (no `make.globals` on this root).
     assert_eq!(
         crate::pretend::config_features_string(&config),
-        "merge-time sandbox"
+        "merge-time sandbox unmerge-orphans"
     );
     assert_eq!(crate::pretend::config_bzip2_command(&config), "lbzip2");
     let _ = std::fs::remove_dir_all(&tmp);

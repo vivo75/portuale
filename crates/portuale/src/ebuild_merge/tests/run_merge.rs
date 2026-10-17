@@ -997,11 +997,11 @@ fn real_merge_creates_a_real_fifo_and_records_a_fif_contents_line() {
     )
     .expect("run_unmerge succeeds");
     assert_eq!(unmerge_status, 0);
+    // Portage 3.0.82.2, S0 cell F1a (not from portuale output): under
+    // default `FEATURES` the orphan arm unlinks the fifo (`<<< fif`).
     assert!(
-        std::fs::symlink_metadata(&fifo_path)
-            .map(|m| m.file_type().is_fifo())
-            .unwrap_or(false),
-        "real portage never unlinks a fif/dev CONTENTS entry on unmerge"
+        std::fs::symlink_metadata(&fifo_path).is_err(),
+        "default FEATURES unlinks a fifo on unmerge"
     );
     assert!(
         !root.join("var/db/pkg/dev-libs/fifopkg-1.0").exists(),

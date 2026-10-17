@@ -680,7 +680,11 @@ mod tests {
             assert_eq!(get(&env, "ENV_UNSET"), Some("DISPLAY PERL5LIB"));
 
             // FEATURES is the incremental fold, mirrored as PORTAGE_FEATURES.
-            let features = "assume-digests binpkg-docompress binpkg-dostrip splitdebug";
+            // `unmerge-orphans` rides along from the synthetic base seeded
+            // when no `make.globals` is read (the hermetic-root shape; on
+            // a real system it comes from `cnf/make.globals` itself).
+            let features =
+                "assume-digests binpkg-docompress binpkg-dostrip splitdebug unmerge-orphans";
             assert_eq!(get(&env, "FEATURES"), Some(features));
             assert_eq!(get(&env, "PORTAGE_FEATURES"), Some(features));
 
@@ -781,9 +785,13 @@ mod tests {
                 assert_eq!(get(&env, "MAKEOPTS"), Some("-j7"));
 
                 // Env `USE`/`FEATURES` never leak verbatim (folded, not copied).
+                // `unmerge-orphans` rides along from the synthetic base (no
+                // `make.globals` on this root; see the family test above).
                 assert_eq!(
                     get(&env, "FEATURES"),
-                    Some("assume-digests binpkg-docompress binpkg-dostrip evil sandbox")
+                    Some(
+                        "assume-digests binpkg-docompress binpkg-dostrip evil sandbox unmerge-orphans"
+                    )
                 );
                 assert_eq!(get(&env, "USE"), None);
 

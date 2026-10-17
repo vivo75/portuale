@@ -529,9 +529,9 @@ pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result
         shell: options.shell,
         config_protect: options.config_protect.clone(),
         config_protect_mask: options.config_protect_mask.clone(),
+        unmerge_orphans: options.unmerge_orphans,
         config_root: options.config_root.clone(),
         already_unmerged: deferred_delete.map(<[String]>::to_vec).unwrap_or_default(),
-        ..Default::default()
     };
 
     if let Some(pkg_options) = backup {
