@@ -140,3 +140,7 @@ with PORTAGE_VERBOSE=1. Captures: `cells/K{7,8}-{install,qmerge}.*` and `cells/K
   merge (6038-6042) and stale-entry pruning (3093-3094, 3267-3271).
 - The run was unprivileged (uid 1000, ROOT owned by the caller). The root-run path was not
   exercised. Guess: identical, since nothing in `_unmerge_pkgfiles` branches on uid.
+
+## Correction 2026-10-17 (plan 02.355)
+
+The "Not established" lines above on fif/dev entries and on a symlink to a directory with foreign children were settled by the 02.355 S0 captures (`LLM/evidence/2026-10-16-355-exec/` and the S0 cells it cites: F1a/F1b, E1-E3). Under the default `FEATURES` Portage's orphan arm (`vartree.py:3098-3112`) unlinks a `fif`/`dev` node; only `-unmerge-orphans` keeps it. The capture above is left as recorded.

@@ -16,7 +16,7 @@ Package removal: `ebuild <file> unmerge`. Context moved out of the code comments
 - `ebuild.rs` checks this alongside `ebuild_phases::is_phase_command`/`ebuild_merge::is_merge_command` before routing to execution.
 
 ## struct ContentsEntry (field mtime)
-- `mtime` is Portage's `ebuild_merge::format_contents_line` trailing field, present for `obj`/`sym` lines. `None` for `dir`, which has no trailing field at all: its last whitespace-separated token is `abs_path` itself, non-numeric, so parsing it as an mtime naturally fails into `None`.
+- `mtime` is Portage's `ebuild_merge::format_contents_line` trailing field, present for `obj`/`sym` lines. `None` for `dir`/`dev`/`fif`, which have no trailing field. Since #357 the line is split by `portage_vdb::contents::parse_line` (Portage's `_contents_re`, see `portage-vdb/contents.md`), not by whitespace, so paths with spaces survive.
 
 ## type ProtectedSymlinks
 - Portage's `protected_symlinks`: the live target directory's `(dev, ino)` an orphaned symlink (bug #326685) points to -> every such symlink's `abs_path`. Grouped by target inode (not by symlink path) because that's how `remove_dirs` looks entries up -- Portage's `_unmerge_dirs()` `protected_symlinks.pop(inode_key)`.
