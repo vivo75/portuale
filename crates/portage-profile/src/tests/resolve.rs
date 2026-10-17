@@ -2436,3 +2436,283 @@ fn package_use_loads_tokens_and_skips_bare_atom_lines() {
         ]
     );
 }
+
+/// Scaffolding for the #346 S1 user-profile tests: a temp config root with
+/// `repo/profiles/leaf` as the selected profile (`make.profile` symlinked
+/// to it) plus `etc/portage/profile/<file>` per `user_files`. Portage
+/// 3.0.82.2 appends that directory as its last profile node
+/// (LocationsManager.py:169-189); every expected value below replays an
+/// S0 `u*` cell from `LLM/evidence/2026-10-15-346-s0/u/`, never portuale
+/// output.
+fn user_profile_test_root(
+    tag: &str,
+    chain_files: &[(&str, &str)],
+    user_files: &[(&str, &str)],
+) -> PathBuf {
+    let root = TempDir::new(tag).keep();
+    let leaf = root.join("repo/profiles/leaf");
+    let user = root.join("etc/portage/profile");
+    fs::create_dir_all(&leaf).unwrap();
+    fs::create_dir_all(&user).unwrap();
+    for (file, content) in chain_files {
+        fs::write(leaf.join(file), content).unwrap();
+    }
+    for (file, content) in user_files {
+        fs::write(user.join(file), content).unwrap();
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&leaf, root.join("etc/portage/make.profile")).unwrap();
+    root
+}
+
+fn resolve_user_profile_test_root(root: &Path) -> Config {
+    resolve_config(ResolveConfigArgs {
+        config_root: root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: root,
+    })
+    .expect("user-profile config must resolve")
+}
+
+#[test]
+fn user_profile_node_is_present_only_with_make_profile() {
+    // S0 u15: without `make.profile` Portage never appends the user node
+    // (the run aborts as invalid-profile); portuale resolves with an
+    // empty chain and must ignore the user files entirely.
+    let root = TempDir::new("portage-profile-test-user-node-gate").keep();
+    let user = root.join("etc/portage/profile");
+    fs::create_dir_all(&user).unwrap();
+    fs::write(user.join("use.force"), "x\n").unwrap();
+    fs::write(user.join("package.use"), "dev-libs/t341-dep x\n").unwrap();
+    let config = resolve_user_profile_test_root(&root);
+    assert!(config.profile_use_layers.is_empty());
+    // Only the synthetic repo level exists; the user files are ignored.
+    assert_eq!(config.use_mask_force_levels.len(), 1);
+    assert_eq!(
+        config.use_mask_force_levels[0],
+        UseMaskForceLevel::default()
+    );
+    assert!(config.package_use.is_empty());
+    assert!(config.use_force.is_empty());
+
+    // With `make.profile` the same directory becomes the last level.
+    let root = user_profile_test_root(
+        "portage-profile-test-user-node-present",
+        &[],
+        &[("use.force", "x\n")],
+    );
+    let config = resolve_user_profile_test_root(&root);
+    assert_eq!(config.use_mask_force_levels.len(), 3);
+    assert_eq!(
+        config.use_mask_force_levels[2].use_force,
+        vec!["x".to_string()]
+    );
+    assert_eq!(
+        config.use_force,
+        vec!["x".to_string()].into_iter().collect()
+    );
+}
+
+#[test]
+fn user_profile_make_defaults_and_package_use_form_the_last_level() {
+    // S0 u03/u04/u17: the user `make.defaults` USE and `package.use`
+    // stack after the chain, as one more `profile_use_layers` level.
+    let root = user_profile_test_root(
+        "portage-profile-test-user-level",
+        &[("make.defaults", "USE=\"chainflag\"\n")],
+        &[
+            ("make.defaults", "USE=\"x\"\nFEATURES=\"test\"\n"),
+            ("package.use", "dev-libs/t341-dep y\n"),
+        ],
+    );
+    let config = resolve_user_profile_test_root(&root);
+    assert_eq!(config.profile_use_layers.len(), 2);
+    assert_eq!(
+        config.profile_use_layers[1].make_defaults_use,
+        vec!["x".to_string()]
+    );
+    assert_eq!(
+        config.profile_use_layers[1].package_use,
+        vec![("dev-libs/t341-dep".to_string(), vec!["y".to_string()])]
+    );
+    // The flat `use_tokens` still carry every level's USE= in order.
+    assert_eq!(
+        config.use_tokens,
+        vec!["chainflag".to_string(), "x".to_string()]
+    );
+    // The user `make.defaults` scalars land with the other layers.
+    assert_eq!(
+        config.other_vars.get("FEATURES").map(String::as_str),
+        Some("test")
+    );
+}
+
+#[test]
+fn user_profile_use_force_and_mask_stack_last() {
+    // S0 u02/u05/u06/u07/u12/u13: every user-profile force/mask file
+    // closes its stack — the flat folds and the per-level view alike.
+    let root = user_profile_test_root(
+        "portage-profile-test-user-force-mask",
+        &[],
+        &[
+            ("use.force", "x\n"),
+            ("use.mask", "y\n"),
+            ("use.stable.mask", "z\n"),
+            ("package.use.force", "dev-libs/t341-dep x\n"),
+            ("package.use.mask", "dev-libs/t341-dep y\n"),
+            ("package.use.stable.force", "dev-libs/t341-dep w\n"),
+        ],
+    );
+    let config = resolve_user_profile_test_root(&root);
+    assert_eq!(
+        config.use_force,
+        vec!["x".to_string()].into_iter().collect()
+    );
+    assert_eq!(config.use_mask, vec!["y".to_string()].into_iter().collect());
+    assert_eq!(
+        config.use_stable_mask,
+        vec!["z".to_string()].into_iter().collect()
+    );
+    assert_eq!(
+        config.package_use_force,
+        vec![("dev-libs/t341-dep".to_string(), vec!["x".to_string()])]
+    );
+    assert_eq!(
+        config.package_use_mask,
+        vec![("dev-libs/t341-dep".to_string(), vec!["y".to_string()])]
+    );
+    assert_eq!(
+        config.package_use_stable_force,
+        vec![("dev-libs/t341-dep".to_string(), vec!["w".to_string()])]
+    );
+    let user_level = config.use_mask_force_levels.last().expect("user level");
+    assert_eq!(user_level.use_force, vec!["x".to_string()]);
+    assert_eq!(user_level.use_mask, vec!["y".to_string()]);
+    assert_eq!(user_level.use_stable_mask, vec!["z".to_string()]);
+    assert_eq!(
+        user_level.package_use_force,
+        vec![("dev-libs/t341-dep".to_string(), vec!["x".to_string()])]
+    );
+    assert_eq!(
+        user_level.package_use_mask,
+        vec![("dev-libs/t341-dep".to_string(), vec!["y".to_string()])]
+    );
+    assert_eq!(
+        user_level.package_use_stable_force,
+        vec![("dev-libs/t341-dep".to_string(), vec!["w".to_string()])]
+    );
+}
+
+#[test]
+fn user_profile_accept_keywords_stacks_between_chain_and_user_file() {
+    // S0 u08: the user node's `package.accept_keywords` accepts the
+    // package after the chain, before the user file.
+    let root = user_profile_test_root(
+        "portage-profile-test-user-accept-keywords",
+        &[("package.accept_keywords", "dev-libs/chainpkg ~amd64\n")],
+        &[(
+            "package.accept_keywords",
+            "dev-libs/bareacceptkeywordspkg ~amd64\n",
+        )],
+    );
+    let config = resolve_user_profile_test_root(&root);
+    assert_eq!(
+        config.package_accept_keywords,
+        vec![
+            ("dev-libs/chainpkg".to_string(), vec!["~amd64".to_string()]),
+            (
+                "dev-libs/bareacceptkeywordspkg".to_string(),
+                vec!["~amd64".to_string()]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn user_profile_packages_feed_system_and_profile_sets() {
+    // S0 u09/u18/u19: unstarred user `packages` lines join `@profile`
+    // (the node always carries `profile-set`); starred lines join
+    // `@system` only and never `@profile`.
+    let root = user_profile_test_root(
+        "portage-profile-test-user-packages",
+        &[],
+        &[("packages", "dev-libs/t341-dep\n*dev-libs/systempkg\n")],
+    );
+    let config = resolve_user_profile_test_root(&root);
+    assert_eq!(
+        config.profile_packages,
+        vec!["dev-libs/t341-dep".to_string()]
+    );
+    assert_eq!(
+        config.system_packages,
+        vec!["dev-libs/systempkg".to_string()]
+    );
+}
+
+#[test]
+fn user_profile_eapi_gates_package_use_wildcards() {
+    // S0 u10: with `profile/eapi` = `5`, a `*/` wildcard in the user
+    // `package.use` is dropped with exactly one warning; without the
+    // file (S0 u11) the same line is kept, silently.
+    let root = user_profile_test_root(
+        "portage-profile-test-user-eapi5",
+        &[],
+        &[("eapi", "5\n"), ("package.use", "*/t341-dep x\n")],
+    );
+    let config = resolve_user_profile_test_root(&root);
+    assert!(config.profile_use_layers[1].package_use.is_empty());
+    assert_eq!(config.config_warnings.len(), 1);
+    assert!(
+        config.config_warnings[0].ends_with("/etc/portage/profile/package.use: */t341-dep"),
+        "unexpected warning: {}",
+        config.config_warnings[0]
+    );
+
+    let root = user_profile_test_root(
+        "portage-profile-test-user-noeapi",
+        &[],
+        &[("package.use", "*/t341-dep x\n")],
+    );
+    let config = resolve_user_profile_test_root(&root);
+    assert_eq!(
+        config.profile_use_layers[1].package_use,
+        vec![("*/t341-dep".to_string(), vec!["x".to_string()])]
+    );
+    assert!(config.config_warnings.is_empty());
+}
+
+#[test]
+fn user_profile_unmask_counters_chain_mask_and_parent_stays_unwalked() {
+    // S0 u14: the user `package.unmask` lifts a chain `package.mask`
+    // (both flat folds already stack this way; the node must preserve
+    // it). S0 u16: a `parent` file inside the user profile is never
+    // walked — the pointed-to `package.use` must have no effect.
+    let root = user_profile_test_root(
+        "portage-profile-test-user-unmask",
+        &[("package.mask", "dev-libs/t341-dep\n")],
+        &[("package.unmask", "dev-libs/t341-dep\n")],
+    );
+    let config = resolve_user_profile_test_root(&root);
+    assert_eq!(config.package_mask, vec!["dev-libs/t341-dep".to_string()]);
+    assert_eq!(config.package_unmask, vec!["dev-libs/t341-dep".to_string()]);
+
+    let root = TempDir::new("portage-profile-test-user-parent").keep();
+    let leaf = root.join("repo/profiles/leaf");
+    let user = root.join("etc/portage/profile");
+    let pointed = root.join("pointed");
+    fs::create_dir_all(&leaf).unwrap();
+    fs::create_dir_all(&user).unwrap();
+    fs::create_dir_all(&pointed).unwrap();
+    fs::write(pointed.join("package.use"), "dev-libs/t341-dep x\n").unwrap();
+    fs::write(user.join("parent"), "../pointed\n").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&leaf, root.join("etc/portage/make.profile")).unwrap();
+    let config = resolve_user_profile_test_root(&root);
+    // Chain level plus the user level only; the `parent` target adds none.
+    assert_eq!(config.profile_use_layers.len(), 2);
+    assert!(config.profile_use_layers[1].package_use.is_empty());
+}

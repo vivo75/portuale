@@ -44,13 +44,29 @@ pub(crate) fn use_expand_display_value(
 }
 
 /// The resolved global USE set printed by `emerge --info`: `use_flags` with
-/// `use_force` folded in and `use_mask` removed (`use_force`/`use_mask` stay
-/// out of `Config::use_flags` on purpose; they apply per-candidate instead).
-/// Portage: config.py, regenerate
+/// the `features` tier (`test` when FEATURES names it), `use_force`
+/// folded in and `use_mask` removed (`use_force`/`use_mask` stay out of
+/// `Config::use_flags` on purpose; they apply per-candidate instead).
+/// A stronger global tier revoking `test` (`-test` in `defaults` and up)
+/// cancels the features tier again, per USE_ORDER.
+/// Portage: config.py:1138-1145, regenerate; _emerge/actions.py, action_info
 pub(crate) fn resolved_global_use(
     config: &portage_profile::Config,
 ) -> std::collections::BTreeSet<String> {
     let mut set: std::collections::BTreeSet<String> = config.use_flags.iter().cloned().collect();
+    // Only `test` is modelled in `features_use`; anything else never fires.
+    if !config.features_use.is_empty() {
+        let revoked = config
+            .use_tokens
+            .iter()
+            .chain(config.conf_use_tokens.iter())
+            .chain(config.env_use_tokens.iter())
+            .flat_map(|tokens| tokens.split_whitespace())
+            .any(|token| token == "-test" || token == "-*");
+        if !revoked {
+            set.extend(config.features_use.iter().cloned());
+        }
+    }
     set.extend(config.use_force.iter().cloned());
     for m in &config.use_mask {
         set.remove(m);

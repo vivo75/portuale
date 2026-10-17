@@ -531,17 +531,22 @@ fn masked_rows_for_pool(
     Some(out)
 }
 
+/// The top-level "all masked" block. `set_member_of` names the set
+/// argument this atom was expanded from, if any: Portage discloses set
+/// members with a `(dependency required by …)` line, while a direct
+/// top-level atom reports no chain.
 pub(crate) fn all_masked_report(
     repos: &[RepoConfig],
     atom_str: &str,
     config: &portage_profile::Config,
     xinfo: &str,
+    set_member_of: Option<&str>,
 ) -> Option<String> {
     // The header/footer live here; the masked list is shared with the
     // dependency disclosure.
     let masked = masked_candidates_for_atom(repos, atom_str, config)?;
 
-    render_all_masked_block(xinfo, masked)
+    render_all_masked_block(xinfo, masked, set_member_of)
 }
 
 /// Binary-only twin of [`all_masked_report`] for `--usepkgonly`, where
@@ -560,10 +565,14 @@ pub(crate) fn all_binary_masked_report(
 ) -> Option<String> {
     let atom = portage_dep::parse_atom(atom_str)?;
     let masked = masked_rows_for_pool(binaries, atom_str, &atom, config)?;
-    render_all_masked_block(xinfo, masked)
+    render_all_masked_block(xinfo, masked, None)
 }
 
-fn render_all_masked_block(xinfo: &str, masked: Vec<(String, Vec<String>)>) -> Option<String> {
+fn render_all_masked_block(
+    xinfo: &str,
+    masked: Vec<(String, Vec<String>)>,
+    set_member_of: Option<&str>,
+) -> Option<String> {
     // Portage prints the upgrade paragraph whenever any listed row is
     // EAPI-masked (`show_masked_packages` returns `have_eapi_mask`, and
     // the caller wraps `portage.const.EAPI` — `9` here — at 75 columns;
@@ -585,8 +594,19 @@ fn render_all_masked_block(xinfo: &str, masked: Vec<(String, Vec<String>)>) -> O
     if have_eapi_mask {
         out.push_str(eapi_mask_upgrade_notice());
     }
+    // A set member discloses the set that pulled it in; a direct
+    // top-level atom reports no chain. Portage: depgraph.py,
+    // _show_unsatisfied_dep (the `atom_arg` dep-chain walk ends at the
+    // set for `SetArg` members).
+    if let Some(set) = set_member_of {
+        out.push_str(&format!(
+            "\n(dependency required by \"{set}\" [argument])\n"
+        ));
+    } else {
+        out.push('\n');
+    }
     out.push_str(
-        "\nFor more information, see the MASKED PACKAGES section in the emerge\n\
+        "For more information, see the MASKED PACKAGES section in the emerge\n\
          man page or refer to the Gentoo Handbook.\n",
     );
     Some(out)

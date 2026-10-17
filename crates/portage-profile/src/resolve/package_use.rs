@@ -38,11 +38,12 @@ pub(crate) fn fold_package_use(args: FoldPackageUseArgs<'_>) -> Result<(), Error
     // Purely additive; parsed independently. Portage: UseManager
     //
     // Repo and chain lines validate first (node rules, use dropped, no
-    // wildcards); the user profile (`/etc/portage/profile`, Portage's last
-    // profile node) validates with `eapi=None`, wildcards on, repo and
-    // build-id on, use dropped; the user file the same. Chain lines were
-    // already validated (and warned) in `load_scalar_layers`: identical
-    // warnings dedupe at the end of `resolve_config`.
+    // wildcards). The user profile (`/etc/portage/profile`, Portage's last
+    // profile node) is not folded here: it forms its own
+    // `profile_use_layers` level in `load_scalar_layers`, with the node's
+    // EAPI gating the wildcard syntax. Chain lines were already validated
+    // (and warned) there: identical warnings dedupe at the end of
+    // `resolve_config`.
     // Portage: UseManager._parse_file_to_dict (profiles, with
     // user_config=True on the user node) and _parse_user_files_to_extatomdict
     let all_repos: Vec<(String, PathBuf)> =
@@ -80,13 +81,6 @@ pub(crate) fn fold_package_use(args: FoldPackageUseArgs<'_>) -> Result<(), Error
             warnings,
         ));
     }
-    profile_use_lines.extend(filter_atom_lines(
-        &read_config_lines_with_sources(&config_root.join("etc/portage/profile/package.use"))?,
-        &user_use_rules,
-        dict,
-        WARN_RANK_USE,
-        warnings,
-    ));
     let user_use_lines = filter_atom_lines(
         &read_config_lines_with_sources(&config_root.join("etc/portage/package.use"))?,
         &user_use_rules,

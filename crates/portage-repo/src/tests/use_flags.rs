@@ -1055,3 +1055,51 @@ fn use_context_fingerprint_debug_asserts_on_post_freeze_mutation() {
     frozen.accept_keywords.insert("~amd64".to_string());
     let _ = use_context_fingerprint(&frozen);
 }
+
+#[test]
+fn effective_use_flags_applies_the_user_profile_level_last() {
+    // #346 S1: the user profile is Portage's last profile node, so its
+    // `package.use` and force/mask entries win over the chain levels in
+    // the per-level walks. Replays S0 u04 (`package.use` enables `x`)
+    // and u06/u07 (force/mask decide `(x)`/`(-x)`) at the unit level;
+    // the contract pins replay the full cells against Portage 3.0.82.2.
+    let user_use_level = portage_profile::ProfileUseLayer {
+        make_defaults_use: vec![],
+        package_use: vec![("dev-libs/pkg".to_string(), vec!["foo".to_string()])],
+    };
+    let user_mask_force_level = portage_profile::UseMaskForceLevel {
+        use_force: vec!["bar".to_string()],
+        use_mask: vec!["baz".to_string()],
+        package_use_force: vec![("dev-libs/pkg".to_string(), vec!["qux".to_string()])],
+        ..Default::default()
+    };
+    let cfg = portage_profile::Config {
+        profile_use_layers: vec![
+            portage_profile::ProfileUseLayer {
+                make_defaults_use: vec![],
+                package_use: vec![("dev-libs/pkg".to_string(), vec!["-foo".to_string()])],
+            },
+            user_use_level,
+        ],
+        use_mask_force_levels: vec![
+            portage_profile::UseMaskForceLevel::default(),
+            user_mask_force_level,
+        ],
+        accept_keywords: HashSet::from(["amd64".to_string()]),
+        ..Default::default()
+    };
+    let flags = effective_use_flags(EffectiveUseFlagsArgs {
+        config: &cfg,
+        iuse: "foo bar baz qux",
+        keywords: &["amd64".to_string()],
+        candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        category: "dev-libs",
+        package: "pkg",
+    });
+    // The chain's `-foo` loses to the user level's `foo`; the user
+    // level forces `bar`/`qux` and masks `baz`.
+    assert!(flags.contains("foo"));
+    assert!(flags.contains("bar"));
+    assert!(flags.contains("qux"));
+    assert!(!flags.contains("baz"));
+}

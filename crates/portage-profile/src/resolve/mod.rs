@@ -79,6 +79,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
     let mut user_use_warnings: Vec<ProfileWarning> = Vec::new();
     let LoadScalarLayersOut {
         chain,
+        user_node,
         level_scalar_deltas,
         profile_scalars,
     } = load_scalar_layers(LoadScalarLayersArgs {
@@ -102,7 +103,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         &level_scalar_deltas,
     );
 
-    fold_profile_use_masks(&chain, &mut config)?;
+    fold_profile_use_masks(&chain, user_node.as_ref(), &mut config)?;
 
     fold_package_masks_and_keywords(FoldPackageMasksAndKeywordsArgs {
         main_repo_location,
@@ -110,6 +111,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         overlay_repos,
         repo_masters,
         chain: &chain,
+        user_node: user_node.as_ref(),
         config_root,
         config: &mut config,
         warnings: &mut warnings,
@@ -133,7 +135,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         main_repo_name,
         overlay_repos,
         chain: &chain,
-        config_root,
+        user_node: user_node.as_ref(),
         config: &mut config,
         warnings: &mut warnings,
     })?;
@@ -149,11 +151,19 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         main_repo_name,
         overlay_repos,
         chain: &chain,
+        user_node: user_node.as_ref(),
         config: &mut config,
         warnings: &mut warnings,
     })?;
 
-    fold_package_sets(&chain, &mut config, &all_repos, config_root, &mut warnings)?;
+    fold_package_sets(FoldPackageSetsArgs {
+        chain: &chain,
+        user_node: user_node.as_ref(),
+        config: &mut config,
+        all_repos: &all_repos,
+        config_root,
+        warnings: &mut warnings,
+    })?;
 
     fold_licenses_and_accepts(
         &all_repos,

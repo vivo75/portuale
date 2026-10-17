@@ -9,3 +9,6 @@ The scalar layers in Portage's order: env.d, make.globals, the profile chain, ma
 - The make.defaults walk is Portage `regenerate()` over `configdict["defaults"]`; `use_tokens` accumulates every level's `USE=` flat too (fallback path + inspection). USE excluded from cross-level substitution: see the module doc comment.
 - The profile USE_EXPAND-defaults fold is Portage config.py "translate profile USE_EXPAND defaults into per-level USE flags" (2849-2889).
 - `PROFILE_ONLY_VARIABLES` detail: the profile's own fold, env.d's own assignment (source 0) excluded. A key the globals/profile chain also assigned keeps that value; one only env.d held is dropped from `scalars`.
+
+## fn fold_profile_level_use (#346 S1)
+- One profile level's `defaults`-tier contribution (`make.defaults` USE plus its own `package.use`), extracted from `load_scalar_layers` so the chain levels and the appended user-profile node share the mechanism. The user level runs last with the node's own rules (config.py:683-700 reads `make.defaults` per `profiles_complex` node, user node included).

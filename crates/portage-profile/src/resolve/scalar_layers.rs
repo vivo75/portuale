@@ -5,6 +5,8 @@ use crate::resolve::*;
 /// What [`load_scalar_layers`] hands back to its caller.
 pub(crate) struct LoadScalarLayersOut {
     pub(crate) chain: Vec<PathBuf>,
+    /// The appended user-profile node, if Portage appends one.
+    pub(crate) user_node: Option<UserProfileNode>,
     pub(crate) level_scalar_deltas: Vec<HashMap<String, String>>,
     pub(crate) profile_scalars: HashMap<String, String>,
 }
@@ -19,6 +21,71 @@ pub(crate) struct LoadScalarLayersArgs<'a> {
     pub(crate) repo_aliases: &'a [(String, PathBuf)],
     pub(crate) parent_colon_repos: &'a HashSet<String>,
     pub(crate) warnings: &'a mut Vec<ProfileWarning>,
+}
+
+/// Arguments of [`fold_profile_level_use`].
+struct FoldProfileLevelUseArgs<'a> {
+    level: &'a Path,
+    rules: &'a NodeAtomRules,
+    scalars: &'a mut HashMap<String, String>,
+    config: &'a mut Config,
+    warnings: &'a mut Vec<ProfileWarning>,
+    level_scalar_deltas: &'a mut Vec<HashMap<String, String>>,
+}
+
+/// One profile level's `defaults`-tier contribution: its `make.defaults`
+/// `USE` plus its own `package.use`. Appends one [`ProfileUseLayer`]
+/// and one scalar delta; `USE=` values also join `config.use_tokens`
+/// through [`process_lines`], like every chain level.
+fn fold_profile_level_use(args: FoldProfileLevelUseArgs<'_>) -> Result<(), Error> {
+    let FoldProfileLevelUseArgs {
+        level,
+        rules,
+        scalars,
+        config,
+        warnings,
+        level_scalar_deltas,
+    } = args;
+    // One level's `make.defaults` USE plus its own package.use; the
+    // length delta slices out just this level's USE contribution.
+    let before = config.use_tokens.len();
+    let scalars_before = scalars.clone();
+    let make_defaults = level.join("make.defaults");
+    if make_defaults.is_file() {
+        // USE is excluded from cross-level substitution (Portage quirk).
+        scalars.remove("USE");
+        note_higher(&mut *config, "USE");
+        let text = fs::read_to_string(&make_defaults).map_err(|e| Error::ReadFile {
+            path: make_defaults.display().to_string(),
+            source: e,
+        })?;
+        let snapshot = IncrementalSnapshot::take(config);
+        process_lines(&text, &mut *scalars, &mut *config, AcceptRawLayer::Defaults);
+        snapshot.restore(&mut *config);
+    }
+    let level_make_defaults_use = config.use_tokens[before..].to_vec();
+    let level_package_use = parse_package_use_lines(
+        &filter_atom_lines(
+            &read_config_lines_with_sources(&level.join("package.use"))?,
+            rules,
+            AtomLineKind::Dict { allow_use: false },
+            WARN_RANK_USE,
+            warnings,
+        ),
+        false,
+    );
+    config.profile_use_layers.push(ProfileUseLayer {
+        make_defaults_use: level_make_defaults_use,
+        package_use: level_package_use,
+    });
+    level_scalar_deltas.push(
+        scalars
+            .iter()
+            .filter(|(k, v)| scalars_before.get(*k) != Some(*v))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    );
+    Ok(())
 }
 
 /// The scalar layers in Portage's order: env.d, make.globals, the profile chain, make.conf.
@@ -123,45 +190,30 @@ pub(crate) fn load_scalar_layers(
         node_rules.push(rules_for_node(level, all_repos, &repo_rules)?);
     }
     for (level, rules) in chain.iter().zip(node_rules.iter()) {
-        // One level's `make.defaults` USE plus its own package.use; the
-        // length delta slices out just this level's USE contribution.
-        let before = config.use_tokens.len();
-        let scalars_before = scalars.clone();
-        let make_defaults = level.join("make.defaults");
-        if make_defaults.is_file() {
-            // USE is excluded from cross-level substitution (Portage quirk).
-            scalars.remove("USE");
-            note_higher(&mut *config, "USE");
-            let text = fs::read_to_string(&make_defaults).map_err(|e| Error::ReadFile {
-                path: make_defaults.display().to_string(),
-                source: e,
-            })?;
-            let snapshot = IncrementalSnapshot::take(config);
-            process_lines(&text, &mut *scalars, &mut *config, AcceptRawLayer::Defaults);
-            snapshot.restore(&mut *config);
-        }
-        let level_make_defaults_use = config.use_tokens[before..].to_vec();
-        let level_package_use = parse_package_use_lines(
-            &filter_atom_lines(
-                &read_config_lines_with_sources(&level.join("package.use"))?,
-                rules,
-                AtomLineKind::Dict { allow_use: false },
-                WARN_RANK_USE,
-                warnings,
-            ),
-            false,
-        );
-        config.profile_use_layers.push(ProfileUseLayer {
-            make_defaults_use: level_make_defaults_use,
-            package_use: level_package_use,
-        });
-        level_scalar_deltas.push(
-            scalars
-                .iter()
-                .filter(|(k, v)| scalars_before.get(*k) != Some(*v))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        );
+        fold_profile_level_use(FoldProfileLevelUseArgs {
+            level,
+            rules,
+            scalars: &mut *scalars,
+            config: &mut *config,
+            warnings,
+            level_scalar_deltas: &mut level_scalar_deltas,
+        })?;
+    }
+    // The user profile is Portage's last profile node: its `make.defaults`
+    // and `package.use` form one more level, after the chain, with the
+    // node's own EAPI gating the wildcard syntax.
+    // Portage: LocationsManager.py:169-189, config.py:683-700
+    let user_node = resolve_user_profile_node(config_root, &chain, warnings);
+    if let Some(user) = &user_node {
+        let rules = user_node_rules(user.eapi.as_deref(), UserNodeFile::PackageUse);
+        fold_profile_level_use(FoldProfileLevelUseArgs {
+            level: &user.path,
+            rules: &rules,
+            scalars: &mut *scalars,
+            config: &mut *config,
+            warnings,
+            level_scalar_deltas: &mut level_scalar_deltas,
+        })?;
     }
     // `scalars` as the profile chain left it, before make.conf/env: a
     // USE_EXPAND variable still at this value folded per-level, not again
@@ -212,6 +264,7 @@ pub(crate) fn load_scalar_layers(
     }
     Ok(LoadScalarLayersOut {
         chain,
+        user_node,
         level_scalar_deltas,
         profile_scalars,
     })

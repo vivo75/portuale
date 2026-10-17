@@ -3,8 +3,13 @@
 use crate::resolve::*;
 
 /// Profile `use.mask`, `use.force` and `arch.list`.
-pub(crate) fn fold_profile_use_masks(chain: &[PathBuf], config: &mut Config) -> Result<(), Error> {
-    // use.mask/use.force: every level's file stacked with `-atom` removal.
+pub(crate) fn fold_profile_use_masks(
+    chain: &[PathBuf],
+    user_node: Option<&UserProfileNode>,
+    config: &mut Config,
+) -> Result<(), Error> {
+    // use.mask/use.force: every level's file stacked with `-atom` removal,
+    // the user profile (Portage's last profile node) closing the stack.
     // Not folded into `use_flags` here: Portage applies force/mask as the
     // literal last step of its USE walk, strictly after the `pkg` tier, so
     // a package.use entry can never override them. Applied per-candidate in
@@ -16,6 +21,10 @@ pub(crate) fn fold_profile_use_masks(chain: &[PathBuf], config: &mut Config) -> 
     for level in chain {
         usemask_sources.push(read_config_lines(&level.join("use.mask"))?);
         useforce_sources.push(read_config_lines(&level.join("use.force"))?);
+    }
+    if let Some(user) = user_node {
+        usemask_sources.push(read_config_lines(&user.path.join("use.mask"))?);
+        useforce_sources.push(read_config_lines(&user.path.join("use.force"))?);
     }
     config.use_force = stack_mask_lines(&useforce_sources).into_iter().collect();
     config.use_mask = stack_mask_lines(&usemask_sources).into_iter().collect();

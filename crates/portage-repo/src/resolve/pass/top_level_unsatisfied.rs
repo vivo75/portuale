@@ -162,12 +162,15 @@ pub(crate) fn step_top_level_unsatisfied(
                 }
             }
             // An atom matching only masked ebuilds reports the "all masked"
-            // block, not the "no ebuilds" one. Portage: _show_unsatisfied_dep
+            // block, not the "no ebuilds" one. A set member additionally
+            // names its set (`(dependency required by "@set" [argument])`).
+            // Portage: _show_unsatisfied_dep
             if let Some(report) = all_masked_report(
                 &ctx.repos,
                 current_atom,
                 config,
                 &format!("{current_atom:?}"),
+                ctx.top_level.sets.get(current_atom).map(String::as_str),
             ) {
                 return Err(Error::Detail(report));
             }

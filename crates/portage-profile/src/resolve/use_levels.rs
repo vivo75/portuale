@@ -8,6 +8,7 @@ pub(crate) struct UseMaskForceLevelsArgs<'a> {
     pub(crate) main_repo_name: &'a str,
     pub(crate) overlay_repos: &'a [(String, PathBuf)],
     pub(crate) chain: &'a [PathBuf],
+    pub(crate) user_node: Option<&'a UserProfileNode>,
     pub(crate) config: &'a mut Config,
     pub(crate) warnings: &'a mut Vec<ProfileWarning>,
 }
@@ -19,12 +20,14 @@ pub(crate) fn use_mask_force_levels(args: UseMaskForceLevelsArgs<'_>) -> Result<
         main_repo_name,
         overlay_repos,
         chain,
+        user_node,
         config,
         warnings,
     } = args;
     // Per-level view of the eight sources parsed flat above, replaying
     // Portage's interleaved per-level stacking. Level 0 is synthetic
-    // (repo-level package.use.*); levels 1.. are the profile chain.
+    // (repo-level package.use.*); levels 1.. are the profile chain, and
+    // the user profile (Portage's last profile node) closes the stack.
     // Portage: UseManager.getUseMask/getUseForce
     //
     // The `package.use.*` entries validate like the flat fold (use dropped,
@@ -110,6 +113,36 @@ pub(crate) fn use_mask_force_levels(args: UseMaskForceLevelsArgs<'_>) -> Result<
             package_use_force: filtered("package.use.force", warnings)?,
             package_use_stable_mask: filtered("package.use.stable.mask", warnings)?,
             package_use_stable_force: filtered("package.use.stable.force", warnings)?,
+        });
+    }
+    // The user profile closes the stack with the node's own EAPI gating
+    // the `package.use*` wildcard syntax (Portage reads the profile lists
+    // over `profiles_complex`, which ends at the user node).
+    if let Some(user) = user_node {
+        let rules = user_node_rules(user.eapi.as_deref(), UserNodeFile::PackageUse);
+        let user_filtered = |file: &str,
+                             warnings: &mut Vec<ProfileWarning>|
+         -> Result<Vec<(String, Vec<String>)>, Error> {
+            Ok(parse_package_use_lines(
+                &filter_atom_lines(
+                    &read_config_lines_with_sources(&user.path.join(file))?,
+                    &rules,
+                    dict,
+                    WARN_RANK_USE,
+                    warnings,
+                ),
+                false,
+            ))
+        };
+        levels.push(UseMaskForceLevel {
+            use_mask: read_config_lines(&user.path.join("use.mask"))?,
+            use_force: read_config_lines(&user.path.join("use.force"))?,
+            use_stable_mask: read_config_lines(&user.path.join("use.stable.mask"))?,
+            use_stable_force: read_config_lines(&user.path.join("use.stable.force"))?,
+            package_use_mask: user_filtered("package.use.mask", warnings)?,
+            package_use_force: user_filtered("package.use.force", warnings)?,
+            package_use_stable_mask: user_filtered("package.use.stable.mask", warnings)?,
+            package_use_stable_force: user_filtered("package.use.stable.force", warnings)?,
         });
     }
     config.use_mask_force_levels = levels;

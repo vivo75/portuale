@@ -267,6 +267,76 @@ pub(crate) fn user_atom_rules(allow_wildcard: bool, allow_build_id: bool) -> Nod
     }
 }
 
+/// The user profile's `profile-formats`: Portage hard-codes
+/// `("profile-bashrcs", "profile-set")` for the appended node, so the
+/// node qualifies for `@profile` (`profile-set`) but never for the
+/// format-gated readers (`build-id`, `profile-license`, ...).
+// Portage: LocationsManager.py:169-189
+pub(crate) const USER_PROFILE_FORMATS: [&str; 2] = ["profile-bashrcs", "profile-set"];
+
+/// The user profile (`/etc/portage/profile`) as Portage's last profile
+/// node: present only when a `make.profile` resolved (the chain is
+/// non-empty) and the directory exists. The node's own `parent` file is
+/// never walked (the node is appended, not visited).
+// Portage: LocationsManager.py:169-189
+// (`self._user_config and self.profiles` plus `os.path.exists`)
+pub(crate) struct UserProfileNode {
+    pub path: PathBuf,
+    /// The node's `eapi` file content, or `None` when the file is absent
+    /// or malformed (never the repo default, never an abort — unlike
+    /// chain nodes, whose bad `eapi` empties the profile list).
+    pub eapi: Option<String>,
+}
+
+/// [`UserProfileNode`] for this resolve, or `None` when Portage would
+/// not append the node. The `eapi` read warns exactly like the
+/// repo-level reader on a malformed file (deduped to once downstream).
+// Portage: read_corresponding_eapi_file(custom_prof + os.sep, default=None)
+pub(crate) fn resolve_user_profile_node(
+    config_root: &Path,
+    chain: &[PathBuf],
+    warnings: &mut Vec<ProfileWarning>,
+) -> Option<UserProfileNode> {
+    if chain.is_empty() {
+        return None;
+    }
+    let path = config_root.join("etc/portage/profile");
+    if !path.exists() {
+        return None;
+    }
+    let eapi = read_adjacent_eapi(&path, warnings);
+    Some(UserProfileNode { path, eapi })
+}
+
+/// Which user-profile file's rules to build: Portage validates every
+/// file with the node's EAPI but varies wildcards/build-ids per file.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum UserNodeFile {
+    /// `package.mask`, `package.unmask`, `packages`: no wildcards.
+    Mask,
+    /// `package.use*`: wildcards only when the node has no EAPI.
+    PackageUse,
+    /// `package.accept_keywords`: no wildcards, no build-ids.
+    AcceptKeywords,
+}
+
+/// Rules for one user-profile file: the node's EAPI drives the atom
+/// grammar (`None` parses permissively, like the user files); wildcards
+/// only for `package.use*` with no EAPI (`extended_syntax = eapi is None
+/// and user_config`); `allow_repo` from the user formats; build-ids
+/// everywhere but `package.accept_keywords`.
+// Portage: MaskManager.py:171-193, KeywordsManager.py:25-60,
+// UseManager.py:277-288, config.py:655-666
+pub(crate) fn user_node_rules(eapi: Option<&str>, file: UserNodeFile) -> NodeAtomRules {
+    let formats: Vec<String> = USER_PROFILE_FORMATS.iter().map(|s| s.to_string()).collect();
+    NodeAtomRules {
+        allow_repo: allow_profile_repo_deps(eapi, &formats),
+        allow_build_id: !matches!(file, UserNodeFile::AcceptKeywords),
+        allow_wildcard: matches!(file, UserNodeFile::PackageUse) && eapi.is_none(),
+        eapi: eapi.map(str::to_string),
+    }
+}
+
 /// A repo's own repo-level file rules: parsed with the file-adjacent
 /// `profiles/eapi` value, but `allow_repo` follows the computed `repo.eapi`
 /// (Portage passes the whole `RepoConfig` to `allow_profile_repo_deps`).

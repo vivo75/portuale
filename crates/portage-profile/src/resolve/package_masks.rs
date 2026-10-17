@@ -9,6 +9,7 @@ pub(crate) struct FoldPackageMasksAndKeywordsArgs<'a> {
     pub(crate) overlay_repos: &'a [(String, PathBuf)],
     pub(crate) repo_masters: &'a HashMap<String, Vec<PathBuf>>,
     pub(crate) chain: &'a [PathBuf],
+    pub(crate) user_node: Option<&'a UserProfileNode>,
     pub(crate) config_root: &'a Path,
     pub(crate) config: &'a mut Config,
     pub(crate) warnings: &'a mut Vec<ProfileWarning>,
@@ -24,6 +25,7 @@ pub(crate) fn fold_package_masks_and_keywords(
         overlay_repos,
         repo_masters,
         chain,
+        user_node,
         config_root,
         config,
         warnings,
@@ -154,30 +156,32 @@ pub(crate) fn fold_package_masks_and_keywords(
     }
     // The user profile (`/etc/portage/profile`) is Portage's last profile
     // node: its `package.mask`/`.unmask` stack after the chain, before the
-    // user files, with `eapi=None`, repo and build-id on, no wildcards.
+    // user files, with the node's own EAPI and no wildcards. Absent
+    // without the node: without `make.profile` Portage never appends it.
     // A missing directory reads as empty, like every other absent file.
     // Portage: MaskManager.py:171-193 (the profiles loop covers the user
-    // node; `portage1_directories` is true there too), oracle Q2e
-    let user_profile_rules = user_atom_rules(false, true);
-    let user_profile = config_root.join("etc/portage/profile");
-    mask_sources.push(filter_atom_lines(
-        &read_config_lines_with_sources(&user_profile.join("package.mask"))?,
-        &user_profile_rules,
-        AtomLineKind::File {
-            packages_file: false,
-        },
-        WARN_RANK_MASK,
-        warnings,
-    ));
-    unmask_sources.push(filter_atom_lines(
-        &read_config_lines_with_sources(&user_profile.join("package.unmask"))?,
-        &user_profile_rules,
-        AtomLineKind::File {
-            packages_file: false,
-        },
-        WARN_RANK_MASK,
-        warnings,
-    ));
+    // node; `portage1_directories` is true there too)
+    if let Some(user) = user_node {
+        let user_profile_rules = user_node_rules(user.eapi.as_deref(), UserNodeFile::Mask);
+        mask_sources.push(filter_atom_lines(
+            &read_config_lines_with_sources(&user.path.join("package.mask"))?,
+            &user_profile_rules,
+            AtomLineKind::File {
+                packages_file: false,
+            },
+            WARN_RANK_MASK,
+            warnings,
+        ));
+        unmask_sources.push(filter_atom_lines(
+            &read_config_lines_with_sources(&user.path.join("package.unmask"))?,
+            &user_profile_rules,
+            AtomLineKind::File {
+                packages_file: false,
+            },
+            WARN_RANK_MASK,
+            warnings,
+        ));
+    }
     // User-level files validate like Portage's `user_config` readers:
     // `eapi=None`, wildcards and repo on, build-ids on.
     // Portage: MaskManager.py:214-232
@@ -204,16 +208,19 @@ pub(crate) fn fold_package_masks_and_keywords(
     config.package_mask = stack_mask_lines(&mask_sources);
     config.package_unmask = stack_mask_lines(&unmask_sources);
 
-    // package.accept_keywords: profile-chain then user-level, flat
-    // concatenation (no `-atom` removal exists for this file). No repo-level
-    // source exists in Portage. Chain lines validate with the node's rules
-    // (no wildcards, use dropped) but never with build-ids: Portage does
-    // not pass `allow_build_id` there even with the `build-id` format
-    // (S0 `formats` cell still warns on `=…-1-2`); the user file takes
+    // package.accept_keywords: profile-chain, then the user profile node,
+    // then user-level, flat concatenation (no `-atom` removal exists for
+    // this file). No repo-level source exists in Portage. Chain lines
+    // validate with the node's rules (no wildcards, use dropped) but never
+    // with build-ids: Portage does not pass `allow_build_id` there even
+    // with the `build-id` format (S0 `formats` cell still warns on
+    // `=…-1-2`); the user-profile node reads with the same profile reader
+    // (no wildcards, no build-ids, the node's EAPI); the user file takes
     // build-ids instead, still dropping use-dep lines.
-    // Portage: KeywordsManager.py:49-60 (profiles), :73-104 (user).
+    // Portage: KeywordsManager.py:25-60 (profiles, covering the user node),
+    // :73-104 (user).
     // Neither the chain nor the user profile `package.keywords` file is
-    // read here (Portage merges it into the same dict): S6 residue, see
+    // read here (Portage merges it into the same dict): S2 owns that, see
     // the code note.
     let mut accept_keywords_lines: Vec<String> = Vec::new();
     for level in chain {
@@ -222,6 +229,19 @@ pub(crate) fn fold_package_masks_and_keywords(
         accept_keywords_lines.extend(filter_atom_lines(
             &read_config_lines_with_sources(&level.join("package.accept_keywords"))?,
             &rules,
+            AtomLineKind::Dict { allow_use: false },
+            WARN_RANK_KEYWORDS,
+            warnings,
+        ));
+    }
+    // The user profile's `package.accept_keywords` stacks after the chain
+    // (it is the last profile node), before the user file.
+    if let Some(user) = user_node {
+        let user_profile_accept_rules =
+            user_node_rules(user.eapi.as_deref(), UserNodeFile::AcceptKeywords);
+        accept_keywords_lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&user.path.join("package.accept_keywords"))?,
+            &user_profile_accept_rules,
             AtomLineKind::Dict { allow_use: false },
             WARN_RANK_KEYWORDS,
             warnings,

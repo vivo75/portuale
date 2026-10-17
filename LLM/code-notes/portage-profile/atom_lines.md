@@ -2,8 +2,8 @@
 Profile-file atom validation (`grabfile_package` / `grabdict_package` port, #341 S5).
 
 ## struct NodeAtomRules
-- Per-profile-node parse flags: the node's `eapi` string plus `allow_repo` / `allow_build_id` resolved from the containing repo's `profile-formats`, never wildcards (repo profiles pass no `allow_wildcard`; Portage `MaskManager.py:171-193`, `KeywordsManager.py:25-60`, `UseManager.py:277-288` with `user_config=False`). `eapi: Option<String>` stays optional for the S6 user-profile path (`eapi=None`, permissive + wildcards per file).
-- `allow_profile_repo_deps`: Portage `repository/config.py:1476-1485` is `eapi_has_repo_deps(eapi) or "profile-repo-deps" in formats`; `eapi_has_repo_deps` (eapi.py:111-112) is the `repo_deps` attr, False for every supported EAPI 0-9, True for `None`/unsupported. Computed through S1's `eapi_attrs` so the table stays single-sourced.
+- Per-profile-node parse flags: the node's `eapi` string plus `allow_repo` / `allow_build_id` resolved from the containing repo's `profile-formats`, never wildcards (repo profiles pass no `allow_wildcard`; Portage `MaskManager.py:171-193`, `KeywordsManager.py:25-60`, `UseManager.py:277-288` with `user_config=False`). `eapi: Option<String>` stays optional for the user-profile node (`eapi=None` when the file is absent/malformed, LocationsManager.py:169-189) and the user files.
+- `allow_profile_repo_deps`: Portage `repository/config.py:1476-1485` is `eapi_has_repo_deps(eapi) or "profile-repo-deps" in formats`; `eapi_has_repo_deps` (eapi.py:111-112) is the `repo_deps` attr, False for every supported EAPI 0-9, True for `None`/unsupported. Computed through S1's `eapi_attrs` so the table stays single-sourced. The user node reuses it over its hard-coded `("profile-bashrcs", "profile-set")` formats (#346 S1).
 
 ## fn node_atom_rules
 - The node's `eapi` file is `readline().strip()` (first line, whitespace-stripped), else the repo default; an unsupported value raises Portage's `ParseError("Profile contains unsupported EAPI …")` (LocationsManager.py:216-242), which empties the whole profile list — ported as `Error::UnsupportedProfileEapi`, checked for every chain node up front in `load_scalar_layers` (chain order = Portage visit order, first bad node wins) so the abort precedes any file read, exactly like Portage's `_addProfile` raising during `load_profiles`.
@@ -29,8 +29,8 @@ Profile-file atom validation (`grabfile_package` / `grabdict_package` port, #341
 - Warning ranks (0 repo/layout, 1 packages, 2 use, 3 license/properties/restrict/env, 4 keywords, 5 mask) reproduce Portage's manager read order (config.py, UseManager, LicenseManager, KeywordsManager, MaskManager); `resolve_config` stable-sorts and dedupes to exactly-once (owner Q3) — which also collapses the double read of chain `package.use` (`load_scalar_layers` + `fold_package_use`) and the double read of `package.use.*` (`fold_package_use_force_mask` + `use_mask_force_levels`).
 - `package.provided` is deliberately NOT filtered here: Portage validates it with `isvalidatom("=" + line)` (config.py:970-1011), a different (S8-family) check; its EAPI 7+ gate is unported too. Residue, same reasoning as above.
 
-## fn user_atom_rules (#341 S6)
-- User-config (`/etc/portage/package.*`) and user-profile (`/etc/portage/profile/*`) rules: Portage reads both with `eapi=None` (`verify_eapi=False`) and `allow_repo=True`; only wildcards and build-ids vary per file (oracle Q2e, re-verified live on host Portage 3.0.82.2, 2026-10-12, over the S0 run6 eight lines):
+## fn user_atom_rules (#341 S6, narrowed by #346 S1)
+- User-config (`/etc/portage/package.*`) rules: Portage reads them with `eapi=None` (`verify_eapi=False`) and `allow_repo=True`; only wildcards and build-ids vary per file (oracle Q2e, re-verified live on host Portage 3.0.82.2, 2026-10-12, over the S0 run6 eight lines):
   | file | wildcard | build-id | use deps | Portage reader |
   |---|---|---|---|---|
   | `package.mask`, `package.unmask` | on | on | kept | MaskManager.py:214-232 |
@@ -38,19 +38,30 @@ Profile-file atom validation (`grabfile_package` / `grabdict_package` port, #341
   | `package.use` (user) | on | on | dropped | UseManager.py:337-348 |
   | `package.license` (user) | on | OFF | kept | LicenseManager.py:37-42 |
   | `package.properties`, `package.accept_restrict`, `package.env` (user) | on | on | kept | config.py:857-902 |
-  | user-profile `package.mask`, `package.unmask`, `packages` | OFF | on | kept | MaskManager.py:171-193, config.py:655-666 |
-  | user-profile `package.use*` (use, use.force/mask, stable.*) | ON | on | dropped | UseManager.py:277-288 (`extended_syntax = eapi is None and user_config`) |
-  | user-profile `package.accept_keywords` | OFF | OFF | dropped | KeywordsManager.py:49-60 (same reader as chain profiles) |
-- The user profile is Portage's last profile node (`_profile_node(custom_prof, True, True, …, eapi=None-file-or-None, True, …)`, LocationsManager.py:169-189): its `package.mask`/`.unmask`, `package.use*` and `packages` stack after the chain, before the user files. Its `package.unmask` IS read (`portage1_directories=True`); its `package.license` is NOT (LicenseManager only re-reads `profile-license`-format profiles).
+- The user-profile rows moved to `user_node_rules` (#346 S1): the node's EAPI drives the grammar, wildcards only for `package.use*` with no EAPI, `allow_repo` from the node's formats.
+- The user profile is Portage's last profile node (`_profile_node(custom_prof, True, True, ("profile-bashrcs", "profile-set"), <eapi file or None>, True, False)`, LocationsManager.py:169-189): its `package.mask`/`.unmask`, `package.use*` and `packages` stack after the chain, before the user files. Its `package.unmask` IS read (`portage1_directories=True`); its `package.license` is NOT (LicenseManager only re-reads `profile-license`-format profiles).
 - `package.env` use-dep crash NOT ported: Portage's reader accepts `dev-libs/foo[x] file.conf` and then dies with `AssertionError: setcpv recursion detected` on the next resolve (oracle Q2e, S0 cell C-userenv-crash). portuale keeps the line (valid for the reader) and matches it normally; no contract pin covers that cell.
 - Residues (no S0 capture covers them; each needs its own probe + pin before implementing):
-  - `package.keywords`, chain-side and user-side: Portage merges it into the accept_keywords dict (KeywordsManager.py:25-37 profiles, :73-104 user, with a deprecation `UserWarning` for the user file); portuale reads neither. Same for the user profile's `package.keywords` / `package.accept_keywords` (profile loop, no wildcards; keywords with build-id on, accept_keywords off).
-  - An `/etc/portage/profile/eapi` file: Portage reads it (`read_corresponding_eapi_file`, default None) and the user node then parses with that EAPI (wildcards off unless absent/malformed). S6 always uses `eapi=None` per the plan; no fixture has the file.
-  - The user profile carries `profile-set` in its formats tuple: Portage's `ProfilePackageSet` may feed its unstarred `packages` lines to `@profile`. S6 only stacks them into `@system`. No capture either way.
-  - `use_mask_force_levels` (the per-level USE-flip suggestion stack) has no user-profile level; only the flat force/mask folds do. No capture.
+  - `package.keywords`, chain-side and user-side: Portage merges it into the accept_keywords dict (KeywordsManager.py:25-37 profiles, :73-104 user, with a deprecation `UserWarning` for the user file); portuale reads neither. Same for the user profile's `package.keywords` (profile loop, no wildcards; build-id on). Owned by #346 S2.
+- Shipped by #346 S1 (was: residues above): the user profile's `package.accept_keywords` (profile reader, no wildcards/build-ids, node's EAPI), the `profile/eapi` file (wildcards off unless absent/malformed), the user node's `packages` feeding `@profile` (`profile-set` hard-coded in the node's formats), and the `use_mask_force_levels` user-profile level.
 
 ## enum Error::UnsupportedProfileEapi
 - `Display` renders Portage's `!!! ParseError: …` line plus the 4-line `Your current profile is invalid…` abort (B-prof-eapi10). The `Unable to parse profile` and not-a-symlink framing lines depend on container layout and are not reproduced (S5 summary). The `!!!` prefix is the CLI protocol: `pretend/mod.rs` prints `!!!`-leading config errors verbatim, everything else with the `emerge: ` prefix.
 
 ## struct Config::config_warnings
 - Rank-sorted, deduped texts; the CLI prints each once to stderr at config-load position (before `Calculating dependencies`, owner Q2+Q3). Running-root config warnings (`load_running_config`) are still dropped, not printed — same residue class as the user-profile re-read (S6).
+
+## struct UserProfileNode (#346 S1)
+- The appended user-profile node: `path` plus the node's `eapi` file content (`None` when absent or malformed — never the repo default, never an abort). Portage: `_profile_node(custom_prof, True, True, ("profile-bashrcs", "profile-set"), read_corresponding_eapi_file(custom_prof + os.sep, default=None), True, False)` (LocationsManager.py:169-189); the namedtuple shape is `(location, portage1_directories, user_config, profile_formats, eapi, allow_build_id, show_deprecated_warning)` (repository/config.py:40-51).
+- The node's own `parent` file is never walked: the node is appended after `load_profiles`, not visited by `_addProfile`. Verified by S0 u16 (Portage ignores it, `USE="-x"`).
+
+## fn resolve_user_profile_node (#346 S1)
+- Gate: `self._user_config and self.profiles` (LocationsManager.py:169) plus `os.path.exists(custom_prof)` — ported as non-empty chain plus `path.exists()`. Without `make.profile` Portage aborts the whole run as invalid-profile (S0 u15: rc 1, different reason than portuale's masked block); portuale resolves with an empty chain and ignores the user files.
+- The `eapi` read is `read_corresponding_eapi_file` with `default=None` (util/__init__.py:441-479): exactly-one-line else warn `--- Invalid 'eapi' file …` and default; missing is silent; no support check. Shared with the repo-level reader (`read_adjacent_eapi`); the single call site in `load_scalar_layers` warns once.
+
+## enum UserNodeFile (#346 S1)
+- Per-file rule selector for the user node: `Mask` (`package.mask`, `package.unmask`, `packages`), `PackageUse` (`package.use*`), `AcceptKeywords` (`package.accept_keywords`).
+
+## fn user_node_rules (#346 S1)
+- Rules for one user-profile file: the node's EAPI drives the atom grammar (`None` parses permissively, like the user files); wildcards only for `PackageUse` with no EAPI (`extended_syntax = eapi is None and user_config`, UseManager.py:277-288, which also forces `allow_repo` and skips `verify_eapi` there); `allow_repo` from `allow_profile_repo_deps` over the hard-coded user formats (repository/config.py:1476-1485); `allow_build_id` from the node's `True` (repository/config.py:40-51) except `AcceptKeywords`, whose profile reader never passes it (KeywordsManager.py:49-60).
+- Design note: the plan suggested `Vec<ProfileNode { path, kind }>` for the chain; S1 threads one `UserProfileNode` alongside the unchanged `Vec<PathBuf>` chain instead. Every fold receives it with per-file rules from this helper (one mechanism, one gate), while `resolve_profile_chain`'s return type and `chain.last()` (`pkgindex_profile`, the selected repo profile) stay untouched.

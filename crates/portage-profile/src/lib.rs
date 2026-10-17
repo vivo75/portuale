@@ -14,20 +14,24 @@
 // - No line continuation / multi-line quoted values; `#` is a comment only at
 //   line start. Non-USE/ACCEPT_KEYWORDS vars are last-wins scalars.
 // - `package.mask`/`.unmask`: main repo + every profile level + the user
-//   profile (`/etc/portage/profile`, `eapi=None`, no wildcards) + user
-//   files (wildcards on), plus every overlay's repo-level entries
-//   (`::repo`-scoped, implicit `masters` = main repo only). No eclass
-//   inheritance, no explicit `masters =`.
-// - `package.accept_keywords`: profile-chain + user-level, purely additive; a
-//   bare atom gains the implicit `~arch` default at both levels.
-//   (`package.keywords`, chain or user, is not read.)
-// - `package.use`: repo-level, per-profile-level, user-profile, and
-//   user-level sources at their own `USE_ORDER` positions; repo
-//   `make.defaults` USE leads the `repo` layer; only user-level lines get
-//   the `USE_EXPAND`-prefix shorthand.
-// - `packages` (`@system`), `@profile` (`profile-set` levels), and
-//   `package.provided` files are read; `@system` also stacks the user
-//   profile's `packages` (`eapi=None`, no wildcards).
+//   profile as Portage's last profile node (`/etc/portage/profile`, only
+//   when a `make.profile` resolved; the node's `eapi` file or `None`,
+//   no wildcards) + user files (wildcards on), plus every overlay's
+//   repo-level entries (`::repo`-scoped, implicit `masters` = main repo
+//   only). No eclass inheritance, no explicit `masters =`.
+// - `package.accept_keywords`: profile-chain + user-profile node (no
+//   wildcards, no build-ids, like the chain) + user-level, purely
+//   additive; a bare atom gains the implicit `~arch` default at every
+//   level. (`package.keywords`, chain or user, is not read.)
+// - `package.use`: repo-level, per-profile-level (the user profile forms
+//   the last level, its `make.defaults` USE included, wildcards only
+//   without a node `eapi`), and user-level sources at their own
+//   `USE_ORDER` positions; repo `make.defaults` USE leads the `repo`
+//   layer; only user-level lines get the `USE_EXPAND`-prefix shorthand.
+// - `packages` (`@system`), `@profile` (`profile-set` levels, always
+//   including the user node), and `package.provided` files are read;
+//   `@system` also stacks the user profile's `packages` (node EAPI,
+//   no wildcards).
 // - `use.mask`/`use.force` (+`.stable.` variants) and `package.use.mask`/
 //   `.force` (+`.stable.` variants) are read but never folded into `use_flags`;
 //   `portage-repo` applies them last (force-add, then force-remove).
