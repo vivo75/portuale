@@ -419,3 +419,202 @@ task). Plan defaults: none open for S5 (unattended yes).
   dos2unix (`l1-ebuild-direct-20261017T164108Z`).
 - L3 smoke (`l3-20261017T164141Z`, default parallelism): rc 0, hard 0,
   UNEXPLAINED 0, payload diffs 26 (tolerated static archives).
+
+## S6 (351-MARK, 351-DIE: phase output reaches stdout and `build.log`)
+
+Status: code done, new pins written, STOP RULE observed (executor:
+unattended batch worker, 2026-10-17). No bed script run (per task).
+Oracle: Portage 3.0.82.2 captures in `LLM/evidence/2026-10-15-346-s0/`
+(`m/` family + `matrix.md`); every expected value below comes from
+those Portage captures, never from portuale output. Plan defaults
+taken: none open for S6 (unattended only up to the end of its code).
+
+### What changed (files)
+- `crates/portuale/src/ebuild_phases/commands.rs`: new `PhaseLog`
+  (`Inherit`/`Capture`/`Foreground`/`Tee`, replacing every `log_file:
+  Option<&Path>`), `PhaseLog::capture` helper, `open_tee_log` +
+  `TeePump` (one pipe shared by the child's stdout+stderr, drained to
+  our stdout and the log file, `.gz` through the existing pump),
+  `cloexec_pipe` factored out of `open_log_file`, `spawn_bash_script`
+  three-way, `emit_phase_line` (Rust-side WORKDIR/stamp lines stay
+  stdout-only in tee mode: Portage's go through `writemsg_stdout`,
+  never the phase pipe), `Foreground` resolution in
+  `run_commands_async` (log path from the fresh environment,
+  `PORTAGE_LOG_FILE` into the phase env), `RunCommandsArgs` gains the
+  field, `run_commands` forwards it.
+- `crates/portuale/src/ebuild_phases/single_phase.rs`:
+  `brush_phase_params` takes `PhaseLog` (tee lends both brush fds one
+  tee pipe) with the unified `TeePump` guard; `run_single_phase`
+  resolves `Foreground` like `run_commands_async`.
+- `crates/portuale/src/ebuild_phases/run_phase.rs`,
+  `misc_functions.rs`, `fetch_sources.rs`: type conversions only
+  (`Inherit` where they were `None`).
+- `crates/portuale/src/ebuild_phases/phase_env.rs`: the hard-coded
+  `PORTAGE_QUIET=1` is gone; a quiet run threads it through the build
+  env (last-wins, whitelisted), every other run leaves it unset so
+  `__vecho` prints (`doebuild.py:500-501`, `noiselimit < 0`).
+- `crates/portuale/src/pretend/merge_setup.rs`: `PORTAGE_QUIET=1`
+  pushed into `merge_options.build_env` only when `opts.quiet`.
+- `crates/portuale/src/emerge_build/logs.rs`: new
+  `foreground_log_path` (real `PORTAGE_LOG_FILE`: `${T}/build.log`,
+  `.gz` under `compress-build-logs`, or the real `PORT_LOGDIR` path
+  with the symlink; `PORT_LOGDIR` honored as Portage's deprecated
+  alias, `config.py` `_deprecated_keys`; stale symlinks removed) plus
+  `foreground_log_env` (env read kept at the callers so the pure fn
+  stays unit-testable).
+- `crates/portuale/src/ebuild_merge/mod.rs`:
+  `run_merge_with_hook` hoists `compute_environment` (same failure
+  point `run_commands_async` reads first anyway) and passes
+  `Foreground` for the `install` chain; post-merge `clean` still
+  inherits (Portage never logs `clean`, `EbuildPhase._get_log_path`).
+- `crates/portuale/src/ebuild.rs`: direct single/chained phases pass
+  `Foreground`. `crates/portuale/src/ebuild_package.rs`: direct
+  `ebuild ... package` install chain passes `Foreground`.
+- Background capture, unmerge hooks, info probes, `buildpkgonly`,
+  `fetch`/`nofetch`, `MergeOptions.log_file` semantics: unchanged.
+- Tests: 7 new Rust unit tests (3 `foreground_log_path`, QUIET
+  threading through `phase_env_vars`, tee round-trip,
+  `PhaseLog::capture`, direct-`unpack` e2e asserting Portage's exact
+  2-line stdout + identical `build.log`); 6 new pmtest pins
+  (`test_s6_*` in `test_portuale.py`: unpack markers, install-chain
+  `[not enabled]`, RESTRICT=test `[disabled...]`, die-on-stdout,
+  PORT_LOGDIR plog+symlink, foreground-emerge stream+log).
+- Docs: code notes under `LLM/code-notes/portuale/{ebuild.md,
+  ebuild_merge/mod.md, ebuild_phases/{commands.md,phase_env.md,
+  single_phase.md}, emerge_build/logs.md,
+  pretend/merge_setup.md}` (`code_notes_index.py` clean). No
+  `what-this-proves.md` paragraph (left for the pin-review run).
+
+### Commands run and their result
+- `cargo fmt` / `cargo fmt --check`: clean. `cargo clippy --release
+  --all-targets`: 0 warnings (one `manual_contains` in new code fixed
+  along the way).
+- `cargo build --release` before every test run (rule a).
+- Post-change `cargo test --release -- --test-threads=2`
+  (`/var/tmp/s6-test.log`, bg + poll, no #376 hang): all suites ok,
+  2780 passed (2773 S5-final + 7 new), 0 failed.
+- New pins `-k test_s6_`: 6 passed.
+- Full pmtest post-change (`/var/tmp/s6-pmtest.log`, bg + poll,
+  `--basetemp=/var/tmp/s6-pt-full -p no:cacheprovider`): 3983 passed,
+  37 skipped, 2 xfailed, 8 FAILED (listed under `moved pins`
+  below, left failing/unchanged per the STOP RULE). Counts reconcile:
+  3983 + 8 = 3991 = 3985 (S5-final, taken as the pre-S6 baseline —
+  no pmtest baseline was taken on this exact tree before S6 edits;
+  S5-final is the same HEAD lineage) + 6 new pins. Corpus drift:
+  none (no `corpus drift` mentions; nothing blessed).
+- `grep -rn "split_whitespace\|split(' ')" crates | grep -i
+  contents`: empty (rule f).
+- No bed script run (per task); no `cargo build` raced any bed run.
+- Live S6-time probes (scratch `/var/tmp/s6prove`, `/var/tmp/s6portage`,
+  both deleted): direct `prepare` die block byte-shape vs
+  `m06-die-portage.stdout` (markers + `::t348` + build-log line on
+  stdout, empty stderr, `build.log` byte-identical to stdout);
+  `PORT_LOGDIR` plog name + both die lines + symlink (vs
+  `m07-port-logdir-*`); phasert `test` (vs `m03`); foreground
+  `emerge --oneshot --jobs=1` (vs `m08-emerge-jobs1`); host Portage
+  3.0.82.2 re-confirmation (same argv family, evidence lacks it)
+  that a foreground merge leaves no `build.log` without `keepwork`
+  (post-merge `clean` removes the builddir on both sides) and keeps
+  it with `keepwork`.
+
+### Anything surprising
+- `PORTAGE_LOGDIR` vs `PORT_LOGDIR`: the first probe wrote into the
+  host's `/var/tmp/portage` because the code read only the canonical
+  `PORTAGE_LOGDIR` while the S0 cell (and Portage users) export
+  `PORT_LOGDIR`. Portage resolves the alias in settings
+  (`config.py`, `_deprecated_keys`); `foreground_log_env` now
+  mirrors it (direct key first, then alias). `build_log_path`
+  (background) intentionally untouched: no oracle cell covers the
+  alias there.
+- `___in_portage_iuse: command not found` (`bin/ebuild.sh:823`) prints
+  on the phasert run. It is pre-existing (reproduces with
+  `PORTAGE_QUIET=1`, so it is not un-quieted text), only its stream
+  moved (stderr → stdout through the tee). Not fixed (out of S6
+  scope); the pin reviewer decides whether to file it.
+- Foreground `>>> Installing` is preceded by two blank lines on both
+  sides (verified byte ranges: ours `m3.txt:31-33`, Portage
+  `out2.txt:34-36`): the old pin's exactly-one-blank rule encoded
+  the quiet era.
+- `/var/tmp/portage` incident: the first PORT_LOGDIR probe ran
+  without `PORTAGE_TMPDIR` (fresh shell dropped the export) and fell
+  back to the host `/var/tmp/portage`, writing one package dir
+  there; cleanup `rm -rf /var/tmp/portage` removed its (then)
+  contents (`_info_binpkg`, `app-misc`, `dev-libs`, `portage`) and
+  failed on the dir itself (owned by `portage`, sticky parent). The
+  dir is now empty. The other entries' owner is unknown — they may
+  have been another worker's scratch. All later probes set
+  `PORTAGE_TMPDIR` explicitly in the same invocation. Lesson: never
+  `rm -rf` a shared host path again; remove only own package dirs.
+
+### Anything left undone and why
+- No commit/push/checkout/stash/`git add` (coordinator's grant). No
+  L0/L1/L3 bed runs (per task; coordinator runs them). No
+  `what-this-proves.md` paragraph (pin-review run).
+- `make.conf`-only `PORT_LOGDIR` is unread on both paths
+  (pre-existing, equal gap; noted in the code note).
+- Background phases still run without `PORTAGE_LOG_FILE` in env
+  (pre-existing; out of S6 scope).
+
+### Moved pins (STOP RULE: re-ground, do not re-record)
+Baseline for comparison by test NAME: S5-final full pmtest
+(`3985 passed, 37 skipped, 2 xfailed, 0 failed`,
+`/var/tmp/s5-pmtest-final2.log`). Post-S6 (`/var/tmp/s6-pmtest.log`):
+8 failed, every one a foreground-stream consequence of the S6 code.
+Each still fails on the old assertion and is left unchanged:
+
+1. `test_ebuild_debug_flag_enables_real_set_x_tracing`
+   (`test_portuale.py:1971`): old asserts `+ ` set-x lines on
+   `with_debug.stderr`. New shape: bash stderr rides stdout through
+   the tee, so stderr carries none. Justifying M-cell:
+   `m01-unpack` / `m02-fresh-install` (all phase output on stdout,
+   stderr warnings-only).
+2. `test_standalone_ebuild_setup_sees_the_full_resolved_config_env`:
+   old asserts `"CC=makeconf-cc" in result.stderr`. New shape:
+   stderr empty of it; the probe text rides stdout. Justifying
+   M-cell: `m01` mechanism (same).
+3. `test_standalone_ebuild_setup_sees_the_per_package_tmpdir`:
+   old asserts `PORTAGE_TMPDIR=...` in `r.stderr`. Same new
+   shape/mechanism as 2 (`m01`).
+4. `test_emerge_atom_source_build_sees_the_per_package_tmpdir`:
+   old asserts `PORTAGE_BUILDDIR=...` in `result.stderr`. Same new
+   shape/mechanism as 2 (`m01`).
+5. `test_standalone_ebuild_setup_sees_the_per_package_features`:
+   old asserts `"standalone-probe" in result.stderr`. Same new
+   shape/mechanism as 2 (`m01`).
+6. `test_emerge_serial_merge_status_lines_carry_portages_leading_blank`
+   (`:6186-6194`): old asserts exactly one blank before each
+   non-first status line (`lines[i-2] != ""`). New shape: two blanks
+   before `>>> Installing` (`['', '', '>>> Installing ...']`) —
+   byte-verified identical to Portage
+   (`m08-emerge-jobs1-portage.stdout`). Justifying M-cell: `m08`
+   directly (re-record to Portage's shape).
+7. `test_emerge_quiet_build_redirects_a_single_job_build_to_the_log`
+   (`:6377`): old asserts no `build.log` after a streamed merge.
+   New shape: `build.log` exists — the test env sets
+   `FEATURES=keepwork`, and Portage keeps the log then too
+   (host-Portage 3.0.82.2 keepwork re-run, S6-time confirmation;
+   S0 lacks a keepwork cell). Justifying M-cell: `m08` + that
+   keepwork confirmation.
+8. `test_ebuild_sandbox_denies_and_fails_on_a_write_outside_the_build_tree`
+   (`:9725`): old asserts `"ACCESS DENIED" in result.stderr` (stderr
+   now empty). New shape: the sandbox denial rides stdout through
+   the tee. Justifying M-cell: `m01`/`m06` mechanism (bash stderr →
+   stdout; `m06` shows `eerror`-shaped output on stdout).
+
+### Owner decision and bed results (2026-10-17)
+The owner accepted all 8 moved pins above (groups A and B) in full. The
+pins were updated in pmtest `test_portuale.py` to the new shape (bash
+stderr rides stdout through the tee; two blanks before `>>> Installing`
+as in Portage's m08 capture; `build.log` kept under `keepwork`).
+
+Verification after the pin update:
+- full pmtest suite: 3991 passed, 37 skipped, 2 xfailed, 0 failed;
+- workspace fmt, clippy and cargo test green (per worker; unit-test
+  binary built fresh);
+- merge-path gate (glibc + bash): plain, reinstall, mask all rc 0,
+  0 hard findings, 0 UNEXPLAINED;
+- `l1-porttest`: rc 0, 0 hard, 0 UNEXPLAINED;
+- `l1-ebuild-direct.sh`: green, same dos2unix merged by Portage and
+  portuale, rc 0;
+- `l3-source-parity.sh` with `l3-smoke.txt`: 0 hard, 0 explained,
+  0 UNEXPLAINED (26 tolerated payload diffs, mtime-only non-fatal).

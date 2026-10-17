@@ -233,6 +233,7 @@ fn run_qmerge_merges_without_rerunning_the_install_phase() {
         debug: false,
         config_root: &MergeOptions::default().config_root,
         shell: ebuild_phases::ShellBackend::default(),
+        log_file: ebuild_phases::PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("install phase succeeds");

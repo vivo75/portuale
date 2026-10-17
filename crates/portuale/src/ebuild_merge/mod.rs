@@ -148,6 +148,16 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
         buildpkg,
         before_merge,
     } = args;
+    // The environment first: `run_commands_async` reads it too, and a
+    // metadata failure surfaces before any phase output either way.
+    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
+    // Every caller runs foreground here (`options.log_file` is only set on
+    // the Scheduler's captured halves, which merge through `run_qmerge`):
+    // the `install` chain tees through `${T}/build.log` like Portage's
+    // `_spawn_phase` pipe, while the post-merge `clean` below inherits the
+    // terminal (Portage never opens the log for `clean`).
+    // Portage: doebuild.py, _spawn_phase (`logfile`); EbuildPhase.py
+    // (`_get_log_path` returns `None` for `clean`/`cleanrm`)
     let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
         ebuild_path,
         commands: &["install"],
@@ -157,6 +167,7 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
         debug: options.debug,
         config_root: &options.config_root,
         shell: options.shell,
+        log_file: ebuild_phases::PhaseLog::Foreground,
         build_env: &options.build_env,
     })?;
     if status != 0 {
@@ -196,9 +207,8 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
             return Ok(status);
         }
     }
-    let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
     // The hook point: the build halves succeeded, the vdb merge has
-    // not started.
+    // not started (`env` is the hoisted environment above).
     if let Some(hook) = before_merge {
         hook();
     }
@@ -216,7 +226,7 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
             debug: options.debug,
             config_root: &options.config_root,
             shell: options.shell,
-            log_file: options.log_file.as_deref(),
+            log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
         })?;
     }
     Ok(merge_status)

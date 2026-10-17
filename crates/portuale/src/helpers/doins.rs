@@ -3382,6 +3382,7 @@ mod tests {
             debug: false,
             config_root: Path::new("/dev/null/no-config-root"),
             shell: crate::ebuild_phases::ShellBackend::default(),
+            log_file: crate::ebuild_phases::PhaseLog::Inherit,
             build_env: &[],
         })
         .expect("run_commands should not itself error");

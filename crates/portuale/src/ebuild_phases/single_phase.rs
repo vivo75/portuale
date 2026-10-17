@@ -3,26 +3,50 @@
 use crate::ebuild_phases::*;
 
 /// Builds the `ExecutionParameters` for a brush phase shell, redirecting
-/// its stdout+stderr to `log_file` when given. Captured parallel builds
-/// run through `bash` instead; this brush path is only for a forced backend.
+/// its stdout+stderr per `log`: appended to the file for `Capture`
+/// (parallel builds run through `bash` instead; this brush path is only
+/// for a forced backend), teed to our stdout and the file for `Tee`.
 pub(crate) fn brush_phase_params(
     shell: &mut brush_core::Shell,
-    log_file: Option<&Path>,
-) -> Result<(brush_core::ExecutionParameters, Option<LogPump>), String> {
-    let mut pump = None;
-    if let Some(path) = log_file {
-        let sink = open_log_file(path)?;
-        shell
-            .open_files_mut()
-            .set_fd(brush_core::openfiles::OpenFiles::STDOUT_FD, sink.out.into());
-        shell
-            .open_files_mut()
-            .set_fd(brush_core::openfiles::OpenFiles::STDERR_FD, sink.err.into());
-        // The shell owns the pipe write ends now; the caller holds the
-        // guard across execution and drops the shell first.
-        pump = sink.pump;
+    log: PhaseLog<'_>,
+) -> Result<(brush_core::ExecutionParameters, TeePump), String> {
+    let mut guard = TeePump {
+        thread: None,
+        pump: None,
+    };
+    match log {
+        PhaseLog::Capture(path) => {
+            let sink = open_log_file(path)?;
+            shell
+                .open_files_mut()
+                .set_fd(brush_core::openfiles::OpenFiles::STDOUT_FD, sink.out.into());
+            shell
+                .open_files_mut()
+                .set_fd(brush_core::openfiles::OpenFiles::STDERR_FD, sink.err.into());
+            // The shell owns the pipe write ends now; the caller holds the
+            // guard across execution and drops the shell first.
+            guard.pump = sink.pump;
+        }
+        PhaseLog::Tee(path) => {
+            let (write_end, pump) = open_tee_log(path)?;
+            let err_end = write_end
+                .try_clone()
+                .map_err(|e| format!("dup for brush stderr failed: {e}"))?;
+            shell.open_files_mut().set_fd(
+                brush_core::openfiles::OpenFiles::STDOUT_FD,
+                write_end.into(),
+            );
+            shell
+                .open_files_mut()
+                .set_fd(brush_core::openfiles::OpenFiles::STDERR_FD, err_end.into());
+            guard = pump;
+        }
+        // `Foreground` resolves upstream (`run_commands_async`,
+        // `run_single_phase`); reaching here would tee nowhere, so
+        // inherit like `Inherit` rather than misrouting the stream.
+        PhaseLog::Inherit | PhaseLog::Foreground => {}
     }
-    Ok((shell.default_exec_params(), pump))
+    Ok((shell.default_exec_params(), guard))
 }
 
 /// Arguments of [`run_single_phase`].
@@ -38,8 +62,9 @@ pub(crate) struct RunSinglePhaseArgs<'a> {
     /// `run_commands_async`); `&[]` otherwise.
     pub(crate) build_env: &'a [(String, String)],
     /// Background-mode `PORTAGE_LOG_FILE`, extended to this hook (see
-    /// `ebuild_merge::MergeOptions::log_file`); `None` for foreground.
-    pub(crate) log_file: Option<&'a Path>,
+    /// `ebuild_merge::MergeOptions::log_file`); `Foreground` tees through
+    /// `${T}/build.log` like a direct `ebuild` run, `Inherit` elsewhere.
+    pub(crate) log_file: PhaseLog<'a>,
 }
 
 /// Runs exactly `phase`, with no `actionmap_deps` prerequisite chain.
@@ -74,6 +99,32 @@ pub(crate) fn run_single_phase(args: RunSinglePhaseArgs<'_>) -> Result<i32, Stri
         if !extra_env.iter().any(|(k, _)| k == "MERGE_TYPE") {
             extra_env.push(("MERGE_TYPE".to_string(), "source".to_string()));
         }
+        // A foreground run resolves `${T}/build.log` here (the path needs
+        // the environment) and tees the phase through it; `PORTAGE_LOG_FILE`
+        // rides the phase env so `die` prints its build-log line.
+        // Portage: doebuild.py, _spawn_phase; prepare_build_dirs.py
+        let foreground_path: Option<PathBuf>;
+        let log_file = match log_file {
+            PhaseLog::Foreground => {
+                let (logdir, sep) = crate::emerge_build::foreground_log_env();
+                foreground_path = Some(crate::emerge_build::foreground_log_path(
+                    crate::emerge_build::ForegroundLogArgs {
+                        t_dir: &env.t(),
+                        builddir: env.portage_builddir(),
+                        category: &env.category,
+                        pf: &env.split.pf,
+                        features: &features_string(&extra_env),
+                        logdir: logdir.as_deref(),
+                        sep: &sep,
+                    },
+                ));
+                PhaseLog::Tee(foreground_path.as_deref().unwrap())
+            }
+            resolved => resolved,
+        };
+        if let PhaseLog::Tee(path) = log_file {
+            extra_env.push(("PORTAGE_LOG_FILE".to_string(), path.display().to_string()));
+        }
         // `A`/`AA` come from `apply_eapi_phase_env` (Portage's
         // `doebuild_environment` computes them for every non-`depend`
         // phase, including these standalone hooks).
@@ -100,7 +151,7 @@ pub(crate) struct RunCleanArgs<'a> {
     pub(crate) debug: bool,
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
-    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) log_file: PhaseLog<'a>,
 }
 
 /// The `clean` phase: removes the image, the resume markers, `${T}` and
@@ -178,7 +229,7 @@ pub(crate) struct RunInstprepArgs<'a> {
     pub(crate) debug: bool,
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
-    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) log_file: PhaseLog<'a>,
 }
 
 /// The `instprep` internal phase on every merge, before `INSTALL_MASK`,
@@ -238,8 +289,9 @@ pub(crate) struct RunPhaseFromSavedEnvArgs<'a> {
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
     /// Background-mode `PORTAGE_LOG_FILE`, extended to this hook (see
-    /// `ebuild_merge::MergeOptions::log_file`); `None` for foreground.
-    pub(crate) log_file: Option<&'a Path>,
+    /// `ebuild_merge::MergeOptions::log_file`); `Inherit` for foreground
+    /// hooks (unmerge) and direct-path `clean`.
+    pub(crate) log_file: PhaseLog<'a>,
     /// Regenerates the vdb env from the live phase environment when `Some`;
     /// non-empty `refresh_features` overrides `FEATURES` for that regeneration.
     pub(crate) update_env: Option<&'a Path>,

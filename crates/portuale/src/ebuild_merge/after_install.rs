@@ -21,7 +21,7 @@ pub(crate) fn merge_after_install(
         debug: options.debug,
         config_root: &options.config_root,
         shell: options.shell,
-        log_file: options.log_file.as_deref(),
+        log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
     })?;
     if instprep_status != 0 {
         eprintln!("!!! instprep failed");
@@ -143,7 +143,7 @@ pub(crate) fn merge_after_install(
         config_root: &options.config_root,
         shell: options.shell,
         build_env: &preinst_env,
-        log_file: options.log_file.as_deref(),
+        log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
     })?;
     if preinst_status != 0 {
         return Ok(preinst_status);
@@ -304,7 +304,7 @@ pub(crate) fn merge_after_install_finish(
         config_root: &options.config_root,
         shell: options.shell,
         build_env: &postinst_env,
-        log_file: options.log_file.as_deref(),
+        log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
     })?;
     absorb_update_env(root, &env.category, &env.split.pf, &update_env)?;
 
@@ -682,7 +682,7 @@ pub(crate) fn run_vdb_saved_env_phase(args: RunVdbSavedEnvPhaseArgs<'_>) -> Resu
     std::fs::copy(&ebuild, &dst).map_err(|e| format!("{}: {e}", ebuild.display()))?;
     crate::ebuild_phases::run_phase_from_saved_env(
         crate::ebuild_phases::RunPhaseFromSavedEnvArgs { ebuild_path: &dst, saved_env_bz2: &env, seed: // Each unmerge seeds its own (old version's) builddir once.
-        true, phase, root, portage_tmpdir, debug: options.debug, config_root: &options.config_root, shell: options.shell, log_file: options.log_file.as_deref(), update_env: // An unmerge's `prerm`/`postrm` never rewrites a vdb env.
+        true, phase, root, portage_tmpdir, debug: options.debug, config_root: &options.config_root, shell: options.shell, log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()), update_env: // An unmerge's `prerm`/`postrm` never rewrites a vdb env.
         None, refresh_features: None, replacing_versions: // No `REPLACING_VERSIONS` on an unmerge hook.
         None,
         // No `MERGE_TYPE`/`EMERGE_FROM` on an unmerge hook either: both

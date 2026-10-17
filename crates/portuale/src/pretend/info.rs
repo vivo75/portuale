@@ -731,7 +731,7 @@ pub(crate) fn print_info_packages(args: PrintInfoPackagesArgs<'_>) {
                         config_root,
                         shell,
                         build_env: &[],
-                        log_file: None,
+                        log_file: crate::ebuild_phases::PhaseLog::Inherit,
                     })
                 }
                 InfoPkg::Installed(i) => {
@@ -766,7 +766,7 @@ pub(crate) fn print_info_packages(args: PrintInfoPackagesArgs<'_>) {
                             config_root,
                             shell,
                             build_env: &[],
-                            log_file: None,
+                            log_file: crate::ebuild_phases::PhaseLog::Inherit,
                         })
                     };
                     match crate::binpkg::extract_binpkg(

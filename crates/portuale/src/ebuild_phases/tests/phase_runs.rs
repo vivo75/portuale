@@ -618,6 +618,7 @@ fn install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer() {
             debug: false,
             config_root: Path::new("/dev/null/no-config-root"),
             shell: ShellBackend::Brush,
+            log_file: PhaseLog::Inherit,
             build_env: &[],
         });
         let _ = tx.send(result);

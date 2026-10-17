@@ -265,7 +265,7 @@ pub(crate) async fn fetch_sources(
                     extra_env: &[],
                     config_root,
                     shell,
-                    log_file: None,
+                    log_file: PhaseLog::Inherit,
                 })
                 .await;
             }

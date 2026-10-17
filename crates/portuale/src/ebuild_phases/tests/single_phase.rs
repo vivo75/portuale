@@ -27,7 +27,7 @@ fn run_clean_removes_a_stale_installed_marker_image_and_temp() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Bash,
-        log_file: None,
+        log_file: PhaseLog::Inherit,
     })
     .expect("run_clean should not itself error");
     assert_eq!(status, 0, "clean should exit successfully");
@@ -70,7 +70,7 @@ fn run_clean_with_keepwork_keeps_temp_and_workdir_but_still_drops_the_marker() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Bash,
-        log_file: None,
+        log_file: PhaseLog::Inherit,
     })
     .expect("run_clean should not itself error");
     assert_eq!(status, 0, "clean should exit successfully");
@@ -106,7 +106,7 @@ fn run_single_phase_actually_runs_pkg_config_and_pkg_info() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         build_env: &[],
-        log_file: None,
+        log_file: PhaseLog::Inherit,
     })
     .expect("run_single_phase should not itself error");
     assert_eq!(config_status, 0);
@@ -119,7 +119,7 @@ fn run_single_phase_actually_runs_pkg_config_and_pkg_info() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         build_env: &[],
-        log_file: None,
+        log_file: PhaseLog::Inherit,
     })
     .expect("run_single_phase should not itself error");
     assert_eq!(info_status, 0);
@@ -171,7 +171,7 @@ fn run_single_phase_actually_runs_pkg_preinst_and_pkg_postinst() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         build_env: &[],
-        log_file: None,
+        log_file: PhaseLog::Inherit,
     })
     .expect("run_single_phase should not itself error");
     assert_eq!(preinst_status, 0);
@@ -184,7 +184,7 @@ fn run_single_phase_actually_runs_pkg_preinst_and_pkg_postinst() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         build_env: &[],
-        log_file: None,
+        log_file: PhaseLog::Inherit,
     })
     .expect("run_single_phase should not itself error");
     assert_eq!(postinst_status, 0);
@@ -224,7 +224,7 @@ fn run_single_phase_actually_runs_pkg_prerm_and_pkg_postrm() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         build_env: &[],
-        log_file: None,
+        log_file: PhaseLog::Inherit,
     })
     .expect("run_single_phase should not itself error");
     assert_eq!(prerm_status, 0);
@@ -237,7 +237,7 @@ fn run_single_phase_actually_runs_pkg_prerm_and_pkg_postrm() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         build_env: &[],
-        log_file: None,
+        log_file: PhaseLog::Inherit,
     })
     .expect("run_single_phase should not itself error");
     assert_eq!(postrm_status, 0);

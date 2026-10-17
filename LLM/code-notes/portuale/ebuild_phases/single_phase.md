@@ -49,3 +49,6 @@ Single phases, clean, instprep, and phases run from a saved environment. Context
 
 ## struct RunPhaseFromSavedEnvArgs (fields merge_type, replaced_by_version, #348 S2 E3)
 - `merge_type: Some("binary")` keeps `binary_merge_env()` for binpkg hooks; `None` (unmerge) carries neither `MERGE_TYPE` nor `EMERGE_FROM`, so `ebuild.sh` re-creates them readonly-empty from the filtered saved env — the oracle's `declare -r MERGE_TYPE` shape (`dblink.unmerge` never sets them). `replaced_by_version: Some` threads `REPLACED_BY_VERSION` for replace-loop hooks, `None` for standalone unmerge/`config`/`info`.
+
+## S6 (351-MARK/DIE): brush tee and Foreground resolution
+- `brush_phase_params` takes `PhaseLog` and returns the unified `TeePump` guard (`Capture` keeps the old fd redirect; `Tee` lends both fds one tee pipe). `run_single_phase` resolves `Foreground` exactly like `run_commands_async` (log path from the fresh environment, `PORTAGE_LOG_FILE` into `extra_env`).

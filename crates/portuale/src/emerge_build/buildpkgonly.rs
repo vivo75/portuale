@@ -111,7 +111,7 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
                 debug: options.debug,
                 config_root: &options.config_root,
                 shell: options.shell,
-                log_file: None,
+                log_file: ebuild_phases::PhaseLog::Inherit,
             }) {
                 Ok(0) => None,
                 Ok(status) => Some(format!(

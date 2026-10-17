@@ -19,3 +19,6 @@ The options every merge path shares: status mode, package and merge options, POR
 - Backlog #232 review (Important-2): Portage's record skips non-candidate sets (`depgraph.py:11366`).
 - Plain arm: Portage's own `print()` before the message (`actions.py:518`); the backlog #185 `actions.py:526` blank only covers the no-prompt shape, and `ask_confirm`'s own opener never runs.
 - Its own suppression set (`:11308-11317`) is `--buildpkgonly` / `--fetchonly` / `--fetch-all-uri` / `--oneshot` / `--onlydeps` / `--pretend`: `--pretend` never reaches this branch, `--oneshot` / `--onlydeps` already keep the deferral gate above at bay (Portage's folded variable, `actions.py:257`), and `--fetchonly` / `--fetch-all-uri` are portuale-unimplemented options (a usage error long before this point), so only `--buildpkgonly` still suppresses here.
+
+## S6 (351-MARK): PORTAGE_QUIET follows --quiet
+- `merge_setup` threads `PORTAGE_QUIET=1` into `merge_options.build_env` only when `opts.quiet` (Portage `doebuild.py:500-501`, `noiselimit < 0`); the phase env no longer sets it by default, so `__vecho` markers print. `--quiet-build` stays a pure log redirect (`capture_log` in `merge_run.rs`), never `PORTAGE_QUIET`.

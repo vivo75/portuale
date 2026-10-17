@@ -123,6 +123,104 @@ pub(crate) fn ensure_portage_logdir_symlink(args: EnsurePortageLogdirSymlinkArgs
     }
 }
 
+/// Arguments of [`foreground_log_path`].
+pub(crate) struct ForegroundLogArgs<'a> {
+    pub(crate) t_dir: &'a Path,
+    pub(crate) builddir: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) pf: &'a str,
+    pub(crate) features: &'a str,
+    /// `PORTAGE_LOGDIR` (already resolved by the caller, so this stays
+    /// unit-testable with no env involvement, like
+    /// [`ensure_portage_logdir_symlink`]).
+    pub(crate) logdir: Option<&'a Path>,
+    /// `PORTAGE_LOG_FILE_SEP` (likewise caller-resolved, `":"` default).
+    pub(crate) sep: &'a str,
+}
+
+/// Reads `PORTAGE_LOGDIR`/`PORTAGE_LOG_FILE_SEP` the way [`build_log_path`]
+/// does, for [`foreground_log_path`] callers. `PORT_LOGDIR` is honored as
+/// the deprecated alias, exactly like Portage's settings lookup
+/// (`config.py`, `_deprecated_keys`: the direct key first, then the
+/// alias), since the S0 `m07-port-logdir` cell exports that spelling.
+pub(crate) fn foreground_log_env() -> (Option<PathBuf>, String) {
+    let logdir = std::env::var_os("PORTAGE_LOGDIR")
+        .or_else(|| std::env::var_os("PORT_LOGDIR"))
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty());
+    let sep = std::env::var("PORTAGE_LOG_FILE_SEP").unwrap_or_else(|_| ":".to_string());
+    (logdir, sep)
+}
+
+/// Portage's `PORTAGE_LOG_FILE` for a foreground build: `${T}/build.log`
+/// (`.gz` under `compress-build-logs`), or the real `PORT_LOGDIR` path
+/// when that dir is usable — with `${T}/build.log` left as a symlink to
+/// it, exactly like [`build_log_path`]. Reads `split-log` /
+/// `compress-build-logs` from `features`; `logdir`/`sep` arrive resolved
+/// (see [`foreground_log_env`]). A stale symlink from an older
+/// `PORT_LOGDIR` run is removed rather than followed anywhere else.
+///
+/// Returns the real path Portage exports (never the symlink): `die`
+/// prints it as `The complete build log is located at '…'`.
+// Portage: prepare_build_dirs.py, prepare_build_dirs
+pub(crate) fn foreground_log_path(args: ForegroundLogArgs<'_>) -> PathBuf {
+    let ForegroundLogArgs {
+        t_dir,
+        builddir,
+        category,
+        pf,
+        features,
+        logdir,
+        sep,
+    } = args;
+    let tokens: Vec<&str> = features.split_whitespace().collect();
+    let split_log = tokens.contains(&"split-log");
+    let compress = tokens.contains(&"compress-build-logs");
+    let tmpdir_log_path = t_dir.join(if compress {
+        "build.log.gz"
+    } else {
+        "build.log"
+    });
+    let Some(logdir) = logdir else {
+        // No logdir configured: a stale symlink must not divert the log
+        // outside the build dir.
+        if std::fs::symlink_metadata(&tmpdir_log_path).is_ok_and(|m| m.is_symlink()) {
+            let _ = std::fs::remove_file(&tmpdir_log_path);
+        }
+        return tmpdir_log_path;
+    };
+    ensure_portage_logdir_symlink(EnsurePortageLogdirSymlinkArgs {
+        tmpdir_log_path: &tmpdir_log_path,
+        builddir,
+        category,
+        pf,
+        logdir: Some(logdir),
+        sep,
+        split_log,
+        compress,
+    });
+    // Trust the fresh symlink only when it still lands inside the
+    // configured logdir (a leftover from an unwritable-dir run keeps its
+    // old target, which Portage would not log to either).
+    match std::fs::read_link(&tmpdir_log_path) {
+        Ok(target) => {
+            let real = if target.is_absolute() {
+                target
+            } else {
+                tmpdir_log_path
+                    .parent()
+                    .map(|p| p.join(target))
+                    .unwrap_or_else(|| tmpdir_log_path.clone())
+            };
+            if real.starts_with(logdir) {
+                real
+            } else {
+                tmpdir_log_path
+            }
+        }
+        Err(_) => tmpdir_log_path,
+    }
+}
 /// Last `n` lines of `path`, or a short "(build log unavailable)" note.
 /// A `.gz` path is gunzipped first.
 pub(crate) fn tail_of(path: &Path, n: usize) -> String {

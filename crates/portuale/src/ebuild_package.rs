@@ -701,6 +701,10 @@ pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
         debug: options.debug,
         config_root: &options.config_root,
         shell: options.shell,
+        // A direct `ebuild ... package` is foreground: Portage runs the
+        // same `doebuild` install chain with its logging pipe.
+        // Portage: doebuild.py, _spawn_phase
+        log_file: ebuild_phases::PhaseLog::Foreground,
         build_env,
     })?;
     if status != 0 {
@@ -2535,6 +2539,7 @@ mod tests {
             debug: options.debug,
             config_root: &options.config_root,
             shell: options.shell,
+            log_file: ebuild_phases::PhaseLog::Inherit,
             build_env: &[],
         })
         .expect("install succeeds");
@@ -2587,6 +2592,7 @@ mod tests {
             debug: options.debug,
             config_root: &options.config_root,
             shell: options.shell,
+            log_file: ebuild_phases::PhaseLog::Inherit,
             build_env: &[],
         })
         .expect("install succeeds");

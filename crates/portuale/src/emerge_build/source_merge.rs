@@ -336,7 +336,7 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
         debug: per_entry.debug,
         config_root: &per_entry.config_root,
         shell: per_entry.shell,
-        log_file: per_entry.log_file.as_deref(),
+        log_file: ebuild_phases::PhaseLog::capture(per_entry.log_file.as_deref()),
     })?;
     if clean_status != 0 {
         return Err(format!("{cp}-{version}: clean failed ({clean_status})"));

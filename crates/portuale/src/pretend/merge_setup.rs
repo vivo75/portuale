@@ -64,6 +64,15 @@ pub(crate) fn merge_setup(
     // The compiler/make flags for every build phase's environment, from the
     // resolved config. `FEATURES` stays out (portuale models it separately).
     merge_options.build_env = crate::emerge_build::run_wide_phase_env(config);
+    // Portage sets `PORTAGE_QUIET` only below the `--quiet` noise floor
+    // (`doebuild.py`, `noiselimit < 0`); the phase env otherwise leaves it
+    // unset so the `__vecho` markers print. Threaded here so every merge
+    // phase inherits it through the build env's last-wins layering.
+    if quiet {
+        merge_options
+            .build_env
+            .push(("PORTAGE_QUIET".to_string(), "1".to_string()));
+    }
     merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
     // `INSTALL_MASK` + the `no{man,info,doc}` `FEATURES` fold, from the
     // resolved config, not the process env.

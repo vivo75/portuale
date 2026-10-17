@@ -76,7 +76,7 @@ impl HookCtx<'_> {
                         debug: options.debug,
                         config_root: &options.config_root,
                         shell: options.shell,
-                        log_file: options.log_file.as_deref(),
+                        log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
                         update_env,
                         refresh_features: update_env.map(|_| options.features.as_str()),
                         replacing_versions: Some(replacing_versions.as_str()),
@@ -260,7 +260,7 @@ pub fn merge_binpkg(
             debug: options.debug,
             config_root: &options.config_root,
             shell: options.shell,
-            log_file: options.log_file.as_deref(),
+            log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
         })?;
         if instprep_status != 0 {
             eprintln!("!!! instprep failed");

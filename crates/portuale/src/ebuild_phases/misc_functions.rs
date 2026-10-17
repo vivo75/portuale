@@ -12,7 +12,7 @@ pub(crate) struct RunMiscFunctionsArgs<'a> {
     pub(crate) debug: bool,
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
-    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) log_file: PhaseLog<'a>,
 }
 
 /// Runs `bin/misc-functions.sh __dyn_<mydo>` directly: unlike `doebuild` commands
@@ -87,7 +87,7 @@ pub(crate) struct RunMiscFunctionsBrushArgs<'a> {
     pub(crate) bin_dir: &'a Path,
     pub(crate) helpers_dir: &'a Path,
     pub(crate) config_root: &'a Path,
-    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) log_file: PhaseLog<'a>,
 }
 
 pub(crate) async fn run_misc_functions_brush(
@@ -153,7 +153,7 @@ pub(crate) struct RunMiscFunctionsBashArgs<'a> {
     pub(crate) bin_dir: &'a Path,
     pub(crate) helpers_dir: &'a Path,
     pub(crate) config_root: &'a Path,
-    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) log_file: PhaseLog<'a>,
     pub(crate) fs_sandbox: bool,
 }
 
@@ -267,7 +267,7 @@ pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, St
             debug,
             config_root,
             shell,
-            log_file: None,
+            log_file: PhaseLog::Inherit,
         })
         .await
     })

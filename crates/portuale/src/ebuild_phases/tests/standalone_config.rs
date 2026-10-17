@@ -637,3 +637,53 @@ fn discard_direct_ebuild_features_drops_the_scheduler_only_tokens() {
     // `noauto` stays: dropping it belongs to the `merge` command path.
     assert_eq!(discard_direct_ebuild_features("noauto test"), "noauto test");
 }
+
+/// `PORTAGE_QUIET` is never set by the phase env itself: Portage sets it
+/// only below the `--quiet` noise floor (`doebuild.py`, `noiselimit < 0`),
+/// so the `__vecho` markers print on every other run. A quiet merge
+/// threads `PORTAGE_QUIET=1` through the build env, which the last-wins
+/// layering keeps.
+#[test]
+fn phase_env_vars_leaves_portage_quiet_unset_unless_the_run_is_quiet() {
+    let root = s4_root("quiet", "FEATURES=\"test\"\n");
+    let eroot = root.cfg.clone();
+    let portage_tmpdir = root.tmp.join("pt");
+    let env = compute_environment(&root.ebuild, &portage_tmpdir).expect("ebuild parses");
+    let bin_dir = root.tmp.join("bin");
+    let helpers_dir = bin_dir.join("ebuild-helpers");
+    with_env("USE", None, || {
+        let base = PhaseEnvVarsArgs {
+            env: &env,
+            root: &eroot,
+            ebuild_phase_value: "setup",
+            debug: false,
+            bin_dir: &bin_dir,
+            helpers_dir: &helpers_dir,
+            config_root: &root.cfg,
+            extra_env: &[],
+        };
+        let vars = phase_env_vars(base);
+        assert!(
+            vars.iter().all(|(k, _)| k != "PORTAGE_QUIET"),
+            "a non-quiet run must not hush __vecho"
+        );
+        let vars = phase_env_vars(PhaseEnvVarsArgs {
+            env: &env,
+            root: &eroot,
+            ebuild_phase_value: "setup",
+            debug: false,
+            bin_dir: &bin_dir,
+            helpers_dir: &helpers_dir,
+            config_root: &root.cfg,
+            extra_env: &[("PORTAGE_QUIET".to_string(), "1".to_string())],
+        });
+        assert_eq!(
+            vars.iter()
+                .find(|(k, _)| k == "PORTAGE_QUIET")
+                .map(|(_, v)| v.as_str()),
+            Some("1"),
+            "a quiet run threads PORTAGE_QUIET through"
+        );
+    });
+    let _ = std::fs::remove_dir_all(&root.tmp);
+}

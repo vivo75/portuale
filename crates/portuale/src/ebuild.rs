@@ -423,7 +423,7 @@ pub(crate) fn run_real_commands(
                 config_root: &merge_options.config_root,
                 shell,
                 build_env: &direct_build_env,
-                log_file: None,
+                log_file: ebuild_phases::PhaseLog::Foreground,
             })
         } else {
             ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
@@ -435,6 +435,7 @@ pub(crate) fn run_real_commands(
                 debug,
                 config_root: &merge_options.config_root,
                 shell,
+                log_file: ebuild_phases::PhaseLog::Foreground,
                 build_env: &direct_build_env,
             })
         };

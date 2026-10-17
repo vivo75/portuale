@@ -11,7 +11,7 @@ pub(crate) struct RunOnePhaseArgs<'a> {
     pub(crate) extra_env: &'a [(String, String)],
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
-    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) log_file: PhaseLog<'a>,
 }
 
 /// Runs one phase in a fresh embedded shell: Portage spawns a brand-new `bin/ebuild.sh`
@@ -142,7 +142,7 @@ pub(crate) struct RunOnePhaseBrushArgs<'a> {
     pub(crate) bin_dir: &'a Path,
     pub(crate) helpers_dir: &'a Path,
     pub(crate) config_root: &'a Path,
-    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) log_file: PhaseLog<'a>,
 }
 
 pub(crate) async fn run_one_phase_brush(args: RunOnePhaseBrushArgs<'_>) -> Result<i32, String> {
@@ -222,7 +222,7 @@ pub(crate) struct RunOnePhaseBashArgs<'a> {
     pub(crate) bin_dir: &'a Path,
     pub(crate) helpers_dir: &'a Path,
     pub(crate) config_root: &'a Path,
-    pub(crate) log_file: Option<&'a Path>,
+    pub(crate) log_file: PhaseLog<'a>,
     pub(crate) iso: Isolation,
 }
 

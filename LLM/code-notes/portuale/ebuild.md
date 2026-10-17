@@ -82,3 +82,6 @@ The `ebuild <file> <command>` CLI: option/command recognition plus real executio
 
 ## fn unsupported_eapi_message
 - #348 S5: `Unable to do any operations on '<cpv>', since ... supports EAPI '<eapi>'.` with leading dashes stripped from the EAPI (`exception.py`) and `bin/ebuild`'s `!!! ` + word-wrap at 70 columns (byte-verified against 3.0.82.2 for `99` and `7_alpha`).
+
+## S6 (351-MARK/DIE): direct phases tee through ${T}/build.log
+- `run_real_commands` passes `PhaseLog::Foreground` for standalone phases and chained commands (`run_single_phase`/`run_commands` resolve it to the tee). `PORTAGE_LOG_FILE` rides the phase env from there, so `die` prints its build-log line with the S4 `::repo` suffix on stdout. `clean` and the merge/unmerge/package subcommands keep their own routing.

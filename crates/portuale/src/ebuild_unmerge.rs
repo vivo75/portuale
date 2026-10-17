@@ -1158,7 +1158,7 @@ pub fn run_unmerge(
         config_root: &options.config_root,
         shell: options.shell,
         build_env: &[],
-        log_file: None,
+        log_file: crate::ebuild_phases::PhaseLog::Inherit,
     })?;
     if prerm_status != 0 {
         return Ok(prerm_status);
@@ -1188,7 +1188,7 @@ pub fn run_unmerge(
         config_root: &options.config_root,
         shell: options.shell,
         build_env: &[],
-        log_file: None,
+        log_file: crate::ebuild_phases::PhaseLog::Inherit,
     })?;
     if postrm_status != 0 {
         return Ok(postrm_status);

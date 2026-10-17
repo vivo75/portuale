@@ -224,3 +224,115 @@ fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
     let _ = fs::remove_dir_all(&root);
     let _ = fs::remove_dir_all(&portage_tmpdir);
 }
+
+/// Without `PORT_LOGDIR` the foreground log is `${T}/build.log`, and a
+/// stale symlink from an older logdir run is removed rather than
+/// followed. Portage `prepare_build_dirs.py` (`PORTAGE_LOG_FILE`).
+#[test]
+fn foreground_log_path_is_t_build_log_without_a_logdir() {
+    let tmp = tempdir();
+    let builddir = tmp.join("builddir");
+    let t_dir = builddir.join("temp");
+    std::fs::create_dir_all(&t_dir).unwrap();
+    // A leftover symlink must not divert the log outside the build dir.
+    let elsewhere = tmp.join("elsewhere.log");
+    std::fs::write(&elsewhere, "stale").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, t_dir.join("build.log")).unwrap();
+
+    let resolved = foreground_log_path(ForegroundLogArgs {
+        t_dir: &t_dir,
+        builddir: &builddir,
+        category: "dev-libs",
+        pf: "foo-1.0",
+        features: "",
+        logdir: None,
+        sep: ":",
+    });
+    assert_eq!(resolved, t_dir.join("build.log"));
+    assert!(
+        !std::fs::symlink_metadata(t_dir.join("build.log")).is_ok_and(|m| m.is_symlink()),
+        "stale symlink must be gone"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// With `PORT_LOGDIR` the foreground log is the real plog path under the
+/// logdir (what Portage exports as `PORTAGE_LOG_FILE`), with
+/// `${T}/build.log` left as a symlink to it. S0 cell `m07-port-logdir`.
+#[test]
+fn foreground_log_path_returns_the_real_plog_path_under_port_logdir() {
+    let tmp = tempdir();
+    let builddir = tmp.join("builddir");
+    let t_dir = builddir.join("temp");
+    std::fs::create_dir_all(&t_dir).unwrap();
+    let logdir = tmp.join("plogs");
+
+    let resolved = foreground_log_path(ForegroundLogArgs {
+        t_dir: &t_dir,
+        builddir: &builddir,
+        category: "app-misc",
+        pf: "t348-b-envnoeapply-7",
+        features: "test",
+        logdir: Some(&logdir),
+        sep: ":",
+    });
+    assert!(
+        resolved.starts_with(&logdir),
+        "{resolved:?} should live under {logdir:?}"
+    );
+    let name = resolved.file_name().unwrap().to_str().unwrap();
+    assert!(name.starts_with("app-misc:t348-b-envnoeapply-7:"), "{name}");
+    assert!(name.ends_with(".log"), "{name}");
+    let link = std::fs::read_link(t_dir.join("build.log")).expect("symlink placed");
+    assert_eq!(link, resolved);
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Under `compress-build-logs` the foreground log gains the `.gz`
+/// suffix in both placements, like `build_log_path`.
+#[test]
+fn foreground_log_path_gains_the_gz_suffix_when_compressed() {
+    let tmp = tempdir();
+    let builddir = tmp.join("builddir");
+    let t_dir = builddir.join("temp");
+    std::fs::create_dir_all(&t_dir).unwrap();
+    let logdir = tmp.join("plogs");
+
+    let plain = foreground_log_path(ForegroundLogArgs {
+        t_dir: &t_dir,
+        builddir: &builddir,
+        category: "dev-libs",
+        pf: "foo-1.0",
+        features: "compress-build-logs",
+        logdir: None,
+        sep: ":",
+    });
+    assert_eq!(plain, t_dir.join("build.log.gz"));
+
+    let under_dir = foreground_log_path(ForegroundLogArgs {
+        t_dir: &t_dir,
+        builddir: &builddir,
+        category: "dev-libs",
+        pf: "foo-1.0",
+        features: "compress-build-logs",
+        logdir: Some(&logdir),
+        sep: ":",
+    });
+    assert!(
+        under_dir.starts_with(&logdir),
+        "{under_dir:?} should live under {logdir:?}"
+    );
+    assert!(
+        under_dir
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .ends_with(".log.gz"),
+        "{under_dir:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

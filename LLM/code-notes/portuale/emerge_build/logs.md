@@ -14,3 +14,8 @@ Build logs: per-package `build.log` placement, `PORTAGE_LOGDIR` symlinks, and fa
 
 ## fn tail_of
 - Ports Portage's failure display (`Scheduler.py`) and QA scan (`doebuild.py`), which both wrap a `.gz`-suffixed log in `gzip.GzipFile(mode="rb")` before reading.
+
+## fn foreground_log_path (S6, 351-MARK/DIE)
+- Portage's `PORTAGE_LOG_FILE` for a foreground build (`prepare_build_dirs.py:398-468`): `${T}/build.log` (`.gz` under `compress-build-logs`), or the real `PORT_LOGDIR` path when usable, with `${T}/build.log` left as a symlink. Returns the real path (never the symlink): `die` prints it as `The complete build log is located at '…'` (`bin/isolated-functions.sh`, `die`).
+- `PORT_LOGDIR` (not just `PORTAGE_LOGDIR`) is honored as the deprecated alias, like Portage's settings lookup (`config.py`, `_deprecated_keys`: direct key first, then the alias); the S0 `m07-port-logdir` cell exports that spelling. A stale symlink with no logdir configured is removed rather than followed.
+- Callers resolve `logdir`/`sep` through `foreground_log_env` (process env, same as `build_log_path`); `make.conf`-only `PORT_LOGDIR` is equally unread on both paths (pre-existing, out of S6 scope).

@@ -180,7 +180,11 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
         // `bin/ebuild` and `emerge` alike.
         // Portage: config.py (`portage._internal_caller`)
         ("PORTAGE_INTERNAL_CALLER".to_string(), "1".to_string()),
-        ("PORTAGE_QUIET".to_string(), "1".to_string()),
+        // `PORTAGE_QUIET` is never set here: Portage sets it only below the
+        // `--quiet` noise floor (`doebuild.py`, `noiselimit < 0`), so the
+        // `__vecho` markers print on every other run. A quiet merge threads
+        // `PORTAGE_QUIET=1` through the build env, which wins last below.
+        // Portage: doebuild.py (`if noiselimit < 0`)
         (
             "PORTAGE_DEBUG".to_string(),
             if debug { "1" } else { "0" }.to_string(),

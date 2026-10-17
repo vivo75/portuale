@@ -24,6 +24,7 @@ fn install_lands_a_real_file_under_a_real_d() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -75,6 +76,7 @@ fn a_brush_phase_does_not_leak_its_umask_into_the_host_process() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -115,7 +117,7 @@ fn install_dies_like_portage_when_s_is_missing() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::default(),
-        log_file: Some(&log_file),
+        log_file: PhaseLog::Capture(&log_file),
         build_env: &[],
     })
     .expect("run_commands_logged should not itself error");
@@ -152,6 +154,7 @@ fn install_writes_the_real_build_time_file() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -200,6 +203,7 @@ fn install_qa_check_docompress_compresses_docs_and_repairs_symlinks() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Bash,
+        log_file: PhaseLog::Inherit,
         build_env: &extra_env,
     })
     .expect("run_commands should not itself error");
@@ -262,6 +266,7 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
         debug: false,
         config_root: no_root,
         shell: ShellBackend::Bash,
+        log_file: PhaseLog::Inherit,
         build_env: &env_with("-binpkg-docompress"),
     })
     .expect("run_commands should not itself error");
@@ -284,7 +289,7 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
             debug: false,
             config_root: no_root,
             shell: ShellBackend::Bash,
-            log_file: None,
+            log_file: PhaseLog::Inherit,
         })
         .expect("run_instprep should not itself error")
     };
@@ -349,6 +354,7 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -389,6 +395,7 @@ fn install_lands_a_real_file_under_a_real_d_via_real_bash() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Bash,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -438,6 +445,7 @@ fn install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -509,6 +517,7 @@ fn features_xattr_routes_phase_installs_through_the_xattr_wrapper() {
             debug: false,
             config_root: Path::new("/dev/null/no-config-root"),
             shell: ShellBackend::Brush,
+            log_file: PhaseLog::Inherit,
             build_env: &[("FEATURES".to_string(), features.to_string())],
         })
         .expect("run_commands should not itself error");
@@ -548,6 +557,7 @@ fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -586,6 +596,7 @@ fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
             debug: false,
             config_root: Path::new("/dev/null/no-config-root"),
             shell,
+            log_file: PhaseLog::Inherit,
             build_env: &[],
         })
         .expect("run_commands should not itself error");
@@ -612,7 +623,7 @@ fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
             config_root: Path::new("/dev/null/no-config-root"),
             shell,
             build_env: &[],
-            log_file: Some(&log),
+            log_file: PhaseLog::Capture(&log),
         })
         .expect("run_single_phase should not itself error");
         assert_ne!(
@@ -653,7 +664,7 @@ fn brush_phase_env_is_filtered_of_bash_special_variables() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
-        log_file: Some(&log),
+        log_file: PhaseLog::Capture(&log),
         build_env: &[],
     })
     .expect("run_commands_logged should not itself error");
@@ -736,6 +747,7 @@ fn expanded_name_export_assigns_in_both_backends() {
             debug: false,
             config_root: Path::new("/dev/null/no-config-root"),
             shell,
+            log_file: PhaseLog::Inherit,
             build_env: &[],
         })
         .expect("run_commands should not itself error");
@@ -829,6 +841,7 @@ fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_re
         debug: false,
         config_root: &tmp,
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -866,6 +879,7 @@ fn debug_flag_exports_portage_debug() {
             debug,
             config_root: Path::new("/dev/null/no-config-root"),
             shell: ShellBackend::Brush,
+            log_file: PhaseLog::Inherit,
             build_env: &[],
         })
         .expect("run_commands should not itself error");
@@ -904,6 +918,7 @@ fn phases_export_portage_actual_distdir_so_doins_keeps_absolute_symlinks() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -951,6 +966,7 @@ fn phases_see_the_per_package_fake_distdir() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -1002,6 +1018,7 @@ fn fake_distdir_is_prepared_only_when_portage_prepares_it() {
             debug: false,
             config_root: Path::new("/dev/null/no-config-root"),
             shell: ShellBackend::Brush,
+            log_file: PhaseLog::Inherit,
             build_env: &build_env,
         })
         .expect("run_commands should not itself error");
@@ -1038,6 +1055,7 @@ fn pretend_alone_succeeds_with_no_explicit_phase_functions() {
         debug: false,
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -1166,4 +1184,111 @@ fn stamped_unpack_prints_the_skip_pair_and_does_not_rerun_the_body() {
         "the force line names the stamp, got:\n{stdout}"
     );
     assert_eq!(ran_lines(), 1, "the stamped body must not run again");
+}
+
+/// The foreground tee writes every child byte to our stdout and to the
+/// log file (Portage's `_spawn_phase` logging pipe merges both streams
+/// onto the terminal and into `${T}/build.log`). The stdout half lands
+/// on the test runner's captured output; the file half is asserted here.
+#[test]
+fn open_tee_log_writes_to_the_file_what_the_child_writes() {
+    use std::io::Write as _;
+    let tmp = TempDir::new("ebuild-phases-test-tee").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let log = tmp.join("build.log");
+    let (mut child_end, pump) = open_tee_log(&log).expect("tee opens");
+    child_end.write_all(b">>> Unpacking source...\n").unwrap();
+    drop(child_end);
+    drop(pump);
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        ">>> Unpacking source...\n"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `PhaseLog::capture` maps a background log path to `Capture` and its
+/// absence to `Inherit` (never to a silent third shape).
+#[test]
+fn phase_log_capture_maps_an_absent_path_to_inherit() {
+    let path = Path::new("/tmp/build.log");
+    assert!(matches!(
+        PhaseLog::capture(Some(path)),
+        PhaseLog::Capture(p) if p == path
+    ));
+    assert!(matches!(PhaseLog::capture(None), PhaseLog::Inherit));
+}
+
+/// A direct `unpack` tees Portage's markers to stdout and writes
+/// `${T}/build.log` (S0 cell `m01-unpack`, rc 0): `>>> Unpacking
+/// source...` and `>>> Source unpacked in ...` on stdout, the same
+/// bytes in the log, nothing marker-shaped on stderr.
+///
+/// Portage 3.0.82.2, full argv `ebuild
+/// t348-b-phases-8.ebuild unpack` (S0 cell `m01-unpack-portage.stdout`,
+/// 124 B on stdout, config warnings only on stderr).
+#[test]
+fn foreground_unpack_tees_portages_markers_to_stdout_and_build_log() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let ebuild_path = fixtures.join("repo-348/app-misc/t348-b-phases/t348-b-phases-8.ebuild");
+    let tmp = TempDir::new("ebuild-phases-test-s6-unpack").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let cfg = tmp.join("cfg/etc/portage");
+    std::fs::create_dir_all(&cfg).unwrap();
+    std::fs::write(
+        cfg.join("repos.conf"),
+        format!(
+            "[DEFAULT]\nmain-repo = testrepo\n\n\
+             [testrepo]\nlocation = {}\n\n\
+             [t348]\nlocation = {}/repo-348\npriority = 60\n",
+            fixtures.join("repo").display(),
+            fixtures.display(),
+        ),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        fixtures.join("repo/profiles/default"),
+        cfg.join("make.profile"),
+    )
+    .unwrap();
+    let portage_tmpdir = tmp.join("tmp");
+    let distdir = tmp.join("dist");
+    let output = std::process::Command::new(portuale_exe())
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap())
+        .env("HOME", std::env::var("HOME").unwrap_or_default())
+        .env("PORTAGE_CONFIGROOT", tmp.join("cfg"))
+        .env("PORTAGE_TMPDIR", &portage_tmpdir)
+        .env("DISTDIR", &distdir)
+        .env(
+            "FEATURES",
+            "-sandbox -usersandbox -userpriv -network-sandbox -ipc-sandbox -pid-sandbox -news",
+        )
+        .args(["ebuild", &ebuild_path.display().to_string(), "unpack"])
+        .output()
+        .expect("portuale ebuild spawns");
+    assert!(
+        output.status.success(),
+        "unpack: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let builddir = portage_tmpdir.join("portage/app-misc/t348-b-phases-8");
+    assert_eq!(
+        stdout,
+        format!(
+            ">>> Unpacking source...\n>>> Source unpacked in {}/work\n",
+            builddir.display()
+        ),
+        "Portage's unpack markers, got:\n{stdout}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains(">>>"),
+        "no markers on stderr"
+    );
+    let logged =
+        std::fs::read_to_string(builddir.join("temp/build.log")).expect("build.log written");
+    assert_eq!(logged, stdout, "the log carries the terminal stream");
+    let _ = std::fs::remove_dir_all(&tmp);
 }

@@ -83,7 +83,7 @@ pub(crate) fn build_one_source_entry(args: BuildOneSourceEntryArgs<'_>) -> Resul
         debug: options.debug,
         config_root: &options.config_root,
         shell,
-        log_file: log_path.as_deref(),
+        log_file: ebuild_phases::PhaseLog::capture(log_path.as_deref()),
     })?;
     if clean_status != 0 {
         return Err(format!("{cp}-{version}: clean failed ({clean_status})"));
@@ -97,7 +97,7 @@ pub(crate) fn build_one_source_entry(args: BuildOneSourceEntryArgs<'_>) -> Resul
         debug: options.debug,
         config_root: &options.config_root,
         shell,
-        log_file: log_path.as_deref(),
+        log_file: ebuild_phases::PhaseLog::capture(log_path.as_deref()),
         build_env: &build_env,
     })?;
     if status != 0 {
@@ -236,7 +236,7 @@ pub(crate) fn merge_one_built_entry(args: MergeOneBuiltEntryArgs<'_>) -> Result<
             debug: per_entry.debug,
             config_root: &per_entry.config_root,
             shell: per_entry.shell,
-            log_file: per_entry.log_file.as_deref(),
+            log_file: ebuild_phases::PhaseLog::capture(per_entry.log_file.as_deref()),
         })?;
     }
     // The `Completed (N of M) cpv::repo` line.

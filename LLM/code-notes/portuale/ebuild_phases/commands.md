@@ -40,3 +40,9 @@ Runs a phase command list (with logging): fetch once, then each command's phase 
 
 ## fn run_commands_async (MERGE_TYPE default, #348 S2 E3)
 - A direct `ebuild <file> <phase>` run is a source merge: defaults `MERGE_TYPE=source` (like `doebuild()` for `tree == "porttree"`); `exports_merge_type` is enforced centrally in `apply_eapi_phase_env`. `A` without an `unpack` in the chain stays unset here — `apply_eapi_phase_env` fills the USE-reduced default instead.
+
+## S6 (351-MARK/DIE): PhaseLog and the foreground tee
+- `PhaseLog::{Inherit, Capture, Foreground, Tee}` replaces `log_file: Option<&Path>`. `Capture` is the background file-only redirect; `Foreground` resolves in `run_commands_async`/`run_single_phase` (the only places with the environment) to `Tee(${T}/build.log)` via `emerge_build::foreground_log_path`, pushing `PORTAGE_LOG_FILE` into the phase env so `die` prints its build-log line (`bin/isolated-functions.sh`). Leaves treat an unresolved `Foreground` as `Inherit`.
+- `open_tee_log` lends one pipe to the child's stdout+stderr (order-preserving merge, like Portage's `_spawn_phase` logging pipe, `doebuild.py`; `BuildLogger.py` on the scheduler side) and drains it to our stdout plus the log file (`.gz` through the existing pump). `TeePump` joins the drain thread before the gzip pump.
+- `emit_phase_line` prints Rust-side lines (WORKDIR/stamp) to stdout only in tee mode: Portage's own skip lines go through `writemsg_stdout`, never the phase pipe (`doebuild.py`).
+- Foreground entry points: direct `ebuild` single/chained phases (`ebuild.rs`), the foreground merge install chain (`ebuild_merge::run_merge_with_hook`), direct `ebuild ... package` (`ebuild_package.rs`). `clean` stays unlogged on every foreground path (Portage `EbuildPhase._get_log_path` returns `None` for `clean`/`cleanrm`); background capture, unmerge hooks, info probes and `buildpkgonly` are unchanged.

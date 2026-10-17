@@ -47,3 +47,6 @@ The merge driver: `merge`/`qmerge` entry points, shared helpers, submodules.
 
 ## fn source_distfiles
 - Ports Portage's `configdict["pkg"]["A"]` (`doebuild.py:585-594`): the use-reduced, unique distfile basenames of `SRC_URI`, reduced against the resolved `USE` the hook env carries. Portage's `config.environ()` exports it into every phase, so the postinst vdb-env regeneration (see `merge_after_install`'s `PORTAGE_UPDATE_ENV` comment) sees it; the filtered `${T}/environment` drops `A`, so the merge path re-supplies it. `None` outside a repo checkout, with no `SRC_URI`, or on an unparsable `SRC_URI` -- the same "can't tell, so don't set it" degrade `flat_field_on` uses. Portage sets `A` unconditionally (`" ".join(uri_map)` is `""` for an SRC_URI-less package like `virtual/pkgconfig`), so missing/empty yields `Some("")`: the vdb env must carry `declare -x A=""` the way Portage's does.
+
+## S6 (351-MARK): foreground merge install chain tees
+- `run_merge_with_hook` hoists `compute_environment` (same failure point `run_commands_async` reads first anyway) and passes `PhaseLog::Foreground` for the `install` chain: foreground merges stream markers to stdout and `${T}/build.log` like Portage's `_spawn_phase` pipe (S0 `m08-emerge-jobs1`). The post-merge `clean` still inherits (Portage never logs `clean`).
