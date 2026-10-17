@@ -82,8 +82,9 @@ pub(crate) use profile_chain::*;
 pub use resolve::*;
 
 pub use phase_environ::{
-    ENV_BLACKLIST, ENVIRON_FILTER, PORTUALE_COMPUTED, PhaseUse, in_portage_iuse_body,
-    phase_environ, phase_environ_pkg, portage_use, standalone_iuse_effective,
+    ENV_BLACKLIST, ENVIRON_FILTER, PORTUALE_COMPUTED, PhaseUse, apply_unprefixed_use_expand_filter,
+    filter_unprefixed_use_expand_value, in_portage_iuse_body, phase_environ, phase_environ_pkg,
+    portage_use, standalone_iuse_effective,
 };
 
 /// Error resolving profile/config files. Distinct variants mirror the

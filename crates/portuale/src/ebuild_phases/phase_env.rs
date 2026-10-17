@@ -188,10 +188,30 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
         ("EBUILD_PHASE".to_string(), ebuild_phase_value.to_string()),
     ]);
 
-    // Resolved `FEATURES` when already in `vars`; else the process value. A raw
-    // literal must not clobber the standalone folded base.
+    // Resolved `FEATURES` when already in `vars` (the standalone folded
+    // base); else the run's resolved list from `extra_env`, falling back
+    // to the process env only with no config in scope. A raw literal
+    // must not clobber the standalone folded base.
     if !vars.iter().any(|(k, _)| k == "FEATURES") {
-        vars.push(("FEATURES".to_string(), phase_features_value()));
+        vars.push(("FEATURES".to_string(), resolved_features.clone()));
+    }
+    // `PORTAGE_CONFIGROOT` always carries its trailing slash, like
+    // Portage's `LocationsManager` normalizes it (`config_root.rstrip(sep)
+    // + sep`). The calling env passes through raw above; this computed
+    // value wins.
+    // Portage: LocationsManager.py, `self.config_root = ... + os.sep`
+    vars.push((
+        "PORTAGE_CONFIGROOT".to_string(),
+        config_root_with_slash(config_root),
+    ));
+    // `PORTAGE_REPO_NAME` for the direct `ebuild` path: the repo the
+    // file lives in (the emerge path threads the same value per entry).
+    // Absent outside a repo checkout. Fixes the `die` `::repo` suffix.
+    // Portage: doebuild.py, doebuild_environment
+    if !vars.iter().any(|(k, _)| k == "PORTAGE_REPO_NAME")
+        && let Some(repo_name) = crate::ebuild_merge::repository_name_for(&env.pkg_dir)
+    {
+        vars.push(("PORTAGE_REPO_NAME".to_string(), repo_name));
     }
 
     // `PORTAGE_RESTRICT`/`PORTAGE_PROPERTIES` for every phase, from the USE-reduced

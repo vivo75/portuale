@@ -219,9 +219,33 @@ pub(crate) fn run_real_commands(
     force_test_env: &[(String, String)],
 ) -> ExitCode {
     let root = portage_repo::root_from_env();
-    // `make.globals` default is `/var/tmp` (the builddir adds the
-    // rest itself).
-    let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
+    let config_root = portage_repo::config_root_from_env();
+    // One resolved `Config` per invocation: the tmpdir/distdir
+    // defaults, the `FEATURES` gates and the binpkg scalars below all
+    // read it instead of re-resolving per lookup. `None` outside any
+    // repo checkout: every reader keeps its calling-env-only fallback.
+    // Portage: config.py (settings); doebuild.py, doebuild_environment
+    let canonical_pkg_dir = std::path::Path::new(ebuild_file)
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf));
+    let standalone_config = canonical_pkg_dir
+        .as_deref()
+        .and_then(|pkg_dir| ebuild_phases::resolve_standalone_config(pkg_dir, &config_root, &root));
+    // `PORTAGE_TMPDIR`/`DISTDIR` from the resolved config, calling
+    // environment highest (Portage's top layer). Without a config the
+    // old env-or-`make.globals`-default shortcut stands.
+    // Portage: config.py; cnf/make.globals:30,35
+    let portage_tmpdir_base = match &standalone_config {
+        Some(config) => portage_repo::portage_tmpdir_from_env_or_config(config),
+        None => portage_repo::portage_tmpdir_from_env(),
+    };
+    let distdir_base = match &standalone_config {
+        Some(config) => portage_repo::distdir_from_env_or_config(config),
+        None => std::env::var_os("DISTDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(portage_repo::DISTDIR_DEFAULT)),
+    };
     // Per-package `PORTAGE_TMPDIR`: re-derive from the matched
     // `package.env` value when the calling environment is silent.
     // Skipped for `depend`/`clean`, which Portage exempts too.
@@ -231,15 +255,15 @@ pub(crate) fn run_real_commands(
         .iter()
         .any(|cmd| *cmd == "depend" || *cmd == "clean")
     {
-        portage_tmpdir
+        portage_tmpdir_base
     } else {
         let process_tmpdir = std::env::var_os("PORTAGE_TMPDIR").map(std::path::PathBuf::from);
         let ebuild_path = std::path::Path::new(ebuild_file);
         match ebuild_phases::resolve_standalone_portage_tmpdir(
             ebuild_path,
-            &portage_repo::config_root_from_env(),
+            &config_root,
             &root,
-            &portage_tmpdir,
+            &portage_tmpdir_base,
             process_tmpdir.as_deref(),
         ) {
             Ok(resolved) => resolved,
@@ -249,31 +273,61 @@ pub(crate) fn run_real_commands(
             }
         }
     };
-    // Same env-var-not-full-config-resolution shortcut: the
-    // `make.globals` defaults apply when unset.
-    // Real `make.globals` `DISTDIR` default, same shortcut.
-    let distdir = std::env::var_os("DISTDIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
-    // Merge config via the same env-var shortcut, factored into
-    // `MergeOptions::from_env` (shared with `emerge <atom>`).
+    let distdir = distdir_base;
+    // Merge config like the `emerge` path's `merge_setup`: `from_env`
+    // (shared, untouched), then the resolved config overrides — the
+    // resolved `FEATURES` drive the gates (sandbox, protect-owned,
+    // `unmerge-orphans`, `binpkg-*`), not the raw process value.
+    // Portage: _emerge/actions.py; config.py (settings.features)
     let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
+    merge_options.distdir = distdir.clone();
+    if let Some(config) = &standalone_config {
+        merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
+        (
+            merge_options.install_mask,
+            merge_options.install_mask_prunes_usr_share,
+        ) = crate::pretend::config_install_mask(config);
+        merge_options.apply_uninstall_ignore(config);
+        merge_options.set_resolved_features(&crate::pretend::config_features_string(config));
+        merge_options.apply_config_protect(config);
+        merge_options.package_env_vars = config.package_env_vars.clone();
+    }
     // Per-package `FEATURES`: fold a matched `package.env` value
-    // onto the raw process value and re-derive the merge gates.
+    // onto the run-wide list and re-derive the merge gates.
     if let Some(features) = ebuild_phases::resolve_standalone_resolved_features(
         std::path::Path::new(ebuild_file),
-        &portage_repo::config_root_from_env(),
+        &config_root,
         &root,
         &merge_options.features,
         &std::env::var("FEATURES").unwrap_or_default(),
     ) {
         merge_options.set_resolved_features(&features);
     }
-    // `unmerge-orphans` from `FEATURES`, same shortcut.
+    // `bin/ebuild` drops the scheduler-only tokens for the direct path
+    // (the `emerge` Scheduler gates on `merge-wait`, so it keeps them).
+    merge_options.features =
+        ebuild_phases::discard_direct_ebuild_features(&merge_options.features.clone());
+    // The resolved `FEATURES` ride into every phase through the build
+    // env (like the merge path's run-wide env), so sandbox, isolation
+    // and helper gating see the config value, not the raw process one.
+    // `EBUILD_FORCE_TEST` still travels here too.
+    let mut direct_build_env: Vec<(String, String)> = force_test_env.to_vec();
+    direct_build_env.push(("FEATURES".to_string(), merge_options.features.clone()));
+    direct_build_env.push((
+        "PORTAGE_FEATURES".to_string(),
+        merge_options.features.clone(),
+    ));
     let UnmergeAndPackageOptionsOut {
         unmerge_options,
         package_options,
-    } = unmerge_and_package_options(debug, shell, ebuild_file, &root, &distdir);
+    } = unmerge_and_package_options(UnmergeAndPackageOptionsArgs {
+        debug,
+        shell,
+        ebuild_file,
+        root: &root,
+        distdir: &distdir,
+        standalone_config: standalone_config.as_ref(),
+    });
     let ebuild_path = std::path::Path::new(ebuild_file);
 
     // `merge`/`qmerge`/`unmerge` write into a root-owned filesystem:
@@ -347,7 +401,7 @@ pub(crate) fn run_real_commands(
                 debug,
                 config_root: &merge_options.config_root,
                 shell,
-                build_env: force_test_env,
+                build_env: &direct_build_env,
                 log_file: None,
             })
         } else {
@@ -360,7 +414,7 @@ pub(crate) fn run_real_commands(
                 debug,
                 config_root: &merge_options.config_root,
                 shell,
-                build_env: force_test_env,
+                build_env: &direct_build_env,
             })
         };
         match result {
@@ -381,14 +435,31 @@ pub(crate) struct UnmergeAndPackageOptionsOut {
     pub(crate) package_options: PackageOptions,
 }
 
+/// Arguments of [`unmerge_and_package_options`].
+pub(crate) struct UnmergeAndPackageOptionsArgs<'a> {
+    pub(crate) debug: bool,
+    pub(crate) shell: ShellBackend,
+    pub(crate) ebuild_file: &'a str,
+    pub(crate) root: &'a Path,
+    pub(crate) distdir: &'a Path,
+    pub(crate) standalone_config: Option<&'a portage_profile::Config>,
+}
+
 /// The unmerge and package options of the direct ebuild path.
+/// `standalone_config` is the caller's once-resolved `Config` (cached
+/// per invocation); `None` falls back to resolving the unmerge chain
+/// here, and then to the calling-env-only defaults.
 pub(crate) fn unmerge_and_package_options(
-    debug: bool,
-    shell: ShellBackend,
-    ebuild_file: &str,
-    root: &Path,
-    distdir: &Path,
+    args: UnmergeAndPackageOptionsArgs<'_>,
 ) -> UnmergeAndPackageOptionsOut {
+    let UnmergeAndPackageOptionsArgs {
+        debug,
+        shell,
+        ebuild_file,
+        root,
+        distdir,
+        standalone_config,
+    } = args;
     let default_unmerge_options = ebuild_unmerge::UnmergeOptions::default();
     // `unmerge-orphans` from the resolved `FEATURES` when a config
     // resolves (the same folded chain `emerge -C` reads, synthetic base
@@ -400,7 +471,14 @@ pub(crate) fn unmerge_and_package_options(
     // else the incremental fold of the calling env and the `make.globals`
     // `UNINSTALL_IGNORE` default.
     // Portage: dbapi/vartree.py:2913, `"unmerge-orphans" in self.settings.features`
-    let unmerge_config = ebuild_phases::resolve_unmerge_config(&config_root, root);
+    let owned_unmerge_config;
+    let unmerge_config = match standalone_config {
+        Some(config) => Some(config),
+        None => {
+            owned_unmerge_config = ebuild_phases::resolve_unmerge_config(&config_root, root);
+            owned_unmerge_config.as_ref()
+        }
+    };
     // `unmerge-orphans` from the resolved `FEATURES` when a config
     // resolves (the same folded chain `emerge -C` reads, synthetic base
     // included); else the incremental fold of the calling env.
@@ -505,19 +583,47 @@ pub(crate) fn unmerge_and_package_options(
         portage_bzip2_command: ebuild_package::resolve_portage_bzip2_command(chain),
         binpkg_format,
         config_root: portage_repo::config_root_from_env(),
-        // Real default-on `FEATURES` token; see
-        // `PackageOptions::buildpkg_live`.
-        buildpkg_live: !std::env::var("FEATURES")
-            .map(|f| f.split_whitespace().any(|t| t == "-buildpkg-live"))
-            .unwrap_or(false),
-        // Real default is on, but this defaults off; see
-        // `PackageOptions::binpkg_multi_instance`.
-        binpkg_multi_instance: std::env::var("FEATURES")
-            .map(|f| f.split_whitespace().any(|t| t == "binpkg-multi-instance"))
-            .unwrap_or(false),
-        binpkg_signing: std::env::var("FEATURES")
-            .map(|f| f.split_whitespace().any(|t| t == "binpkg-signing"))
-            .unwrap_or(false),
+        // The `FEATURES` tokens below follow the resolved list when a
+        // config resolves (the whole emerge merge setup already does;
+        // Q5: `binpkg-multi-instance` is no longer conservative here),
+        // else the calling env with the `make.globals` defaults.
+        // Portage: config.py (settings.features); cnf/make.globals
+        buildpkg_live: unmerge_config
+            .as_ref()
+            .map(|c| {
+                crate::pretend::config_features_string(c)
+                    .split_whitespace()
+                    .any(|t| t == "buildpkg-live")
+            })
+            .unwrap_or_else(|| {
+                !std::env::var("FEATURES")
+                    .map(|f| f.split_whitespace().any(|t| t == "-buildpkg-live"))
+                    .unwrap_or(false)
+            }),
+        binpkg_multi_instance: unmerge_config
+            .as_ref()
+            .map(|c| {
+                crate::pretend::config_features_string(c)
+                    .split_whitespace()
+                    .any(|t| t == "binpkg-multi-instance")
+            })
+            .unwrap_or_else(|| {
+                std::env::var("FEATURES")
+                    .map(|f| f.split_whitespace().any(|t| t == "binpkg-multi-instance"))
+                    .unwrap_or(false)
+            }),
+        binpkg_signing: unmerge_config
+            .as_ref()
+            .map(|c| {
+                crate::pretend::config_features_string(c)
+                    .split_whitespace()
+                    .any(|t| t == "binpkg-signing")
+            })
+            .unwrap_or_else(|| {
+                std::env::var("FEATURES")
+                    .map(|f| f.split_whitespace().any(|t| t == "binpkg-signing"))
+                    .unwrap_or(false)
+            }),
         binpkg_gpg_signing_base_command: std::env::var("BINPKG_GPG_SIGNING_BASE_COMMAND")
             .unwrap_or_default(),
         binpkg_gpg_signing_digest: std::env::var("BINPKG_GPG_SIGNING_DIGEST").unwrap_or_default(),

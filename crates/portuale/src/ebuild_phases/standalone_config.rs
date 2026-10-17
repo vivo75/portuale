@@ -62,6 +62,23 @@ pub(crate) fn flat_field_on(raw: &str, use_set: &std::collections::HashSet<Strin
 /// `type_complexity` lint.
 pub(crate) type StandaloneBaseEnv = (Vec<(String, bool)>, Vec<(String, String)>);
 
+/// Tokens `bin/ebuild` drops from the resolved `FEATURES` for the
+/// direct path: `fail-clean` always, and `merge-wait` (a scheduler-only
+/// token; keeping it would let WORKDIR removal run early). The `emerge`
+/// path keeps both (the Scheduler gates on `merge-wait`). `noauto` is
+/// NOT dropped here: `bin/ebuild` drops it only for `merge`, together
+/// with the phase-loop semantics S5/S6 own.
+/// Direct-path-only helper (the standalone base env and
+/// `run_real_commands`); the merge path never calls it.
+// Portage: bin/ebuild:305-309
+pub(crate) fn discard_direct_ebuild_features(features: &str) -> String {
+    features
+        .split_whitespace()
+        .filter(|t| *t != "fail-clean" && *t != "merge-wait")
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The resolved config for the standalone `ebuild <file>` paths;
 /// `None` outside any repo checkout.
 pub(crate) fn resolve_standalone_config(
@@ -208,19 +225,48 @@ pub(crate) fn phase_standalone_base_env(
     let Some((display, flags)) = (|| -> Option<StandaloneBaseEnv> {
         let config = resolve_standalone_config(&env.pkg_dir, config_root, eroot)?;
         let repos = portage_repo::find_repos(config_root).ok()?;
-        let display = portage_repo::candidate_use_flags_display(
+        let mut flags = portage_profile::phase_environ(&config, None);
+        // `bin/ebuild` drops the scheduler-only tokens for the direct
+        // path (this function serves that path only; the merge path
+        // keeps them).
+        for key in ["FEATURES", "PORTAGE_FEATURES"] {
+            if let Some(slot) = flags.iter_mut().find(|(k, _)| k == key) {
+                slot.1 = discard_direct_ebuild_features(&slot.1.clone());
+            }
+        }
+        // The package's full effective `USE` (`PORTAGE_USE` shape: the
+        // effective set narrowed to `IUSE ∪ IUSE_EFFECTIVE`), not just
+        // the IUSE display list: a flag-less package still sees the
+        // implicit expansion (e.g. `elibc_glibc`).
+        // Portage: config.py, setcpv
+        let effective = portage_repo::candidate_effective_use_flags(
             &repos,
             &config,
             &env.category,
             &env.split.pn,
             &env.split.pvr,
         );
-        let flags = portage_profile::phase_environ(&config, None);
+        let iuse = md5_iuse(env);
+        let use_flags = portage_profile::portage_use(&config, &iuse, &effective);
+        // The display pairs carry the full `PORTAGE_USE`, all on: the
+        // tail joins them into the exported `USE`.
+        let display: Vec<(String, bool)> = use_flags.iter().map(|f| (f.clone(), true)).collect();
+        // Portage's `setcpv` unprefixed filter over the narrowed USE:
+        // `ARCH="amd64"` with no `amd64` in USE exports as `""`.
+        let use_set: std::collections::HashSet<String> = use_flags.iter().cloned().collect();
+        for var in &config.use_expand_unprefixed {
+            if let Some(current) = flags.iter().find(|(k, _)| k == var).map(|(_, v)| v.clone()) {
+                let filtered =
+                    portage_profile::filter_unprefixed_use_expand_value(&current, &use_set);
+                if let Some(slot) = flags.iter_mut().find(|(k, _)| k == var) {
+                    slot.1 = filtered;
+                }
+            }
+        }
         // Per-package `package.env` build vars, atom-matched against
         // the ebuild's own md5-cache identity. Layered after the base
         // flags so they win; the `USE=` half already folded in above.
         let cpv_slot = standalone_cpv_slot(&env.pkg_dir, &env.category, &env.split.pf)?;
-        let mut flags = flags;
         // The run-wide base folds with pkg and calling env in order;
         // scalars lose to the caller.
         let profile_only_variables = config
@@ -256,6 +302,7 @@ pub(crate) fn phase_standalone_base_env(
                 &pkg_features,
                 &std::env::var("FEATURES").unwrap_or_default(),
             );
+            let folded = discard_direct_ebuild_features(&folded);
             flags.push(("FEATURES".to_string(), folded.clone()));
             flags.push(("PORTAGE_FEATURES".to_string(), folded));
         }

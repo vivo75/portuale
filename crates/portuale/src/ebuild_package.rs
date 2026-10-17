@@ -53,10 +53,12 @@ pub struct PackageOptions {
     /// packaged when `buildpkg` is on. Default `true`; consulted by
     /// `emerge_build::entry_buildpkg_wanted`, not by this module itself.
     pub buildpkg_live: bool,
-    /// `FEATURES=binpkg-multi-instance`, opt-in (default `false` here, a
-    /// deliberate conservatism). Both formats build identical archive bytes;
-    /// only the path convention differs: `<pkgdir>/<cat>/<pn>/<pf>-
-    /// <build_id>.<suffix>`, suffix `xpak` for xpak, `gpkg.tar` for gpkg.
+    /// `FEATURES=binpkg-multi-instance`: the multi-instance binpkg layout
+    /// (`<pkgdir>/<cat>/<pn>/<pf>-<build_id>.<suffix>`, suffix `xpak` for
+    /// xpak, `gpkg.tar` for gpkg). Follows the resolved `FEATURES` on
+    /// every path (on wherever `make.globals` is read); the flat layout
+    /// stays only where no config resolves. Both formats build
+    /// identical archive bytes; only the path convention differs.
     pub binpkg_multi_instance: bool,
     /// `FEATURES=binpkg-signing`: the `__dyn_package` helper signs the gpkg
     /// members (detached `.sig` sidecars) and clear-signs the `Manifest`.

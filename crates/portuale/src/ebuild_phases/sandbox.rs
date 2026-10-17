@@ -103,13 +103,13 @@ pub(crate) fn feature_token_present(features: &str, token: &str) -> bool {
     features.split_whitespace().any(|t| t == token)
 }
 
-/// `FEATURES` for the phase's bash: passed straight through so unmodified bash gating
-/// on `contains_word <token> "${FEATURES}"` works (estrip handling, `__dyn_test`'s test
-/// gate, `misc-functions.sh` handling). Tokens Rust acts on independently are never
-/// re-gated by any bash run here (verified by grep), so no double-handling.
-/// Portage: doebuild.py, doebuild_environment
-pub(crate) fn phase_features_value() -> String {
-    std::env::var("FEATURES").unwrap_or_default()
+/// `PORTAGE_CONFIGROOT` with Portage's guaranteed trailing slash
+/// (`LocationsManager` normalizes `config_root.rstrip(sep) + sep`, so
+/// `/` stays `/` and anything else gains one).
+// Portage: LocationsManager.py
+pub(crate) fn config_root_with_slash(config_root: &Path) -> String {
+    let s = config_root.display().to_string();
+    if s.ends_with('/') { s } else { format!("{s}/") }
 }
 
 /// `FEATURES=network-sandbox` present?

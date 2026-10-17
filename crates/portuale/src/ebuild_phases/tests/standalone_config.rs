@@ -421,3 +421,219 @@ fn required_use_message_matches_portage_validate_deps_text() {
          \n  The above constraints are a subset of the following complete expression:\n    foo exactly-one-of ( bar baz )\n\n"
     );
 }
+
+/// A hermetic standalone root for the #349 S4 config reads: one repo
+/// (`profiles/repo_name`), one flag-less package with an md5-cache
+/// entry, `make.profile` at the synthetic default, and a `make.conf`
+/// carrying `DISTDIR`/`PORTAGE_TMPDIR`/`FEATURES`. Expected values from
+/// Portage 3.0.82.2 (S0 cells `e01-full`, `e04-nofeatures`).
+struct S4Root {
+    tmp: std::path::PathBuf,
+    cfg: std::path::PathBuf,
+    ebuild: std::path::PathBuf,
+}
+
+fn s4_root(tag: &str, make_conf: &str) -> S4Root {
+    let tmp = TempDir::new(&format!("ebuild-phases-test-s4-{tag}")).keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let repo = tmp.join("repo");
+    let prof = repo.join("profiles/default");
+    let portage_dir = tmp.join("cfg/etc/portage");
+    std::fs::create_dir_all(&prof).unwrap();
+    std::fs::create_dir_all(&portage_dir).unwrap();
+    std::fs::write(repo.join("profiles/repo_name"), "testrepo\n").unwrap();
+    std::fs::write(
+        prof.join("make.defaults"),
+        "ARCH=\"amd64\"\nACCEPT_KEYWORDS=\"${ARCH}\"\nELIBC=\"glibc\"\n\
+         USE_EXPAND=\"ELIBC\"\nUSE_EXPAND_IMPLICIT=\"ELIBC\"\n\
+         USE_EXPAND_VALUES_ELIBC=\"glibc musl\"\n\
+         IUSE_IMPLICIT=\"elibc_glibc elibc_musl\"\n\
+         USE_EXPAND_UNPREFIXED=\"ARCH\"\n",
+    )
+    .unwrap();
+    let pkg_dir = repo.join("dev-libs/s4envpkg");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let ebuild = pkg_dir.join("s4envpkg-1.0.ebuild");
+    std::fs::write(&ebuild, "EAPI=8\nSLOT=\"0\"\n").unwrap();
+    let cache_dir = repo.join("metadata/md5-cache/dev-libs");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::write(
+        cache_dir.join("s4envpkg-1.0"),
+        "EAPI=8\nKEYWORDS=amd64\nSLOT=0\n\
+         _md5_=0000000000000000000000000000000\n",
+    )
+    .unwrap();
+    std::fs::write(
+        portage_dir.join("repos.conf"),
+        "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = repo\n",
+    )
+    .unwrap();
+    // `repos.conf` locations resolve relative to the config root, so the
+    // repo must also be visible there.
+    let _ = std::fs::remove_dir_all(tmp.join("cfg/repo"));
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&repo, tmp.join("cfg/repo")).unwrap();
+    std::fs::write(portage_dir.join("make.conf"), make_conf).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&prof, portage_dir.join("make.profile")).unwrap();
+    S4Root {
+        tmp: tmp.clone(),
+        cfg: tmp.join("cfg"),
+        ebuild,
+    }
+}
+
+/// Save/restore a process-env key around a closure (process-global, so
+/// every env-touching test does this).
+fn with_env(key: &str, value: Option<&str>, f: impl FnOnce()) {
+    let saved = std::env::var_os(key);
+    unsafe {
+        match value {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+    f();
+    unsafe {
+        match saved {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+}
+
+/// `DISTDIR`/`PORTAGE_TMPDIR` resolve from `make.conf` when the calling
+/// env is silent, and the env wins when set (S0 `e01`/`e05`).
+#[test]
+fn standalone_tmpdir_and_distdir_follow_the_config_with_env_on_top() {
+    let root = s4_root(
+        "dirs",
+        "DISTDIR=\"/conf/dist\"\nPORTAGE_TMPDIR=\"/conf/tmp\"\nFEATURES=\"test\"\n",
+    );
+    let eroot = root.cfg.clone();
+    let pkg_dir = root.ebuild.parent().unwrap().to_path_buf();
+    with_env("DISTDIR", None, || {
+        with_env("PORTAGE_TMPDIR", None, || {
+            let config =
+                resolve_standalone_config(&pkg_dir, &root.cfg, &eroot).expect("root resolves");
+            assert_eq!(
+                portage_repo::distdir_from_env_or_config(&config),
+                std::path::PathBuf::from("/conf/dist")
+            );
+            assert_eq!(
+                portage_repo::portage_tmpdir_from_env_or_config(&config),
+                std::path::PathBuf::from("/conf/tmp")
+            );
+        });
+    });
+    with_env("DISTDIR", Some("/env/dist"), || {
+        with_env("PORTAGE_TMPDIR", Some("/env/tmp"), || {
+            let config =
+                resolve_standalone_config(&pkg_dir, &root.cfg, &eroot).expect("root resolves");
+            assert_eq!(
+                portage_repo::distdir_from_env_or_config(&config),
+                std::path::PathBuf::from("/env/dist")
+            );
+            assert_eq!(
+                portage_repo::portage_tmpdir_from_env_or_config(&config),
+                std::path::PathBuf::from("/env/tmp")
+            );
+        });
+    });
+    let _ = std::fs::remove_dir_all(&root.tmp);
+}
+
+/// The standalone base `USE` is the full effective set (a flag-less
+/// package still sees `elibc_glibc`, S0 `e01`), and `ARCH` filters to
+/// `""` (S0 `e01`).
+#[test]
+fn standalone_base_env_carries_portage_use_and_a_filtered_arch() {
+    let root = s4_root("use", "FEATURES=\"test\"\n");
+    let eroot = root.cfg.clone();
+    let portage_tmpdir = root.tmp.join("pt");
+    let env = compute_environment(&root.ebuild, &portage_tmpdir).expect("ebuild parses");
+    with_env("USE", None, || {
+        let (use_str, flags) = phase_standalone_base_env(&env, &root.cfg, &eroot, "setup", &[]);
+        assert!(
+            use_str.split_whitespace().any(|f| f == "elibc_glibc"),
+            "full PORTAGE_USE, got {use_str:?}"
+        );
+        let arch = flags
+            .iter()
+            .find(|(k, _)| k == "ARCH")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(arch, Some(""), "ARCH filters to empty, like Portage");
+    });
+    let _ = std::fs::remove_dir_all(&root.tmp);
+}
+
+/// End to end through `phase_env_vars` on the synthetic root: the
+/// exported phase env carries the config tmpdir/builddir, the slashed
+/// config root, the repo name, the full `USE` and the filtered `ARCH`
+/// (S0 `e01-full` on both sides).
+#[test]
+fn phase_env_vars_exports_the_resolved_direct_path_shape() {
+    let root = s4_root(
+        "env",
+        "DISTDIR=\"/conf/dist\"\nPORTAGE_TMPDIR=\"/conf/tmp\"\nFEATURES=\"test\"\n",
+    );
+    let eroot = root.cfg.clone();
+    let portage_tmpdir = root.tmp.join("pt");
+    let env = compute_environment(&root.ebuild, &portage_tmpdir).expect("ebuild parses");
+    let bin_dir = root.tmp.join("bin");
+    let helpers_dir = bin_dir.join("ebuild-helpers");
+    with_env("USE", None, || {
+        let vars = phase_env_vars(PhaseEnvVarsArgs {
+            env: &env,
+            root: &eroot,
+            ebuild_phase_value: "setup",
+            debug: false,
+            bin_dir: &bin_dir,
+            helpers_dir: &helpers_dir,
+            config_root: &root.cfg,
+            extra_env: &[("DISTDIR".to_string(), "/conf/dist".to_string())],
+        });
+        let get = |key: &str| vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        assert_eq!(
+            get("PORTAGE_TMPDIR"),
+            Some(portage_tmpdir.to_str().unwrap())
+        );
+        assert_eq!(
+            get("PORTAGE_CONFIGROOT"),
+            Some(format!("{}/", root.cfg.display()).as_str())
+        );
+        assert_eq!(get("PORTAGE_REPO_NAME"), Some("testrepo"));
+        let use_str = get("USE").unwrap_or("");
+        assert!(
+            use_str.split_whitespace().any(|f| f == "elibc_glibc"),
+            "full PORTAGE_USE, got {use_str:?}"
+        );
+        assert_eq!(get("ARCH"), Some(""));
+        let features = get("FEATURES").unwrap_or("");
+        assert!(
+            features.split_whitespace().any(|t| t == "test"),
+            "resolved FEATURES, got {features:?}"
+        );
+        // The actual dir moves to `PORTAGE_ACTUAL_DISTDIR`; `DISTDIR`
+        // becomes the per-package fake.
+        assert_eq!(get("PORTAGE_ACTUAL_DISTDIR"), Some("/conf/dist"));
+        assert_eq!(get("DISTDIR"), Some(env.fake_distdir().to_str().unwrap()));
+    });
+    let _ = std::fs::remove_dir_all(&root.tmp);
+}
+
+/// `bin/ebuild` drops the scheduler-only tokens for the direct path
+/// (Portage: `bin/ebuild:305-309`); the `emerge` Scheduler gates on
+/// `merge-wait`, so it keeps them. `noauto` is not dropped here (only
+/// for `merge`, with the phase-loop semantics).
+#[test]
+fn discard_direct_ebuild_features_drops_the_scheduler_only_tokens() {
+    assert_eq!(
+        discard_direct_ebuild_features("sandbox merge-wait fail-clean test"),
+        "sandbox test"
+    );
+    assert_eq!(discard_direct_ebuild_features("test"), "test");
+    assert_eq!(discard_direct_ebuild_features(""), "");
+    // `noauto` stays: dropping it belongs to the `merge` command path.
+    assert_eq!(discard_direct_ebuild_features("noauto test"), "noauto test");
+}

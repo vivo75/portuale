@@ -297,11 +297,14 @@ pub(crate) fn ask_select(n: usize) -> Option<usize> {
 }
 
 /// A short pause before a removal starts, so Ctrl-C can still abort.
-/// `CLEAN_DELAY=0` skips it. Honours the `CLEAN_DELAY` env var directly.
-/// Portage: _emerge/unmerge.py, countdown
-pub(crate) fn clean_delay_countdown() {
+/// `CLEAN_DELAY=0` skips it. The calling env wins, else the resolved
+/// config, else Portage's 5-second default (`make.globals:96`).
+/// Portage: _emerge/actions.py, action_uninstall; _emerge/unmerge.py, countdown
+pub(crate) fn clean_delay_countdown(config: Option<&portage_profile::Config>) {
     let secs: u64 = std::env::var("CLEAN_DELAY")
         .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config.and_then(|c| c.other_vars.get("CLEAN_DELAY").cloned()))
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(5);
     if secs == 0 {

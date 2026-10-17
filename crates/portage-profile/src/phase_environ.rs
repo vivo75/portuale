@@ -433,8 +433,55 @@ pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String,
             env.entry(key).or_insert(value);
         }
     }
+    // 5. With a package, the `USE_EXPAND_UNPREFIXED` filter runs over
+    //    the combined map (the scalar comes from steps 1-3, the USE
+    //    from step 4). Unset variables stay unset.
+    if let Some(p) = pkg {
+        let use_flags = portage_use(config, p.iuse, p.enabled);
+        apply_unprefixed_use_expand_filter(config, &use_flags, &mut env);
+    }
 
     env.into_iter().collect()
+}
+
+/// Run the `USE_EXPAND_UNPREFIXED` filter over a combined export map in
+/// place: every set unprefixed variable keeps only the tokens
+/// `use_flags` (the narrowed `PORTAGE_USE`) names, else `""`.
+pub fn apply_unprefixed_use_expand_filter(
+    config: &Config,
+    use_flags: &[String],
+    env: &mut BTreeMap<String, String>,
+) {
+    let use_set: std::collections::HashSet<String> = use_flags.iter().cloned().collect();
+    for var in &config.use_expand_unprefixed {
+        if let Some(current) = env.get(var).cloned() {
+            env.insert(
+                var.clone(),
+                filter_unprefixed_use_expand_value(&current, &use_set),
+            );
+        }
+    }
+}
+
+/// Portage `setcpv`'s `USE_EXPAND_UNPREFIXED` filter of one variable's
+/// current (stack) value: keep only the tokens the package's `USE`
+/// names, else `""`. `use_set` is the narrowed `PORTAGE_USE` set:
+/// Portage filters after dropping non-`IUSE`/non-implicit flags
+/// (`difference_update`), so only `IUSE ∪ IUSE_EFFECTIVE` membership
+/// can keep a token. Callers skip variables with no current value
+/// (Portage only writes the key when it is set somewhere). Shared by
+/// the merge path (`phase_environ_pkg`) and the standalone `ebuild`
+/// path (which applies it to its own base flags).
+// Portage: config.py, setcpv
+pub fn filter_unprefixed_use_expand_value(
+    current: &str,
+    use_set: &std::collections::HashSet<String>,
+) -> String {
+    current
+        .split_whitespace()
+        .filter(|tok| use_set.contains(*tok))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The per-package rows of `phase_environ`, split out so the per-entry
@@ -444,6 +491,9 @@ pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String,
 /// `Some(pkg)`: `USE`, `IUSE_EFFECTIVE`, and every `USE_EXPAND` value
 /// derived from the effective USE (empty when off). `None`: no
 /// `USE`/`IUSE_EFFECTIVE`; unprefixed names (`ARCH`) keep their scalar.
+/// The `USE_EXPAND_UNPREFIXED` filter runs in [`phase_environ`]
+/// (step 5) and in the merge tail, over the combined map — never here,
+/// since this map alone never carries the scalar.
 // Portage: config.py, setcpv
 pub fn phase_environ_pkg(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String, String)> {
     let mut env: BTreeMap<String, String> = BTreeMap::new();
@@ -849,6 +899,58 @@ mod tests {
             assert!(c.envd_sets_path);
             let env = phase_environ(&c, None);
             assert_eq!(get(&env, "PATH"), Some("/conf/bin:/usr/bin"));
+        });
+    }
+
+    #[test]
+    fn unprefixed_use_expand_keeps_only_use_named_tokens() {
+        // Portage 3.0.82.2 `setcpv` (`config.py`): the `ARCH` scalar
+        // survives only for tokens the package's USE names.
+        let uses = |toks: &[&str]| toks.iter().map(|s| s.to_string()).collect();
+        let narrow: std::collections::HashSet<String> = uses(&["elibc_glibc"]);
+        assert_eq!(filter_unprefixed_use_expand_value("amd64", &narrow), "");
+        assert_eq!(filter_unprefixed_use_expand_value("amd64 x86", &narrow), "");
+        let wide: std::collections::HashSet<String> = uses(&["amd64", "elibc_glibc"]);
+        assert_eq!(
+            filter_unprefixed_use_expand_value("amd64 x86", &wide),
+            "amd64"
+        );
+        assert_eq!(filter_unprefixed_use_expand_value("", &wide), "");
+    }
+
+    #[test]
+    fn phase_environ_pkg_filters_unprefixed_names_against_package_use() {
+        // The fixture-shaped profile below sets `ARCH="amd64"` with
+        // `USE_EXPAND_UNPREFIXED="ARCH"`: a flag-less package (USE
+        // `elibc_glibc` only) exports `ARCH=""`, while a package whose
+        // own `IUSE` declares and enables `amd64` keeps it. Portage
+        // 3.0.82.2 S0 cell `e01-full` is the `""` oracle.
+        let (root, repo) = synthetic_root("unprefixed", "ARCH=\"amd64\"\n");
+        with_test_env(&[], || {
+            let c = resolve(&root, &repo);
+            assert!(c.use_expand_unprefixed.contains("ARCH"));
+            // No `amd64` in USE: filtered to empty.
+            let env = phase_environ(
+                &c,
+                Some(PhaseUse {
+                    iuse: &[],
+                    enabled: &strs(&["abi_x86_64"]),
+                }),
+            );
+            assert_eq!(get(&env, "USE"), Some("abi_x86_64"));
+            assert_eq!(get(&env, "ARCH"), Some(""));
+            // Declared and enabled: kept.
+            let env = phase_environ(
+                &c,
+                Some(PhaseUse {
+                    iuse: &strs(&["amd64"]),
+                    enabled: &strs(&["amd64"]),
+                }),
+            );
+            assert_eq!(get(&env, "ARCH"), Some("amd64"));
+            // No package: the scalar stands (run-wide value).
+            let env = phase_environ(&c, None);
+            assert_eq!(get(&env, "ARCH"), Some("amd64"));
         });
     }
 

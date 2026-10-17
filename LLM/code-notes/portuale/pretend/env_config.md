@@ -69,3 +69,6 @@ Config and repo loading, EMERGE_DEFAULT_OPTS, scheduling policy.
 
 ## fn load_running_config
 - Backlog #242 Slice D: per-node USE paint (S0 map `LLM/evidence/2026-10-02-242-display-sites.md` §2). A hermetic test tree carries no `/etc/portage` -- Portage has no such tree at all.
+
+## fn package_options_from_env (#349 S4: DISTDIR)
+- `distdir` follows the resolved config when one is in scope (`distdir_from_env_or_config`, calling env highest); config-less keeps the env-or-`make.globals`-default. Portage: `config.py`; `cnf/make.globals:30`.

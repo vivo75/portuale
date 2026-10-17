@@ -251,6 +251,17 @@ pub(crate) fn entry_phase_env_tail(
                 enabled: &enabled,
             }),
         ));
+        // Portage's `setcpv` unprefixed filter over the combined map:
+        // `ARCH="amd64"` with no `amd64` in USE exports as `""`.
+        let use_flags = portage_profile::portage_use(config, &iuse, &enabled);
+        let use_set: std::collections::HashSet<String> = use_flags.iter().cloned().collect();
+        for var in &config.use_expand_unprefixed {
+            if let Some(current) = env.iter().find(|(k, _)| k == var).map(|(_, v)| v.clone())
+                && let Some(slot) = env.iter_mut().find(|(k, _)| k == var)
+            {
+                slot.1 = portage_profile::filter_unprefixed_use_expand_value(&current, &use_set);
+            }
+        }
     }
     env.extend(entry_identity_env(entry, candidate));
     env

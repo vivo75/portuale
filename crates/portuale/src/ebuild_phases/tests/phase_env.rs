@@ -479,3 +479,18 @@ fn brush_setup_script_defines_in_portage_iuse_as_a_function() {
     assert!(!script.contains("export BASH_FUNC"), "{script}");
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
+
+/// `PORTAGE_CONFIGROOT` always carries Portage's trailing slash
+/// (`LocationsManager` normalizes `config_root.rstrip(sep) + sep`).
+#[test]
+fn config_root_with_slash_matches_portage_locations_manager() {
+    assert_eq!(
+        config_root_with_slash(Path::new("/var/tmp/s346/e-e01/cfg")),
+        "/var/tmp/s346/e-e01/cfg/"
+    );
+    assert_eq!(config_root_with_slash(Path::new("/")), "/");
+    assert_eq!(
+        config_root_with_slash(Path::new("/already/slashed/")),
+        "/already/slashed/"
+    );
+}

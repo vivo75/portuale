@@ -63,9 +63,12 @@ pub(crate) fn package_options_from_env(
     ebuild_package::PackageOptions {
         debug,
         pkgdir: ebuild_package::resolve_pkgdir(chain),
-        distdir: std::env::var_os("DISTDIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| d.distdir.clone()),
+        distdir: match config {
+            Some(c) => portage_repo::distdir_from_env_or_config(c),
+            None => std::env::var_os("DISTDIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| d.distdir.clone()),
+        },
         shell,
         binpkg_compress,
         binpkg_compress_flags,
@@ -78,8 +81,10 @@ pub(crate) fn package_options_from_env(
             Some(f) => f.split_whitespace().any(|t| t == "buildpkg-live"),
             None => !feature_enabled("-buildpkg-live"),
         },
-        // Deliberately defaults off here (Portage default is on; see
-        // `PackageOptions::binpkg_multi_instance`). Explicit opt-in.
+        // Follows the resolved `FEATURES` when one is in scope (on
+        // wherever `make.globals` is read); without a resolved list the
+        // calling env opts in explicitly (see
+        // `PackageOptions::binpkg_multi_instance`).
         binpkg_multi_instance: feature_on("binpkg-multi-instance"),
         binpkg_signing: feature_on("binpkg-signing"),
         binpkg_gpg_signing_base_command: std::env::var("BINPKG_GPG_SIGNING_BASE_COMMAND")

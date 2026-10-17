@@ -227,12 +227,9 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
     // per run, from the effective running root, never the target config.
     let running_config = load_running_config(root, &portage_repo::running_root_from_env(), repos);
 
-    // `DISTDIR` is env-var-sourced at this CLI boundary (same shortcut
-    // `FetchOptions::distdir` uses). Only consulted for the `f`/`F`
-    // fetch-restrict bracket column.
-    let distdir = std::env::var_os("DISTDIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
+    // `DISTDIR` is config-rooted (calling env highest) for the `f`/`F`
+    // fetch-restrict bracket column. Portage: config.py; cnf/make.globals:30
+    let distdir = portage_repo::distdir_from_env_or_config(config);
 
     // A `--getbinpkg` run refreshes each binhost's `Packages` index before
     // resolution, in `--pretend` exactly like in a merge. A failed

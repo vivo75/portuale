@@ -39,3 +39,6 @@
 ## fn clean_delay_countdown
 - Ports Portage's `_emerge/unmerge.py:639` `countdown(int(settings["CLEAN_DELAY"]), ">>> Unmerging")` (default `CLEAN_DELAY=5`). Same "read the var at the CLI boundary" shortcut as `PORTAGE_TMPDIR` etc.
 - `countdown(int(settings["CLEAN_DELAY"]), ">>> Unmerging")` -- a short pause (default `CLEAN_DELAY=5`) before a real unmerge starts, so a `Ctrl-C` can still abort. `CLEAN_DELAY=0` skips it.
+
+## fn clean_delay_countdown (#349 S4: CLEAN_DELAY from the config)
+- Takes `Option<&Config>`: the calling env wins, else the resolved `make.conf` scalar, else Portage's 5-second default (`make.globals:96`; `actions.py:2748-2758`, which parses `settings["CLEAN_DELAY"]` the same way). S0 `l04` oracle (`CLEAN_DELAY="0"` in `make.conf` skips the countdown). Both removal callers (`emerge -C`, `--clean`/`--prune`) pass their resolved config. Found while probing: the suite-wide autouse fixture exports `CLEAN_DELAY=0` via the env, which masked that `make.conf` was never read.

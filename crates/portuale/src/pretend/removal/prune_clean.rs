@@ -384,7 +384,7 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
         if ask && !ask_confirm(color, "Would you like to unmerge these packages?") {
             return ExitCode::from(130);
         }
-        clean_delay_countdown();
+        clean_delay_countdown(Some(config));
         return execute_unmerge(ExecuteUnmergeArgs {
             removal_list: &removal_list,
             root,

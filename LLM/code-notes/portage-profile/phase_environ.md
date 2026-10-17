@@ -64,3 +64,7 @@ Portage `config.environ()` for build-phase environments: the export set a source
 
 ## fn standalone_iuse_effective
 - `(IUSE_EFFECTIVE, body)` from declared `IUSE` + profile implicit set, gated on `EapiAttrs.iuse_effective`; `None` below it (Portage serves the `PORTAGE_IUSE`-regex form there, which this port never builds — below the EAPI floor). #348 S2 (E6). Portage: `config.py`, `setcpv`.
+
+## fn filter_unprefixed_use_expand_value / fn apply_unprefixed_use_expand_filter (#349 S4)
+- Portage `config.py` `setcpv`'s `USE_EXPAND_UNPREFIXED` loop (`for k in ...: var_split = [x for x in var_split if x in use]`): every set unprefixed variable keeps only the tokens the package's USE names, else `""`. The domain is the narrowed `PORTAGE_USE` -- Portage filters after `difference_update` drops non-`IUSE`/non-implicit flags, so only `IUSE ∪ IUSE_EFFECTIVE` membership can keep a token. S0 `e01-full` oracle (`ARCH=""` against `USE="elibc_glibc"`).
+- Placement matters: the filter runs over the *combined* map (scalars from steps 1-3 plus the per-package rows), i.e. `phase_environ` step 5 and the merge tail `entry_phase_env_tail` after its `extend` -- never inside `phase_environ_pkg` alone, whose fresh map never carries the scalar. Unset variables stay unset (Portage only writes the key when it is set somewhere).

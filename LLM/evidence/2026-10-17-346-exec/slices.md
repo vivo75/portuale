@@ -103,3 +103,198 @@ Portage captures, never from portuale output. Plan defaults taken: Q1 yes
   merge-order / autounmask-USE divergences (other slices' scope),
   reported, not allowlisted.
 - No commit/push/checkout/stash (coordinator's grant).
+
+## S4 (#349, 351-BIN: `ebuild` reads its configuration)
+
+Status: done (executor: unattended batch worker, 2026-10-17).
+Oracle: Portage 3.0.82.2 captures in `LLM/evidence/2026-10-15-346-s0/`
+(`e/` family + `matrix.md`: every E-cell expected value below comes
+from those Portage captures), plus two fresh host-`ebuild` captures of
+the exact `make.globals`-copy setups in `s4-oracle/` (same Portage
+3.0.82.2; the S0 evidence has no `make.globals`-copy `setup` cell, and
+the task allows re-capture where evidence is lacking). Plan defaults
+taken: Q4 yes (resolved FEATURES drive the direct-path gates, D3 site
+list mirrored without touching shared `from_env`), Q5 yes (direct-path
+`binpkg-multi-instance` follows resolved FEATURES). 02.355 S4 (resolved
+`unmerge-orphans` + synthetic `make.globals` base layer) reused as
+committed, not redone.
+
+### What changed (files)
+- `crates/portage-repo/src/env_roots.rs`: new `DISTDIR_DEFAULT`
+  (`make.globals:30`), `distdir_from_config`,
+  `distdir_from_env_or_config`, `portage_tmpdir_from_env_or_config`
+  (calling env highest, then config, then default); 2 unit tests.
+- `crates/portage-profile/src/phase_environ.rs`: new
+  `filter_unprefixed_use_expand_value` +
+  `apply_unprefixed_use_expand_filter` (Portage `config.py` `setcpv`
+  `USE_EXPAND_UNPREFIXED` loop; domain is the narrowed `PORTAGE_USE`);
+  wired into `phase_environ` step 5 (combined map -- the pkg helper's
+  fresh map never carries the scalar, so filtering there is a no-op)
+  and exported for the merge tail; 2 unit tests.
+- `crates/portuale/src/ebuild.rs` (`run_real_commands`,
+  `unmerge_and_package_options`): one resolved `Config` per invocation
+  (cached in the caller, `None` outside a repo keeps env-only
+  fallbacks); tmpdir/distdir from
+  `portage_tmpdir_from_env_or_config`/`distdir_from_env_or_config`
+  (package.env `PORTAGE_TMPDIR` still layers on top); merge gates mirror
+  `merge_setup.rs:63-78` (`resolved_config`, `config_install_mask`,
+  `apply_uninstall_ignore`, `set_resolved_features`,
+  `apply_config_protect`, `package_env_vars`, resolved `distdir`) then
+  the per-package `FEATURES` fold, then `bin/ebuild`'s scheduler-only
+  discards; the final list rides phases via `direct_build_env`.
+  `PackageOptions` `buildpkg_live`/`binpkg_multi_instance`/
+  `binpkg_signing` follow the resolved FEATURES when a config resolves
+  (Q5: the "deliberate conservatism" is gone). 6-arg fn bundled into
+  `UnmergeAndPackageOptionsArgs` (clippy `too_many_arguments`).
+- `crates/portuale/src/ebuild_phases/standalone_config.rs`: new
+  `discard_direct_ebuild_features` (`fail-clean`, `merge-wait`;
+  `bin/ebuild:305-309`); standalone `USE` is the full `PORTAGE_USE`
+  (was IUSE display only); unprefixed filter over the base flags.
+- `crates/portuale/src/ebuild_phases/phase_env.rs`: `FEATURES`
+  fallback is the run's resolved list (`phase_features_value` removed);
+  `PORTAGE_CONFIGROOT` pushed with the trailing slash
+  (`LocationsManager.py`); `PORTAGE_REPO_NAME` pushed from
+  `repository_name_for` (fixes direct-path `die` `::repo`).
+- `crates/portuale/src/ebuild_phases/sandbox.rs`:
+  `phase_features_value` replaced by `config_root_with_slash`.
+- `crates/portuale/src/emerge_build/entry_env.rs`: merge-tail
+  unprefixed filter over the combined per-entry map.
+- `crates/portuale/src/pretend/env_config.rs`
+  (`package_options_from_env`) and `resolve_plan.rs` (`plan_resolve`):
+  `DISTDIR` follows the resolved config (env highest).
+- `crates/portuale/src/pretend/prompt.rs` (+ 2 call sites):
+  `clean_delay_countdown` reads `CLEAN_DELAY` from env, else resolved
+  config, else 5 (`actions.py:2748-2758`; S0 `l04`-adjacent).
+- `crates/portuale/src/ebuild_package.rs`: `binpkg_multi_instance`
+  doc updated (resolved FEATURES decide).
+- Tests: 9 new Rust unit tests; 7 pmtest pins in
+  `test_portuale.py` (`test_s4_*`: tmpdir/distdir/USE/ARCH/slash/repo,
+  resolved FEATURES list, env-wins, multi-instance layout, config-DISTDIR
+  fetch, die `::t348`, config CLEAN_DELAY).
+- pmtest bed prerequisite (new, NOT run):
+  `differential-test-bed/run/l1-ebuild-direct.sh` -- stock-make.globals
+  `portuale ebuild <gentoo bash>.ebuild merge` vs Portage `ebuild ...
+  merge` in fresh containers, rc + installed version recorded. The
+  coordinator runs it with the L1/L3 gates.
+- Docs: code notes under `LLM/code-notes/{portage-repo/env_roots,
+  portage-profile/phase_environ,portuale/ebuild{,_phases/*,pretend/*}}`
+  (`code_notes_index.py` clean); paragraph appended to
+  `LLM/what-this-proves.md`; fresh oracle in `s4-oracle/`
+  (`g/e-setup-portage.{argv where applicable,rc,stdout,stderr,stagelog}`,
+  `pkg-portage.{rc,stdout,stderr,pkgfind}`).
+
+### Commands run and their result
+- Baseline (pre-edit tree, same HEAD): pmtest full suite
+  `/var/tmp/s4-baseline-pmtest.log` -- 3974 passed, 37 skipped,
+  2 xfailed, 0 failed. Cargo baseline reused from S1's post-verify on
+  the identical tree (2755 passed, 0 failed; `git status` clean).
+- `cargo build --release` before every test run (rule a).
+- `cargo fmt` / `cargo fmt --check`: clean. `cargo clippy --release
+  --all-targets`: 0 warnings.
+- Post-change `cargo test --release -- --test-threads=2`
+  (`/var/tmp/s4-test.log`, bg + poll, no #376 hang): 31 suites ok,
+  2764 passed (2755 + 9 new), 0 failed. A later `cargo fmt` touched
+  whitespace in one new test only; targeted re-run green
+  (`discard_direct`, 1 passed; test-binary recompiled).
+- New pins: `-k s4_` 7 passed.
+- Full pmtest suite post-change, first run (`/var/tmp/s4-final-pmtest.log`):
+  3979 passed, 37 skipped, 2 xfailed, 2 FAILED by test NAME vs the
+  pre-edit baseline (0 failed):
+  `test_ebuild_without_network_sandbox_shares_the_host_network_namespace`
+  and `test_ebuild_without_sandbox_tolerates_the_same_stray_write`.
+  Cause: both run under the host config with `FEATURES=""`, which never
+  disabled host-`make.globals` sandbox tokens on either package manager
+  (`FEATURES` folds incrementally, Portage `config.py`); S4's resolved
+  gates now sandbox like Portage does there, so the phases ran isolated
+  (different netns) / sandbox-confined. The pins encoded portuale's old
+  env-only read, not Portage behavior -- re-grounded by spelling the
+  negation (`-network-sandbox -sandbox -usersandbox -userpriv
+  -ipc-sandbox -mount-sandbox -pid-sandbox`), which is what disables a
+  config token on both sides; docstrings say so. Targeted re-run:
+  5 passed (the 2 plus the 3 `sandbox_features_each` params).
+- Full pmtest suite post-fix (`/var/tmp/s4-final2-pmtest.log`, bg +
+  poll; compared by test NAME against the pre-edit baseline): 3980
+  passed, 37 skipped, 2 xfailed, 1 FAILED --
+  `test_ebuild_network_sandbox_gives_src_phases_a_fresh_network_namespace`,
+  the same `FEATURES=""`-vs-host-config cause in its `plain_env` arm
+  (both runs net-isolated, so the inequality failed). Fixed the same
+  way (negations in `plain_env`); targeted re-run of the 3
+  network/sandbox tests plus the 7 S4 pins: 10 passed.
+- Full pmtest suite post-fix-2 (`/var/tmp/s4-final3-pmtest.log`, bg +
+  poll): 3981 passed (3974 baseline + 7 new S4 pins), 37 skipped,
+  2 xfailed, 0 failed -- green, no new failures by test NAME vs the
+  pre-edit baseline. Corpus drift: none (no `corpus drift` mentions;
+  nothing blessed).
+- `grep -rn "split_whitespace\|split(' ')" crates | grep -i contents`:
+  (rule f; result recorded here).
+- Bed scripts (run by the coordinator after the worker, 2026-10-17):
+  - Gate (fmt, clippy 0 warnings, workspace cargo test, pmtest suite):
+    green, 3981 passed, 37 skipped, 2 xfailed.
+  - glibc+bash merge gate, three runs (plain / reinstall / install
+    mask): rc 0, hard 0, UNEXPLAINED 0 each. `l1-porttest`: 0/0.
+  - New cell `l1-ebuild-direct.sh`: green with `app-text/dos2unix`
+    (both PMs rc 0, same installed version). Honest history: the
+    first picks (`bash-9999`, then `bash-5.4_alpha_pre...`, then
+    `bash-5.3_p15`) failed with rc 1 on BOTH Portage and portuale
+    identically (git-r3 fetch without git in the image; Portage's own
+    `60noop-testsuites` install-QA hook dying "USE Flag 'test' not in
+    IUSE" on a direct `ebuild` run of a package without `IUSE=test`),
+    so they were environmental, not divergences; the cell now picks
+    a package with `IUSE=test`.
+  - L3 smoke (`l3-smoke.txt`, builds glibc + bash from source, runs
+    every phase): run 1 at `-j12` gave rc 1 with ONE unexplained row,
+    `MISSING /usr/lib/debug/.build-id/0c`. Cause: Portage's bash came
+    out with build-id `0c...`, portuale's with `0b153159...`, which is
+    the build-id both sides had on 2026-10-11, so portuale's output
+    is unchanged and the Portage side varied. Run 2 (serial default
+    jobs, `l3-20261017T132015Z`): rc 0, hard 0, UNEXPLAINED 0, payload
+    diffs 26. The host was loaded by other work during both runs, so
+    timings are not recorded.
+
+### Anything surprising
+- The first FEATURES pins failed on `merge-wait`: portuale exported it
+  (host `make.globals` has it) but Portage's phase env does not.
+  Root cause: `bin/ebuild:305-309` unconditionally discards
+  `fail-clean` and `merge-wait` for the direct path (scheduler-only
+  tokens); the `emerge` Scheduler gates on `merge-wait`, so it keeps
+  them. Ported as `discard_direct_ebuild_features` (direct path only).
+  `noauto` is deliberately NOT dropped (only for `merge`, with
+  phase-loop semantics S5/S6 own) -- S5-adjacent residue.
+- The `USE_EXPAND_UNPREFIXED` filter first landed inside
+  `phase_environ_pkg` and silently did nothing (fresh map, no scalar);
+  moved to the combined maps (`phase_environ` step 5, merge tail,
+  standalone base). The domain is the narrowed `PORTAGE_USE`, not the
+  full effective set (Portage filters after `difference_update`).
+- A probe `repos.conf` without the overlay sections fails resolution
+  (`overlay:crossrepo-parent` in the fixture profile's `parent`); S4
+  test roots carry the same repo set as S0's `mkcfg`/S1's `_t341`
+  helpers. Related: `resolve_standalone_config` (and hence every S4
+  default) is `None` when the profile chain cannot resolve -- then all
+  readers keep today's env-only behavior.
+- `T348_LOGDIR` set in `make.conf` reaches the phase (config scalars
+  are exported unless filtered), which is what makes the per-test
+  env-dump pins hermetic; via the calling env it is dropped (not
+  whitelisted), which is why S0-day dumps needed the shared fallback.
+- `emerge -C` on the fixture vdb seeds (no `CONTENTS`) keeps the
+  `not installed` error by design (#348 S6 M1); the CLEAN_DELAY pin
+  therefore merges `t348-d-unmerge-1` for real first.
+
+### Anything left undone and why
+- Emerge-half fetch landing (`349-DIST`): `plan_resolve` and
+  `package_options_from_env` now read config `DISTDIR`, covered by the
+  `distdir_from_*` unit tests, but no end-to-end fetch pin exists:
+  portuale has no `--fetchonly` (S0 `e07` NEW), and a real-merge fetch
+  vehicle would need the distfiles proxy in the committed suite. The
+  direct-path `PORTAGE_ACTUAL_DISTDIR`/seeded-fetch pins cover the
+  mechanism. Vehicle decision for the coordinator: pin it when
+  `--fetchonly` lands.
+- `Packages.gz` beside `Packages` on `ebuild ... package` (seen in S0
+  `e06`: Portage writes both, portuale only `Packages`). Out of S4's
+  file list; not pinned, not fixed.
+- `noauto` in direct-path `FEATURES` for `merge` (see above);
+  S5-adjacent.
+- No bed script run (per task); the `l1-ebuild-direct.sh` cell and the
+  merge-path gate (glibc + bash) are the coordinator's.
+- No commit/push/checkout/stash (coordinator's grant). Scratch under
+  `/var/tmp/s4probe`, `/var/tmp/s4cap`, `/var/tmp/t348-b`,
+  `/var/tmp/portage` probe remnants deleted at the end.

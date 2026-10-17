@@ -30,7 +30,7 @@ The environment variables and PATH a phase runs with.
 - Value for `PORTAGE_PYTHON` in a phase (#326 S2.3/D2): the `portuale-python` shim next to the phase runtime in native mode, `/usr/bin/python` with `PORTUALE_PYTHON_HELPERS=real`.
 
 ## fn phase_env_vars (FEATURES)
-- The merge path's base has no `FEATURES`, so the process value stands (still overridden downstream by `extra_env`); the standalone `phase_environ` base already folds run-wide + package.env + calling env, which a raw literal must not clobber. No-config standalone runs keep the process value.
+- The merge path's base has no `FEATURES`, so the run's resolved list from `extra_env` stands (still overridden downstream by `extra_env`); the standalone `phase_environ` base already folds run-wide + package.env + calling env, which a raw literal must not clobber. No-config runs keep the process value (#349 S4; before, the fallback was always the raw process read).
 
 ## fn phase_env_vars (RESTRICT/PROPERTIES)
 - From the package's already-USE-reduced `RESTRICT`/`PROPERTIES` (`str(self._pkg.restrict)`/`str(self._pkg.properties)`). Bash consults these directly: the `RESTRICT=test` skip, `RESTRICT=nostrip`/`RESTRICT=strip`. The raw `RESTRICT`/`PROPERTIES` are never exported (only the ebuild's own bash sees the raw unreduced values via its sourced metadata). `depend` reduces on the config `USE` set (Portage's `PORTAGE_USE`); see `restrict_and_properties`.
@@ -78,3 +78,8 @@ The environment variables and PATH a phase runs with.
 
 ## fn eapi_path_var
 - #348 S2: the trailing-slash decision now reads `path_variables_end_with_trailing_slash` from `EapiAttrs` instead of matching `0..6`; behaviour identical (`SYSROOT` is always stripped per bug 654600 and never comes through here).
+
+## fn phase_env_vars (#349 S4: FEATURES fallback, PORTAGE_CONFIGROOT, PORTAGE_REPO_NAME)
+- The `FEATURES` fallback (no standalone folded base, i.e. merge builds and config-less runs) is `features_string(extra_env)` -- the run's resolved list when threaded, else the process env -- never the raw process read (`phase_features_value`, removed). The standalone folded base still wins whenever present.
+- `PORTAGE_CONFIGROOT` is pushed with Portage's trailing slash (`config_root_with_slash`, `LocationsManager.py`: `config_root.rstrip(sep) + sep`); the whitelisted calling-env passthrough carries the raw value, this computed one wins. S0 `e01-full` oracle (`<cfg>/`).
+- `PORTAGE_REPO_NAME` is pushed from `repository_name_for(&env.pkg_dir)` (the `profiles/repo_name` walk the merge path already uses per entry in `entry_identity_env`); absent outside a repo checkout. Fixes the direct-path `die` `::repo` suffix (was empty, S0 `e08-die-repo`). The merge path threads the same value per entry through `extra_env`, which wins downstream -- same value, no conflict.
