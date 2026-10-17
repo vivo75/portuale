@@ -530,6 +530,7 @@ pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result
         config_protect: options.config_protect.clone(),
         config_protect_mask: options.config_protect_mask.clone(),
         unmerge_orphans: options.unmerge_orphans,
+        uninstall_ignore: options.uninstall_ignore.clone(),
         config_root: options.config_root.clone(),
         already_unmerged: deferred_delete.map(<[String]>::to_vec).unwrap_or_default(),
     };
@@ -585,18 +586,21 @@ pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result
     let mut retire = (deferred_delete.is_none() && !is_replacement)
         .then(|| RetireWrites::for_root(root))
         .flatten();
-    crate::ebuild_unmerge::unmerge_pkgfiles_into(crate::ebuild_unmerge::UnmergePkgfilesIntoArgs {
-        root,
-        category,
-        pn: package,
-        pf,
-        also_keep,
-        options: &unmerge_options,
-        is_replacement,
-        replacement_preserved,
-        replacement_needed,
-        retire: retire.as_mut(),
-    })?;
+    let elog_lines = crate::ebuild_unmerge::unmerge_pkgfiles_into(
+        crate::ebuild_unmerge::UnmergePkgfilesIntoArgs {
+            root,
+            category,
+            pn: package,
+            pf,
+            also_keep,
+            options: &unmerge_options,
+            is_replacement,
+            replacement_preserved,
+            replacement_needed,
+            retire: retire.as_mut(),
+        },
+    )?;
+    crate::ebuild_unmerge::emit_unmerge_elog(root, category, pf, &elog_lines);
     let postrm_status = run_hook("postrm")?;
     if postrm_status != 0 {
         eprintln!("{category}/{pf}: FAILED postrm ({postrm_status}) -- unmerge continues");

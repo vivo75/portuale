@@ -73,6 +73,185 @@ pub fn unmerge_orphans_from_env() -> bool {
         .any(|t| t == "unmerge-orphans")
 }
 
+/// `PACKDEBUG_PATH` (`const.py:113`): under `FEATURES=packdebug` Portage
+/// keeps serving old debuginfo tarballs to binhost clients instead of
+/// unmerging them.
+pub(crate) const PACKDEBUG_TARBALL_IGNORE: &str = "/usr/lib/debug/.tarball/*";
+
+/// The `UNINSTALL_IGNORE` list with the packdebug tarball dir appended
+/// exactly when `features` carries `packdebug` (a stale copy is dropped
+/// first, so re-resolving is idempotent).
+/// Portage: dbapi/vartree.py, _unmerge_pkgfiles; const.py:113
+pub(crate) fn uninstall_ignore_with_packdebug(base: &str, features: &str) -> String {
+    let mut patterns: Vec<String> = shlex_split(base)
+        .into_iter()
+        .filter(|p| p != PACKDEBUG_TARBALL_IGNORE)
+        .collect();
+    if features.split_whitespace().any(|t| t == "packdebug") {
+        patterns.push(PACKDEBUG_TARBALL_IGNORE.to_string());
+    }
+    patterns.join(" ")
+}
+
+/// POSIX-shell word splitting for `UNINSTALL_IGNORE` (quotes group,
+/// backslash escapes the next char), as Portage's `shlex.split` does.
+/// Portage: dbapi/vartree.py, _unmerge_pkgfiles (`shlex.split`)
+pub(crate) fn shlex_split(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else if q == '"' && c == '\\' {
+                    match chars.next() {
+                        Some(n) if n == '"' || n == '\\' => cur.push(n),
+                        Some(n) => {
+                            cur.push('\\');
+                            cur.push(n);
+                        }
+                        None => cur.push('\\'),
+                    }
+                } else {
+                    cur.push(c);
+                }
+            }
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    in_word = true;
+                }
+                '\\' => {
+                    if let Some(n) = chars.next() {
+                        cur.push(n);
+                    }
+                    in_word = true;
+                }
+                c if c.is_whitespace() => {
+                    if in_word {
+                        out.push(std::mem::take(&mut cur));
+                        in_word = false;
+                    }
+                }
+                _ => {
+                    cur.push(c);
+                    in_word = true;
+                }
+            },
+        }
+    }
+    if in_word {
+        out.push(cur);
+    }
+    out
+}
+
+/// Whether the root-relative `abs_path` (leading `/`) matches any
+/// `UNINSTALL_IGNORE` pattern, with Python-fnmatch semantics.
+/// Portage: dbapi/vartree.py, _unmerge_pkgfiles (`fnmatch.fnmatch`)
+fn uninstall_ignore_matches(patterns: &[String], abs_path: &str) -> bool {
+    patterns
+        .iter()
+        .any(|p| crate::install_mask::fnmatch(abs_path, p))
+}
+
+/// Greedy 72-column word wrap, Portage's `textwrap.wrap(msg, 72)` for a
+/// message with no long words (the preserved-symlink notice).
+fn wrap_72(msg: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    for word in msg.split_whitespace() {
+        if cur.is_empty() {
+            cur.push_str(word);
+        } else if cur.len() + 1 + word.len() <= 72 {
+            cur.push(' ');
+            cur.push_str(word);
+        } else {
+            lines.push(std::mem::take(&mut cur));
+            cur.push_str(word);
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
+/// Live `(dev, ino)` of every recorded path's parent directory, each with
+/// the recorded parents behind it. Portage builds the same map per dblink
+/// to match a path through a symlinked directory by inode.
+/// Portage: dbapi/vartree.py, dblink._match_contents (`_contents_inodes`)
+fn recorded_parent_inodes(root: &Path, text: &str) -> BTreeMap<(u64, u64), Vec<String>> {
+    let mut map: BTreeMap<(u64, u64), Vec<String>> = BTreeMap::new();
+    let mut stat_done: BTreeSet<String> = BTreeSet::new();
+    for (_, recorded) in portage_vdb::paths(text) {
+        let parent = Path::new(recorded.trim_start_matches('/'))
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !stat_done.insert(parent.clone()) {
+            continue;
+        }
+        if let Ok(meta) = std::fs::metadata(root.join(&parent)) {
+            map.entry((meta.dev(), meta.ino()))
+                .or_default()
+                .push(parent);
+        }
+    }
+    map
+}
+
+/// Whether the package whose `CONTENTS` is `text` owns `abs_path`: the
+/// exact path, or Portage's narrow parent-inode form — the live parent
+/// directory's `(dev, ino)` equals a recorded parent's, and the path
+/// rebuilt under that recorded parent is itself recorded.
+/// Portage: dbapi/vartree.py, dblink._match_contents.
+fn contents_isowner(
+    root: &Path,
+    text: &str,
+    abs_path: &str,
+    inodes: &BTreeMap<(u64, u64), Vec<String>>,
+) -> bool {
+    if ebuild_merge::contents_text_owns(text, abs_path) {
+        return true;
+    }
+    let rel = abs_path.trim_start_matches('/');
+    let path = Path::new(rel);
+    let (Some(parent), Some(base)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+    else {
+        return false;
+    };
+    let Ok(parent_meta) = std::fs::metadata(root.join(parent)) else {
+        return false;
+    };
+    let Some(parents) = inodes.get(&(parent_meta.dev(), parent_meta.ino())) else {
+        return false;
+    };
+    parents.iter().any(|dir| {
+        let rebuilt = if dir.is_empty() {
+            format!("/{base}")
+        } else {
+            format!("/{dir}/{base}")
+        };
+        ebuild_merge::contents_text_owns(text, &rebuilt)
+    })
+}
+
+/// Whether `text` owns `abs_path`: the exact path, or any recorded path
+/// holding it as a proper prefix component. Portage's `getcontents`
+/// materialises implicit parent `dir` entries, so a file installed
+/// through a directory symlink owns the symlink too; the prefix form is
+/// that mechanism without materialising the entries.
+/// Portage: dbapi/vartree.py, getcontents (`dir_entry`); _owners.
+fn contents_owns_or_under(text: &str, abs_path: &str) -> bool {
+    let prefix = format!("{abs_path}/");
+    portage_vdb::paths(text).any(|(_, path)| path == abs_path || path.starts_with(prefix.as_str()))
+}
+
 /// Orphaned symlinks by live target directory `(dev, ino)`; grouped so
 /// `remove_dirs` can look them up by inode.
 /// Portage: dbapi/vartree.py, _unmerge_dirs.
@@ -82,6 +261,7 @@ type ProtectedSymlinks = BTreeMap<(u64, u64), Vec<String>>;
 struct RemoveContentsArgs<'a> {
     root: &'a Path,
     category: &'a str,
+    pf: &'a str,
     others_in_slot: &'a [String],
     /// The members of `others_in_slot` that are the package being merged
     /// over this one; their ownership comes from the new image's `CONTENTS`.
@@ -89,6 +269,9 @@ struct RemoveContentsArgs<'a> {
     config_protect: &'a str,
     config_protect_mask: &'a str,
     unmerge_orphans: bool,
+    /// Raw `UNINSTALL_IGNORE` (the resolved scalar with the packdebug fold);
+    /// split shell-style once per call.
+    uninstall_ignore: &'a str,
     infodirs_inodes: &'a BTreeSet<(u64, u64)>,
     cfgfiledict: &'a BTreeMap<String, String>,
     stale_confmem: &'a mut Vec<String>,
@@ -97,24 +280,28 @@ struct RemoveContentsArgs<'a> {
 }
 
 /// Deletes every `CONTENTS`-listed entry from `root`, deepest paths first,
-/// in Portage's arm order: missing lstat skips, the `is_owned`/symlink-orphan
-/// check, the orphan arm for any non-directory (any recorded kind), the
-/// mtime check for kinds other than `dir`/`fif`/`dev`, then the `!dir`,
-/// `!sym`, `!obj`+`!md5`, `!fif` type guards. A `dir` entry that is a live
-/// symlink stays on the old path (deferred to `remove_dirs`, which keeps
-/// it): R3 moves with R2/R4/R4b so no commit can unlink `/bin` on a
-/// merged-usr `emerge -C`. Removed paths still remembered by `cfgfiledict`
-/// are collected into `stale_confmem`; `preserved_paths` are filtered first.
+/// in Portage's arm order: missing lstat skips, the `UNINSTALL_IGNORE` and
+/// libdir-symlink ignores, the `is_owned`/symlink-orphan check, the orphan
+/// arm for any non-directory (any recorded kind), the mtime check for kinds
+/// other than `dir`/`fif`/`dev`, then the `!dir`, `!sym`, `!obj`+`!md5`,
+/// `!fif` type guards. A `dir` entry that is a live symlink takes the sym
+/// branch (R3); a symlink to a non-empty directory whose children are not
+/// all owned regular files waits in `protected_symlinks` (R4) for the
+/// owners search. Removed paths still remembered by `cfgfiledict` are
+/// collected into `stale_confmem`; `preserved_paths` are filtered first.
+/// Returns the R4b elog lines (empty when nothing was protected).
 /// Portage: dbapi/vartree.py, _unmerge_pkgfiles.
-fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
+fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> {
     let RemoveContentsArgs {
         root,
         category,
+        pf,
         others_in_slot,
         replacing,
         config_protect,
         config_protect_mask,
         unmerge_orphans,
+        uninstall_ignore,
         infodirs_inodes,
         cfgfiledict,
         stale_confmem,
@@ -124,6 +311,8 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
     let mut entries = parse_contents(contents_text);
     entries.retain(|e| !preserved_paths.contains(&e.abs_path));
     entries.sort_by(|a, b| b.abs_path.cmp(&a.abs_path));
+    let ignore_patterns = shlex_split(uninstall_ignore);
+    let self_inodes = recorded_parent_inodes(root, contents_text);
 
     let mut protected_symlinks: ProtectedSymlinks = BTreeMap::new();
     let mut dirs: Vec<(PathBuf, (u64, u64))> = Vec::new();
@@ -160,7 +349,6 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
             .iter()
             .flatten()
             .any(|text| ebuild_merge::contents_text_owns(text, &entry.abs_path));
-
         // A live symlink-to-directory claimed as a literal `dir` entry
         // elsewhere defers to `remove_dirs` (Portage: _unmerge_pkgfiles).
         if is_owned
@@ -180,6 +368,20 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
                     .or_default()
                     .push(entry.abs_path.clone());
             }
+        }
+
+        // R1 (`UNINSTALL_IGNORE` fnmatch, packdebug folded) and R2 (live
+        // `/lib`, `/usr/lib`, `/usr/local/lib` symlinks never go): both
+        // skip before ownership, like Portage's `cfgpro` arm.
+        // Portage: dbapi/vartree.py, _unmerge_pkgfiles.
+        if uninstall_ignore_matches(&ignore_patterns, &entry.abs_path)
+            || (islink
+                && matches!(
+                    entry.abs_path.as_str(),
+                    "/lib" | "/usr/lib" | "/usr/local/lib"
+                ))
+        {
+            continue;
         }
 
         if is_owned {
@@ -242,25 +444,71 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
                 }
                 unlink_tolerant(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
             }
-            "sym" => {
+            "sym" | "dir" => {
+                // R3: a `dir` entry that is a live symlink takes the sym
+                // branch (unlinked, subject to R4). A `dir` that is neither
+                // a live symlink nor a live directory is `!dir`-kept.
+                // Portage: dbapi/vartree.py, _unmerge_pkgfiles.
+                if entry.node_type == "dir" && !islink {
+                    // `!dir`: a recorded directory that is not a live
+                    // directory stays (the mtime arm never ran for it).
+                    if lstat.is_dir() {
+                        dirs.push((dest, (lstat.dev(), lstat.ino())));
+                    }
+                    continue;
+                }
                 // `!sym`: a recorded symlink that is not a live symlink
-                // stays (a `dir` entry that is a live symlink never
-                // reaches here: R3 moves with R2/R4/R4b, so it stays on
-                // the old deferred path below).
+                // stays.
                 if !islink {
                     continue;
                 }
-                unlink_tolerant(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-            }
-            "dir" => {
-                // `!dir`: a recorded directory that is not a live
-                // directory stays (the mtime arm never ran for it).
-                if lstat.is_dir() && !islink {
-                    dirs.push((dest, (lstat.dev(), lstat.ino())));
-                } else if islink {
-                    // A live symlink (R3, not this slice): today's path.
-                    dirs.push((dest, (lstat.dev(), lstat.ino())));
+                // R4: a symlink to a non-empty directory is kept unless
+                // every child is a regular file this package owns; then it
+                // waits in `protected_symlinks` for the owners search.
+                // Portage: dbapi/vartree.py, _unmerge_pkgfiles (`!empty`).
+                if let Some(target_meta) = stat.as_ref().filter(|m| m.is_dir()) {
+                    let names: Vec<String> = portage_util::read_dir_entries(&dest)
+                        .map(|entries| {
+                            entries
+                                .into_iter()
+                                .map(|e| e.file_name().to_string_lossy().into_owned())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if !names.is_empty() {
+                        let target_key = (target_meta.dev(), target_meta.ino());
+                        let mut all_owned = true;
+                        for name in &names {
+                            let child_abs = format!("{}/{name}", entry.abs_path);
+                            if !contents_isowner(root, contents_text, &child_abs, &self_inodes) {
+                                all_owned = false;
+                                break;
+                            }
+                            match std::fs::symlink_metadata(
+                                root.join(child_abs.trim_start_matches('/')),
+                            ) {
+                                // Vanished mid-unmerge: skip, like Portage.
+                                Err(_) => continue,
+                                Ok(meta) if !meta.file_type().is_file() => {
+                                    // Nested symlinks or directories make
+                                    // the issue complex, so the symlink is
+                                    // preserved to be on the safe side.
+                                    all_owned = false;
+                                    break;
+                                }
+                                Ok(_) => {}
+                            }
+                        }
+                        if !all_owned {
+                            protected_symlinks
+                                .entry(target_key)
+                                .or_default()
+                                .push(entry.abs_path.clone());
+                            continue;
+                        }
+                    }
                 }
+                unlink_tolerant(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
             }
             "fif" if !lstat.file_type().is_fifo() => {
                 // `!fif`: a recorded fifo that is not a live fifo stays.
@@ -275,8 +523,181 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<(), String> {
         }
     }
     remove_dirs(root, dirs, &mut protected_symlinks, infodirs_inodes);
-    // Entries `remove_dirs` didn't resolve stay in place with no warning.
-    Ok(())
+    let mut elog = unmerge_protected_symlinks(UnmergeProtectedArgs {
+        root,
+        category,
+        pf,
+        others_in_slot: &owner_texts,
+        infodirs_inodes,
+        protected_symlinks: &mut protected_symlinks,
+    })?;
+    // Whatever R4b left behind stays, with the preserved notice.
+    // Portage: dbapi/vartree.py, _unmerge_pkgfiles (trailing elog).
+    if !protected_symlinks.is_empty() {
+        let flat: BTreeSet<&String> = protected_symlinks
+            .values()
+            .flat_map(|syms| syms.iter())
+            .collect();
+        elog.extend(wrap_72(
+            "One or more symlinks to directories have been preserved in order to \
+             ensure that files installed via these symlinks remain accessible. \
+             This indicates that the mentioned symlink(s) may be obsolete remnants \
+             of an old install, and it may be appropriate to replace a given symlink \
+             with the directory that it points to.",
+        ));
+        elog.push(String::new());
+        for f in flat {
+            elog.push(format!(
+                "\t{}",
+                root.join(f.trim_start_matches('/')).display()
+            ));
+        }
+        elog.push(String::new());
+    }
+    Ok(elog)
+}
+
+/// Arguments of [`unmerge_protected_symlinks`].
+struct UnmergeProtectedArgs<'a> {
+    root: &'a Path,
+    category: &'a str,
+    pf: &'a str,
+    others_in_slot: &'a [Option<String>],
+    infodirs_inodes: &'a BTreeSet<(u64, u64)>,
+    protected_symlinks: &'a mut ProtectedSymlinks,
+}
+
+/// Portage's `_unmerge_protected_symlinks`: for the leftover
+/// `protected_symlinks`, return early when a same-slot instance owns the
+/// path; otherwise search every installed package for owners of the
+/// symlink path (an exact record, or a record under it — Portage's
+/// `getcontents` materialises implicit parent dirs) and unlink it when
+/// only this package owns it, re-running `remove_dirs` over its ancestors.
+/// Returns the search elog lines (empty when the early return fires).
+/// Portage: dbapi/vartree.py, _unmerge_protected_symlinks.
+fn unmerge_protected_symlinks(args: UnmergeProtectedArgs<'_>) -> Result<Vec<String>, String> {
+    let UnmergeProtectedArgs {
+        root,
+        category,
+        pf,
+        others_in_slot,
+        infodirs_inodes,
+        protected_symlinks,
+    } = args;
+    if protected_symlinks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let flat: Vec<String> = {
+        let mut set = BTreeSet::new();
+        for syms in protected_symlinks.values() {
+            set.extend(syms.iter().cloned());
+        }
+        set.into_iter().collect()
+    };
+
+    for f in &flat {
+        for other in others_in_slot.iter().flatten() {
+            let inodes = recorded_parent_inodes(root, other);
+            if contents_isowner(root, other, f, &inodes) {
+                // Another same-slot instance owns a file via this
+                // symlink: skip the search (the trailing preserved
+                // notice still fires in the caller).
+                return Ok(Vec::new());
+            }
+        }
+    }
+
+    let mut elog = vec![
+        String::new(),
+        "Directory symlink(s) may need protection:".to_string(),
+        String::new(),
+    ];
+    for f in &flat {
+        elog.push(format!(
+            "\t{}",
+            root.join(f.trim_start_matches('/')).display()
+        ));
+    }
+    elog.extend(
+        [
+            "",
+            "Use the UNINSTALL_IGNORE variable to exempt specific symlinks",
+            "from the following search (see the make.conf man page).",
+            "",
+            "Searching all installed packages for files installed via above symlink(s)...",
+            "",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
+
+    let db = portage_vdb::for_root(root);
+    let all = db.read_file_all("CONTENTS").map_err(|e| e.to_string())?;
+    let mut owned = false;
+    'scan: for (key, bytes) in &all {
+        if key.category == category && key.pf == pf {
+            continue;
+        }
+        let Some(bytes) = bytes else { continue };
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            continue;
+        };
+        for f in &flat {
+            if contents_owns_or_under(text, f) {
+                owned = true;
+                break 'scan;
+            }
+        }
+    }
+
+    if !owned {
+        elog.push(
+            "The above directory symlink(s) are all safe to remove. Removing them now..."
+                .to_string(),
+        );
+        elog.push(String::new());
+        let mut dirs = Vec::new();
+        for syms in protected_symlinks.values() {
+            for relative_path in syms {
+                let obj = root.join(relative_path.trim_start_matches('/'));
+                let mut parent = obj.parent().map(Path::to_path_buf);
+                while let Some(p) = parent {
+                    if p == root || !p.starts_with(root) {
+                        break;
+                    }
+                    if let Ok(meta) = std::fs::symlink_metadata(&p) {
+                        dirs.push((p.clone(), (meta.dev(), meta.ino())));
+                    }
+                    parent = p.parent().map(Path::to_path_buf);
+                }
+                unlink_tolerant(&obj).map_err(|e| format!("{}: {e}", obj.display()))?;
+            }
+        }
+        protected_symlinks.clear();
+        remove_dirs(root, dirs, protected_symlinks, infodirs_inodes);
+    }
+    Ok(elog)
+}
+
+/// Echo the R4b lines (` * `, Portage's echo module) and append them to the
+/// elog summary log; both best-effort around a successful unmerge.
+/// Portage: dbapi/vartree.py, dblink._elog("elog", "postrm", ...).
+pub(crate) fn emit_unmerge_elog(root: &Path, category: &str, pf: &str, lines: &[String]) {
+    if lines.is_empty() {
+        return;
+    }
+    if crate::elog::echo_enabled() {
+        for line in lines {
+            println!(" * {line}");
+        }
+    }
+    if crate::elog::module_enabled("save_summary") {
+        let _ = crate::elog::save_summary_process(
+            &crate::elog::logdir(root),
+            &format!("{category}/{pf}"),
+            &lines.join("\n"),
+        );
+    }
 }
 
 /// `remove_file` tolerating what Portage's `unlink()` tolerates beyond
@@ -406,6 +827,11 @@ pub struct UnmergeOptions {
     /// accumulated default set -- setting `FEATURES` to any other token
     /// reads as `false` here, unlike Portage.
     pub unmerge_orphans: bool,
+    /// `UNINSTALL_IGNORE` paths the unmerge skips (the resolved scalar with
+    /// the packdebug fold); mirrors `MergeOptions::uninstall_ignore`, which
+    /// is where the three entry points resolve it.
+    /// Portage: dbapi/vartree.py, _unmerge_pkgfiles; cnf/make.globals:93
+    pub uninstall_ignore: String,
     /// Portage's `PORTAGE_CONFIGROOT`; only consulted by the masters-chain
     /// resolution reached via the `prerm`/`postrm` phase calls below.
     pub config_root: PathBuf,
@@ -423,6 +849,7 @@ impl Default for UnmergeOptions {
             config_protect: "/etc".to_string(),
             config_protect_mask: "/etc/env.d".to_string(),
             unmerge_orphans: true,
+            uninstall_ignore: "/lib/modules/*".to_string(),
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
             already_unmerged: Vec::new(),
         }
@@ -476,6 +903,7 @@ pub(crate) fn unmerge_pkgfiles(args: UnmergePkgfilesArgs<'_>) -> Result<(), Stri
         replacement_needed,
         retire: None,
     })
+    .map(|_| ())
 }
 
 /// Arguments of [`unmerge_pkgfiles_into`].
@@ -494,8 +922,11 @@ pub(crate) struct UnmergePkgfilesIntoArgs<'a> {
 
 /// [`unmerge_pkgfiles`] collecting the registry/config-memory/other-entry
 /// writes into `retire` instead of committing one by one; `None` commits
-/// directly. See [`retire_entry`].
-pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result<(), String> {
+/// directly. Returns the R4b elog lines for the caller to echo and log.
+/// See [`retire_entry`].
+pub(crate) fn unmerge_pkgfiles_into(
+    args: UnmergePkgfilesIntoArgs<'_>,
+) -> Result<Vec<String>, String> {
     let UnmergePkgfilesIntoArgs {
         root,
         category,
@@ -591,14 +1022,16 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
             retire: retire.as_deref_mut(),
         })?;
 
-    remove_contents(RemoveContentsArgs {
+    let elog = remove_contents(RemoveContentsArgs {
         root,
         category,
+        pf,
         others_in_slot: &others_in_slot,
         replacing: also_keep,
         config_protect: &options.config_protect,
         config_protect_mask: &options.config_protect_mask,
         unmerge_orphans: options.unmerge_orphans,
+        uninstall_ignore: &options.uninstall_ignore,
         infodirs_inodes: &infodirs_inodes,
         cfgfiledict: &cfgfiledict,
         stale_confmem: &mut stale_confmem,
@@ -653,7 +1086,7 @@ pub(crate) fn unmerge_pkgfiles_into(args: UnmergePkgfilesIntoArgs<'_>) -> Result
         },
     )?;
 
-    Ok(())
+    Ok(elog)
 }
 
 /// Removes the vdb entry directory itself, then best-effort `rmdir`s its
@@ -732,7 +1165,7 @@ pub fn run_unmerge(
     }
 
     let mut retire = ebuild_merge::RetireWrites::for_root(root);
-    unmerge_pkgfiles_into(UnmergePkgfilesIntoArgs {
+    let elog_lines = unmerge_pkgfiles_into(UnmergePkgfilesIntoArgs {
         root,
         category: &env.category,
         pn: &env.split.pn,
@@ -744,6 +1177,7 @@ pub fn run_unmerge(
         replacement_needed: &[],
         retire: retire.as_mut(),
     })?;
+    emit_unmerge_elog(root, &env.category, &env.split.pf, &elog_lines);
 
     let postrm_status = ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
         ebuild_path,
@@ -842,6 +1276,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -881,6 +1317,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -913,6 +1351,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: true,
@@ -945,6 +1385,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: true,
@@ -964,8 +1406,9 @@ mod tests {
 
     #[test]
     fn remove_contents_with_unmerge_orphans_leaves_a_symlink_to_a_directory_alone() {
-        // Excludes a symlink to a directory; the mtime-checked removal
-        // leaves it alone here too.
+        // R2 skips a live `/lib` symlink before anything else (this also
+        // exercises the orphan arm's symlink-to-directory exclusion, which
+        // would leave it alone here too).
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("real-lib")).unwrap();
@@ -977,6 +1420,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: true,
@@ -1009,6 +1454,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1035,6 +1482,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1087,6 +1536,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &["otherpkg-2.0".to_string()],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1132,6 +1583,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1176,6 +1629,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &["otherpkg-2.0".to_string()],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1210,6 +1665,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &["orphanpkg-2.0".to_string()],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1254,6 +1711,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &["orphanpkg-2.0".to_string()],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1369,6 +1828,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1414,6 +1875,8 @@ mod tests {
             category: "dev-libs",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1637,6 +2100,8 @@ mod tests {
             category: "app-misc",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1673,6 +2138,8 @@ mod tests {
             category: "app-misc",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1718,6 +2185,8 @@ mod tests {
             category: "app-misc",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: false,
@@ -1761,6 +2230,8 @@ mod tests {
             category: "app-misc",
             others_in_slot: &[],
             replacing: &[],
+            pf: "",
+            uninstall_ignore: "",
             config_protect: "/etc",
             config_protect_mask: "",
             unmerge_orphans: true,
@@ -1796,6 +2267,8 @@ mod tests {
                 category: "app-misc",
                 others_in_slot: &[],
                 replacing: &[],
+                pf: "",
+                uninstall_ignore: "",
                 config_protect: "/etc",
                 config_protect_mask: "",
                 unmerge_orphans,
@@ -1836,6 +2309,8 @@ mod tests {
                 category: "app-misc",
                 others_in_slot: &[],
                 replacing: &[],
+                pf: "",
+                uninstall_ignore: "",
                 config_protect: "/etc",
                 config_protect_mask: "",
                 unmerge_orphans,
@@ -1874,6 +2349,8 @@ mod tests {
                 category: "app-misc",
                 others_in_slot: &[],
                 replacing: &[],
+                pf: "",
+                uninstall_ignore: "",
                 config_protect: "/etc",
                 config_protect_mask: "",
                 unmerge_orphans,
@@ -1918,6 +2395,13 @@ mod tests {
             format!("dir /bin\nobj /bin/t355 {md5} {mtime}\n"),
         )
         .unwrap();
+        // A second package records `dir /bin` too, so the R4b owners
+        // search keeps the symlink (the C1a shape: Portage 3.0.82.2 keeps
+        // `/bin` with `--- !empty`, then the preserved notice).
+        let vdb_b = root.join("var/db/pkg/app-misc/t355-c1b-1");
+        std::fs::create_dir_all(&vdb_b).unwrap();
+        std::fs::write(vdb_b.join("CONTENTS"), "dir /bin\nobj /bin/oth abc 1\n").unwrap();
+        std::fs::write(root.join("usr/bin/oth"), b"other package").unwrap();
 
         let portage_tmpdir = tmp.join("tmp");
         std::fs::create_dir_all(&portage_tmpdir).unwrap();
@@ -1942,6 +2426,10 @@ mod tests {
         assert!(
             !root.join("bin/t355").exists(),
             "the package's own file is removed"
+        );
+        assert!(
+            root.join("bin/oth").is_file(),
+            "the other package's file survives"
         );
         assert!(
             root.join("bin")
@@ -2110,5 +2598,598 @@ mod tests {
         })
         .expect_err("without CONTENTS must fail");
         assert!(err.contains("not installed"), "{err}");
+    }
+
+    #[test]
+    fn shlex_split_follows_shell_quoting() {
+        assert_eq!(shlex_split(""), Vec::<String>::new());
+        assert_eq!(
+            shlex_split("/lib/modules/* /a/b"),
+            vec!["/lib/modules/*", "/a/b"]
+        );
+        assert_eq!(shlex_split("\"/x/*\" '/y/*'"), vec!["/x/*", "/y/*"]);
+        assert_eq!(shlex_split("a\"b c\"d"), vec!["ab cd"]);
+        assert_eq!(shlex_split("/x/\\ foo"), vec!["/x/ foo"]);
+    }
+
+    #[test]
+    fn uninstall_ignore_with_packdebug_appends_exactly_under_packdebug() {
+        // Portage 3.0.82.2, vartree.py:2926-2931 (S0 cell U2 is source-only:
+        // portuale never writes the tarball, so only the fold is pinned).
+        assert_eq!(
+            uninstall_ignore_with_packdebug("/lib/modules/*", "packdebug"),
+            "/lib/modules/* /usr/lib/debug/.tarball/*"
+        );
+        assert_eq!(
+            uninstall_ignore_with_packdebug("/lib/modules/*", "buildpkg"),
+            "/lib/modules/*"
+        );
+        // Re-resolving is idempotent, never stacking the pattern.
+        assert_eq!(
+            uninstall_ignore_with_packdebug(
+                "/lib/modules/* /usr/lib/debug/.tarball/*",
+                "packdebug"
+            ),
+            "/lib/modules/* /usr/lib/debug/.tarball/*"
+        );
+        // Leaving `packdebug` drops a stale copy again.
+        assert_eq!(
+            uninstall_ignore_with_packdebug("/lib/modules/* /usr/lib/debug/.tarball/*", "buildpkg"),
+            "/lib/modules/*"
+        );
+    }
+
+    #[test]
+    fn wrap_72_matches_portage_textwrap_on_the_preserved_notice() {
+        // Portage 3.0.82.2, S0 cell C1a-pg (`textwrap.wrap(msg, 72)`): the
+        // trailing preserved-symlink notice wraps to exactly these lines.
+        assert_eq!(
+            wrap_72(
+                "One or more symlinks to directories have been preserved in order to \
+                 ensure that files installed via these symlinks remain accessible. \
+                 This indicates that the mentioned symlink(s) may be obsolete remnants \
+                 of an old install, and it may be appropriate to replace a given symlink \
+                 with the directory that it points to."
+            ),
+            vec![
+                "One or more symlinks to directories have been preserved in order to",
+                "ensure that files installed via these symlinks remain accessible. This",
+                "indicates that the mentioned symlink(s) may be obsolete remnants of an",
+                "old install, and it may be appropriate to replace a given symlink with",
+                "the directory that it points to.",
+            ]
+        );
+    }
+
+    #[test]
+    fn contents_owns_or_under_counts_a_record_under_the_symlink() {
+        // Portage's `getcontents` materialises implicit parent dirs, so a
+        // file installed through a directory symlink owns the symlink.
+        let text = "obj /usr/share/t355/link/b.txt abc 1\nsym /other -> x 1\n";
+        assert!(contents_owns_or_under(text, "/usr/share/t355/link"));
+        assert!(contents_owns_or_under(text, "/usr/share/t355/link/b.txt"));
+        assert!(!contents_owns_or_under(text, "/usr/share/t355/link2"));
+        // The prefix form owns every ancestor of a recorded path too
+        // (Portage's implicit parent dirs).
+        assert!(contents_owns_or_under(text, "/usr/share/t355"));
+        assert!(!contents_owns_or_under(text, "/other/sibling"));
+    }
+
+    #[test]
+    fn remove_contents_skips_uninstall_ignore_paths() {
+        // Portage 3.0.82.2, S0 cell U1a (not from portuale output): the
+        // literal `UNINSTALL_IGNORE="/usr/share/t355/ign/*"` drops the
+        // make.globals default, so `ign/x` is kept (`--- cfgpro`) while
+        // `m.ko` goes.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/t355/ign")).unwrap();
+        std::fs::create_dir_all(root.join("lib/modules/t355")).unwrap();
+        std::fs::write(root.join("usr/share/t355/ign/x"), b"x").unwrap();
+        std::fs::write(root.join("lib/modules/t355/m.ko"), b"mod").unwrap();
+        let x_stat = || {
+            let live = root.join("usr/share/t355/ign/x");
+            (
+                ebuild_merge::mtime_secs(&std::fs::metadata(&live).unwrap()).unwrap(),
+                ebuild_merge::md5_hex(&live).unwrap(),
+            )
+        };
+        let m_stat = || {
+            let live = root.join("lib/modules/t355/m.ko");
+            (
+                ebuild_merge::mtime_secs(&std::fs::metadata(&live).unwrap()).unwrap(),
+                ebuild_merge::md5_hex(&live).unwrap(),
+            )
+        };
+        let (x_mtime, x_md5) = x_stat();
+        let (m_mtime, m_md5) = m_stat();
+        let contents = format!(
+            "obj /usr/share/t355/ign/x {x_md5} {x_mtime}\n\
+             obj /lib/modules/t355/m.ko {m_md5} {m_mtime}\n"
+        );
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            pf: "",
+            others_in_slot: &[],
+            replacing: &[],
+            uninstall_ignore: "/usr/share/t355/ign/*",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("usr/share/t355/ign/x").is_file(),
+            "an ignored path must survive unmerge"
+        );
+        assert!(
+            !root.join("lib/modules/t355/m.ko").exists(),
+            "the dropped default no longer protects m.ko"
+        );
+    }
+
+    #[test]
+    fn remove_contents_never_removes_live_libdir_symlinks() {
+        // Portage 3.0.82.2, S0 cell L1 (not from portuale output): live
+        // symlinks `/lib` and `/usr/lib` are kept (`--- cfgpro`), exactly
+        // these two (plus `/usr/local/lib`); a recorded `/lib64` symlink
+        // is not on the list and still goes.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr")).unwrap();
+        std::os::unix::fs::symlink("lib64", root.join("lib")).unwrap();
+        std::os::unix::fs::symlink("lib64", root.join("usr/lib")).unwrap();
+        std::os::unix::fs::symlink("lib64", root.join("lib64")).unwrap();
+        let contents = "sym /lib -> lib64 1\nsym /usr/lib -> lib64 1\nsym /lib64 -> lib64 1\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            pf: "",
+            others_in_slot: &[],
+            replacing: &[],
+            uninstall_ignore: "",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        for guarded in ["lib", "usr/lib"] {
+            assert!(
+                root.join(guarded)
+                    .symlink_metadata()
+                    .is_ok_and(|m| m.file_type().is_symlink()),
+                "{guarded} must survive"
+            );
+        }
+        assert!(
+            root.join("lib64").symlink_metadata().is_err(),
+            "a recorded symlink outside the R2 list still goes"
+        );
+    }
+
+    #[test]
+    fn remove_contents_unlinks_a_dir_entry_that_is_a_live_symlink_to_an_empty_dir() {
+        // Portage 3.0.82.2, S0 cell D1 (not from portuale output): a `dir`
+        // entry that is a live symlink takes the sym branch (`<<< dir`).
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("opt/t355/other")).unwrap();
+        std::os::unix::fs::symlink("other", root.join("opt/t355/d")).unwrap();
+        let contents = "dir /opt/t355/d\n";
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            pf: "",
+            others_in_slot: &[],
+            replacing: &[],
+            uninstall_ignore: "",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            root.join("opt/t355/d").symlink_metadata().is_err(),
+            "the symlink a dir entry points at must go (S0 D1)"
+        );
+        assert!(root.join("opt/t355/other").is_dir());
+    }
+
+    #[test]
+    fn remove_contents_unlinks_a_symlink_whose_children_are_all_owned() {
+        // Portage 3.0.82.2, S0 cell E3 (not from portuale output): every
+        // child is an owned regular file, so the link goes with no elog.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/t355/a-real")).unwrap();
+        std::fs::write(root.join("usr/share/t355/a-real/f"), b"f").unwrap();
+        std::os::unix::fs::symlink("a-real", root.join("usr/share/t355/z-link")).unwrap();
+        let live_f = root.join("usr/share/t355/a-real/f");
+        let f_mtime = ebuild_merge::mtime_secs(&std::fs::metadata(&live_f).unwrap()).unwrap();
+        let f_md5 = ebuild_merge::md5_hex(&live_f).unwrap();
+        let link = root.join("usr/share/t355/z-link");
+        let link_mtime =
+            ebuild_merge::mtime_secs(&std::fs::symlink_metadata(&link).unwrap()).unwrap();
+        let contents = format!(
+            "dir /usr/share/t355/a-real\n\
+             obj /usr/share/t355/a-real/f {f_md5} {f_mtime}\n\
+             sym /usr/share/t355/z-link -> a-real {link_mtime}\n"
+        );
+        let elog = remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            pf: "",
+            others_in_slot: &[],
+            replacing: &[],
+            uninstall_ignore: "",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(link.symlink_metadata().is_err());
+        assert!(!live_f.exists());
+        assert!(
+            elog.is_empty(),
+            "all-owned links go silently (S0 E3): {elog:?}"
+        );
+    }
+
+    #[test]
+    fn remove_contents_protects_a_symlink_with_an_unowned_child_and_unlinks_it_when_nobody_owns_it()
+    {
+        // Portage 3.0.82.2, S0 cell E2 (not from portuale output): `--- !empty`
+        // plus the search elog, then `<<< sym` when the owners search finds
+        // nobody.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/t355/real")).unwrap();
+        std::fs::write(root.join("usr/share/t355/real/u.txt"), b"admin").unwrap();
+        std::os::unix::fs::symlink("real", root.join("usr/share/t355/link")).unwrap();
+        let link = root.join("usr/share/t355/link");
+        let link_mtime =
+            ebuild_merge::mtime_secs(&std::fs::symlink_metadata(&link).unwrap()).unwrap();
+        let contents =
+            format!("dir /usr/share/t355/real\nsym /usr/share/t355/link -> real {link_mtime}\n");
+        let elog = remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            pf: "t355-ea-1",
+            others_in_slot: &[],
+            replacing: &[],
+            uninstall_ignore: "",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(link.symlink_metadata().is_err());
+        assert!(root.join("usr/share/t355/real/u.txt").is_file());
+        let text = elog.join("\n");
+        assert!(text.contains("Directory symlink(s) may need protection:"));
+        assert!(text.contains("Searching all installed packages"));
+        assert!(text.contains("safe to remove. Removing them now"));
+        assert!(!text.contains("One or more symlinks"));
+    }
+
+    #[test]
+    fn remove_contents_keeps_a_protected_symlink_another_package_owns() {
+        // Portage 3.0.82.2, S0 cells C1a (keep half) and E2 (search
+        // wording), not from portuale output: E1-as-designed never reaches
+        // R4 (the merge backs the symlink aside), so this pins the
+        // redesigned probe — a second package recording the same symlink
+        // path. The link stays with the trailing preserved notice and no
+        // "safe to remove".
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/t355/real")).unwrap();
+        std::fs::write(root.join("usr/share/t355/real/u.txt"), b"admin").unwrap();
+        std::os::unix::fs::symlink("real", root.join("usr/share/t355/link")).unwrap();
+        let link = root.join("usr/share/t355/link");
+        let link_mtime =
+            ebuild_merge::mtime_secs(&std::fs::symlink_metadata(&link).unwrap()).unwrap();
+        let contents =
+            format!("dir /usr/share/t355/real\nsym /usr/share/t355/link -> real {link_mtime}\n");
+        let other_vdb = root.join("var/db/pkg/app-misc/t355-eb2-1");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(other_vdb.join("CONTENTS"), &contents).unwrap();
+        let elog = remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            pf: "t355-ea-1",
+            others_in_slot: &[],
+            replacing: &[],
+            uninstall_ignore: "",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(
+            link.symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink()),
+            "another owner keeps the link"
+        );
+        let text = elog.join("\n");
+        assert!(text.contains("Directory symlink(s) may need protection:"));
+        assert!(!text.contains("safe to remove"));
+        assert!(text.contains("One or more symlinks to directories have been preserved"));
+    }
+
+    #[test]
+    fn remove_contents_skips_the_owners_search_when_a_same_slot_instance_owns_the_link() {
+        // The R4b early return, in the bug-#326685 shape: another same-slot
+        // instance records the path as a literal `dir`, so the symlink is
+        // orphaned into `protected_symlinks` before the `is_owned` skip;
+        // R4b then skips the search elog, while the trailing preserved
+        // notice still fires.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("keep/target")).unwrap();
+        std::fs::write(root.join("keep/target/other.txt"), b"other").unwrap();
+        std::os::unix::fs::symlink(root.join("keep/target"), root.join("keep/link")).unwrap();
+        let link = root.join("keep/link");
+        let link_mtime =
+            ebuild_merge::mtime_secs(&std::fs::symlink_metadata(&link).unwrap()).unwrap();
+        let other_vdb = root.join("var/db/pkg/dev-libs/orphanpkg-2.0");
+        std::fs::create_dir_all(&other_vdb).unwrap();
+        std::fs::write(other_vdb.join("CONTENTS"), "dir /keep/link\n").unwrap();
+        let contents = format!("sym /keep/link -> whatever {link_mtime}\n");
+        let elog = remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "dev-libs",
+            pf: "seedpkg-1.0",
+            others_in_slot: &["orphanpkg-2.0".to_string()],
+            replacing: &[],
+            uninstall_ignore: "",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(link.symlink_metadata().is_ok());
+        let text = elog.join("\n");
+        assert!(
+            !text.contains("may need protection"),
+            "the early return skips the search: {text:?}"
+        );
+        assert!(text.contains("One or more symlinks to directories have been preserved"));
+    }
+
+    #[test]
+    fn contents_isowner_matches_a_child_through_a_live_symlink_by_inode() {
+        // Portage's narrow `_match_contents` form: the child is addressed
+        // through the live symlink, but the rebuilt path under the
+        // same-inode recorded parent is recorded too.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("t/a-real")).unwrap();
+        std::os::unix::fs::symlink("a-real", root.join("t/z-link")).unwrap();
+        let text = "dir /t/a-real\nobj /t/a-real/f abc 1\nsym /t/z-link -> a-real 1\n";
+        let inodes = recorded_parent_inodes(&root, text);
+        assert!(contents_isowner(&root, text, "/t/a-real/f", &inodes));
+        assert!(contents_isowner(&root, text, "/t/z-link/f", &inodes));
+        assert!(!contents_isowner(&root, text, "/t/z-link/u.txt", &inodes));
+        assert!(!contents_isowner(&root, text, "/t/a-real/u.txt", &inodes));
+    }
+
+    #[test]
+    fn merged_usr_bin_is_removed_when_no_other_package_records_it() {
+        // Portage 3.0.82.2, S0 cell C1b (not from portuale output): with no
+        // other recorder Portage removes `/bin` (`<<< sym` after the search
+        // elog). The S4 C1 test covers the keep half; this covers R4b's
+        // remove half at merged-usr scale.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::os::unix::fs::symlink("usr/bin", root.join("bin")).unwrap();
+        std::fs::write(root.join("usr/bin/u1"), b"untracked").unwrap();
+        let live = root.join("bin/t355");
+        std::fs::write(&live, b"a").unwrap();
+        let mtime = ebuild_merge::mtime_secs(&std::fs::metadata(&live).unwrap()).unwrap();
+        let md5 = ebuild_merge::md5_hex(&live).unwrap();
+        let contents = format!("dir /bin\nobj /bin/t355 {md5} {mtime}\n");
+        let elog = remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            pf: "t355-c1a-1",
+            others_in_slot: &[],
+            replacing: &[],
+            uninstall_ignore: "",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: false,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &contents,
+        })
+        .expect("remove_contents succeeds");
+
+        assert!(!root.join("bin").symlink_metadata().is_ok());
+        assert!(root.join("usr/bin/u1").is_file());
+        let text = elog.join("\n");
+        assert!(text.contains("safe to remove. Removing them now"));
+    }
+
+    /// Hand-built merged-usr pair: A owns `sym link`, B records the same
+    /// symlink path; an untracked file makes R4 protect it and R4b keep it.
+    fn seed_dir_symlink_pair(root: &Path, with_owner_b: bool) {
+        std::fs::create_dir_all(root.join("usr/share/t355/real")).unwrap();
+        std::fs::write(root.join("usr/share/t355/real/u.txt"), b"admin").unwrap();
+        std::os::unix::fs::symlink("real", root.join("usr/share/t355/link")).unwrap();
+        let link_mtime = ebuild_merge::mtime_secs(
+            &std::fs::symlink_metadata(root.join("usr/share/t355/link")).unwrap(),
+        )
+        .unwrap();
+        let contents = format!(
+            "dir /usr/share\n\
+             dir /usr/share/t355\n\
+             dir /usr/share/t355/real\n\
+             sym /usr/share/t355/link -> real {link_mtime}\n"
+        );
+        let vdb_a = root.join("var/db/pkg/app-misc/t355-ea-1");
+        std::fs::create_dir_all(&vdb_a).unwrap();
+        std::fs::write(vdb_a.join("CONTENTS"), &contents).unwrap();
+        if with_owner_b {
+            let vdb_b = root.join("var/db/pkg/app-misc/t355-eb2-1");
+            std::fs::create_dir_all(&vdb_b).unwrap();
+            std::fs::write(vdb_b.join("CONTENTS"), &contents).unwrap();
+        }
+    }
+
+    #[test]
+    fn unmerge_one_installed_keeps_a_dir_symlink_another_package_records() {
+        // Portage 3.0.82.2, S0 cells C1a (keep half) and E2 (search
+        // wording), not from portuale output: the E1 e2e through
+        // `unmerge_one_installed`, with two installed packages.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        seed_dir_symlink_pair(&root, true);
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        crate::ebuild_merge::unmerge_one_installed(crate::ebuild_merge::UnmergeOneInstalledArgs {
+            root: &root,
+            category: "app-misc",
+            package: "t355-ea",
+            pf: "t355-ea-1",
+            also_keep: &[],
+            scratch_dir: &tmp.join("scratch"),
+            portage_tmpdir: &portage_tmpdir,
+            options: &crate::ebuild_merge::MergeOptions::default(),
+            backup: None,
+            is_replacement: false,
+            replaced_by_version: None,
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+            deferred_delete: None,
+        })
+        .expect("unmerge_one_installed succeeds");
+
+        assert!(
+            root.join("usr/share/t355/link")
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink()),
+            "another owner keeps the link (S0 C1a shape)"
+        );
+        assert!(root.join("usr/share/t355/real/u.txt").is_file());
+        assert!(!root.join("var/db/pkg/app-misc/t355-ea-1").exists());
+        assert!(root.join("var/db/pkg/app-misc/t355-eb2-1").is_dir());
+    }
+
+    #[test]
+    fn unmerge_one_installed_removes_a_dir_symlink_nobody_else_records() {
+        // Portage 3.0.82.2, S0 cell E2 (not from portuale output): the E2
+        // e2e through `unmerge_one_installed` — one package, untracked
+        // child, nobody owns the link, so it goes.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        seed_dir_symlink_pair(&root, false);
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        crate::ebuild_merge::unmerge_one_installed(crate::ebuild_merge::UnmergeOneInstalledArgs {
+            root: &root,
+            category: "app-misc",
+            package: "t355-ea",
+            pf: "t355-ea-1",
+            also_keep: &[],
+            scratch_dir: &tmp.join("scratch"),
+            portage_tmpdir: &portage_tmpdir,
+            options: &crate::ebuild_merge::MergeOptions::default(),
+            backup: None,
+            is_replacement: false,
+            replaced_by_version: None,
+            replacement_needed: &[],
+            replacement_preserved: &BTreeMap::new(),
+            deferred_delete: None,
+        })
+        .expect("unmerge_one_installed succeeds");
+
+        assert!(root.join("usr/share/t355/link").symlink_metadata().is_err());
+        assert!(root.join("usr/share/t355/real/u.txt").is_file());
+    }
+
+    #[test]
+    fn unmerge_one_installed_unlinks_a_dir_entry_replaced_by_a_symlink() {
+        // Portage 3.0.82.2, S0 cell D1 (not from portuale output): the D1
+        // e2e through `unmerge_one_installed` — the recorded dir is live a
+        // symlink to an empty dir, so R3 unlinks it.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("opt/t355/other")).unwrap();
+        std::os::unix::fs::symlink("other", root.join("opt/t355/d")).unwrap();
+        let vdb = root.join("var/db/pkg/app-misc/t355-d1-1");
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(
+            vdb.join("CONTENTS"),
+            "dir /opt\ndir /opt/t355\ndir /opt/t355/d\n",
+        )
+        .unwrap();
+        let portage_tmpdir = tmp.join("tmp");
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+        crate::ebuild_merge::unmerge_one_installed(crate::ebuild_merge::UnmergeOneInstalledArgs {
+            root: &root,
+            category: "app-misc",
+            package: "t355-d1",
+            pf: "t355-d1-1",
+            also_keep: &[],
+            scratch_dir: &tmp.join("scratch"),
+            portage_tmpdir: &portage_tmpdir,
+            options: &crate::ebuild_merge::MergeOptions::default(),
+            backup: None,
+            is_replacement: false,
+            replaced_by_version: None,
+            replacement_preserved: &BTreeMap::new(),
+            replacement_needed: &[],
+            deferred_delete: None,
+        })
+        .expect("unmerge_one_installed succeeds");
+
+        assert!(root.join("opt/t355/d").symlink_metadata().is_err());
+        assert!(root.join("opt/t355/other").is_dir());
     }
 }

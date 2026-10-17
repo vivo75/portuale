@@ -521,6 +521,9 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
     // `FEATURES=unmerge-orphans` keeps what the resolved `CONFIG_PROTECT`
     // protects, not the process env's value.
     options.apply_config_protect(config);
+    // `UNINSTALL_IGNORE` from the resolved scalar (the synthetic base when
+    // `make.globals` was not read), not the raw process env.
+    options.apply_uninstall_ignore(config);
     // Resolved `FEATURES` for the backup gate and both option sets, as the
     // merge paths do.
     // Portage: dbapi/vartree.py, dblink._pre_unmerge_backup

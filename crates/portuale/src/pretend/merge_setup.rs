@@ -72,6 +72,9 @@ pub(crate) fn merge_setup(
         merge_options.install_mask,
         merge_options.install_mask_prunes_usr_share,
     ) = config_install_mask(config);
+    // `UNINSTALL_IGNORE` from the resolved scalar, for the replace loop
+    // (before `set_resolved_features`, which folds packdebug over it).
+    merge_options.apply_uninstall_ignore(config);
     merge_options.set_resolved_features(&config_features_string(config));
     // `CONFIG_PROTECT` from the resolved fold (calling env included), not the
     // raw process env. See `MergeOptions::apply_config_protect`.

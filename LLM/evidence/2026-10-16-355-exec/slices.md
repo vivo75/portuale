@@ -587,3 +587,157 @@ Gate (coordinator, independent): fmt rc=0, clippy 0 warnings,
 workspace `cargo test --release -- --test-threads=2` no failures, pmtest
 suite 3946 passed / 37 skipped / 2 xfailed (3941 + 5 new pins). Merge-path
 gate and `l1-porttest.txt`: see the commit message of the S4 commit.
+
+---
+
+# S5 — plan `LLM/02.355-reinstall-unmerge-parity.opus.md`, slice S5 (#356 part 2: R1, R2, R3, R4, R4b)
+
+Branch (both repos): `backlog/355-358-unmerge-parity` (S1–S4 committed).
+Oracle rule: expected values from Portage 3.0.82.2 captures (S0 cells
+U1a, U1b, U1d, L1, E2, E3, D1, D2, C1a, C1b), never from portuale output;
+tests write "Portage", never "real". Defaults taken: Q2 (R4b elog wording
+ported through portuale's elog, pins assert the lines), Q3 base layer
+(already seeded in S4). R3 lands in the same commit as R2/R4/R4b (this
+slice is one commit per repo).
+
+## What changed
+
+portuale (product + unit tests + code note):
+
+- `crates/portuale/src/ebuild_merge/options.rs`: `MergeOptions` gains
+  `uninstall_ignore: String` (default `/lib/modules/*`, Portage
+  `cnf/make.globals:93`). `from_env` reads the calling env over the
+  default; new `apply_uninstall_ignore` replaces it from the resolved
+  scalar (`other_vars`, which carries the Q3 synthetic base when
+  `make.globals` was not read, so the literal form replaces and
+  `${UNINSTALL_IGNORE} …` appends); `set_resolved_features` folds the
+  packdebug tarball dir over the result, idempotently.
+- `crates/portuale/src/ebuild_unmerge.rs`:
+  - `uninstall_ignore_with_packdebug` (packdebug append/strip,
+    `const.py:113`), `shlex_split` (minimal POSIX splitter with unit
+    tests — no shared helper exists: `portage-profile`'s is single-token,
+    `doins`' is private bytes), `wrap_72` (pinned against the C1a capture
+    lines), `recorded_parent_inodes` + `contents_isowner` (Portage's narrow
+    `_match_contents` form: exact path, or rebuilt under a same-inode
+    recorded parent), `contents_owns_or_under` (exact or proper-prefix
+    component — Portage's implicit-parent-`dir` mechanism without
+    materialising entries, plan G6). The `INSTALL_MASK` matcher was
+    checked, not assumed: `install_mask::fnmatch` documents Python-fnmatch
+    semantics (`/` ordinary) and is reused directly.
+  - `UnmergeOptions` gains `uninstall_ignore` (same default).
+  - `remove_contents`: R1 (`UNINSTALL_IGNORE` fnmatch) + R2 (live `/lib`,
+    `/usr/lib`, `/usr/local/lib` symlinks never go) skip before `is_owned`
+    (Portage's `cfgpro` arm); R3 (`dir` entry that is a live symlink takes
+    the sym branch); R4 (`!empty`: non-empty target with a non-owned or
+    non-regular child waits in `protected_symlinks`); returns the R4b elog
+    lines. New `unmerge_protected_symlinks` (early return on same-slot
+    owners, whole-vdb search via `read_file_all("CONTENTS")` on every
+    backend, unlink-when-unowned with ancestor re-`rmdir`) plus the
+    trailing preserved notice. New `emit_unmerge_elog` (` * ` echo +
+    summary-log append, both gated and best-effort).
+  - `unmerge_pkgfiles_into` returns the elog lines; `unmerge_one_installed`
+    (`after_install.rs`) and `run_unmerge` (`ebuild.rs`) emit them.
+- Entry points: `emerge -C` (`pretend/removal/unmerge.rs`) and the merge
+  replace loop (`pretend/merge_setup.rs`, before `set_resolved_features`
+  so packdebug folds last) call `apply_uninstall_ignore`; `ebuild <f>
+  unmerge` (`ebuild.rs`, Q11) resolves once and derives both
+  `unmerge_orphans` (S4's incremental fold kept for the no-config
+  fallback) and `uninstall_ignore`.
+- Tests: 16 new in `ebuild_unmerge.rs` (one per rule: R1 U1a-shape, R2 L1
+  with `/lib64` exactness, R3 D1, R4 E3-silence, R4b E2-remove with elog
+  asserts, R4b E1-keep with trailing-notice asserts, R4b early-return,
+  G6 prefix owner, inode translation, C1b-remove at `/bin` scale; plus
+  E1/E2/D1 e2e through `unmerge_one_installed`, E1 with two installed
+  packages), 4 new in `ebuild_merge/tests/options.rs`. The S4 C1 test
+  gained its second recorder (C1a shape — without it R4b would now
+  faithfully remove `/bin`, per C1b-pg).
+- `LLM/code-notes/portuale/ebuild_unmerge.md`: the stale R4b "unreachable
+  dead code" paragraph replaced (stale once R4 exists), the R3-deferral
+  paragraph updated, new sections for `unmerge_protected_symlinks`,
+  `emit_unmerge_elog`, `shlex_split`, `uninstall_ignore`;
+  `python3 LLM/tools/code_notes_index.py` run (no index diff).
+
+pmtest (fixtures + pins, no CASES entry per plan):
+
+- 6 new fixture dirs from the S0 `scripts/ebuilds` (`t355-ign`,
+  `t355-liblink`, `t355-ea`, `t355-e3`, `t355-d1`) plus new
+  `t355-eb2` (redesigned E1 owner B: records the same symlink path as A;
+  E1-as-designed cannot pin S5 per the S0 stop-rule note (a)), each with
+  a real md5-cache entry from host `egencache` (existing entries
+  untouched; other plans' untracked `pg359-*`/`pg367-*` left alone).
+- 8 new pins in `test_emerge_pretend_contract.py` (all with Portage-cited
+  docstrings): U1a, U1b, U1d, L1, E1 (redesigned: B merges first so the
+  removed package's mtime matches — a second merge always replaces the
+  link on both PMs — then `-C A` keeps the link with the search + trailing
+  elog and no "safe to remove"), E2 (removed with "safe to remove", no
+  trailing notice), E3 (gone silently), D1. C1 already pinned in S4.
+
+## Commands run and results
+
+- pmtest baseline BEFORE any edit (this tree = S4 commit):
+  `python3 -m pytest pytests-contract-suite -q
+  --basetemp=/var/tmp/355-s5-base-pt -p no:cacheprovider` →
+  **3946 passed, 37 skipped, 2 xfailed, 0 failed** (matches S4 final).
+- `cargo fmt --check` → clean. `cargo clippy --release --all-targets` →
+  0 warnings.
+- `cargo build --release` before every test run (rule (a)).
+- New Rust tests alone: `ebuild_unmerge` 53/53 (3 first-run failures were
+  test-shape bugs, fixed: a prefix assertion that forgot implicit parents
+  own every ancestor, a missing `usr/` dir, and an early-return probe that
+  used a `sym` record where the 326685 `dir` record belongs),
+  `ebuild_merge::tests::options` 7/7.
+- Whole workspace `cargo test --release -- --test-threads=2` (nohup +
+  poll; no #376 hang) → **2747 passed, 0 failed** in 31 targets (S4:
+  2727; +20 is exactly the new tests).
+- New pmtest pins alone → 8 passed (first run: 6 passed, the 2 E-pins
+  failed planting `u.txt` — see §Surprising).
+- Full pmtest suite (`--basetemp=/var/tmp/355-s5-pt`) → **3954 passed,
+  37 skipped, 2 xfailed, 0 failed** (baseline 3946 + 8 new pins; compared
+  by test NAME, no test changed verdict), no corpus drift.
+- `grep -rn "split_whitespace\|split(' ')" crates | grep -i contents` →
+  empty (S3 invariant holds).
+- Bed gate (glibc/bash merges, `l1-porttest.txt`): NOT run — coordinator
+  runs them per the task brief.
+
+## Anything surprising
+
+1. **E1 pin order matters (both PMs).** A second merge always replaces an
+   identical live symlink with a fresh mtime (Portage `mergeme` +
+   `movefile`, verified in `vartree.py`; portuale `replace_symlink_atomic`
+   likewise), so the removed package must merge LAST for its recorded
+   mtime to match and R4 to be reached. The pin merges B first, then A.
+   (S0 E1-pg shows the same effect as `--- !mtime`.)
+2. **portuale's install QA strips empty `dodir`'d dirs from the image**
+   (pre-existing merge-side divergence, out of S5 scope): `t355-ea`'s
+   `real/` never reaches the image while `t355-e3`'s `a-real/` does (a
+   `doins`'d file brings its parents). S0's own `mkdir -p real` admin step
+   already normalised this on both PMs; the E1/E2 pins do the same. R4
+   lists the live target dir, so the missing `dir` record changes nothing
+   there. Reported here, not pursued (possible follow-up outside #356).
+3. **C1b is now live behavior.** With no other recorder, portuale removes
+   `/bin`, exactly like C1b-pg (`<<< sym /bin` after the search elog). The
+   SAFETY property (C1a shape, second recorder present) stays green in both
+   the Rust test and the pmtest pin. The D2 cell shape (dir entry +
+   non-empty target, nobody owns) is covered by the C1b-scale Rust test.
+4. Three `remove_contents` unit tests failed first-run on test-shape bugs
+   (see above); no product-code fix resulted. One `cargo test` rerun
+   tripped the `self_exe.rs:56` staleness guard (test edits landed after
+   the build); rebuilt and green — the known invalid sequence, not a
+   regression.
+
+## Left undone and why
+
+- Merge-path safety gate (glibc + bash test merges) and
+  `l1-porttest.txt`: coordinator runs them (task brief forbids them here).
+  S5 is therefore "code complete, gate pending", not "done" in the plan's
+  Z sense. `l1-porttest.txt` must stay at 0 unexplained.
+- No `what-this-proves.md` paragraph (plan puts docs in Z), no
+  backlog/plan edits (Z close-out), no commits (coordinator reviews and
+  commits). No allowlist entries added; no corpus bless (no drift).
+- STOP RULE: nothing fired. No cell showed portuale already matching
+  (E3/E3b outcome-coincidence stays, mechanism now pinned); no existing
+  pin flipped without a Portage capture justifying it (the C1 Rust test's
+  second recorder mirrors the pmtest C1a pin's long-standing setup).
+- Scratch `/var/tmp/355-s5-*` (baseline/pin/suite logs and basetemps, the
+  manual merge probe, the egencache configroot) deleted at handoff per the
+  scratch rule.

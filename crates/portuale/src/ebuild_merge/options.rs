@@ -23,6 +23,14 @@ pub struct MergeOptions {
     /// `set_resolved_features` re-derives it from the resolved list.
     /// Portage: dbapi/vartree.py, `"unmerge-orphans" in self.settings.features`
     pub unmerge_orphans: bool,
+    /// `UNINSTALL_IGNORE` paths the unmerge skips, fnmatch'd against the
+    /// root-relative path. Default is Portage's `make.globals` value;
+    /// `from_env` reads the calling env, `apply_uninstall_ignore` the
+    /// resolved config (which carries the synthetic base when
+    /// `make.globals` was not read). `set_resolved_features` appends the
+    /// packdebug tarball dir under `FEATURES=packdebug`.
+    /// Portage: dbapi/vartree.py, _unmerge_pkgfiles; cnf/make.globals:93
+    pub uninstall_ignore: String,
     /// Re-protect every already-offered update instead of reusing it
     /// (`NOCONFMEM` presence, off by default).
     pub noconfmem: bool,
@@ -72,6 +80,7 @@ impl Default for MergeOptions {
             resolved_config: None,
             protect_owned: true,
             unmerge_orphans: true,
+            uninstall_ignore: "/lib/modules/*".to_string(),
             noconfmem: false,
             protect_if_modified: true,
             // Impossible path: blocker resolution then degrades to empty
@@ -110,6 +119,12 @@ impl MergeOptions {
         // `unmerge-orphans` is default-on: fold the calling env over the
         // default token (see `ebuild_unmerge::unmerge_orphans_from_env`).
         let unmerge_orphans = crate::ebuild_unmerge::unmerge_orphans_from_env();
+        // `UNINSTALL_IGNORE` is a scalar with a `make.globals` default, not
+        // an incremental: the env value replaces it when set.
+        let uninstall_ignore = crate::ebuild_unmerge::uninstall_ignore_with_packdebug(
+            &std::env::var("UNINSTALL_IGNORE").unwrap_or_else(|_| "/lib/modules/*".to_string()),
+            &env_features.join(" "),
+        );
         Self {
             debug,
             shell,
@@ -125,6 +140,7 @@ impl MergeOptions {
                 .map(|f| f.split_whitespace().any(|t| t == "protect-owned"))
                 .unwrap_or(d.protect_owned),
             unmerge_orphans,
+            uninstall_ignore,
             protect_if_modified: std::env::var("FEATURES")
                 .map(|f| {
                     f.split_whitespace()
@@ -154,6 +170,10 @@ impl MergeOptions {
         self.protect_owned = has("protect-owned");
         self.protect_if_modified = has("config-protect-if-modified");
         self.unmerge_orphans = has("unmerge-orphans");
+        self.uninstall_ignore = crate::ebuild_unmerge::uninstall_ignore_with_packdebug(
+            &self.uninstall_ignore,
+            features,
+        );
         self.gpg_verify = crate::binpkg::GpgVerify::from_features(features);
         self.features = features.to_string();
     }
@@ -167,6 +187,17 @@ impl MergeOptions {
         }
         if let Some(v) = config.resolved_incremental("CONFIG_PROTECT_MASK") {
             self.config_protect_mask = v.join(" ");
+        }
+    }
+
+    /// Replace the unmerge ignore list from the resolved scalar, when some
+    /// layer assigns the key. The synthetic base (or the real
+    /// `make.globals`) already seeded the default, so a literal assignment
+    /// replaces it and `${UNINSTALL_IGNORE} …` appends through it.
+    /// Portage: lib/portage/dbapi/vartree.py, dblink._unmerge_pkgfiles
+    pub fn apply_uninstall_ignore(&mut self, config: &portage_profile::Config) {
+        if let Some(v) = config.other_vars.get("UNINSTALL_IGNORE") {
+            self.uninstall_ignore = v.clone();
         }
     }
 }

@@ -117,3 +117,66 @@ fn from_env_folds_the_calling_env_over_the_default_on_unmerge_orphans() {
     let _restore = RestoreFeatures::set(Some("-*"));
     assert!(!MergeOptions::from_env(shell, false).unmerge_orphans);
 }
+
+#[test]
+fn uninstall_ignore_defaults_to_the_make_globals_value() {
+    // Portage cnf/make.globals:93: `UNINSTALL_IGNORE=/lib/modules/*`.
+    assert_eq!(MergeOptions::default().uninstall_ignore, "/lib/modules/*");
+}
+
+#[test]
+fn apply_uninstall_ignore_takes_the_resolved_scalar() {
+    // A literal assignment replaces the seeded default; the append form
+    // arrives already expanded (see the Q3 base-layer test).
+    let mut config = portage_profile::Config::default();
+    let mut options = MergeOptions::default();
+    options.apply_uninstall_ignore(&config);
+    assert_eq!(options.uninstall_ignore, "/lib/modules/*");
+    config
+        .other_vars
+        .insert("UNINSTALL_IGNORE".to_string(), "/x/*".to_string());
+    options.apply_uninstall_ignore(&config);
+    assert_eq!(options.uninstall_ignore, "/x/*");
+}
+
+#[test]
+fn set_resolved_features_folds_packdebug_over_uninstall_ignore() {
+    // Portage vartree.py:2926-2931: under `FEATURES=packdebug` the old
+    // debuginfo tarballs are kept for binhost clients.
+    let mut options = MergeOptions::default();
+    options.set_resolved_features("packdebug buildpkg");
+    assert_eq!(
+        options.uninstall_ignore,
+        "/lib/modules/* /usr/lib/debug/.tarball/*"
+    );
+    // Re-resolving never stacks the pattern.
+    options.set_resolved_features("packdebug");
+    assert_eq!(
+        options.uninstall_ignore,
+        "/lib/modules/* /usr/lib/debug/.tarball/*"
+    );
+    options.set_resolved_features("buildpkg");
+    assert_eq!(options.uninstall_ignore, "/lib/modules/*");
+}
+
+#[test]
+fn from_env_reads_uninstall_ignore_from_the_calling_env() {
+    let _env = FEATURES_ENV_LOCK.lock().unwrap();
+    let shell = crate::ebuild_phases::ShellBackend::default();
+    let _restore = RestoreFeatures::set(Some("packdebug"));
+    let before = std::env::var("UNINSTALL_IGNORE").ok();
+    unsafe {
+        std::env::set_var("UNINSTALL_IGNORE", "/x/*");
+    }
+    let options = MergeOptions::from_env(shell, false);
+    match before {
+        Some(v) => unsafe {
+            std::env::set_var("UNINSTALL_IGNORE", v);
+        },
+        None => unsafe {
+            std::env::remove_var("UNINSTALL_IGNORE");
+        },
+    }
+    // The env value replaces the default; packdebug appends its tarball dir.
+    assert_eq!(options.uninstall_ignore, "/x/* /usr/lib/debug/.tarball/*");
+}

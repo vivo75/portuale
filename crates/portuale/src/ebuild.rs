@@ -395,13 +395,47 @@ pub(crate) fn unmerge_and_package_options(
     // included); else the incremental fold of the calling env.
     // Portage: dbapi/vartree.py:2913, `"unmerge-orphans" in self.settings.features`
     let config_root = portage_repo::config_root_from_env();
-    let unmerge_orphans = ebuild_phases::resolve_unmerge_config(&config_root, root)
+    // Both unmerge options from the resolved chain when a config resolves
+    // (the same folded chain `emerge -C` reads, synthetic base included);
+    // else the incremental fold of the calling env and the `make.globals`
+    // `UNINSTALL_IGNORE` default.
+    // Portage: dbapi/vartree.py:2913, `"unmerge-orphans" in self.settings.features`
+    let unmerge_config = ebuild_phases::resolve_unmerge_config(&config_root, root);
+    // `unmerge-orphans` from the resolved `FEATURES` when a config
+    // resolves (the same folded chain `emerge -C` reads, synthetic base
+    // included); else the incremental fold of the calling env.
+    // Portage: dbapi/vartree.py:2913, `"unmerge-orphans" in self.settings.features`
+    let unmerge_orphans = unmerge_config
+        .as_ref()
         .map(|config| {
-            crate::pretend::config_features_string(&config)
+            crate::pretend::config_features_string(config)
                 .split_whitespace()
                 .any(|tok| tok == "unmerge-orphans")
         })
         .unwrap_or_else(ebuild_unmerge::unmerge_orphans_from_env);
+    // `UNINSTALL_IGNORE` from the resolved scalar, else the calling env
+    // over the `make.globals` default; packdebug appends its tarball dir.
+    // Portage: dbapi/vartree.py, _unmerge_pkgfiles; const.py:113
+    let (resolved_features, resolved_ignore) = unmerge_config.as_ref().map_or_else(
+        || {
+            (
+                std::env::var("FEATURES").unwrap_or_default(),
+                std::env::var("UNINSTALL_IGNORE").unwrap_or_else(|_| "/lib/modules/*".to_string()),
+            )
+        },
+        |config| {
+            (
+                crate::pretend::config_features_string(config),
+                config
+                    .other_vars
+                    .get("UNINSTALL_IGNORE")
+                    .cloned()
+                    .unwrap_or_else(|| "/lib/modules/*".to_string()),
+            )
+        },
+    );
+    let uninstall_ignore =
+        ebuild_unmerge::uninstall_ignore_with_packdebug(&resolved_ignore, &resolved_features);
     let unmerge_options = ebuild_unmerge::UnmergeOptions {
         debug,
         shell,
@@ -410,6 +444,7 @@ pub(crate) fn unmerge_and_package_options(
         config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
             .unwrap_or(default_unmerge_options.config_protect_mask),
         unmerge_orphans,
+        uninstall_ignore,
         config_root: portage_repo::config_root_from_env(),
         already_unmerged: Vec::new(),
     };
