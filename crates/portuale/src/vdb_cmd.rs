@@ -747,10 +747,7 @@ mod tests {
     }
 
     fn scratch(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("portuale-vdbcmd-{}-{tag}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+        portage_util::TempDir::new(&format!("vdbcmd-{tag}")).keep()
     }
 
     /// `cp -a` (modes and mtimes kept, symlinks kept).

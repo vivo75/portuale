@@ -45,10 +45,8 @@ fn make_xpak_binpkg(prefix: &[u8], entries: &[(&str, &[u8])]) -> Vec<u8> {
 /// Assemble a plain-outer-tar gpkg container from `<prefix>/<name>`
 /// members plus a `Manifest` body, in gpkg member order.
 fn build_gpkg(prefix: &str, members: &[(&str, &[u8])], manifest: Option<&str>) -> PathBuf {
-    let scratch = ScratchDir::new("gpkg-build").unwrap();
-    // leak the scratch dir for the caller's test lifetime
-    let root = scratch.path().to_path_buf();
-    std::mem::forget(scratch);
+    // outlives the call; the next test process's stale sweep reclaims it
+    let root = portage_util::TempDir::new("gpkg-build").keep();
     let pkgdir = root.join(prefix);
     fs::create_dir_all(&pkgdir).unwrap();
     let mut argv: Vec<String> = vec![
@@ -87,10 +85,8 @@ enum GpkgEntry<'a> {
 /// `build_gpkg`'s typed sibling: stage one filesystem object per entry
 /// and let GNU `tar` write the headers.
 fn build_gpkg_entries(entries: &[(&str, GpkgEntry)]) -> PathBuf {
-    let scratch = ScratchDir::new("gpkg-build-typed").unwrap();
-    // leak the scratch dir for the caller's test lifetime
-    let root = scratch.path().to_path_buf();
-    std::mem::forget(scratch);
+    // outlives the call; the next test process's stale sweep reclaims it
+    let root = portage_util::TempDir::new("gpkg-build-typed").keep();
     let mut argv: Vec<String> = vec![
         "-cf".into(),
         lossy(&root.join("out.gpkg.tar")),

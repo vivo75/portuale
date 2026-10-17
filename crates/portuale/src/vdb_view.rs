@@ -848,10 +848,7 @@ mod tests {
     }
 
     fn scratch(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("portuale-vdbview-{}-{tag}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+        portage_util::TempDir::new(&format!("vdbview-{tag}")).keep()
     }
 
     fn cp_a(from: &Path, to: &Path) {
