@@ -442,6 +442,7 @@
 - [crates/portuale/src/remote/tests/stages.rs](portuale/remote/tests/stages.md) — Merge-driver and regen-stage behaviour tests.
 - [crates/portuale/src/remote_bundle.rs](portuale/remote_bundle.md) — Remote-merge wire bundles: one binpkg prepared for stdin streaming.
 - [crates/portuale/src/self_exe.rs](portuale/self_exe.md) — The running binary's path, resolved once for `PORTUALE_BIN` re-execs.
+- [crates/portuale/src/test_watchdog.rs](portuale/test_watchdog.md) — Hang watchdog for the unit-test binary (backlog #376). Test builds only, Linux only.
 - [crates/portuale/src/vdb_cmd.rs](portuale/vdb_cmd.md) — The `vdb` applet: convert, verify, status, sweep, rebuild-index, import-stores and mount.
 - [crates/portuale/src/vdb_fuse.rs](portuale/vdb_fuse.md) — The FUSE adapter of `portuale vdb mount`: `fuser` callbacks to the pure views.
 - [crates/portuale/src/vdb_ipc.rs](portuale/vdb_ipc.md) — The parent pipe (`PORTUALE_VDB_IPC`): installed-package lookups mid-merge.

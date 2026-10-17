@@ -70,3 +70,19 @@ fn system_loadavg_1min_reads_a_plausible_value() {
     let la = system_loadavg_1min();
     assert!(la >= 0.0 && la.is_finite(), "{la}");
 }
+
+/// Backlog #376: a build thread that panics reports a failure for its
+/// entry instead of leaving the scheduler waiting forever on its result.
+#[test]
+fn a_panicking_build_thread_becomes_a_failure_message() {
+    let entry = source_entry(
+        "schedbad",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    let payload = std::panic::catch_unwind(|| panic!("boom {}", 7)).unwrap_err();
+    let msg = super::scheduler::worker_panic_message(&entry, payload);
+    assert!(msg.contains("schedbad"), "{msg}");
+    assert!(msg.contains("build thread panicked: boom 7"), "{msg}");
+}

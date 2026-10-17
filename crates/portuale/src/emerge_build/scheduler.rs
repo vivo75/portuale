@@ -394,12 +394,15 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
                     // Registers every subprocess this worker spawns into
                     // `registry` for the closure's own lifetime.
                     let _guard = ebuild_phases::scope_scheduler_registry(registry);
-                    let r = build_one_source_entry(
-                        BuildOneSourceEntryArgs { entry, repos, root, portage_tmpdir, options, buildpkg: bp, capture_log: // Each build's output goes to its own
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        build_one_source_entry(
+                            BuildOneSourceEntryArgs { entry, repos, root, portage_tmpdir, options, buildpkg: bp, capture_log: // Each build's output goes to its own
                         // `${T}/build.log` so parallel builds don't
                         // interleave on the terminal.
                         true, progress: entry_progress, display },
-                    );
+                        )
+                    }))
+                    .unwrap_or_else(|payload| Err(worker_panic_message(entry, payload)));
                     let _ = tx.send((idx, r));
                 });
             }
@@ -494,4 +497,23 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
         ));
     }
     Err(msg)
+}
+
+/// The failure a worker thread that panicked reports in place of its result.
+/// Without it the scheduler would wait forever on a result nobody sends (its
+/// own `tx` clone keeps the channel open), so a panic became a silent hang
+/// (backlog #376).
+pub(super) fn worker_panic_message(
+    entry: &GraphEntry,
+    payload: Box<dyn std::any::Any + Send>,
+) -> String {
+    let what = payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "(no message)".into());
+    format!(
+        "{}/{}: build thread panicked: {what}",
+        entry.category, entry.package
+    )
 }

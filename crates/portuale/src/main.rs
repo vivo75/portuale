@@ -241,6 +241,9 @@ fn main() -> ExitCode {
     }
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod test_watchdog;
+
 #[cfg(test)]
 mod broken_pipe_tests {
     /// A closed stdout pipe exits 141 quietly, not a panic message and an abort.
