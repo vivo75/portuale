@@ -2,11 +2,11 @@
 
 > **Oracle before code.** Every expected value comes from Portage 3.0.82.2 (container bed `../pmtest/differential-test-bed/`, host `emerge`, or `lib/portage/tests/resolver/`), never from portuale's own output, the harvested corpus, or this plan's source reading. Each slice's test docstring says which. Host Portage files are byte-identical to `3rdparty/portage/lib` for the files cited here (checked in the review), so the line numbers hold for both.
 
-Status: proposed 2026-10-18, revised the same day after `LLM/2026-10-18-batch-plan.review.md` (review item ids D*/G*/P* below). Not started. Owner priorities, reviewed with most care: **#408, #409, #401, #383, #384, #372, #405**. Difficulty: F ≈ 1 h, M = one slice with an oracle, A = several slices or research. Ratings now follow the backlog's `[A]` marks where the review showed more work (G12).
+Status: proposed 2026-10-18, revised the same day after `LLM/2026-10-18-batch-plan.review.md` (review item ids D*/G*/P* below). Not started. Owner answers to §6 recorded 2026-10-18. Owner priorities, reviewed with most care: **#408, #409, #401, #383, #384, #372, #405**. Difficulty: F ≈ 1 h, M = one slice with an oracle, A = several slices or research. Ratings now follow the backlog's `[A]` marks where the review showed more work (G12).
 
 ## 0. Branch rule and step 0
 
-Before any slice: in `../pmtest` the tree has untracked `fixtures/repo/dev-libs/pg359-*` and md5-cache leftovers from #359 (P4). Decide with the owner: commit them on their own, or stash, so the by-name baseline is clean. Then open `batch/2026-10-18` in **both** repos. One paired commit per slice, pmtest first, each message quoting the other. Commit/push only when asked.
+**Done 2026-10-18 (owner Q5):** the untracked `fixtures/repo/dev-libs/pg359-*` and md5-cache leftovers from #359 (P4). They are used by committed pins (`CASES` rows, `test_pg359_*`), so they were committed standalone as pmtest `417bb17`; the tree is clean. Then open `batch/2026-10-18` in **both** repos. One paired commit per slice, pmtest first, each message quoting the other. Commit/push only when asked.
 
 ## 1. Ground truth (checked 2026-10-18, review §"What was checked")
 
@@ -38,7 +38,7 @@ Per slice (AGENTS.md step 8): `cargo fmt --check`; `cargo clippy --release --all
 | 1 | S2 | #409 | F/M | Blocking bug; no merge path; independent of S1. |
 | 1 | S3 | #372 | A | Touches `phase_env_vars` only; not dependent on S1 (P3). |
 | 1 | S4 | #383 | A | Needs the synthetic base to carry `preserve-libs` (D5). |
-| 1 | S5 | #384 | A | **Blocked on owner Q2** (D6, D7). |
+| 1 | S5 | #384 | M | Owner Q2 answered: embedded copy of `make.globals` (see S5). |
 | 2 | S6 | #405 (b)(c) | F/M | |
 | 2 | S7 | #401 | A | S7.0 oracle first, then 2 slices. |
 | 3 | S8 | #371, #375, #395, #396, #392, #393, #373 | F each | One commit each. |
@@ -96,11 +96,15 @@ Per slice (AGENTS.md step 8): `cargo fmt --check`; `cargo clippy --release --all
 - [ ] **S4.3 Implement** merge, unmerge and depclean arms with one shared helper, or file the unmerge/depclean halves with real backlog numbers at close-out (D4); do not leave an unmentioned cut.
 - [ ] **S4.4 Merge-path gate** (§2): three L1 runs, glibc and bash test merges; the default-on path must be byte-identical.
 
-### S5 — #384 locate `make.globals` like Portage (A; blocked on owner Q2)
+### S5 — #384 locate `make.globals` like Portage (M; owner Q2: portuale carries its own copy)
 
-Do **not** start before the owner answers Q2 (D6, D7): reading the installed `/usr/share/portage/config/make.globals` for every `PORTAGE_CONFIGROOT` makes the contract suite and Rust tests depend on the host (sandbox features, `CLEAN_DELAY`, `DISTDIR`, …), and on a host without Portage (the #326 runtime) it does not exist. Per AGENTS.md step 3 this is surfaced, not decided. The real-world gain is limited to `PORTAGE_CONFIGROOT≠/` runs.
+Decision (owner, 2026-10-18): portuale brings its own `make.globals`. This is feasible and solves D7: `crates/portuale/build.rs` already embeds the repo's top-level `cnf/` directory at build time (`walk(&repo.join("cnf"), "cnf", …)`; today it holds only `cnf/sets/`), and `3rdparty/portage/cnf/make.globals` is the upstream file. Host `/usr/share/portage/config/make.globals` differs from it by exactly one line (`FEATURES="${FEATURES} xattr"`, appended by the Gentoo ebuild, line 177). Hermetic runs read the embedded copy, so results no longer depend on the host.
 
-Options for Q2: (i) explicit global-config directory input whose hermetic value the harness pins (the closest analogue of Portage's own `_not_installed` → `PORTAGE_BASE_PATH/cnf`), with `3rdparty/portage/cnf/make.globals` shipped as fallback (note `xattr` difference); (ii) honour `PORTAGE_OVERRIDE_EPREFIX` fully (Prefix support, not this batch); (iii) close #384 as "intentional divergence". If (i): oracle on `config.py:462-490` (incl. the `<config_root>/etc/make.globals` warning), failing test with a hermetic root carrying a different file, drift review against Portage captures, L1 gate.
+- [ ] **S5.1 Oracle:** `config.py:462-490` and `LocationsManager.py:413-417`; decide on the `xattr` line (recommended: the embedded copy includes it, since it is what every Gentoo Portage reads; record the choice). Capture Portage `emerge --info` FEATURES with `PORTAGE_CONFIGROOT` pointing at a fixture root.
+- [ ] **S5.2** Copy the file to `cnf/make.globals`; in `scalar_layers.rs:147-175` stop reading `<config_root>/usr/share/portage/config/make.globals` (Portage never reads it from the config root); the embedded copy is the base layer; the synthetic `unmerge-orphans`/`preserve-libs` base (S4.0) becomes redundant and is removed here. Warn on `<config_root>/etc/make.globals` as `config.py:475-490` does.
+- [ ] **S5.3** Failing test: a hermetic root carrying a *different* `usr/share/portage/config/make.globals` is ignored; `FEATURES` has `preserve-libs` and `unmerge-orphans` from the embedded copy.
+- [ ] **S5.4** Drift review against Portage captures (expect drift where hermetic roots had no globals); merge-path gate (§2). Test that the embedded file equals `3rdparty/portage/cnf/make.globals` plus the declared `xattr` line, so a Portage bump is noticed.
+- [ ] **S5.5** Residue: a host whose installed `make.globals` was patched by the distro differs from the embedded copy (accepted divergence, documented in the code note).
 
 ### S6 — #405 (b)(c) option errors (F/M)
 
@@ -119,7 +123,7 @@ Options for Q2: (i) explicit global-config directory input whose hermetic value 
 
 ### S8 — small divergences (F each, one commit per item, capture first)
 
-**#371** `Total: 0 packages` rc 0 for an empty set; re-ground `test_world_missing_file_expands_to_system_not_an_error` and `test_preserved_rebuild_set_is_empty_when_the_registry_is_empty` from Portage captures. **#375** fold `--update-if-installed` into `req.update` (`create_depgraph_params.py:139-143`); cell `pg367-top -pvD --update-if-installed`. **#395** ` for <root>` suffix (`depgraph.py:6502-6503`; the `PORTAGE_RUNNING_ROOT` hook is at `portage-repo/src/env_roots.rs:72-79`, owner Q3). **#396** `--usepkgonly=n` drops the ebuild db (`depgraph.py:809`; probe a NEW package). **#392** `USE="-flag"` on `NS` without `-v`. **#393** `--update --package-moves=n` same-version slot mismatch. **#373** `usepkg-exclude/include` in repos.conf (`repository/config.py:196,269-282`, `depgraph.py:384-392`). Resolver gate applies.
+**#371** `Total: 0 packages` rc 0 for an empty set; re-ground `test_world_missing_file_expands_to_system_not_an_error` and `test_preserved_rebuild_set_is_empty_when_the_registry_is_empty` from Portage captures. **#375** fold `--update-if-installed` into `req.update` (`create_depgraph_params.py:139-143`); cell `pg367-top -pvD --update-if-installed`. **#395** ` for <root>` suffix (`depgraph.py:6502-6503`; the `PORTAGE_RUNNING_ROOT` hook is at `portage-repo/src/env_roots.rs:72-79`, owner Q3: the hook is kept; removing it is not under 15 minutes (three test setups plus every fixture run), and printing the suffix is its own slice since about 53 `no ebuilds to satisfy` test sites compare modulo it). **#396** `--usepkgonly=n` drops the ebuild db (`depgraph.py:809`; probe a NEW package). **#392** `USE="-flag"` on `NS` without `-v`. **#393** `--update --package-moves=n` same-version slot mismatch. **#373** `usepkg-exclude/include` in repos.conf (`repository/config.py:196,269-282`, `depgraph.py:384-392`). Resolver gate applies.
 
 ### S9 — #380 (F/M), #406 (conditional)
 
@@ -137,13 +141,13 @@ Options for Q2: (i) explicit global-config directory input whose hermetic value 
 
 #390, #363–#365, #368 (pubgrub, Tier 4, A): each needs its own plan.
 
-## 6. Questions for the owner (do not pick silently)
+## 6. Owner decisions (2026-10-18)
 
-1. **S1:** for `config/preinst/prerm/postinst/postrm`, stay in portuale's own group (Portage's behaviour; needs a pid-based kill path) or `setsid` them too and record the divergence?
-2. **S5 (#384):** which of options (i)/(ii)/(iii) above? Hermetic determinism of the contract suite is the constraint.
-3. **S8 #395:** keep `PORTAGE_RUNNING_ROOT`? Printing the suffix when the target root differs changes many pmtest pins.
-4. **S10 #382:** call the Rust unmerge from `merge_flow.sh`, or port the arms into shell?
-5. **Step 0:** commit or stash the untracked `pg359-*` fixtures in pmtest before branching?
+1. **Q1 (S1): use Portage's behaviour.** `config/preinst/prerm/postinst/postrm` stay in portuale's own foreground group (pid-based kill path instead of `kill(-pgid)`); pid-sandbox phases get `setsid`. No recorded divergence.
+2. **Q2 (S5): portuale carries its own `make.globals`**, via the existing `cnf/` embedding.
+3. **Q3 (S8 #395): keep `PORTAGE_RUNNING_ROOT`** (removal is not under 15 minutes).
+4. **Q4 (S10 #382): open, owner needs information.** `mrg` is the remote merge command; its generated script `crates/portuale/src/remote/merge_flow.sh` installs a package on a remote host and, when an older version of the same slot is installed, removes the old files with its own shell code (`:177-200`): it deletes a file only if its mtime equals the recorded one, with no config-protect, `UNINSTALL_IGNORE`, orphan or `!md5` handling, and `awk '{print $2}'` (`:31-34`) cuts paths containing spaces. The local merge path uses the Rust unmerge, which follows Portage. Options: (A) the script calls a `portuale` binary on the remote for the unmerge: one implementation, but the remote must have the binary (check whether the remote client already ships it); (B) port each missing rule into shell: no dependency, but a fourth copy that drifts. Recommendation: (A) if the binary is already on the remote, else (B) limited to cases the bed can compare. Decide after S10's first check of what the remote has.
+5. **Q5 (step 0): done**, pmtest `417bb17`.
 
 ## 7. Close-out (AGENTS.md 7, 10, 11)
 
