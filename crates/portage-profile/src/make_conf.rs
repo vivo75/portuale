@@ -17,13 +17,13 @@ pub(crate) fn logical_lines(text: &str) -> Vec<String> {
             continue;
         }
         let mut line = raw;
+        let ends_with_escape = line.ends_with('\\') && !line.ends_with("\\\\");
         let mut cont = false;
-        if quote.is_none() && line.ends_with('\\') && !line.ends_with("\\\\") {
-            line = &line[..line.len() - 1];
-            cont = true;
-        }
         if !cur.is_empty() {
-            cur.push(' ');
+            // Inside a quote a trailing `\` stays with the next line's
+            // newline so `varexpand` drops the pair, as `getconfig` does.
+            let kept_backslash = quote.is_some() && cur.ends_with('\\');
+            cur.push(if kept_backslash { '\n' } else { ' ' });
         }
         let mut prev = ' ';
         let mut escaped = false;
@@ -56,6 +56,12 @@ pub(crate) fn logical_lines(text: &str) -> Vec<String> {
                 }
             }
             prev = c;
+        }
+        // A trailing `\` continues the line only outside a quote; inside one
+        // it is kept for the next line (see above).
+        if quote.is_none() && ends_with_escape && !line.is_empty() {
+            line = &line[..line.len() - 1];
+            cont = true;
         }
         cur.push_str(line);
         if quote.is_none() && !cont {
@@ -250,7 +256,7 @@ pub(crate) fn read_env_file_kv(
         return Vec::new();
     };
     let mut out: Vec<(String, String)> = Vec::new();
-    for line in text.lines() {
+    for line in logical_lines(&text) {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("source ") {
             let sourced = Path::new(rest.trim());
