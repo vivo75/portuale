@@ -1,0 +1,133 @@
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib64/libthread_db.so.1".
+
+Program received signal SIGTTIN, Stopped (tty input).
+[Switching to thread 1 (Thread 0x7f91cf2d3740 (LWP 619348))]
+0x00007f91cf3819db in __GI_kill () at ../sysdeps/unix/syscall-template.S:120
+
+--- INFO PROCESSO ---
+process 619348
+cmdline = '/var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/bash -i /var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/tests/exec8.sub'
+cwd = '/var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/tests'
+exe = '/var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/bash'
+
+--- MAPPA DI MEMORIA (MEMORY MAPS) ---
+process 619348
+Mapped address spaces:
+
+Start Addr         End Addr           Size               Offset             Perms File 
+0x0000557faea18000 0x0000557faea20000 0x8000             0x0                r--p  /var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/bash 
+0x0000557faea20000 0x0000557faeb48000 0x128000           0x8000             r-xp  /var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/bash 
+0x0000557faeb48000 0x0000557faeb81000 0x39000            0x130000           r--p  /var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/bash 
+0x0000557faeb81000 0x0000557faeb84000 0x3000             0x169000           r--p  /var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/bash 
+0x0000557faeb84000 0x0000557faebc2000 0x3e000            0x16c000           rw-p  /var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/bash 
+0x0000557faebc2000 0x0000557faec1a000 0x58000            0x0                rw-p   
+0x0000557faec1a000 0x0000557faec5c000 0x42000            0x0                rw-p  [heap] 
+0x00007f91cf2cc000 0x00007f91cf2d6000 0xa000             0x0                rw-p   
+0x00007f91cf2d6000 0x00007f91cf2dd000 0x7000             0x0                r--p  /usr/lib64/libtinfow.so.6.5 
+0x00007f91cf2dd000 0x00007f91cf2fd000 0x20000            0x7000             r-xp  /usr/lib64/libtinfow.so.6.5 
+0x00007f91cf2fd000 0x00007f91cf30e000 0x11000            0x27000            r--p  /usr/lib64/libtinfow.so.6.5 
+0x00007f91cf30e000 0x00007f91cf312000 0x4000             0x37000            r--p  /usr/lib64/libtinfow.so.6.5 
+0x00007f91cf312000 0x00007f91cf313000 0x1000             0x3b000            rw-p  /usr/lib64/libtinfow.so.6.5 
+0x00007f91cf313000 0x00007f91cf315000 0x2000             0x0                rw-p   
+0x00007f91cf315000 0x00007f91cf319000 0x4000             0x0                r--p  /usr/lib/gcc/x86_64-pc-linux-gnu/16/libgcc_s.so.1 
+0x00007f91cf319000 0x00007f91cf33d000 0x24000            0x4000             r-xp  /usr/lib/gcc/x86_64-pc-linux-gnu/16/libgcc_s.so.1 
+0x00007f91cf33d000 0x00007f91cf341000 0x4000             0x28000            r--p  /usr/lib/gcc/x86_64-pc-linux-gnu/16/libgcc_s.so.1 
+0x00007f91cf341000 0x00007f91cf342000 0x1000             0x2c000            r--p  /usr/lib/gcc/x86_64-pc-linux-gnu/16/libgcc_s.so.1 
+0x00007f91cf342000 0x00007f91cf343000 0x1000             0x2d000            rw-p  /usr/lib/gcc/x86_64-pc-linux-gnu/16/libgcc_s.so.1 
+0x00007f91cf343000 0x00007f91cf367000 0x24000            0x0                r--p  /usr/lib64/libc.so.6 
+0x00007f91cf367000 0x00007f91cf4e2000 0x17b000           0x24000            r-xp  /usr/lib64/libc.so.6 
+0x00007f91cf4e2000 0x00007f91cf535000 0x53000            0x19f000           r--p  /usr/lib64/libc.so.6 
+0x00007f91cf535000 0x00007f91cf539000 0x4000             0x1f2000           r--p  /usr/lib64/libc.so.6 
+0x00007f91cf539000 0x00007f91cf53b000 0x2000             0x1f6000           rw-p  /usr/lib64/libc.so.6 
+0x00007f91cf53b000 0x00007f91cf543000 0x8000             0x0                rw-p   
+0x00007f91cf543000 0x00007f91cf54a000 0x7000             0x0                r--p  /usr/lib64/libtinfo.so.6.5 
+0x00007f91cf54a000 0x00007f91cf56a000 0x20000            0x7000             r-xp  /usr/lib64/libtinfo.so.6.5 
+0x00007f91cf56a000 0x00007f91cf57b000 0x11000            0x27000            r--p  /usr/lib64/libtinfo.so.6.5 
+0x00007f91cf57b000 0x00007f91cf57f000 0x4000             0x37000            r--p  /usr/lib64/libtinfo.so.6.5 
+0x00007f91cf57f000 0x00007f91cf580000 0x1000             0x3b000            rw-p  /usr/lib64/libtinfo.so.6.5 
+0x00007f91cf580000 0x00007f91cf596000 0x16000            0x0                r--p  /usr/lib64/libreadline.so.8.3 
+0x00007f91cf596000 0x00007f91cf5cc000 0x36000            0x16000            r-xp  /usr/lib64/libreadline.so.8.3 
+0x00007f91cf5cc000 0x00007f91cf5d6000 0xa000             0x4c000            r--p  /usr/lib64/libreadline.so.8.3 
+0x00007f91cf5d6000 0x00007f91cf5d9000 0x3000             0x56000            r--p  /usr/lib64/libreadline.so.8.3 
+0x00007f91cf5d9000 0x00007f91cf5df000 0x6000             0x59000            rw-p  /usr/lib64/libreadline.so.8.3 
+0x00007f91cf5df000 0x00007f91cf5e0000 0x1000             0x0                rw-p   
+0x00007f91cf5e0000 0x00007f91cf5e3000 0x3000             0x0                r--p  /usr/lib64/libsandbox.so 
+0x00007f91cf5e3000 0x00007f91cf5ee000 0xb000             0x3000             r-xp  /usr/lib64/libsandbox.so 
+0x00007f91cf5ee000 0x00007f91cf5f2000 0x4000             0xe000             r--p  /usr/lib64/libsandbox.so 
+0x00007f91cf5f2000 0x00007f91cf5f3000 0x1000             0x12000            r--p  /usr/lib64/libsandbox.so 
+0x00007f91cf5f3000 0x00007f91cf5f4000 0x1000             0x13000            rw-p  /usr/lib64/libsandbox.so 
+0x00007f91cf5f4000 0x00007f91cf5fa000 0x6000             0x0                rw-p   
+0x00007f91cf5fa000 0x00007f91cf642000 0x48000            0x0                r--p  /etc/ld.so.cache (deleted) 
+0x00007f91cf642000 0x00007f91cf646000 0x4000             0x0                r--p  [vvar] 
+0x00007f91cf646000 0x00007f91cf648000 0x2000             0x0                r--p  [vvar_vclock] 
+0x00007f91cf648000 0x00007f91cf64a000 0x2000             0x0                r-xp  [vdso] 
+0x00007f91cf64a000 0x00007f91cf64b000 0x1000             0x0                r--p  /usr/lib64/ld-linux-x86-64.so.2 
+0x00007f91cf64b000 0x00007f91cf678000 0x2d000            0x1000             r-xp  /usr/lib64/ld-linux-x86-64.so.2 
+0x00007f91cf678000 0x00007f91cf684000 0xc000             0x2e000            r--p  /usr/lib64/ld-linux-x86-64.so.2 
+0x00007f91cf684000 0x00007f91cf686000 0x2000             0x39000            r--p  /usr/lib64/ld-linux-x86-64.so.2 
+0x00007f91cf686000 0x00007f91cf687000 0x1000             0x3b000            rw-p  /usr/lib64/ld-linux-x86-64.so.2 
+0x00007f91cf687000 0x00007f91cf688000 0x1000             0x0                rw-p   
+0x00007fffa2b47000 0x00007fffa2b6b000 0x24000            0x0                rw-p  [stack] 
+
+--- COREGISTRO DEI THREAD ATTIVI ---
+  Id   Target Id                                 Frame 
+* 1    Thread 0x7f91cf2d3740 (LWP 619348) "bash" 0x00007f91cf3819db in __GI_kill () at ../sysdeps/unix/syscall-template.S:120
+
+--- BACKTRACE DI TUTTI I THREAD ---
+
+Thread 1 (Thread 0x7f91cf2d3740 (LWP 619348) "bash"):
+#0  0x00007f91cf3819db in __GI_kill () at ../sysdeps/unix/syscall-template.S:120
+No locals.
+#1  0x0000557faea822d3 in initialize_job_control (force=<optimized out>) at /var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/jobs.c:4795
+        ottin = 0x1
+        t = <optimized out>
+        t_errno = -1
+        tty_sigs = 2
+#2  0x0000557faea28559 in shell_initialize () at /var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/shell.c:1969
+        hostname = "seed-desk\000Oϑ\177\000\000\215\340Oϑ\177\000\000\215\340Oϑ\177\000\000\215\340Oϑ\177\000\000\215\340Oϑ\177\000\000\215\340Oϑ\177\000\000\bghϑ\177\000\000`]Sϑ\177\000\000\236മ\177U\000\000\035", '\000' <repeats 15 times>, "\260\032\270\256\177U\000\000\005\000\000\000\000\000\000\000\005\000\000\000\000\000\000\000\250L\266\242\377\177\000\000\260\032\270\256\177U\000\000\237\253>ϑ\177\000\000\210L\266\242\377\177\000\000\003\2357ϑ\177\000\000\000^Pϑ\177\000\000?\000\000\000\000\000\000\000?\000\000\000\000\000\000\000\250L\266\242\377\177\000\000\260\032\270\256\177U\000\000\237\253>ϑ\177\000\000\210L\266\242\377\177"...
+        should_be_restricted = 0
+#3  0x0000557faea23df7 in main (argc=3, argv=0x7fffa2b64c88, env=0x7fffa2b64ca8) at /var/tmp/portage/app-shells/bash-5.3_p20-r1/work/bash-5.3/shell.c:580
+        i = <optimized out>
+        code = 0
+        old_errexit_flag = <optimized out>
+        saverst = <optimized out>
+        locally_skip_execution = 0
+        arg_index = 2
+        top_level_arg_index = 32657
+
+--- REGISTRI DELLA CPU (THREAD CORRENTE) ---
+rax            0x0                 0
+rbx            0x10                16
+rcx            0x7f91cf3819db      140264223545819
+rdx            0x0                 0
+rsi            0x15                21
+rdi            0x0                 0
+rbp            0x1                 0x1
+rsp            0x7fffa2b647e8      0x7fffa2b647e8
+r8             0x7fffa2b646a0      140735923242656
+r9             0x0                 0
+r10            0x8                 8
+r11            0x246               582
+r12            0x0                 0
+r13            0x7f91cf686000      140264226709504
+r14            0x2                 2
+r15            0x2d                45
+rip            0x7f91cf3819db      0x7f91cf3819db <__GI_kill+11>
+eflags         0x246               [ PF ZF IF ]
+cs             0x33                51
+ss             0x2b                43
+ds             0x0                 0
+es             0x0                 0
+fs             0x0                 0
+gs             0x0                 0
+fs_base        0x7f91cf2d3740      140264222832448
+gs_base        0x0                 0
+
+--- DETTAGLI COMPLETI DIAGNOSTICA TERMINATI ---
+A debugging session is active.
+
+	Inferior 1 [process 619348] will be detached.
+
+Quit anyway? (y or n) [answered Y; input not from terminal]
+[Inferior 1 (process 619348) detached]

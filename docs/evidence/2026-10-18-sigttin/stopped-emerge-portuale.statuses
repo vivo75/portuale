@@ -1,0 +1,140 @@
+/proc/1/status:State:	S (sleeping)
+/proc/1/status:PPid:	0
+/proc/1/status:SigPnd:	0000000000000000
+/proc/1/status:ShdPnd:	0000000000000000
+/proc/1/status:SigBlk:	7fefc1fe28014a03
+/proc/1/status:SigIgn:	0000000000001000
+/proc/1/status:SigCgt:	00000000000004ec
+/proc/131382/status:State:	S (sleeping)
+/proc/131382/status:PPid:	99
+/proc/131382/status:SigPnd:	0000000000000000
+/proc/131382/status:ShdPnd:	0000000000000000
+/proc/131382/status:SigBlk:	0000000000000000
+/proc/131382/status:SigIgn:	0000000000001000
+/proc/131382/status:SigCgt:	0000000100000440
+/proc/44/status:State:	S (sleeping)
+/proc/44/status:PPid:	1
+/proc/44/status:SigPnd:	0000000000000000
+/proc/44/status:ShdPnd:	0000000000000000
+/proc/44/status:SigBlk:	0008000400004a03
+/proc/44/status:SigIgn:	0000000000001000
+/proc/44/status:SigCgt:	0000000100000040
+/proc/580605/status:State:	T (stopped)
+/proc/580605/status:PPid:	131382
+/proc/580605/status:SigPnd:	0000000000000000
+/proc/580605/status:ShdPnd:	0000000000104000
+/proc/580605/status:SigBlk:	0000000000000000
+/proc/580605/status:SigIgn:	0000000000000000
+/proc/580605/status:SigCgt:	0000000000004207
+/proc/580607/status:State:	T (stopped)
+/proc/580607/status:PPid:	580605
+/proc/580607/status:SigPnd:	0000000000000000
+/proc/580607/status:ShdPnd:	0000000000114000
+/proc/580607/status:SigBlk:	0000000000010000
+/proc/580607/status:SigIgn:	0000000000000004
+/proc/580607/status:SigCgt:	0000000000014002
+/proc/580623/status:State:	T (stopped)
+/proc/580623/status:PPid:	580607
+/proc/580623/status:SigPnd:	0000000000000000
+/proc/580623/status:ShdPnd:	0000000000114000
+/proc/580623/status:SigBlk:	0000000000010000
+/proc/580623/status:SigIgn:	0000000000000000
+/proc/580623/status:SigCgt:	0000000000014006
+/proc/586023/status:State:	T (stopped)
+/proc/586023/status:PPid:	580623
+/proc/586023/status:SigPnd:	0000000000000000
+/proc/586023/status:ShdPnd:	0000000000114000
+/proc/586023/status:SigBlk:	0000000000010000
+/proc/586023/status:SigIgn:	0000000000000004
+/proc/586023/status:SigCgt:	0000000000010002
+/proc/586044/status:State:	T (stopped)
+/proc/586044/status:PPid:	586023
+/proc/586044/status:SigPnd:	0000000000000000
+/proc/586044/status:ShdPnd:	0000000000114000
+/proc/586044/status:SigBlk:	0000000000010000
+/proc/586044/status:SigIgn:	0000000000000000
+/proc/586044/status:SigCgt:	0000000001815207
+/proc/586300/status:State:	T (stopped)
+/proc/586300/status:PPid:	586044
+/proc/586300/status:SigPnd:	0000000000000000
+/proc/586300/status:ShdPnd:	0000000000114000
+/proc/586300/status:SigBlk:	0000000000010000
+/proc/586300/status:SigIgn:	0000000000000004
+/proc/586300/status:SigCgt:	0000000000010002
+/proc/586301/status:State:	T (stopped)
+/proc/586301/status:PPid:	586300
+/proc/586301/status:SigPnd:	0000000000000000
+/proc/586301/status:ShdPnd:	0000000000114000
+/proc/586301/status:SigBlk:	0000000000010000
+/proc/586301/status:SigIgn:	0000000000000000
+/proc/586301/status:SigCgt:	0000000043817eff
+/proc/618505/status:State:	T (stopped)
+/proc/618505/status:PPid:	586301
+/proc/618505/status:SigPnd:	0000000000000000
+/proc/618505/status:ShdPnd:	0000000000114000
+/proc/618505/status:SigBlk:	0000000000010000
+/proc/618505/status:SigIgn:	0000000000000004
+/proc/618505/status:SigCgt:	0000000000010002
+/proc/618509/status:State:	T (stopped)
+/proc/618509/status:PPid:	618505
+/proc/618509/status:SigPnd:	0000000000000000
+/proc/618509/status:ShdPnd:	0000000000114000
+/proc/618509/status:SigBlk:	0000000000010000
+/proc/618509/status:SigIgn:	0000000000000004
+/proc/618509/status:SigCgt:	0000000000010002
+/proc/619348/status:State:	T (stopped)
+/proc/619348/status:PPid:	618509
+/proc/619348/status:SigPnd:	0000000000000000
+/proc/619348/status:ShdPnd:	0000000000000000
+/proc/619348/status:SigBlk:	0000000000000000
+/proc/619348/status:SigIgn:	0000000000284004
+/proc/619348/status:SigCgt:	000000004b803efb
+/proc/67/status:State:	S (sleeping)
+/proc/67/status:PPid:	1
+/proc/67/status:SigPnd:	0000000000000000
+/proc/67/status:ShdPnd:	0000000000000000
+/proc/67/status:SigBlk:	0008000000004003
+/proc/67/status:SigIgn:	0000000000001000
+/proc/67/status:SigCgt:	0000000000000000
+/proc/677634/status:State:	S (sleeping)
+/proc/677634/status:PPid:	0
+/proc/677634/status:SigPnd:	0000000000000000
+/proc/677634/status:ShdPnd:	0000000000000000
+/proc/677634/status:SigBlk:	0000000000010000
+/proc/677634/status:SigIgn:	0000000000384004
+/proc/677634/status:SigCgt:	000000004b813efb
+/proc/81/status:State:	S (sleeping)
+/proc/81/status:PPid:	1
+/proc/81/status:SigPnd:	0000000000000000
+/proc/81/status:ShdPnd:	0000000000000000
+/proc/81/status:SigBlk:	0000000000000000
+/proc/81/status:SigIgn:	0000000000001000
+/proc/81/status:SigCgt:	0000000000004001
+/proc/82/status:State:	S (sleeping)
+/proc/82/status:PPid:	1
+/proc/82/status:SigPnd:	0000000000000000
+/proc/82/status:ShdPnd:	0000000000000000
+/proc/82/status:SigBlk:	0008000000004003
+/proc/82/status:SigIgn:	0000000000001000
+/proc/82/status:SigCgt:	0000000000000000
+/proc/99/status:State:	S (sleeping)
+/proc/99/status:PPid:	0
+/proc/99/status:SigPnd:	0000000000000000
+/proc/99/status:ShdPnd:	0000000000000000
+/proc/99/status:SigBlk:	0000000000010000
+/proc/99/status:SigIgn:	0000000000384004
+/proc/99/status:SigCgt:	000000004b813efb
+/proc/self/status:State:	R (running)
+/proc/self/status:PPid:	677634
+/proc/self/status:SigPnd:	0000000000000000
+/proc/self/status:ShdPnd:	0000000000000000
+/proc/self/status:SigBlk:	0000000000000000
+/proc/self/status:SigIgn:	0000000000000000
+/proc/self/status:SigCgt:	0000000000000400
+/proc/thread-self/status:State:	R (running)
+/proc/thread-self/status:PPid:	677634
+/proc/thread-self/status:SigPnd:	0000000000000000
+/proc/thread-self/status:ShdPnd:	0000000000000000
+/proc/thread-self/status:SigBlk:	0000000000000000
+/proc/thread-self/status:SigIgn:	0000000000000000
+/proc/thread-self/status:SigCgt:	0000000000000400
