@@ -494,3 +494,37 @@ fn config_root_with_slash_matches_portage_locations_manager() {
         "/already/slashed/"
     );
 }
+
+/// The phase env names the user's bashrc and hook directory under the
+/// config root, as `doebuild_environment` does (`doebuild.py:535-540`;
+/// observed values in `LLM/evidence/2026-10-18-372-s0/`). Backlog #372.
+#[test]
+fn phase_env_names_the_user_bashrc_and_hook_dir_under_the_config_root() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-bashrc-vars");
+    let bin_dir = bin_dir().unwrap().to_path_buf();
+    let env = compute_environment(
+        &fixtures.join("repo/dev-libs/usebuildpkg/usebuildpkg-1.0.ebuild"),
+        portage_tmpdir.path(),
+    )
+    .expect("fixture ebuild parses");
+    let vars = phase_env_vars(PhaseEnvVarsArgs {
+        env: &env,
+        root: &fixtures,
+        ebuild_phase_value: "compile",
+        debug: false,
+        bin_dir: &bin_dir,
+        helpers_dir: &bin_dir.join("ebuild-helpers"),
+        config_root: Path::new("/var/tmp/cfg"),
+        extra_env: &[],
+    });
+    let get = |k: &str| vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    assert_eq!(
+        get("PORTAGE_BASHRC"),
+        Some("/var/tmp/cfg/etc/portage/bashrc")
+    );
+    assert_eq!(
+        get("PM_EBUILD_HOOK_DIR"),
+        Some("/var/tmp/cfg/etc/portage/env")
+    );
+}

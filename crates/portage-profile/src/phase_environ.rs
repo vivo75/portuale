@@ -392,6 +392,17 @@ pub fn phase_environ(config: &Config, pkg: Option<PhaseUse<'_>>) -> Vec<(String,
             .or_insert_with(|| format!("--load-average {nproc} --output-sync=line"));
     }
 
+    // 2c. The profile bashrcs `bin/ebuild.sh` sources, one path per line.
+    // Portage: doebuild.py, doebuild_environment (`PORTAGE_BASHRC_FILES`)
+    if !config.profile_bashrc_files.is_empty() {
+        let files: Vec<String> = config
+            .profile_bashrc_files
+            .iter()
+            .map(|f| f.display().to_string())
+            .collect();
+        env.insert("PORTAGE_BASHRC_FILES".to_string(), files.join("\n"));
+    }
+
     // 3. Incrementals, folded and sorted.
     let features = config
         .resolved_incremental("FEATURES")

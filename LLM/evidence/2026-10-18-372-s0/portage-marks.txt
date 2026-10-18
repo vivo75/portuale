@@ -1,0 +1,23 @@
+user depend
+profile clean
+user clean
+hook-pn clean
+profile pretend
+user pretend
+hook-pn pretend
+profile setup
+user setup
+hook-pn setup
+profile unpack
+user unpack
+hook-pn unpack
+profile prepare
+user prepare
+hook-pn prepare
+profile configure
+user configure
+hook-pn configure
+profile compile
+user compile
+hook-pn compile
+ebuild-src_compile

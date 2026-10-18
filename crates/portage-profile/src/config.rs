@@ -157,6 +157,10 @@ pub struct Config {
     /// `package.env` files' non-`USE` assignments for the build-phase
     /// env. Not consumed by `--pretend`.
     pub package_env_vars: Vec<(String, Vec<(String, String)>)>,
+    /// Existing `profile.bashrc` files, one per profile node in chain order
+    /// (the user profile last), whatever the node's `profile-formats`.
+    /// Sourced by `ebuild.sh` through `PORTAGE_BASHRC_FILES`.
+    pub profile_bashrc_files: Vec<PathBuf>,
     /// `@system` atoms: profile `packages` files, stacked, `*`-lines only.
     pub system_packages: Vec<String>,
     /// `@profile` atoms: unstarred `packages` lines of `profile-set`

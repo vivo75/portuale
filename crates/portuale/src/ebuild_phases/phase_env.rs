@@ -208,6 +208,17 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
         "PORTAGE_CONFIGROOT".to_string(),
         config_root_with_slash(config_root),
     ));
+    // The user's bashrc and hook directory, under the config root; absent
+    // files are skipped silently by `bin/ebuild.sh`.
+    // Portage: doebuild.py:535-540 (`EBUILD_SH_ENV_FILE`, `EBUILD_SH_ENV_DIR`)
+    vars.push((
+        "PORTAGE_BASHRC".to_string(),
+        format!("{}etc/portage/bashrc", config_root_with_slash(config_root)),
+    ));
+    vars.push((
+        "PM_EBUILD_HOOK_DIR".to_string(),
+        format!("{}etc/portage/env", config_root_with_slash(config_root)),
+    ));
     // `PORTAGE_REPO_NAME` for the direct `ebuild` path: the repo the
     // file lives in (the emerge path threads the same value per entry).
     // Absent outside a repo checkout. Fixes the `die` `::repo` suffix.

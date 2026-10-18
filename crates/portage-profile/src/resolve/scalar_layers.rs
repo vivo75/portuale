@@ -215,6 +215,16 @@ pub(crate) fn load_scalar_layers(
             level_scalar_deltas: &mut level_scalar_deltas,
         })?;
     }
+    // `profile.bashrc` of every node, chain order, user profile last; the
+    // file is taken whatever the node's `profile-formats` (`package.bashrc`
+    // is the format-gated half and is not read, backlog #413).
+    // Portage: config.py:850-853
+    config.profile_bashrc_files = chain
+        .iter()
+        .chain(user_node.iter().map(|u| &u.path))
+        .map(|node| node.join("profile.bashrc"))
+        .filter(|file| file.is_file())
+        .collect();
     // `scalars` as the profile chain left it, before make.conf/env: a
     // USE_EXPAND variable still at this value folded per-level, not again
     // in the global conf-tier loop (Portage skips the `defaults` re-fold).
