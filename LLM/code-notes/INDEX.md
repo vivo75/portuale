@@ -284,6 +284,7 @@
 - [crates/portuale/src/ebuild_merge/collisions.rs](portuale/ebuild_merge/collisions.md) — Blockers against installed packages and file collisions.
 - [crates/portuale/src/ebuild_merge/from_binpkg.rs](portuale/ebuild_merge/from_binpkg.md) — Merging a binary package.
 - [crates/portuale/src/ebuild_merge/installed_instance.rs](portuale/ebuild_merge/installed_instance.md) — INSTALL_MASK and what is already installed.
+- [crates/portuale/src/ebuild_merge/listing.rs](portuale/ebuild_merge/listing.md) — One listing printer for the direct-path merge and unmerge (backlog #403):
 - [crates/portuale/src/ebuild_merge/mod.rs](portuale/ebuild_merge/mod.md) — The merge driver: `merge`/`qmerge` entry points, shared helpers, submodules.
 - [crates/portuale/src/ebuild_merge/options.rs](portuale/ebuild_merge/options.md) — Env-var-sourced merge options for `run_merge` plus the `movefile` xattr policy.
 - [crates/portuale/src/ebuild_merge/plib_merge.rs](portuale/ebuild_merge/plib_merge.md) — Merge-side preserved-library handling: collision takeover, CONTENTS/NEEDED stripping, preserve-libs computation and registration.

@@ -307,6 +307,11 @@ pub(crate) fn run_real_commands(
     // (the `emerge` Scheduler gates on `merge-wait`, so it keeps them).
     merge_options.features =
         ebuild_phases::discard_direct_ebuild_features(&merge_options.features.clone());
+    // The direct `ebuild <file> merge|qmerge` path lists every merged entry
+    // on stdout like Portage's foreground merge; the `emerge`-scheduler
+    // paths keep `direct` off and stay silent.
+    // Portage: dbapi/vartree.py, `dblink._display_merge`.
+    merge_options.direct = true;
     // The resolved `FEATURES` ride into every phase through the build
     // env (like the merge path's run-wide env), so sandbox, isolation
     // and helper gating see the config value, not the raw process one.
@@ -547,6 +552,11 @@ pub(crate) fn unmerge_and_package_options(
         uninstall_ignore,
         config_root: portage_repo::config_root_from_env(),
         already_unmerged: Vec::new(),
+        // The direct `ebuild <file> unmerge` path lists every entry like
+        // Portage's foreground `dblink.unmerge`; `emerge -C` builds its
+        // own options with `direct` off.
+        // Portage: dbapi/vartree.py, `dblink._display_merge`.
+        direct: true,
     };
     // Binpkg scalars from the resolved chain (calling env over
     // files), else the `make.globals` defaults. The gpkg pair reads

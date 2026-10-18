@@ -1,0 +1,31 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s403/l-l09-cfgpro-portuale/tmp/portage/app-misc/s403-mod-2.0/work
+>>> Preparing source in /var/tmp/s403/l-l09-cfgpro-portuale/tmp/portage/app-misc/s403-mod-2.0/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s403/l-l09-cfgpro-portuale/tmp/portage/app-misc/s403-mod-2.0/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s403/l-l09-cfgpro-portuale/tmp/portage/app-misc/s403-mod-2.0/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/s403-mod-2.0
+
+>>> Install app-misc/s403-mod-2.0 into /var/tmp/s403/l-l09-cfgpro-portuale/tmp/portage/app-misc/s403-mod-2.0/image
+>>> Completed installing app-misc/s403-mod-2.0 into /var/tmp/s403/l-l09-cfgpro-portuale/tmp/portage/app-misc/s403-mod-2.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging app-misc/s403-mod-2.0 to /var/tmp/s403/l-l09-cfgpro-portuale/root/
+--- /var/tmp/s403/l-l09-cfgpro-portuale/root/usr/
+--- /var/tmp/s403/l-l09-cfgpro-portuale/root/usr/share/
+=== /var/tmp/s403/l-l09-cfgpro-portuale/root/usr/share/s403-owned.txt
+>>> Safely unmerging already-installed instance...
+--- replaced obj /var/tmp/s403/l-l09-cfgpro-portuale/root/usr/share/s403-owned.txt
+--- replaced dir /var/tmp/s403/l-l09-cfgpro-portuale/root/usr/share
+--- replaced dir /var/tmp/s403/l-l09-cfgpro-portuale/root/usr
+--- cfgpro   obj /var/tmp/s403/l-l09-cfgpro-portuale/root/lib/modules/s403-test/s403-test.ko
+--- cfgpro   dir /var/tmp/s403/l-l09-cfgpro-portuale/root/lib/modules/s403-test
+--- !empty   dir /var/tmp/s403/l-l09-cfgpro-portuale/root/lib/modules
+--- !empty   dir /var/tmp/s403/l-l09-cfgpro-portuale/root/lib
+>>> Original instance of package unmerged safely.
+>>> app-misc/s403-mod-2.0 merged.

@@ -1,0 +1,36 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/work
+>>> Preparing source in /var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/work/t348-b-phases-7 ...
+ * Applying fix.patch ...
+ [ ok ]
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/work/t348-b-phases-7 ...
+./configure --prefix=/usr --host= --mandir=/usr/share/man --infodir=/usr/share/info --datadir=/usr/share --sysconfdir=/etc --localstatedir=/var/lib
+t348-b-phases configured ok
+>>> Source configured.
+>>> Compiling source in /var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/work/t348-b-phases-7 ...
+make -j32 
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-b-phases-7
+
+>>> Install app-misc/t348-b-phases-7 into /var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/image
+make -j32 DESTDIR=/var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/image install 
+mkdir -p "/var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/image/usr/share/t348-b-phases"
+cp built.txt "/var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/image/usr/share/t348-b-phases/built.txt"
+cp config.args "/var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/image/usr/share/t348-b-phases/config.args"
+>>> Completed installing app-misc/t348-b-phases-7 into /var/tmp/s403/l-l10-nocolor-portage/tmp/portage/app-misc/t348-b-phases-7/image
+
+ * Final size of build directory: 24 KiB
+ * Final size of installed tree:  12 KiB
+
+ * checking 3 files for package collisions
+>>> Merging app-misc/t348-b-phases-7 to /var/tmp/s403/l-l10-nocolor-portage/root/
+>>> /var/tmp/s403/l-l10-nocolor-portage/root/usr/
+>>> /var/tmp/s403/l-l10-nocolor-portage/root/usr/share/
+>>> /var/tmp/s403/l-l10-nocolor-portage/root/usr/share/t348-b-phases/
+>>> /var/tmp/s403/l-l10-nocolor-portage/root/usr/share/t348-b-phases/built.txt
+>>> /var/tmp/s403/l-l10-nocolor-portage/root/usr/share/t348-b-phases/config.args
+>>> /var/tmp/s403/l-l10-nocolor-portage/root/usr/share/doc/
+>>> /var/tmp/s403/l-l10-nocolor-portage/root/usr/share/doc/t348-b-phases-7/
+>>> /var/tmp/s403/l-l10-nocolor-portage/root/usr/share/doc/t348-b-phases-7/README.md
+>>> app-misc/t348-b-phases-7 merged.

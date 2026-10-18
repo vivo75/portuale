@@ -1,0 +1,2 @@
+cwd: /var/tmp/s403
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s403/l-l07b-cfgskip-portuale/cfg ROOT=/var/tmp/s403/l-l07b-cfgskip-portuale/root PORTAGE_TMPDIR=/var/tmp/s403/l-l07b-cfgskip-portuale/tmp DISTDIR=/var/tmp/s403/l-l07b-cfgskip-portuale/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news CONFIG_PROTECT=/etc CONFIG_PROTECT_MASK=/etc/env.d /var/tmp/s403/bin/ebuild /var/tmp/s403/s403-overlay/app-misc/s403-cfg/s403-cfg-2.0.ebuild merge

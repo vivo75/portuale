@@ -1,0 +1,2 @@
+cwd: /var/tmp/s403
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s403/l-l08-collision-portage/cfg ROOT=/var/tmp/s403/l-l08-collision-portage/root PORTAGE_TMPDIR=/var/tmp/s403/l-l08-collision-portage/tmp DISTDIR=/var/tmp/s403/l-l08-collision-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news\ protect-owned ebuild /var/tmp/s403/s403-overlay/app-misc/s403-mod/s403-mod-1.0.ebuild merge

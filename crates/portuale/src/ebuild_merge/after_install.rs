@@ -97,22 +97,30 @@ pub(crate) fn merge_after_install(
     // <file> merge` has no depgraph, so blockers resolve self-contained.
     let blocked =
         blocked_installed_packages(root, &options.config_root, env, main_slot, &repository);
-    let (collisions, symlink_collisions, plib_collisions) = find_collisions(FindCollisionsArgs {
-        d: &env.d(),
-        root,
-        category: &env.category,
-        package: &env.split.pn,
-        slot: main_slot,
-        config_protect: &options.config_protect,
-        config_protect_mask: &options.config_protect_mask,
-        plib_inodes: &plib_inodes,
-        blocked: &blocked,
-    })?;
+    let (collisions, symlink_collisions, plib_collisions, image_files, image_symlinks) =
+        find_collisions(FindCollisionsArgs {
+            d: &env.d(),
+            root,
+            category: &env.category,
+            package: &env.split.pn,
+            slot: main_slot,
+            config_protect: &options.config_protect,
+            config_protect_mask: &options.config_protect_mask,
+            plib_inodes: &plib_inodes,
+            blocked: &blocked,
+        })?;
     // Abort condition: a symlink-over-directory violation always aborts;
     // otherwise `collision_protect` aborts on any collision while
     // `protect_owned` aborts only when an owner was identified.
     // `find_owners` runs only when `protect_owned` might need it.
     // Portage: vartree.py, dblink.merge
+    //
+    // The listing opens here, before the abort: Portage's
+    // `_collision_protect` prints the line first thing, even when the
+    // merge then aborts. A disabled listing is a no-op (the emerge path).
+    // Portage: vartree.py, dblink._collision_protect
+    let mut listing = MergeListing::new(options.direct);
+    listing.collision_line(image_files + image_symlinks);
     let protect_owned_abort = options.protect_owned
         && !collisions.is_empty()
         && !find_owners(root, &collisions).is_empty();
@@ -128,6 +136,10 @@ pub(crate) fn merge_after_install(
             &symlink_collisions,
         ));
     }
+
+    // `>>> Merging` runs after the collision phase and before `preinst`.
+    // Portage: vartree.py, dblink.treewalk
+    listing.merging(&format!("{}/{}", env.category, env.split.pf), root);
 
     // The `-MERGING-<pf>` temporary is created before `pkg_preinst`,
     // populated after it, and renamed into place only after every
@@ -169,6 +181,7 @@ pub(crate) fn merge_after_install(
         noconfmem: options.noconfmem,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::from_options(options),
+        listing: &mut listing,
     })?;
     // Pre-replace-loop preserve-libs: the replaced instance's
     // still-needed libraries are selected now (the new entry still sits
@@ -243,7 +256,7 @@ pub(crate) fn merge_after_install(
     // is the live entry's own file, or a scratch copy on a database
     // backend stored back after the phase.
     // Portage: vartree.py, treewalk; doebuild.py, doebuild_environment
-    merge_after_install_finish(MergeAfterInstallFinishArgs {
+    let finish_status = merge_after_install_finish(MergeAfterInstallFinishArgs {
         root,
         options,
         ebuild_path,
@@ -252,7 +265,9 @@ pub(crate) fn merge_after_install(
         replaced: &replaced,
         env,
         replacing_versions,
-    })
+        listing: &mut listing,
+    })?;
+    Ok(finish_status)
 }
 
 /// The values [`merge_after_install_finish`] reads from its caller.
@@ -265,6 +280,7 @@ pub(crate) struct MergeAfterInstallFinishArgs<'a> {
     pub(crate) replaced: &'a [String],
     pub(crate) env: &'a ebuild_phases::Environment,
     pub(crate) replacing_versions: String,
+    pub(crate) listing: &'a mut MergeListing,
 }
 
 pub(crate) fn merge_after_install_finish(
@@ -279,6 +295,7 @@ pub(crate) fn merge_after_install_finish(
         replaced,
         env,
         replacing_versions,
+        listing,
     } = args;
     let update_env = update_env_target(
         root,
@@ -306,6 +323,12 @@ pub(crate) fn merge_after_install_finish(
         build_env: &postinst_env,
         log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
     })?;
+    // `>>> <cpv> merged.`, right after a successful `postinst` and
+    // before `env_update` — a failed `postinst` prints nothing.
+    // Portage: vartree.py, dblink.treewalk
+    if postinst_status == 0 {
+        listing.merged(&format!("{}/{}", env.category, env.split.pf));
+    }
     absorb_update_env(root, &env.category, &env.split.pf, &update_env)?;
 
     if !contents.is_empty() || !replaced.is_empty() {
@@ -415,7 +438,15 @@ pub(crate) fn unmerge_replaced_same_slot(
     let new_version = new_pf
         .strip_prefix(&format!("{package}-"))
         .unwrap_or(new_pf);
+    // The replace loop's frame lines, once per replaced same-slot
+    // instance: `>>> Safely unmerging …` before its unmerge (which runs
+    // `pkg_prerm`, removes the files and runs `pkg_postrm`), then
+    // `>>> Original …` after its vdb entry is deleted. A disabled
+    // listing is a no-op (the emerge path).
+    // Portage: vartree.py, dblink.treewalk
+    let mut replace_listing = MergeListing::new(options.direct);
     for (i, old_pf) in replaced.iter().enumerate() {
+        replace_listing.safely_unmerging();
         unmerge_one_installed(UnmergeOneInstalledArgs {
             root,
             category,
@@ -432,6 +463,7 @@ pub(crate) fn unmerge_replaced_same_slot(
             replacement_needed: &replacement_needed,
             deferred_delete: defer_delete.then(|| &replaced[..i]),
         })?;
+        replace_listing.original_unmerged();
     }
 
     // The superseded versions' `prerm`/`postrm` elog output reaches the
@@ -533,6 +565,7 @@ pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result
         uninstall_ignore: options.uninstall_ignore.clone(),
         config_root: options.config_root.clone(),
         already_unmerged: deferred_delete.map(<[String]>::to_vec).unwrap_or_default(),
+        direct: options.direct,
     };
 
     if let Some(pkg_options) = backup {
@@ -586,6 +619,7 @@ pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result
     let mut retire = (deferred_delete.is_none() && !is_replacement)
         .then(|| RetireWrites::for_root(root))
         .flatten();
+    let mut unmerge_listing = MergeListing::new(unmerge_options.direct);
     let elog_lines = crate::ebuild_unmerge::unmerge_pkgfiles_into(
         crate::ebuild_unmerge::UnmergePkgfilesIntoArgs {
             root,
@@ -598,6 +632,7 @@ pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result
             replacement_preserved,
             replacement_needed,
             retire: retire.as_mut(),
+            listing: &mut unmerge_listing,
         },
     )?;
     crate::ebuild_unmerge::emit_unmerge_elog(root, category, pf, &elog_lines);

@@ -1,0 +1,46 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s403/l-l08-collision-portage/tmp/portage/app-misc/s403-mod-1.0/work
+>>> Preparing source in /var/tmp/s403/l-l08-collision-portage/tmp/portage/app-misc/s403-mod-1.0/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s403/l-l08-collision-portage/tmp/portage/app-misc/s403-mod-1.0/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s403/l-l08-collision-portage/tmp/portage/app-misc/s403-mod-1.0/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/s403-mod-1.0
+
+>>> Install app-misc/s403-mod-1.0 into /var/tmp/s403/l-l08-collision-portage/tmp/portage/app-misc/s403-mod-1.0/image
+>>> Completed installing app-misc/s403-mod-1.0 into /var/tmp/s403/l-l08-collision-portage/tmp/portage/app-misc/s403-mod-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  8 KiB
+
+ [32;01m*[39;49;00m checking 2 files for package collisions
+[31;01m * [39;49;00mThis package will overwrite one or more files that may belong to other
+[31;01m * [39;49;00mpackages (see list below). You can use a command such as `portageq
+[31;01m * [39;49;00mowners / <filename>` to identify the installed package that owns a
+[31;01m * [39;49;00mfile. If portageq reports that only one package owns a file then do
+[31;01m * [39;49;00mNOT file a bug report. A bug report is only useful if it identifies at
+[31;01m * [39;49;00mleast two or more packages that are known to install the same file(s).
+[31;01m * [39;49;00mIf a collision occurs and you can not explain where the file came from
+[31;01m * [39;49;00mthen you should simply ignore the collision since there is not enough
+[31;01m * [39;49;00minformation to determine if a real problem exists. Please do NOT file
+[31;01m * [39;49;00ma bug report at https://bugs.gentoo.org/ unless you report exactly
+[31;01m * [39;49;00mwhich two packages install the same file(s). See
+[31;01m * [39;49;00mhttps://wiki.gentoo.org/wiki/Knowledge_Base:Blockers for tips on how
+[31;01m * [39;49;00mto solve the problem. And once again, please do NOT file a bug report
+[31;01m * [39;49;00munless you have completely understood the above message.
+[31;01m * [39;49;00m
+[31;01m * [39;49;00mDetected file collision(s):
+[31;01m * [39;49;00m
+[31;01m * [39;49;00m	/var/tmp/s403/l-l08-collision-portage/root/usr/share/s403-owned.txt
+[31;01m * [39;49;00m
+[31;01m * [39;49;00mSearching all installed packages for file collisions...
+[31;01m * [39;49;00m
+[31;01m * [39;49;00mPress Ctrl-C to Stop
+[31;01m * [39;49;00m
+[31;01m * [39;49;00mapp-misc/s403-collide-1.0:0::s403
+[31;01m * [39;49;00m	/var/tmp/s403/l-l08-collision-portage/root/usr/share/s403-owned.txt
+[31;01m * [39;49;00m
+[31;01m * [39;49;00mPackage 'app-misc/s403-mod-1.0' NOT merged due to file collisions. If
+[31;01m * [39;49;00mnecessary, refer to your elog messages for the whole content of the
+[31;01m * [39;49;00mabove message.

@@ -1,0 +1,25 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s403/l-l07b-cfgskip-portage/tmp/portage/app-misc/s403-cfg-2.0/work
+>>> Preparing source in /var/tmp/s403/l-l07b-cfgskip-portage/tmp/portage/app-misc/s403-cfg-2.0/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s403/l-l07b-cfgskip-portage/tmp/portage/app-misc/s403-cfg-2.0/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s403/l-l07b-cfgskip-portage/tmp/portage/app-misc/s403-cfg-2.0/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/s403-cfg-2.0
+
+>>> Install app-misc/s403-cfg-2.0 into /var/tmp/s403/l-l07b-cfgskip-portage/tmp/portage/app-misc/s403-cfg-2.0/image
+>>> Completed installing app-misc/s403-cfg-2.0 into /var/tmp/s403/l-l07b-cfgskip-portage/tmp/portage/app-misc/s403-cfg-2.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging app-misc/s403-cfg-2.0 to /var/tmp/s403/l-l07b-cfgskip-portage/root/
+--- /var/tmp/s403/l-l07b-cfgskip-portage/root/etc/
+--- /var/tmp/s403/l-l07b-cfgskip-portage/root/etc/s403-cfg.conf
+>>> Safely unmerging already-installed instance...
+--- replaced obj /var/tmp/s403/l-l07b-cfgskip-portage/root/etc/s403-cfg.conf
+--- replaced dir /var/tmp/s403/l-l07b-cfgskip-portage/root/etc
+>>> Original instance of package unmerged safely.
+>>> app-misc/s403-cfg-2.0 merged.

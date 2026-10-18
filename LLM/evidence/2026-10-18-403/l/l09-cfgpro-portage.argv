@@ -1,0 +1,2 @@
+cwd: /var/tmp/s403
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s403/l-l09-cfgpro-portage/cfg ROOT=/var/tmp/s403/l-l09-cfgpro-portage/root PORTAGE_TMPDIR=/var/tmp/s403/l-l09-cfgpro-portage/tmp DISTDIR=/var/tmp/s403/l-l09-cfgpro-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news ebuild /var/tmp/s403/s403-overlay/app-misc/s403-mod/s403-mod-2.0.ebuild merge

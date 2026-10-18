@@ -23,3 +23,9 @@ Blockers against installed packages and file collisions.
 ## type CollisionsResult
 - PMS 13.4's symlink-over-directory ban (checked unconditionally, regardless of `FEATURES`, but only for the symlinks Portage actually checks -- file-target/dangling ones; a symlink whose target is a directory is in Portage's `os.walk` `dirs`, never in `file_list`/`symlink_list`, so it is skipped here, like Portage) plus Portage's `FEATURES=collision-protect` ordinary-collision detection, plus preserve-libs collision exclusion and blocker exclusion (`mypkglist = others_in_slot + blockers` -- see `blocked_installed_packages` for the full Portage grounding; `FEATURES=protect-owned` is decided by the caller, `run_merge`, using the `collisions` result together with `find_owners`, not inside `find_collisions` itself).
 - `find_collisions` walks `d` (the install image, `${D}`) the same way `merge_tree` does, but read-only and file/symlink-only (Portage's `_collision_protect` never checks directories at all -- a directory merging into an existing directory is normal, not a collision). Returns `(collisions, symlink_collisions, plib_collisions)` as real, `ROOT`-relative absolute paths (`plib_collisions` keyed by the preserved lib's own owning cpv); the caller decides whether `collisions` alone should abort the merge (gated on `FEATURES=collision-protect`) -- `symlink_collisions` always should, and `plib_collisions` never does (Portage's `_collision_protect` excludes those from `collisions` unconditionally, regardless of `FEATURES`).
+
+## fn find_collisions (counts, #403)
+- Also returns the collision line's `N`: regular files plus non-directory
+  symlinks in the image (directories never counted). Ports `treewalk`'s
+  `filelist`/`linklist` split (vartree.py:4625-4681): dir-target symlinks
+  are skipped before counting, like they are before checking.
