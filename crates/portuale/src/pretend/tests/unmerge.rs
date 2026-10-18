@@ -33,6 +33,7 @@ fn execute_unmerge_forwards_quiet_and_noinfo_to_the_info_regen() {
         noinfo: false,
         repos: &[],
         config: &portage_profile::Config::default(),
+        autoclean: false,
     });
     assert_eq!(format!("{rc:?}"), success);
     assert!(
@@ -52,6 +53,7 @@ fn execute_unmerge_forwards_quiet_and_noinfo_to_the_info_regen() {
         noinfo: true,
         repos: &[],
         config: &portage_profile::Config::default(),
+        autoclean: false,
     });
     assert_eq!(format!("{rc:?}"), success);
     assert!(crate::mtimedb::read_info_mtimes(&root).is_empty());
@@ -73,6 +75,7 @@ fn unmerge_end_notice_skips_an_empty_removal_list() {
         noinfo: true,
         repos: &repos,
         config: &config,
+        autoclean: false,
     });
     assert_eq!(format!("{rc:?}"), format!("{:?}", ExitCode::SUCCESS));
     assert!(

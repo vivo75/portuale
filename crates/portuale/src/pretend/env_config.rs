@@ -351,6 +351,14 @@ pub(crate) fn config_features_string(config: &portage_profile::Config) -> String
     config_features_list(config).join(" ")
 }
 
+/// Whether the post-merge auto-clean runs: the resolved `AUTOCLEAN` is an
+/// explicit `yes` (make.globals ships `no`). The calling env wins over the
+/// config, as for every resolved scalar.
+/// Portage: _emerge/actions.py, action_build
+pub(crate) fn autoclean_enabled(config: &portage_profile::Config) -> bool {
+    portage_profile::env_over_config_scalar(config, "AUTOCLEAN").is_some_and(|v| v == "yes")
+}
+
 /// Resolved merge-time `PORTAGE_BZIP2_COMMAND`; shared with the remote server.
 pub(crate) fn config_bzip2_command(config: &portage_profile::Config) -> String {
     config

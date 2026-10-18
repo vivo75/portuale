@@ -62,3 +62,6 @@
 ## fn resolve_cleanup_args
 - Ports Portage's `action_depclean` argument handling (`actions.py:848-863`): ambiguous bare name -> `!!! ... ambiguous` + `Err(1)`; one matching nothing prints to stderr; `null/` prefix stripped for display.
 - Shared by `--depclean` and `--prune`: resolve each bare name against the vdb null-category scan (ambiguous -> `!!! ... ambiguous` + `Err(1)`), then check every resulting atom -- one matching nothing prints `--- Couldn't find 'X' to <action>.` (stderr), and if *none* match, print `>>> No packages selected for removal by <action>` and return `Err(1)`. An empty `targets` is `Ok(vec![])` (the full, no-args form).
+
+## fn execute_unmerge (autoclean flag)
+- Backlog #404 (02.346 S11): `autoclean: bool` skips the post-removal info-dir regen, the preserved-libs notice and the GLEP 42 notice, which the merge's own `show_post_merge_notices` runs right after the auto-clean (Portage runs all three in `post_emerge`, after the auto-clean unmerge returns). The elog batch, the world cleanup and the removal loop itself are unchanged; manual paths pass `false`.

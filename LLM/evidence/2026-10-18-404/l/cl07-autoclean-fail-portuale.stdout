@@ -1,0 +1,30 @@
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging (1 of 1) app-misc/s404-fail-1.0::s404 for /var/tmp/s404/l-cl07-autoclean-fail-portuale/root
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s404/l-cl07-autoclean-fail-portuale/tmp/portage/app-misc/s404-fail-1.0/work
+>>> Preparing source in /var/tmp/s404/l-cl07-autoclean-fail-portuale/tmp/portage/app-misc/s404-fail-1.0/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s404/l-cl07-autoclean-fail-portuale/tmp/portage/app-misc/s404-fail-1.0/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s404/l-cl07-autoclean-fail-portuale/tmp/portage/app-misc/s404-fail-1.0/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/s404-fail-1.0
+ [31;01m*[0m ERROR: app-misc/s404-fail-1.0::s404 failed (install phase):
+ [31;01m*[0m   The source directory '/var/tmp/s404/l-cl07-autoclean-fail-portuale/tmp/portage/app-misc/s404-fail-1.0/work/s404-fail-1.0' doesn't exist
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m            ebuild.sh, line  838:  Called __ebuild_main 'install'
+ [31;01m*[0m   phase-functions.sh, line 1216:  Called __dyn_install
+ [31;01m*[0m   phase-functions.sh, line  708:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		die "The source directory '${S}' doesn't exist"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-misc/s404-fail-1.0::s404'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-misc/s404-fail-1.0::s404'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/s404/l-cl07-autoclean-fail-portuale/tmp/portage/app-misc/s404-fail-1.0/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/s404/l-cl07-autoclean-fail-portuale/tmp/portage/app-misc/s404-fail-1.0/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/s404/l-cl07-autoclean-fail-portuale/tmp/portage/app-misc/s404-fail-1.0'
+ [31;01m*[0m S: '/var/tmp/s404/l-cl07-autoclean-fail-portuale/tmp/portage/app-misc/s404-fail-1.0/work/s404-fail-1.0'

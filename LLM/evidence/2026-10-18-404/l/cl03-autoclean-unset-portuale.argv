@@ -1,0 +1,2 @@
+cwd: /var/tmp/s404
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s404/l-cl03-autoclean-unset-portuale/cfg ROOT=/var/tmp/s404/l-cl03-autoclean-unset-portuale/root PORTAGE_TMPDIR=/var/tmp/s404/l-cl03-autoclean-unset-portuale/tmp DISTDIR=/var/tmp/s404/l-cl03-autoclean-unset-portuale/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news /var/tmp/s404/bin/emerge --oneshot --package-moves=n app-misc/t348-b-phases

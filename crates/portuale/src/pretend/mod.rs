@@ -877,6 +877,26 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
             return Some(code);
         }
 
+        // With a user-set `AUTOCLEAN=yes`, a successful merge is followed
+        // by the `--clean` selection system-wide (a `--buildpkgonly` run
+        // builds without merging, so it never cleans). `--pretend` cannot
+        // reach here, and a failed merge returns above.
+        // Portage: _emerge/actions.py, action_build
+        if !opts.buildpkgonly && autoclean_enabled(config) {
+            run_autoclean_after_merge(RunAutocleanAfterMergeArgs {
+                root,
+                config_root,
+                config,
+                repos,
+                shell: opts.shell,
+                debug: opts.debug,
+                ask: opts.ask,
+                quiet: opts.quiet,
+                noinfo: config_features_list(config).iter().any(|t| t == "noinfo"),
+                color: &color,
+            });
+        }
+
         if let Some(code) = show_post_merge_notices(ShowPostMergeNoticesArgs {
             opts,
             entries,

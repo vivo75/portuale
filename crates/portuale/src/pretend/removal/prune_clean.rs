@@ -162,6 +162,7 @@ pub(crate) fn run_prune_nodeps_pretend(args: RunPruneNodepsPretendArgs<'_>) -> E
         debug,
         color,
         is_clean: false,
+        autoclean: false,
         quiet,
         noinfo,
         repos,
@@ -218,6 +219,7 @@ pub(crate) fn run_clean_pretend(args: RunCleanPretendArgs<'_>) -> ExitCode {
         debug,
         color,
         is_clean: true,
+        autoclean: false,
         quiet,
         noinfo,
         repos,
@@ -235,6 +237,11 @@ pub(crate) struct RunPruneNodepsOrCleanArgs<'a> {
     pub(crate) debug: bool,
     pub(crate) color: &'a Colorizer,
     pub(crate) is_clean: bool,
+    /// The post-merge auto-clean: no `CLEAN_DELAY` countdown (Portage
+    /// skips it when `autoclean` is set) and no pretend header (the run
+    /// is never `--pretend`; see `run_autoclean_after_merge`).
+    /// Portage: _emerge/unmerge.py, unmerge
+    pub(crate) autoclean: bool,
     /// Suppression of the post-removal info-regen block; computed by the caller.
     pub(crate) quiet: bool,
     pub(crate) noinfo: bool,
@@ -255,6 +262,7 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
         debug,
         color,
         is_clean,
+        autoclean,
         quiet,
         noinfo,
         repos,
@@ -384,7 +392,12 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
         if ask && !ask_confirm(color, "Would you like to unmerge these packages?") {
             return ExitCode::from(130);
         }
-        clean_delay_countdown(Some(config));
+        // The post-merge auto-clean never counts down, whatever
+        // `CLEAN_DELAY` says; a manual `--clean`/`--prune` does.
+        // Portage: _emerge/unmerge.py, unmerge
+        if !autoclean {
+            clean_delay_countdown(Some(config));
+        }
         return execute_unmerge(ExecuteUnmergeArgs {
             removal_list: &removal_list,
             root,
@@ -395,6 +408,7 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
             noinfo,
             repos,
             config,
+            autoclean,
         });
     }
     ExitCode::SUCCESS
