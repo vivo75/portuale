@@ -7,6 +7,7 @@ use crate::ebuild_merge;
 
 mod buildpkgonly;
 mod entry_env;
+mod fetchonly;
 mod logs;
 mod resume;
 mod scheduler;
@@ -18,6 +19,7 @@ mod tests;
 
 pub use buildpkgonly::*;
 pub(crate) use entry_env::*;
+pub use fetchonly::*;
 pub(crate) use logs::*;
 pub(crate) use resume::*;
 pub(crate) use scheduler::*;

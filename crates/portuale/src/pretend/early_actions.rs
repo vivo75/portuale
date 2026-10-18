@@ -42,6 +42,7 @@ pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<Ex
         resume,
         clean_action,
         rage_clean,
+        fetchonly,
         ..
     } = opts;
     let mut pretend = *pretend_out;
@@ -69,7 +70,13 @@ pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<Ex
     // `--pretend` and the read-only query actions are exempt. `--regen`
     // rewrites the repo cache, not the root, so it is not gated here.
     // Portage: _emerge/actions.py, action_build privilege check
+    // `--fetchonly`/`--fetch-all-uri` of a build need only the portage group
+    // (`need_superuser` in actions.py), so they pass; a failed write to DISTDIR
+    // reports itself.
+    let fetch_build_only =
+        fetchonly && !(clean_action || depclean || prune || unmerge || deselect || rage_clean);
     let write_action = !pretend
+        && !fetch_build_only
         && !search_action
         && !info_action
         && !list_sets

@@ -45,6 +45,8 @@ pub(crate) const ENV_SCALAR_VARS: &[&str] = &[
     "EMERGE_DEFAULT_OPTS",
     "PORTAGE_RSYNC_EXTRA_OPTS",
     "GENTOO_MIRRORS",
+    "FETCHCOMMAND",
+    "RESUMECOMMAND",
 ];
 
 #[cfg(test)]

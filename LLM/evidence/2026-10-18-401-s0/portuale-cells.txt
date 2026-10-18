@@ -1,0 +1,69 @@
+=== pf
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+https://example.invalid/probe-1.tar.gz 
+rc=0
+--- stderr
+--- dist:
+=== pF
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+https://example.invalid/probe-1.tar.gz 
+rc=0
+--- stderr
+--- dist:
+=== pfv
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+https://example.invalid/probe-1.tar.gz 
+rc=0
+--- stderr
+--- dist:
+=== f
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+>>> Fetching (1 of 1) dev-util/fetchprobe-1::fetchrepo for /var/tmp/s7-oracle/root
+>>> Downloading 'https://example.invalid/probe-1.tar.gz'
+ * probe-1.tar.gz BLAKE2B SHA512 size ;-) ...                            [ ok ]
+rc=0
+--- stderr
+--- dist:
+probe-1.tar.gz
+=== F
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+>>> Fetching (1 of 1) dev-util/fetchprobe-1::fetchrepo for /var/tmp/s7-oracle/root
+>>> Downloading 'https://example.invalid/probe-1.tar.gz'
+ * probe-1.tar.gz BLAKE2B SHA512 size ;-) ...                            [ ok ]
+rc=0
+--- stderr
+--- dist:
+probe-1.tar.gz
+=== f-fail
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+>>> Fetching (1 of 1) dev-util/fetchprobe-1::fetchrepo for /var/tmp/s7-oracle/root
+>>> Downloading 'https://example.invalid/probe-1.tar.gz'
+
+>>> Failed to emerge dev-util/fetchprobe-1 for /var/tmp/s7-oracle/root
+rc=1
+--- stderr
+!!! Couldn't download 'probe-1.tar.gz'. Aborting.

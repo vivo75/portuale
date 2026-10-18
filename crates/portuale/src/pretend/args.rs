@@ -79,6 +79,10 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) newrepo: bool,
     pub(crate) emptytree: bool,
     pub(crate) buildpkgonly: bool,
+    /// `--fetchonly`/`-f`: fetch the sources, merge nothing (`--pretend`: list them).
+    pub(crate) fetchonly: bool,
+    /// `--fetch-all-uri`/`-F`: like `--fetchonly` for every file of `SRC_URI`; implies it.
+    pub(crate) fetch_all_uri: bool,
     pub(crate) buildpkg_opt: Option<bool>,
     pub(crate) quiet_build: Option<bool>,
     pub(crate) buildpkg_exclude: Vec<String>,
@@ -280,6 +284,8 @@ impl<'a> Default for EmergeOpts<'a> {
             emptytree: false,
             // --buildpkgonly/-B: plain boolean, like --newrepo.
             buildpkgonly: false,
+            fetchonly: false,
+            fetch_all_uri: false,
             // --buildpkg/-b: `None` = not given (fall back to `FEATURES=buildpkg`).
             // Only matters on a non-`--pretend` source merge.
             buildpkg_opt: None,
@@ -1555,6 +1561,16 @@ fn parse_build_opts<'a>(
         opts.buildpkgonly = true;
         *idx += 1;
         Ok(true)
+    } else if arg == "--fetchonly" || arg == "-f" {
+        opts.fetchonly = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--fetch-all-uri" || arg == "-F" {
+        // `-F` implies `-f`. Portage: _emerge/actions.py, apply_priorities/action_build
+        opts.fetch_all_uri = true;
+        opts.fetchonly = true;
+        *idx += 1;
+        Ok(true)
     } else if arg == "--buildpkg" || arg == "-b" {
         match args.get(*idx + 1).map(String::as_str) {
             Some("y") => {
@@ -2415,6 +2431,11 @@ fn apply_short_flag(opts: &mut EmergeOpts<'_>, c: char) -> bool {
             opts.searchdesc = true;
         }
         'B' => opts.buildpkgonly = true,
+        'f' => opts.fetchonly = true,
+        'F' => {
+            opts.fetch_all_uri = true;
+            opts.fetchonly = true;
+        }
         'b' => opts.buildpkg_opt = Some(true),
         _ => return false,
     }

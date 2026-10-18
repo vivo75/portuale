@@ -782,25 +782,36 @@ pub(crate) fn show_resolution_header_with_counts(
         buildpkgonly,
         unordered_display,
         nodeps,
+        fetchonly,
         ..
     } = opts;
+    // `--pretend --fetchonly` prints the same display (its list is URIs, see
+    // `run_fetchonly_action`); a plain `--pretend` prints it with the merge list.
     // The resolution-phase display for a non-`--pretend` run, printed whether
     // or not the list itself is shown and whether or not resolution succeeds.
     // See `resolution_header_shown`/`resolution_notice_shown` for the gates.
     // Portage: _emerge/depgraph.py, _start_resolution_display
-    if !pretend && !quiet {
+    if (!pretend || fetchonly) && !quiet {
         if resolution_header_shown(ResolutionHeaderShownArgs {
             ask,
             tree,
             verbose,
             quiet,
-        }) {
+        }) || (pretend && fetchonly)
+        {
             // `These are the packages that would be ...`: `in reverse order` for
             // `--tree` (a plain `:` under `--unordered-display`), `built` under
             // `--buildpkgonly`, else `merged, in order:`.
             println!();
-            let action = if buildpkgonly { "built" } else { "merged" };
-            if tree {
+            let action = if fetchonly {
+                "fetched"
+            } else if buildpkgonly {
+                "built"
+            } else {
+                "merged"
+            };
+            // `--tree` does not apply to fetching (depgraph.py:_start_resolution_display).
+            if tree && !fetchonly {
                 if unordered_display {
                     println!("These are the packages that would be {action}:");
                 } else {

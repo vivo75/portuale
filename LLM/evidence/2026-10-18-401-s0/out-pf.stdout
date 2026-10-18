@@ -1,0 +1,23 @@
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 2.49 s (backtrack: 0/20).
+
+
+>>> Downloading 'http://10.48.0.229:8080/distfiles/layout.conf'
+--2026-10-18 20:25:02--  http://10.48.0.229:8080/distfiles/layout.conf
+Connecting to 10.48.0.229:8080... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 38 [text/plain]
+Saving to: ‘/var/tmp/d401/.layout.conf.10.48.0.229.__download__’
+
+     0K                                                       100% 30.1M=0s
+
+2026-10-18 20:25:02 (30.1 MB/s) - ‘/var/tmp/d401/.layout.conf.10.48.0.229.__download__’ saved [38/38]
+
+http://10.48.0.229:8080/distfiles/32/hello-2.12.3.tar.gz https://www.mirrorservice.org/sites/ftp.gnu.org/gnu/hello/hello-2.12.3.tar.gz https://artfiles.org/gnu.org/hello/hello-2.12.3.tar.gz https://ftp.gnu.org/gnu/hello/hello-2.12.3.tar.gz 
+
+ * IMPORTANT: 1 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

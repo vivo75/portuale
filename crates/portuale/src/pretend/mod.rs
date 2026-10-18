@@ -326,6 +326,7 @@ pub fn run(args: &[String]) -> ExitCode {
             tree: opts.tree,
             verbose: opts.verbose,
             quiet: opts.quiet,
+            fetching: opts.fetchonly,
         })
         && (opts.pretend || gated_abort_partial.is_none()))
         || autounmask_only_reshows_merge_list(AutounmaskOnlyReshowsMergeListArgs {
@@ -748,6 +749,54 @@ pub(crate) struct RunAfterDisplayArgs<'a> {
     pub(crate) config: &'a Config,
 }
 
+/// Runs the `--fetchonly`/`--fetch-all-uri` job over `entries`; the exit code.
+/// `DISTDIR` follows the calling env, then the config, then Portage's default.
+struct FetchonlyActionArgs<'a> {
+    opts: &'a EmergeOpts<'a>,
+    entries: &'a [GraphEntry],
+    config: &'a Config,
+    repos: &'a [RepoConfig],
+    root: &'a Path,
+    config_root: &'a Path,
+}
+
+fn run_fetchonly_action(args: FetchonlyActionArgs<'_>) -> u8 {
+    let FetchonlyActionArgs {
+        opts,
+        entries,
+        config,
+        repos,
+        root,
+        config_root,
+    } = args;
+    let portage_tmpdir = std::env::var_os("PORTAGE_TMPDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| portage_repo::portage_tmpdir_from_config(config));
+    let distdir = std::env::var_os("DISTDIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            config
+                .other_vars
+                .get("DISTDIR")
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/distfiles"));
+    let code = emerge_build::run_fetchonly(emerge_build::RunFetchonlyArgs {
+        entries,
+        config,
+        repos,
+        root,
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &distdir,
+        config_root,
+        shell: opts.shell,
+        debug: opts.debug,
+        pretend: opts.pretend,
+        all_uri: opts.fetch_all_uri,
+    });
+    u8::try_from(code).unwrap_or(1)
+}
+
 /// Everything a non-`--pretend` run does after the display: prompts, then the merge.
 pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCode> {
     let RunAfterDisplayArgs {
@@ -764,6 +813,29 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
         color,
         config,
     } = args;
+    // `--pretend --fetchonly`: the URIs, no merge list. Portage runs the Scheduler in
+    // listing mode after an optional prompt (actions.py:541-543, EbuildFetchonly.py).
+    if opts.pretend && opts.fetchonly {
+        if opts.ask
+            && !ask_confirm(
+                &color,
+                "Would you like to fetch the source files for these packages?",
+            )
+        {
+            return Some(ExitCode::from(130));
+        }
+        return match run_fetchonly_action(FetchonlyActionArgs {
+            opts,
+            entries,
+            config,
+            repos,
+            root,
+            config_root,
+        }) {
+            0 => None,
+            code => Some(ExitCode::from(code)),
+        };
+    }
     if !opts.pretend {
         // An empty displayed plan quits here (before the rotation and the
         // scheduler), after every failure gate above. `--resume` never reaches
@@ -799,8 +871,26 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
         }
         // `--ask` prompts once, after the whole merge list, before anything builds.
         // Portage: _emerge/actions.py, action_build
-        if opts.ask && !ask_confirm(&color, "Would you like to merge these packages?") {
+        let prompt = if opts.fetchonly {
+            "Would you like to fetch the source files for these packages?"
+        } else {
+            "Would you like to merge these packages?"
+        };
+        if opts.ask && !ask_confirm(&color, prompt) {
             return Some(ExitCode::from(130));
+        }
+        // `--fetchonly`: download only. Nothing below runs: no vdb, world or resume
+        // writes (mtimedb is read-only under fetch-only).
+        // Portage: _emerge/actions.py, action_build; mtimedb.py
+        if opts.fetchonly {
+            return Some(ExitCode::from(run_fetchonly_action(FetchonlyActionArgs {
+                opts,
+                entries,
+                config,
+                repos,
+                root,
+                config_root,
+            })));
         }
         let MergeSetupOut {
             status_mode,

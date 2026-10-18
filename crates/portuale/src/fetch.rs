@@ -627,6 +627,8 @@ pub fn fetch_src_uri(
                     continue;
                 }
                 let candidate = candidate.as_str();
+                // Portage: fetch.py, `>>> Downloading '<uri>'` before each attempt.
+                println!(">>> Downloading '{candidate}'");
                 // A non-empty partial on disk switches from `FETCHCOMMAND` to
                 // `RESUMECOMMAND` (`wget -c` continues it).
                 let has_partial = std::fs::metadata(&dest)
@@ -690,9 +692,94 @@ pub fn fetch_src_uri(
                 ));
             }
         }
+        print_verified_line(&entry.filename, digests);
         filenames.push(entry.filename.clone());
     }
     Ok(filenames)
+}
+
+/// ` * <file> <HASHES> size ;-) ...  [ ok ]`: the `EOutput.ebegin`/`eend` pair Portage prints
+/// once a distfile is verified (present or fetched). The status is right-aligned to `COLUMNS`.
+// Portage: lib/portage/package/ebuild/fetch.py, fetch; output.py, EOutput
+fn print_verified_line(filename: &str, digests: &portage_fetch::DistfileDigests) {
+    let mut names: Vec<&str> = digests.hashes.keys().map(String::as_str).collect();
+    names.push("size");
+    names.sort_unstable();
+    let color = crate::color::Colorizer::new(crate::color::resolve_havecolor(None));
+    let msg = format!("{filename} {} ;-) ...", names.join(" "));
+    let columns = std::env::var("COLUMNS")
+        .ok()
+        .and_then(|c| c.parse::<usize>().ok())
+        .filter(|c| *c > 0)
+        .unwrap_or(80);
+    let pad = columns.saturating_sub(msg.len() + 3 + 7);
+    println!(
+        "{}{msg}{}{}{}{}",
+        color.c("INFORM", " * "),
+        " ".repeat(pad),
+        color.c("BRACKET", "[ "),
+        color.c("GOOD", "ok"),
+        color.c("BRACKET", " ]"),
+    );
+}
+
+/// What `fetch(..., listonly=1)` prints for `src_uri`: per file, in `SRC_URI` order, the candidate URIs (mirrors
+/// laid out per their `layout.conf`, which is the one thing fetched), without downloading
+/// or verifying anything. `all_uri` lists every file whatever the USE set
+/// (`--fetch-all-uri`). A file already in `DISTDIR` is listed too.
+// Portage: lib/portage/package/ebuild/fetch.py, fetch (listonly)
+pub fn list_src_uri(
+    pkg_dir: &Path,
+    src_uri: &str,
+    all_uri: bool,
+    options: &FetchOptions,
+) -> Result<Vec<Vec<String>>, String> {
+    let manifest = parse_manifest(&pkg_dir.join("Manifest")).unwrap_or_default();
+    let entries = flatten_src_uri(src_uri, |negated, flag| {
+        all_uri || options.use_flags.contains(flag) != negated
+    })
+    .map_err(|e| format!("{}: {e}", pkg_dir.display()))?;
+    let thirdpartymirrors = crate::ebuild_phases::repo_root_for(pkg_dir)
+        .map(|repo_root| parse_thirdpartymirrors(&repo_root.join("profiles/thirdpartymirrors")))
+        .transpose()?
+        .unwrap_or_default();
+    let custommirrors = parse_thirdpartymirrors(&options.config_root.join("etc/portage/mirrors"))
+        .unwrap_or_default();
+    let no_digests = std::collections::HashMap::new();
+    let cache_path =
+        distdir_writable(&options.distdir).then(|| options.distdir.join(".mirror-cache.json"));
+    let now = options.mirror_cache_now.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64())
+    });
+    let mut listed = Vec::new();
+    for (_, group) in group_by_filename(&entries) {
+        let entry = group[0];
+        let hashes = manifest
+            .get(&entry.filename)
+            .map_or(&no_digests, |digests| &digests.hashes);
+        let mut seen = std::collections::HashSet::new();
+        let mut uris = Vec::new();
+        for candidate in assemble_candidates(&group, &custommirrors, &thirdpartymirrors, options) {
+            let uri = match candidate {
+                Candidate::Uri(uri) => uri,
+                Candidate::Mirror(root) => mirror_url(MirrorUrlArgs {
+                    mirror: &root,
+                    filename: &entry.filename,
+                    digests: hashes,
+                    distdir: &options.distdir,
+                    cache_path: cache_path.as_deref(),
+                    now,
+                }),
+            };
+            if seen.insert(uri.clone()) {
+                uris.push(uri);
+            }
+        }
+        listed.push(uris);
+    }
+    Ok(listed)
 }
 
 #[cfg(test)]
@@ -1877,6 +1964,29 @@ mod tests {
             ],
             ..FetchOptions::default()
         }
+    }
+
+    /// `--pretend --fetchonly` lists, per file, every candidate in `fetch()` order (mirrors
+    /// first, the literal URI last) without downloading; `--fetch-all-uri` lists the files
+    /// of USE-disabled groups too. Oracle: Portage 3.0.82.2 `-pf`/`-pF`
+    /// (`LLM/evidence/2026-10-18-401-s0/`).
+    #[test]
+    fn list_src_uri_lists_candidates_and_all_uri_files() {
+        let mut options = test_options();
+        options.gentoo_mirrors = vec!["/local/fsmirror".to_string()];
+        let dir = tempdir();
+        let src_uri =
+            "https://example.invalid/a-1.tar.gz flag? ( https://example.invalid/b-1.tar.gz )";
+        let listed = list_src_uri(&dir, src_uri, false, &options).unwrap();
+        assert_eq!(listed, [vec!["https://example.invalid/a-1.tar.gz"]]);
+        let all = list_src_uri(&dir, src_uri, true, &options).unwrap();
+        assert_eq!(
+            all,
+            [
+                vec!["https://example.invalid/a-1.tar.gz"],
+                vec!["https://example.invalid/b-1.tar.gz"]
+            ]
+        );
     }
 
     /// A plain URI sorts after the mirror lists, last (Portage's `fetch`

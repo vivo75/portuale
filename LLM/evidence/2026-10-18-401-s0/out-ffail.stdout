@@ -1,0 +1,15 @@
+
+ * IMPORTANT: 1 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+Calculating dependencies ... done!
+Dependency resolution took 1.73 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) app-misc/hello-2.12.3::gentoo
+>>> Downloading 'http://distfiles.gentoo.org/distfiles/hello-2.12.3.tar.gz'
+>>> Downloading 'https://artfiles.org/gnu.org/hello/hello-2.12.3.tar.gz'
+>>> Downloading 'https://ftp.gnu.org/gnu/hello/hello-2.12.3.tar.gz'
+>>> Downloading 'https://www.mirrorservice.org/sites/ftp.gnu.org/gnu/hello/hello-2.12.3.tar.gz'
+
+>>> Failed to emerge app-misc/hello-2.12.3

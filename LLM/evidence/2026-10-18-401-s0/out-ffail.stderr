@@ -1,0 +1,22 @@
+[f1r] Local copy of remote index is up-to-date and will be used.
+!!! FETCHCOMMAND does not contain the required ${FILE} parameter.
+!!! RESUMECOMMAND does not contain the required ${FILE} parameter.
+!!! Refer to the make.conf(5) man page for information about how to
+!!! correctly specify FETCHCOMMAND and RESUMECOMMAND.
+!!! FETCHCOMMAND does not contain the required ${FILE} parameter.
+!!! RESUMECOMMAND does not contain the required ${FILE} parameter.
+!!! Refer to the make.conf(5) man page for information about how to
+!!! correctly specify FETCHCOMMAND and RESUMECOMMAND.
+!!! FETCHCOMMAND does not contain the required ${FILE} parameter.
+!!! RESUMECOMMAND does not contain the required ${FILE} parameter.
+!!! Refer to the make.conf(5) man page for information about how to
+!!! correctly specify FETCHCOMMAND and RESUMECOMMAND.
+!!! FETCHCOMMAND does not contain the required ${FILE} parameter.
+!!! RESUMECOMMAND does not contain the required ${FILE} parameter.
+!!! Refer to the make.conf(5) man page for information about how to
+!!! correctly specify FETCHCOMMAND and RESUMECOMMAND.
+!!! FETCHCOMMAND does not contain the required ${FILE} parameter.
+!!! RESUMECOMMAND does not contain the required ${FILE} parameter.
+!!! Refer to the make.conf(5) man page for information about how to
+!!! correctly specify FETCHCOMMAND and RESUMECOMMAND.
+!!! Couldn't download 'hello-2.12.3.tar.gz'. Aborting.

@@ -10,63 +10,72 @@ fn nonpretend_merge_list_shown_only_when_portage_shows_it() {
         ask: false,
         tree: false,
         verbose: false,
-        quiet: false
+        quiet: false,
+        fetching: false,
     }));
     assert!(merge_list_shown(MergeListShownArgs {
         pretend: true,
         ask: false,
         tree: false,
         verbose: false,
-        quiet: true
+        quiet: true,
+        fetching: false,
     }));
     assert!(!merge_list_shown(MergeListShownArgs {
         pretend: false,
         ask: false,
         tree: false,
         verbose: false,
-        quiet: false
+        quiet: false,
+        fetching: false,
     }));
     assert!(merge_list_shown(MergeListShownArgs {
         pretend: false,
         ask: true,
         tree: false,
         verbose: false,
-        quiet: false
+        quiet: false,
+        fetching: false,
     }));
     assert!(merge_list_shown(MergeListShownArgs {
         pretend: false,
         ask: false,
         tree: true,
         verbose: false,
-        quiet: false
+        quiet: false,
+        fetching: false,
     }));
     assert!(merge_list_shown(MergeListShownArgs {
         pretend: false,
         ask: false,
         tree: false,
         verbose: true,
-        quiet: false
+        quiet: false,
+        fetching: false,
     }));
     assert!(!merge_list_shown(MergeListShownArgs {
         pretend: false,
         ask: false,
         tree: false,
         verbose: false,
-        quiet: true
+        quiet: true,
+        fetching: false,
     }));
     assert!(!merge_list_shown(MergeListShownArgs {
         pretend: false,
         ask: false,
         tree: false,
         verbose: true,
-        quiet: true
+        quiet: true,
+        fetching: false,
     }));
     assert!(merge_list_shown(MergeListShownArgs {
         pretend: false,
         ask: true,
         tree: false,
         verbose: false,
-        quiet: true
+        quiet: true,
+        fetching: false,
     }));
 }
 
@@ -269,4 +278,22 @@ fn top_level_all_masked_abort_prints_the_notice_only_off_pretend() {
         false,
         "there are no ebuilds built with USE flags to satisfy \"dev-libs/foo\"."
     ));
+}
+
+/// `--pretend --fetchonly` prints URIs instead of the merge list, whatever else is asked;
+/// a real fetch with `--ask`/`--verbose` still shows it. Portage: actions.py:541-543.
+#[test]
+fn pretend_fetchonly_shows_no_merge_list() {
+    let args = |pretend, verbose, fetching| MergeListShownArgs {
+        pretend,
+        ask: false,
+        tree: false,
+        verbose,
+        quiet: false,
+        fetching,
+    };
+    assert!(!merge_list_shown(args(true, false, true)));
+    assert!(!merge_list_shown(args(true, true, true)));
+    assert!(merge_list_shown(args(false, true, true)));
+    assert!(merge_list_shown(args(true, false, false)));
 }

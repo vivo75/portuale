@@ -60,3 +60,19 @@ fn bundled_x_and_j_l_clusters_parse_like_portage() {
     let opts = parsed(&["--load-average", "--pretend"]).expect("a bare --load-average parses");
     assert!(opts.pretend && opts.load_average.is_none());
 }
+
+/// Backlog #401: `-f`/`-F` parse as options and bundle letters; `-F` implies `-f`.
+/// Portage: `_emerge/actions.py` (`fetchonly`, `fetch_all_uri`).
+#[test]
+fn fetchonly_and_fetch_all_uri_parse_alone_and_in_bundles() {
+    let opts = parsed(&["-pf", "dev-libs/a"]).expect("-pf parses");
+    assert!(opts.pretend && opts.fetchonly && !opts.fetch_all_uri);
+    let opts = parsed(&["--fetchonly", "dev-libs/a"]).expect("--fetchonly parses");
+    assert!(opts.fetchonly);
+    let opts = parsed(&["-F"]).expect("-F parses");
+    assert!(opts.fetchonly && opts.fetch_all_uri);
+    let opts = parsed(&["-aF", "dev-libs/a"]).expect("-aF parses");
+    assert!(opts.ask && opts.fetchonly && opts.fetch_all_uri);
+    let opts = parsed(&["--fetch-all-uri"]).expect("--fetch-all-uri parses");
+    assert!(opts.fetchonly && opts.fetch_all_uri);
+}

@@ -321,12 +321,60 @@ pub(crate) fn emerging_line(
     root: &Path,
     color: &crate::color::Colorizer,
 ) -> String {
-    let binary = entry.source == CandidateSource::Binary;
-    let action = if binary {
+    let action = if entry.source == CandidateSource::Binary {
         "Emerging binary"
     } else {
         "Emerging"
     };
+    progress_line(ProgressLine {
+        action,
+        entry,
+        version,
+        progress,
+        root,
+        color,
+    })
+}
+
+/// `Fetching ({cur} of {max}) {cpv}::{repo}[ for {root}]`, the `--fetchonly` job's status line.
+// Portage: _emerge/EbuildBuild.py, _start (the fetchonly arm)
+pub(crate) fn fetching_line(
+    entry: &GraphEntry,
+    version: &str,
+    progress: mrg_director::MergeProgress,
+    root: &Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    progress_line(ProgressLine {
+        action: "Fetching",
+        entry,
+        version,
+        progress,
+        root,
+        color,
+    })
+}
+
+/// The values [`progress_line`] reads from its caller.
+struct ProgressLine<'a> {
+    action: &'a str,
+    entry: &'a GraphEntry,
+    version: &'a str,
+    progress: mrg_director::MergeProgress,
+    root: &'a Path,
+    color: &'a crate::color::Colorizer,
+}
+
+fn progress_line(args: ProgressLine<'_>) -> String {
+    let ProgressLine {
+        action,
+        entry,
+        version,
+        progress,
+        root,
+        color,
+    } = args;
+    let binary = entry.source == CandidateSource::Binary;
     let pkg_color = if binary {
         "PKG_BINARY_MERGE"
     } else {

@@ -7,6 +7,8 @@ pub(crate) struct MergeListShownArgs {
     pub(crate) tree: bool,
     pub(crate) verbose: bool,
     pub(crate) quiet: bool,
+    /// `--fetchonly`/`--fetch-all-uri`.
+    pub(crate) fetching: bool,
 }
 
 /// Whether the merge list prints: always under `--pretend`; otherwise only
@@ -19,7 +21,12 @@ pub(crate) fn merge_list_shown(args: MergeListShownArgs) -> bool {
         tree,
         verbose,
         quiet,
+        fetching,
     } = args;
+    // `--pretend --fetchonly` lists URIs instead of the merge list (actions.py:541-543).
+    if pretend && fetching {
+        return false;
+    }
     pretend || ((ask || tree || verbose) && !(quiet && !ask))
 }
 
