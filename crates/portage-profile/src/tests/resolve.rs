@@ -87,7 +87,8 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
         config.resolved_incremental("CONFIG_PROTECT"),
         Some(vec![
             "/conf-protect".to_string(),
-            "/envd-protect".to_string()
+            "/envd-protect".to_string(),
+            "/etc".to_string()
         ])
     );
 
@@ -127,6 +128,7 @@ fn reload_env_d_picks_up_a_rewritten_profile_env() {
         config.resolved_incremental("CONFIG_PROTECT"),
         Some(vec![
             "/conf-protect".to_string(),
+            "/etc".to_string(),
             "/new-protect".to_string()
         ])
     );
@@ -1706,7 +1708,8 @@ fn env_layer_overrides_config_vars() {
         assert!(c.accept_keywords.contains("amd64"));
         assert!(!c.accept_keywords.contains("~amd64"));
         assert!(c.use_flags.contains("video_cards_nvidia"));
-        assert!(!c.other_vars.contains_key("CFLAGS"));
+        // The embedded `make.globals` sets an empty `CFLAGS`, like Portage's.
+        assert_eq!(c.other_vars.get("CFLAGS").map(String::as_str), Some(""));
     });
 
     with_test_env(
@@ -1786,7 +1789,7 @@ fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
         let c = resolve();
         assert_eq!(
             c.resolved_incremental("CONFIG_PROTECT"),
-            Some(vec!["/conf-protect".to_string()])
+            Some(vec!["/conf-protect".to_string(), "/etc".to_string()])
         );
         assert_eq!(
             c.resolved_incremental("ENV_UNSET"),
@@ -1807,12 +1810,13 @@ fn env_layer_stacks_onto_the_config_protect_and_env_unset_folds() {
                 c.resolved_incremental("CONFIG_PROTECT"),
                 Some(vec![
                     "/conf-protect".to_string(),
-                    "/env-protect".to_string()
+                    "/env-protect".to_string(),
+                    "/etc".to_string()
                 ])
             );
             assert_eq!(
                 c.resolved_incremental("CONFIG_PROTECT_MASK"),
-                Some(vec!["/env-mask".to_string()])
+                Some(vec!["/env-mask".to_string(), "/etc/env.d".to_string()])
             );
             assert_eq!(
                 c.resolved_incremental("ENV_UNSET"),

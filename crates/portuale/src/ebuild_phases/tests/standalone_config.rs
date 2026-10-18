@@ -286,13 +286,13 @@ fn resolve_unmerge_config_reads_binpkg_format_from_make_conf() {
         );
     }
 
-    // No value anywhere in the chain: nothing resolves, so Portage's
-    // `make.globals` default (`gpkg`) applies.
+    // No value in the chain: the embedded `make.globals` default applies.
     std::fs::write(portage_dir.join("make.conf"), "# no BINPKG_FORMAT here\n").unwrap();
     let config = resolve_unmerge_config(&probe, &probe).expect("scratch chain resolves");
-    assert!(
-        !config.other_vars.contains_key("BINPKG_FORMAT"),
-        "an unconfigured chain contributes no value"
+    assert_eq!(
+        config.other_vars.get("BINPKG_FORMAT").map(String::as_str),
+        Some("gpkg"),
+        "an unconfigured chain yields the embedded make.globals default"
     );
     assert_eq!(
         crate::ebuild_package::resolve_binpkg_format(|key| config.other_vars.get(key).cloned()),

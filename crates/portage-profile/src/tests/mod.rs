@@ -90,6 +90,7 @@ mod fingerprints;
 mod graph;
 mod incrementals;
 mod make_conf;
+mod make_globals;
 mod package_files;
 mod profile_chain;
 mod resolve;

@@ -2706,6 +2706,7 @@ mod tests {
         assert!(out.status.success(), "{text}");
         let logged = std::fs::read_to_string(&log).unwrap_or_default();
         assert!(logged.contains("zstd -T5"), "zstd log: {logged:?}\n{text}");
+        // The fixtures' make.conf says `-binpkg-multi-instance`: flat layout.
         assert!(
             w.join("pkgdir/dev-libs/packagepkg-1.0.gpkg.tar").is_file(),
             "{text}"

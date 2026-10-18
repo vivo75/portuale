@@ -287,8 +287,14 @@ fn regen_postinst_rewrites_vdb_env_from_merge_time_env() {
         !after.contains("x=\"\""),
         "stray build-time x survived:\n{after}"
     );
+    // Token-wise: the embedded `make.globals` carries `buildpkg-live`.
     assert!(
-        !after.contains("buildpkg"),
+        !after
+            .lines()
+            .filter(|l| l.contains("FEATURES=\""))
+            .any(|l| l
+                .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+                .any(|t| t == "buildpkg")),
         "build-time FEATURES survived:\n{after}"
     );
     assert!(
@@ -477,8 +483,10 @@ fn regen_splits_lc_all_like_portage() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// The pulled client config stacks the server's `make.globals` as its
-/// bottom layer (expected value from the incremental fold).
+/// A `make.globals` on the server's config root is not staged under the
+/// pulled client root: Portage reads it from its own install only, so the
+/// embedded copy is the bottom layer (the client's `-news sign` folds over
+/// it).
 #[test]
 fn remote_client_config_stacks_server_make_globals() {
     let _env_guard = PLACED_CONFIG_ENV_LOCK.lock().unwrap();
@@ -520,20 +528,22 @@ fn remote_client_config_stacks_server_make_globals() {
     ctx.etc_portage = ConfigPlacement::Client(client_etc.to_string_lossy().into_owned());
     let placed = place_config_root(&ctx, None).expect("client placement resolves");
     assert!(
-        placed
+        !placed
             .dir
             .join("usr/share/portage/config/make.globals")
-            .is_file(),
-        "the server make.globals must be seeded under the pulled root"
+            .exists(),
+        "no make.globals is staged under the pulled root"
     );
     let eroot = tmp.join("eroot");
     let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
         .expect("placed client config resolves");
     assert!(repos.iter().any(|r| r.is_main));
     let resolved = crate::pretend::config_features_string(&config);
-    assert_eq!(
-        resolved, "sandbox sign",
-        "incremental fold over the seeded defaults"
+    assert!(
+        resolved.split_whitespace().any(|t| t == "sign")
+            && !resolved.split_whitespace().any(|t| t == "news")
+            && resolved.split_whitespace().any(|t| t == "preserve-libs"),
+        "the embedded base folds under the client make.conf: {resolved}"
     );
     drop(placed);
     // SAFETY: same as above.
@@ -585,15 +595,29 @@ fn remote_client_config_stacks_server_make_globals() {
     .expect("install succeeds");
     let after = read_vdb_env(&vdb.join("environment.bz2"));
     assert!(
-        after.contains("declare -x FEATURES=\"sandbox sign\""),
+        after
+            .lines()
+            .any(|l| l.starts_with("declare -x FEATURES=\"")
+                && l.contains(" sign")
+                && !l.contains(" news ")),
         "resolved FEATURES missing:\n{after}"
     );
     assert!(
-        after.contains("declare -x PORTAGE_FEATURES=\"sandbox sign\""),
+        after
+            .lines()
+            .any(|l| l.starts_with("declare -x PORTAGE_FEATURES=\"")
+                && l.contains(" sign")
+                && !l.contains(" news ")),
         "resolved PORTAGE_FEATURES missing:\n{after}"
     );
+    // Token-wise: the embedded `make.globals` carries `buildpkg-live`.
     assert!(
-        !after.contains("buildpkg"),
+        !after
+            .lines()
+            .filter(|l| l.contains("FEATURES=\""))
+            .any(|l| l
+                .split_whitespace()
+                .any(|t| t.trim_matches('"') == "buildpkg")),
         "build-time FEATURES survived:\n{after}"
     );
     let _ = std::fs::remove_dir_all(&tmp);

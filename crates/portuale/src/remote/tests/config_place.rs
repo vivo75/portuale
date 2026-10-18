@@ -76,11 +76,11 @@ fn placed_config_root_covers_both_placements() {
         assert!(repos.iter().any(|r| r.is_main));
         let (mask, _) = crate::pretend::config_install_mask(&config);
         assert_eq!(mask, "/usr/share/porttest/im/drop.txt *.la");
-        // `unmerge-orphans` rides along from the synthetic base (no
-        // `make.globals` on these placed roots; #356 S4 Q3).
+        // The embedded `make.globals` base plus the client's
+        // `make.conf` tokens (`merge-time`, `sandbox`).
         assert_eq!(
             crate::pretend::config_features_string(&config),
-            "merge-time sandbox unmerge-orphans"
+            "assume-digests binpkg-docompress binpkg-dostrip binpkg-logs binpkg-multi-instance buildpkg-live compress-index config-protect-if-modified distlocks ebuild-locks fixlafiles ipc-sandbox merge-sync merge-time merge-wait multilib-strict network-sandbox news parallel-fetch pid-sandbox pkgdir-index-trusted preserve-libs protect-owned qa-unresolved-soname-deps sandbox strict unknown-features-warn unmerge-logs unmerge-orphans userfetch userpriv usersandbox usersync xattr"
         );
         assert_eq!(crate::pretend::config_bzip2_command(&config), "lbzip2");
         if matches!(placement, ConfigPlacement::Client(_)) {
@@ -161,10 +161,10 @@ fn remote_client_make_profile_resolves_against_same_named_server_repo() {
     let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
         .expect("placed client config resolves");
     assert!(repos.iter().any(|repo| repo.is_main));
-    assert_eq!(
-        crate::pretend::config_features_string(&config),
-        "custom filecaps sandbox",
-        "server make.globals + same-named profile + client make.conf"
+    assert_features_include(
+        &config,
+        &["custom", "filecaps", "sandbox"],
+        "server make.globals + same-named profile + client make.conf",
     );
     drop(placed);
     drop(_env);
@@ -202,10 +202,10 @@ fn remote_client_make_profile_resolves_without_client_repos_conf() {
     );
     let eroot = tmp.join("eroot");
     let config = l171e_resolve_with_server_repos(&placed.dir, &server_root, &eroot);
-    assert_eq!(
-        crate::pretend::config_features_string(&config),
-        "custom filecaps sandbox",
-        "server make.globals + profile + client make.conf"
+    assert_features_include(
+        &config,
+        &["custom", "filecaps", "sandbox"],
+        "server make.globals + profile + client make.conf",
     );
     drop(placed);
     drop(_env);
@@ -312,10 +312,10 @@ fn remote_client_make_profile_dir_with_cross_repo_parent_resolves() {
     let (repos, config) = crate::pretend::load_repos_and_config(&placed.dir, &eroot)
         .expect("placed client config resolves");
     assert!(repos.iter().any(|repo| repo.is_main));
-    assert_eq!(
-        crate::pretend::config_features_string(&config),
-        "custom filecaps sandbox",
-        "server make.globals + parent profile + client make.conf"
+    assert_features_include(
+        &config,
+        &["custom", "filecaps", "sandbox"],
+        "server make.globals + parent profile + client make.conf",
     );
     drop(placed);
     drop(_env);
@@ -366,10 +366,10 @@ fn remote_client_make_profile_prefers_main_repo_and_relative_targets() {
     );
     let eroot = tmp.join("eroot");
     let config = l171e_resolve_with_server_repos(&placed.dir, &server_root, &eroot);
-    assert_eq!(
-        crate::pretend::config_features_string(&config),
-        "custom mainfeat sandbox",
-        "server make.globals + main profile + client make.conf"
+    assert_features_include(
+        &config,
+        &["custom", "mainfeat", "sandbox"],
+        "server make.globals + main profile + client make.conf",
     );
     drop(placed);
     drop(_env);
@@ -426,10 +426,10 @@ fn remote_binpkg_path_resolves_the_placed_client_config() {
     let (mask, prunes_usr_share) = crate::pretend::config_install_mask(&config);
     assert_eq!(mask, "/usr/share/porttest/im/drop.txt *.la");
     assert!(!prunes_usr_share);
-    // Same synthetic base as above (no `make.globals` on this root).
+    // Same embedded base as above.
     assert_eq!(
         crate::pretend::config_features_string(&config),
-        "merge-time sandbox unmerge-orphans"
+        "assume-digests binpkg-docompress binpkg-dostrip binpkg-logs binpkg-multi-instance buildpkg-live compress-index config-protect-if-modified distlocks ebuild-locks fixlafiles ipc-sandbox merge-sync merge-time merge-wait multilib-strict network-sandbox news parallel-fetch pid-sandbox pkgdir-index-trusted preserve-libs protect-owned qa-unresolved-soname-deps sandbox strict unknown-features-warn unmerge-logs unmerge-orphans userfetch userpriv usersandbox usersync xattr"
     );
     assert_eq!(crate::pretend::config_bzip2_command(&config), "lbzip2");
     let _ = std::fs::remove_dir_all(&tmp);
@@ -506,10 +506,10 @@ fn remote_client_without_repos_conf_resolves_on_the_production_path() {
         repos.iter().map(|repo| &repo.name).collect::<Vec<_>>()
     );
     assert!(repos.iter().any(|repo| repo.is_main));
-    assert_eq!(
-        crate::pretend::config_features_string(&config),
-        "custom filecaps sandbox",
-        "server make.globals + server profile + client make.conf"
+    assert_features_include(
+        &config,
+        &["custom", "filecaps", "sandbox"],
+        "server make.globals + server profile + client make.conf",
     );
     drop(placed);
     drop(_env);

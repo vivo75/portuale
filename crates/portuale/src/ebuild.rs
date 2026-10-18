@@ -489,12 +489,12 @@ pub(crate) fn unmerge_and_package_options(
     } = args;
     let default_unmerge_options = ebuild_unmerge::UnmergeOptions::default();
     // `unmerge-orphans` from the resolved `FEATURES` when a config
-    // resolves (the same folded chain `emerge -C` reads, synthetic base
+    // resolves (the same folded chain `emerge -C` reads, embedded make.globals
     // included); else the incremental fold of the calling env.
     // Portage: dbapi/vartree.py:2913, `"unmerge-orphans" in self.settings.features`
     let config_root = portage_repo::config_root_from_env();
     // Both unmerge options from the resolved chain when a config resolves
-    // (the same folded chain `emerge -C` reads, synthetic base included);
+    // (the same folded chain `emerge -C` reads, embedded make.globals included);
     // else the incremental fold of the calling env and the `make.globals`
     // `UNINSTALL_IGNORE` default.
     // Portage: dbapi/vartree.py:2913, `"unmerge-orphans" in self.settings.features`
@@ -507,7 +507,7 @@ pub(crate) fn unmerge_and_package_options(
         }
     };
     // `unmerge-orphans` from the resolved `FEATURES` when a config
-    // resolves (the same folded chain `emerge -C` reads, synthetic base
+    // resolves (the same folded chain `emerge -C` reads, embedded make.globals
     // included); else the incremental fold of the calling env.
     // Portage: dbapi/vartree.py:2913, `"unmerge-orphans" in self.settings.features`
     let unmerge_orphans = unmerge_config

@@ -2,6 +2,13 @@
 
 use crate::resolve::*;
 
+/// The `make.globals` text compiled in (upstream's `cnf/make.globals` plus
+/// the `xattr` FEATURES line the Gentoo ebuild appends).
+const EMBEDDED_MAKE_GLOBALS: &str = include_str!("../../../../cnf/make.globals");
+
+/// Where Portage keeps it, named in its obsolete-file warning.
+const GLOBAL_CONFIG_PATH: &str = "/usr/share/portage/config/make.globals";
+
 /// What [`load_scalar_layers`] hands back to its caller.
 pub(crate) struct LoadScalarLayersOut {
     pub(crate) chain: Vec<PathBuf>,
@@ -144,33 +151,33 @@ pub(crate) fn load_scalar_layers(
     // Which `scalars` keys the env.d read owned, so a later layer assigning
     // the same key joins `envd_higher_keys` and `reload_env_d` keeps it.
 
-    // `globals`: `cnf/make.globals`, always sourced as the base layer
-    // (Portage: config.py, `portage.const.GLOBAL_CONFIG_PATH`).
-    // Read `config_root`-relative: the live path under `/`, absent under tests.
-    let globals_path = config_root.join("usr/share/portage/config/make.globals");
-    if globals_path.is_file() {
-        let text = fs::read_to_string(&globals_path).map_err(|e| Error::ReadFile {
-            path: globals_path.display().to_string(),
-            source: e,
-        })?;
+    // `globals`: portuale's own copy of `make.globals`, always the base
+    // layer. Portage reads `GLOBAL_CONFIG_PATH` (under `EPREFIX`), never the
+    // config root, so a `<config_root>/usr/share/portage/config/make.globals`
+    // is ignored and a hermetic run no longer depends on the host's file.
+    // Portage: config.py:467-490, LocationsManager.py:413-417
+    {
+        let obsolete = config_root.join("etc/make.globals");
+        if obsolete.is_file() {
+            warnings.push(ProfileWarning {
+                rank: WARN_RANK_REPO,
+                text: format!(
+                    "!!! Found obsolete make.globals file: '{}', (using '{}' instead)",
+                    obsolete.display(),
+                    GLOBAL_CONFIG_PATH,
+                ),
+            });
+        }
         scalars.remove("USE");
         note_higher(&mut *config, "USE");
         let snapshot = IncrementalSnapshot::take(config);
-        process_lines(&text, &mut *scalars, &mut *config, AcceptRawLayer::Globals);
+        process_lines(
+            EMBEDDED_MAKE_GLOBALS,
+            &mut *scalars,
+            &mut *config,
+            AcceptRawLayer::Globals,
+        );
         snapshot.restore(&mut *config);
-    } else {
-        // No `make.globals` under this config root (hermetic test roots):
-        // seed Portage's two unmerge defaults under the stack, before
-        // `make.conf` expansion, so later layers fold as on a real system
-        // (`-*`/`-unmerge-orphans` drop the token, a literal
-        // `UNINSTALL_IGNORE=` replaces the paths, and
-        // `UNINSTALL_IGNORE="${UNINSTALL_IGNORE} …"` appends through the
-        // seeded scalar). When the real file is read this is skipped: its
-        // own assignments already carry both values.
-        // Portage: cnf/make.globals:77-84, FEATURES `unmerge-orphans`;
-        // cnf/make.globals:93, UNINSTALL_IGNORE `/lib/modules/*`.
-        note_incremental(&mut *config, "FEATURES", "unmerge-orphans");
-        scalars.insert("UNINSTALL_IGNORE".to_string(), "/lib/modules/*".to_string());
     }
 
     let make_profile = config_root.join("etc/portage/make.profile");

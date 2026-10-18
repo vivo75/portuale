@@ -781,3 +781,21 @@ mod plan;
 mod preflight;
 mod ssh;
 mod stages;
+
+/// The resolved `FEATURES` hold every token of `tokens` plus the embedded
+/// `make.globals` base (`preserve-libs` stands for it). The server's
+/// `usr/share/portage/config/make.globals` is no longer read.
+pub(crate) fn assert_features_include(
+    config: &portage_profile::Config,
+    tokens: &[&str],
+    why: &str,
+) {
+    let features = crate::pretend::config_features_string(config);
+    let have: Vec<&str> = features.split_whitespace().collect();
+    for token in tokens.iter().chain(["preserve-libs"].iter()) {
+        assert!(
+            have.contains(token),
+            "{why}: {token} missing from {features}"
+        );
+    }
+}

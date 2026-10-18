@@ -42,8 +42,8 @@ impl Drop for ConfigRootOverride {
 /// dir re-rooted as `<tmp>/etc/portage` (a valid `PORTAGE_CONFIGROOT`)
 /// with `ConfigRootOverride` held for the whole resolve. The pulled temp
 /// dir is removed best-effort on drop; the pulled tree additionally
-/// carries the server's own `make.globals` seed plus a remapped
-/// `make.profile` (see `place_config_root`, `remap_client_make_profile`).
+/// carries a remapped `make.profile` (see `place_config_root`,
+/// `remap_client_make_profile`).
 /// Shared by `run_remote_resolve` and `run_bundle_stage`.
 pub(crate) struct PlacedConfig {
     /// The dir to resolve from (the server path, or the pulled temp root).
@@ -193,14 +193,10 @@ pub(crate) fn place_config_root(
     ctx: &RemoteContext,
     control: Option<&std::path::Path>,
 ) -> Result<PlacedConfig, String> {
-    // The server's own `make.globals`, located the way the local path
-    // locates it; read before the override below repoints
-    // `PORTAGE_CONFIGROOT` at the placed dir. `Server` placements need
-    // no seed; the pulled `Client` tree gets it as the resolve's bottom
-    // layer. Absent on the server (tests): contributes nothing.
+    // `make.globals` is the program's own file (embedded in `portage-profile`),
+    // never read from a config root, so nothing is staged for it.
     // Portage: config.py, global_config_path
     let server_config_root = portage_repo::config_root_from_env();
-    let server_globals = server_config_root.join("usr/share/portage/config/make.globals");
     let (dir, tmp): (std::path::PathBuf, Option<std::path::PathBuf>) = match &ctx.etc_portage {
         ConfigPlacement::Server(path) => (std::path::PathBuf::from(path), None),
         ConfigPlacement::Client(path) => {
@@ -212,25 +208,6 @@ pub(crate) fn place_config_root(
                 // Best-effort: don't leave a partial pull behind.
                 let _ = std::fs::remove_dir_all(&tmp);
                 return Err(message);
-            }
-            if server_globals.is_file() {
-                let dest = tmp.join("usr/share/portage/config/make.globals");
-                if let Some(parent) = dest.parent()
-                    && let Err(e) = std::fs::create_dir_all(parent)
-                {
-                    let _ = std::fs::remove_dir_all(&tmp);
-                    return Err(format!(
-                        "mrg: staging the server make.globals under {}: {e}",
-                        tmp.display()
-                    ));
-                }
-                if let Err(e) = std::fs::copy(&server_globals, &dest) {
-                    let _ = std::fs::remove_dir_all(&tmp);
-                    return Err(format!(
-                        "mrg: staging the server make.globals under {}: {e}",
-                        tmp.display()
-                    ));
-                }
             }
             // A pulled `make.profile` may dangle when the client holds
             // its repos elsewhere: remap its target text against the

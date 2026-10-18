@@ -105,13 +105,19 @@ pub(crate) fn fold_package_use(args: FoldPackageUseArgs<'_>) -> Result<(), Error
     .filter(|(_, tokens)| !tokens.is_empty())
     .collect();
 
-    // `configdict["features"]["USE"]`: `test` when FEATURES names it.
-    // Portage: config.py. FEATURES is a last-wins scalar here.
-    let features_has_test = scalars
-        .get("FEATURES")
-        .into_iter()
-        .flat_map(|f| f.split_whitespace())
-        .any(|t| t == "test");
+    // `configdict["features"]["USE"]`: `test` when FEATURES names it. The
+    // incremental stack decides (the embedded `make.globals` sets FEATURES
+    // first, so the last scalar alone no longer names every token); the
+    // scalar is the fallback before any layer registered the key.
+    // Portage: config.py
+    let features_has_test = match config.resolved_incremental("FEATURES") {
+        Some(tokens) => tokens.iter().any(|t| t == "test"),
+        None => scalars
+            .get("FEATURES")
+            .into_iter()
+            .flat_map(|f| f.split_whitespace())
+            .any(|t| t == "test"),
+    };
     config.features_use = if features_has_test {
         vec!["test".to_string()]
     } else {

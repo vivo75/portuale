@@ -59,22 +59,23 @@ fn env_over_config_scalar_follows_the_calling_env_over_make_conf_chain() {
         );
     });
 
-    // No value anywhere: `None` (the caller falls back to real
-    // `make.globals`'s own default, `BINPKG_FORMAT="gpkg"` --
-    // `ebuild_package::resolve_binpkg_format`).
+    // No env and no `make.conf` value: the embedded `make.globals` default,
+    // `BINPKG_FORMAT="gpkg"`, is the base layer on every root.
     fs::write(portage_dir.join("make.conf"), "CFLAGS=\"-O2\"\n").unwrap();
     with_test_env(&[], || {
         let c = resolve();
-        assert!(!c.other_vars.contains_key("BINPKG_FORMAT"));
-        assert_eq!(env_over_config_scalar(&c, "BINPKG_FORMAT"), None);
+        assert_eq!(
+            c.other_vars.get("BINPKG_FORMAT").map(String::as_str),
+            Some("gpkg")
+        );
     });
 }
 
 #[test]
-fn a_missing_make_globals_seeds_the_unmerge_defaults_under_the_stack() {
-    // Backlog #356 S4 (Q3): with no `make.globals` under the config root
-    // (the hermetic-root shape), Portage's two unmerge defaults seed the
-    // bottom of the stack before `make.conf` expansion, so later layers
+fn the_embedded_make_globals_seeds_the_unmerge_defaults_under_the_stack() {
+    // Backlog #356 S4 (Q3), reworked by #384: the embedded `make.globals`
+    // (the base of every root, hermetic ones included) carries Portage's
+    // two unmerge defaults at the bottom of the stack before `make.conf` expansion, so later layers
     // fold as on a real system. Expected behaviour from Portage 3.0.82.2
     // (`cnf/make.globals:77-84` `unmerge-orphans`, `:93`
     // `UNINSTALL_IGNORE=/lib/modules/*`).
@@ -111,7 +112,7 @@ fn a_missing_make_globals_seeds_the_unmerge_defaults_under_the_stack() {
         assert!(
             c.resolved_incremental("FEATURES")
                 .is_some_and(|f| f.iter().any(|t| t == "unmerge-orphans")),
-            "the synthetic base must carry unmerge-orphans"
+            "the embedded make.globals must carry unmerge-orphans"
         );
         assert_eq!(
             c.other_vars.get("UNINSTALL_IGNORE").map(String::as_str),
@@ -131,7 +132,7 @@ fn a_missing_make_globals_seeds_the_unmerge_defaults_under_the_stack() {
         assert!(
             c.resolved_incremental("FEATURES")
                 .is_none_or(|f| !f.iter().any(|t| t == "unmerge-orphans")),
-            "a make.conf negation must beat the synthetic base"
+            "a make.conf negation must beat the embedded base"
         );
         assert_eq!(
             c.other_vars.get("UNINSTALL_IGNORE").map(String::as_str),

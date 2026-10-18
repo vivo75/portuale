@@ -26,8 +26,8 @@ pub struct MergeOptions {
     /// `UNINSTALL_IGNORE` paths the unmerge skips, fnmatch'd against the
     /// root-relative path. Default is Portage's `make.globals` value;
     /// `from_env` reads the calling env, `apply_uninstall_ignore` the
-    /// resolved config (which carries the synthetic base when
-    /// `make.globals` was not read). `set_resolved_features` appends the
+    /// resolved config (which carries the embedded `make.globals` values).
+    /// `set_resolved_features` appends the
     /// packdebug tarball dir under `FEATURES=packdebug`.
     /// Portage: dbapi/vartree.py, _unmerge_pkgfiles; cnf/make.globals:93
     pub uninstall_ignore: String,
@@ -200,8 +200,8 @@ impl MergeOptions {
     }
 
     /// Replace the unmerge ignore list from the resolved scalar, when some
-    /// layer assigns the key. The synthetic base (or the real
-    /// `make.globals`) already seeded the default, so a literal assignment
+    /// layer assigns the key. The embedded `make.globals` already seeded
+    /// the default, so a literal assignment
     /// replaces it and `${UNINSTALL_IGNORE} …` appends through it.
     /// Portage: lib/portage/dbapi/vartree.py, dblink._unmerge_pkgfiles
     pub fn apply_uninstall_ignore(&mut self, config: &portage_profile::Config) {

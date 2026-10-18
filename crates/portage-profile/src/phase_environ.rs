@@ -741,11 +741,9 @@ mod tests {
             assert_eq!(get(&env, "ENV_UNSET"), Some("DISPLAY PERL5LIB"));
 
             // FEATURES is the incremental fold, mirrored as PORTAGE_FEATURES.
-            // `unmerge-orphans` rides along from the synthetic base seeded
-            // when no `make.globals` is read (the hermetic-root shape; on
-            // a real system it comes from `cnf/make.globals` itself).
-            let features =
-                "assume-digests binpkg-docompress binpkg-dostrip splitdebug unmerge-orphans";
+            // The embedded `cnf/make.globals` FEATURES plus this test's own
+            // `make.conf` tokens (`splitdebug`), every root alike.
+            let features = "assume-digests binpkg-docompress binpkg-dostrip binpkg-logs binpkg-multi-instance buildpkg-live compress-index config-protect-if-modified distlocks ebuild-locks fixlafiles ipc-sandbox merge-sync merge-wait multilib-strict network-sandbox news parallel-fetch pid-sandbox pkgdir-index-trusted preserve-libs protect-owned qa-unresolved-soname-deps splitdebug strict unknown-features-warn unmerge-logs unmerge-orphans userfetch userpriv usersandbox usersync xattr";
             assert_eq!(get(&env, "FEATURES"), Some(features));
             assert_eq!(get(&env, "PORTAGE_FEATURES"), Some(features));
 
@@ -846,12 +844,12 @@ mod tests {
                 assert_eq!(get(&env, "MAKEOPTS"), Some("-j7"));
 
                 // Env `USE`/`FEATURES` never leak verbatim (folded, not copied).
-                // `unmerge-orphans` rides along from the synthetic base (no
-                // `make.globals` on this root; see the family test above).
+                // The embedded `make.globals` tokens (see the family test
+                // above) plus `evil`, `sandbox` from the test.
                 assert_eq!(
                     get(&env, "FEATURES"),
                     Some(
-                        "assume-digests binpkg-docompress binpkg-dostrip evil sandbox unmerge-orphans"
+                        "assume-digests binpkg-docompress binpkg-dostrip binpkg-logs binpkg-multi-instance buildpkg-live compress-index config-protect-if-modified distlocks ebuild-locks evil fixlafiles ipc-sandbox merge-sync merge-wait multilib-strict network-sandbox news parallel-fetch pid-sandbox pkgdir-index-trusted preserve-libs protect-owned qa-unresolved-soname-deps sandbox strict unknown-features-warn unmerge-logs unmerge-orphans userfetch userpriv usersandbox usersync xattr"
                     )
                 );
                 assert_eq!(get(&env, "USE"), None);
