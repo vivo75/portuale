@@ -632,6 +632,16 @@ fn render_all_masked_block(
     Some(out)
 }
 
+/// Whether `msg` is the top-level "all masked" abort block built by
+/// [`all_masked_report`]/[`all_binary_masked_report`]: the only resolver
+/// `Err` raised after resolution started, so the only one whose exit path
+/// prints the resolution notice (351-ABORT). The dependency-path masked
+/// disclosures share the sentence but never travel as `Err`.
+pub fn is_all_masked_abort_report(msg: &str) -> bool {
+    msg.trim_start()
+        .starts_with("!!! All ebuilds that could satisfy")
+}
+
 /// Portage's EAPI-masked upgrade paragraph (the leading blank line
 /// included): printed after the masked rows whenever any of them is
 /// EAPI-masked, before the `MASKED PACKAGES` footer. Shared by the

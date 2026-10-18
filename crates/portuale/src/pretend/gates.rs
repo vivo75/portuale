@@ -100,3 +100,12 @@ pub(crate) fn resolution_header_shown(args: ResolutionHeaderShownArgs) -> bool {
 pub(crate) fn resolution_notice_shown(quiet: bool, nodeps: bool) -> bool {
     !quiet && !nodeps
 }
+
+/// Whether a resolve-phase error prints the resolution notice on its way
+/// out: only the top-level all-masked abort of a non-`--pretend` run does.
+/// The `--pretend` arm stays silent (plan Q6); every other error shape is
+/// out of scope.
+// Portage: _emerge/depgraph.py, _start_resolution_display
+pub(crate) fn top_level_abort_notice_shown(pretend: bool, msg: &str) -> bool {
+    !pretend && portage_repo::is_all_masked_abort_report(msg)
+}

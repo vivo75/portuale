@@ -761,6 +761,18 @@ pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
 
 /// The header printed before the merge list of a non-pretend run.
 pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult) {
+    show_resolution_header_with_counts(opts, result.backtrack_restarts, result.backtrack_max);
+}
+
+/// The same notice with explicit backtrack counts: a non-`--pretend` run
+/// that aborts before any `GraphResult` exists (the top-level all-masked
+/// arm) prints it with zero restarts -- the argument dies on first
+/// dequeue, before any backtrack -- over the run's backtrack max.
+pub(crate) fn show_resolution_header_with_counts(
+    opts: &EmergeOpts<'_>,
+    backtrack_restarts: u64,
+    backtrack_max: u32,
+) {
     let &EmergeOpts {
         pretend,
         quiet,
@@ -805,8 +817,7 @@ pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult
             // The wall-clock seconds are cut (determinism); only the
             // `backtrack: B/M` signal is kept, plus a trailing blank line.
             println!(
-                "Dependency resolution took (backtrack: {}/{}).\n",
-                result.backtrack_restarts, result.backtrack_max,
+                "Dependency resolution took (backtrack: {backtrack_restarts}/{backtrack_max}).\n",
             );
         }
     }

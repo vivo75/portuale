@@ -33,3 +33,6 @@ Pure predicates for what a run shows: merge-list gating, the empty-plan arms, an
 
 ## fn resolution_notice_shown
 - Backlog #185 fix round 1: ports the spinner gating (`_emerge/depgraph.py:12129-12132` + `stdout_spinner.py:117-139`): `--quiet` or `--nodeps` forces `spinner.mode = QUIET`, so `begin_notice("Calculating dependencies")` queues nothing, `end_notice()` reports nothing to complete (no `... done!` line), and `backtrack_depgraph`'s `finally:` prints no timing report.
+
+## fn top_level_abort_notice_shown
+- Backlog #351 S7: the top-level all-masked abort prints the resolution notice on its way out only for a non-`--pretend` run (`!pretend && is_all_masked_abort_report(msg)`); the `--pretend` arm stays silent per the plan's Q6 ruling, and every other resolve error shape (plain miss, USE miss, REQUIRED_USE) keeps today's silence as out of scope. The resulting incoherence is Portage-faithful on each arm taken alone: Portage prints the preamble on `--pretend` aborts too (S0 a02/a03), while portuale's `--pretend` success path never prints it (pinned convention) — unifying the two is a decision of its own (plan Q6 default: leave it).

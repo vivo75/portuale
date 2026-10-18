@@ -239,3 +239,34 @@ fn nonpretend_resolution_display_splits_header_from_notice_under_nodeps() {
     }));
     assert!(!resolution_notice_shown(true, false));
 }
+
+/// Plan #351 S7 (351-ABORT): a non-`--pretend` run that aborts on a
+/// top-level all-masked target prints the resolution notice on its way
+/// out; the `--pretend` arm stays silent (Q6) and every other resolve
+/// error shape is out of scope. Oracle: Portage 3.0.82.2 A cells
+/// `LLM/evidence/2026-10-15-346-s0/a/` (`a01` prints, `a02` silent).
+#[test]
+fn top_level_all_masked_abort_prints_the_notice_only_off_pretend() {
+    // A cell a01's report shape (the `for <root>.` suffix Portage adds
+    // to the header line is omitted per the fixture-miss-message
+    // convention, but the matched prefix is identical on both sides).
+    let masked = "\n!!! All ebuilds that could satisfy \
+        \"dev-libs/bareacceptkeywordspkg\" have been masked.\n\
+        !!! One of the following masked packages is required to complete your request:\n\
+        - dev-libs/bareacceptkeywordspkg-1.0::testrepo (masked by: ~amd64 keyword)\n\
+        \n\
+        For more information, see the MASKED PACKAGES section in the emerge\n\
+        man page or refer to the Gentoo Handbook.\n";
+    assert!(top_level_abort_notice_shown(false, masked));
+    // A cell a02 (`-p`): the `--pretend` all-masked arm stays silent.
+    assert!(!top_level_abort_notice_shown(true, masked));
+    // The neighbouring top-level abort shapes keep today's silence.
+    assert!(!top_level_abort_notice_shown(
+        false,
+        "there are no ebuilds to satisfy \"dev-libs/foo\"."
+    ));
+    assert!(!top_level_abort_notice_shown(
+        false,
+        "there are no ebuilds built with USE flags to satisfy \"dev-libs/foo\"."
+    ));
+}

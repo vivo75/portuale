@@ -74,3 +74,6 @@ Masked-dependency reports.
 ## fn render_all_masked_block
 - #348 S5: when any row is EAPI-masked, the upgrade paragraph follows the rows (`The current version of portage supports EAPI '9'. ...`, `portage.const.EAPI == 9` wrapped at 75 columns — the two lines are that wrap verbatim), before the `MASKED PACKAGES` footer. Shared text: `eapi_mask_upgrade_notice` (also used by the dependency-path disclosures). Portage: `_emerge/depgraph.py:_show_unsatisfied_dep` (`have_eapi_mask`).
 - #346 S2: `candidate_masking_reasons` reads the effective KEYWORDS for both the accept check and the `kmask` text — a `-~amd64` profile removal reports the bare `missing keyword` (S0 k04), not the raw `~amd64 keyword`.
+
+## fn is_all_masked_abort_report
+- #351 S7: matches the top-level "all masked" block (`all_masked_report`/`all_binary_masked_report`) by its `!!! All ebuilds that could satisfy` prefix — the only resolver `Err` raised after resolution started, so the only one whose exit path prints the resolution notice. Portage's `for <root>.` header suffix (omitted here per the fixture-miss-message convention) sits after the matched prefix, so both shapes match.
