@@ -4662,10 +4662,11 @@ mod tests {
         );
     }
 
-    /// #34 S3 non-regression: `-pvuD` on pg34-blib plans nothing (Portage
-    /// `Total: 0`): an installed, already-built parent's BDEPEND is not
-    /// traversed for update when the parent itself is not merged. The
-    /// installed-BDEPEND fold stays cut pending bed evidence (code note).
+    /// `-pvuD` on pg34-blib plans nothing under pubgrub: an installed,
+    /// already-built parent's BDEPEND is not traversed. Portage prints
+    /// `Total: 0` only with `--usepkg` set (bdeps off); with this request
+    /// (no binary flags) it plans `U pg34-btool-2`, so this pins a known
+    /// divergence, not Portage's output (#390; code note).
     #[test]
     fn pg34_blib_pubgrub_pvud_plans_nothing() {
         let req = pg34_s3_request(&["dev-libs/pg34-blib"]);
