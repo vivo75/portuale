@@ -601,8 +601,7 @@ fn parse_display_opts<'a>(
             *idx += 2;
             v.clone()
         } else {
-            eprintln!("emerge: --color requires an argument (y or n)");
-            return Err(ExitCode::from(2));
+            return Err(parser_error("argument --color: expected one argument"));
         };
         opts.color_opt = match val.as_str() {
             "y" => Some(true),
@@ -732,8 +731,7 @@ fn parse_atom_list_opts<'a>(
         // Repeatable; each value is itself a space-separated atom list.
         // A missing value is a usage error.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--exclude\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error("argument --exclude/-X: expected one argument"));
         };
         opts.excluded
             .extend(value.split_whitespace().map(String::from));
@@ -746,8 +744,9 @@ fn parse_atom_list_opts<'a>(
         Ok(true)
     } else if arg == "--reinstall-atoms" {
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--reinstall-atoms\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --reinstall-atoms: expected one argument",
+            ));
         };
         opts.reinstall_atoms
             .extend(value.split_whitespace().map(String::from));
@@ -760,8 +759,9 @@ fn parse_atom_list_opts<'a>(
         Ok(true)
     } else if arg == "--useoldpkg-atoms" {
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--useoldpkg-atoms\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --useoldpkg-atoms: expected one argument",
+            ));
         };
         opts.useoldpkg_atoms
             .extend(value.split_whitespace().map(String::from));
@@ -775,8 +775,9 @@ fn parse_atom_list_opts<'a>(
     } else if arg == "--rebuild-exclude" || arg == "--rebuild-ignore" {
         let is_exclude = arg == "--rebuild-exclude";
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"{arg}\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(&format!(
+                "argument {arg}: expected one argument"
+            )));
         };
         let dst = if is_exclude {
             &mut opts.rebuild_exclude
@@ -1015,8 +1016,9 @@ fn parse_graph_opts<'a>(
     } else if arg == "--usepkg-exclude" {
         // Same append shape as --exclude; no short alias.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--usepkg-exclude\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --usepkg-exclude: expected one argument",
+            ));
         };
         opts.usepkg_exclude
             .extend(value.split_whitespace().map(String::from));
@@ -1029,8 +1031,9 @@ fn parse_graph_opts<'a>(
         Ok(true)
     } else if arg == "--usepkg-include" {
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--usepkg-include\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --usepkg-include: expected one argument",
+            ));
         };
         opts.usepkg_include
             .extend(value.split_whitespace().map(String::from));
@@ -1044,8 +1047,9 @@ fn parse_graph_opts<'a>(
     } else if arg == "--getbinpkg-exclude" {
         // Same append shape as --exclude (Portage `action: "append"`).
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--getbinpkg-exclude\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --getbinpkg-exclude: expected one argument",
+            ));
         };
         opts.getbinpkg_exclude
             .extend(value.split_whitespace().map(String::from));
@@ -1058,8 +1062,9 @@ fn parse_graph_opts<'a>(
         Ok(true)
     } else if arg == "--getbinpkg-include" {
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--getbinpkg-include\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --getbinpkg-include: expected one argument",
+            ));
         };
         opts.getbinpkg_include
             .extend(value.split_whitespace().map(String::from));
@@ -1073,8 +1078,9 @@ fn parse_graph_opts<'a>(
     } else if arg == "--buildpkg-exclude" {
         // Same append shape as --exclude.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--buildpkg-exclude\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --buildpkg-exclude: expected one argument",
+            ));
         };
         opts.buildpkg_exclude
             .extend(value.split_whitespace().map(String::from));
@@ -1258,8 +1264,7 @@ fn parse_action_opts<'a>(
         // A REQUIRED closed-choice value (`y`/`n`): a missing or other
         // value is an immediate usage error, with no default to fall back to.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--with-bdeps\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error("argument --with-bdeps: expected one argument"));
         };
         match value.as_str() {
             "y" => {
@@ -1301,8 +1306,9 @@ fn parse_action_opts<'a>(
     } else if arg == "--with-bdeps-auto" {
         // Same required closed-choice shape as `--with-bdeps`.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--with-bdeps-auto\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --with-bdeps-auto: expected one argument",
+            ));
         };
         match value.as_str() {
             "y" => {
@@ -1772,29 +1778,34 @@ fn parse_jobs_opts<'a>(
                 *idx += 1;
             }
             Err(_) => {
-                eprintln!("emerge: invalid -j parameter: {value:?}");
-                return Err(ExitCode::from(2));
+                // A bare `-j` followed by more short flags: `-jx` reports `-x`,
+                // `-jabc` is `-j -a -b -c`.
+                opts.jobs = usize::MAX;
+                *idx += 1 + apply_short_bundle(opts, value, args, *idx)?;
             }
         }
         Ok(true)
     } else if arg == "--load-average" || arg == "-l" {
-        // A required value (unlike `--jobs`' optional one): missing or
-        // non-numeric is a usage error.
-        match args.get(*idx + 1).map(|s| s.parse::<f64>()) {
-            Some(Ok(la)) if la > 0.0 => {
+        // The value is optional: the next token is taken only when it is a number
+        // (`insert_optional_args`, `valid_floats`), else the option stands alone.
+        match args
+            .get(*idx + 1)
+            .filter(|s| s.parse::<f64>().is_ok_and(|v| v >= 0.0))
+        {
+            Some(next) => {
+                let la: f64 = next.parse().unwrap_or(0.0);
+                if la <= 0.0 {
+                    return Err(parser_error(&format!(
+                        "Invalid --load-average parameter: '{next}'\n"
+                    )));
+                }
                 opts.load_average = Some(la);
                 *idx += 2;
             }
-            _ => {
-                eprintln!("emerge: option \"--load-average\" requires a positive number");
-                return Err(ExitCode::from(2));
-            }
+            None => *idx += 1,
         }
         Ok(true)
-    } else if let Some(value) = arg
-        .strip_prefix("--load-average=")
-        .or_else(|| arg.strip_prefix("-l"))
-    {
+    } else if let Some(value) = arg.strip_prefix("--load-average=") {
         match value.parse::<f64>() {
             Ok(la) if la > 0.0 => {
                 opts.load_average = Some(la);
@@ -1805,6 +1816,20 @@ fn parse_jobs_opts<'a>(
                     "Invalid --load-average parameter: '{value}'\n"
                 )));
             }
+        }
+        Ok(true)
+    } else if let Some(value) = arg.strip_prefix("-l") {
+        match value.parse::<f64>() {
+            Ok(la) if la > 0.0 => {
+                opts.load_average = Some(la);
+                *idx += 1;
+            }
+            Ok(_) => {
+                return Err(parser_error(&format!(
+                    "Invalid --load-average parameter: '{value}'\n"
+                )));
+            }
+            Err(_) => *idx += 1 + apply_short_bundle(opts, value, args, *idx)?,
         }
         Ok(true)
     } else if arg == "--root-deps" || arg == "--root-deps=True" || arg == "--root-deps=rdeps" {
@@ -1909,8 +1934,9 @@ fn parse_autounmask_opts<'a>(
         // A REQUIRED `y`/`n` value; gates the backtrack loop's autounmask
         // re-drive. Disabled by default.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--autounmask-backtrack\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --autounmask-backtrack: expected one argument",
+            ));
         };
         if !matches!(value.as_str(), "y" | "n") {
             return Err(parser_error(&format!(
@@ -1979,8 +2005,9 @@ fn parse_autounmask_scope_opts<'a>(
     if arg == "--autounmask-use" {
         // A REQUIRED `y`/`n` value.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--autounmask-use\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --autounmask-use: expected one argument",
+            ));
         };
         match value.as_str() {
             "y" => {
@@ -2020,8 +2047,9 @@ fn parse_autounmask_scope_opts<'a>(
     } else if arg == "--autounmask-license" {
         // A REQUIRED `y`/`n` value, like `--autounmask-use`.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--autounmask-license\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --autounmask-license: expected one argument",
+            ));
         };
         match value.as_str() {
             "y" => {
@@ -2272,8 +2300,9 @@ fn parse_quickpkg_opts<'a>(
     if arg == "--rebuilt-binaries-timestamp" {
         // A required numeric Unix timestamp.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--rebuilt-binaries-timestamp\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --rebuilt-binaries-timestamp: expected one argument",
+            ));
         };
         match value.parse::<u64>() {
             Ok(n) => {
@@ -2301,8 +2330,9 @@ fn parse_quickpkg_opts<'a>(
     } else if arg == "--quickpkg-direct" {
         // A REQUIRED `y`/`n` value, like `--autounmask-backtrack`.
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--quickpkg-direct\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --quickpkg-direct: expected one argument",
+            ));
         };
         match value.as_str() {
             "y" => opts.quickpkg_direct = Some(true),
@@ -2331,8 +2361,9 @@ fn parse_quickpkg_opts<'a>(
         Ok(true)
     } else if arg == "--quickpkg-direct-root" {
         let Some(value) = args.get(*idx + 1) else {
-            eprintln!("emerge: option \"--quickpkg-direct-root\" requires an argument");
-            return Err(ExitCode::from(2));
+            return Err(parser_error(
+                "argument --quickpkg-direct-root: expected one argument",
+            ));
         };
         opts.quickpkg_direct_root = Some(value.clone());
         *idx += 2;
@@ -2346,9 +2377,94 @@ fn parse_quickpkg_opts<'a>(
     }
 }
 
+/// Applies one short flag of a bundle; `false` for a letter that is no flag.
+fn apply_short_flag(opts: &mut EmergeOpts<'_>, c: char) -> bool {
+    match c {
+        'p' => opts.pretend = true,
+        'a' => opts.ask = true,
+        'v' => opts.verbose = true,
+        'q' => opts.quiet = true,
+        'N' => opts.newuse = true,
+        'U' => opts.changed_use = true,
+        'O' => opts.nodeps = true,
+        'o' => opts.onlydeps = true,
+        '1' => opts.oneshot = true,
+        't' => opts.tree = true,
+        'u' => opts.update = true,
+        'n' => opts.noreplace = true,
+        'd' => opts.debug = true,
+        'D' => opts.deep = portage_repo::Deep::Unlimited,
+        'e' => opts.emptytree = true,
+        'k' => {
+            opts.usepkg = true;
+            opts.usepkg_given = true;
+        }
+        'K' => opts.usepkgonly = true,
+        'g' => {
+            opts.getbinpkg = true;
+            opts.getbinpkg_given = true;
+        }
+        'G' => opts.getbinpkgonly = true,
+        'W' => opts.deselect = true,
+        'C' => opts.unmerge = true,
+        'c' => opts.depclean = true,
+        'P' => opts.prune = true,
+        's' => opts.search_action = true,
+        'S' => {
+            opts.search_action = true;
+            opts.searchdesc = true;
+        }
+        'B' => opts.buildpkgonly = true,
+        'b' => opts.buildpkg_opt = Some(true),
+        _ => return false,
+    }
+    true
+}
+
+/// A short-flag bundle (`flags` without its dash), left to right. `-X` takes the rest
+/// of the bundle, else the next argument, as its value; returns how many extra
+/// arguments it consumed. An unknown letter reports the whole bundle when it comes
+/// first and the letter alone otherwise, as argparse does.
+// Portage: _emerge/main.py, parse_opts (argparse short-option clusters)
+fn apply_short_bundle(
+    opts: &mut EmergeOpts<'_>,
+    flags: &str,
+    args: &[String],
+    idx: usize,
+) -> Result<usize, ExitCode> {
+    for (pos, (offset, c)) in flags.char_indices().enumerate() {
+        if c == 'X' {
+            let rest = &flags[offset + 1..];
+            let value = if rest.is_empty() {
+                let Some(next) = args.get(idx + 1) else {
+                    return Err(parser_error("argument --exclude/-X: expected one argument"));
+                };
+                opts.excluded
+                    .extend(next.split_whitespace().map(String::from));
+                return Ok(1);
+            } else {
+                rest
+            };
+            opts.excluded
+                .extend(value.split_whitespace().map(String::from));
+            return Ok(0);
+        }
+        if !apply_short_flag(opts, c) {
+            let shown = if pos == 0 {
+                format!("-{flags}")
+            } else {
+                format!("-{c}")
+            };
+            return Err(report_option(&shown));
+        }
+    }
+    Ok(0)
+}
+
 /// Positional atoms, bundles, unknown options. Returns whether the token was consumed.
 fn parse_tail_opts<'a>(
     opts: &mut EmergeOpts<'a>,
+    args: &[String],
     idx: &mut usize,
     arg: &'a str,
 ) -> Result<bool, ExitCode> {
@@ -2357,59 +2473,8 @@ fn parse_tail_opts<'a>(
         *idx += 1;
         Ok(true)
     } else if !arg.starts_with("--") && arg.len() > 2 {
-        // Short-flag bundle (e.g. "-pv"): one character at a time, left to
-        // right. A bundled flag never consumes a value (unlike standalone).
-        for c in arg[1..].chars() {
-            match c {
-                'p' => opts.pretend = true,
-                'a' => opts.ask = true,
-                'v' => opts.verbose = true,
-                'q' => opts.quiet = true,
-                'N' => opts.newuse = true,
-                'U' => opts.changed_use = true,
-                'O' => opts.nodeps = true,
-                'o' => opts.onlydeps = true,
-                '1' => opts.oneshot = true,
-                't' => opts.tree = true,
-                'u' => opts.update = true,
-                'n' => opts.noreplace = true,
-                'd' => opts.debug = true,
-                'D' => opts.deep = portage_repo::Deep::Unlimited,
-                'e' => opts.emptytree = true,
-                'k' => {
-                    opts.usepkg = true;
-                    opts.usepkg_given = true;
-                }
-                'K' => opts.usepkgonly = true,
-                'g' => {
-                    opts.getbinpkg = true;
-                    opts.getbinpkg_given = true;
-                }
-                'G' => opts.getbinpkgonly = true,
-                'W' => opts.deselect = true,
-                'C' => opts.unmerge = true,
-                'c' => opts.depclean = true,
-                'P' => opts.prune = true,
-                's' => opts.search_action = true,
-                'S' => {
-                    opts.search_action = true;
-                    opts.searchdesc = true;
-                }
-                'B' => opts.buildpkgonly = true,
-                'b' => opts.buildpkg_opt = Some(true),
-                'X' => {
-                    // -X requires a value, so it can't be bundled; error
-                    // specifically instead of a misleading generic one.
-                    eprintln!(
-                        "emerge: -X (--exclude) requires an argument and can't be \
-                             bundled with other short flags in portuale"
-                    );
-                    return Err(ExitCode::from(2));
-                }
-                _ => return Err(report_option(&format!("-{c}"))),
-            }
-        }
-        *idx += 1;
+        let extra = apply_short_bundle(opts, &arg[1..], args, *idx)?;
+        *idx += 1 + extra;
         Ok(true)
     } else {
         Err(report_option(arg))
@@ -2440,7 +2505,7 @@ pub(crate) fn parse_emerge_args(args: &[String]) -> Result<EmergeOpts<'_>, ExitC
             || parse_autounmask_scope_opts(&mut opts, args, &mut i, arg)?
             || parse_binpkg_opts(&mut opts, args, &mut i, arg)?
             || parse_quickpkg_opts(&mut opts, args, &mut i, arg)?
-            || parse_tail_opts(&mut opts, &mut i, arg)?;
+            || parse_tail_opts(&mut opts, args, &mut i, arg)?;
     }
     Ok(opts)
 }

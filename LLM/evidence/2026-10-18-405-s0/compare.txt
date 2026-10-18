@@ -1,0 +1,32 @@
+OK   --color  rc=2  emerge: error: argument --color: expected one argument
+OK   --exclude  rc=2  emerge: error: argument --exclude/-X: expected one argument
+OK   -X  rc=2  emerge: error: argument --exclude/-X: expected one argument
+OK   -pX  rc=2  emerge: error: argument --exclude/-X: expected one argument
+OK   -vX  rc=2  emerge: error: argument --exclude/-X: expected one argument
+OK   --reinstall-atoms  rc=2  emerge: error: argument --reinstall-atoms: expected one argument
+OK   --useoldpkg-atoms  rc=2  emerge: error: argument --useoldpkg-atoms: expected one argument
+OK   --rebuild-exclude  rc=2  emerge: error: argument --rebuild-exclude: expected one argument
+OK   --rebuild-ignore  rc=2  emerge: error: argument --rebuild-ignore: expected one argument
+OK   --usepkg-exclude  rc=2  emerge: error: argument --usepkg-exclude: expected one argument
+OK   --usepkg-include  rc=2  emerge: error: argument --usepkg-include: expected one argument
+OK   --getbinpkg-exclude  rc=2  emerge: error: argument --getbinpkg-exclude: expected one argument
+OK   --getbinpkg-include  rc=2  emerge: error: argument --getbinpkg-include: expected one argument
+OK   --buildpkg-exclude  rc=2  emerge: error: argument --buildpkg-exclude: expected one argument
+OK   --with-bdeps  rc=2  emerge: error: argument --with-bdeps: expected one argument
+OK   --with-bdeps-auto  rc=2  emerge: error: argument --with-bdeps-auto: expected one argument
+OK   --autounmask-backtrack  rc=2  emerge: error: argument --autounmask-backtrack: expected one argument
+OK   --autounmask-use  rc=2  emerge: error: argument --autounmask-use: expected one argument
+OK   --autounmask-license  rc=2  emerge: error: argument --autounmask-license: expected one argument
+OK   --rebuilt-binaries-timestamp  rc=2  emerge: error: argument --rebuilt-binaries-timestamp: expected one argument
+OK   --quickpkg-direct  rc=2  emerge: error: argument --quickpkg-direct: expected one argument
+OK   --quickpkg-direct-root  rc=2  emerge: error: argument --quickpkg-direct-root: expected one argument
+OK   -jx  rc=2  emerge: error: unrecognized arguments: -x
+OK   -j2x  rc=2  emerge: error: unrecognized arguments: -2x
+OK   -jx2  rc=2  emerge: error: unrecognized arguments: -x2
+OK   --jobs=x  rc=2  emerge: error: Invalid --jobs parameter: 'x'
+OK   --load-average=x  rc=2  emerge: error: Invalid --load-average parameter: 'x'
+OK   -l2x  rc=2  emerge: error: unrecognized arguments: -2x
+OK   -lx  rc=2  emerge: error: unrecognized arguments: -x
+OK   -zp  rc=2  emerge: error: unrecognized arguments: -zp
+OK   -pzv  rc=2  emerge: error: unrecognized arguments: -z
+OK   -pz  rc=2  emerge: error: unrecognized arguments: -z
