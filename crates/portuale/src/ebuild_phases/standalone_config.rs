@@ -318,6 +318,25 @@ pub(crate) fn phase_standalone_base_env(
     (enabled.join(" "), flags)
 }
 
+/// Whether the raw (not USE-reduced) `PROPERTIES` names `interactive`: such
+/// a package keeps the terminal as stdin in every phase.
+// Portage: AbstractEbuildProcess.py, _start (`"interactive" in properties.split()`)
+pub(crate) fn properties_name_interactive(env: &Environment) -> bool {
+    let Some(repo_root) = repo_root_for(&env.pkg_dir) else {
+        return false;
+    };
+    portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf)
+        .ok()
+        .and_then(|m| m.get("PROPERTIES").cloned())
+        .is_some_and(|raw| raw_properties_name_interactive(&raw))
+}
+
+/// The raw-string half of [`properties_name_interactive`]: `foo? ( interactive )`
+/// counts even with `foo` off, as Portage splits the unreduced string.
+pub(crate) fn raw_properties_name_interactive(raw: &str) -> bool {
+    raw.split_whitespace().any(|w| w == "interactive")
+}
+
 /// The ebuild's USE-reduced `RESTRICT`/`PROPERTIES`; `("", "")`
 /// outside any repo checkout. `use_set` is empty except for `depend`.
 pub(crate) fn restrict_and_properties(

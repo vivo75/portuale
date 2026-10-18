@@ -536,6 +536,8 @@ pub(crate) struct SpawnBashScriptArgs<'a> {
     /// Names the spawn in its failure message (`"phase setup"` reads
     /// `spawning real bash for phase setup failed: …`).
     pub(crate) context: &'a str,
+    /// The package's raw `PROPERTIES` names `interactive`.
+    pub(crate) interactive: bool,
 }
 
 /// Run a vendored bash helper script under the sandbox with a curated
@@ -554,6 +556,7 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
         iso,
         log_file,
         context,
+        interactive,
     } = args;
     // The guards must outlive `cmd` (see `open_log_file`): declared first so
     // drop order destroys them after `cmd`, on every path.
@@ -590,7 +593,12 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
         // inherit like `Inherit` rather than misrouting the stream.
         PhaseLog::Inherit | PhaseLog::Foreground => {}
     }
-    let status = spawn_trackable(&mut cmd)
+    // Only `config` and `interactive` packages keep the terminal as stdin.
+    // Portage: AbstractEbuildProcess.py, _start
+    if argv_word != "config" && !interactive {
+        cmd.stdin(std::process::Stdio::null());
+    }
+    let status = spawn_trackable(&mut cmd, PhasePlacement::for_phase(argv_word))
         .map_err(|e| format!("spawning real bash for {context} failed: {e}"))?;
     drop(cmd);
     // Explicit: joins the pump threads now that every write end is closed.

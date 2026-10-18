@@ -91,8 +91,9 @@ pub(crate) fn progress_color() -> crate::color::Colorizer {
 /// serial and non-background); `show_jobs` is `background &&
 /// (!quiet || verbose)`.
 ///
-/// Two deliberate cuts: interactive packages (portuale models no
-/// `interactive` PROPERTIES) and the `--pretend`/`--fetchonly`/
+/// Two deliberate cuts: interactive packages (the phase spawn honours
+/// `PROPERTIES=interactive` for stdin, but this mode ignores it: no forced
+/// foreground / `--jobs=1`, backlog #412) and the `--pretend`/`--fetchonly`/
 /// `--fetch-all-uri` exemption (those modes never reach this code).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct StatusMode {

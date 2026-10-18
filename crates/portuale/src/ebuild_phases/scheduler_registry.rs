@@ -27,7 +27,35 @@ thread_local! {
 /// plus whether termination was already requested.
 pub(crate) struct SchedulerRegistry {
     terminated: bool,
+    /// Leaders of the sessions started for `PhasePlacement::NewSession`
+    /// children (pgid == pid); signalled as a group.
     pgids: std::collections::HashSet<i32>,
+    /// `PhasePlacement::ParentGroup` children: signalled by pid only, as
+    /// their group is portuale's own.
+    pids: std::collections::HashSet<i32>,
+}
+
+/// Where a phase's process tree lives relative to the terminal.
+/// Portage: pid-ns-init, `os.setsid()`; doebuild.py, `_global_pid_phases`
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PhasePlacement {
+    /// Own session and process group: `^C` and terminal job-control signals
+    /// reach portuale only, which kills the group through the registry.
+    NewSession,
+    /// portuale's own (foreground) process group: the phase may use the
+    /// terminal, and is killed by pid only.
+    ParentGroup,
+}
+
+impl PhasePlacement {
+    /// `config`, `preinst`, `prerm`, `postinst` and `postrm` stay in the
+    /// parent's group, every other script gets its own session.
+    pub(crate) fn for_phase(phase: &str) -> Self {
+        match phase {
+            "config" | "preinst" | "prerm" | "postinst" | "postrm" => Self::ParentGroup,
+            _ => Self::NewSession,
+        }
+    }
 }
 
 /// A fresh, empty registry for one `run_build_scheduler` call.
@@ -35,6 +63,7 @@ pub(crate) fn new_scheduler_registry() -> std::sync::Arc<std::sync::Mutex<Schedu
     std::sync::Arc::new(std::sync::Mutex::new(SchedulerRegistry {
         terminated: false,
         pgids: std::collections::HashSet::new(),
+        pids: std::collections::HashSet::new(),
     }))
 }
 
@@ -63,11 +92,20 @@ pub(crate) fn scope_scheduler_registry(
 /// Portage's non-blocking "return without waiting" semantics
 /// (PollScheduler.py, _terminate_tasks; AsynchronousTask.py, cancel).
 pub(crate) fn kill_registered_children(registry: &std::sync::Mutex<SchedulerRegistry>) {
-    let pgids: Vec<i32> = {
+    let (pgids, pids): (Vec<i32>, Vec<i32>) = {
         let mut registry = registry.lock().unwrap();
         registry.terminated = true;
-        registry.pgids.iter().copied().collect()
+        (
+            registry.pgids.iter().copied().collect(),
+            registry.pids.iter().copied().collect(),
+        )
     };
+    for pid in pids {
+        // SAFETY: plain ints; `pid` is a child this process spawned.
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
     for pgid in pgids {
         // SAFETY: `pgid` is recorded by this process, so negating it cannot
         // overflow and names a group we own (`kill` takes plain ints).
@@ -83,31 +121,50 @@ pub(crate) fn kill_registered_children(registry: &std::sync::Mutex<SchedulerRegi
 /// when the failure hit) is killed at once, so it can never outlive the run.
 pub(crate) fn spawn_trackable(
     cmd: &mut std::process::Command,
+    placement: PhasePlacement,
 ) -> std::io::Result<std::process::ExitStatus> {
     use std::os::unix::process::CommandExt as _;
-    cmd.process_group(0);
+    if placement == PhasePlacement::NewSession {
+        // SAFETY: only `setsid`, which is async-signal-safe, runs between
+        // fork and exec. It also makes the child its own group leader.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
     let mut child = cmd.spawn()?;
     let pgid = child.id() as i32;
     let registry = SCHEDULER_REGISTRY.with(|cell| cell.borrow().clone());
     if let Some(reg) = &registry {
         let terminated = {
             let mut registry = reg.lock().unwrap();
-            registry.pgids.insert(pgid);
+            match placement {
+                PhasePlacement::NewSession => registry.pgids.insert(pgid),
+                PhasePlacement::ParentGroup => registry.pids.insert(pgid),
+            };
             registry.terminated
         };
         if terminated {
-            // Best-effort like the bulk kill above: the group exists (this
-            // process just spawned its leader), an already-exited one reports
-            // `ESRCH` and there is nothing to kill.
+            // Best-effort like the bulk kill above: an already-exited child
+            // reports `ESRCH` and there is nothing to kill.
             // SAFETY: as above.
             unsafe {
-                libc::kill(-pgid, libc::SIGTERM);
+                match placement {
+                    PhasePlacement::NewSession => libc::kill(-pgid, libc::SIGTERM),
+                    PhasePlacement::ParentGroup => libc::kill(pgid, libc::SIGTERM),
+                };
             }
         }
     }
     let status = child.wait();
     if let Some(reg) = &registry {
-        reg.lock().unwrap().pgids.remove(&pgid);
+        let mut registry = reg.lock().unwrap();
+        registry.pgids.remove(&pgid);
+        registry.pids.remove(&pgid);
     }
     status
 }
@@ -127,8 +184,11 @@ mod tests {
         kill_registered_children(&registry);
         let _guard = scope_scheduler_registry(registry);
         let started = std::time::Instant::now();
-        let status =
-            spawn_trackable(std::process::Command::new("sleep").arg("60")).expect("spawn sleep");
+        let status = spawn_trackable(
+            std::process::Command::new("sleep").arg("60"),
+            PhasePlacement::NewSession,
+        )
+        .expect("spawn sleep");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(20),
             "a post-termination spawn must be killed, not waited out (took {:?})",

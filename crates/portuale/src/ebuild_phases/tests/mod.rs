@@ -26,3 +26,4 @@ mod runtime_paths;
 mod sandbox;
 mod single_phase;
 mod standalone_config;
+mod terminal;

@@ -10,3 +10,7 @@ Child processes registered for the build scheduler to kill.
 
 ## fn kill_registered_children
 - `SIGTERM`s every process group currently registered in `registry`. Best-effort: a group that already exited between the snapshot and the signal simply yields `ESRCH`, silently ignored, matching Portage's own "typically... return without waiting for exit status" non- blocking semantics.
+
+## enum PhasePlacement (#408)
+
+Backlog #408: phases used to be spawned with `process_group(0)` while the terminal's foreground group stayed portuale's. Any `bash -i` inside a phase (`app-shells/bash`'s `make check`) then did `kill(0, SIGTTIN)` and stopped the whole group for good. Stdin was irrelevant: `bash -i` opens `/dev/tty` or uses stderr (probe, `LLM/evidence/2026-10-18-408-s0/` and `LLM/2026-10-18-batch-plan.review.md`, cases A/C/J/K). Portage never makes a process group: pid-sandbox phases run under `bin/pid-ns-init:96` (`os.setsid()`), and `_global_pid_phases = {config, preinst, prerm, postinst, postrm}` (`doebuild.py:141`) stay in emerge's foreground group. portuale: `NewSession` (`setsid` in `pre_exec`, pgid == pid, so `kill(-pgid)` still reaches the tree) for every phase script except those five, which are `ParentGroup` and are killed by pid only (`pids` set). Known deltas, both deliberate: a build phase gets a session even when `pid-sandbox` is off (Portage leaves it in emerge's group; kept so the registry's group kill still reaches `make`'s children), and Ctrl-C reaches only portuale (backlog #411: no signal forwarding, as before the change).
