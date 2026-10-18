@@ -59,6 +59,72 @@ pub(crate) fn show_post_merge_notices(args: ShowPostMergeNoticesArgs<'_>) -> Opt
     None
 }
 
+/// The values [`run_autoclean_after_merge`] reads from its caller.
+pub(crate) struct RunAutocleanAfterMergeArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) config_root: &'a Path,
+    pub(crate) config: &'a Config,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) shell: ebuild_phases::ShellBackend,
+    pub(crate) debug: bool,
+    pub(crate) ask: bool,
+    /// Suppression of the post-removal info-regen block; computed by the caller.
+    pub(crate) quiet: bool,
+    pub(crate) noinfo: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
+/// After a successful non-`--pretend`/non-`--buildpkgonly` merge with a
+/// user-set `AUTOCLEAN=yes`: the `--clean` selection system-wide, which
+/// either reports no outdated packages or unmerges them, with no
+/// `CLEAN_DELAY` countdown. The outcome is discarded: the merge already
+/// succeeded, and a clean that finds nothing exits 1 by convention.
+/// Portage: _emerge/actions.py, action_build; _emerge/unmerge.py, unmerge
+pub(crate) fn run_autoclean_after_merge(args: RunAutocleanAfterMergeArgs<'_>) {
+    let RunAutocleanAfterMergeArgs {
+        root,
+        config_root,
+        config,
+        repos,
+        shell,
+        debug,
+        ask,
+        quiet,
+        noinfo,
+        color,
+    } = args;
+    println!(">>> Auto-cleaning packages...");
+    // Only for a non-`/` ROOT, like the manual removal paths do in
+    // Portage (this line is an auto-clean-only addition: the manual
+    // `--clean` path still does not print it).
+    // Portage: _emerge/unmerge.py, _unmerge_display
+    if root != Path::new("/") {
+        println!(
+            "\n{}",
+            color.c(
+                "darkgreen",
+                &format!(">>> Using system located in ROOT tree {}/", root.display())
+            )
+        );
+    }
+    let _ = run_prune_nodeps_or_clean(RunPruneNodepsOrCleanArgs {
+        targets: &[],
+        root,
+        config_root,
+        pretend: false,
+        ask,
+        shell,
+        debug,
+        color,
+        is_clean: true,
+        autoclean: true,
+        quiet,
+        noinfo,
+        repos,
+        config,
+    });
+}
+
 /// The values [`record_world_after_merge`] reads from its caller.
 pub(crate) struct RecordWorldAfterMergeArgs<'a> {
     pub(crate) opts: &'a EmergeOpts<'a>,

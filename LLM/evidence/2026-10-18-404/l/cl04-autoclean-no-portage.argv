@@ -1,0 +1,2 @@
+cwd: /var/tmp/s404
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s404/l-cl04-autoclean-no-portage/cfg ROOT=/var/tmp/s404/l-cl04-autoclean-no-portage/root PORTAGE_TMPDIR=/var/tmp/s404/l-cl04-autoclean-no-portage/tmp DISTDIR=/var/tmp/s404/l-cl04-autoclean-no-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news emerge --oneshot --package-moves=n app-misc/t348-b-phases

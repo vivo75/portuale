@@ -308,6 +308,7 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
             noinfo,
             repos,
             config,
+            autoclean: false,
         });
     }
     ExitCode::SUCCESS
@@ -502,6 +503,12 @@ pub(crate) struct ExecuteUnmergeArgs<'a> {
     /// only reach here with a non-empty `removal_list` and no `--pretend`).
     pub(crate) repos: &'a [portage_repo::RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
+    /// The post-merge auto-clean: the info-dir regen, the preserved-libs
+    /// notice and the GLEP 42 notice stay with the merge's own
+    /// post-merge step (which runs right after), as in Portage where
+    /// they live in `post_emerge`, after the auto-clean.
+    /// Portage: post_emerge.py, post_emerge
+    pub(crate) autoclean: bool,
 }
 
 pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
@@ -515,6 +522,7 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
         noinfo,
         repos,
         config,
+        autoclean,
     } = args;
     let portage_tmpdir = portage_repo::portage_tmpdir_from_env();
     let mut options = ebuild_merge::MergeOptions::from_env(shell, debug);
@@ -615,20 +623,24 @@ pub(crate) fn execute_unmerge(args: ExecuteUnmergeArgs<'_>) -> ExitCode {
     });
 
     // After the removal, regenerate any stale GNU info directory index,
-    // then warn about any library the removal preserved.
+    // then warn about any library the removal preserved -- unless this is
+    // the post-merge auto-clean, whose merge step runs all three right
+    // after (see `run_autoclean_after_merge`).
     // Portage: post_emerge.py, post_emerge
-    if let Err(e) = crate::info_files::post_merge_info_update(root, color, quiet, noinfo) {
-        // Every removal already landed above, so the notice prints.
+    if !autoclean {
+        if let Err(e) = crate::info_files::post_merge_info_update(root, color, quiet, noinfo) {
+            // Every removal already landed above, so the notice prints.
+            // Portage: post_emerge.py, post_emerge
+            display_news_notice_if_any(repos, root, config, color);
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+        crate::preserved_libs::show_preserved_libs_notice(root, color, false, false);
+        // The GLEP 42 count notice tail after the uninstall actions.
         // Portage: post_emerge.py, post_emerge
-        display_news_notice_if_any(repos, root, config, color);
-        eprintln!("emerge: {e}");
-        return ExitCode::from(1);
-    }
-    crate::preserved_libs::show_preserved_libs_notice(root, color, false, false);
-    // The GLEP 42 count notice tail after the uninstall actions.
-    // Portage: post_emerge.py, post_emerge
-    if !removal_list.is_empty() {
-        display_news_notice_if_any(repos, root, config, color);
+        if !removal_list.is_empty() {
+            display_news_notice_if_any(repos, root, config, color);
+        }
     }
 
     ExitCode::SUCCESS

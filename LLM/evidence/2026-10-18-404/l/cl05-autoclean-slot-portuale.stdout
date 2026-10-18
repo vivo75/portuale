@@ -1,0 +1,32 @@
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging (1 of 1) app-misc/t348-b-phaseslim-8::t348 for /var/tmp/s404/l-cl05-autoclean-slot-portuale/root
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s404/l-cl05-autoclean-slot-portuale/tmp/portage/app-misc/t348-b-phaseslim-8/work
+>>> Preparing source in /var/tmp/s404/l-cl05-autoclean-slot-portuale/tmp/portage/app-misc/t348-b-phaseslim-8/work/t348-b-phaseslim-8 ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s404/l-cl05-autoclean-slot-portuale/tmp/portage/app-misc/t348-b-phaseslim-8/work/t348-b-phaseslim-8 ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s404/l-cl05-autoclean-slot-portuale/tmp/portage/app-misc/t348-b-phaseslim-8/work/t348-b-phaseslim-8 ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-b-phaseslim-8
+
+>>> Install app-misc/t348-b-phaseslim-8 into /var/tmp/s404/l-cl05-autoclean-slot-portuale/tmp/portage/app-misc/t348-b-phaseslim-8/image
+>>> Completed installing app-misc/t348-b-phaseslim-8 into /var/tmp/s404/l-cl05-autoclean-slot-portuale/tmp/portage/app-misc/t348-b-phaseslim-8/image
+
+ [32m*[0m Final size of build directory: 4 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (1 of 1) app-misc/t348-b-phaseslim-8::t348 to /var/tmp/s404/l-cl05-autoclean-slot-portuale/root
+
+>>> Completed (1 of 1) app-misc/t348-b-phaseslim-8::t348 to /var/tmp/s404/l-cl05-autoclean-slot-portuale/root
+>>> Auto-cleaning packages...
+
+>>> Using system located in ROOT tree /var/tmp/s404/l-cl05-autoclean-slot-portuale/root/
+
+>>> No outdated packages were found on your system.
+
+ * GNU info directory index is up-to-date.

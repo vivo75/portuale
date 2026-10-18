@@ -1,0 +1,4 @@
+
+ * The resume list contains packages that could not be merged.
+ * Use `emerge --resume` to retry, or `emerge --resume --skipfirst` to skip the first one.
+emerge: app-misc/s404-fail-1.0: merge failed (1)

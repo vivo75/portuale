@@ -1,0 +1,2 @@
+cwd: /var/tmp/s404
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s404/l-cl06-autoclean-pretend-portuale/cfg ROOT=/var/tmp/s404/l-cl06-autoclean-pretend-portuale/root PORTAGE_TMPDIR=/var/tmp/s404/l-cl06-autoclean-pretend-portuale/tmp DISTDIR=/var/tmp/s404/l-cl06-autoclean-pretend-portuale/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news /var/tmp/s404/bin/emerge --pretend --oneshot --package-moves=n app-misc/t348-b-phases
