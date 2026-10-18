@@ -14,3 +14,12 @@ report; the coordinator ran the remaining gates and reviewed the diff.
   full run; not reproducible, probably the leftover worker run overlapping.
   Noted, not explained.
 - No existing pin moved. The bed (L0) was not run for this slice.
+
+## Bed (added by coordinator, 2026-10-18, after Z)
+
+`differential-test-bed/run/l0-resolver.sh` on `backlog/346-rest` (S1–S9
+merged with main incl. #369): 31 UNEXPLAINED, 6 explained, 0 invariant
+violations (rc=1 as for the previous run). The finding lines are identical
+to the previous bed run `l0-20261017T205457Z` (same 31). Report
+`pmtest/differential-test-bed/logs/l0-20261018T033226Z/`. L1/L2/L3 and the
+fixture oracle were not run.
