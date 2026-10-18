@@ -616,3 +616,162 @@ so the `buildtime_hard` gate is lifted everywhere:
   (`contract.json.xz` + `expanded.json.xz`); the paired portuale commit
   carries the code + unit tests + notes + this evidence dir. The 9
   fresh container captures (`s4-*.txt`) are evidence here, not fixtures.
+
+---
+
+# 02.359 S5 (#369 deferred disjunctions: `_dep_disjunctive_stack`) — slice log
+
+Branch `backlog/369-deferred-disjunctions` in both repos (pre-existing, not
+switched). Nothing committed, pushed, added, stashed, reset or cleaned
+(coordinator reviews and commits; `git add` never run). No `/dev/shm`
+writes. Host config untouched (all Portage captures ran in
+`localhost/test-portuale:latest`; `/etc/make.local` never touched).
+Scratch `/var/tmp/x369a` (+ a detached base worktree + two extra target
+dirs, all under it) removed at the end with a separate `sudo rm -rf`; the
+suite's `--basetemp` was a fresh dir per run. No bed script while cargo
+built; no rebuild during any bed run; bed scripts one at a time.
+
+Owner decisions applied (differing from the plan text where noted): real
+port for the main walk AND the installed walk; the `--autounmask-use` flip
+path (`slot_expand.rs:437-556`) NOT ported — filed as residue #398 (new
+entry in `LLM/backlog-tasks-2026-10.md`, number verified free across all
+tiers); `or_group_universe` and the reverse-order tricks in
+`enqueue_flat_deps` KEPT (not removed); `pg359-vapp`/virtual deferral NOT
+ported (S0 shows no divergence: `pg359-vapp -pv` byte-identical 4 rows,
+re-verified live and by fresh container capture `s5-vapp-pv.txt`).
+
+## Product change (portuale repo, uncommitted)
+
+`||` branch choice deferred to the drained graph, ported from host Portage
+3.0.82.2 (`_queue_disjunctive_deps`, `_queue_disjunction`,
+`_pop_disjunction`, `_create_graph`; `use_reduce` running before the queue):
+
+- `resolve/disjunction_stack.rs` (new) — `split_off_disjunctions`
+  (raw-token split into `||`-free plains + one raw token list per
+  `|| ( ... )` group; `flag?` conditionals evaluated against the owner's
+  USE at split time like Portage's `use_reduce`-first order; groups nested
+  in plain parens extracted too; active-but-emptied wrappers dropped rather
+  than emitted; any structural surprise returns the input unsplit so the
+  downstream flattener errors exactly as without deferral),
+  `DeferredDisjunction` (one entry per expansion: all groups + frozen USE,
+  EAPI flag, owner/version/depth + a `DeferredSite::{Main, Installed}`
+  queueing context), `pop_disjunction` (LIFO pop, resolve each group with
+  the existing `disjunction_preference`/`promote_tied_alternative` against
+  pop-time entries+queue, enqueue chosen via the owning site's queueing fn
+  with `from_disjunction: true`).
+- `pass_state.rs` — `PassState::disjunctive_stack`.
+- `pass/mod.rs` (`run_pass`) — the walk loop pops one deferred entry
+  whenever `pop_queue_item` reports both `queue` and `held_blocks` empty
+  (the portuale equivalent of "the whole `_dep_stack` is empty"); empty
+  stack too ends the walk.
+- `pass/enqueue_deps.rs` (main walk) — split before flatten; plains flow
+  through the unchanged flatten/filter/puller/enqueue pipeline (closures
+  never fire on `||`-free input, so group-free expansions are exactly as
+  found); groups push a `Main` entry. `filter_root_deps` now also returns
+  its existence-split sets for the pop-time filter.
+- `resolve/enqueue.rs` (installed walk, via `EnqueueSinks::disjunctive_stack`)
+  — same split/push with an `Installed` entry; plains keep the existing
+  `enqueue_plain_tokens` path.
+- Untouched by owner decision: `or_group_universe` + reverse tricks,
+  `slot_expand.rs` flip path (#398), blockers/root-deps post-walk sites,
+  `seed_queue`, `--with-test-deps` path.
+- Unit tests: `tests/disjunction_stack.rs` (new, 8 tests: splitter shapes
+  incl. conditional evaluation, nesting, malformed-unsplit, the
+  active-emptied regression below; rb/ra-shaped resolve tests citing the
+  Portage captures); re-grounded
+  `tests_165::enqueue_dependencies_queues_plains_before_disjunction_choices`
+  to the deferred contract (plains queue now, the choice sits on the
+  returned stack) with `enqueue_165` returning the stack.
+- Code notes: new `LLM/code-notes/portage-repo/resolve/disjunction_stack.md`
+  (incl. the nested-`||`, multi-`PackageArg` and virtual non-ports);
+  `python3 LLM/tools/code_notes_index.py` clean.
+
+## pmtest change (pmtest repo, uncommitted; NO corpus bless — zero drift)
+
+- 3 new default-solver pins next to the existing `ra -pv` lock pin:
+  `rb -pv` → `y b a rb`, `rb -pve` → `y b a rb`, `ra -pve` → `y a b ra`.
+  Every docstring names its Portage 3.0.82.2 capture, never portuale's
+  output. `CASES` rc entries for all four already existed. No new
+  fixtures (S5 uses S0's `pg359-*`/`pg366-*` trees only).
+- Fresh container captures (same staging/env as S0, fresh stage per cell,
+  stored beside the runner + cells file in this evidence dir):
+  `s5-ra-pve.txt` (the only cell without a prior oracle),
+  `s5-rb-pv.txt`, `s5-rb-pve.txt`, `s5-ra-pv.txt` (re-verification),
+  `s5-vapp-pv.txt` (control), `portage-version.txt` (3.0.82.2).
+
+## Commands and results
+
+- `cargo fmt --check` — clean. `cargo clippy --release --all-targets` —
+  0 warnings.
+- `timeout 2400 cargo test --release -- --test-threads=2` (whole
+  workspace) — all green, 0 failures (portage-repo lib 1117 incl. 8 new
+  + re-grounded 165; portuale bin 1070).
+- Live binary vs Portage captures (fixture env): `rb -pv`/`-pve` now print
+  Portage's 4 rows (`y b a rb`, no `x`); `ra -pv`/`-pve` and `pg359-vapp
+  -pv` row-identical to their captures (order included).
+- `python3 -m pytest pytests-contract-suite -q
+  --basetemp=/var/tmp/x369a -p no:cacheprovider -rf` — final:
+  **3942 passed, 37 skipped, 2 xfailed** (baseline 3939/37/2; +3 new
+  pins), zero drift (no bless needed).
+- `differential-test-bed/run/l0-fixture-oracle.sh` —
+  logs/l0-fx-20261016T204333Z: explained 19, **UNEXPLAINED 4** (all
+  pre-existing `skipped-updates` USE-paint rows on `--backtrack=0`
+  blk0{a,b,c} orders), byte-identical class to S3/S4.
+- `GENTOO_MIRRORS=http://10.48.0.229:8080
+  differential-test-bed/run/l0-resolver.sh` —
+  logs/l0-20261016T204406Z: **unexplained 31 (order 14, advice 9, error 6,
+  truncated 2)**, set categories 0/0/0/0/0
+  (`compare/resolve-compare.py --count-categories
+  missing,extra,version,action,exit`): exactly the baseline.
+- Pubgrub modes (`L0_SKIP_MULTI=1 L0_SKIP_INVARIANTS=1
+  L0_PORTUALE_OPTS=--solver=pubgrub`, `-pvuD` then `-pve` with
+  `-pvuD/--getbinpkg=n --usepkg=n` / `-pve --getbinpkg=n --usepkg=n`) —
+  logs/l0-20261016T205251Z + l0-20261016T210715Z: set categories
+  **0/0/0/0/0** both modes (the brief's baseline shape, confirmed against
+  `findings/l0-pubgrub.md` and the #374 runs `l0-20261016T185128Z` /
+  `l0-20261016T190945Z`: unexplained probe rows AND row texts diffed
+  identical, no new `[order]` row; S5 cannot reach pubgrub anyway —
+  `solver_bridge.rs` references none of the touched functions).
+- No HARD STOP fired: no new UNEXPLAINED or `[order]` row versus any
+  baseline. No allowlist touched; no backlog number filed except #398.
+
+## Surprises
+
+- **Mid-slice regression, found by the suite and fixed here (not blessed,
+  not allowlisted).** First full-suite run: 3941 passed + 1 failed
+  (`test_circular_dependencies_upstream_pg0_portage_text_cyc0w3`: same
+  2-cycle reported rotated, `cyc0z-3` first instead of Portage's
+  `cyc0y-1`). Cause: the first splitter version re-emitted an
+  *active-but-emptied* conditional as `foo? ( )`, which the downstream
+  flattener rejects (`expected: dependency string`), silently dropping the
+  owner's whole dep string. Live on `=dev-libs/cyc0w-3` pass 2, where
+  `dev-libs/cyc0z` expands with foo AND bar on
+  (`foo? ( !bar? ( y ) )` → inner inactive → empty wrapper). Bisected
+  with a bypass build (old text restored), then fixed by dropping emptied
+  wrappers (an emptied active conditional contributes nothing, exactly
+  what the unflattened string reduces to) and re-verified: current binary
+  prints y-first 3/3, suite fully green on re-run. Regression test added
+  (`split_drops_an_active_conditional_emptied_by_its_contents`). The
+  empty-wrapper shape also covers `flag? ( || ( ... ) )` with the flag on,
+  which would otherwise Break every such expansion.
+- The cyc walk is `||`-free with an empty disjunctive stack throughout, so
+  the ONLY behavioral delta there was the splitter's plains — a useful
+  narrowing result in itself. A/B was done via a detached base worktree
+  (old binary 10/10 y-first vs new 20/20 z-first pre-fix), since removed.
+- One `sudo rm -rf` of the scratch dir over-deleted (took the detached
+  worktree, its target dir and the cells/runner copies too); all evidence
+  had already been copied into this dir, the worktree registration was
+  pruned, nothing tracked was affected. Lesson recorded here so the next
+  slice cleans selectively.
+
+## Left undone and why
+
+- #398 (flip-path `||`) filed, not implemented — owner decision.
+- Virtual-atom deferral not ported — S0 shows no divergence (#397 stays
+  unfiled per the plan condition); `s5-vapp-pv.txt` guards the control.
+- `or_group_universe` + reverse-order tricks kept — owner decision (the
+  plan's "remove them" step explicitly not taken).
+- `LLM/what-this-proves.md`: untouched (plan assigns it to Z).
+- Full-suite green needs no bless (zero drift); the paired portuale commit
+  carries code + unit tests + notes + this evidence dir (incl. the 5
+  container captures + runner + cells), the pmtest commit the 3 pins.

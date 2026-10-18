@@ -3576,6 +3576,7 @@ mod cycles;
 mod dep_validate;
 mod depclean;
 mod direct_solve;
+mod disjunction_stack;
 mod eliminate;
 mod entry;
 mod env_roots;

@@ -44,6 +44,9 @@ pub(crate) struct EnqueueSinks<'a> {
     /// This installed package's own flattened non-blocker atoms become
     /// slot-conflict pullers, like the main loop's own recording.
     pub slot_pullers: &'a mut SlotPullers,
+    /// Deferred `||` groups, pushed when this expansion owns any; `run_pass`
+    /// pops them once the whole queue drains.
+    pub disjunctive_stack: &'a mut Vec<DeferredDisjunction>,
 }
 
 /// Reads `category/package-version`'s own dependency metadata and enqueues
@@ -99,6 +102,7 @@ pub(crate) fn enqueue_dependencies(
         root_deps_build_seen,
         installed_meta_memo,
         slot_pullers,
+        disjunctive_stack,
     } = sinks;
     // The installed package's own dependency metadata: the live ebuild view
     // while the version still has an ebuild, else the vdb-recorded snapshot
@@ -167,10 +171,14 @@ pub(crate) fn enqueue_dependencies(
     // The node key for the resolver map (installed deep-walk owner).
     let self_node: RootCp = (false, category.to_string(), package.to_string());
     // Branch selection shares the `disjunction_preference` helper; same
-    // drain-state snapshot as the main walk.
+    // drain-state snapshot as the main walk. `||` groups defer to the
+    // drained graph instead: only the plains flatten here, with the same
+    // closures (never invoked on `||`-free input).
+    // Portage: depgraph.py, _queue_disjunctive_deps
+    let (plains, groups) = split_off_disjunctions(&tokens, &use_flags);
     let flat_deps = match flatten_deps_for_enqueue(FlattenDepsForEnqueueArgs {
         queue,
-        tokens: &tokens,
+        tokens: &plains,
         use_flags: &use_flags,
         cross_active,
         running_tags: &running_tags,
@@ -244,6 +252,31 @@ pub(crate) fn enqueue_dependencies(
     // Same plains-reversed + `||`-last split as the main walk's
     // `enqueue_flat_deps`.
     let universe = or_group_universe(&tokens);
+    if !groups.is_empty() {
+        disjunctive_stack.push(DeferredDisjunction {
+            groups,
+            use_flags: use_flags.clone(),
+            empty_groups_always_true: false,
+            owner: owner_key.clone(),
+            owner_version: owner_version.clone(),
+            depth: child_depth,
+            owner_targets_running_root: entries
+                .iter()
+                .find(|e| e.category == owner_key.0 && e.package == owner_key.1)
+                .is_some_and(|e| e.targets_running_root),
+            site: DeferredSite::Installed {
+                buildtime_tokens: buildtime_tokens.clone(),
+                or_universe: universe.clone(),
+                running_tags: running_tags.clone(),
+                root_deps_satisfied: root_deps_satisfied.clone(),
+                root_deps_unsatisfied: root_deps_unsatisfied.clone(),
+                root_deps_split: root_deps_split.is_some(),
+                resolve_root: root.to_path_buf(),
+                cross_active,
+                root_deps_running_root: root_deps_running_root.map(|p| p.to_path_buf()),
+            },
+        });
+    }
     let (mut disj, mut plains): (Vec<String>, Vec<String>) = flat_deps
         .into_iter()
         .partition(|t| t != "||" && universe.contains(t));

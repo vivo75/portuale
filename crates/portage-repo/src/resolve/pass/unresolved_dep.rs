@@ -413,6 +413,7 @@ pub(crate) fn enqueue_installed_deps(args: EnqueueInstalledDepsArgs<'_>) -> Vec<
                 root_deps_build_seen: &mut state.root_deps_build_seen,
                 installed_meta_memo: &mut state.installed_meta_memo,
                 slot_pullers: &mut state.slot_pullers,
+                disjunctive_stack: &mut state.disjunctive_stack,
             },
             union_constraints,
         );

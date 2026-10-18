@@ -100,6 +100,7 @@
 - [crates/portage-repo/src/resolve/ctx.rs](portage-repo/resolve/ctx.md) — The per-run resolver context: BFS request fields plus the derived required-set closures.
 - [crates/portage-repo/src/resolve/cycles.rs](portage-repo/resolve/cycles.md) — Circular dependencies: hard-cycle detection, restart triggers, virtual cycles and USE-fix suggestions.
 - [crates/portage-repo/src/resolve/direct_solve.rs](portage-repo/resolve/direct_solve.md) — Solves slot conflicts directly, without backtracking.
+- [crates/portage-repo/src/resolve/disjunction_stack.rs](portage-repo/resolve/disjunction_stack.md) — Deferred `||` resolution for the default solver (02.359 S5, backlog #369).
 - [crates/portage-repo/src/resolve/driver.rs](portage-repo/resolve/driver.md) — The backtracking loop: one pass per node, settle or feed back.
 - [crates/portage-repo/src/resolve/enqueue.rs](portage-repo/resolve/enqueue.md) — Queueing one package's dependencies.
 - [crates/portage-repo/src/resolve/entry.rs](portage-repo/resolve/entry.md) — Graph entries and their edges: blocker rows, per-entry display facts, and merge-order inputs.
