@@ -21,6 +21,13 @@ pub struct BinRepo {
     /// `frozen` (default `false`): cached `Packages` used as-is, never
     /// refreshed.
     pub frozen: bool,
+    /// `getbinpkg-exclude`: validated remote atoms (bad ones dropped with
+    /// Portage's warning at parse time). Folded with the CLI set per
+    /// refresh; local `PKGDIR` instances are never filtered.
+    pub getbinpkg_exclude: Vec<String>,
+    /// `getbinpkg-include`: validated remote atoms (same rule). A
+    /// non-empty effective set is a whitelist.
+    pub getbinpkg_include: Vec<String>,
 }
 
 impl BinRepo {
@@ -46,10 +53,137 @@ impl BinRepo {
     }
 }
 
+/// Portage `_emerge/is_valid_package_atom.py:19-27`
+/// (`insert_category_into_atom`): splice `category/` before the first
+/// alphanumeric/`_`/`*` character (ASCII). `None` when the string holds
+/// none (the caller then validates the string as-is, which fails).
+fn insert_category_into_atom(atom: &str, category: &str) -> Option<String> {
+    let pos = atom
+        .char_indices()
+        .find(|(_, c)| *c == '*' || c.is_ascii_alphanumeric() || *c == '_')
+        .map(|(i, _)| i)?;
+    Some(format!("{}{}/{}", &atom[..pos], category, &atom[pos..]))
+}
+
+/// Portage `portage/repository/config.py:91-116` (`_find_bad_atoms`,
+/// strict mode): the bad entries of a `getbinpkg-exclude/include` value,
+/// in order. Only package names and slot atoms are allowed: any
+/// operator, blocker, use dep or repo form is bad (build-ids only ever
+/// parse on a `=` operator, so the operator rule covers them).
+fn find_bad_getbinpkg_atoms(value: &str) -> Vec<&str> {
+    use portage_dep::{AtomEapi, AtomOptions, Blocker, Operator, parse_atom_with};
+    let mut bad = Vec::new();
+    for x in value.split_whitespace() {
+        let probe: String = if x.split(':').next().unwrap_or(x).contains('/') {
+            x.to_string()
+        } else {
+            match insert_category_into_atom(x, "dummy-category") {
+                Some(inserted) => inserted,
+                None => x.to_string(),
+            }
+        };
+        let opts = AtomOptions {
+            eapi: AtomEapi::None,
+            allow_wildcard: true,
+            allow_repo: Some(false),
+            allow_build_id: None,
+        };
+        let is_bad = match parse_atom_with(&probe, &opts, "") {
+            Err(_) => true,
+            Ok(atom) => {
+                atom.operator != Operator::None
+                    || atom.blocker != Blocker::None
+                    || atom.use_deps.is_some()
+            }
+        };
+        if is_bad {
+            bad.push(x);
+        }
+    }
+    bad
+}
+
+/// One section's `getbinpkg-exclude/include` values, validated: bad
+/// atoms are dropped with Portage's warning, then atoms in both lists
+/// are dropped from both with its warning (both keep file order).
+// Portage: binrepo/config.py, BinRepoConfig.__init__
+fn validated_getbinpkg_keys(
+    name: &str,
+    raw_exclude: &str,
+    raw_include: &str,
+    warnings: &mut Vec<ProfileWarning>,
+) -> (Vec<String>, Vec<String>) {
+    let mut exclude: Vec<String> = Vec::new();
+    let mut include: Vec<String> = Vec::new();
+    for (raw, opt) in [
+        (raw_exclude, "getbinpkg-exclude"),
+        (raw_include, "getbinpkg-include"),
+    ] {
+        let bad = find_bad_getbinpkg_atoms(raw);
+        if !bad.is_empty() {
+            warnings.push(ProfileWarning {
+                rank: WARN_RANK_REPO,
+                text: format!(
+                    "\n!!! The following atoms are invalid in {opt} attribute for \
+                     binrepo [{name}] (only package names and slot atoms allowed):\n\n    {}",
+                    bad.join("\n    ")
+                ),
+            });
+            let bad_set: std::collections::HashSet<&str> = bad.into_iter().collect();
+            let kept: Vec<String> = raw
+                .split_whitespace()
+                .filter(|a| !bad_set.contains(a))
+                .map(str::to_string)
+                .collect();
+            if opt == "getbinpkg-exclude" {
+                exclude = kept;
+            } else {
+                include = kept;
+            }
+        } else if opt == "getbinpkg-exclude" {
+            exclude = raw.split_whitespace().map(str::to_string).collect();
+        } else {
+            include = raw.split_whitespace().map(str::to_string).collect();
+        }
+    }
+    let in_both: Vec<String> = {
+        let include_set: std::collections::HashSet<&str> =
+            include.iter().map(String::as_str).collect();
+        let mut seen = std::collections::HashSet::new();
+        exclude
+            .iter()
+            .filter(|a| include_set.contains(a.as_str()) && seen.insert(a.as_str()))
+            .cloned()
+            .collect()
+    };
+    if !in_both.is_empty() {
+        warnings.push(ProfileWarning {
+            rank: WARN_RANK_REPO,
+            text: format!(
+                "\n!!! The following atoms appear in both the getbinpkg-exclude \
+                 getbinpkg-include lists for binrepo [{name}]:\n\n    {}",
+                in_both.join("\n    ")
+            ),
+        });
+        let both: std::collections::HashSet<&str> = in_both.iter().map(String::as_str).collect();
+        exclude.retain(|a| !both.contains(a.as_str()));
+        include.retain(|a| !both.contains(a.as_str()));
+    }
+    (exclude, include)
+}
+
 /// Parses `binrepos.conf`, appends implicit `PORTAGE_BINHOST` entries,
 /// and returns the repos sorted by `(priority, name)`.
+/// `getbinpkg-exclude/include` keys are validated like Portage's
+/// `BinRepoConfig` (bad atoms dropped with its warning; atoms in both of
+/// one repo's lists dropped from both with its warning); the texts ride
+/// `warnings` for the config-load position on stderr.
 // Portage: binrepo/config.py, BinRepoConfigLoader
-pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<BinRepo> {
+pub(crate) fn parse_binrepos(
+    binrepos_conf: &str,
+    portage_binhost: &str,
+    warnings: &mut Vec<ProfileWarning>,
+) -> Vec<BinRepo> {
     let normalize = |u: &str| u.trim_end_matches('/').to_string();
     let mut repos: Vec<BinRepo> = Vec::new();
     let mut seen_uris: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -61,18 +195,31 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
     let mut location: Option<String> = None;
     let mut verify_signature = true;
     let mut frozen = false;
-    #[allow(clippy::type_complexity)]
+    let mut raw_exclude = String::new();
+    let mut raw_include = String::new();
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     let flush = |section: &mut Option<String>,
                  sync_uri: &mut Option<String>,
                  priority: &mut i32,
                  location: &mut Option<String>,
                  verify_signature: &mut bool,
                  frozen: &mut bool,
+                 raw_exclude: &mut String,
+                 raw_include: &mut String,
                  repos: &mut Vec<BinRepo>,
-                 seen: &mut std::collections::HashSet<String>| {
+                 seen: &mut std::collections::HashSet<String>,
+                 warnings: &mut Vec<ProfileWarning>| {
         if let (Some(name), Some(uri)) = (section.take(), sync_uri.take()) {
             let uri = uri.trim_end_matches('/').to_string();
             seen.insert(uri.clone());
+            // Portage skips the key validation for a `DEFAULT` section
+            // (its keys are defaults, not a repo); the section is dropped
+            // below either way.
+            let (getbinpkg_exclude, getbinpkg_include) = if name == "DEFAULT" {
+                (Vec::new(), Vec::new())
+            } else {
+                validated_getbinpkg_keys(&name, raw_exclude, raw_include, warnings)
+            };
             repos.push(BinRepo {
                 name,
                 sync_uri: uri,
@@ -80,12 +227,16 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
                 location: location.take(),
                 verify_signature: *verify_signature,
                 frozen: *frozen,
+                getbinpkg_exclude,
+                getbinpkg_include,
             });
         }
         *priority = 0;
         *location = None;
         *verify_signature = true;
         *frozen = false;
+        raw_exclude.clear();
+        raw_include.clear();
     };
     for line in binrepos_conf.lines() {
         let line = line.trim();
@@ -100,8 +251,11 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
                 &mut location,
                 &mut verify_signature,
                 &mut frozen,
+                &mut raw_exclude,
+                &mut raw_include,
                 &mut repos,
                 &mut seen_uris,
+                warnings,
             );
             section = Some(inner.trim().to_string());
             continue;
@@ -124,6 +278,10 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
                         "true" | "yes" | "1" | "on"
                     )
                 }
+                // One section may repeat a key; Portage's config parser
+                // keeps the last, so later lines overwrite.
+                "getbinpkg-exclude" => raw_exclude = v.trim().to_string(),
+                "getbinpkg-include" => raw_include = v.trim().to_string(),
                 _ => {}
             }
         }
@@ -135,8 +293,11 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
         &mut location,
         &mut verify_signature,
         &mut frozen,
+        &mut raw_exclude,
+        &mut raw_include,
         &mut repos,
         &mut seen_uris,
+        warnings,
     );
     repos.retain(|r| r.name != "DEFAULT");
 
@@ -158,6 +319,10 @@ pub(crate) fn parse_binrepos(binrepos_conf: &str, portage_binhost: &str) -> Vec<
                 location: None,
                 verify_signature: true,
                 frozen: false,
+                // Implicit entries carry no keys (Portage reads them from
+                // the config sections only).
+                getbinpkg_exclude: Vec::new(),
+                getbinpkg_include: Vec::new(),
             });
         }
     }

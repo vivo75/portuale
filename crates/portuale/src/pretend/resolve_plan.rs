@@ -80,6 +80,8 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
         usepkg,
         usepkgonly,
         getbinpkg,
+        ref getbinpkg_exclude,
+        ref getbinpkg_include,
         getbinpkgonly,
         selective_flag,
         update,
@@ -236,8 +238,18 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
     // refresh is non-fatal: warn and resolve against the local pool.
     // Portage: _emerge/actions.py, bintree.py
     if getbinpkg {
-        emerge_getbinpkg::refresh_binhost_indexes(&config.binrepos, root, pretend);
+        emerge_getbinpkg::refresh_binhost_indexes(
+            &config.binrepos,
+            root,
+            pretend,
+            getbinpkg_exclude,
+            getbinpkg_include,
+        );
     }
+    // Atoms in both CLI lists warn (after the refresh: Portage populates
+    // before adjusting configs, so the per-repo warnings print first).
+    // Portage: _emerge/actions.py, binpkg_selection_config
+    emerge_getbinpkg::warn_getbinpkg_cli_overlap(getbinpkg_exclude, getbinpkg_include);
 
     // `--rebuild-if-unbuilt` (=y) clears `new-rev` + `new-ver`;
     // `--rebuild-if-new-rev` (=y) clears `new-ver`. Unset stays off.

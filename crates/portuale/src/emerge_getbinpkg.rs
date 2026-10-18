@@ -92,21 +92,135 @@ pub(crate) fn binhost_unsupported_version_warning(
 /// the stale cache is dropped. A failed refresh is non-fatal either way:
 /// resolution proceeds against whatever pool the rules leave.
 ///
+/// Remote entries matching the effective `--getbinpkg-exclude` (or missing
+/// from a non-empty `--getbinpkg-include`) never reach the in-memory pool:
+/// each binrepo's own keys fold with the CLI sets and conflicting atoms
+/// warn per repo, like Portage. The on-disk/EDB cache keeps the unfiltered
+/// index (Portage filters when reading, not when writing, so a later run
+/// without the option is unpoisoned). Local `PKGDIR` instances are never
+/// filtered.
+///
 /// Deliberate narrowings: no conditional-GET (an unchanged index re-downloads;
 /// resolution is identical, only one stdout line differs across runs); a
 /// fetched index with no/unparseable `TIMESTAMP` or an unsupported `VERSION`
 /// is dropped with Portage's own warning, discarding even a stale cache; no
 /// `--verbose` detail, `ssh://`, pool filtering, or trust-helper gating.
 // Portage: lib/portage/dbapi/bintree.py, _populate_remote
-pub fn refresh_binhost_indexes(binrepos: &[BinRepo], root: &Path, pretend: bool) {
+pub fn refresh_binhost_indexes(
+    binrepos: &[BinRepo],
+    root: &Path,
+    pretend: bool,
+    cli_exclude: &[String],
+    cli_include: &[String],
+) {
     for binrepo in binrepos {
-        let outcome = refresh_one_binrepo(binrepo, root, pretend);
+        let filter = GetbinpkgFilter::for_binrepo(binrepo, cli_exclude, cli_include);
+        let outcome = refresh_one_binrepo(binrepo, root, pretend, &filter);
         if let Some(warning) = outcome.stderr_warning {
             eprint!("{warning}");
         }
         if let Some(note) = outcome.stdout_note {
             print!("{note}");
         }
+    }
+}
+
+/// One binrepo's effective `--getbinpkg-exclude/include` sets: its own
+/// `binrepos.conf` keys folded with the CLI sets, minus the atoms each
+/// side loses to a conflict warning (warned here, in refresh order, like
+/// Portage's `_populate_remote`, which runs before the CLI-overlap pass).
+// Portage: lib/portage/dbapi/bintree.py, _populate_remote
+struct GetbinpkgFilter {
+    exclude: Vec<String>,
+    include: Vec<String>,
+}
+
+impl GetbinpkgFilter {
+    fn for_binrepo(binrepo: &BinRepo, cli_exclude: &[String], cli_include: &[String]) -> Self {
+        fn split_atoms(values: &[String]) -> std::collections::BTreeSet<String> {
+            values
+                .iter()
+                .flat_map(|s| s.split_whitespace())
+                .map(str::to_string)
+                .collect()
+        }
+        let mut exclude: std::collections::BTreeSet<String> =
+            binrepo.getbinpkg_exclude.iter().cloned().collect();
+        exclude.extend(split_atoms(cli_exclude));
+        let mut include: std::collections::BTreeSet<String> =
+            binrepo.getbinpkg_include.iter().cloned().collect();
+        include.extend(split_atoms(cli_include));
+        // `--getbinpkg-include` overrides `getbinpkg-exclude` in binrepos.conf.
+        let conflicted_exclude: Vec<String> = exclude
+            .intersection(&split_atoms(cli_include))
+            .cloned()
+            .collect();
+        if !conflicted_exclude.is_empty() {
+            eprint!(
+                "\n!!! The following getbinpkg-exclude atoms for [{}] have been \
+                 overridden by the --getbinpkg-include option:\n\n    {}\n",
+                binrepo.name,
+                conflicted_exclude.join("\n    ")
+            );
+            for a in &conflicted_exclude {
+                exclude.remove(a);
+            }
+        }
+        // `--getbinpkg-exclude` overrides `getbinpkg-include` in binrepos.conf.
+        let conflicted_include: Vec<String> = include
+            .intersection(&split_atoms(cli_exclude))
+            .cloned()
+            .collect();
+        if !conflicted_include.is_empty() {
+            eprint!(
+                "\n!!! The following getbinpkg-include atoms for [{}] have been \
+                 overridden by the --getbinpkg-exclude option:\n\n    {}\n",
+                binrepo.name,
+                conflicted_include.join("\n    ")
+            );
+            for a in &conflicted_include {
+                include.remove(a);
+            }
+        }
+        GetbinpkgFilter {
+            exclude: exclude.into_iter().collect(),
+            include: include.into_iter().collect(),
+        }
+    }
+
+    /// Drop the filtered records, keeping order. Local `PKGDIR` records
+    /// never pass through here.
+    fn apply(
+        &self,
+        entries: Vec<std::collections::HashMap<String, String>>,
+    ) -> Vec<std::collections::HashMap<String, String>> {
+        entries
+            .into_iter()
+            .filter(|e| !portage_repo::getbinpkg_record_excluded(e, &self.exclude, &self.include))
+            .collect()
+    }
+}
+
+/// Portage `_emerge/actions.py` `binpkg_selection_config`: atoms in both
+/// CLI lists warn and cancel from both. Runs after the refresh, like
+/// Portage (which populates before adjusting configs, so the per-repo
+/// warnings print first — S0 cell `g03-both`).
+pub(crate) fn warn_getbinpkg_cli_overlap(exclude: &[String], include: &[String]) {
+    let exclude_set: std::collections::BTreeSet<&str> =
+        exclude.iter().flat_map(|s| s.split_whitespace()).collect();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut conflicted: Vec<&str> = Vec::new();
+    for a in include.iter().flat_map(|s| s.split_whitespace()) {
+        if exclude_set.contains(a) && seen.insert(a) {
+            conflicted.push(a);
+        }
+    }
+    if !conflicted.is_empty() {
+        eprint!(
+            "\n!!! The following atoms appear in both the --getbinpkg-exclude and \
+             --getbinpkg-include command line arguments:\n\n    {}\n",
+            conflicted.join("\n    ")
+        );
     }
 }
 
@@ -138,11 +252,18 @@ fn edb_cache_packages_file(root: &Path, sync_uri: &str) -> std::path::PathBuf {
         location: None,
         verify_signature: true,
         frozen: false,
+        getbinpkg_exclude: Vec::new(),
+        getbinpkg_include: Vec::new(),
     }
     .packages_dir(root)
     .join("Packages")
 }
-fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path, pretend: bool) -> RefreshOutcome {
+fn refresh_one_binrepo(
+    binrepo: &BinRepo,
+    root: &Path,
+    pretend: bool,
+    filter: &GetbinpkgFilter,
+) -> RefreshOutcome {
     // Messages print the configured URI; fetch URLs use the stripped form.
     let raw = binrepo.sync_uri.as_str();
     let uri = raw.trim_end_matches('/');
@@ -152,13 +273,19 @@ fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path, pretend: bool) -> Refresh
             Some(std::sync::Arc::new(overlay)),
         );
     };
+    // Filtered entries feed the in-memory pool; the cache write below
+    // keeps the unfiltered index (see `refresh_binhost_indexes`).
+    let ok_entries = |entries: Vec<std::collections::HashMap<String, String>>| {
+        ok(portage_repo::BinaryIndex::from_entries(
+            filter.apply(entries),
+        ));
+    };
     let cached_file = edb_cache_packages_file(root, raw);
     let cached_text = std::fs::read_to_string(&cached_file).ok();
     let (cached_header, cached_entries) = cached_text
         .as_deref()
         .map(portage_repo::parse_packages_index)
         .unwrap_or_default();
-    let cached_index = || portage_repo::BinaryIndex::from_entries(cached_entries.clone());
 
     // Refresh is always requested here, so a cached index on a frozen repo is
     // used as-is.
@@ -168,7 +295,7 @@ fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path, pretend: bool) -> Refresh
             .is_some_and(|s| !s.is_empty())
         && binrepo.frozen
     {
-        ok(cached_index());
+        ok_entries(cached_entries.clone());
         return RefreshOutcome {
             stderr_warning: None,
             stdout_note: Some(use_cached_note(&binrepo.name, "frozen")),
@@ -184,7 +311,7 @@ fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path, pretend: bool) -> Refresh
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.0);
     if downloaded_at > 0.0 && ttl_secs > 0.0 && downloaded_at + ttl_secs > unix_now() {
-        ok(cached_index());
+        ok_entries(cached_entries.clone());
         return RefreshOutcome {
             stderr_warning: None,
             stdout_note: Some(use_cached_note(&binrepo.name, "within TTL")),
@@ -203,7 +330,7 @@ fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path, pretend: bool) -> Refresh
             ));
             if pretend {
                 // Keep the stale copy and say so.
-                ok(cached_index());
+                ok_entries(cached_entries.clone());
                 RefreshOutcome {
                     stderr_warning: warning,
                     stdout_note: Some(format!(
@@ -266,7 +393,7 @@ fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path, pretend: bool) -> Refresh
                 _ => false,
             };
             if stale_remote {
-                ok(cached_index());
+                ok_entries(cached_entries.clone());
                 return RefreshOutcome {
                     stderr_warning: None,
                     stdout_note: None,
@@ -274,7 +401,7 @@ fn refresh_one_binrepo(binrepo: &BinRepo, root: &Path, pretend: bool) -> Refresh
             }
             let now = unix_now() as u64;
             let staged = stamp_download_timestamp(&remote_text, now);
-            ok(portage_repo::BinaryIndex::from_entries(remote_entries));
+            ok_entries(remote_entries);
             // Best-effort cache write: an unwritable cache dir is ignored; only a
             // write error on a writable dir warns (refreshes stay non-fatal).
             // Either way the in-memory index above is what the run resolves from.
@@ -2277,8 +2404,10 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false);
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false, &[], &[]);
         let cached = binrepo.packages_dir(&root).join("Packages");
         // The promoted index is cached with a fresh DOWNLOAD_TIMESTAMP header, so
         // it differs from the served bytes by exactly that line.
@@ -2320,8 +2449,10 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false);
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false, &[], &[]);
         assert!(
             !binrepo.packages_dir(&root).join("Packages").exists(),
             "a corrupt Packages.gz warns with no plain-Packages fallback"
@@ -2357,10 +2488,17 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
-        let warning = refresh_one_binrepo(&binrepo, &root, false)
-            .stderr_warning
-            .expect("a 500ing binhost warns");
+        let warning = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            false,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        )
+        .stderr_warning
+        .expect("a 500ing binhost warns");
         assert!(
             warning.contains(&format!("from '{base}/sub/'")),
             "warning keeps the configured trailing slash: {warning}"
@@ -2468,8 +2606,10 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false);
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false, &[], &[]);
         assert!(
             !binrepo.packages_dir(&root).join("Packages").exists(),
             "a failed refresh leaves no cache file for the resolver to trust"
@@ -2535,8 +2675,15 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
-        let outcome = refresh_one_binrepo(&binrepo, &root, pretend);
+        let outcome = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            pretend,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        );
         assert!(
             outcome.stderr_warning.is_none(),
             "pretend={pretend}: an unwritable cache dir is ignored silently like real: {:?}",
@@ -2585,12 +2732,19 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
         // A stale cache with no TTL headers (the TTL check must not fire).
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, stale).unwrap();
-        let outcome = refresh_one_binrepo(&binrepo, &root, true);
+        let outcome = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            true,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        );
         assert!(
             outcome
                 .stderr_warning
@@ -2641,11 +2795,18 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, stale).unwrap();
-        let outcome = refresh_one_binrepo(&binrepo, &root, false);
+        let outcome = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            false,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        );
         assert!(
             outcome
                 .stderr_warning
@@ -2686,11 +2847,18 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, &cached_body).unwrap();
-        let outcome = refresh_one_binrepo(&binrepo, &root, true);
+        let outcome = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            true,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        );
         assert!(outcome.stderr_warning.is_none());
         assert_eq!(
             outcome.stdout_note.as_deref(),
@@ -2726,11 +2894,18 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, stale).unwrap();
-        let outcome = refresh_one_binrepo(&binrepo, &root, false);
+        let outcome = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            false,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        );
         assert!(outcome.stderr_warning.is_none());
         assert!(outcome.stdout_note.is_none());
         let (header, entries) =
@@ -2769,11 +2944,18 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, cached_body).unwrap();
-        let outcome = refresh_one_binrepo(&binrepo, &root, false);
+        let outcome = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            false,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        );
         assert!(outcome.stderr_warning.is_none());
         assert!(outcome.stdout_note.is_none());
         assert_eq!(
@@ -2802,11 +2984,18 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: true,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, cached_body).unwrap();
-        let outcome = refresh_one_binrepo(&binrepo, &root, true);
+        let outcome = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            true,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        );
         assert!(outcome.stderr_warning.is_none());
         assert_eq!(
             outcome.stdout_note.as_deref(),
@@ -2908,12 +3097,19 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         };
         let stale = "TIMESTAMP: 5\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/stalepkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
         let cached = edb_cache_packages_file(&root, &binrepo.sync_uri);
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, stale).unwrap();
-        let outcome = refresh_one_binrepo(&binrepo, &root, pretend);
+        let outcome = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            pretend,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        );
         assert_eq!(
             outcome.stderr_warning.as_deref(),
             Some(expected_warning),
@@ -2968,10 +3164,12 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         }];
         // A failed refresh warns on stderr and resolves against the local pool --
         // here the plain Packages succeeds, so the live index lands in the cache.
-        refresh_binhost_indexes(&binrepos, &root, false);
+        refresh_binhost_indexes(&binrepos, &root, false, &[], &[]);
         assert!(
             root.join("var/cache/edb/binhost/127.0.0.1/Packages")
                 .is_file(),
@@ -3090,8 +3288,10 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
         }];
-        refresh_binhost_indexes(&binrepos, &root, false);
+        refresh_binhost_indexes(&binrepos, &root, false, &[], &[]);
 
         let config = Config {
             binrepos: binrepos.clone(),
@@ -3265,6 +3465,8 @@ mod tests {
                 location: None,
                 verify_signature: false,
                 frozen: false,
+                getbinpkg_exclude: Vec::new(),
+                getbinpkg_include: Vec::new(),
             }],
             ..Default::default()
         };

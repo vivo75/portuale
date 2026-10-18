@@ -407,3 +407,54 @@ fn fixture_repo_constrained_atom_finds_the_named_repo_only() {
         PretendOutcome::NoVisibleCandidate
     );
 }
+
+/// Backlog #347 S9: a `Packages` record matching `--getbinpkg-exclude`
+/// (or missing from a non-empty `--getbinpkg-include`) never becomes a
+/// candidate (Portage `bintree.py:1825-1846`). Grounded in S0 cells
+/// `g01-exclude` (exclude) and `g02-include` (whitelist).
+#[test]
+fn getbinpkg_record_filter_matches_like_wildcard_package_set() {
+    let record = HashMap::from([
+        ("CPV".to_string(), "app-misc/s346-gbin-a-1".to_string()),
+        ("SLOT".to_string(), "0".to_string()),
+        ("REPO".to_string(), "s346g".to_string()),
+    ]);
+    // Excluded by name.
+    assert!(getbinpkg_record_excluded(
+        &record,
+        &["app-misc/s346-gbin-a".to_string()],
+        &[]
+    ));
+    // Not excluded by another name.
+    assert!(!getbinpkg_record_excluded(
+        &record,
+        &["app-misc/s346-gbin-b".to_string()],
+        &[]
+    ));
+    // Non-empty include is a whitelist: a miss filters out.
+    assert!(getbinpkg_record_excluded(
+        &record,
+        &[],
+        &["app-misc/s346-gbin-b".to_string()]
+    ));
+    // ... and a hit keeps the record.
+    assert!(!getbinpkg_record_excluded(
+        &record,
+        &[],
+        &["app-misc/s346-gbin-a".to_string()]
+    ));
+    // Slot atoms match on the record's slot.
+    assert!(getbinpkg_record_excluded(
+        &record,
+        &["app-misc/s346-gbin-a:0".to_string()],
+        &[]
+    ));
+    assert!(!getbinpkg_record_excluded(
+        &record,
+        &["app-misc/s346-gbin-a:1".to_string()],
+        &[]
+    ));
+    // Nothing configured: never filtered (local PKGDIR instances are
+    // never filtered either — the filter only runs on remote records).
+    assert!(!getbinpkg_record_excluded(&record, &[], &[]));
+}

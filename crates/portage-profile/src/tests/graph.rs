@@ -10,6 +10,8 @@ fn binrepo_packages_dir_maps_scheme_to_the_portage_edb_cache_layout() {
         location: None,
         verify_signature: true,
         frozen: false,
+        getbinpkg_exclude: Vec::new(),
+        getbinpkg_include: Vec::new(),
     };
     assert_eq!(
         http.packages_dir(root),
@@ -22,6 +24,8 @@ fn binrepo_packages_dir_maps_scheme_to_the_portage_edb_cache_layout() {
         location: None,
         verify_signature: true,
         frozen: false,
+        getbinpkg_exclude: Vec::new(),
+        getbinpkg_include: Vec::new(),
     };
     assert_eq!(file.packages_dir(root), Path::new("/srv/pkgs"));
 }

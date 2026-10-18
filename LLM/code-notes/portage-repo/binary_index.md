@@ -63,6 +63,9 @@ The binary package index (`Packages`) and binary candidates.
 ## fn pick_binary_instance
 - Picks one `Packages` entry of `cat/pkg-version` (binpkg-multi-instance aware, backlogs #299/#301). `Some(id)` selects the entry whose `BUILD_ID` is exactly `id` (the build the resolver planned); `None` selects the newest build -- highest `(BUILD_TIME, BUILD_ID)`, Portage `dbapi._cmp_cpv` order -- which for an index with a single (or `BUILD_ID`-less) entry is simply that entry.
 
+## fn getbinpkg_record_excluded
+- S9 (#347): whether one remote `Packages` record is filtered by the effective `--getbinpkg-exclude` / `--getbinpkg-include` sets (Portage `bintree.py:1825-1846`, `WildcardPackageSet.containsCPV` via `matches_cli_option_atom`). The match string mirrors candidate construction (`split_cpv` + `split_slot` with the same `0/0` / `"__unknown__"` fallbacks); an unparsable `CPV` never filters (such records never become candidates either).
+
 ## fn find_remote_binpkg
 - The raw `Packages` index record for `category/package-version` from the first binrepo (in `binrepos` order) whose cached index carries it -- the repo itself (its `sync_uri` for the download, its `verify_signature` for Portage `gpkg.__init__`'s own per-binrepo signature policy, `gpkg.py:792-819`) plus the index record (`PATH`, `SIZE`, the `SHA*`/`MD5` digests). `None` if no configured binrepo lists that exact CPV. When the binrepo lists several builds of the version, the newest one is returned; use `find_remote_binpkg_instance` to ask for a specific `BUILD_ID`.
 

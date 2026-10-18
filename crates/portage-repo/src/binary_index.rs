@@ -326,6 +326,61 @@ pub(crate) fn binary_candidates_from_index(
     candidates
 }
 
+/// The `cat/pkg-ver:slot/sub::repo` match string for one `Packages`
+/// record, for `--getbinpkg-exclude/include` filtering. `None` when the
+/// record's `CPV` does not parse (such records never become candidates
+/// either, in [`binary_candidates_from_index`]). Missing `SLOT`/`REPO`
+/// fall back exactly like candidate construction (`0/0`,
+/// `"__unknown__"`).
+fn remote_record_match_str(record: &HashMap<String, String>) -> Option<String> {
+    let cpv = record.get("CPV")?;
+    let (category, package, version) = split_cpv(cpv)?;
+    let (slot, sub_slot) = split_slot(record.get("SLOT").map(String::as_str).unwrap_or("0"));
+    let repo = record
+        .get("REPO")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_else(|| "__unknown__".to_string());
+    Some(format!(
+        "{category}/{package}-{version}:{slot}/{sub_slot}::{repo}"
+    ))
+}
+
+/// Whether one remote `Packages` record is filtered out by the effective
+/// `--getbinpkg-exclude` / `--getbinpkg-include` sets: excluded on any
+/// exclude match, or (with a non-empty include set) missing from the
+/// whitelist. Matching is `WildcardPackageSet.containsCPV` (implicit
+/// `*/` wildcarding via [`matches_cli_option_atom`]); either list may
+/// hold whitespace-separated multi-atom elements, split like Portage's
+/// `" ".join(atoms).split()`. Local `PKGDIR` instances never reach this
+/// predicate (Portage filters the remote index at load time only).
+// Portage: lib/portage/dbapi/bintree.py, _populate_remote_repo
+pub fn getbinpkg_record_excluded(
+    record: &HashMap<String, String>,
+    exclude: &[String],
+    include: &[String],
+) -> bool {
+    let Some(candidate_str) = remote_record_match_str(record) else {
+        return false;
+    };
+    if exclude
+        .iter()
+        .flat_map(|s| s.split_whitespace())
+        .any(|ex| matches_cli_option_atom(ex, &candidate_str))
+    {
+        return true;
+    }
+    let includes: Vec<&str> = include.iter().flat_map(|s| s.split_whitespace()).collect();
+    if !includes.is_empty()
+        && !includes
+            .iter()
+            .any(|inc| matches_cli_option_atom(inc, &candidate_str))
+    {
+        return true;
+    }
+    false
+}
+
 /// Collapses binpkg-multi-instance duplicates (several entries, different
 /// `BUILD_ID`s, per `cat/pkg-ver:slot/sub_slot::repo`): keeps the highest-
 /// `(BUILD_TIME, BUILD_ID)` instance satisfying the atom's `[use]` deps -- or

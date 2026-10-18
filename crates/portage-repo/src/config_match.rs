@@ -38,7 +38,10 @@ pub(crate) fn matches_config_entry_with_build_id(
 /// `t341-dep`. Config files (`package.*`) never do this — a
 /// category-less line there is invalid (S5/S6) — so they keep using
 /// [`matches_config_entry`] directly.
-pub(crate) fn matches_cli_option_atom(entry: &str, candidate_str: &str) -> bool {
+///
+/// `pub` for the `--getbinpkg` refresh layer (`portuale`), which matches
+/// raw `Packages` records before they become candidates.
+pub fn matches_cli_option_atom(entry: &str, candidate_str: &str) -> bool {
     if portage_dep::match_from_list(entry, &[candidate_str]).is_some_and(|m| !m.is_empty()) {
         return true;
     }

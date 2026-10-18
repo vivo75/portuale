@@ -35,6 +35,8 @@ fn fixture_binhost() -> portage_profile::BinRepo {
         location: None,
         verify_signature: true,
         frozen: false,
+        getbinpkg_exclude: Vec::new(),
+        getbinpkg_include: Vec::new(),
     }
 }
 
@@ -80,6 +82,8 @@ fn in_memory_binhost_1010(
         location: None,
         verify_signature: false,
         frozen: false,
+        getbinpkg_exclude: Vec::new(),
+        getbinpkg_include: Vec::new(),
     };
     set_remote_binary_index_override(
         &binrepo.packages_dir(Path::new("/")),

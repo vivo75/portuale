@@ -225,8 +225,9 @@ impl<'a> Default for EmergeOpts<'a> {
             usepkg_include: Vec::new(),
             // --getbinpkg-exclude/--getbinpkg-include: same append shape as
             // --exclude, validated with the strict family rule (see
-            // `validate_exclude_options`). Portuale parses and validates
-            // them; remote-fetch filtering is not modelled (no S0 cell).
+            // `validate_exclude_options`). The refresh layer folds them
+            // with each binrepo's own keys and filters the remote index
+            // before candidates are read (S0 G cells).
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
             json: false,

@@ -18,21 +18,20 @@ pub(crate) struct StepTopLevelUnsatisfiedArgs<'a> {
     pub(crate) atom: &'a Atom,
 }
 
-/// Whether an explicitly requested top-level atom has at least one matching
-/// package (ebuild, local binary or installed instance) and every match is
-/// `--exclude`d: then the argument resolves to nothing silently, like
-/// Portage, instead of aborting. Only the safe half of Portage's rule is
-/// ported: Portage skips when *any* match is excluded (depgraph.py, the
-/// `if excluded: continue` in the argument loop), but a surviving
-/// non-excluded match means the walk would have selected a package, so the
-/// walk never reaches this probe then; requiring *all* matches excluded
-/// can never drop a resolvable argument. The remaining corner (a masked,
-/// non-excluded match beside an excluded one: Portage skips, portuale
-/// reports the mask) is documented, not pinned.
+/// Whether an explicitly requested top-level atom is skipped silently
+/// because it is `--exclude`d: Portage skips the argument when *any*
+/// match is excluded (`if excluded: continue` in the argument loop), but
+/// only when selection found nothing (`if not pkg:`) — a surviving
+/// selectable match means the walk never reaches this probe. Ebuild,
+/// local-binary, installed and (under `--getbinpkg`) remote matches all
+/// count, like Portage's `_iter_match_pkgs_any`.
+// Portage: lib/_emerge/depgraph.py, the argument loop (`if not pkg:`
+// ... `if excluded: continue`); S0 cell `g07-partly-excluded`.
 /// Candidate strings mirror the `cat/pkg-ver:slot/sub::repo` shape
 /// `resolve_pretend` matches against.
-fn top_level_atom_entirely_excluded(
+fn top_level_atom_excluded(
     ctx: &ResolveCtx<'_>,
+    config: &Config,
     current_atom: &str,
     atom: &Atom,
 ) -> Result<bool, Error> {
@@ -48,18 +47,15 @@ fn top_level_atom_entirely_excluded(
                     .any(|ex| matches_cli_option_atom(ex, candidate_str))
             })
     };
-    // None = no match (skip the atom from the verdict); Some(false) = a
-    // surviving non-excluded match (never drop); Some(true) = excluded.
-    let mut verdict: Option<bool> = None;
-    let mut fold = |candidate_str: String| {
-        if verdict == Some(false) {
-            return;
-        }
-        match excluded_match(&candidate_str) {
-            None => {}
-            Some(excluded) => {
-                verdict = Some(verdict.unwrap_or(true) && excluded);
-            }
+    // Portage skips on any excluded match; without any match at all the
+    // atom stays unsatisfiable (the miss path below reports it).
+    let mut any_match = false;
+    let mut any_excluded = false;
+    let mut fold = |candidate_str: String| match excluded_match(&candidate_str) {
+        None => {}
+        Some(excluded) => {
+            any_match = true;
+            any_excluded = any_excluded || excluded;
         }
     };
     for c in list_candidates(&ctx.repos, &atom.category, &atom.package)?.iter() {
@@ -74,13 +70,27 @@ fn top_level_atom_entirely_excluded(
             atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
         ));
     }
+    if ctx.getbinpkg {
+        for c in list_remote_binary_candidates(
+            &config.binrepos,
+            ctx.root,
+            &ctx.local_binpkg,
+            &atom.category,
+            &atom.package,
+        ) {
+            fold(format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            ));
+        }
+    }
     for (version, slot, sub_slot) in installed_candidates(ctx.root, &atom.category, &atom.package) {
         fold(format!(
             "{}/{}-{version}:{slot}/{sub_slot}",
             atom.category, atom.package
         ));
     }
-    Ok(verdict.unwrap_or(false))
+    Ok(any_match && any_excluded)
 }
 
 /// A top-level atom with no visible candidate: Portage's drop-or-abort for arguments.
@@ -105,18 +115,18 @@ pub(crate) fn step_top_level_unsatisfied(
     // Portage: depgraph.py
     if ctx.top_level.contains(current_atom) && matches!(outcome, PretendOutcome::NoVisibleCandidate)
     {
-        // `--exclude`: an explicitly requested argument with at least one
-        // matching package, every one of them excluded, resolves to
-        // nothing silently (`Total: 0`, exit 0) instead of aborting with
-        // "there are no ebuilds". Set members never take this path (their
-        // miss lands in `missing_args` below, like Portage's `SetArg`
-        // handling, which never consults the excluded set).
+        // `--exclude`: an explicitly requested argument left with no
+        // selectable candidate, where at least one match is excluded,
+        // resolves to nothing silently (`Total: 0`, exit 0) instead of
+        // aborting with "there are no ebuilds". Set members never take
+        // this path (their miss lands in `missing_args` below, like
+        // Portage's `SetArg` handling, which never consults the excluded
+        // set).
         // Portage: depgraph.py, the `if excluded: continue` in the
-        // argument loop (an excluded match anywhere skips the
-        // unsatisfied report; the all-excluded rule below is the safe
-        // half of it — see `top_level_atom_entirely_excluded`).
+        // argument loop (inside `if not pkg:`, so a selectable match
+        // never reaches it — see `top_level_atom_excluded`).
         if !ctx.set_args.contains(current_atom)
-            && top_level_atom_entirely_excluded(ctx, current_atom, atom)?
+            && top_level_atom_excluded(ctx, config, current_atom, atom)?
         {
             return Ok(ControlFlow::Break(()));
         }
@@ -173,6 +183,30 @@ pub(crate) fn step_top_level_unsatisfied(
                 ctx.top_level.sets.get(current_atom).map(String::as_str),
             ) {
                 return Err(Error::Detail(report));
+            }
+            // Under `--getbinpkg` an atom matching only masked *remote*
+            // binaries reports the same block over the remote pool (the
+            // ebuild pool above has no version match here, or the walk
+            // would have selected it). Local `PKGDIR` binaries keep the
+            // miss text below (no cell covers that shape).
+            // Portage: _show_unsatisfied_dep over the bintree;
+            // S0 cell `g07-partly-excluded`.
+            if ctx.getbinpkg {
+                let remote = list_remote_binary_candidates(
+                    &config.binrepos,
+                    ctx.root,
+                    &ctx.local_binpkg,
+                    &key.0,
+                    &key.1,
+                );
+                if let Some(report) = all_binary_masked_report(
+                    &remote,
+                    current_atom,
+                    config,
+                    &format!("{current_atom:?}"),
+                ) {
+                    return Err(Error::Detail(report));
+                }
             }
             // A USE miss aborts with the "no ebuilds built with USE flags" block
             // (with `(Change USE:)` / `(Missing IUSE:)` rows, no dep lines for

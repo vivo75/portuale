@@ -187,7 +187,9 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         .unwrap_or_else(|| "/var/cache/binpkgs".to_string());
 
     // binrepos.conf + PORTAGE_BINHOST. `etc/portage/binrepos.conf` may be
-    // a directory of `*.conf` fragments, not just a single file.
+    // a directory of `*.conf` fragments, not just a single file. The
+    // binrepo key warnings join the profile warning stream (same
+    // config-load position on stderr).
     config.binrepos = parse_binrepos(
         &read_config_lines(&config_root.join("etc/portage/binrepos.conf"))
             .unwrap_or_default()
@@ -196,6 +198,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
             .get("PORTAGE_BINHOST")
             .map(String::as_str)
             .unwrap_or(""),
+        &mut warnings,
     );
 
     // `PORTAGE_CONFIGROOT` is stamped into the settings, and `CBUILD`
