@@ -854,3 +854,66 @@ fn non_use_changes_keep_no_trigger() {
     assert_eq!(mask.autounmask_mask_changes.len(), 1);
     assert_eq!(mask.autounmask_mask_changes[0].trigger, None);
 }
+
+/// A flip-revealed `||` group defers to the drained graph (#398).
+///
+/// `pg398-t` pulls `pg398-a` plainly, then `pg398-c`'s `pg398-a[flip]` flips
+/// the already-resolved slot on. The flip reveals
+/// `|| ( dev-libs/pg398-x dev-libs/pg398-y )` while `pg398-b` (queued behind
+/// the trigger) still has to pull `pg398-y` into the graph. Choosing at flip
+/// time picks first-listed `pg398-x` with neither alternative visible; Portage
+/// 3.0.82.2 (`emerge -pv --autounmask-use=y dev-libs/pg398-t`,
+/// `LLM/evidence/2026-10-18-398/v3-t-portage.txt`) merges `y` but never `x`.
+#[test]
+fn flip_revealed_disjunction_defers_to_the_drained_graph() {
+    for result in [
+        graph_result_autounmask("dev-libs/pg398-t"),
+        graph_result_autounmask_backtrack("dev-libs/pg398-t"),
+    ] {
+        assert!(
+            result.entries.iter().all(|e| e.package != "pg398-x"),
+            "the flip-revealed group must not pick x early: {:?}",
+            result
+                .entries
+                .iter()
+                .map(|e| &e.package)
+                .collect::<Vec<_>>()
+        );
+        let a = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg398-a")
+            .expect("a is in the graph");
+        assert!(
+            a.deps.iter().any(|d| d.package == "pg398-y"),
+            "the drain-time choice records the A->Y edge like Portage's tree: {:?}",
+            a.deps.iter().map(|d| &d.package).collect::<Vec<_>>()
+        );
+        let mut y_owners: Vec<(String, String)> = result
+            .entries
+            .iter()
+            .find(|e| e.package == "pg398-y")
+            .expect("y is in the graph")
+            .required_by
+            .clone();
+        y_owners.sort();
+        assert_eq!(
+            y_owners,
+            vec![
+                ("dev-libs".to_string(), "pg398-a".to_string()),
+                ("dev-libs".to_string(), "pg398-b".to_string()),
+            ],
+            "the drain-time choice records both parents, like Portage walking A->Y and B->Y"
+        );
+        assert!(
+            result.entries.iter().any(|e| e.package == "pg398-y"),
+            "y still reaches the graph through pg398-b"
+        );
+        assert_eq!(
+            result.autounmask_use_changes.len(),
+            1,
+            "the flip is still recorded: {:?}",
+            result.autounmask_use_changes
+        );
+    }
+}

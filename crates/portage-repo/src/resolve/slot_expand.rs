@@ -256,7 +256,7 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
     let slot = state.entries[existing_idx].slot.clone().unwrap_or_default();
     let existing_depth = state
         .resolved_depths
-        .get(&(key.0.clone(), key.1.clone(), slot))
+        .get(&(key.0.clone(), key.1.clone(), slot.clone()))
         .copied()
         .unwrap_or(0);
     // Same key-inclusion rule as the fresh expansion.
@@ -299,9 +299,15 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
             )
         })
         .unwrap_or_default();
+    // The `||` groups defer to the disjunctive stack (resolved at drain
+    // against the graph as it stands), while the plains queue in-walk as
+    // before. A malformed shape falls back to today's path: the splitter
+    // returns its input unsplit, so there are no groups to defer.
+    // Portage: depgraph.py, _queue_disjunctive_deps
+    let (plains_tokens, groups) = split_off_disjunctions(&tokens, new_use);
     let flat_deps = match flatten_deps_for_flip(FlattenDepsForFlipArgs {
         state,
-        tokens: &tokens,
+        tokens: &plains_tokens,
         new_use,
         delta_meta: &delta_meta,
         cross_running_root,
@@ -379,6 +385,34 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
                 },
             ));
         }
+    }
+    // Deferred groups resolve at drain against the graph as it stands then;
+    // pushing before the plains enqueue keeps an early return below from
+    // dropping them.
+    if !groups.is_empty() {
+        state.disjunctive_stack.push(DeferredDisjunction {
+            groups,
+            use_flags: new_use.clone(),
+            empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
+                delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
+            ),
+            owner: key.clone(),
+            owner_version: existing_version.to_string(),
+            depth: existing_depth,
+            owner_targets_running_root: state.entries[existing_idx].targets_running_root,
+            site: DeferredSite::Flip {
+                buildtime_atoms: buildtime_atoms.clone(),
+                runtime_atoms: runtime_atoms.clone(),
+                bdepend_atoms: bdepend_atoms.clone(),
+                or_universe: or_group_universe(&tokens),
+                running_tags: running_tags.clone(),
+                root_deps_satisfied: root_deps_satisfied.clone(),
+                root_deps_unsatisfied: root_deps_unsatisfied.clone(),
+                delta_meta: delta_meta.clone(),
+                buildpkgonly_narrow,
+                slot,
+            },
+        });
     }
     if enqueue_flipped_tokens(EnqueueFlippedTokensArgs {
         state,
