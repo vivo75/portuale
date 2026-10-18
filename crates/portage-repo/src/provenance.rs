@@ -62,7 +62,13 @@ pub(crate) fn visibility_provenance(
         None
     };
     let keyword_entry = keyword_provenance(KeywordProvenanceArgs {
-        keywords: &candidate.keywords,
+        keywords: &effective_keywords(
+            config,
+            &candidate_str,
+            category,
+            package,
+            &candidate.keywords,
+        ),
         candidate_str: &candidate_str,
         build_id: candidate.build_id.as_deref(),
         category,
@@ -171,8 +177,17 @@ pub(crate) fn keyword_mask_marker(
         "{category}/{package}-{}:{}/{}::{}",
         candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
     );
+    // The effective KEYWORDS (profile `package.keywords` applied): a stable
+    // keyword added by a profile node reads as globally accepted here.
+    let eff_keywords = effective_keywords(
+        config,
+        &candidate_str,
+        category,
+        package,
+        &candidate.keywords,
+    );
     if keywords_accepted(KeywordsAcceptedArgs {
-        keywords: &candidate.keywords,
+        keywords: &eff_keywords,
         candidate_str: &candidate_str,
         build_id: candidate.build_id.as_deref(),
         category,
@@ -182,7 +197,7 @@ pub(crate) fn keyword_mask_marker(
     }) {
         return None;
     }
-    let testing_for_our_arch = candidate.keywords.iter().any(|k| {
+    let testing_for_our_arch = eff_keywords.iter().any(|k| {
         k.strip_prefix('~')
             .is_some_and(|arch| config.accept_keywords.contains(arch))
     });

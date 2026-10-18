@@ -228,3 +228,6 @@ The resolved configuration (`Config`): every USE layer, visibility list, and fin
 - field `envd_raw`: Portage `config.py:2691-2699`, `reload`.
 - field `envd_vars`: Portage `config.py:724-743`.
 - field `envd_profile_only`: Portage `config.py:734-743` (the env.d blacklist is computed once at init and reused by `reload()`).
+
+## field package_keywords_profile (#346 S2)
+- (atom-or-wildcard, keyword tokens) from profile-node `package.keywords` (chain order, then the user node). Folded incrementally onto each candidate's own KEYWORDS by `portage-repo::effective_keywords`, never into the accept dict. Hashed into both config fingerprints (visibility and USE-context: `is_stable` reads it through effective USE).

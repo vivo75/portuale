@@ -336,7 +336,13 @@ pub(crate) fn is_visible_uncached(
     }
 
     if !keywords_accepted(KeywordsAcceptedArgs {
-        keywords: &candidate.keywords,
+        keywords: &effective_keywords(
+            config,
+            &candidate_str,
+            category,
+            package,
+            &candidate.keywords,
+        ),
         candidate_str: &candidate_str,
         build_id: candidate.build_id.as_deref(),
         category,
@@ -449,7 +455,13 @@ pub(crate) fn visible_with_relax(args: VisibleWithRelaxArgs<'_>) -> bool {
 
     relax_keywords
         || keywords_accepted(KeywordsAcceptedArgs {
-            keywords: &candidate.keywords,
+            keywords: &effective_keywords(
+                config,
+                &candidate_str,
+                category,
+                package,
+                &candidate.keywords,
+            ),
             candidate_str: &candidate_str,
             build_id: candidate.build_id.as_deref(),
             category,
@@ -531,7 +543,13 @@ pub(crate) fn keyword_masked_only(
     }
 
     if keywords_accepted(KeywordsAcceptedArgs {
-        keywords: &candidate.keywords,
+        keywords: &effective_keywords(
+            config,
+            &candidate_str,
+            category,
+            package,
+            &candidate.keywords,
+        ),
         candidate_str: &candidate_str,
         build_id: candidate.build_id.as_deref(),
         category,
@@ -581,7 +599,13 @@ pub(crate) fn mask_masked_only(
         return false;
     }
     if !keywords_accepted(KeywordsAcceptedArgs {
-        keywords: &candidate.keywords,
+        keywords: &effective_keywords(
+            config,
+            &candidate_str,
+            category,
+            package,
+            &candidate.keywords,
+        ),
         candidate_str: &candidate_str,
         build_id: candidate.build_id.as_deref(),
         category,
@@ -680,7 +704,13 @@ pub(crate) fn license_masked_only(
     }
 
     if !keywords_accepted(KeywordsAcceptedArgs {
-        keywords: &candidate.keywords,
+        keywords: &effective_keywords(
+            config,
+            &candidate_str,
+            category,
+            package,
+            &candidate.keywords,
+        ),
         candidate_str: &candidate_str,
         build_id: candidate.build_id.as_deref(),
         category,
@@ -818,6 +848,45 @@ pub(crate) struct KeywordsAcceptedArgs<'a> {
     pub(crate) package: &'a str,
     pub(crate) accept_keywords: &'a HashSet<String>,
     pub(crate) package_accept_keywords: &'a [(String, Vec<String>)],
+}
+
+/// A candidate's effective `KEYWORDS`: its own tokens minus `-*`, then
+/// each matching profile-node `package.keywords` entry folded in order
+/// (`-*` clears, `-tok` discards, else appends once). Callers pass the
+/// result as the `keywords` of [`keywords_accepted`]/[`is_stable`]/the
+/// mask reason, never the raw metadata.
+/// Portage: KeywordsManager.getKeywords (stack_lists, incremental). The
+/// match carries no build-id: Portage builds a build-less `_pkg_str`
+/// there, so an `=`+build-id line matches nothing (the #341 S2 rule).
+pub(crate) fn effective_keywords(
+    config: &portage_profile::Config,
+    candidate_str: &str,
+    category: &str,
+    package: &str,
+    keywords: &[String],
+) -> Vec<String> {
+    let mut out: Vec<String> = keywords
+        .iter()
+        .filter(|k| k.as_str() != "-*")
+        .cloned()
+        .collect();
+    for (_, tokens) in config_entries_matching(
+        &config.package_keywords_profile,
+        candidate_str,
+        category,
+        package,
+    ) {
+        for tok in tokens {
+            if tok == "-*" {
+                out.clear();
+            } else if let Some(rest) = tok.strip_prefix('-') {
+                out.retain(|k| k != rest);
+            } else if !out.contains(tok) {
+                out.push(tok.clone());
+            }
+        }
+    }
+    out
 }
 
 /// The keyword-matching half of `is_visible` (everything except the

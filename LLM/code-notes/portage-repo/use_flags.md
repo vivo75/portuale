@@ -59,3 +59,4 @@ Effective USE and USE mask/force resolution.
 
 ## fn atom_specificity
 - Full port of Portage `best_match_to_list`'s specificity ranking (dep:2796-2884): full operators as before; extended atoms rank below everything (`=*` 0, slotted −1, plain −2 — the code values, which differ from the docstring). Anything unparseable is −2. S3 parses entries with `allow_wildcard: true, allow_repo: Some(true)` so the extended tiers apply; before that every wildcard fell into −2 via the default `parse_atom` rejection.
+- #346 S2: `effective_use_flags_uncached` and `forced_or_masked_flags_unfiltered` feed `is_stable` the effective KEYWORDS (Portage `isStable` reads `getKeywords`, the profile-modified list), so every `EffectiveUseFlagsArgs`/`ForcedOrMaskedFlagsArgs` caller inherits it.

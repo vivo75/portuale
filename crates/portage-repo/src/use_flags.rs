@@ -234,7 +234,7 @@ pub(crate) fn effective_use_flags_uncached(
     }
 
     let stable = is_stable(IsStableArgs {
-        keywords,
+        keywords: &effective_keywords(config, candidate_str, category, package, keywords),
         candidate_str,
         build_id,
         category,
@@ -497,7 +497,7 @@ pub(crate) fn forced_or_masked_flags_unfiltered(
     config: &portage_profile::Config,
 ) -> HashSet<String> {
     let stable = is_stable(IsStableArgs {
-        keywords,
+        keywords: &effective_keywords(config, candidate_str, category, package, keywords),
         candidate_str,
         build_id,
         category,

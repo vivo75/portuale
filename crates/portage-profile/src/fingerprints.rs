@@ -59,6 +59,7 @@ pub fn use_context_base_fingerprint(config: &Config) -> u64 {
         lvl.package_use_stable_force.hash(&mut h);
     }
     config.package_accept_keywords.hash(&mut h);
+    config.package_keywords_profile.hash(&mut h);
     config.repo_make_defaults_use.hash(&mut h);
 
     // `profile_use_layers`: every layer in full, each inner list in full.
@@ -94,6 +95,7 @@ pub fn is_visible_base_fingerprint(config: &Config) -> u64 {
         }
     }
     config.package_accept_keywords.hash(&mut h);
+    config.package_keywords_profile.hash(&mut h);
     config.accept_properties.hash(&mut h);
     config.package_properties.hash(&mut h);
     config.accept_restrict.hash(&mut h);

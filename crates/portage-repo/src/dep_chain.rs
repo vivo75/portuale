@@ -97,8 +97,15 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
             "{}/{}-{}:{}/{}::{}",
             node.category, node.package, cand.version, cand.slot, cand.sub_slot, cand.repo_name
         );
+        let eff_keywords = effective_keywords(
+            config,
+            &candidate_str,
+            &node.category,
+            &node.package,
+            &cand.keywords,
+        );
         let stable = is_stable(IsStableArgs {
-            keywords: &cand.keywords,
+            keywords: &eff_keywords,
             candidate_str: &candidate_str,
             build_id: cand.build_id.as_deref(),
             category: &node.category,

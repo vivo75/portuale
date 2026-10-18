@@ -209,19 +209,46 @@ pub(crate) fn fold_package_masks_and_keywords(
     config.package_unmask = stack_mask_lines(&unmask_sources);
 
     // package.accept_keywords: profile-chain, then the user profile node,
-    // then user-level, flat concatenation (no `-atom` removal exists for
-    // this file). No repo-level source exists in Portage. Chain lines
+    // then the user files, flat concatenation (no `-atom` removal exists
+    // for this file). No repo-level source exists in Portage. Chain lines
     // validate with the node's rules (no wildcards, use dropped) but never
     // with build-ids: Portage does not pass `allow_build_id` there even
     // with the `build-id` format (S0 `formats` cell still warns on
     // `=…-1-2`); the user-profile node reads with the same profile reader
-    // (no wildcards, no build-ids, the node's EAPI); the user file takes
-    // build-ids instead, still dropping use-dep lines.
+    // (no wildcards, no build-ids, the node's EAPI). The user
+    // `package.keywords` lines come first (Portage reads that file into
+    // the same dict, then extends each atom with the accept_keywords
+    // entries), validating like the user file (wildcards and build-ids
+    // on, use-dep lines dropped).
     // Portage: KeywordsManager.py:25-60 (profiles, covering the user node),
     // :73-104 (user).
-    // Neither the chain nor the user profile `package.keywords` file is
-    // read here (Portage merges it into the same dict): S2 owns that, see
-    // the code note.
+    // Profile-node `package.keywords` (chain and user node) is a different
+    // reader below: it adds to the package's own KEYWORDS, never here.
+    let mut profile_keywords_lines: Vec<String> = Vec::new();
+    for level in chain {
+        let rules = rules_for_node(level, &all_repos, &repo_rules)?;
+        profile_keywords_lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&level.join("package.keywords"))?,
+            &rules,
+            AtomLineKind::Dict { allow_use: false },
+            WARN_RANK_KEYWORDS,
+            warnings,
+        ));
+    }
+    // The user profile's `package.keywords` stacks after the chain, with
+    // the node's own EAPI and no wildcards/build-ids.
+    if let Some(user) = user_node {
+        let user_profile_keywords_rules =
+            user_node_rules(user.eapi.as_deref(), UserNodeFile::PackageKeywords);
+        profile_keywords_lines.extend(filter_atom_lines(
+            &read_config_lines_with_sources(&user.path.join("package.keywords"))?,
+            &user_profile_keywords_rules,
+            AtomLineKind::Dict { allow_use: false },
+            WARN_RANK_KEYWORDS,
+            warnings,
+        ));
+    }
+    config.package_keywords_profile = parse_package_accept_keywords_lines(&profile_keywords_lines);
     let mut accept_keywords_lines: Vec<String> = Vec::new();
     for level in chain {
         let mut rules = rules_for_node(level, &all_repos, &repo_rules)?;
@@ -249,10 +276,33 @@ pub(crate) fn fold_package_masks_and_keywords(
     }
     // User-level lines validate like Portage's `user_config` reader:
     // `eapi=None`, wildcards and repo on, build-ids on, use-dep lines
-    // dropped. Portage: KeywordsManager.py:73-104
+    // dropped. The user `package.keywords` file is read first, into the
+    // same dict; `package.accept_keywords` entries then extend each atom.
+    // A non-empty read warns once (message part only, no Python frame).
+    // Portage: KeywordsManager.py:73-104
+    let user_keywords_path = config_root.join("etc/portage/package.keywords");
+    let user_accept_path = config_root.join("etc/portage/package.accept_keywords");
     let user_accept_rules = user_atom_rules(true, true);
+    let user_keywords_lines = filter_atom_lines(
+        &read_config_lines_with_sources(&user_keywords_path)?,
+        &user_accept_rules,
+        AtomLineKind::Dict { allow_use: false },
+        WARN_RANK_KEYWORDS,
+        warnings,
+    );
+    if !user_keywords_lines.is_empty() {
+        warnings.push(ProfileWarning {
+            rank: WARN_RANK_KEYWORDS,
+            text: format!(
+                "{} is deprecated, use {} instead",
+                user_keywords_path.display(),
+                user_accept_path.display()
+            ),
+        });
+    }
+    accept_keywords_lines.extend(user_keywords_lines);
     accept_keywords_lines.extend(filter_atom_lines(
-        &read_config_lines_with_sources(&config_root.join("etc/portage/package.accept_keywords"))?,
+        &read_config_lines_with_sources(&user_accept_path)?,
         &user_accept_rules,
         AtomLineKind::Dict { allow_use: false },
         WARN_RANK_KEYWORDS,

@@ -487,8 +487,10 @@ pub(crate) fn viable_parent_flip_targets(
             "{}/{}-{}:{}/{}::{}",
             category, package, c.version, c.slot, c.sub_slot, c.repo_name
         );
+        let eff_keywords =
+            effective_keywords(config, &candidate_str, &category, &package, &c.keywords);
         let stable = is_stable(IsStableArgs {
-            keywords: &c.keywords,
+            keywords: &eff_keywords,
             candidate_str: &candidate_str,
             build_id: c.build_id.as_deref(),
             category: &category,

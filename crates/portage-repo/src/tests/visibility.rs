@@ -716,3 +716,56 @@ fn user_accept_keywords_build_id_line_accepts_only_the_equal_instance() {
     );
     assert!(is_visible(&instance("2"), "dev-libs", "t341-dep", &config));
 }
+
+/// Profile-node `package.keywords` adds a stable keyword to the package's
+/// own KEYWORDS, so the global set alone accepts it with no `~` marker.
+/// Portage 3.0.82.2, S0 cells `k02-userprofile-amd64` and
+/// `k03-chain-amd64` (rc 0, `[ebuild N ]`, no tilde): full argv
+/// `emerge -p --package-moves=n dev-libs/bareacceptkeywordspkg` with the
+/// profile `package.keywords` line `dev-libs/bareacceptkeywordspkg amd64`.
+#[test]
+fn profile_package_keywords_adds_a_stable_keyword_to_the_package() {
+    let config = portage_profile::Config {
+        package_keywords_profile: vec![(
+            "dev-libs/bareacceptkeywordspkg".to_string(),
+            vec!["amd64".to_string()],
+        )],
+        ..test_config()
+    };
+    let c = candidate("1.0", &["~amd64"]);
+    assert!(is_visible(&c, "dev-libs", "bareacceptkeywordspkg", &config));
+    assert_eq!(
+        keyword_mask_marker(&c, "dev-libs", "bareacceptkeywordspkg", &config, &None),
+        None,
+        "globally accepted now: no ~ marker"
+    );
+}
+
+/// A `-~amd64` profile removal empties the package's own KEYWORDS, so the
+/// mask reason is the bare `missing keyword`, not `~amd64 keyword`.
+/// Portage 3.0.82.2, S0 cell `k04-profile-minus` (rc 1,
+/// `- dev-libs/bareacceptkeywordspkg-1.0::testrepo (masked by: missing
+/// keyword)`): full argv `emerge -p --package-moves=n
+/// dev-libs/bareacceptkeywordspkg` with the user-profile line
+/// `dev-libs/bareacceptkeywordspkg -~amd64`.
+#[test]
+fn profile_package_keywords_removal_empties_the_package_keywords() {
+    let config = portage_profile::Config {
+        package_keywords_profile: vec![(
+            "dev-libs/bareacceptkeywordspkg".to_string(),
+            vec!["-~amd64".to_string()],
+        )],
+        ..test_config()
+    };
+    let c = candidate("1.0", &["~amd64"]);
+    assert!(!is_visible(
+        &c,
+        "dev-libs",
+        "bareacceptkeywordspkg",
+        &config
+    ));
+    assert_eq!(
+        candidate_masking_reasons(&c, "dev-libs", "bareacceptkeywordspkg", &config),
+        vec!["missing keyword".to_string()],
+    );
+}

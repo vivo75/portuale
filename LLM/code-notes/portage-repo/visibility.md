@@ -77,3 +77,6 @@ Keyword, mask and license visibility of a candidate.
 
 ## fn keyword_masked_only / mask_masked_only / license_masked_only
 - #348 S5: an EAPI-masked candidate is never "masked by X alone" (its reason is the lone `EAPI <eapi>`); `use_masked_only` needs no guard (it goes through `is_visible`).
+
+## fn effective_keywords (#346 S2)
+- Portage `KeywordsManager.getKeywords`: own KEYWORDS minus `-*`, then each matching profile-node `package.keywords` entry folded in order (`-*` clears, `-tok` discards, else appends once — `stack_lists` incremental). Every `keywords_accepted`/`is_stable`/reason/marker call site passes this, never the raw metadata. The match carries no build-id (Portage builds a build-less `_pkg_str` there; an `=`+build-id line matches nothing, the #341 S2 rule). Source order, not `ordered_by_atom_specificity`: the established portuale equivalent for per-file folds.

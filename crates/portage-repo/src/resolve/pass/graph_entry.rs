@@ -79,7 +79,13 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
     // Portage: depgraph.py, _display_autounmask (unstable_keyword_msg)
     if bp.autounmask_suggest_keywords
         && !keywords_accepted(KeywordsAcceptedArgs {
-            keywords: &resolved.keywords,
+            keywords: &effective_keywords(
+                config,
+                &resolved_cpv_str,
+                &key.0,
+                &key.1,
+                &resolved.keywords,
+            ),
             candidate_str: &resolved_cpv_str,
             build_id: resolved.build_id.as_deref(),
             category: &key.0,

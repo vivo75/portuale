@@ -22,7 +22,9 @@
 // - `package.accept_keywords`: profile-chain + user-profile node (no
 //   wildcards, no build-ids, like the chain) + user-level, purely
 //   additive; a bare atom gains the implicit `~arch` default at every
-//   level. (`package.keywords`, chain or user, is not read.)
+//   level. The user `package.keywords` file feeds the same dict first
+//   (with a deprecation warning); profile-node `package.keywords`
+//   instead extends each candidate's own `KEYWORDS`.
 // - `package.use`: repo-level, per-profile-level (the user profile forms
 //   the last level, its `make.defaults` USE included, wildcards only
 //   without a node `eapi`), and user-level sources at their own

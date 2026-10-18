@@ -2633,6 +2633,68 @@ fn user_profile_accept_keywords_stacks_between_chain_and_user_file() {
 }
 
 #[test]
+fn user_package_keywords_feeds_the_accept_dict_first_with_a_deprecation_warning() {
+    // S0 k01/k05: the user `package.keywords` file merges into the
+    // accept-keywords dict before `package.accept_keywords` entries extend
+    // it per atom; the message-only deprecation warning fires on read.
+    let root = user_profile_test_root("portage-profile-test-user-package-keywords", &[], &[]);
+    fs::write(
+        root.join("etc/portage/package.keywords"),
+        "dev-libs/bareacceptkeywordspkg ~amd64\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("etc/portage/package.accept_keywords"),
+        "dev-libs/bareacceptkeywordspkg -~amd64\n",
+    )
+    .unwrap();
+    let config = resolve_user_profile_test_root(&root);
+    assert_eq!(
+        config.package_accept_keywords,
+        vec![
+            (
+                "dev-libs/bareacceptkeywordspkg".to_string(),
+                vec!["~amd64".to_string()]
+            ),
+            (
+                "dev-libs/bareacceptkeywordspkg".to_string(),
+                vec!["-~amd64".to_string()]
+            ),
+        ]
+    );
+    let keywords_path = root.join("etc/portage/package.keywords");
+    let accept_path = root.join("etc/portage/package.accept_keywords");
+    assert!(config.config_warnings.iter().any(|w| w
+        == &format!(
+            "{} is deprecated, use {} instead",
+            keywords_path.display(),
+            accept_path.display()
+        )));
+}
+
+#[test]
+fn profile_package_keywords_stack_chain_then_user_node() {
+    // S0 k02/k03: chain and user-profile `package.keywords` add to the
+    // package's own KEYWORDS, in chain-then-node order.
+    let root = user_profile_test_root(
+        "portage-profile-test-profile-package-keywords",
+        &[("package.keywords", "dev-libs/chainpkg amd64\n")],
+        &[("package.keywords", "dev-libs/bareacceptkeywordspkg amd64\n")],
+    );
+    let config = resolve_user_profile_test_root(&root);
+    assert_eq!(
+        config.package_keywords_profile,
+        vec![
+            ("dev-libs/chainpkg".to_string(), vec!["amd64".to_string()]),
+            (
+                "dev-libs/bareacceptkeywordspkg".to_string(),
+                vec!["amd64".to_string()]
+            ),
+        ]
+    );
+}
+
+#[test]
 fn user_profile_packages_feed_system_and_profile_sets() {
     // S0 u09/u18/u19: unstarred user `packages` lines join `@profile`
     // (the node always carries `profile-set`); starred lines join

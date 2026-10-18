@@ -249,8 +249,15 @@ pub(crate) fn use_unsat_candidates_for_atom(
             "{}/{}-{}:{}/{}::{}",
             display.category, display.package, c.version, c.slot, c.sub_slot, c.repo_name
         );
+        let eff_keywords = effective_keywords(
+            config,
+            &candidate_str,
+            &display.category,
+            &display.package,
+            &c.keywords,
+        );
         let stable = is_stable(IsStableArgs {
-            keywords: &c.keywords,
+            keywords: &eff_keywords,
             candidate_str: &candidate_str,
             build_id: c.build_id.as_deref(),
             category: &display.category,

@@ -97,6 +97,12 @@ pub struct Config {
     /// `package.accept_keywords`. A `"**"` token means "accept any
     /// keyword".
     pub package_accept_keywords: Vec<(String, Vec<String>)>,
+    /// `(atom-or-wildcard, keyword tokens)` pairs from profile-node
+    /// `package.keywords` (chain order, then the user-profile node):
+    /// folded incrementally onto each candidate's own `KEYWORDS`
+    /// (`getKeywords`), never into the accept dict above.
+    // Portage: KeywordsManager._pkeywords_list
+    pub package_keywords_profile: Vec<(String, Vec<String>)>,
     /// Every repo's `profiles/package.use`: the weakest USE layer.
     /// Overlays `::repo`-scoped; the main repo unscoped.
     pub package_use_repo: Vec<(String, Vec<String>)>,

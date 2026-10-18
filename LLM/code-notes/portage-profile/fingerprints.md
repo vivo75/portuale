@@ -20,3 +20,4 @@ Content fingerprints of the USE-context and visibility `Config` fields that `por
 
 ## fn is_visible_base_fingerprint
 - Backlog #114: the visibility base, the immutable `is_visible`-relevant config fields the USE-context base does not cover: `package.mask`/`package.unmask`, the `LICENSE`/`PROPERTIES`/`RESTRICT` accept lists, `package.accept_keywords`, and `license_groups`. Frozen by `resolve_config` (`is_visible_base_fingerprint`); the `portage-repo` `is_visible` memo hashes it plus the live `autounmask_use` (which the check reaches through `use_flags_if_conditional`) instead of re-hashing those lists per call. Same `None`-means-fall-back contract as `use_context_base`.
+- #346 S2: `package_keywords_profile` joins both digests (it moves visibility through `effective_keywords`, and stability through the effective-USE `is_stable` input).

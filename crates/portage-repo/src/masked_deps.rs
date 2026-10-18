@@ -133,8 +133,15 @@ pub(crate) fn atom_all_use_unmasked(
         return true;
     };
     let valid_iuse = valid_iuse(&iuse, config);
+    let eff_keywords = effective_keywords(
+        config,
+        &candidate_str,
+        &atom.category,
+        &atom.package,
+        &keywords,
+    );
     let stable = is_stable(IsStableArgs {
-        keywords: &keywords,
+        keywords: &eff_keywords,
         candidate_str: &candidate_str,
         build_id: None,
         category: &atom.category,
@@ -366,8 +373,18 @@ pub(crate) fn candidate_masking_reasons(
         reasons.push("RESTRICT".to_string());
     }
 
+    // The reason reads the effective KEYWORDS (profile `package.keywords`
+    // applied): a `-~amd64` removal reports `missing keyword`, not the
+    // raw `~amd64 keyword`. Portage: getmaskingstatus.py
+    let eff_keywords = effective_keywords(
+        config,
+        &candidate_str,
+        category,
+        package,
+        &candidate.keywords,
+    );
     if !keywords_accepted(KeywordsAcceptedArgs {
-        keywords: &candidate.keywords,
+        keywords: &eff_keywords,
         candidate_str: &candidate_str,
         build_id: candidate.build_id.as_deref(),
         category,
@@ -375,8 +392,7 @@ pub(crate) fn candidate_masking_reasons(
         accept_keywords: &config.accept_keywords,
         package_accept_keywords: &config.package_accept_keywords,
     }) {
-        let kmask = candidate
-            .keywords
+        let kmask = eff_keywords
             .iter()
             .find_map(|k| {
                 k.strip_prefix('~')

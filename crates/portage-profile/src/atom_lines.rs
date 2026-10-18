@@ -318,20 +318,27 @@ pub(crate) enum UserNodeFile {
     PackageUse,
     /// `package.accept_keywords`: no wildcards, no build-ids.
     AcceptKeywords,
+    /// Profile-node `package.keywords`: no wildcards, no build-ids on
+    /// the user node (its formats never carry `build-id`); chain levels
+    /// keep their own node rules instead (build-ids per formats).
+    PackageKeywords,
 }
 
 /// Rules for one user-profile file: the node's EAPI drives the atom
 /// grammar (`None` parses permissively, like the user files); wildcards
 /// only for `package.use*` with no EAPI (`extended_syntax = eapi is None
 /// and user_config`); `allow_repo` from the user formats; build-ids
-/// everywhere but `package.accept_keywords`.
+/// everywhere but `package.accept_keywords`/`package.keywords`.
 // Portage: MaskManager.py:171-193, KeywordsManager.py:25-60,
 // UseManager.py:277-288, config.py:655-666
 pub(crate) fn user_node_rules(eapi: Option<&str>, file: UserNodeFile) -> NodeAtomRules {
     let formats: Vec<String> = USER_PROFILE_FORMATS.iter().map(|s| s.to_string()).collect();
     NodeAtomRules {
         allow_repo: allow_profile_repo_deps(eapi, &formats),
-        allow_build_id: !matches!(file, UserNodeFile::AcceptKeywords),
+        allow_build_id: !matches!(
+            file,
+            UserNodeFile::AcceptKeywords | UserNodeFile::PackageKeywords
+        ),
         allow_wildcard: matches!(file, UserNodeFile::PackageUse) && eapi.is_none(),
         eapi: eapi.map(str::to_string),
     }
