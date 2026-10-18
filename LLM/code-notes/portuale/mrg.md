@@ -68,3 +68,6 @@
 - `make_conf_backend_reaches_emerge_ebuild_and_portageq`: backlog #318.
 - `redb_merge_phases_query_the_parent_over_the_pipe`: feat#157 S6.3 end to end; `has_version` semantics (the new instance is published between `pkg_preinst` and `pkg_postinst`).
 - `a_held_redb_file_is_busy_in_process`: a genuine cross-process refusal.
+
+## const OPTIONS (347-MRG)
+- Backlog #347 S8: `--rebuild-exclude`, `--rebuild-ignore` and `--usepkg-exclude` are repeatable atom lists (`action: "append"` in Portage `_emerge/main.py:565-594`, same help shape as `--exclude`), forwarded by `to_emerge_argv` as one `--long=<value>` per occurrence. The emerge codepath already parsed and validated all three (`args.rs`, `cli_atoms.rs` strict families); only the `mrg` table and `emerge_handles` lacked them. Unit-pinned (`rebuild_and_usepkg_exclude_forward_like_exclude`) and pmtest-pinned (`test_mrg_forwards_rebuild_and_usepkg_exclude`).

@@ -806,6 +806,36 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "atoms to prefer old binpkgs over newer ebuilds",
     },
+    Opt {
+        id: "rebuild_exclude",
+        long: "--rebuild-exclude",
+        alias: None,
+        short: None,
+        kind: Kind::Append,
+        choices: &[],
+        missing: "",
+        help: "atoms to never rebuild via the --rebuild flag",
+    },
+    Opt {
+        id: "rebuild_ignore",
+        long: "--rebuild-ignore",
+        alias: None,
+        short: None,
+        kind: Kind::Append,
+        choices: &[],
+        missing: "",
+        help: "atoms whose dependents are never rebuilt via --rebuild",
+    },
+    Opt {
+        id: "usepkg_exclude",
+        long: "--usepkg-exclude",
+        alias: None,
+        short: None,
+        kind: Kind::Append,
+        choices: &[],
+        missing: "",
+        help: "atoms to ignore matching binary packages for",
+    },
     // --- Portuale-only remote options (see docs/remote-merge.md). Never
     // forwarded to the emerge codepath: `--remote-hostname` selects the
     // remote executor instead of `to_emerge_argv` + `pretend::run`, and
@@ -1174,7 +1204,10 @@ fn emerge_handles(long: &str) -> bool {
             | "--exclude"
             | "--getbinpkg-exclude"
             | "--getbinpkg-include"
+            | "--rebuild-exclude"
+            | "--rebuild-ignore"
             | "--reinstall-atoms"
+            | "--usepkg-exclude"
             | "--usepkg-include"
             | "--useoldpkg-atoms"
     )
@@ -2006,6 +2039,32 @@ mod tests {
 
         let m = parse(&["--getbinpkg-exclude", "cat/a", "cat/b"]).unwrap();
         assert_eq!(to_emerge_argv(&m), ["--getbinpkg-exclude=cat/a", "cat/b"]);
+    }
+
+    /// 347-MRG: `--rebuild-exclude`, `--rebuild-ignore` and
+    /// `--usepkg-exclude` are repeatable atom lists (`action: "append"`
+    /// in Portage `_emerge/main.py`), forwarded like `--exclude`.
+    #[test]
+    fn rebuild_and_usepkg_exclude_forward_like_exclude() {
+        let m = parse(&[
+            "--rebuild-exclude",
+            "cat/a",
+            "--rebuild-ignore",
+            "cat/b",
+            "--usepkg-exclude",
+            "cat/c",
+            "cat/pkg",
+        ])
+        .unwrap();
+        assert_eq!(
+            to_emerge_argv(&m),
+            [
+                "--rebuild-exclude=cat/a",
+                "--rebuild-ignore=cat/b",
+                "--usepkg-exclude=cat/c",
+                "cat/pkg"
+            ]
+        );
     }
 
     /// The `OptionalValue` bare/inserted-literal and `-j y|n` unlimited

@@ -2,6 +2,7 @@
 //! option families (plan #341 S7).
 
 use crate::pretend::EmergeOpts;
+use crate::pretend::parser_error;
 use portage_dep::{AtomEapi, AtomOptions, Blocker, Operator, parse_atom_with};
 use std::borrow::Cow;
 use std::process::ExitCode;
@@ -112,17 +113,18 @@ pub(crate) fn is_valid_set_atom(x: &str) -> bool {
 /// Portage `_emerge/main.py:839-845,885-906` (option post-pass):
 /// `--buildpkg-exclude` first (its own message, no "(only …)" suffix),
 /// then the nine strict families in tuple order. Failures print Portage's
-/// `parser.error` line (the ~4.7 KB argparse `usage:` block Portage
-/// prints above it is not reproduced) and exit 2.
+/// `parser.error` line with its trailing `\n` (so a blank line follows,
+/// rule D4); the ~4.7 KB argparse `usage:` block Portage prints above it
+/// is a documented cut (347-USG), not a second message to reproduce.
+/// Exit 2.
 pub(crate) fn validate_exclude_options(opts: &EmergeOpts<'_>) -> Option<ExitCode> {
     if !opts.buildpkg_exclude.is_empty() {
         let bad = find_bad_atoms(&opts.buildpkg_exclude, true);
         if !bad.is_empty() {
-            eprintln!(
-                "emerge: error: Invalid Atom(s) in --buildpkg-exclude parameter: '{}'",
+            return Some(parser_error(&format!(
+                "Invalid Atom(s) in --buildpkg-exclude parameter: '{}'\n",
                 bad.join(",")
-            );
-            return Some(ExitCode::from(2));
+            )));
         }
     }
     let families: &[(&[String], &str)] = &[
@@ -142,12 +144,11 @@ pub(crate) fn validate_exclude_options(opts: &EmergeOpts<'_>) -> Option<ExitCode
         }
         let bad = find_bad_atoms(atoms, false);
         if !bad.is_empty() {
-            eprintln!(
-                "emerge: error: Invalid Atom(s) in --{flag} parameter: '{}' \
-                 (only package names and slot atoms (with wildcards) allowed)",
+            return Some(parser_error(&format!(
+                "Invalid Atom(s) in --{flag} parameter: '{}' \
+                 (only package names and slot atoms (with wildcards) allowed)\n",
                 bad.join(",")
-            );
-            return Some(ExitCode::from(2));
+            )));
         }
     }
     None

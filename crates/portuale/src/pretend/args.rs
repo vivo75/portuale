@@ -517,10 +517,10 @@ fn parse_mode_opts<'a>(
                 *idx += 1;
             }
             _ => {
-                eprintln!(
-                    "emerge: option \"--onlydeps-with-rdeps\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
-                );
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "argument --onlydeps-with-rdeps: invalid choice: '{value}' \
+                     (choose from 'True', 'y', 'n')"
+                )));
             }
         }
         Ok(true)
@@ -552,10 +552,10 @@ fn parse_mode_opts<'a>(
                 *idx += 1;
             }
             _ => {
-                eprintln!(
-                    "emerge: option \"--onlydeps-with-ideps\": invalid choice: {value:?} (choose from \"True\", \"y\", \"n\")"
-                );
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "argument --onlydeps-with-ideps: invalid choice: '{value}' \
+                     (choose from 'True', 'y', 'n')"
+                )));
             }
         }
         Ok(true)
@@ -607,8 +607,9 @@ fn parse_display_opts<'a>(
             "y" => Some(true),
             "n" => Some(false),
             other => {
-                eprintln!("emerge: --color: invalid choice: {other:?} (choose from 'y', 'n')");
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "argument --color: invalid choice: '{other}' (choose from 'y', 'n')"
+                )));
             }
         };
         Ok(true)
@@ -681,8 +682,9 @@ fn parse_depth_opts<'a>(
                 *idx += 1;
             }
             Err(_) => {
-                eprintln!("emerge: invalid --deep parameter: {value:?}");
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "Invalid --deep parameter: '{value}'\n"
+                )));
             }
         }
         Ok(true)
@@ -707,8 +709,9 @@ fn parse_depth_opts<'a>(
                 *idx += 1;
             }
             Err(_) => {
-                eprintln!("emerge: invalid --backtrack parameter: {value:?}");
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "Invalid --backtrack parameter: '{value}'\n"
+                )));
             }
         }
         Ok(true)
@@ -1269,10 +1272,9 @@ fn parse_action_opts<'a>(
                 *idx += 2;
             }
             _ => {
-                eprintln!(
-                    "emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                );
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "argument --with-bdeps: invalid choice: '{value}' (choose from 'y', 'n')"
+                )));
             }
         }
         Ok(true)
@@ -1289,10 +1291,9 @@ fn parse_action_opts<'a>(
                 *idx += 1;
             }
             _ => {
-                eprintln!(
-                    "emerge: option \"--with-bdeps\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                );
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "argument --with-bdeps: invalid choice: '{value}' (choose from 'y', 'n')"
+                )));
             }
         }
         Ok(true)
@@ -1312,10 +1313,9 @@ fn parse_action_opts<'a>(
                 *idx += 2;
             }
             _ => {
-                eprintln!(
-                    "emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                );
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "argument --with-bdeps-auto: invalid choice: '{value}' (choose from 'y', 'n')"
+                )));
             }
         }
         Ok(true)
@@ -1330,10 +1330,9 @@ fn parse_action_opts<'a>(
                 *idx += 1;
             }
             _ => {
-                eprintln!(
-                    "emerge: option \"--with-bdeps-auto\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-                );
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "argument --with-bdeps-auto: invalid choice: '{value}' (choose from 'y', 'n')"
+                )));
             }
         }
         Ok(true)
@@ -1759,8 +1758,9 @@ fn parse_jobs_opts<'a>(
                 *idx += 1;
             }
             Err(_) => {
-                eprintln!("emerge: invalid --jobs parameter: {value:?}");
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "Invalid --jobs parameter: '{value}'\n"
+                )));
             }
         }
         Ok(true)
@@ -1800,8 +1800,9 @@ fn parse_jobs_opts<'a>(
                 *idx += 1;
             }
             _ => {
-                eprintln!("emerge: invalid --load-average parameter: {value:?}");
-                return Err(ExitCode::from(2));
+                return Err(parser_error(&format!(
+                    "Invalid --load-average parameter: '{value}'\n"
+                )));
             }
         }
         Ok(true)
@@ -1911,20 +1912,18 @@ fn parse_autounmask_opts<'a>(
             return Err(ExitCode::from(2));
         };
         if !matches!(value.as_str(), "y" | "n") {
-            eprintln!(
-                "emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-            );
-            return Err(ExitCode::from(2));
+            return Err(parser_error(&format!(
+                "argument --autounmask-backtrack: invalid choice: '{value}' (choose from 'y', 'n')"
+            )));
         }
         opts.autounmask_backtrack = Some(value == "y");
         *idx += 2;
         Ok(true)
     } else if let Some(value) = arg.strip_prefix("--autounmask-backtrack=") {
         if !matches!(value, "y" | "n") {
-            eprintln!(
-                "emerge: option \"--autounmask-backtrack\": invalid choice: {value:?} (choose from \"y\", \"n\")"
-            );
-            return Err(ExitCode::from(2));
+            return Err(parser_error(&format!(
+                "argument --autounmask-backtrack: invalid choice: '{value}' (choose from 'y', 'n')"
+            )));
         }
         opts.autounmask_backtrack = Some(value == "y");
         *idx += 1;

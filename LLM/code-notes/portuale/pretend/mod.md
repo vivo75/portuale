@@ -22,6 +22,13 @@
 
 ## fn report_option
 - See emerge_options.rs's doc comment for the value-consumption scope cut.
+- Backlog #347 S8: an unrecognized token prints Portage's argparse line `emerge: error: unrecognized arguments: <token>` (single `\n`, rc 2; S0 cell `c12-frobnicate`), not the old portuale-only `unrecognized option "<token>"`. The `usage:` block above it stays a documented cut (347-USG).
+
+## fn parser_error_text
+- Backlog #347 S8: renders one Portage `_emerge/main.py` `parser.error(message)` line. The message is taken exactly as Portage passes it, trailing `\n` included, so `parser.error`-origin lines (`Invalid --jobs/--deep/--backtrack/--load-average parameter`, `Invalid Atom(s)`) end in a blank line while argparse-native ones (`invalid choice`, `unrecognized arguments`) end in one `\n` (rule D4, byte-pinned by the S0 C cells). Unit-pinned in `pretend/tests/error_lines.rs`.
+
+## fn parser_error
+- Backlog #347 S8: prints [`parser_error_text`] to stderr and returns exit 2, like `parser.error` (which also exits 2). Every C-cell error site in `args.rs` and `cli_atoms.rs` goes through it. Deliberately untouched: the space/missing-value arms with no C cell (`-j<attached>` invalid, bare `--load-average`, the `requires an argument` family) keep their portuale-authored texts; Portage recycles an attached short's rest back into argv (`main.py:263-288`, so `-jx` dies as `unrecognized arguments: -x`), which is behavior work beyond S8's text scope.
 
 ## const DEFAULT_BACKTRACK_MAX
 - Backlog #263. Grounded in Portage 3.0.82.2 (`/usr/sbin/emerge`): `_emerge/depgraph.py:12188` (`_backtrack_depgraph`) reads `max_retries = 0 if nodeps else myopts.get("--backtrack", 20)` -- `--backtrack` itself is `action: store` with no default (`lib/_emerge/main.py:385-389`), so the 20 lives only in that reader.

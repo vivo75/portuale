@@ -642,6 +642,7 @@ mod blockers;
 mod circular;
 mod conflicts;
 mod env_config;
+mod error_lines;
 mod flag_spellings;
 mod gates;
 mod help;

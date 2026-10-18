@@ -140,8 +140,29 @@ fn report_option(token: &str) -> ExitCode {
             found.canonical
         );
     } else {
-        eprintln!("emerge: unrecognized option {token:?}");
+        return parser_error(&format!("unrecognized arguments: {token}"));
     }
+    ExitCode::from(2)
+}
+
+/// Renders one Portage `_emerge/main.py` `parser.error(message)` line: the
+/// `usage:` block Portage prints above it is a documented cut (347-USG:
+/// its option order comes from a `frozenset`, so it is not reproducible
+/// byte for byte), and only the error line is printed. The message is
+/// taken exactly as Portage passes it, trailing `\n` included, so
+/// `parser.error`-origin lines end in a blank line while argparse-native
+/// ones (`unrecognized arguments`, `invalid choice`) end in one `\n`.
+/// Plan #347 S8 (347-ERR); oracle `LLM/evidence/2026-10-15-346-s0/c/`.
+// Portage: _emerge/main.py, parse_opts
+pub(crate) fn parser_error_text(message: &str) -> String {
+    format!("emerge: error: {message}\n")
+}
+
+/// Prints [`parser_error_text`] to stderr and exits 2, like
+/// `parser.error` (which also exits 2).
+// Portage: _emerge/main.py, parse_opts
+pub(crate) fn parser_error(message: &str) -> ExitCode {
+    eprint!("{}", parser_error_text(message));
     ExitCode::from(2)
 }
 
