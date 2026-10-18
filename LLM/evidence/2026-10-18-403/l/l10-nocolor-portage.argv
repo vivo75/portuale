@@ -1,0 +1,2 @@
+cwd: /var/tmp/s403
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s403/l-l10-nocolor-portage/cfg ROOT=/var/tmp/s403/l-l10-nocolor-portage/root PORTAGE_TMPDIR=/var/tmp/s403/l-l10-nocolor-portage/tmp DISTDIR=/var/tmp/s403/l-l10-nocolor-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news NOCOLOR=yes ebuild /home/vivo/repo/PORTUALE/pmtest/fixtures/repo-348/app-misc/t348-b-phases/t348-b-phases-7.ebuild merge

@@ -1,0 +1,17 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s403/l-l08-collision-portuale/tmp/portage/app-misc/s403-mod-1.0/work
+>>> Preparing source in /var/tmp/s403/l-l08-collision-portuale/tmp/portage/app-misc/s403-mod-1.0/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s403/l-l08-collision-portuale/tmp/portage/app-misc/s403-mod-1.0/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s403/l-l08-collision-portuale/tmp/portage/app-misc/s403-mod-1.0/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/s403-mod-1.0
+
+>>> Install app-misc/s403-mod-1.0 into /var/tmp/s403/l-l08-collision-portuale/tmp/portage/app-misc/s403-mod-1.0/image
+>>> Completed installing app-misc/s403-mod-1.0 into /var/tmp/s403/l-l08-collision-portuale/tmp/portage/app-misc/s403-mod-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  8 KiB
+
+ [32;01m*[39;49;00m checking 2 files for package collisions

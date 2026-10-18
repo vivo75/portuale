@@ -161,12 +161,24 @@ pub(crate) fn blockers_from_flat_deps(
 /// function's `collisions` plus `find_owners`, not inside. Walks `d`
 /// read-only and file/symlink-only (directories merging into existing
 /// directories are normal). Returns `(collisions, symlink_collisions,
-/// plib_collisions)` as `ROOT`-relative absolute paths; only the caller
-/// decides whether `collisions` aborts, `symlink_collisions` always
-/// should, `plib_collisions` never does.
+/// plib_collisions, file_count, symlink_count)` as `ROOT`-relative
+/// absolute paths; only the caller decides whether `collisions` aborts,
+/// `symlink_collisions` always should, `plib_collisions` never does.
 // Portage: vartree.py, dblink._collision_protect
-pub(crate) type CollisionsResult =
-    Result<(Vec<String>, Vec<String>, BTreeMap<String, BTreeSet<String>>), String>;
+//
+// The trailing `(usize, usize)` is the collision line's `N`: regular
+// files in the image (`file_list`) plus non-directory symlinks
+// (`symlink_list`) — directories are never counted.
+pub(crate) type CollisionsResult = Result<
+    (
+        Vec<String>,
+        Vec<String>,
+        BTreeMap<String, BTreeSet<String>>,
+        usize,
+        usize,
+    ),
+    String,
+>;
 /// Arguments of [`find_collisions`].
 pub(crate) struct FindCollisionsArgs<'a> {
     pub(crate) d: &'a Path,
@@ -202,6 +214,11 @@ pub(crate) fn find_collisions(args: FindCollisionsArgs<'_>) -> CollisionsResult 
     let mut collisions = Vec::new();
     let mut symlink_collisions = Vec::new();
     let mut plib_collisions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // The collision line's `N`: regular files plus non-directory
+    // symlinks (directories are never counted).
+    // Portage: vartree.py, `dblink.treewalk` (`filelist`/`linklist`).
+    let mut file_count = 0usize;
+    let mut symlink_count = 0usize;
     let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
     while let Some(relative_dir) = stack.pop() {
         let src_dir = d.join(&relative_dir);
@@ -235,6 +252,11 @@ pub(crate) fn find_collisions(args: FindCollisionsArgs<'_>) -> CollisionsResult 
             {
                 continue;
             }
+            if file_type.is_symlink() {
+                symlink_count += 1;
+            } else if file_type.is_file() {
+                file_count += 1;
+            }
 
             let Ok(dest_meta) = std::fs::symlink_metadata(&dest) else {
                 continue;
@@ -267,7 +289,13 @@ pub(crate) fn find_collisions(args: FindCollisionsArgs<'_>) -> CollisionsResult 
             collisions.push(abs_path);
         }
     }
-    Ok((collisions, symlink_collisions, plib_collisions))
+    Ok((
+        collisions,
+        symlink_collisions,
+        plib_collisions,
+        file_count,
+        symlink_count,
+    ))
 }
 
 /// For each collision, the installed packages claiming it. A fresh scan

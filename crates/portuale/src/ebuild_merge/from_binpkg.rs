@@ -282,6 +282,8 @@ pub fn merge_binpkg(
         collisions,
         symlink_collisions,
         plib_collisions,
+        image_files,
+        image_symlinks,
     } = merge_binpkg_find_collisions(MergeBinpkgFindCollisionsArgs {
         root,
         build_info: &build_info,
@@ -291,7 +293,11 @@ pub fn merge_binpkg(
         main_slot: &main_slot,
         options,
     })?;
-    // Same abort condition as `merge_after_install`.
+    // Same abort condition as `merge_after_install`. The listing opens
+    // before the abort, like `merge_after_install`.
+    // Portage: vartree.py, dblink._collision_protect, dblink.treewalk
+    let mut listing = MergeListing::new(options.direct);
+    listing.collision_line(image_files + image_symlinks);
     let protect_owned_abort = options.protect_owned
         && !collisions.is_empty()
         && !find_owners(root, &collisions).is_empty();
@@ -307,6 +313,10 @@ pub fn merge_binpkg(
             &symlink_collisions,
         ));
     }
+
+    // `>>> Merging` runs after the collision phase and before `preinst`.
+    // Portage: vartree.py, dblink.treewalk
+    listing.merging(&format!("{category}/{pf}"), root);
 
     // The `-MERGING-<pf>` temporary is created before `pkg_preinst` and
     // renamed into place after every replaced version is unmerged,
@@ -338,6 +348,7 @@ pub fn merge_binpkg(
         noconfmem: options.noconfmem,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::from_options(options),
+        listing: &mut listing,
     })?;
     // Pre-replace-loop preserve-libs, identical to `merge_after_install`.
     let new_image_paths: BTreeSet<String> = portage_vdb::paths(&contents)
@@ -358,6 +369,7 @@ pub fn merge_binpkg(
         portage_tmpdir,
         options,
         hooks: &hooks,
+        listing: &mut listing,
     })
 }
 
@@ -367,6 +379,8 @@ pub(crate) struct MergeBinpkgFindCollisionsOut {
     pub(crate) collisions: Vec<String>,
     pub(crate) symlink_collisions: Vec<String>,
     pub(crate) plib_collisions: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) image_files: usize,
+    pub(crate) image_symlinks: usize,
 }
 
 /// The values [`merge_binpkg_find_collisions`] reads from its caller.
@@ -402,22 +416,25 @@ pub(crate) fn merge_binpkg_find_collisions(
         }
     }
     let blocked = blockers_from_flat_deps(root, &flat_deps);
-    let (collisions, symlink_collisions, plib_collisions) = find_collisions(FindCollisionsArgs {
-        d: image,
-        root,
-        category,
-        package,
-        slot: main_slot,
-        config_protect: &options.config_protect,
-        config_protect_mask: &options.config_protect_mask,
-        plib_inodes: &plib_inodes,
-        blocked: &blocked,
-    })?;
+    let (collisions, symlink_collisions, plib_collisions, image_files, image_symlinks) =
+        find_collisions(FindCollisionsArgs {
+            d: image,
+            root,
+            category,
+            package,
+            slot: main_slot,
+            config_protect: &options.config_protect,
+            config_protect_mask: &options.config_protect_mask,
+            plib_inodes: &plib_inodes,
+            blocked: &blocked,
+        })?;
     Ok(MergeBinpkgFindCollisionsOut {
         plib_registry,
         collisions,
         symlink_collisions,
         plib_collisions,
+        image_files,
+        image_symlinks,
     })
 }
 
@@ -437,6 +454,7 @@ pub(crate) struct MergeBinpkgFinishArgs<'a> {
     pub(crate) portage_tmpdir: &'a Path,
     pub(crate) options: &'a MergeOptions,
     pub(crate) hooks: &'a HookCtx<'a>,
+    pub(crate) listing: &'a mut MergeListing,
 }
 
 /// Preserve, replace, publish, postinst and elog of a binary-package merge.
@@ -456,6 +474,7 @@ pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<i32
         portage_tmpdir,
         options,
         hooks,
+        listing,
     } = args;
     let mut preserve_paths = BTreeSet::new();
     if let Some((paths, old_contents_text)) =
@@ -533,6 +552,12 @@ pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<i32
         true,
         vdb_env_bz2.is_file().then_some(vdb_env_bz2.as_path()),
     )?;
+    // `>>> <cpv> merged.`, right after a successful `postinst` — a
+    // failed `postinst` prints nothing.
+    // Portage: vartree.py, dblink.treewalk
+    if postinst_status == 0 {
+        listing.merged(&format!("{category}/{pf}"));
+    }
     absorb_update_env(root, category, pf, &update_env)?;
     if postinst_status != 0 {
         eprintln!(

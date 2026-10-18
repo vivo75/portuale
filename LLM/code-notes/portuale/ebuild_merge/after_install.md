@@ -51,3 +51,13 @@ The post-install merge driver and same-slot unmerge.
 
 ## fn unmerge_replaced_same_slot / struct UnmergeOneInstalledArgs (replaced_by_version, #348 S2 E3)
 - The replace loop passes the replacing version down to the old version's hooks as `REPLACED_BY_VERSION` (`new_pf` minus `package-`); standalone `emerge -C` passes `None` (Portage: `dblink.treewalk` sets it, `dblink.unmerge` does not).
+
+## fn merge_after_install (listing, #403)
+- The direct path prints Portage's frame: `collision_line` right after
+  `find_collisions` (before the abort check — the line appears even when
+  the merge aborts, S403 l08), `>>> Merging` before `create_vdb_tmp` /
+  `preinst`. The replace loop prints `>>> Safely unmerging …` /
+  `>>> Original …` around each replaced instance. `>>> <cpv> merged.`
+  prints in `merge_after_install_finish` right after a successful
+  `postinst`, before `env_update`. All gated on `MergeOptions.direct`.
+  Portage: vartree.py, `treewalk`.

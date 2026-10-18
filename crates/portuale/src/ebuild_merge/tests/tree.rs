@@ -65,6 +65,7 @@ fn merge_tree_carries_xattrs_like_portage_movefile() {
             noconfmem: false,
             cfgfiledict: &mut BTreeMap::new(),
             xattrs: policy,
+            listing: &mut MergeListing::new(false),
         })
         .expect("merge_tree succeeds");
     };
@@ -149,6 +150,7 @@ fn merge_tree_copies_files_dirs_and_symlinks_and_writes_matching_contents() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -202,6 +204,7 @@ fn merge_tree_never_writes_the_existing_inode() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -291,6 +294,7 @@ fn merge_tree_replaces_a_running_executable_atomically() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     });
 
     let alive = child.try_wait().expect("try_wait").is_none();
@@ -345,6 +349,7 @@ fn merge_tree_replaces_a_symlink_without_temporaries() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -411,6 +416,7 @@ fn merge_tree_preserves_ownership_from_the_source_when_root() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -440,6 +446,7 @@ fn merge_tree_preserves_ownership_from_the_source_when_root() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict2,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
     let meta = std::fs::symlink_metadata(root.join("usr/share/x")).unwrap();
@@ -468,6 +475,7 @@ fn merge_tree_does_not_protect_a_brand_new_file() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -500,6 +508,7 @@ fn merge_tree_leaves_an_unchanged_protected_file_alone() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -532,6 +541,7 @@ fn merge_tree_protects_a_changed_file_under_a_protected_path() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -589,6 +599,7 @@ fn merge_tree_protect_if_modified_applies_directly_when_dest_still_matches_the_i
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -640,6 +651,7 @@ fn merge_tree_still_protects_a_locally_modified_file_despite_protect_if_modified
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -687,6 +699,7 @@ fn merge_tree_force_protects_a_path_the_installed_instance_recorded_but_the_admi
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -724,6 +737,7 @@ fn merge_tree_remembers_an_already_offered_update_and_leaves_the_live_file_untou
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("first merge_tree succeeds");
     assert!(root.join("etc/._cfg0000_foo.conf").exists());
@@ -739,6 +753,7 @@ fn merge_tree_remembers_an_already_offered_update_and_leaves_the_live_file_untou
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("second merge_tree succeeds");
     assert_eq!(
@@ -778,6 +793,7 @@ fn merge_tree_noconfmem_reprotects_an_already_offered_update() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("first merge_tree succeeds");
     assert!(root.join("etc/._cfg0000_foo.conf").exists());
@@ -795,6 +811,7 @@ fn merge_tree_noconfmem_reprotects_an_already_offered_update() {
         noconfmem: true,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("second merge_tree succeeds");
     assert!(!root.join("etc/._cfg0001_foo.conf").exists());
@@ -830,6 +847,7 @@ fn merge_tree_protects_a_changed_symlink_under_a_protected_path() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -870,6 +888,7 @@ fn merge_tree_does_not_protect_an_unchanged_symlink() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -904,6 +923,7 @@ fn merge_tree_protects_a_symlink_source_replacing_a_regular_file_dest() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 
@@ -945,6 +965,7 @@ fn merge_tree_protects_a_regular_file_source_replacing_a_symlink_dest() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 

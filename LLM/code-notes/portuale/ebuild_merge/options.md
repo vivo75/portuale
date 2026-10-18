@@ -42,3 +42,10 @@ Env-var-sourced merge options for `run_merge` plus the `movefile` xattr policy.
 
 ## impl XattrPolicy::from_options
 - Uses the merge's resolved `FEATURES` when the options carry a non-empty list, else the raw `$FEATURES` (as everywhere else in this module). Uses the resolved config's `PORTAGE_XATTR_EXCLUDE` (`make.globals` sets it), else the process env's.
+
+## MergeOptions.direct (#403)
+- The direct-`ebuild`-applet gate for the per-file listing printer
+  (`listing.rs`): `ebuild.rs` sets it for `merge`/`qmerge`/`unmerge`; the
+  `emerge`-scheduler paths never do (their listing would go to the build
+  log, which portuale does not reproduce). Portage discriminator:
+  `dblink._display_merge`'s foreground scheduler vs background task.

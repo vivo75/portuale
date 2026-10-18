@@ -77,6 +77,9 @@ pub(crate) struct MergeTreeArgs<'a> {
     pub(crate) noconfmem: bool,
     pub(crate) cfgfiledict: &'a mut BTreeMap<String, String>,
     pub(crate) xattrs: &'a XattrPolicy,
+    /// The direct-path listing printer; a disabled listing is a no-op
+    /// (the `emerge`-scheduler path and silent unit tests).
+    pub(crate) listing: &'a mut MergeListing,
 }
 
 /// Walks `d` (`${D}`) and merges every entry into `root` (`${ROOT}`),
@@ -96,6 +99,7 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
         noconfmem,
         cfgfiledict,
         xattrs,
+        listing,
     } = args;
     let mut contents = String::new();
     let mut stack: Vec<PathBuf> = vec![PathBuf::new()];
@@ -175,6 +179,7 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                     // Installed by atomic rename, like a regular file.
                     replace_symlink_atomic(&target, &src, &write_dest, mtime)?;
                 }
+                listing.merge_symlink(&write_dest, &target_str, moveme);
                 // CONTENTS records the logical path/target, never the ._cfgNNNN_
                 // variant a protected write may have landed at.
                 contents.push_str(&format_contents_line(
@@ -191,6 +196,7 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                 // Portage: vartree.py, mergeme
                 let dir_existed = dest.is_dir();
                 std::fs::create_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+                listing.merge_dir(&dest, dir_existed);
                 if !dir_existed {
                     use std::os::unix::fs::PermissionsExt;
                     let src_meta =
@@ -243,18 +249,23 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                     // and xattrs survive; only mtime is refreshed). A diverted
                     // ._cfgNNNN_ write never takes this path.
                     // Portage: vartree.py, dblink._needs_move
-                    if write_dest == dest && !needs_move(&src, &write_dest, xattrs) {
+                    let identical = write_dest == dest && !needs_move(&src, &write_dest, xattrs);
+                    if identical {
                         filetime::set_file_mtime(
                             &write_dest,
                             filetime::FileTime::from_unix_time(mtime, 0),
                         )
                         .map_err(|e| format!("{}: {e}", write_dest.display()))?;
+                        listing.merge_file(&write_dest, MergeFileKind::Identical);
                     } else {
                         // Atomic replacement: the destination's existing inode is
                         // never opened for write (a safety requirement, not an
                         // optimization).
                         replace_file_atomic(&src, &write_dest, mtime, xattrs)?;
+                        listing.merge_file(&write_dest, MergeFileKind::New);
                     }
+                } else {
+                    listing.merge_file(&write_dest, MergeFileKind::ConfmemRejected);
                 }
                 // CONTENTS records the logical path and the source's MD5, never
                 // the ._cfgNNNN_ variant; the vdb owns the logical path either way.
@@ -281,6 +292,9 @@ pub(crate) fn merge_tree(args: MergeTreeArgs<'_>) -> Result<String, String> {
                             .map_err(|e| format!("{}: {e}", parent.display()))?;
                     }
                     create_special_node(&src, &dest, &file_type)?;
+                    listing.merge_special(&dest, true);
+                } else {
+                    listing.merge_special(&dest, false);
                 }
                 let node_type = if file_type.is_fifo() { "fif" } else { "dev" };
                 contents.push_str(&format_contents_line(

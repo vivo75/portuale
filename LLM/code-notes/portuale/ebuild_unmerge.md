@@ -110,3 +110,16 @@ Package removal: `ebuild <file> unmerge`. Context moved out of the code comments
 
 ## field uninstall_ignore
 - `MergeOptions::uninstall_ignore` is the resolved `UNINSTALL_IGNORE` scalar: `from_env` reads the calling env over the `make.globals` default (`/lib/modules/*`, cnf/make.globals:93); `apply_uninstall_ignore` replaces it from the resolved config next to `apply_config_protect` (both the `emerge -C` and merge/replace-loop setups call it); `set_resolved_features` folds the packdebug tarball dir over whatever base resulted, idempotently. `UnmergeOptions::uninstall_ignore` is built from it in `unmerge_one_installed`, and separately in `ebuild.rs` from the resolved-or-env chain (Q11's routing, same helper). `remove_contents` splits the raw string once per call.
+
+## unmerge listing (#403)
+- `remove_contents` prints the full `_unmerge_pkgfiles` display at every
+  decision point via `MergeListing` (`listing.rs`): `--- !found`,
+  `--- cfgpro` (UNINSTALL_IGNORE, not config-protect), `--- replaced`,
+  `<<<` (orphan/sym/obj removals), `--- !mtime`/`!dir`/`!sym`/`!obj`/
+  `!md5`/`!fif`, empty-desc `---` for kept fifos/devs. `remove_dirs`
+  prints `<<< dir` on every successful rmdir and `--- !empty dir` on a
+  tolerated failure; `cleanup_info_dir` prints `<<<`/`!!! obj`;
+  `unmerge_protected_symlinks`' R4b loop prints `<<<`/`!!! sym`.
+  Portage: vartree.py:2866-3245, :3370-3499. Gated on
+  `UnmergeOptions.direct` (set from `MergeOptions.direct` in the replace
+  loop, set for direct `ebuild unmerge`, unset for `emerge -C`).

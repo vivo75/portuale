@@ -1,0 +1,4 @@
+ebuild: This package will overwrite one or more files that may belong to other packages:
+app-misc/s403-collide-1.0:
+	/usr/share/s403-owned.txt
+Package 'app-misc/s403-mod-1.0' NOT merged due to file collisions.

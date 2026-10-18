@@ -46,3 +46,11 @@ Merging the image tree onto ROOT. Context moved out of the code comments (#336 P
 
 ## fn read_filling
 - A plain `Read::read` may return a short count for regular files too.
+
+## fn merge_tree (listing, #403)
+- Every merged entry prints its Portage line inline in traversal order via
+  `MergeListing` (`listing.rs`): `>>>`/`---` for dirs (existed or not),
+  `>>>`/`===`/`---` for files (moved / byte-identical / confmem-rejected,
+  `write_dest` so a diverted write names the `._cfgNNNN_` path),
+  `>>>`/`--- ... -> ...` for symlinks (moved or not), `>>>`/`!!!` for
+  fifos/devices (created or already there). Portage: vartree.py, `mergeme`.

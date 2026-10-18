@@ -277,6 +277,9 @@ struct RemoveContentsArgs<'a> {
     stale_confmem: &'a mut Vec<String>,
     preserved_paths: &'a BTreeSet<String>,
     contents_text: &'a str,
+    /// The direct-path listing printer; a disabled listing is a no-op
+    /// (the `emerge -C` path and silent unit tests).
+    listing: &'a mut ebuild_merge::MergeListing,
 }
 
 /// Deletes every `CONTENTS`-listed entry from `root`, deepest paths first,
@@ -307,6 +310,7 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
         stale_confmem,
         preserved_paths,
         contents_text,
+        listing,
     } = args;
     let mut entries = parse_contents(contents_text);
     entries.retain(|e| !preserved_paths.contains(&e.abs_path));
@@ -338,7 +342,10 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
         // Portage: dbapi/vartree.py, `--- !found`.
         let lstat = match std::fs::symlink_metadata(&dest) {
             Ok(meta) => meta,
-            Err(_) => continue,
+            Err(_) => {
+                listing.unmerge_kept("!found", &entry.node_type, &dest);
+                continue;
+            }
         };
         let islink = lstat.file_type().is_symlink();
         // The followed stat: `None` includes a dangling symlink.
@@ -381,12 +388,14 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
                     "/lib" | "/usr/lib" | "/usr/local/lib"
                 ))
         {
+            listing.unmerge_kept("cfgpro", &entry.node_type, &dest);
             continue;
         }
 
         if is_owned {
             // Another same-slot instance claims this path: skip before
             // the mtime check (most often an in-place upgrade).
+            listing.unmerge_replaced(&entry.node_type, &dest);
             continue;
         } else if cfgfiledict.contains_key(&entry.abs_path) {
             // Going away and still remembered: its config-memory entry is stale too.
@@ -404,6 +413,7 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
             && !ebuild_merge::is_protected(root, config_protect, config_protect_mask, &dest)
         {
             unlink_tolerant(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+            listing.unmerge_removed(&entry.node_type, &dest);
             continue;
         }
 
@@ -415,6 +425,7 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
             if current_mtime != recorded_mtime {
                 // Locally modified since the merge that recorded
                 // this entry -- leave it in place.
+                listing.unmerge_kept("!mtime", &entry.node_type, &dest);
                 continue;
             }
         }
@@ -425,6 +436,7 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
                 // (an `obj` replaced by a directory skips instead of
                 // aborting the whole unmerge with EISDIR).
                 if !stat.as_ref().is_some_and(|m| m.is_file()) {
+                    listing.unmerge_kept("!obj", &entry.node_type, &dest);
                     continue;
                 }
                 // `!md5`: an `obj` that survives this far (protected, or
@@ -436,13 +448,18 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
                 {
                     let live_md5 = match ebuild_merge::md5_hex(&dest) {
                         Ok(md5) => md5,
-                        Err(_) => continue,
+                        Err(_) => {
+                            listing.unmerge_kept("!obj", &entry.node_type, &dest);
+                            continue;
+                        }
                     };
                     if live_md5 != recorded_md5.to_lowercase() {
+                        listing.unmerge_kept("!md5", &entry.node_type, &dest);
                         continue;
                     }
                 }
                 unlink_tolerant(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+                listing.unmerge_removed(&entry.node_type, &dest);
             }
             "sym" | "dir" => {
                 // R3: a `dir` entry that is a live symlink takes the sym
@@ -454,12 +471,15 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
                     // directory stays (the mtime arm never ran for it).
                     if lstat.is_dir() {
                         dirs.push((dest, (lstat.dev(), lstat.ino())));
+                    } else {
+                        listing.unmerge_kept("!dir", &entry.node_type, &dest);
                     }
                     continue;
                 }
                 // `!sym`: a recorded symlink that is not a live symlink
                 // stays.
                 if !islink {
+                    listing.unmerge_kept("!sym", &entry.node_type, &dest);
                     continue;
                 }
                 // R4: a symlink to a non-empty directory is kept unless
@@ -504,25 +524,36 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
                                 .entry(target_key)
                                 .or_default()
                                 .push(entry.abs_path.clone());
+                            listing.unmerge_kept("!empty", &entry.node_type, &dest);
                             continue;
                         }
                     }
                 }
                 unlink_tolerant(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+                listing.unmerge_removed(&entry.node_type, &dest);
             }
             "fif" if !lstat.file_type().is_fifo() => {
                 // `!fif`: a recorded fifo that is not a live fifo stays.
+                listing.unmerge_kept("!fif", &entry.node_type, &dest);
             }
             "fif" => {
                 // A live fifo was already unlinked by the orphan arm under
                 // default FEATURES; reaching here keeps it.
+                listing.unmerge_kept("", &entry.node_type, &dest);
             }
             _ => {
                 // `dev` entries are kept, matching Portage.
+                listing.unmerge_kept("", &entry.node_type, &dest);
             }
         }
     }
-    remove_dirs(root, dirs, &mut protected_symlinks, infodirs_inodes);
+    remove_dirs(
+        root,
+        dirs,
+        &mut protected_symlinks,
+        infodirs_inodes,
+        &mut *listing,
+    );
     let mut elog = unmerge_protected_symlinks(UnmergeProtectedArgs {
         root,
         category,
@@ -530,6 +561,7 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
         others_in_slot: &owner_texts,
         infodirs_inodes,
         protected_symlinks: &mut protected_symlinks,
+        listing,
     })?;
     // Whatever R4b left behind stays, with the preserved notice.
     // Portage: dbapi/vartree.py, _unmerge_pkgfiles (trailing elog).
@@ -565,6 +597,7 @@ struct UnmergeProtectedArgs<'a> {
     others_in_slot: &'a [Option<String>],
     infodirs_inodes: &'a BTreeSet<(u64, u64)>,
     protected_symlinks: &'a mut ProtectedSymlinks,
+    listing: &'a mut ebuild_merge::MergeListing,
 }
 
 /// Portage's `_unmerge_protected_symlinks`: for the leftover
@@ -583,6 +616,7 @@ fn unmerge_protected_symlinks(args: UnmergeProtectedArgs<'_>) -> Result<Vec<Stri
         others_in_slot,
         infodirs_inodes,
         protected_symlinks,
+        listing,
     } = args;
     if protected_symlinks.is_empty() {
         return Ok(Vec::new());
@@ -671,10 +705,17 @@ fn unmerge_protected_symlinks(args: UnmergeProtectedArgs<'_>) -> Result<Vec<Stri
                     parent = p.parent().map(Path::to_path_buf);
                 }
                 unlink_tolerant(&obj).map_err(|e| format!("{}: {e}", obj.display()))?;
+                listing.unmerge_removed("sym", &obj);
             }
         }
         protected_symlinks.clear();
-        remove_dirs(root, dirs, protected_symlinks, infodirs_inodes);
+        remove_dirs(
+            root,
+            dirs,
+            protected_symlinks,
+            infodirs_inodes,
+            &mut *listing,
+        );
     }
     Ok(elog)
 }
@@ -723,7 +764,12 @@ const INFODIR_CLEANUP: [&str; 2] = ["dir", "dir.old"];
 /// Fires for a literal `info` name or an `INFOPATH`/`INFODIR` inode match;
 /// only regular files are deleted.
 /// Portage: dbapi/vartree.py, _unmerge_dirs.
-fn cleanup_info_dir(dest: &Path, inode_key: (u64, u64), infodirs_inodes: &BTreeSet<(u64, u64)>) {
+fn cleanup_info_dir(
+    dest: &Path,
+    inode_key: (u64, u64),
+    infodirs_inodes: &BTreeSet<(u64, u64)>,
+    listing: &mut ebuild_merge::MergeListing,
+) {
     let is_info_dir = infodirs_inodes.contains(&inode_key)
         || dest.file_name().and_then(|n| n.to_str()) == Some("info");
     if !is_info_dir {
@@ -745,7 +791,10 @@ fn cleanup_info_dir(dest: &Path, inode_key: (u64, u64), infodirs_inodes: &BTreeS
     for name in &names {
         let child = dest.join(name);
         if std::fs::symlink_metadata(&child).is_ok_and(|m| m.is_file()) {
-            let _ = std::fs::remove_file(&child);
+            match std::fs::remove_file(&child) {
+                Ok(()) => listing.unmerge_removed("obj", &child),
+                Err(_) => listing.show_unmerge("!!!", "", "obj", &child),
+            }
         }
     }
 }
@@ -760,6 +809,7 @@ fn remove_dirs(
     dirs: Vec<(PathBuf, (u64, u64))>,
     protected_symlinks: &mut ProtectedSymlinks,
     infodirs_inodes: &BTreeSet<(u64, u64)>,
+    listing: &mut ebuild_merge::MergeListing,
 ) {
     // Sorted ascending so `pop()` visits deepest paths first (a path
     // sorts after its own ancestor).
@@ -768,19 +818,24 @@ fn remove_dirs(
     let mut revisit: BTreeMap<PathBuf, (u64, u64)> = BTreeMap::new();
 
     while let Some((dest, inode_key)) = stack.pop() {
-        cleanup_info_dir(&dest, inode_key, infodirs_inodes);
+        cleanup_info_dir(&dest, inode_key, infodirs_inodes, &mut *listing);
         match std::fs::remove_dir(&dest) {
             Ok(()) => {
+                listing.unmerge_removed("dir", &dest);
                 let Some(unmerge_syms) = protected_symlinks.remove(&inode_key) else {
                     continue;
                 };
                 let mut parents: BTreeSet<PathBuf> = BTreeSet::new();
                 for relative_path in &unmerge_syms {
                     let sym_dest = root.join(relative_path.trim_start_matches('/'));
-                    if std::fs::remove_file(&sym_dest).is_ok()
-                        && let Some(parent) = sym_dest.parent()
-                    {
-                        parents.insert(parent.to_path_buf());
+                    match std::fs::remove_file(&sym_dest) {
+                        Ok(()) => {
+                            listing.unmerge_removed("sym", &sym_dest);
+                            if let Some(parent) = sym_dest.parent() {
+                                parents.insert(parent.to_path_buf());
+                            }
+                        }
+                        Err(_) => listing.show_unmerge("!!!", "", "sym", &sym_dest),
                     }
                 }
                 // Walk each newly-emptied ancestor chain, re-queuing failed
@@ -808,6 +863,7 @@ fn remove_dirs(
             Err(_) => {
                 // Any other tolerated failure (chiefly "not empty") is
                 // tracked for a possible later revisit.
+                listing.unmerge_kept("!empty", "dir", &dest);
                 revisit.insert(dest, inode_key);
             }
         }
@@ -839,6 +895,12 @@ pub struct UnmergeOptions {
     /// but a database backend keeps installed until the publishing commit.
     /// Left out of `others_in_slot`; empty everywhere else.
     pub already_unmerged: Vec<String>,
+    /// Print the per-file unmerge listing to stdout: set only on the
+    /// direct `ebuild <file> unmerge` path (and the direct merge's
+    /// replace loop, via `MergeOptions.direct`). The `emerge -C` path
+    /// stays silent.
+    /// Portage: vartree.py, `dblink._display_merge`.
+    pub direct: bool,
 }
 
 impl Default for UnmergeOptions {
@@ -852,6 +914,7 @@ impl Default for UnmergeOptions {
             uninstall_ignore: "/lib/modules/*".to_string(),
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
             already_unmerged: Vec::new(),
+            direct: false,
         }
     }
 }
@@ -902,6 +965,7 @@ pub(crate) fn unmerge_pkgfiles(args: UnmergePkgfilesArgs<'_>) -> Result<(), Stri
         replacement_preserved,
         replacement_needed,
         retire: None,
+        listing: &mut ebuild_merge::MergeListing::new(false),
     })
     .map(|_| ())
 }
@@ -918,6 +982,8 @@ pub(crate) struct UnmergePkgfilesIntoArgs<'a> {
     pub(crate) replacement_preserved: &'a BTreeMap<String, Vec<String>>,
     pub(crate) replacement_needed: &'a [(String, Vec<crate::needed_elf::NeededEntry>)],
     pub(crate) retire: Option<&'a mut ebuild_merge::RetireWrites>,
+    /// The direct-path listing printer; a disabled listing is a no-op.
+    pub(crate) listing: &'a mut ebuild_merge::MergeListing,
 }
 
 /// [`unmerge_pkgfiles`] collecting the registry/config-memory/other-entry
@@ -938,6 +1004,7 @@ pub(crate) fn unmerge_pkgfiles_into(
         replacement_preserved,
         replacement_needed,
         mut retire,
+        listing,
     } = args;
     // Through the root's installed-database backend. The error keeps the
     // underlying text: the io error, `ENOENT` for a missing entry, the
@@ -1037,6 +1104,7 @@ pub(crate) fn unmerge_pkgfiles_into(
         stale_confmem: &mut stale_confmem,
         preserved_paths: &preserved_paths,
         contents_text: &contents_text,
+        listing,
     })?;
     if !stale_confmem.is_empty() {
         let mut updated = cfgfiledict;
@@ -1165,6 +1233,7 @@ pub fn run_unmerge(
     }
 
     let mut retire = ebuild_merge::RetireWrites::for_root(root);
+    let mut listing = ebuild_merge::MergeListing::new(options.direct);
     let elog_lines = unmerge_pkgfiles_into(UnmergePkgfilesIntoArgs {
         root,
         category: &env.category,
@@ -1176,6 +1245,7 @@ pub fn run_unmerge(
         replacement_preserved: &BTreeMap::new(), // Standalone `emerge -C`: no replacing package.
         replacement_needed: &[],
         retire: retire.as_mut(),
+        listing: &mut listing,
     })?;
     emit_unmerge_elog(root, &env.category, &env.split.pf, &elog_lines);
 
@@ -1286,6 +1356,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1327,6 +1398,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1361,6 +1433,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1395,6 +1468,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1430,6 +1504,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1464,6 +1539,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1492,6 +1568,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("missing entries are not an error");
     }
@@ -1546,6 +1623,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1593,6 +1671,7 @@ mod tests {
             stale_confmem: &mut stale_confmem,
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1639,6 +1718,7 @@ mod tests {
             stale_confmem: &mut stale_confmem,
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1675,6 +1755,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1721,6 +1802,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1748,7 +1830,12 @@ mod tests {
         std::fs::create_dir_all(&info).unwrap();
         std::fs::write(info.join("dir"), b"").unwrap();
 
-        cleanup_info_dir(&info, (0, 0), &BTreeSet::new());
+        cleanup_info_dir(
+            &info,
+            (0, 0),
+            &BTreeSet::new(),
+            &mut ebuild_merge::MergeListing::new(false),
+        );
 
         assert!(!info.join("dir").exists());
     }
@@ -1761,7 +1848,12 @@ mod tests {
         std::fs::write(info.join("dir"), b"").unwrap();
         std::fs::write(info.join("dir.old"), b"").unwrap();
 
-        cleanup_info_dir(&info, (0, 0), &BTreeSet::new());
+        cleanup_info_dir(
+            &info,
+            (0, 0),
+            &BTreeSet::new(),
+            &mut ebuild_merge::MergeListing::new(false),
+        );
 
         assert!(!info.join("dir").exists());
         assert!(!info.join("dir.old").exists());
@@ -1777,7 +1869,12 @@ mod tests {
         std::fs::write(info.join("dir"), b"").unwrap();
         std::fs::write(info.join("automake.info"), b"real content").unwrap();
 
-        cleanup_info_dir(&info, (0, 0), &BTreeSet::new());
+        cleanup_info_dir(
+            &info,
+            (0, 0),
+            &BTreeSet::new(),
+            &mut ebuild_merge::MergeListing::new(false),
+        );
 
         assert!(info.join("dir").exists());
         assert!(info.join("automake.info").exists());
@@ -1790,7 +1887,12 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(other.join("dir"), b"").unwrap();
 
-        cleanup_info_dir(&other, (0, 0), &BTreeSet::new());
+        cleanup_info_dir(
+            &other,
+            (0, 0),
+            &BTreeSet::new(),
+            &mut ebuild_merge::MergeListing::new(false),
+        );
 
         assert!(other.join("dir").exists());
     }
@@ -1808,7 +1910,12 @@ mod tests {
         let inode_key = (meta.dev(), meta.ino());
         let infodirs_inodes = BTreeSet::from([inode_key]);
 
-        cleanup_info_dir(&other, inode_key, &infodirs_inodes);
+        cleanup_info_dir(
+            &other,
+            inode_key,
+            &infodirs_inodes,
+            &mut ebuild_merge::MergeListing::new(false),
+        );
 
         assert!(!other.join("dir").exists());
     }
@@ -1838,6 +1945,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -1885,6 +1993,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2110,6 +2219,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2148,6 +2258,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("a type-changed obj must skip, not fail");
 
@@ -2195,6 +2306,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2240,6 +2352,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2277,6 +2390,7 @@ mod tests {
                 stale_confmem: &mut Vec::new(),
                 preserved_paths: &BTreeSet::new(),
                 contents_text: contents,
+                listing: &mut ebuild_merge::MergeListing::new(false),
             })
             .expect("a type-changed dir must never abort the unmerge");
 
@@ -2319,6 +2433,7 @@ mod tests {
                 stale_confmem: &mut Vec::new(),
                 preserved_paths: &BTreeSet::new(),
                 contents_text: contents,
+                listing: &mut ebuild_merge::MergeListing::new(false),
             })
             .expect("remove_contents succeeds");
 
@@ -2359,6 +2474,7 @@ mod tests {
                 stale_confmem: &mut Vec::new(),
                 preserved_paths: &BTreeSet::new(),
                 contents_text: contents,
+                listing: &mut ebuild_merge::MergeListing::new(false),
             })
             .expect("remove_contents succeeds");
 
@@ -2722,6 +2838,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2763,6 +2880,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2804,6 +2922,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2849,6 +2968,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2891,6 +3011,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2939,6 +3060,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -2987,6 +3109,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 
@@ -3047,6 +3170,7 @@ mod tests {
             stale_confmem: &mut Vec::new(),
             preserved_paths: &BTreeSet::new(),
             contents_text: &contents,
+            listing: &mut ebuild_merge::MergeListing::new(false),
         })
         .expect("remove_contents succeeds");
 

@@ -1,0 +1,50 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s403/l-l08b-mergethrough-portage/tmp/portage/app-misc/s403-mod-1.0/work
+>>> Preparing source in /var/tmp/s403/l-l08b-mergethrough-portage/tmp/portage/app-misc/s403-mod-1.0/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s403/l-l08b-mergethrough-portage/tmp/portage/app-misc/s403-mod-1.0/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s403/l-l08b-mergethrough-portage/tmp/portage/app-misc/s403-mod-1.0/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/s403-mod-1.0
+
+>>> Install app-misc/s403-mod-1.0 into /var/tmp/s403/l-l08b-mergethrough-portage/tmp/portage/app-misc/s403-mod-1.0/image
+>>> Completed installing app-misc/s403-mod-1.0 into /var/tmp/s403/l-l08b-mergethrough-portage/tmp/portage/app-misc/s403-mod-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  8 KiB
+
+ [32;01m*[39;49;00m checking 2 files for package collisions
+[31;01m * [39;49;00mThis package will overwrite one or more files that may belong to other
+[31;01m * [39;49;00mpackages (see list below). Add either "collision-protect" or "protect-
+[31;01m * [39;49;00mowned" to FEATURES in make.conf if you would like the merge to abort
+[31;01m * [39;49;00min cases like this. See the make.conf man page for more information
+[31;01m * [39;49;00mabout these features. You can use a command such as `portageq owners /
+[31;01m * [39;49;00m<filename>` to identify the installed package that owns a file. If
+[31;01m * [39;49;00mportageq reports that only one package owns a file then do NOT file a
+[31;01m * [39;49;00mbug report. A bug report is only useful if it identifies at least two
+[31;01m * [39;49;00mor more packages that are known to install the same file(s). If a
+[31;01m * [39;49;00mcollision occurs and you can not explain where the file came from then
+[31;01m * [39;49;00myou should simply ignore the collision since there is not enough
+[31;01m * [39;49;00minformation to determine if a real problem exists. Please do NOT file
+[31;01m * [39;49;00ma bug report at https://bugs.gentoo.org/ unless you report exactly
+[31;01m * [39;49;00mwhich two packages install the same file(s). See
+[31;01m * [39;49;00mhttps://wiki.gentoo.org/wiki/Knowledge_Base:Blockers for tips on how
+[31;01m * [39;49;00mto solve the problem. And once again, please do NOT file a bug report
+[31;01m * [39;49;00munless you have completely understood the above message.
+[31;01m * [39;49;00m
+[31;01m * [39;49;00mDetected file collision(s):
+[31;01m * [39;49;00m
+[31;01m * [39;49;00m	/var/tmp/s403/l-l08b-mergethrough-portage/root/usr/share/s403-owned.txt
+[33;01m * [39;49;00mPackage 'app-misc/s403-mod-1.0' merged despite file collisions. If
+[33;01m * [39;49;00mnecessary, refer to your elog messages for the whole content of the
+[33;01m * [39;49;00mabove message.
+>>> Merging app-misc/s403-mod-1.0 to /var/tmp/s403/l-l08b-mergethrough-portage/root/
+--- /var/tmp/s403/l-l08b-mergethrough-portage/root/usr/
+--- /var/tmp/s403/l-l08b-mergethrough-portage/root/usr/share/
+>>> /var/tmp/s403/l-l08b-mergethrough-portage/root/usr/share/s403-owned.txt
+>>> /var/tmp/s403/l-l08b-mergethrough-portage/root/lib/
+>>> /var/tmp/s403/l-l08b-mergethrough-portage/root/lib/modules/
+>>> /var/tmp/s403/l-l08b-mergethrough-portage/root/lib/modules/s403-test/
+>>> /var/tmp/s403/l-l08b-mergethrough-portage/root/lib/modules/s403-test/s403-test.ko
+>>> app-misc/s403-mod-1.0 merged.

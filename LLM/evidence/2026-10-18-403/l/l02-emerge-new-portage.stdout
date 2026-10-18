@@ -1,0 +1,40 @@
+Calculating dependencies ... done!
+Dependency resolution took 1.84 s (backtrack: 0/20).
+
+
+>>> Verifying ebuild manifests
+
+>>> Running pre-merge checks for app-misc/t348-b-phases-8
+
+>>> Emerging (1 of 1) app-misc/t348-b-phases-8::t348 for /var/tmp/s403/l-l02-emerge-new-portage/root/
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/work
+>>> Preparing source in /var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/work/t348-b-phases-8 ...
+ [32m*[0m Applying fix.patch ...
+[A[72C [34;01m[ [32;01mok[34;01m ][0m
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/work/t348-b-phases-8 ...
+./configure --prefix=/usr --host= --mandir=/usr/share/man --infodir=/usr/share/info --datadir=/usr/share --sysconfdir=/etc --localstatedir=/var/lib
+t348-b-phases configured ok
+>>> Source configured.
+>>> Compiling source in /var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/work/t348-b-phases-8 ...
+make -j32 
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t348-b-phases-8
+
+>>> Install app-misc/t348-b-phases-8 into /var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/image
+make -j32 DESTDIR=/var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/image install 
+mkdir -p "/var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/image/usr/share/t348-b-phases"
+cp built.txt "/var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/image/usr/share/t348-b-phases/built.txt"
+cp config.args "/var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/image/usr/share/t348-b-phases/config.args"
+>>> Completed installing app-misc/t348-b-phases-8 into /var/tmp/s403/l-l02-emerge-new-portage/tmp/portage/app-misc/t348-b-phases-8/image
+
+ [32m*[0m Final size of build directory: 24 KiB
+ [32m*[0m Final size of installed tree:  12 KiB
+
+
+>>> Installing (1 of 1) app-misc/t348-b-phases-8::t348 to /var/tmp/s403/l-l02-emerge-new-portage/root/
+
+>>> Completed (1 of 1) app-misc/t348-b-phases-8::t348 to /var/tmp/s403/l-l02-emerge-new-portage/root/
+
+ * GNU info directory index is up-to-date.

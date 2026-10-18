@@ -89,24 +89,28 @@ fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
 
     let empty_plib = HashMap::new();
     let empty_blocked = HashSet::new();
-    let (collisions, symlink_collisions, _) = find_collisions(FindCollisionsArgs {
-        d: &image,
-        root: &root,
-        category: "sys-kernel",
-        package: "linux-firmware",
-        slot: "0",
-        config_protect: "/etc",
-        config_protect_mask: "/etc/env.d",
-        plib_inodes: &empty_plib,
-        blocked: &empty_blocked,
-    })
-    .expect("find_collisions succeeds");
+    let (collisions, symlink_collisions, _, image_files, image_symlinks) =
+        find_collisions(FindCollisionsArgs {
+            d: &image,
+            root: &root,
+            category: "sys-kernel",
+            package: "linux-firmware",
+            slot: "0",
+            config_protect: "/etc",
+            config_protect_mask: "/etc/env.d",
+            plib_inodes: &empty_plib,
+            blocked: &empty_blocked,
+        })
+        .expect("find_collisions succeeds");
     assert!(
         symlink_collisions.is_empty(),
         "a directory-target symlink is not a PMS 13.4 collision: {symlink_collisions:?}"
     );
     // The ordinary stray-file collision is reported...
     assert_eq!(collisions, vec!["/lib/firmware/brcm/stray.txt".to_string()]);
+    // The collision line counts regular files plus non-directory
+    // symlinks (the directory-target `ad103` link counts as neither).
+    assert_eq!((image_files, image_symlinks), (2, 0));
     assert!(
         find_owners(&root, &collisions).is_empty(),
         "the stray file is unclaimed"
@@ -124,6 +128,7 @@ fn directory_target_symlink_over_a_real_directory_is_ignored_and_backed_up() {
         noconfmem: false,
         cfgfiledict: &mut cfgfiledict,
         xattrs: &XattrPolicy::default(),
+        listing: &mut MergeListing::new(false),
     })
     .expect("merge_tree succeeds");
 

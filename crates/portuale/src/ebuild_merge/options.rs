@@ -66,6 +66,13 @@ pub struct MergeOptions {
     /// The calling environment's own `PORTAGE_TMPDIR`, when set.
     /// Outranks a per-package `package.env` value; `None` in tests.
     pub process_tmpdir: Option<PathBuf>,
+    /// Print the per-file merge/unmerge listing to stdout: set only on
+    /// the direct `ebuild <file> merge|qmerge|unmerge` path. The
+    /// `emerge`-driven paths stay silent (their listing would go to the
+    /// build log, which portuale does not reproduce).
+    /// Portage: vartree.py, `dblink._display_merge` (foreground
+    /// scheduler vs background task).
+    pub direct: bool,
 }
 
 impl Default for MergeOptions {
@@ -94,6 +101,7 @@ impl Default for MergeOptions {
             gpg_verify: crate::binpkg::GpgVerify::default(),
             features: String::new(),
             process_tmpdir: None,
+            direct: false,
         }
     }
 }
@@ -157,6 +165,7 @@ impl MergeOptions {
             gpg_verify: crate::binpkg::GpgVerify::from_env(),
             features: std::env::var("FEATURES").unwrap_or_default(),
             process_tmpdir: std::env::var_os("PORTAGE_TMPDIR").map(PathBuf::from),
+            direct: false,
         }
     }
 }

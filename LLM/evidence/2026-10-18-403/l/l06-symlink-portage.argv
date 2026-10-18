@@ -1,0 +1,2 @@
+cwd: /var/tmp/s403
+cmd: env PORTAGE_CONFIGROOT=/var/tmp/s403/l-l06-symlink-portage/cfg ROOT=/var/tmp/s403/l-l06-symlink-portage/root PORTAGE_TMPDIR=/var/tmp/s403/l-l06-symlink-portage/tmp DISTDIR=/var/tmp/s403/l-l06-symlink-portage/dist FEATURES=-sandbox\ -usersandbox\ -userpriv\ -network-sandbox\ -ipc-sandbox\ -pid-sandbox\ -news ebuild /var/tmp/s403/s403-overlay/app-misc/s403-link/s403-link-1.0.ebuild merge
