@@ -117,6 +117,9 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         } else {
             std::borrow::Cow::Borrowed(config)
         };
+    // `repos.conf`'s per-repo `usepkg-exclude`/`usepkg-include` join the CLI lists.
+    // Portage: _emerge/depgraph.py:384-392
+    let (repo_exclude, repo_include) = portage_repo::repo_usepkg_atoms(config_root);
     // New code builds a `ResolveRequest` and calls the runtime-selected
     // `Resolver` directly (see `resolve_pretend_graph`'s doc comment) --
     // this is the one production call site that carries `--solver=`.
@@ -147,8 +150,8 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         usepkg,
         usepkgonly,
         binpkg_respect_use,
-        usepkg_exclude: usepkg_exclude.to_vec(),
-        usepkg_include: usepkg_include.to_vec(),
+        usepkg_exclude: usepkg_exclude.iter().cloned().chain(repo_exclude).collect(),
+        usepkg_include: usepkg_include.iter().cloned().chain(repo_include).collect(),
         rebuilt_binaries,
         rebuilt_binaries_timestamp,
         newrepo,

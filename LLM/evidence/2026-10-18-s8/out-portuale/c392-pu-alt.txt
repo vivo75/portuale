@@ -1,0 +1,3 @@
+### emerge --pretend --update dev-libs/unsatuseslotalt --color=n
+[ebuild  NS    ] dev-libs/unsatuseslotalt-2.0 [1.0] to /var/tmp/s8/stage/fixtures
+rc=0

@@ -165,7 +165,7 @@ fn usepkgonly_n_leaves_bdeps_auto_on() {
     // (`actions.py` implications need `is True`), so bdeps-auto stays
     // on. Portage still prints `Total: 0` there, but through the
     // ebuild-db drop (`depgraph.py:809`, `"--usepkgonly" not in myopts`),
-    // which this rule does not model — not a bdeps divergence.
+    // which `EmergeOpts::ebuild_db_dropped` models (#396) — not a bdeps rule.
     assert!(bdeps_for_argv(
         &["-pvuD", "--usepkgonly=n", "dev-libs/pg34-blib"],
         &[]
@@ -199,4 +199,28 @@ fn with_bdeps_auto_n_disables_the_auto_bit() {
         ..Default::default()
     };
     assert!(!plan_with_bdeps(&opts, &[]));
+}
+
+#[test]
+fn usepkgonly_n_keeps_the_key_so_the_ebuild_database_is_dropped() {
+    // #396, Portage `depgraph.py:809`: the key stays present as `False`.
+    for (argv, dropped) in [
+        (vec!["--usepkgonly=n"], true),
+        (vec!["--usepkgonly", "n"], true),
+        (vec!["--usepkgonly=n", "--usepkgonly=y"], false),
+        (vec!["-K"], false),
+        (vec!["--usepkg=n"], false),
+    ] {
+        let args: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
+        let opts = parse_emerge_args(&args).expect("parses");
+        assert_eq!(opts.ebuild_db_dropped, dropped, "{argv:?}");
+    }
+}
+
+#[test]
+fn update_if_installed_implies_update() {
+    // #375, Portage `create_depgraph_params.py:139-143`.
+    let args = vec!["--update-if-installed".to_string()];
+    let opts = parse_emerge_args(&args).expect("parses");
+    assert!(opts.update && opts.update_if_installed);
 }

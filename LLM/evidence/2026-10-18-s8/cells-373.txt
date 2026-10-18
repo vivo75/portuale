@@ -1,0 +1,8 @@
+# #373: per-repo usepkg-exclude/include in repos.conf. env-spec REPOKEY=<key>=<atoms> is added to [testrepo].
+c373-base | --pretend --usepkg dev-libs/binaryonlypkg |
+c373-exclude | --pretend --usepkg dev-libs/binaryonlypkg | REPOKEY=usepkg-exclude=dev-libs/binaryonlypkg
+c373-include-other | --pretend --usepkg dev-libs/binaryonlypkg | REPOKEY=usepkg-include=dev-libs/doesnotexist-anywhere
+c373-include-same | --pretend --usepkg dev-libs/binaryonlypkg | REPOKEY=usepkg-include=dev-libs/binaryonlypkg
+c373-exclude-repo | --pretend --usepkg dev-libs/binaryonlypkg | REPOKEY=usepkg-exclude=dev-libs/binaryonlypkg::testrepo
+c373-bad | --pretend --usepkg dev-libs/binaryonlypkg | REPOKEY=usepkg-exclude=>=dev-libs/binaryonlypkg-1
+c373-conflict | --pretend --usepkg dev-libs/binaryonlypkg | REPOKEY=usepkg-exclude=dev-libs/binaryonlypkg;usepkg-include=dev-libs/binaryonlypkg

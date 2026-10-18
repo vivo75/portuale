@@ -1,0 +1,30 @@
+# S8 cells (batch 2026-10-18). Format as 2026-10-15-359-s0/cells-s0.txt.
+c375-pvD-uii-top | -pvD --update-if-installed dev-libs/pg367-top |
+c375-pv-uii-top | -pv --update-if-installed dev-libs/pg367-top |
+c375-pv-uii-installed | -pv --update-if-installed dev-libs/unsatuseslotalt |
+c396-pv-upo-n-new | -pv --usepkgonly=n dev-libs/pg367-top |
+c396-pvuD-upo-n | -pvuD --usepkgonly=n dev-libs/pg34-blib |
+c392-pu-alt | --pretend --update dev-libs/unsatuseslotalt |
+c392-pvu-alt | -pvu dev-libs/unsatuseslotalt |
+c393-nomoves | --pretend --update --package-moves=n dev-libs/slotmovepkg |
+c393-moves | --pretend --update dev-libs/slotmovepkg |
+c371-profile | -pv @profile |
+c371-preserved | -pv @preserved-rebuild |
+c371-profile-p | -p @profile |
+c371-profile-pq | -pq @profile |
+c371-profile-run | @profile |
+c371-profile-ask | -a @profile |
+c371-preserved-run | @preserved-rebuild |
+c371-profile-tree | -pvt @profile |
+c371-profile-fetchonly | -pf @profile |
+c396-pvuD-usepkg-upo-n | -pvuD --usepkg --usepkgonly=n dev-libs/pg34-blib |
+c396-pv-usepkg-upo-n-new | -pv --usepkg --usepkgonly=n dev-libs/pg367-top |
+c396-pvuD-usepkg | -pvuD --usepkg dev-libs/pg34-blib |
+c396-pvuD-upo-y | -pvuD --usepkgonly=y dev-libs/pg34-blib |
+c396-pvuD-K | -pvuDK dev-libs/pg34-blib |
+c396-pv-K-installed | -pvK dev-libs/pg34-blib |
+c396-pv-upo-n-installed | -pv --usepkgonly=n dev-libs/pg34-blib |
+c396-pv-K-installed-nonexistent | -pvK dev-libs/doesnotexist |
+c396-pvu-K-installed-twoslots | -pvuK dev-libs/pg34-multi |
+c373-cli-exclude | --pretend --usepkg --usepkg-exclude dev-libs/binaryonlypkg dev-libs/binaryonlypkg |
+c373-cli-include-other | --pretend --usepkg --usepkg-include dev-libs/doesnotexist-anywhere dev-libs/binaryonlypkg |

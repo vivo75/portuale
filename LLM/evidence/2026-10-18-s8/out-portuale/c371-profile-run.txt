@@ -1,0 +1,5 @@
+### emerge @profile --color=n
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+rc=0

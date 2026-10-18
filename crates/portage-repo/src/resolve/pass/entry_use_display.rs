@@ -132,6 +132,11 @@ pub(crate) fn record_entry_use_display(
                 Some(from.clone())
             }
             PretendOutcome::Reinstall { version, .. } => Some(version.to_string()),
+            // A new slot diffs against the highest installed other-slot instance.
+            // Portage: output.py, set_pkg_info (`cp_matches[-1]`)
+            PretendOutcome::New { .. } => {
+                crate::use_display::highest_installed_version(ctx.root, &key.0, &key.1)
+            }
             _ => None,
         };
         let installed = installed_version.map(|v| {

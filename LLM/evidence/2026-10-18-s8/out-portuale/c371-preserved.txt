@@ -1,0 +1,4 @@
+### emerge -pv @preserved-rebuild --color=n
+
+Total: 0 packages, Size of downloads: 0 KiB
+rc=0

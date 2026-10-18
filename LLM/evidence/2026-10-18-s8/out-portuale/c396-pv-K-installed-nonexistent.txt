@@ -1,0 +1,3 @@
+### emerge -pvK dev-libs/doesnotexist --color=n
+emerge: there are no binary packages to satisfy "dev-libs/doesnotexist" for /var/tmp/s8/stage/fixtures/.
+rc=1

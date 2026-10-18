@@ -1,0 +1,8 @@
+### emerge -pf @profile --color=n
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+rc=0

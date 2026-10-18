@@ -1,0 +1,4 @@
+### emerge -pvD --update-if-installed dev-libs/pg367-top --color=n
+
+Total: 0 packages, Size of downloads: 0 KiB
+rc=0

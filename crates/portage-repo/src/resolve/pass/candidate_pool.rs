@@ -27,7 +27,7 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
     // Re-derive which source the resolved version lives in; must agree
     // with what `resolve_pretend` chose.
     // Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp (ebuild last resort)
-    let mut repo_candidates = if ctx.usepkgonly {
+    let mut repo_candidates = if ctx.usepkgonly || crate::globals::ebuild_db_dropped() {
         Vec::new()
     } else {
         let Ok(c) = list_candidates(&ctx.repos, &key.0, &key.1) else {

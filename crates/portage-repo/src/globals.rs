@@ -67,6 +67,43 @@ pub(crate) fn use_ebuild_visibility() -> bool {
     USE_EBUILD_VISIBILITY.load(AtomicOrdering::Relaxed)
 }
 
+/// `--usepkgonly=n`: Portage's `"--usepkgonly" not in myopts` still fails, so
+/// the ebuild database is left out of the dbs list although binaries are not
+/// exclusive. Off by default.
+// Portage: _emerge/depgraph.py:809
+pub(crate) static EBUILD_DB_DROPPED: AtomicBool = AtomicBool::new(false);
+
+/// Set by `pretend.rs` from `--usepkgonly=n` before any resolution.
+pub fn set_ebuild_db_dropped(dropped: bool) {
+    EBUILD_DB_DROPPED.store(dropped, AtomicOrdering::Relaxed);
+}
+
+pub(crate) fn ebuild_db_dropped() -> bool {
+    EBUILD_DB_DROPPED.load(AtomicOrdering::Relaxed)
+}
+
+/// ` for <root>` appended to the quoted atom of an unsatisfied-dependency
+/// message when the target root is not `/`. Process-global, set once by the CLI.
+// Portage: _emerge/depgraph.py:6502-6503 (`root != _running_root.root`)
+static DISPLAY_ROOT_SUFFIX: RwLock<String> = RwLock::new(String::new());
+
+/// Set by `pretend.rs` from the target `ROOT` and the running root (`/`, or
+/// the portuale-only `PORTAGE_RUNNING_ROOT` hook) before any resolution.
+pub fn set_display_root(root: &std::path::Path, running_root: &std::path::Path) {
+    let norm = |p: &std::path::Path| p.to_string_lossy().trim_end_matches('/').to_string();
+    let target = norm(root);
+    *DISPLAY_ROOT_SUFFIX.write().unwrap() = if target == norm(running_root) {
+        String::new()
+    } else {
+        format!(" for {target}/")
+    };
+}
+
+/// The suffix [`set_display_root`] computed (empty for `/`).
+pub fn display_root_suffix() -> String {
+    DISPLAY_ROOT_SUFFIX.read().unwrap().clone()
+}
+
 /// `--debug`: emit the per-package resolver trace plus the graph dump (see
 /// `resolver_trace`). Process-global, set once by the CLI on the `--pretend` path.
 // Portage: main.py, depgraph.py

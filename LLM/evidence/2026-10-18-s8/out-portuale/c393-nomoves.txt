@@ -1,0 +1,2 @@
+### emerge --pretend --update --package-moves=n dev-libs/slotmovepkg --color=n
+rc=0

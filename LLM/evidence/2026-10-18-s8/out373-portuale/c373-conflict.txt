@@ -1,0 +1,8 @@
+### emerge --pretend --usepkg dev-libs/binaryonlypkg
+
+!!! The following atoms appear in both the usepkg-exclude usepkg-include lists for repo [testrepo]:
+
+    dev-libs/binaryonlypkg
+
+[binary  N     ] dev-libs/binaryonlypkg-1.0-1 to /var/tmp/s8/st373/fixtures
+rc=0

@@ -689,7 +689,7 @@ pub fn resolve_pretend(
     // drop a binary from the pool before it is ever considered, like Portage's
     // break-out-of-the-loop rejection.
     // Portage: depgraph.py dbs construction; list_binary_candidates
-    let mut candidates = if usepkgonly {
+    let mut candidates = if usepkgonly || crate::globals::ebuild_db_dropped() {
         Vec::new()
     } else {
         // Owned copy: the resolver's mutable pool (binaries are `extend`ed in and
@@ -1164,7 +1164,7 @@ pub(crate) fn relax_until_usable(
         // Portage: depgraph.py _iter_match_pkgs installed
         if !empty
             && !is_top_level
-            && (usepkg || usepkgonly)
+            && (usepkg || usepkgonly || crate::globals::ebuild_db_dropped())
             && let Some(version) =
                 best_installed_for_atom(root, atom_str, &atom.category, &atom.package)
         {
@@ -1685,6 +1685,21 @@ pub(crate) fn classify_best_against_installed(
                     to: best.version.clone(),
                 })
             }
+        }
+        // The same version already installed in another slot (a slot move
+        // that `--package-moves=n` left unapplied): under `--update` Portage
+        // keeps the installed instance, as the cpv is equal.
+        // Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp
+        None if update
+            && !empty
+            && !(newuse || changed_use || changed_deps || changed_slot || newrepo)
+            && installed_pairs
+                .iter()
+                .any(|(v, slot, _)| *v == best.version && *slot != best.slot) =>
+        {
+            Ok(PretendOutcome::AlreadyInstalled {
+                version: best.version.clone(),
+            })
         }
         None => Ok(PretendOutcome::New {
             version: best.version.clone(),

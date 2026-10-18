@@ -258,3 +258,22 @@ fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_tim
         "the build-time-key pin must be ignored entirely, got enforced={enforced:?} dropped={dropped:?}"
     );
 }
+
+#[test]
+fn repo_usepkg_atoms_append_the_repo_name_and_drop_bad_and_conflicting_atoms() {
+    // Portage: repository/config.py:253-282 (validation, conflict removal),
+    // depgraph.py:384-392 (`atom::reponame`); Portage 3.0.82.2 evidence in
+    // LLM/evidence/2026-10-18-s8/out373/.
+    let root = masters_test_root("usepkg-lists");
+    std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+    std::fs::write(
+        root.join("etc/portage/repos.conf"),
+        "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n\
+         usepkg-exclude = dev-libs/a dev-libs/b:2 >=dev-libs/bad-1 dev-libs/both\n\
+         usepkg-include = dev-libs/both dev-libs/c\n",
+    )
+    .unwrap();
+    let (exclude, include) = repo_usepkg_atoms(&root);
+    assert_eq!(exclude, vec!["dev-libs/a::main", "dev-libs/b:2::main"]);
+    assert_eq!(include, vec!["dev-libs/c::main"]);
+}

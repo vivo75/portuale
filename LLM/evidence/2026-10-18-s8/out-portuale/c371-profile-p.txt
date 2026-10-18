@@ -1,0 +1,2 @@
+### emerge -p @profile --color=n
+rc=0

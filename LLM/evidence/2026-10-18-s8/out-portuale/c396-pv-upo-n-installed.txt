@@ -1,0 +1,3 @@
+### emerge -pv --usepkgonly=n dev-libs/pg34-blib --color=n
+emerge: there are no ebuilds to satisfy "dev-libs/pg34-blib" for /var/tmp/s8/stage/fixtures/.
+rc=1

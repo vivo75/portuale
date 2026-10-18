@@ -214,8 +214,10 @@ pub(crate) fn render_required_use_block(args: RenderRequiredUseBlockArgs<'_>) ->
         full_human,
         dep_chain,
     } = args;
-    let mut out =
-        format!("\n!!! The ebuild selected to satisfy \"{xinfo}\" has unmet requirements.\n");
+    let mut out = format!(
+        "\n!!! The ebuild selected to satisfy \"{xinfo}\"{} has unmet requirements.\n",
+        crate::display_root_suffix()
+    );
     out.push_str(&format!(
         "- {cpv_repo} {}\n",
         render_use_display_pairs(use_display)

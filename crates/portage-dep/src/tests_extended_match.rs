@@ -161,3 +161,16 @@ fn default_parse_atom_still_rejects_extended_atoms() {
         assert_eq!(parse_atom(s), None, "{s}");
     }
 }
+
+#[test]
+fn an_unknown_repo_candidate_passes_any_repo_atom() {
+    // Portage: dep/__init__.py:3201 (`repo != _unknown_repo`).
+    assert_eq!(
+        match_from_list("dev-libs/a::main", &["dev-libs/a-1::__unknown__"]),
+        Some(vec!["dev-libs/a-1::__unknown__"])
+    );
+    assert_eq!(
+        match_from_list("dev-libs/a::main", &["dev-libs/a-1::other"]),
+        Some(vec![])
+    );
+}

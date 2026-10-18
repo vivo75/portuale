@@ -138,7 +138,13 @@ pub(crate) fn refresh_one_entry_display(
     config: &portage_profile::Config,
 ) {
     let (version, installed_version) = match &e.outcome {
-        PretendOutcome::New { version } => (version.clone(), None),
+        // A new slot diffs against the highest installed instance of another
+        // slot, not against nothing.
+        // Portage: output.py, set_pkg_info (`cp_matches[-1]`)
+        PretendOutcome::New { version } => (
+            version.clone(),
+            highest_installed_version(root, &e.category, &e.package),
+        ),
         PretendOutcome::Upgrade { from, to } | PretendOutcome::Downgrade { from, to } => {
             (to.clone(), Some(from.clone()))
         }
@@ -214,6 +220,19 @@ pub(crate) fn refresh_one_entry_display(
     });
     e.use_flags_display = display;
 }
+/// The highest installed version of `category/package` in any slot.
+pub(crate) fn highest_installed_version(
+    root: &Path,
+    category: &str,
+    package: &str,
+) -> Option<String> {
+    crate::all_installed_packages(root)
+        .into_iter()
+        .filter(|p| p.category == category && p.package == package)
+        .map(|p| p.version)
+        .max_by(|a, b| crate::vercmp_ordering(a, b))
+}
+
 pub(crate) struct BuildUseExpandDisplayArgs<'a> {
     pub(crate) use_flags_display: &'a [(String, bool)],
     pub(crate) config: &'a portage_profile::Config,

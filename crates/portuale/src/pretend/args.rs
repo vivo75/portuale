@@ -27,6 +27,9 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) color_opt: Option<bool>,
     pub(crate) lib_check: bool,
     pub(crate) update: bool,
+    /// `--update-if-installed`: implies `update`, and drops arguments that
+    /// have no installed instance. Portage: create_depgraph_params.py:139-143
+    pub(crate) update_if_installed: bool,
     pub(crate) deep: portage_repo::Deep,
     pub(crate) excluded: Vec<String>,
     pub(crate) reinstall_atoms: Vec<String>,
@@ -37,6 +40,10 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) rebuild_if_new_ver: Option<bool>,
     pub(crate) binpkg_changed_deps_override: Option<bool>,
     pub(crate) use_ebuild_visibility: bool,
+    /// `--usepkgonly=n` given: the key stays in Portage's `myopts`, so the
+    /// ebuild database is dropped although `usepkgonly` is false.
+    /// Portage: _emerge/depgraph.py:809 (`"--usepkgonly" not in myopts`)
+    pub(crate) ebuild_db_dropped: bool,
     pub(crate) rebuild_exclude: Vec<String>,
     pub(crate) rebuild_ignore: Vec<String>,
     pub(crate) complete_graph: bool,
@@ -175,6 +182,7 @@ impl<'a> Default for EmergeOpts<'a> {
             // `--depclean`/`--prune`.
             lib_check: true,
             update: false,
+            update_if_installed: false,
             deep: portage_repo::Deep::NotRequested,
             excluded: Vec::new(),
             // --reinstall-atoms / --useoldpkg-atoms: repeatable, space-separated per
@@ -194,6 +202,7 @@ impl<'a> Default for EmergeOpts<'a> {
             // `--use-ebuild-visibility[=y|n]` (default off).
             binpkg_changed_deps_override: None,
             use_ebuild_visibility: false,
+            ebuild_db_dropped: false,
             // --rebuild-exclude (parent skipped) / --rebuild-ignore (dep never
             // triggers): same repeatable/space-separated shape as --exclude.
             rebuild_exclude: Vec::new(),
@@ -650,6 +659,11 @@ fn parse_depth_opts<'a>(
 ) -> Result<bool, ExitCode> {
     if arg == "--update" || arg == "-u" {
         opts.update = true;
+        *idx += 1;
+        Ok(true)
+    } else if arg == "--update-if-installed" {
+        opts.update = true;
+        opts.update_if_installed = true;
         *idx += 1;
         Ok(true)
     } else if arg == "--noreplace" || arg == "-n" {
@@ -2180,24 +2194,29 @@ fn parse_binpkg_opts<'a>(
         match args.get(*idx + 1).map(String::as_str) {
             Some("y") => {
                 opts.usepkgonly = true;
+                opts.ebuild_db_dropped = false;
                 *idx += 2;
             }
             Some("n") => {
                 opts.usepkgonly = false;
+                opts.ebuild_db_dropped = true;
                 *idx += 2;
             }
             _ => {
                 opts.usepkgonly = true;
+                opts.ebuild_db_dropped = false;
                 *idx += 1;
             }
         }
         Ok(true)
     } else if arg == "--usepkgonly=y" {
         opts.usepkgonly = true;
+        opts.ebuild_db_dropped = false;
         *idx += 1;
         Ok(true)
     } else if arg == "--usepkgonly=n" {
         opts.usepkgonly = false;
+        opts.ebuild_db_dropped = true;
         *idx += 1;
         Ok(true)
     } else if arg == "--getbinpkg" || arg == "-g" {

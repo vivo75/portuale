@@ -415,8 +415,9 @@ pub(crate) fn print_no_visible_candidate(
         .find(|r| r.category == entry.category && r.package == entry.package)
     {
         eprintln!(
-            "\nemerge: there are no ebuilds built with USE flags to satisfy {:?}.",
-            report.atom
+            "\nemerge: there are no ebuilds built with USE flags to satisfy {:?}{}.",
+            report.atom,
+            portage_repo::display_root_suffix()
         );
         eprintln!("!!! One of the following packages is required to complete your request:");
         for (cpv, reasons) in &report.rows {
@@ -430,8 +431,9 @@ pub(crate) fn print_no_visible_candidate(
         .find(|r| r.category == entry.category && r.package == entry.package)
     {
         eprintln!(
-            "\n!!! All ebuilds that could satisfy {:?} have been masked.",
-            report.atom
+            "\n!!! All ebuilds that could satisfy {:?}{} have been masked.",
+            report.atom,
+            portage_repo::display_root_suffix()
         );
         eprintln!("!!! One of the following masked packages is required to complete your request:");
         for (cpv, reasons) in &report.masked {
@@ -457,13 +459,14 @@ pub(crate) fn print_no_visible_candidate(
         // The plain-miss block: the unevaluated atom as queued plus the
         // `_get_dep_chain` rows, in place of the bare line.
         eprintln!(
-            "\nemerge: there are no {} to satisfy {:?}.",
+            "\nemerge: there are no {} to satisfy {:?}{}.",
             if report.binary_only {
                 "binary packages"
             } else {
                 "ebuilds"
             },
-            report.atom
+            report.atom,
+            portage_repo::display_root_suffix()
         );
         for (node, ty) in &report.chain {
             eprintln!("(dependency required by \"{node}\" [{ty}])");

@@ -1,0 +1,5 @@
+### emerge -pv --update-if-installed dev-libs/unsatuseslotalt --color=n
+[ebuild  NS    ] dev-libs/unsatuseslotalt-2.0:2::testrepo [1.0:1::testrepo] to /var/tmp/s8/stage/fixtures USE="-unsatuseorflag" 
+
+Total: 1 package (1 in new slot), Size of downloads: 0 KiB
+rc=0

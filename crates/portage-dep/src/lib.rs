@@ -1119,7 +1119,8 @@ fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
         None => true,
         Some(want) => match &candidate.repo {
             None => true,
-            Some(have) => have == want,
+            // Portage's `_unknown_repo` also passes any `::repo` atom.
+            Some(have) => have == want || have == "__unknown__",
         },
     }
 }

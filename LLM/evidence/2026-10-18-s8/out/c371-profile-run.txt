@@ -1,0 +1,27 @@
+### emerge @profile --color=n
+### delta=none
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+Calculating dependencies ... done!
+Dependency resolution took 0.13 s (backtrack: 0/20).
+
+rc=0

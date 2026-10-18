@@ -195,13 +195,11 @@ struct SectionInfo {
     repos_conf_aliases: Vec<String>,
 }
 
-/// [`find_repos`] without the user-facing section-name-mismatch line, for
-/// internal location-keyed lookups: the CLI layers already report a
-/// mismatch once, and repeating it on every internal probe is noise.
-pub(crate) fn find_repos_impl(
+/// Every `repos.conf` section as raw `key = value` pairs: the global file
+/// first, then the user's file or directory, later keys overriding.
+fn read_repo_sections(
     config_root: &Path,
-    report_section_mismatch: bool,
-) -> Result<Vec<RepoConfig>, Error> {
+) -> Result<HashMap<String, HashMap<String, String>>, Error> {
     let repos_conf_path = config_root.join("etc/portage/repos.conf");
     let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
 
@@ -236,6 +234,104 @@ pub(crate) fn find_repos_impl(
             path: repos_conf_path.display().to_string(),
         });
     }
+    Ok(sections)
+}
+
+/// Per-repo `usepkg-exclude` / `usepkg-include` atoms from `repos.conf`, each
+/// rewritten to `atom::reponame` (invalid atoms dropped with Portage's
+/// warning; an atom in both lists is dropped from both).
+/// Portage: repository/config.py:253-282; _emerge/depgraph.py:384-392
+pub fn repo_usepkg_atoms(config_root: &Path) -> (Vec<String>, Vec<String>) {
+    let Ok(sections) = read_repo_sections(config_root) else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut names: Vec<&String> = sections.keys().filter(|n| *n != "DEFAULT").collect();
+    names.sort();
+    // The warnings print once per process: the resolver asks on every pass.
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let warn = !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed);
+    let (mut exclude, mut include) = (Vec::new(), Vec::new());
+    for section in names {
+        let kv = &sections[section];
+        let Some(location) = kv.get("location") else {
+            continue;
+        };
+        let location = PathBuf::from(location);
+        let location = if location.is_absolute() {
+            location
+        } else {
+            config_root.join(location)
+        };
+        let name = read_repo_name_file(&location).unwrap_or_else(|| section.clone());
+        let mut lists: Vec<Vec<String>> = Vec::new();
+        for opt in ["usepkg-exclude", "usepkg-include"] {
+            let atoms: Vec<String> = kv
+                .get(opt)
+                .map(|v| v.split_whitespace().map(String::from).collect())
+                .unwrap_or_default();
+            let (good, bad): (Vec<String>, Vec<String>) =
+                atoms.into_iter().partition(|a| usepkg_atom_ok(a));
+            if warn && !bad.is_empty() {
+                eprintln!(
+                    "\n!!! The following atoms are invalid in {opt} attribute for repo [{name}] \
+                     (only package names and slot atoms allowed):\n\n    {}\n",
+                    bad.join("\n    ")
+                );
+            }
+            lists.push(good);
+        }
+        let conflicted: Vec<String> = lists[0]
+            .iter()
+            .filter(|a| lists[1].contains(a))
+            .cloned()
+            .collect();
+        if warn && !conflicted.is_empty() {
+            eprintln!(
+                "\n!!! The following atoms appear in both the usepkg-exclude \
+                 usepkg-include lists for repo [{name}]:\n\n    {}\n",
+                conflicted.join("\n    ")
+            );
+        }
+        for (list, out) in lists.iter().zip([&mut exclude, &mut include]) {
+            out.extend(
+                list.iter()
+                    .filter(|a| !conflicted.contains(a))
+                    .map(|a| format!("{a}::{name}")),
+            );
+        }
+    }
+    (exclude, include)
+}
+
+/// Portage `_find_bad_atoms`: a package name or slot atom, wildcards allowed,
+/// no operator, blocker, repo or USE dependency.
+fn usepkg_atom_ok(atom: &str) -> bool {
+    let probe = if atom.split(':').next().unwrap_or(atom).contains('/') {
+        atom.to_string()
+    } else {
+        format!("dummy-category/{atom}")
+    };
+    let opts = portage_dep::AtomOptions {
+        eapi: portage_dep::AtomEapi::None,
+        allow_wildcard: true,
+        allow_repo: Some(false),
+        allow_build_id: None,
+    };
+    portage_dep::parse_atom_with(&probe, &opts, "").is_ok_and(|a| {
+        a.operator == portage_dep::Operator::None
+            && a.blocker == portage_dep::Blocker::None
+            && a.use_deps.is_none()
+    })
+}
+
+/// [`find_repos`] without the user-facing section-name-mismatch line, for
+/// internal location-keyed lookups: the CLI layers already report a
+/// mismatch once, and repeating it on every internal probe is noise.
+pub(crate) fn find_repos_impl(
+    config_root: &Path,
+    report_section_mismatch: bool,
+) -> Result<Vec<RepoConfig>, Error> {
+    let sections = read_repo_sections(config_root)?;
 
     let main_repo = sections
         .get("DEFAULT")

@@ -115,8 +115,9 @@ pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &Graph
             match &f.dep {
                 portage_repo::SkippedDepDisclosure::Masked(report) => {
                     println!(
-                        "!!! All ebuilds that could satisfy {:?} have been masked.",
-                        report.atom
+                        "!!! All ebuilds that could satisfy {:?}{} have been masked.",
+                        report.atom,
+                        portage_repo::display_root_suffix()
                     );
                     println!(
                         "!!! One of the following masked packages is required to complete your request:"
@@ -141,13 +142,14 @@ pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &Graph
                 }
                 portage_repo::SkippedDepDisclosure::Plain(report) => {
                     println!(
-                        "emerge: there are no {} to satisfy {:?}.",
+                        "emerge: there are no {} to satisfy {:?}{}.",
                         if report.binary_only {
                             "binary packages"
                         } else {
                             "ebuilds"
                         },
-                        report.atom
+                        report.atom,
+                        portage_repo::display_root_suffix()
                     );
                     for (node, ty) in &report.chain {
                         println!("(dependency required by \"{node}\" [{ty}])");

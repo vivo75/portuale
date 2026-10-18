@@ -1,0 +1,3 @@
+### emerge --pretend --usepkg dev-libs/binaryonlypkg
+[binary  N     ] dev-libs/binaryonlypkg-1.0-1 to /var/tmp/s8/st373/fixtures
+rc=0

@@ -243,12 +243,29 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         }
     }
 
-    if expanded_atoms.is_empty() {
-        eprintln!(
-            "emerge: no package atoms to resolve (the target list, after \
-             expanding any @world/@selected/@system/@installed/@<set>, is empty)"
-        );
-        return Err(ExitCode::from(2));
+    // `--update-if-installed`: an argument with a candidate but no installed
+    // instance is skipped. An atom with no candidate stays, so it still
+    // reaches the "no ebuilds to satisfy" error.
+    // Portage: _emerge/depgraph.py, _select_files (`update_if_installed`)
+    if opts.update_if_installed {
+        let installed = portage_repo::all_installed_packages(root);
+        let cps: HashSet<String> = portage_repo::all_cp(repos).into_iter().collect();
+        let keep: Vec<bool> = expanded_atoms
+            .iter()
+            .map(|a| {
+                let Some(parsed) = parse_atom(a) else {
+                    return true;
+                };
+                let cp = format!("{}/{}", parsed.category, parsed.package);
+                !cps.contains(&cp) || atom_installed(a, &parsed, &installed)
+            })
+            .collect();
+        let mut it = keep.iter();
+        expanded_atoms.retain(|_| *it.next().unwrap_or(&true));
+        let mut it = keep.iter();
+        expanded_from_set.retain(|_| *it.next().unwrap_or(&true));
+        let mut it = keep.iter();
+        expanded_set_name.retain(|_| *it.next().unwrap_or(&true));
     }
     // The droppable set members, built after expansion so renames match the
     // resolver's own atom texts.
@@ -281,5 +298,25 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         set_args,
         argument_sets,
         set_validation_errors,
+    })
+}
+
+/// Whether any installed instance satisfies `atom`'s package, version and
+/// slot (USE deps are not evaluated).
+fn atom_installed(
+    atom_str: &str,
+    atom: &portage_dep::Atom,
+    installed: &[portage_repo::InstalledPackage],
+) -> bool {
+    let bare = atom_str
+        .split(['[', ':'])
+        .next()
+        .unwrap_or(atom_str)
+        .to_string();
+    installed.iter().any(|p| {
+        p.category == atom.category
+            && p.package == atom.package
+            && atom.slot.as_ref().is_none_or(|s| *s == p.slot)
+            && match_from_list(&bare, &[p.cpv().as_str()]).is_some_and(|m| !m.is_empty())
     })
 }

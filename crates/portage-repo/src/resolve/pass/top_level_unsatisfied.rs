@@ -152,7 +152,18 @@ pub(crate) fn step_top_level_unsatisfied(
             });
             complete_mode_withheld_version(ctx.root, &key.0, &key.1, current_atom, &positives)
         })
-        .flatten();
+        .flatten()
+        // Without an ebuild pool (`--usepkgonly`, or `=n`'s dropped database)
+        // an `--update` argument that matches an installed instance selects
+        // it: nothing to merge, not an error.
+        // Portage: _emerge/depgraph.py, _select_files (installed db in `dbs`)
+        .or_else(|| {
+            (ctx.update && (ctx.usepkgonly || crate::globals::ebuild_db_dropped()))
+                .then(|| {
+                    complete_mode_withheld_version(ctx.root, &key.0, &key.1, current_atom, &[])
+                })
+                .flatten()
+        });
         if let Some(version) = withheld_version {
             *outcome = PretendOutcome::AlreadyInstalled { version };
         } else {
@@ -222,8 +233,9 @@ pub(crate) fn step_top_level_unsatisfied(
                 config,
             }) {
                 let mut block = format!(
-                    "there are no ebuilds built with USE flags to satisfy {current_atom:?}.\n\
-                         !!! One of the following packages is required to complete your request:"
+                    "there are no ebuilds built with USE flags to satisfy {current_atom:?}{}.\n\
+                         !!! One of the following packages is required to complete your request:",
+                    crate::display_root_suffix()
                 );
                 for (cpv, reasons) in rows {
                     block.push_str(&format!("\n- {cpv} ({})", reasons.join(", ")));
@@ -235,7 +247,10 @@ pub(crate) fn step_top_level_unsatisfied(
             } else {
                 "ebuilds"
             };
-            let mut message = format!("there are no {noun} to satisfy {current_atom:?}.");
+            let mut message = format!(
+                "there are no {noun} to satisfy {current_atom:?}{}.",
+                crate::display_root_suffix()
+            );
             // Only suggest a change that would actually fix it (KEYWORDS alone).
             // Portage's "only suggest a working change" spirit.
             if bp.autounmask_suggest_keywords

@@ -39,3 +39,9 @@ Process-wide switches the CLI sets once per run.
 
 ## static UNPARSED_DEP_TOKENS
 - Portage's `use_reduce(token_class=Atom)` raises `InvalidDependString` on an unparseable token; portuale skips it, so a grammar gap in `portage-dep` would otherwise vanish silently from the graph (`docs/history/second_python_copy_removal.md` §4). `emerge --pretend` reports the total on stderr when `PORTUALE_REPORT_UNPARSED_DEP_TOKENS` is set.
+
+## static EBUILD_DB_DROPPED
+- Backlog #396. `--usepkgonly=n` stores `False` under the key, and `"--usepkgonly" not in myopts` (`depgraph.py:809`) is then false, so Portage builds its dbs list without the ebuild database although binaries are not exclusive. Probe: `-pv --usepkgonly=n <new package>` is rc 1 `no ebuilds to satisfy`, not a merge. A process-global rather than a `ResolveRequest` field because the pool is built at four sites (`candidate_pool`, `greedy_slots`, `resolve_pretend`, the dependency installed fallback) and `SelectOptions` has 35 construction sites. Evidence: `LLM/evidence/2026-10-18-s8/out/c396-*.txt`.
+
+## static DISPLAY_ROOT_SUFFIX
+- Backlog #395. `_show_unsatisfied_dep` appends ` for <root>` to the quoted atom when `root != _running_root.root` (`depgraph.py:6502-6503`). Portage's running root is the real `/`; portuale takes it from `PORTAGE_RUNNING_ROOT` (owner Q3: the hook stays), default `/`. The suffix has the root's trailing slash, and the five messages built from `xinfo` carry it: `no ebuilds`, `no binary packages`, `no ebuilds built with USE flags`, `All ebuilds … have been masked` and `The ebuild selected to satisfy … has unmet requirements`.

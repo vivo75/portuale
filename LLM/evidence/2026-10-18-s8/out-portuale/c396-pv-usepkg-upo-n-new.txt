@@ -1,0 +1,3 @@
+### emerge -pv --usepkg --usepkgonly=n dev-libs/pg367-top --color=n
+emerge: there are no ebuilds to satisfy "dev-libs/pg367-top" for /var/tmp/s8/stage/fixtures/.
+rc=1

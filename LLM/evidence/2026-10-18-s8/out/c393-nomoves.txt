@@ -1,0 +1,10 @@
+### emerge --pretend --update --package-moves=n dev-libs/slotmovepkg --color=n
+### delta=none
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.16 s (backtrack: 0/20).
+
+rc=0

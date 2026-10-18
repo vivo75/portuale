@@ -1,0 +1,4 @@
+### emerge -pvuD --usepkg --usepkgonly=n dev-libs/pg34-blib --color=n
+
+Total: 0 packages, Size of downloads: 0 KiB
+rc=0

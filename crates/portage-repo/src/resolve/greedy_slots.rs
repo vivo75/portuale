@@ -186,7 +186,7 @@ fn greedy_pool(
     atom_str: &str,
     extra: &[String],
 ) -> Vec<GreedyEntry> {
-    let mut candidates = if ctx.usepkgonly {
+    let mut candidates = if ctx.usepkgonly || crate::globals::ebuild_db_dropped() {
         Vec::new()
     } else {
         list_candidates(&ctx.repos, &atom.category, &atom.package)

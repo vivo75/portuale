@@ -602,8 +602,9 @@ fn render_all_masked_block(
         .iter()
         .any(|(_, reasons)| reasons.iter().any(|r| r.starts_with("EAPI ")));
     let mut out = format!(
-        "\n!!! All ebuilds that could satisfy {xinfo} have been masked.\n\
-         !!! One of the following masked packages is required to complete your request:\n"
+        "\n!!! All ebuilds that could satisfy {xinfo}{} have been masked.\n\
+         !!! One of the following masked packages is required to complete your request:\n",
+        crate::display_root_suffix()
     );
     for (output_cpv, reasons) in masked {
         out.push_str(&format!(

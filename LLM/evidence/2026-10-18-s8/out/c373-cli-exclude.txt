@@ -1,0 +1,38 @@
+### emerge --pretend --usepkg --usepkg-exclude dev-libs/binaryonlypkg dev-libs/binaryonlypkg --color=n
+### delta=none
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/st/fixtures/repo/profiles/updates/2Q-2024..
+@s
+
+Undefined license group 'FREE'
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.11 s (backtrack: 0/20).
+
+
+!!! All ebuilds that could satisfy "dev-libs/binaryonlypkg" for /tmp/st/fixtures/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/binaryonlypkg-1.0 (masked by: )
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+rc=1

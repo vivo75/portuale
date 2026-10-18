@@ -1,0 +1,8 @@
+### emerge --pretend --usepkg dev-libs/binaryonlypkg
+
+!!! The following atoms are invalid in usepkg-exclude attribute for repo [testrepo] (only package names and slot atoms allowed):
+
+    >=dev-libs/binaryonlypkg-1
+
+[binary  N     ] dev-libs/binaryonlypkg-1.0-1 to /var/tmp/s8/st373/fixtures
+rc=0

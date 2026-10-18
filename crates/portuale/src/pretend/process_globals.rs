@@ -9,6 +9,7 @@ pub(crate) fn apply_process_globals(opts: &EmergeOpts<'_>) {
         ref useoldpkg_atoms,
         binpkg_changed_deps_override,
         use_ebuild_visibility,
+        ebuild_db_dropped,
         debug,
         pretend,
         ..
@@ -26,6 +27,11 @@ pub(crate) fn apply_process_globals(opts: &EmergeOpts<'_>) {
     // overrides as process-globals. Absent (the defaults) is a strict no-op.
     portage_repo::set_binpkg_changed_deps_override(binpkg_changed_deps_override);
     portage_repo::set_use_ebuild_visibility(use_ebuild_visibility);
+    portage_repo::set_ebuild_db_dropped(ebuild_db_dropped);
+    portage_repo::set_display_root(
+        &portage_repo::root_from_env(),
+        &portage_repo::running_root_from_env(),
+    );
 
     // `--debug` under `--pretend` also turns on the resolver trace.
     // Gated to `--pretend` only; portuale's build path never routes
