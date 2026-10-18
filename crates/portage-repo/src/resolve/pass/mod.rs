@@ -97,17 +97,34 @@ pub(crate) fn run_pass(
     // walks before the previous argument's deps are looked at; a FIFO queue
     // would interleave the subtrees. Children each seed enqueues drain as one
     // block, in seed order. Portage: depgraph.py, _create_graph
-    while let ControlFlow::Continue(QueueItem {
-        atom: current_atom,
-        depth,
-        owner,
-        owner_targets_running_root: item_owner_targets_running_root,
-        unevaluated: unevaluated_atom,
-        targets_running_root: item_targets_running_root,
-        buildtime_hard,
-        from_disjunction,
-    }) = pop_queue_item(&mut state)
-    {
+    loop {
+        let ControlFlow::Continue(QueueItem {
+            atom: current_atom,
+            depth,
+            owner,
+            owner_targets_running_root: item_owner_targets_running_root,
+            unevaluated: unevaluated_atom,
+            targets_running_root: item_targets_running_root,
+            buildtime_hard,
+            from_disjunction,
+        }) = pop_queue_item(&mut state)
+        else {
+            // Plain queue and held seed blocks drained: resolve one deferred
+            // `||` entry against the graph as it stands, like Portage popping
+            // `_dep_disjunctive_stack` only when `_dep_stack` is empty. An
+            // empty stack too means the walk is done.
+            // Portage: depgraph.py, _create_graph
+            if !pop_disjunction(PopDisjunctionArgs {
+                state: &mut state,
+                ctx,
+                config,
+                bp,
+                union_constraints: &union_constraints,
+            }) {
+                break;
+            }
+            continue;
+        };
         if step_queue_item(StepQueueItemArgs {
             current_atom,
             owner: &owner,
