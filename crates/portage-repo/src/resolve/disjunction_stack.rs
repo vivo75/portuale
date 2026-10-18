@@ -15,6 +15,7 @@ use crate::*;
 use portage_profile::Config;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Split raw dep-string `tokens` into plain tokens (kept, `||`-free) and one
 /// raw token list per `|| ( ... )` group (`["||", "(", ..., ")"]`, nested
@@ -163,6 +164,28 @@ pub(crate) enum DeferredSite {
         cross_active: bool,
         root_deps_running_root: Option<PathBuf>,
     },
+    /// An `--autounmask-use` flip's groups: the flipped package's own
+    /// re-expansion (`expand_resolved_slot_with_flipped_use`), pushed instead
+    /// of choosing at flip time. Plains queue in-walk as before; the groups
+    /// resolve here against the drained graph, like Portage's
+    /// `_dep_disjunctive_stack`, which never chooses while expanding.
+    // Portage: _emerge/depgraph.py, _queue_disjunctive_deps
+    Flip {
+        buildtime_atoms: HashSet<String>,
+        runtime_atoms: HashSet<String>,
+        bdepend_atoms: HashSet<String>,
+        or_universe: HashSet<String>,
+        running_tags: HashSet<String>,
+        root_deps_satisfied: HashSet<String>,
+        root_deps_unsatisfied: Vec<String>,
+        /// The flipped package's own metadata, for the pop-time merge-order
+        /// edges of newly-queued targets.
+        delta_meta: Arc<HashMap<String, String>>,
+        /// Recomputes the merge-order key order at pop time.
+        buildpkgonly_narrow: bool,
+        /// The flipped slot, to find its entry for the edge push.
+        slot: String,
+    },
 }
 
 /// The values [`pop_disjunction`] reads from its caller.
@@ -222,6 +245,17 @@ pub(crate) fn pop_disjunction(args: PopDisjunctionArgs<'_>) -> bool {
                 config,
                 union_constraints,
             }),
+            DeferredSite::Flip { running_tags, .. } => resolve_flip_group(ResolveFlipGroupArgs {
+                group,
+                entry: &entry,
+                running_tags,
+                queued: &queued,
+                state: &*state,
+                ctx,
+                config,
+                bp,
+                union_constraints,
+            }),
         };
         let ControlFlow::Continue(chosen) = chosen else {
             continue;
@@ -232,13 +266,15 @@ pub(crate) fn pop_disjunction(args: PopDisjunctionArgs<'_>) -> bool {
             state,
             ctx,
             config,
+            bp,
+            union_constraints,
         });
     }
     true
 }
 
-/// The values [`resolve_main_group`] reads from its caller.
-struct ResolveMainGroupArgs<'a> {
+/// The values [`resolve_flip_group`] reads from its caller.
+struct ResolveFlipGroupArgs<'a> {
     group: &'a [String],
     entry: &'a DeferredDisjunction,
     running_tags: &'a HashSet<String>,
@@ -250,10 +286,12 @@ struct ResolveMainGroupArgs<'a> {
     union_constraints: &'a HashMap<(String, String), Vec<String>>,
 }
 
-/// Resolve one main-walk group against the drained graph: same closures as
-/// the expansion-time flatten, with pop-time views.
-fn resolve_main_group(args: ResolveMainGroupArgs<'_>) -> ControlFlow<(), Vec<String>> {
-    let ResolveMainGroupArgs {
+/// Resolve one flip-walk group against the drained graph: the same closures
+/// as the expansion-time flatten, with pop-time views and the backtrack
+/// loop's own circular map (a flipped owner is never given the virtual
+/// pullers join — like the expansion-time flatten).
+fn resolve_flip_group(args: ResolveFlipGroupArgs<'_>) -> ControlFlow<(), Vec<String>> {
+    let ResolveFlipGroupArgs {
         group,
         entry,
         running_tags,
@@ -262,6 +300,59 @@ fn resolve_main_group(args: ResolveMainGroupArgs<'_>) -> ControlFlow<(), Vec<Str
         ctx,
         config,
         bp,
+        union_constraints,
+    } = args;
+    resolve_target_scope_group(ResolveTargetScopeGroupArgs {
+        group,
+        use_flags: &entry.use_flags,
+        empty_groups_always_true: entry.empty_groups_always_true,
+        owner: &entry.owner,
+        owner_targets_running_root: entry.owner_targets_running_root,
+        running_tags,
+        circular: &bp.circular_dependency,
+        queued,
+        state,
+        ctx,
+        config,
+        union_constraints,
+    })
+}
+
+/// The values [`resolve_target_scope_group`] reads from its caller.
+struct ResolveTargetScopeGroupArgs<'a> {
+    group: &'a [String],
+    use_flags: &'a HashSet<String>,
+    empty_groups_always_true: bool,
+    owner: &'a (String, String),
+    owner_targets_running_root: bool,
+    running_tags: &'a HashSet<String>,
+    circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+    queued: &'a [QueueItem],
+    state: &'a PassState,
+    ctx: &'a ResolveCtx<'a>,
+    config: &'a Config,
+    union_constraints: &'a HashMap<(String, String), Vec<String>>,
+}
+
+/// Resolve one target-rooted deferred group against the drained graph: the
+/// same closures as the expansion-time flatten, with pop-time views. Shared
+/// by the main walk and the flip path so a fix to one can never silently
+/// miss the other again.
+fn resolve_target_scope_group(
+    args: ResolveTargetScopeGroupArgs<'_>,
+) -> ControlFlow<(), Vec<String>> {
+    let ResolveTargetScopeGroupArgs {
+        group,
+        use_flags,
+        empty_groups_always_true,
+        owner,
+        owner_targets_running_root,
+        running_tags,
+        circular,
+        queued,
+        state,
+        ctx,
+        config,
         union_constraints,
     } = args;
     let cross_running_root: Option<&Path> = ctx.cross_root();
@@ -289,6 +380,76 @@ fn resolve_main_group(args: ResolveMainGroupArgs<'_>) -> ControlFlow<(), Vec<Str
             .collect()
     });
     let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(queued);
+    let self_node: RootCp = (owner_targets_running_root, owner.0.clone(), owner.1.clone());
+    let circular_view: &HashMap<RootCp, Vec<CircularDepChild>> = circular;
+    let Ok(flat) = portage_use_reduce::use_reduce_flat_disjunctive(
+        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+            tokens: group,
+            uselist: use_flags,
+            mode: portage_use_reduce::MatchMode::Normal,
+            empty_groups_always_true,
+            tie_break: &mut |alts: &[Vec<String>]| {
+                promote_tied_alternative(PromoteTiedAlternativeArgs {
+                    repos: &ctx.repos,
+                    config,
+                    root: grp_root,
+                    entries: entries_view,
+                    constraints: union_constraints,
+                    alts,
+                    queued: queued_view,
+                })
+            },
+        },
+        &mut |atoms: &[String]| {
+            disjunction_preference(DisjunctionPreferenceArgs {
+                repos: &ctx.repos,
+                config,
+                root: grp_root,
+                entries: entries_view,
+                self_cp: &self_node,
+                constraints: union_constraints,
+                circular_dependency: circular_view,
+                root_deps_running_root: ctx.root_deps_running_root,
+                atoms,
+                queued: queued_view,
+                update: ctx.update,
+                gate_entries: &state.entries,
+                gate_queued: queued,
+            })
+        },
+    ) else {
+        return ControlFlow::Break(());
+    };
+    ControlFlow::Continue(flat)
+}
+
+/// The values [`resolve_main_group`] reads from its caller.
+struct ResolveMainGroupArgs<'a> {
+    group: &'a [String],
+    entry: &'a DeferredDisjunction,
+    running_tags: &'a HashSet<String>,
+    queued: &'a [QueueItem],
+    state: &'a PassState,
+    ctx: &'a ResolveCtx<'a>,
+    config: &'a Config,
+    bp: &'a BacktrackParams,
+    union_constraints: &'a HashMap<(String, String), Vec<String>>,
+}
+
+/// Resolve one main-walk group against the drained graph: the shared
+/// target-scope core, with the virtual-pullers join for a `virtual/*` owner.
+fn resolve_main_group(args: ResolveMainGroupArgs<'_>) -> ControlFlow<(), Vec<String>> {
+    let ResolveMainGroupArgs {
+        group,
+        entry,
+        running_tags,
+        queued,
+        state,
+        ctx,
+        config,
+        bp,
+        union_constraints,
+    } = args;
     let self_node: RootCp = (
         entry.owner_targets_running_root,
         entry.owner.0.clone(),
@@ -329,45 +490,20 @@ fn resolve_main_group(args: ResolveMainGroupArgs<'_>) -> ControlFlow<(), Vec<Str
     let circular_view: &HashMap<RootCp, Vec<CircularDepChild>> = circ_with_pullers
         .as_ref()
         .unwrap_or(&bp.circular_dependency);
-    let Ok(flat) = portage_use_reduce::use_reduce_flat_disjunctive(
-        portage_use_reduce::UseReduceFlatDisjunctiveArgs {
-            tokens: group,
-            uselist: &entry.use_flags,
-            mode: portage_use_reduce::MatchMode::Normal,
-            empty_groups_always_true: entry.empty_groups_always_true,
-            tie_break: &mut |alts: &[Vec<String>]| {
-                promote_tied_alternative(PromoteTiedAlternativeArgs {
-                    repos: &ctx.repos,
-                    config,
-                    root: grp_root,
-                    entries: entries_view,
-                    constraints: union_constraints,
-                    alts,
-                    queued: queued_view,
-                })
-            },
-        },
-        &mut |atoms: &[String]| {
-            disjunction_preference(DisjunctionPreferenceArgs {
-                repos: &ctx.repos,
-                config,
-                root: grp_root,
-                entries: entries_view,
-                self_cp: &self_node,
-                constraints: union_constraints,
-                circular_dependency: circular_view,
-                root_deps_running_root: ctx.root_deps_running_root,
-                atoms,
-                queued: queued_view,
-                update: ctx.update,
-                gate_entries: &state.entries,
-                gate_queued: queued,
-            })
-        },
-    ) else {
-        return ControlFlow::Break(());
-    };
-    ControlFlow::Continue(flat)
+    resolve_target_scope_group(ResolveTargetScopeGroupArgs {
+        group,
+        use_flags: &entry.use_flags,
+        empty_groups_always_true: entry.empty_groups_always_true,
+        owner: &entry.owner,
+        owner_targets_running_root: entry.owner_targets_running_root,
+        running_tags,
+        circular: circular_view,
+        queued,
+        state,
+        ctx,
+        config,
+        union_constraints,
+    })
 }
 
 /// The values [`resolve_installed_group`] reads from its caller.
@@ -506,6 +642,8 @@ struct EnqueueChosenAtomsArgs<'a> {
     state: &'a mut PassState,
     ctx: &'a ResolveCtx<'a>,
     config: &'a Config,
+    bp: &'a BacktrackParams,
+    union_constraints: &'a HashMap<(String, String), Vec<String>>,
 }
 
 /// Queue one entry's resolved atoms through the owning site's queueing
@@ -518,6 +656,8 @@ fn enqueue_chosen_atoms(args: EnqueueChosenAtomsArgs<'_>) {
         state,
         ctx,
         config,
+        bp,
+        union_constraints,
     } = args;
     match &entry.site {
         DeferredSite::Main {
@@ -593,6 +733,184 @@ fn enqueue_chosen_atoms(args: EnqueueChosenAtomsArgs<'_>) {
                 running_atoms: running_tags,
                 owner_targets_running_root: entry.owner_targets_running_root,
             });
+        }
+        DeferredSite::Flip {
+            buildtime_atoms,
+            runtime_atoms,
+            bdepend_atoms,
+            or_universe,
+            running_tags,
+            root_deps_satisfied,
+            root_deps_unsatisfied,
+            delta_meta,
+            buildpkgonly_narrow,
+            slot,
+        } => {
+            // The `--root-deps` existence split, mirroring the expansion-time
+            // filter: satisfied atoms drop, unsatisfied ones become their own
+            // running-root entries. Inert without same-root `--root-deps`.
+            let root_deps_split: Option<&Path> = ctx
+                .root_deps_running_root
+                .filter(|_| ctx.cross_root().is_none());
+            let mut flat_deps: Vec<String> = Vec::new();
+            for tok in chosen {
+                let evaluated = portage_dep::evaluate_atom_conditionals(&tok, &entry.use_flags)
+                    .unwrap_or_else(|| tok.clone());
+                if root_deps_satisfied.contains(&evaluated) {
+                    continue;
+                }
+                if root_deps_unsatisfied.contains(&evaluated) {
+                    continue;
+                }
+                flat_deps.push(tok);
+            }
+            if let Some(running_root) = root_deps_split {
+                for atom_str in root_deps_unsatisfied {
+                    state.entries.extend(resolve_root_deps_build_entries(
+                        ResolveRootDepsBuildEntriesArgs {
+                            repos: &ctx.repos,
+                            running_root,
+                            atom_str,
+                            config,
+                            owner: entry.owner.clone(),
+                            seen: &mut state.root_deps_build_seen,
+                            local_binpkg: &ctx.local_binpkg,
+                        },
+                    ));
+                }
+            }
+            // Already-graphed atoms still record pullers and merge-order
+            // edges — Portage adds the parent edge even for a previously
+            // added package — but only genuinely new atoms queue: the drain
+            // may have graphed the choice after the flip (that is the whole
+            // point of deferring), and re-queueing a visited atom would
+            // re-resolve it.
+            let queued_atoms: HashSet<&str> = state.queue.iter().map(|q| q.atom.as_str()).collect();
+            let mut seen_toks: Vec<String> = Vec::new();
+            let mut new_toks: Vec<String> = Vec::new();
+            for tok in &flat_deps {
+                let evaluated = portage_dep::evaluate_atom_conditionals(tok, &entry.use_flags)
+                    .unwrap_or_else(|| tok.clone());
+                if state.visited_atoms.contains(&evaluated)
+                    || queued_atoms.contains(evaluated.as_str())
+                {
+                    seen_toks.push(tok.clone());
+                } else {
+                    new_toks.push(tok.clone());
+                }
+            }
+            // A text-new atom that cleanly re-resolves to its settled slot is
+            // dropped before any bookkeeping, like at expansion time.
+            let mut kept_toks: Vec<String> = Vec::new();
+            for tok in &new_toks {
+                let evaluated = portage_dep::evaluate_atom_conditionals(tok, &entry.use_flags)
+                    .unwrap_or_else(|| tok.clone());
+                if delta_atom_cleanly_reuses_resolved_slot(DeltaAtomCleanlyReusesResolvedSlotArgs {
+                    ctx,
+                    config,
+                    union_constraints,
+                    state: &*state,
+                    bp,
+                    evaluated: &evaluated,
+                    atom_running: running_tags.contains(tok),
+                }) {
+                    continue;
+                }
+                kept_toks.push(tok.clone());
+            }
+            if seen_toks.is_empty() && kept_toks.is_empty() {
+                return;
+            }
+            for tok in seen_toks.iter().chain(kept_toks.iter()) {
+                if let Some(dep_atom) = portage_dep::parse_atom(tok)
+                    && dep_atom.blocker == portage_dep::Blocker::None
+                {
+                    state
+                        .slot_pullers
+                        .entry((dep_atom.category.clone(), dep_atom.package.clone()))
+                        .or_default()
+                        .push((
+                            entry.owner.0.clone(),
+                            entry.owner.1.clone(),
+                            entry.owner_version.clone(),
+                            tok.clone(),
+                        ));
+                    // The parent edge, like a popped queue item records it:
+                    // Portage adds the parent atom even for a previously
+                    // added package.
+                    state
+                        .required_by_map
+                        .entry((dep_atom.category.clone(), dep_atom.package.clone()))
+                        .or_default()
+                        .insert((entry.owner.0.clone(), entry.owner.1.clone()));
+                }
+            }
+            enqueue_flat_deps(EnqueueFlatDepsArgs {
+                flat_deps: kept_toks.clone(),
+                key: &entry.owner,
+                version: &entry.owner_version,
+                depth: entry.depth,
+                parent_use: &entry.use_flags,
+                queue: &mut state.queue,
+                pending_blockers: &mut state.pending_blockers,
+                buildtime_atoms,
+                runtime_atoms,
+                bdepend_atoms,
+                or_universe,
+                running_atoms: running_tags,
+                owner_targets_running_root: entry.owner_targets_running_root,
+            });
+            // Merge-order edges cover every edge-worthy target, visited or
+            // newly queued: Portage records the parent edge even for a
+            // previously added package, and the merge list order follows it.
+            let new_targets: HashSet<(String, String)> = seen_toks
+                .iter()
+                .chain(kept_toks.iter())
+                .filter_map(|tok| {
+                    portage_dep::parse_atom(tok)
+                        .map(|dep_atom| (dep_atom.category.clone(), dep_atom.package.clone()))
+                })
+                .collect();
+            if !new_targets.is_empty() {
+                let portage_order_keys: &[&str] = if *buildpkgonly_narrow {
+                    &["DEPEND", "BDEPEND"]
+                } else {
+                    &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+                };
+                let fresh_edges = merge_order::dep_edges_from_metadata(
+                    delta_meta,
+                    &entry.use_flags,
+                    portage_order_keys,
+                    false,
+                );
+                let slot_key = (
+                    entry.owner.0.clone(),
+                    entry.owner.1.clone(),
+                    slot.clone(),
+                    entry.owner_targets_running_root,
+                );
+                if let Some(&idx) = state.resolved_slots.get(&slot_key) {
+                    let still_current = match &state.entries[idx].outcome {
+                        PretendOutcome::New { version } => version == &entry.owner_version,
+                        PretendOutcome::Upgrade { to, .. } => to == &entry.owner_version,
+                        PretendOutcome::Downgrade { to, .. } => to == &entry.owner_version,
+                        PretendOutcome::Reinstall { version, .. } => {
+                            version == &entry.owner_version
+                        }
+                        _ => false,
+                    };
+                    if still_current {
+                        let entry_deps = &mut state.entries[idx].deps;
+                        for edge in fresh_edges {
+                            if new_targets.contains(&(edge.category.clone(), edge.package.clone()))
+                                && !entry_deps.contains(&edge)
+                            {
+                                entry_deps.push(edge);
+                            }
+                        }
+                    }
+                }
+            }
         }
         DeferredSite::Installed {
             buildtime_tokens,

@@ -39,3 +39,13 @@ Re-expanding a resolved slot when USE changes.
 - Track X Slice B fix (#242): `BDEPEND` alone, for the same running-`BDEPEND`-soft rule the fresh expansion applies (see `enqueue_flat_deps`'s own `bdepend_atoms` doc comment).
 - Track X Slice B (#242): the flipped entry's own per-group roots -- same rule as the fresh expansion (a flipped running-root entry re-resolves its build groups against the running root).
 - Track X Slice C (#242): the node key carries the flipped entry's own root (Portage's node-identity keying); the gate reads the whole graph (same slices the bins would see on a same-root run).
+
+## fn expand_resolved_slot_with_flipped_use, `||` deferral (backlog #398)
+- The flip splits its tokens with `split_off_disjunctions` on the flipped USE
+  before flattening: plains go through the unchanged flatten/filter/enqueue
+  pipeline (closures never fire on `||`-free input), groups defer on the
+  disjunctive stack as a `Flip` site. The deferred entry is pushed before the
+  plains enqueue so the genuinely-new early return cannot drop it.
+- `or_universe` still folds over the full token list (groups included), and
+  the root-deps satisfied/unsatisfied sets are computed once and shared
+  between the plains filter and the Flip site.
