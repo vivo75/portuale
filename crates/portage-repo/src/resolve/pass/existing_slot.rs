@@ -316,6 +316,7 @@ pub(crate) fn existing_slot_version_mismatch(args: ExistingSlotVersionMismatchAr
                 iuse: &existing_cand.iuse,
                 keywords: &existing_cand.keywords,
                 candidate_str: &existing_cand_str,
+                build_id: existing_cand.build_id.as_deref(),
                 category: &key.0,
                 package: &key.1,
             });
@@ -392,6 +393,7 @@ pub(crate) fn existing_slot_use_flip_suggestion(args: ExistingSlotUseFlipSuggest
                 iuse: &existing_cand.iuse,
                 keywords: &existing_cand.keywords,
                 candidate_str: &existing_cand_str,
+                build_id: existing_cand.build_id.as_deref(),
                 category: &key.0,
                 package: &key.1,
             });

@@ -252,6 +252,7 @@ pub(crate) fn use_unsat_candidates_for_atom(
         let stable = is_stable(IsStableArgs {
             keywords: &c.keywords,
             candidate_str: &candidate_str,
+            build_id: c.build_id.as_deref(),
             category: &display.category,
             package: &display.package,
             accept_keywords: &config.accept_keywords,
@@ -262,6 +263,7 @@ pub(crate) fn use_unsat_candidates_for_atom(
             which: MaskOrForce::Mask,
             config,
             candidate_str: &candidate_str,
+            build_id: c.build_id.as_deref(),
             category: &display.category,
             package: &display.package,
             stable,
@@ -273,6 +275,7 @@ pub(crate) fn use_unsat_candidates_for_atom(
                 which: MaskOrForce::Force,
                 config,
                 candidate_str: &candidate_str,
+                build_id: c.build_id.as_deref(),
                 category: &display.category,
                 package: &display.package,
                 stable,

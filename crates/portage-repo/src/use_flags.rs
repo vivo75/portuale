@@ -7,6 +7,11 @@ pub struct EffectiveUseFlagsArgs<'a> {
     pub iuse: &'a str,
     pub keywords: &'a [String],
     pub candidate_str: &'a str,
+    /// The binary `BUILD_ID`, if the candidate is a binpkg instance: an
+    /// `=`+build-id `package.use` line applies only to the equal build
+    /// (Portage `_pkg_str` comparison, dep:2994-3008, #346 S3). `None`
+    /// for ebuilds, which carry no build-id.
+    pub build_id: Option<&'a str>,
     pub category: &'a str,
     pub package: &'a str,
 }
@@ -30,6 +35,7 @@ pub fn effective_use_flags(args: EffectiveUseFlagsArgs<'_>) -> Rc<HashSet<String
         iuse,
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
     } = args;
@@ -38,8 +44,9 @@ pub fn effective_use_flags(args: EffectiveUseFlagsArgs<'_>) -> Rc<HashSet<String
     // candidates. Pure in its six args; thread-local, lock-free.
     // `category`/`package`/`iuse`/`keywords` all join the key even
     // though `candidate_str` usually implies them (`--dynamic-deps=n`
-    // can pass vdb-built metadata for a tree cpv).
-    type EufCache = HashMap<(u64, String), Rc<HashSet<String>>>;
+    // can pass vdb-built metadata for a tree cpv). `build_id` joins too:
+    // same-string binary instances differ only by build (#346 S3).
+    type EufCache = HashMap<(u64, Option<String>, String), Rc<HashSet<String>>>;
     thread_local! {
         static EUF_CACHE: RefCell<EufCache> = RefCell::new(HashMap::new());
     }
@@ -49,7 +56,11 @@ pub fn effective_use_flags(args: EffectiveUseFlagsArgs<'_>) -> Rc<HashSet<String
         use_context_fingerprint(config).hash(&mut h);
         iuse.hash(&mut h);
         keywords.hash(&mut h);
-        (h.finish(), candidate_str.to_string())
+        (
+            h.finish(),
+            build_id.map(str::to_string),
+            candidate_str.to_string(),
+        )
     };
     if let Some(hit) = EUF_CACHE.with(|c| c.borrow().get(&key).cloned()) {
         // The shared set, not a clone: callers only read (the per-call
@@ -62,6 +73,7 @@ pub fn effective_use_flags(args: EffectiveUseFlagsArgs<'_>) -> Rc<HashSet<String
             iuse,
             keywords,
             candidate_str,
+            build_id,
             category,
             package,
         },
@@ -99,6 +111,7 @@ pub(crate) struct EffectiveUseFlagsUncachedArgs<'a> {
     pub(crate) iuse: &'a str,
     pub(crate) keywords: &'a [String],
     pub(crate) candidate_str: &'a str,
+    pub(crate) build_id: Option<&'a str>,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
 }
@@ -111,6 +124,7 @@ pub(crate) fn effective_use_flags_uncached(
         iuse,
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
     } = args;
@@ -136,7 +150,13 @@ pub(crate) fn effective_use_flags_uncached(
         }
     }
     let apply_matching = |flags: &mut HashSet<String>, entries: &[(String, Vec<String>)]| {
-        for (_, tokens) in config_entries_matching(entries, candidate_str, category, package) {
+        for (_, tokens) in config_entries_matching_with_build_id(
+            entries,
+            candidate_str,
+            build_id,
+            category,
+            package,
+        ) {
             portage_profile::apply_use_incremental_iter(tokens, flags);
         }
     };
@@ -216,6 +236,7 @@ pub(crate) fn effective_use_flags_uncached(
     let stable = is_stable(IsStableArgs {
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
         accept_keywords: &config.accept_keywords,
@@ -229,6 +250,7 @@ pub(crate) fn effective_use_flags_uncached(
         which: MaskOrForce::Force,
         config,
         candidate_str,
+        build_id,
         category,
         package,
         stable,
@@ -241,6 +263,7 @@ pub(crate) fn effective_use_flags_uncached(
         which: MaskOrForce::Mask,
         config,
         candidate_str,
+        build_id,
         category,
         package,
         stable,
@@ -261,14 +284,20 @@ pub(crate) fn effective_use_flags_uncached(
 /// earlier `flag`. Plain file order, not a specificity sort (correct
 /// for the `targets/*` child-unmask pattern).
 /// Portage: stack_lists(incremental=True) over getUseMask/getUseForce
+/// The candidate's binary build-id (if any) reaches the match, like
+/// every `_pkg_str` comparison in Portage (dep:2994-3008, #346 S3).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn specificity_ordered_flags(
     entries: &[(String, Vec<String>)],
     candidate_str: &str,
+    build_id: Option<&str>,
     category: &str,
     package: &str,
     mut seed: HashSet<String>,
 ) -> HashSet<String> {
-    for (_, tokens) in config_entries_matching(entries, candidate_str, category, package) {
+    for (_, tokens) in
+        config_entries_matching_with_build_id(entries, candidate_str, build_id, category, package)
+    {
         portage_profile::apply_incremental_iter(tokens, &mut seed);
     }
     seed
@@ -286,6 +315,8 @@ pub(crate) struct ResolvedUseMaskOrForceArgs<'a> {
     pub(crate) which: MaskOrForce,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) candidate_str: &'a str,
+    /// The binary `BUILD_ID` (see [`EffectiveUseFlagsArgs::build_id`).
+    pub(crate) build_id: Option<&'a str>,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) stable: bool,
@@ -303,14 +334,27 @@ pub(crate) fn resolved_use_mask_or_force(
         which,
         config,
         candidate_str,
+        build_id,
         category,
         package,
         stable,
     } = args;
     // Memoised per (which, stable, USE context, candidate); the levels
     // are fixed at config resolution, so the walk result is stable.
-    // Thread-local, lock-free.
-    type RumfCache = HashMap<(MaskOrForce, bool, u64, String, String, String), Rc<HashSet<String>>>;
+    // Thread-local, lock-free. Same-string binary instances differ only
+    // by build-id (#346 S3), so it joins the key.
+    type RumfCache = HashMap<
+        (
+            MaskOrForce,
+            bool,
+            u64,
+            Option<String>,
+            String,
+            String,
+            String,
+        ),
+        Rc<HashSet<String>>,
+    >;
     thread_local! {
         static RUMF_CACHE: RefCell<RumfCache> = RefCell::new(HashMap::new());
     }
@@ -318,6 +362,7 @@ pub(crate) fn resolved_use_mask_or_force(
         which,
         stable,
         use_context_fingerprint(config),
+        build_id.map(str::to_string),
         candidate_str.to_string(),
         category.to_string(),
         package.to_string(),
@@ -330,6 +375,7 @@ pub(crate) fn resolved_use_mask_or_force(
             which,
             config,
             candidate_str,
+            build_id,
             category,
             package,
             stable,
@@ -344,6 +390,7 @@ pub(crate) struct ResolvedUseMaskOrForceUncachedArgs<'a> {
     pub(crate) which: MaskOrForce,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) candidate_str: &'a str,
+    pub(crate) build_id: Option<&'a str>,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) stable: bool,
@@ -356,6 +403,7 @@ pub(crate) fn resolved_use_mask_or_force_uncached(
         which,
         config,
         candidate_str,
+        build_id,
         category,
         package,
         stable,
@@ -380,9 +428,16 @@ pub(crate) fn resolved_use_mask_or_force_uncached(
         if stable {
             portage_profile::apply_incremental_iter(global_stable, &mut acc);
         }
-        acc = specificity_ordered_flags(pkg, candidate_str, category, package, acc);
+        acc = specificity_ordered_flags(pkg, candidate_str, build_id, category, package, acc);
         if stable {
-            acc = specificity_ordered_flags(pkg_stable, candidate_str, category, package, acc);
+            acc = specificity_ordered_flags(
+                pkg_stable,
+                candidate_str,
+                build_id,
+                category,
+                package,
+                acc,
+            );
         }
     }
     acc
@@ -392,6 +447,8 @@ pub struct ForcedOrMaskedFlagsArgs<'a> {
     pub iuse: &'a str,
     pub keywords: &'a [String],
     pub candidate_str: &'a str,
+    /// The binary `BUILD_ID` (see [`EffectiveUseFlagsArgs::build_id`).
+    pub build_id: Option<&'a str>,
     pub category: &'a str,
     pub package: &'a str,
     pub config: &'a portage_profile::Config,
@@ -405,6 +462,7 @@ pub fn forced_or_masked_flags(args: ForcedOrMaskedFlagsArgs<'_>) -> HashSet<Stri
         iuse,
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
         config,
@@ -413,8 +471,14 @@ pub fn forced_or_masked_flags(args: ForcedOrMaskedFlagsArgs<'_>) -> HashSet<Stri
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect();
-    let mut result =
-        forced_or_masked_flags_unfiltered(keywords, candidate_str, category, package, config);
+    let mut result = forced_or_masked_flags_unfiltered(
+        keywords,
+        candidate_str,
+        build_id,
+        category,
+        package,
+        config,
+    );
     result.retain(|f| iuse_names.contains(f));
     result
 }
@@ -423,9 +487,11 @@ pub fn forced_or_masked_flags(args: ForcedOrMaskedFlagsArgs<'_>) -> HashSet<Stri
 /// reinstall-for-flags path, which must also forgive a masked flag the
 /// new ebuild dropped from IUSE).
 /// Portage: lib/_emerge/depgraph.py, _reinstall_for_flags inputs
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn forced_or_masked_flags_unfiltered(
     keywords: &[String],
     candidate_str: &str,
+    build_id: Option<&str>,
     category: &str,
     package: &str,
     config: &portage_profile::Config,
@@ -433,6 +499,7 @@ pub(crate) fn forced_or_masked_flags_unfiltered(
     let stable = is_stable(IsStableArgs {
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
         accept_keywords: &config.accept_keywords,
@@ -443,6 +510,7 @@ pub(crate) fn forced_or_masked_flags_unfiltered(
         which: MaskOrForce::Force,
         config,
         candidate_str,
+        build_id,
         category,
         package,
         stable,
@@ -454,6 +522,7 @@ pub(crate) fn forced_or_masked_flags_unfiltered(
             which: MaskOrForce::Mask,
             config,
             candidate_str,
+            build_id,
             category,
             package,
             stable,

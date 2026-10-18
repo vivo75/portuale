@@ -100,6 +100,7 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
         let stable = is_stable(IsStableArgs {
             keywords: &cand.keywords,
             candidate_str: &candidate_str,
+            build_id: cand.build_id.as_deref(),
             category: &node.category,
             package: &node.package,
             accept_keywords: &config.accept_keywords,
@@ -109,6 +110,7 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
             which: MaskOrForce::Mask,
             config,
             candidate_str: &candidate_str,
+            build_id: cand.build_id.as_deref(),
             category: &node.category,
             package: &node.package,
             stable,
@@ -120,6 +122,7 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
                 which: MaskOrForce::Force,
                 config,
                 candidate_str: &candidate_str,
+                build_id: cand.build_id.as_deref(),
                 category: &node.category,
                 package: &node.package,
                 stable,

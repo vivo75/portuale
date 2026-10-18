@@ -294,6 +294,7 @@ pub(crate) fn slot_conflict_abi_probe(
                                 iuse: live.get("IUSE").map(String::as_str).unwrap_or_default(),
                                 keywords: &c.keywords,
                                 candidate_str: &cand_str,
+                                build_id: c.build_id.as_deref(),
                                 category: &pcat,
                                 package: &ppkg,
                             },
@@ -530,6 +531,7 @@ pub(crate) fn greedy_pin_survives_revision(
             iuse: meta.get("IUSE").map(String::as_str).unwrap_or_default(),
             keywords: &c.keywords,
             candidate_str: &cand_str,
+            build_id: c.build_id.as_deref(),
             category: &provider_cp.0,
             package: &provider_cp.1,
         });
@@ -615,6 +617,7 @@ pub(crate) fn replacement_parent_accepts(args: ReplacementParentAcceptsArgs<'_>)
             iuse: meta.get("IUSE").map(String::as_str).unwrap_or_default(),
             keywords: &c.keywords,
             candidate_str: &cand_str,
+            build_id: c.build_id.as_deref(),
             category: cat,
             package: pkg,
         });

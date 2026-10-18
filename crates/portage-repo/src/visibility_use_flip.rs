@@ -55,6 +55,7 @@ pub(crate) fn flag_is_settable(args: FlagIsSettableArgs<'_>) -> bool {
         iuse,
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
     });
@@ -489,6 +490,7 @@ pub(crate) fn viable_parent_flip_targets(
         let stable = is_stable(IsStableArgs {
             keywords: &c.keywords,
             candidate_str: &candidate_str,
+            build_id: c.build_id.as_deref(),
             category: &category,
             package: &package,
             accept_keywords: &config.accept_keywords,
@@ -498,6 +500,7 @@ pub(crate) fn viable_parent_flip_targets(
             which: MaskOrForce::Mask,
             config,
             candidate_str: &candidate_str,
+            build_id: c.build_id.as_deref(),
             category: &category,
             package: &package,
             stable,
@@ -509,6 +512,7 @@ pub(crate) fn viable_parent_flip_targets(
                 which: MaskOrForce::Force,
                 config,
                 candidate_str: &candidate_str,
+                build_id: c.build_id.as_deref(),
                 category: &category,
                 package: &package,
                 stable,

@@ -354,6 +354,7 @@ fn greedy_use_sets(
         iuse: raw_iuse,
         keywords: &cand.keywords,
         candidate_str: &candidate_str,
+        build_id: cand.build_id.as_deref(),
         category: &key.0,
         package: &key.1,
     })
@@ -388,6 +389,7 @@ fn blocker_atoms_for(
         iuse: meta.get("IUSE").map(String::as_str).unwrap_or(""),
         keywords: &cand.keywords,
         candidate_str: &candidate_str,
+        build_id: cand.build_id.as_deref(),
         category: &key.0,
         package: &key.1,
     });

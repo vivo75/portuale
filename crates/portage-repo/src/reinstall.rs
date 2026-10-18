@@ -494,6 +494,7 @@ pub(crate) fn candidate_iuse_and_use(
         iuse: metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
     });

@@ -49,6 +49,7 @@ pub(crate) fn entry_use_flags(args: EntryUseFlagsArgs<'_>) -> HashSet<String> {
             iuse: metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
             keywords,
             candidate_str,
+            build_id: resolved.build_id.as_deref(),
             category: &key.0,
             package: &key.1,
         })

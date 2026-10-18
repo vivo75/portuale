@@ -32,6 +32,7 @@ pub(crate) fn use_flags_if_conditional(args: UseFlagsIfConditionalArgs<'_>) -> H
         iuse: &candidate.iuse,
         keywords: &candidate.keywords,
         candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
     })

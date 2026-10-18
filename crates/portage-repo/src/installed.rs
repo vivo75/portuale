@@ -516,6 +516,7 @@ pub fn candidate_use_flags_display(
         iuse,
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
     });
@@ -566,6 +567,7 @@ pub fn candidate_effective_use_flags(
         iuse,
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
     });

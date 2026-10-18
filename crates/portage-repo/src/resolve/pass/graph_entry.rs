@@ -81,6 +81,7 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
         && !keywords_accepted(KeywordsAcceptedArgs {
             keywords: &resolved.keywords,
             candidate_str: &resolved_cpv_str,
+            build_id: resolved.build_id.as_deref(),
             category: &key.0,
             package: &key.1,
             accept_keywords: &config.accept_keywords,

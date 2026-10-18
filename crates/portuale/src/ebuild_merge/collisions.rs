@@ -66,6 +66,7 @@ pub(crate) fn blocked_installed_packages(
             iuse,
             keywords: &keywords,
             candidate_str: &candidate_str,
+            build_id: None,
             category: &env.category,
             package: &env.split.pn,
         });

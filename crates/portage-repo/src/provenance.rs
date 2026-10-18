@@ -64,6 +64,7 @@ pub(crate) fn visibility_provenance(
     let keyword_entry = keyword_provenance(KeywordProvenanceArgs {
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
         accept_keywords: &config.accept_keywords,
@@ -81,6 +82,8 @@ pub(crate) fn visibility_provenance(
 pub(crate) struct KeywordProvenanceArgs<'a> {
     pub(crate) keywords: &'a [String],
     pub(crate) candidate_str: &'a str,
+    /// The binary `BUILD_ID` (see [`EffectiveUseFlagsArgs::build_id`).
+    pub(crate) build_id: Option<&'a str>,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) accept_keywords: &'a HashSet<String>,
@@ -96,6 +99,7 @@ pub(crate) fn keyword_provenance(args: KeywordProvenanceArgs<'_>) -> Option<Stri
     let KeywordProvenanceArgs {
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
         accept_keywords,
@@ -104,6 +108,7 @@ pub(crate) fn keyword_provenance(args: KeywordProvenanceArgs<'_>) -> Option<Stri
     if keywords_accepted(KeywordsAcceptedArgs {
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
         accept_keywords,
@@ -113,14 +118,20 @@ pub(crate) fn keyword_provenance(args: KeywordProvenanceArgs<'_>) -> Option<Stri
     }
     // Same source-order fold `specificity_ordered_flags` uses: walk matches
     // in file order and report the first entry that flips visibility on.
-    let matching =
-        config_entries_matching(package_accept_keywords, candidate_str, category, package);
+    let matching = config_entries_matching_with_build_id(
+        package_accept_keywords,
+        candidate_str,
+        build_id,
+        category,
+        package,
+    );
     let mut seed = accept_keywords.clone();
     for (entry, tokens) in matching {
         portage_profile::apply_incremental_iter(tokens, &mut seed);
         if keywords_accepted(KeywordsAcceptedArgs {
             keywords,
             candidate_str,
+            build_id,
             category,
             package,
             accept_keywords: &seed,
@@ -163,6 +174,7 @@ pub(crate) fn keyword_mask_marker(
     if keywords_accepted(KeywordsAcceptedArgs {
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
         accept_keywords: &config.accept_keywords,

@@ -136,6 +136,7 @@ pub(crate) fn atom_all_use_unmasked(
     let stable = is_stable(IsStableArgs {
         keywords: &keywords,
         candidate_str: &candidate_str,
+        build_id: None,
         category: &atom.category,
         package: &atom.package,
         accept_keywords: &config.accept_keywords,
@@ -145,6 +146,7 @@ pub(crate) fn atom_all_use_unmasked(
         which: MaskOrForce::Mask,
         config,
         candidate_str: &candidate_str,
+        build_id: None,
         category: &atom.category,
         package: &atom.package,
         stable,
@@ -153,6 +155,7 @@ pub(crate) fn atom_all_use_unmasked(
         which: MaskOrForce::Force,
         config,
         candidate_str: &candidate_str,
+        build_id: None,
         category: &atom.category,
         package: &atom.package,
         stable,
@@ -366,6 +369,7 @@ pub(crate) fn candidate_masking_reasons(
     if !keywords_accepted(KeywordsAcceptedArgs {
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
         accept_keywords: &config.accept_keywords,

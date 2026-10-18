@@ -146,6 +146,7 @@ pub(crate) fn parent_use_flip(
             iuse: &parent_cand.iuse,
             keywords: &parent_cand.keywords,
             candidate_str: &parent_cpv,
+            build_id: parent_cand.build_id.as_deref(),
             category: &pc,
             package: &pp,
             config,

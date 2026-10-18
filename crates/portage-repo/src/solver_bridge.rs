@@ -393,6 +393,7 @@ impl LazyRepo {
             iuse: &version.iuse,
             keywords: &version.keywords,
             candidate_str: &candidate_str,
+            build_id: None,
             category: &version.category,
             package: &version.package,
         });
@@ -776,6 +777,7 @@ fn bridge_use_columns(
         iuse: &record.iuse,
         keywords: &record.keywords,
         candidate_str: &candidate_str,
+        build_id: None,
         category: &record.category,
         package: &record.package,
         config: &req.config,

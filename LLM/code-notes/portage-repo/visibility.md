@@ -61,9 +61,11 @@ Keyword, mask and license visibility of a candidate.
 - Previously unhandled: a plain keyword name would sit in the accepted set as an inert string that can never equal a Portage `KEYWORDS` entry via `apply_incremental`.
 - Per-keyword loop: Portage `_getMissingKeywords`'s loop (`KeywordsManager.py`, lines ~273-300) -- direct match short-circuits (`match = True; break`); a `-`-prefixed keyword is excluded from every branch of Portage's elif chain; the fallback matches Portage `(hastesting and "~*" in pgroups) or (hasstable and "*" in pgroups)` exactly (the third disjunct, `"**" in pgroups`, is the unconditional check above).
 
+- S3 (#346): new `build_id` field; the folded `package.accept_keywords` entries match with it, so an `=`+build-id line accepts only the equal instance (Portage `_pkg_str` comparison, dep:2994-3008).
 ## fn is_stable
 - Portage `KeywordsManager.isStable` (`lib/portage/package/ebuild/_config/KeywordsManager.py`): not a raw "no `~` prefix" check. Portage's own comment: "this guarantees that the effective use.force/mask settings for a particular ebuild do not change when that ebuild is stabilized."
 
+- S3 (#346): new `build_id` field, passed through to `keywords_accepted` (the unstabilized-keyword probe matches the same instances the visibility check sees).
 ## fn keyword_masked_only / mask_masked_only / license_masked_only
 - Backlog #153: an invalid package is never visible-except-X.
 

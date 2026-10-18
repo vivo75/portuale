@@ -2111,6 +2111,7 @@ struct EufFlatArgs<'a> {
     accept_keywords: &'a HashSet<String>,
     package_accept_keywords: &'a [(String, Vec<String>)],
     candidate_str: &'a str,
+    build_id: Option<&'a str>,
     category: &'a str,
     package: &'a str,
 }
@@ -2135,6 +2136,7 @@ fn euf_flat(args: EufFlatArgs<'_>) -> HashSet<String> {
         accept_keywords,
         package_accept_keywords,
         candidate_str,
+        build_id,
         category,
         package,
     } = args;
@@ -2173,6 +2175,7 @@ fn euf_flat(args: EufFlatArgs<'_>) -> HashSet<String> {
         iuse,
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
     })
@@ -3498,6 +3501,7 @@ fn euf_layers(args: EufLayersArgs<'_>) -> HashSet<String> {
         iuse,
         keywords: &["amd64".to_string()],
         candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
     })

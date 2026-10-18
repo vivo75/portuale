@@ -202,6 +202,7 @@ pub(crate) fn binpkg_respect_use_ok_uncached(args: BinpkgRespectUseOkUncachedArg
             let forced = forced_or_masked_flags_unfiltered(
                 &ebuild.keywords,
                 &ebuild_str,
+                ebuild.build_id.as_deref(),
                 category,
                 package,
                 config,
@@ -221,6 +222,7 @@ pub(crate) fn binpkg_respect_use_ok_uncached(args: BinpkgRespectUseOkUncachedArg
             let forced = forced_or_masked_flags_unfiltered(
                 &candidate.keywords,
                 &candidate_str,
+                candidate.build_id.as_deref(),
                 category,
                 package,
                 config,
@@ -230,6 +232,7 @@ pub(crate) fn binpkg_respect_use_ok_uncached(args: BinpkgRespectUseOkUncachedArg
                 iuse: &candidate.iuse,
                 keywords: &candidate.keywords,
                 candidate_str: &candidate_str,
+                build_id: candidate.build_id.as_deref(),
                 category,
                 package,
             });

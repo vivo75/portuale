@@ -90,6 +90,7 @@ pub(crate) fn constraint_withheld_updates(
                                 iuse: &cand.iuse,
                                 keywords: &cand.keywords,
                                 candidate_str: &cpv,
+                                build_id: cand.build_id.as_deref(),
                                 category: &pin.cp.0,
                                 package: &pin.cp.1,
                             });

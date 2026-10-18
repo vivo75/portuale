@@ -615,6 +615,7 @@ pub fn circular_dep_solutions(
             iuse: &pc.iuse,
             keywords: &pc.keywords,
             candidate_str: &parent_str,
+            build_id: pc.build_id.as_deref(),
             category: &pcat,
             package: &ppkg,
         })
@@ -651,6 +652,7 @@ pub fn circular_dep_solutions(
             iuse: &pc.iuse,
             keywords: &pc.keywords,
             candidate_str: &parent_str,
+            build_id: pc.build_id.as_deref(),
             category: &pcat,
             package: &ppkg,
             config,

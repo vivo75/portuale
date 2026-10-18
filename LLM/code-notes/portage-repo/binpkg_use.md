@@ -12,6 +12,7 @@
 - Backlog #122: the `e.repo_location` hash (the uncached body reads the ebuild's md5-cache entry through `candidate_iuse_and_use`, so two `repo_location`s differing only behind identical candidate `iuse` must not share), and the literal candidate strings bounding any 64-bit digest collision to same-candidate inputs (`EUF_CACHE`'s shape).
 - Backlog #124 E3 detail: two pool candidates sharing `(CPV, repo_name, build_id)` are the same build with the same baked USE, while `build_id` is precisely what distinguishes two binpkg-multi-instance instances of one CPV (`dedup_binary_instances` groups by `(version, slot, sub_slot, repo_name)` and ranks within by `(BUILD_TIME, BUILD_ID)`). The old order-independent xor-fold built a fresh SipHash hasher per element (~200 per call x 12,000 calls) on every call, hit or miss; a single shared hasher would not do since the set's iteration order is not stable, which is why the fold existed.
 
+- S3 (#346): the no-ebuild arm computes the profile selection (`effective_use_flags`) and the forced/masked set for the binary's own cpv with its `build_id`, so a user `package.use` `=`+build-id line moves only the named build's effective USE; the memo key already distinguished builds via the binary-USE stand-in.
 ## fn read_binary_metadata
 - Uses the same key names Portage `_pkgindex_aux_keys` uses (matching md5-cache's own): DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND.
 

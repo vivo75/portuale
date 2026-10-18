@@ -480,3 +480,49 @@ fn read_binary_metadata_any_falls_back_to_a_binrepo_index() {
     assert_eq!(m.get("SIZE").map(String::as_str), Some("573440"));
     assert_eq!(m.get("REPO").map(String::as_str), Some("gentoo"));
 }
+
+/// A user `package.use` `=`+build-id line applies only to the equal binary
+/// instance (the same `_pkg_str` rule as accept_keywords above): with
+/// `--binpkg-respect-use` and no ebuild at the version, Portage compares
+/// the profile selection for the binary's own cpv against the baked USE,
+/// so a line naming build 2 leaves build 1's effective USE alone.
+/// Portage 3.0.82.2, S0 cell `b03-use-bid2-respect` (rc 1,
+/// `masked by: use flag configuration mismatch`): full argv
+/// `emerge -pv --package-moves=n --usepkgonly=y --binpkg-respect-use=y
+/// dev-libs/t341-dep` with build 1 baked `USE: x` and build 2 baked `USE:`
+/// empty. The line gives build 2 effective `{x}` (mismatching its baked
+/// `{}`) while build 1 keeps effective `{}` (mismatching its baked `{x}`):
+/// both builds rejected.
+#[test]
+fn user_package_use_build_id_line_applies_only_to_the_equal_instance() {
+    let build = |bid: &str, baked: &[&str]| {
+        let mut c = candidate("1", &["amd64"]);
+        c.source = CandidateSource::Binary;
+        c.repo_name = "t341".to_string();
+        c.slot = "0".to_string();
+        c.sub_slot = "1".to_string();
+        c.iuse = "x".to_string();
+        c.binary_use = Some(baked.iter().map(|s| s.to_string()).collect());
+        c.build_id = Some(bid.to_string());
+        c
+    };
+    let config = portage_profile::Config {
+        package_use_user: vec![("=dev-libs/t341-dep-1-2".to_string(), vec!["x".to_string()])],
+        ..test_config()
+    };
+    for (bid, baked) in [("1", &["x"][..]), ("2", &[][..])] {
+        assert!(
+            !binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+                candidate: &build(bid, baked),
+                ebuild_at_version: None,
+                category: "dev-libs",
+                package: "t341-dep",
+                config: &config,
+                newuse: false,
+                changed_use: false,
+                respect_use: true
+            }),
+            "build {bid} must mismatch its baked USE"
+        );
+    }
+}

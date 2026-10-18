@@ -683,3 +683,36 @@ fn is_visible_fingerprint_debug_asserts_on_post_freeze_mutation() {
     frozen.package_mask.push("dev-libs/foo".to_string());
     let _ = is_visible_fingerprint(&frozen);
 }
+
+/// A user `package.accept_keywords` `=`+build-id line accepts only the equal
+/// binary instance: Portage compares `_pkg_str` objects throughout
+/// (dep:2994-3008), so the id is consulted in the `=` branch while every
+/// other operator ignores it.
+/// Portage 3.0.82.2, S0 cells `b01-ak-bid2` (rc 0, `[binary N ~] …-1-2`)
+/// and `b02-ak-bid1` (rc 0, `[binary N ~] …-1-1`): full argv
+/// `emerge -pv --package-moves=n --usepkgonly=y dev-libs/t341-dep` with the
+/// two-instance `Packages` (both builds `KEYWORDS=~amd64`) and the user
+/// line `=dev-libs/t341-dep-1(-1|-2) ~amd64`.
+#[test]
+fn user_accept_keywords_build_id_line_accepts_only_the_equal_instance() {
+    let instance = |bid: &str| Candidate {
+        source: CandidateSource::Binary,
+        repo_name: "t341".to_string(),
+        slot: "0".to_string(),
+        sub_slot: "1".to_string(),
+        build_id: Some(bid.to_string()),
+        ..candidate("1", &["~amd64"])
+    };
+    let config = portage_profile::Config {
+        package_accept_keywords: vec![(
+            "=dev-libs/t341-dep-1-2".to_string(),
+            vec!["~amd64".to_string()],
+        )],
+        ..test_config()
+    };
+    assert!(
+        !is_visible(&instance("1"), "dev-libs", "t341-dep", &config),
+        "build 1 stays masked: the -1-2 line names build 2"
+    );
+    assert!(is_visible(&instance("2"), "dev-libs", "t341-dep", &config));
+}

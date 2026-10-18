@@ -146,6 +146,7 @@ pub(crate) fn record_entry_use_display(
             iuse,
             keywords,
             candidate_str,
+            build_id: resolved.build_id.as_deref(),
             category: &key.0,
             package: &key.1,
             config,

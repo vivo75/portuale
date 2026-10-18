@@ -195,6 +195,7 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
             iuse: &existing_cand.iuse,
             keywords: &existing_cand.keywords,
             candidate_str: &existing_cand_str,
+            build_id: existing_cand.build_id.as_deref(),
             category: &key2.0,
             package: &key2.1,
         });
@@ -744,6 +745,7 @@ pub(crate) fn enqueue_test_deps_for_flip(args: EnqueueTestDepsForFlipArgs<'_>) {
             || specificity_ordered_flags(
                 &config.package_use_mask,
                 &candidate_str,
+                existing_cand.build_id.as_deref(),
                 &key.0,
                 &key.1,
                 HashSet::new(),

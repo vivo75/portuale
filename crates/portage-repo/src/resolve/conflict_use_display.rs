@@ -98,6 +98,7 @@ pub(crate) fn assemble_tree_pkg_use_display(
     let force_mask = forced_or_masked_flags_unfiltered(
         &cand.keywords,
         &candidate_str,
+        cand.build_id.as_deref(),
         category,
         package,
         config,

@@ -38,6 +38,7 @@ pub(crate) fn replay_use_of(
             iuse: &cand.iuse,
             keywords: &cand.keywords,
             candidate_str: &cpv,
+            build_id: cand.build_id.as_deref(),
             category: &e.category,
             package: &e.package,
         })
@@ -47,6 +48,7 @@ pub(crate) fn replay_use_of(
             iuse: &cand.iuse,
             keywords: &cand.keywords,
             candidate_str: &cpv,
+            build_id: cand.build_id.as_deref(),
             category: &e.category,
             package: &e.package,
             config: ctx.config,
@@ -412,6 +414,7 @@ pub(crate) fn apply_replay_flips(
                 iuse: &cand.iuse,
                 keywords: &cand.keywords,
                 candidate_str: &cpv,
+                build_id: cand.build_id.as_deref(),
                 category: &cp.0,
                 package: &cp.1,
                 config: ctx.config,

@@ -25,6 +25,7 @@ fn use_expand_star_wildcard_strips_the_pseudo_flag_from_the_effective_set() {
         accept_keywords: &HashSet::from(["amd64".to_string()]),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/wildexpandpkg-1.0:0/0::testrepo",
+        build_id: None,
         category: "dev-libs",
         package: "wildexpandpkg",
     });
@@ -51,6 +52,7 @@ fn effective_use_flags_applies_a_plus_iuse_default_when_nothing_else_says_otherw
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/pkg-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
     });
@@ -81,6 +83,7 @@ fn effective_use_flags_lets_use_tokens_add_alongside_a_plus_iuse_default() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/pkg-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
     });
@@ -111,6 +114,7 @@ fn effective_use_flags_lets_use_tokens_explicitly_cancel_a_plus_iuse_default() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/pkg-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
     });
@@ -128,6 +132,7 @@ fn effective_use_flags_applies_a_use_prefix_wildcard() {
         iuse: "+video_cards_dummy video_cards_intel",
         keywords: &["amd64".to_string()],
         candidate_str: "dev-libs/pkg-1.0::testrepo",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
     });
@@ -153,6 +158,7 @@ fn effective_use_flags_lets_package_use_override_a_plus_iuse_default() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/pkg-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
     });
@@ -184,6 +190,7 @@ fn effective_use_flags_defaults_walk_is_per_profile_level() {
             iuse: "foo",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -206,6 +213,7 @@ fn effective_use_flags_defaults_walk_is_per_profile_level() {
             iuse: "foo",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -227,6 +235,7 @@ fn effective_use_flags_repo_make_defaults_use_is_the_weakest_repo_layer() {
             iuse,
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -271,6 +280,7 @@ fn effective_use_flags_features_use_enables_test_between_repo_and_pkginternal() 
             iuse,
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -300,6 +310,7 @@ fn effective_use_flags_features_use_enables_test_between_repo_and_pkginternal() 
             iuse: "test",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -384,6 +395,7 @@ fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_us
             iuse: "foo",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -406,6 +418,7 @@ fn effective_use_flags_package_env_use_is_pkg_layer_and_loses_to_user_package_us
             iuse: "foo",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -431,6 +444,7 @@ fn effective_use_flags_env_use_is_the_highest_tier_and_beats_user_package_use() 
             iuse: "foo",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -458,6 +472,7 @@ fn effective_use_flags_envd_is_the_lowest_tier() {
             iuse: "foo bar",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -537,6 +552,7 @@ fn effective_use_flags_layers_a_matching_package_use_entry_on_top_of_base() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/bar-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "bar",
     });
@@ -563,6 +579,7 @@ fn effective_use_flags_does_not_affect_a_non_matching_package() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/unrelated-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "unrelated",
     });
@@ -589,6 +606,7 @@ fn effective_use_flags_matches_a_wildcard_package_use_entry() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/bar-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "bar",
     });
@@ -604,6 +622,7 @@ fn resolved_use_mask_or_force_memo_shares_the_allocation() {
         which: MaskOrForce::Mask,
         config: &config,
         candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
         stable: true,
@@ -612,6 +631,7 @@ fn resolved_use_mask_or_force_memo_shares_the_allocation() {
         which: MaskOrForce::Mask,
         config: &config,
         candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
         stable: true,
@@ -622,6 +642,7 @@ fn resolved_use_mask_or_force_memo_shares_the_allocation() {
         which: MaskOrForce::Force,
         config: &config,
         candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
         stable: true,
@@ -641,6 +662,7 @@ fn resolved_use_mask_or_force_memo_shares_the_allocation() {
         which: MaskOrForce::Mask,
         config: &config,
         candidate_str: s,
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
         stable: false,
@@ -650,6 +672,7 @@ fn resolved_use_mask_or_force_memo_shares_the_allocation() {
         which: MaskOrForce::Mask,
         config: &config,
         candidate_str: s,
+        build_id: None,
         category: "dev-libs",
         package: "other",
         stable: false,
@@ -679,6 +702,7 @@ fn effective_use_flags_applies_package_use_force_and_mask() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/bar-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "bar",
     });
@@ -708,6 +732,7 @@ fn effective_use_flags_package_use_mask_wins_over_force_on_conflict() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/bar-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "bar",
     });
@@ -736,6 +761,7 @@ fn effective_use_flags_global_use_force_wins_over_a_package_use_disable() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/bar-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "bar",
     });
@@ -763,6 +789,7 @@ fn effective_use_flags_global_use_mask_wins_over_a_package_use_enable() {
         accept_keywords: &HashSet::new(),
         package_accept_keywords: &[],
         candidate_str: "dev-libs/bar-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "bar",
     });
@@ -801,6 +828,7 @@ fn effective_use_flags_applies_stable_force_and_mask_only_when_stable() {
         accept_keywords: &accept_keywords,
         package_accept_keywords: &[],
         candidate_str: "dev-libs/bar-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "bar",
     });
@@ -835,6 +863,7 @@ fn effective_use_flags_skips_stable_force_and_mask_when_not_stable() {
         accept_keywords: &accept_keywords,
         package_accept_keywords: &[],
         candidate_str: "dev-libs/bar-1.0:0",
+        build_id: None,
         category: "dev-libs",
         package: "bar",
     });
@@ -853,6 +882,7 @@ fn specificity_ordered_flags_processes_entries_in_source_order() {
         !specificity_ordered_flags(
             &parent_masks_child_unmasks,
             "dev-libs/bar-1.0:0",
+            None,
             "dev-libs",
             "bar",
             HashSet::new(),
@@ -870,6 +900,7 @@ fn specificity_ordered_flags_processes_entries_in_source_order() {
         specificity_ordered_flags(
             &child_masks,
             "dev-libs/bar-1.0:0",
+            None,
             "dev-libs",
             "bar",
             HashSet::new(),
@@ -902,6 +933,7 @@ fn resolved_use_mask_interleaves_per_level_across_sources() {
             which: MaskOrForce::Mask,
             config: &config,
             candidate_str: "dev-libs/bar-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "bar",
             stable: true
@@ -914,6 +946,7 @@ fn resolved_use_mask_interleaves_per_level_across_sources() {
             iuse: "xmc",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/bar-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "bar",
             config: &config
@@ -940,6 +973,7 @@ fn resolved_use_mask_interleaves_per_level_across_sources() {
             which: MaskOrForce::Mask,
             config: &config_rev,
             candidate_str: "dev-libs/bar-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "bar",
             stable: true
@@ -992,6 +1026,7 @@ fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
             iuse: "foo bar",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg",
         })
@@ -1008,6 +1043,7 @@ fn effective_use_flags_memo_does_not_leak_between_differing_configs() {
             iuse: "foo bar",
             keywords: &["amd64".to_string()],
             candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+            build_id: None,
             category: "dev-libs",
             package: "pkg"
         })
@@ -1093,6 +1129,7 @@ fn effective_use_flags_applies_the_user_profile_level_last() {
         iuse: "foo bar baz qux",
         keywords: &["amd64".to_string()],
         candidate_str: "dev-libs/pkg-1.0:0/0::testrepo",
+        build_id: None,
         category: "dev-libs",
         package: "pkg",
     });

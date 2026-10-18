@@ -338,6 +338,7 @@ pub(crate) fn is_visible_uncached(
     if !keywords_accepted(KeywordsAcceptedArgs {
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
         accept_keywords: &config.accept_keywords,
@@ -450,6 +451,7 @@ pub(crate) fn visible_with_relax(args: VisibleWithRelaxArgs<'_>) -> bool {
         || keywords_accepted(KeywordsAcceptedArgs {
             keywords: &candidate.keywords,
             candidate_str: &candidate_str,
+            build_id: candidate.build_id.as_deref(),
             category,
             package,
             accept_keywords: &config.accept_keywords,
@@ -531,6 +533,7 @@ pub(crate) fn keyword_masked_only(
     if keywords_accepted(KeywordsAcceptedArgs {
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
         accept_keywords: &config.accept_keywords,
@@ -580,6 +583,7 @@ pub(crate) fn mask_masked_only(
     if !keywords_accepted(KeywordsAcceptedArgs {
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
         accept_keywords: &config.accept_keywords,
@@ -678,6 +682,7 @@ pub(crate) fn license_masked_only(
     if !keywords_accepted(KeywordsAcceptedArgs {
         keywords: &candidate.keywords,
         candidate_str: &candidate_str,
+        build_id: candidate.build_id.as_deref(),
         category,
         package,
         accept_keywords: &config.accept_keywords,
@@ -807,6 +812,8 @@ pub(crate) fn use_masked_only(
 pub(crate) struct KeywordsAcceptedArgs<'a> {
     pub(crate) keywords: &'a [String],
     pub(crate) candidate_str: &'a str,
+    /// The binary `BUILD_ID` (see [`EffectiveUseFlagsArgs::build_id`).
+    pub(crate) build_id: Option<&'a str>,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) accept_keywords: &'a HashSet<String>,
@@ -835,6 +842,7 @@ pub(crate) fn keywords_accepted(args: KeywordsAcceptedArgs<'_>) -> bool {
     let KeywordsAcceptedArgs {
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
         accept_keywords,
@@ -843,6 +851,7 @@ pub(crate) fn keywords_accepted(args: KeywordsAcceptedArgs<'_>) -> bool {
     let accepted = specificity_ordered_flags(
         package_accept_keywords,
         candidate_str,
+        build_id,
         category,
         package,
         accept_keywords.clone(),
@@ -874,6 +883,8 @@ pub(crate) fn keywords_accepted(args: KeywordsAcceptedArgs<'_>) -> bool {
 pub(crate) struct IsStableArgs<'a> {
     pub(crate) keywords: &'a [String],
     pub(crate) candidate_str: &'a str,
+    /// The binary `BUILD_ID` (see [`EffectiveUseFlagsArgs::build_id`).
+    pub(crate) build_id: Option<&'a str>,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) accept_keywords: &'a HashSet<String>,
@@ -890,6 +901,7 @@ pub(crate) fn is_stable(args: IsStableArgs<'_>) -> bool {
     let IsStableArgs {
         keywords,
         candidate_str,
+        build_id,
         category,
         package,
         accept_keywords,
@@ -908,6 +920,7 @@ pub(crate) fn is_stable(args: IsStableArgs<'_>) -> bool {
     !keywords_accepted(KeywordsAcceptedArgs {
         keywords: &unstable,
         candidate_str,
+        build_id,
         category,
         package,
         accept_keywords,

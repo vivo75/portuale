@@ -717,6 +717,7 @@ pub(crate) fn enqueue_test_deps(args: EnqueueTestDepsArgs<'_>) {
             || specificity_ordered_flags(
                 &config.package_use_mask,
                 candidate_str,
+                None,
                 &key.0,
                 &key.1,
                 HashSet::new(),

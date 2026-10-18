@@ -159,6 +159,7 @@ pub(crate) fn refresh_one_entry_display(
         iuse: &cand.iuse,
         keywords: &cand.keywords,
         candidate_str: &candidate_str,
+        build_id: cand.build_id.as_deref(),
         category: &cat,
         package: &pkg,
     });
@@ -186,6 +187,7 @@ pub(crate) fn refresh_one_entry_display(
         iuse: &cand.iuse,
         keywords: &cand.keywords,
         candidate_str: &candidate_str,
+        build_id: cand.build_id.as_deref(),
         category: &cat,
         package: &pkg,
         config,
