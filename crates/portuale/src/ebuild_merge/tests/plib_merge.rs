@@ -188,6 +188,7 @@ fn merge_side_preserve_sees_the_replacing_packages_merging_needed() {
         new_pf: "oldapp-2.0",
         main_slot: "0",
         new_image_paths: &new_image_paths,
+        preserve_libs: true,
     })
     .expect("a same-slot instance owning files preserves");
     assert!(
@@ -272,5 +273,89 @@ fn remove_from_contents_leaves_needed_elf2_untouched_when_nothing_was_removed() 
     assert_eq!(
         std::fs::read_to_string(vdb_dir.join("NEEDED.ELF.2")).unwrap(),
         original_needed
+    );
+}
+
+fn vdb_with_restrict(root: &Path, pf: &str, restrict: &str, use_flags: &str) {
+    let dir = root.join("var/db/pkg/dev-libs").join(pf);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("SLOT"), "0\n").unwrap();
+    std::fs::write(dir.join("RESTRICT"), format!("{restrict}\n")).unwrap();
+    std::fs::write(dir.join("USE"), format!("{use_flags}\n")).unwrap();
+}
+
+/// The merge-side gate follows `treewalk`: `FEATURES` first, then the RESTRICT of the
+/// replaced same-slot instances (USE-reduced with their recorded USE); the new
+/// package's own RESTRICT is never read. Source-derived, not captured:
+/// `vartree.py:2053` (features) and `:4541-4545`, `:4560-4564` (instances).
+#[test]
+fn merge_side_gate_reads_features_and_the_replaced_instances_restrict() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    vdb_with_restrict(&root, "oldapp-1.0", "", "");
+    assert!(preserve_libs_for_merge(
+        true, &root, "dev-libs", "oldapp", "0"
+    ));
+    assert!(
+        !preserve_libs_for_merge(false, &root, "dev-libs", "oldapp", "0"),
+        "-preserve-libs in FEATURES turns the merge side off"
+    );
+
+    vdb_with_restrict(&root, "oldapp-1.0", "preserve-libs", "");
+    assert!(
+        !preserve_libs_for_merge(true, &root, "dev-libs", "oldapp", "0"),
+        "RESTRICT=preserve-libs on the replaced instance"
+    );
+
+    vdb_with_restrict(&root, "oldapp-1.0", "foo? ( preserve-libs )", "");
+    assert!(
+        preserve_libs_for_merge(true, &root, "dev-libs", "oldapp", "0"),
+        "a conditional restrict with the flag off does not restrict"
+    );
+    vdb_with_restrict(&root, "oldapp-1.0", "foo? ( preserve-libs )", "foo");
+    assert!(
+        !preserve_libs_for_merge(true, &root, "dev-libs", "oldapp", "0"),
+        "the instance's recorded USE reduces its RESTRICT"
+    );
+
+    // One restricted instance restricts the others in the slot too; another slot does not.
+    vdb_with_restrict(&root, "oldapp-1.0", "", "");
+    vdb_with_restrict(&root, "oldapp-1.1", "preserve-libs", "");
+    assert!(!preserve_libs_for_merge(
+        true, &root, "dev-libs", "oldapp", "0"
+    ));
+
+    // A restricted instance in another slot does not count.
+    let other = tmp.join("other-root");
+    vdb_with_restrict(&other, "oldapp-1.0", "", "");
+    vdb_with_restrict(&other, "oldapp-2.0", "preserve-libs", "");
+    std::fs::write(other.join("var/db/pkg/dev-libs/oldapp-2.0/SLOT"), "1\n").unwrap();
+    assert!(preserve_libs_for_merge(
+        true, &other, "dev-libs", "oldapp", "0"
+    ));
+}
+
+/// With the gate off the merge selects nothing.
+#[test]
+fn find_preserve_paths_for_merge_selects_nothing_when_the_gate_is_off() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let vdb_old = root.join("var/db/pkg/dev-libs/oldapp-1.0");
+    std::fs::create_dir_all(&vdb_old).unwrap();
+    std::fs::write(vdb_old.join("CONTENTS"), "obj /usr/lib/libold.so.1 def 1\n").unwrap();
+    std::fs::write(vdb_old.join("SLOT"), "0\n").unwrap();
+    std::fs::write(vdb_old.join("COUNTER"), "7\n").unwrap();
+    let image: BTreeSet<String> = BTreeSet::new();
+    assert!(
+        find_preserve_paths_for_merge(FindPreservePathsForMergeArgs {
+            root: &root,
+            category: "dev-libs",
+            package: "oldapp",
+            new_pf: "oldapp-2.0",
+            main_slot: "0",
+            new_image_paths: &image,
+            preserve_libs: false,
+        })
+        .is_none()
     );
 }

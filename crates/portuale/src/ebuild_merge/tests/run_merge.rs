@@ -1257,6 +1257,47 @@ fn real_unmerge_preserves_a_still_needed_shared_library() {
     );
 }
 
+/// `-preserve-libs` turns the unmerge side off: the same still-needed library is
+/// removed with the package and nothing is registered. Source-derived:
+/// `vartree.py:3667` (`_find_libs_to_preserve` returns early without
+/// `_preserve_libs`), `:2053` (set from `FEATURES`). Backlog #383.
+#[test]
+fn unmerge_without_preserve_libs_removes_a_still_needed_library() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    let portage_tmpdir = tmp.join("tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&portage_tmpdir).unwrap();
+    let lib_ebuild = collision_fixture("libpreservetest");
+    let consumer_ebuild = collision_fixture("consumepreservetest");
+    for ebuild in [&lib_ebuild, &consumer_ebuild] {
+        let status = run_merge(
+            ebuild,
+            &root,
+            &portage_tmpdir,
+            &MergeOptions::default(),
+            None,
+        )
+        .expect("run_merge succeeds");
+        assert_eq!(status, 0);
+    }
+    let lib_path = root.join("usr/lib/libpreservetest.so.1");
+    assert!(lib_path.is_file());
+
+    let options = crate::ebuild_unmerge::UnmergeOptions {
+        preserve_libs: false,
+        ..crate::ebuild_unmerge::UnmergeOptions::default()
+    };
+    let status = crate::ebuild_unmerge::run_unmerge(&lib_ebuild, &root, &portage_tmpdir, &options)
+        .expect("run_unmerge succeeds");
+    assert_eq!(status, 0);
+    assert!(
+        !lib_path.exists(),
+        "with -preserve-libs the library goes with its package"
+    );
+    assert!(read_plib_registry(&root).entries.is_empty());
+}
+
 /// Baseline: with the inert default `config_root` no config/USE resolution runs,
 /// so this pair is an ordinary collision-protect abort, proving a genuine collision.
 #[test]

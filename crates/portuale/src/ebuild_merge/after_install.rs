@@ -199,6 +199,13 @@ pub(crate) fn merge_after_install(
             new_pf: &env.split.pf,
             main_slot,
             new_image_paths: &new_image_paths,
+            preserve_libs: preserve_libs_for_merge(
+                options.preserve_libs,
+                root,
+                &env.category,
+                &env.split.pn,
+                main_slot,
+            ),
         })
     {
         let (injected, surviving) =
@@ -562,6 +569,7 @@ pub(crate) fn unmerge_one_installed(args: UnmergeOneInstalledArgs<'_>) -> Result
         config_protect: options.config_protect.clone(),
         config_protect_mask: options.config_protect_mask.clone(),
         unmerge_orphans: options.unmerge_orphans,
+        preserve_libs: options.preserve_libs,
         uninstall_ignore: options.uninstall_ignore.clone(),
         config_root: options.config_root.clone(),
         already_unmerged: deferred_delete.map(<[String]>::to_vec).unwrap_or_default(),

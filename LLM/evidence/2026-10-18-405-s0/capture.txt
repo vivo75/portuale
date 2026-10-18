@@ -1,0 +1,134 @@
+Python 3.14.8
+Portage 3.0.82.2 (python 3.14.8-final-0, default/linux/amd64/23.0/desktop/plasma/systemd, gcc-16, glibc-2.44-r3, 6.18.39-serv x86_64)
+=== argv: --color
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --color: expected one argument
+--- portuale rc=2
+emerge: --color requires an argument (y or n)
+=== argv: --exclude
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --exclude/-X: expected one argument
+--- portuale rc=2
+emerge: option "--exclude" requires an argument
+=== argv: --reinstall-atoms
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --reinstall-atoms: expected one argument
+--- portuale rc=2
+emerge: option "--reinstall-atoms" requires an argument
+=== argv: --useoldpkg-atoms
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --useoldpkg-atoms: expected one argument
+--- portuale rc=2
+emerge: option "--useoldpkg-atoms" requires an argument
+=== argv: --usepkg-exclude
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --usepkg-exclude: expected one argument
+--- portuale rc=2
+emerge: option "--usepkg-exclude" requires an argument
+=== argv: --usepkg-include
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --usepkg-include: expected one argument
+--- portuale rc=2
+emerge: option "--usepkg-include" requires an argument
+=== argv: --getbinpkg-exclude
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --getbinpkg-exclude: expected one argument
+--- portuale rc=2
+emerge: option "--getbinpkg-exclude" requires an argument
+=== argv: --getbinpkg-include
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --getbinpkg-include: expected one argument
+--- portuale rc=2
+emerge: option "--getbinpkg-include" requires an argument
+=== argv: --buildpkg-exclude
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --buildpkg-exclude: expected one argument
+--- portuale rc=2
+emerge: option "--buildpkg-exclude" requires an argument
+=== argv: --with-bdeps
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --with-bdeps: expected one argument
+--- portuale rc=2
+emerge: option "--with-bdeps" requires an argument
+=== argv: --autounmask-backtrack
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --autounmask-backtrack: expected one argument
+--- portuale rc=2
+emerge: option "--autounmask-backtrack" requires an argument
+=== argv: --autounmask-use
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --autounmask-use: expected one argument
+--- portuale rc=2
+emerge: option "--autounmask-use" requires an argument
+=== argv: --autounmask-license
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --autounmask-license: expected one argument
+--- portuale rc=2
+emerge: option "--autounmask-license" requires an argument
+=== argv: --rebuilt-binaries-timestamp
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --rebuilt-binaries-timestamp: expected one argument
+--- portuale rc=2
+emerge: option "--rebuilt-binaries-timestamp" requires an argument
+=== argv: --quickpkg-direct
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --quickpkg-direct: expected one argument
+--- portuale rc=2
+emerge: option "--quickpkg-direct" requires an argument
+=== argv: --quickpkg-direct-root
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --quickpkg-direct-root: expected one argument
+--- portuale rc=2
+emerge: option "--quickpkg-direct-root" requires an argument
+=== argv: -X
+--- portage rc=2
+              [positional_args ...]
+emerge: error: argument --exclude/-X: expected one argument
+--- portuale rc=2
+emerge: option "--exclude" requires an argument
+=== argv: -jx
+--- portage rc=2
+              [positional_args ...]
+emerge: error: unrecognized arguments: -x
+--- portuale rc=2
+emerge: invalid -j parameter: "x"
+=== argv: --jobs=x
+--- portage rc=2
+              [positional_args ...]
+emerge: error: Invalid --jobs parameter: 'x'
+--- portuale rc=2
+emerge: error: Invalid --jobs parameter: 'x'
+=== argv: --load-average
+--- portage rc=1
+[gentoo] Local copy of remote index is within TTL and will be used.
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- portuale rc=2
+emerge: option "--load-average" requires a positive number
+=== argv: --load-average=x
+--- portage rc=2
+              [positional_args ...]
+emerge: error: Invalid --load-average parameter: 'x'
+--- portuale rc=2
+emerge: error: Invalid --load-average parameter: 'x'
+=== argv: -l
+--- portage rc=1
+[gentoo] Local copy of remote index is within TTL and will be used.
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- portuale rc=2
+emerge: option "--load-average" requires a positive number

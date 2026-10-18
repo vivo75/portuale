@@ -2,6 +2,21 @@
 
 use crate::pretend::*;
 
+/// `--depclean-lib-check` and the resolved `preserve-libs` feature, the two inputs of the phase.
+#[derive(Clone, Copy)]
+pub(crate) struct LibCheck {
+    pub(crate) on: bool,
+    pub(crate) preserve_libs: bool,
+}
+
+/// `"preserve-libs" in settings.features` for the resolved config.
+// Portage: _emerge/actions.py, _calc_depclean and action_depclean
+pub(crate) fn config_has_preserve_libs(config: &portage_profile::Config) -> bool {
+    crate::pretend::config_features_string(config)
+        .split_whitespace()
+        .any(|token| token == "preserve-libs")
+}
+
 /// One cleanlist package `--depclean-lib-check` keeps installed: it solely
 /// provides a library still needed at link level by a package that is not
 /// itself being removed.
@@ -23,6 +38,7 @@ pub(crate) struct LibConsumerProtection {
 pub(crate) fn lib_consumer_scan(
     root: &Path,
     cleanlist: &[portage_repo::InstalledPackage],
+    scanned: &[portage_repo::InstalledPackage],
 ) -> Vec<LibConsumerProtection> {
     let owner_entries = needed_elf::read_all_needed_entries(root);
     let map = needed_elf::rebuild(root, &owner_entries);
@@ -30,7 +46,7 @@ pub(crate) fn lib_consumer_scan(
     let clean_cpvs: HashSet<String> = cleanlist.iter().map(|p| p.cpv()).collect();
 
     let mut out: Vec<LibConsumerProtection> = Vec::new();
-    for pkg in cleanlist {
+    for pkg in scanned {
         let pkg_cpv = pkg.cpv();
         // The objects this package owns that provide a soname.
         let mut provided: Vec<(&str, &str)> = map
@@ -93,20 +109,39 @@ pub(crate) fn lib_consumer_scan(
 /// tentative cleanlist, warn about providers that must be kept, and hand
 /// them to `recompute` (a second pass seeding them as roots so their own
 /// deps leave the cleanlist too). A no-op when `lib_check` is off or the
-/// cleanlist is already empty.
+/// cleanlist is already empty. With `preserve-libs` on, a package that does not restrict
+/// it keeps its libraries on unmerge and is not scanned; if none restricts it the whole
+/// phase (and its progress line) is skipped.
 /// Portage: _emerge/actions.py, _calc_depclean
 pub(crate) fn apply_depclean_lib_check(
     root: &Path,
     result: portage_repo::DepcleanResult,
-    lib_check: bool,
+    lib_check: LibCheck,
     color: &Colorizer,
     recompute: impl FnOnce(&[portage_repo::InstalledPackage]) -> portage_repo::DepcleanResult,
 ) -> portage_repo::DepcleanResult {
-    if !lib_check || result.cleanlist.is_empty() {
+    let LibCheck { on, preserve_libs } = lib_check;
+    if !on || result.cleanlist.is_empty() {
+        return result;
+    }
+    let scanned: Vec<portage_repo::InstalledPackage> = result
+        .cleanlist
+        .iter()
+        .filter(|pkg| {
+            !preserve_libs
+                || crate::ebuild_merge::installed_restricts_preserve_libs(
+                    root,
+                    &pkg.category,
+                    &format!("{}-{}", pkg.package, pkg.version),
+                )
+        })
+        .cloned()
+        .collect();
+    if preserve_libs && scanned.is_empty() {
         return result;
     }
     eprintln!(">>> Checking for lib consumers...");
-    let protections = lib_consumer_scan(root, &result.cleanlist);
+    let protections = lib_consumer_scan(root, &result.cleanlist, &scanned);
     if protections.is_empty() {
         return result;
     }
@@ -284,7 +319,11 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         ];
         for line in [None]
             .into_iter()
-            .chain(libcheck_off_paragraph.into_iter().filter(|_| !lib_check))
+            .chain(
+                libcheck_off_paragraph
+                    .into_iter()
+                    .filter(|_| !lib_check && !config_has_preserve_libs(config)),
+            )
             .chain([
                 Some("Always study the list of packages to be cleaned for any obvious"),
                 Some("mistakes. Packages that are part of the world set will always"),
@@ -361,7 +400,11 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
     // The `--depclean-lib-check` phase: a cleanlist package still needed
     // at link level by a survivor is kept, with its own deps.
     // Portage: _emerge/actions.py, _calc_depclean
-    let result = apply_depclean_lib_check(root, result, lib_check, color, |providers| {
+    let lib_check_phase = LibCheck {
+        on: lib_check,
+        preserve_libs: config_has_preserve_libs(config),
+    };
+    let result = apply_depclean_lib_check(root, result, lib_check_phase, color, |providers| {
         portage_repo::depclean_cleanlist(portage_repo::DepcleanCleanlistArgs {
             root,
             world_seeds: &world_seeds,

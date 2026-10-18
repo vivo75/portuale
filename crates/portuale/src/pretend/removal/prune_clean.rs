@@ -59,7 +59,11 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
     }
     // `--depclean-lib-check` applies to `--prune` too.
     // Portage: _emerge/actions.py, _calc_depclean
-    let result = apply_depclean_lib_check(root, result, lib_check, color, |providers| {
+    let lib_check_phase = LibCheck {
+        on: lib_check,
+        preserve_libs: config_has_preserve_libs(config),
+    };
+    let result = apply_depclean_lib_check(root, result, lib_check_phase, color, |providers| {
         portage_repo::prune_cleanlist(root, &args, providers, &config.package_provided)
     });
 

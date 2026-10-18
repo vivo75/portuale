@@ -23,6 +23,9 @@ pub struct MergeOptions {
     /// `set_resolved_features` re-derives it from the resolved list.
     /// Portage: dbapi/vartree.py, `"unmerge-orphans" in self.settings.features`
     pub unmerge_orphans: bool,
+    /// `preserve-libs` in the resolved `FEATURES` (default token). The
+    /// instances' `RESTRICT` half is checked per merge, see `preserve_libs_for_merge`.
+    pub preserve_libs: bool,
     /// `UNINSTALL_IGNORE` paths the unmerge skips, fnmatch'd against the
     /// root-relative path. Default is Portage's `make.globals` value;
     /// `from_env` reads the calling env, `apply_uninstall_ignore` the
@@ -87,6 +90,7 @@ impl Default for MergeOptions {
             resolved_config: None,
             protect_owned: true,
             unmerge_orphans: true,
+            preserve_libs: true,
             uninstall_ignore: "/lib/modules/*".to_string(),
             noconfmem: false,
             protect_if_modified: true,
@@ -148,6 +152,9 @@ impl MergeOptions {
                 .map(|f| f.split_whitespace().any(|t| t == "protect-owned"))
                 .unwrap_or(d.protect_owned),
             unmerge_orphans,
+            preserve_libs: std::env::var("FEATURES")
+                .map(|f| f.split_whitespace().any(|t| t == "preserve-libs"))
+                .unwrap_or(d.preserve_libs),
             uninstall_ignore,
             protect_if_modified: std::env::var("FEATURES")
                 .map(|f| {
@@ -179,6 +186,7 @@ impl MergeOptions {
         self.protect_owned = has("protect-owned");
         self.protect_if_modified = has("config-protect-if-modified");
         self.unmerge_orphans = has("unmerge-orphans");
+        self.preserve_libs = has("preserve-libs");
         self.uninstall_ignore = crate::ebuild_unmerge::uninstall_ignore_with_packdebug(
             &self.uninstall_ignore,
             features,

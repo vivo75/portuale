@@ -245,6 +245,8 @@ pub(crate) struct FindPreservePathsForMergeArgs<'a> {
     pub(crate) new_pf: &'a str,
     pub(crate) main_slot: &'a str,
     pub(crate) new_image_paths: &'a BTreeSet<String>,
+    /// `preserve_libs_for_merge`: `FEATURES` and the replaced instances' `RESTRICT`.
+    pub(crate) preserve_libs: bool,
 }
 
 /// Selects the installed same-slot instance's still-needed libraries before the replace
@@ -261,7 +263,11 @@ pub(crate) fn find_preserve_paths_for_merge(
         new_pf,
         main_slot,
         new_image_paths,
+        preserve_libs,
     } = args;
+    if !preserve_libs {
+        return None;
+    }
     let old_pf = installed_instance_pf(root, category, package, main_slot)?;
     let old_contents_text =
         read_entry_text(root, category, &old_pf, "CONTENTS").unwrap_or_default();

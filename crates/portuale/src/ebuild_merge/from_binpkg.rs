@@ -485,6 +485,13 @@ pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<i32
             new_pf: pf,
             main_slot,
             new_image_paths,
+            preserve_libs: preserve_libs_for_merge(
+                options.preserve_libs,
+                root,
+                category,
+                package,
+                main_slot,
+            ),
         })
     {
         let (injected, surviving) =

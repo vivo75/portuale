@@ -541,6 +541,18 @@ pub(crate) fn unmerge_and_package_options(
     );
     let uninstall_ignore =
         ebuild_unmerge::uninstall_ignore_with_packdebug(&resolved_ignore, &resolved_features);
+    // `preserve-libs` from the same resolved `FEATURES`; with no config, the calling env's
+    // `FEATURES` when set, else the default token.
+    // Portage: dbapi/vartree.py, `"preserve-libs" in mysettings.features`
+    let preserve_libs = if unmerge_config.is_some() {
+        resolved_features
+            .split_whitespace()
+            .any(|t| t == "preserve-libs")
+    } else {
+        std::env::var("FEATURES")
+            .map(|f| f.split_whitespace().any(|t| t == "preserve-libs"))
+            .unwrap_or(true)
+    };
     let unmerge_options = ebuild_unmerge::UnmergeOptions {
         debug,
         shell,
@@ -549,6 +561,7 @@ pub(crate) fn unmerge_and_package_options(
         config_protect_mask: std::env::var("CONFIG_PROTECT_MASK")
             .unwrap_or(default_unmerge_options.config_protect_mask),
         unmerge_orphans,
+        preserve_libs,
         uninstall_ignore,
         config_root: portage_repo::config_root_from_env(),
         already_unmerged: Vec::new(),

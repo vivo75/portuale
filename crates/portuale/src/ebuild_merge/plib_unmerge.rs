@@ -39,6 +39,7 @@ pub(crate) fn preserve_libs_on_unmerge(
         slot,
         contents_text,
         is_replacement,
+        preserve_libs: true,
         retire: None,
     })
 }
@@ -52,6 +53,9 @@ pub(crate) struct PreserveLibsOnUnmergeIntoArgs<'a> {
     pub(crate) slot: &'a str,
     pub(crate) contents_text: &'a str,
     pub(crate) is_replacement: bool,
+    /// `dblink._preserve_libs` for this unmerge: `FEATURES` and the package's own `RESTRICT`.
+    /// Off, nothing is selected but the registry entry is still unregistered.
+    pub(crate) preserve_libs: bool,
     pub(crate) retire: Option<&'a mut RetireWrites>,
 }
 
@@ -67,6 +71,7 @@ pub(crate) fn preserve_libs_on_unmerge_into(
         slot,
         contents_text,
         is_replacement,
+        preserve_libs,
         retire,
     } = args;
     let instance_owns_files = !contents_text.trim().is_empty();
@@ -76,7 +81,7 @@ pub(crate) fn preserve_libs_on_unmerge_into(
 
     let mut registry = read_plib_registry(root);
     // The orphan scan must see the registry before this package's entry is unregistered.
-    let preserved = if is_replacement || !instance_owns_files {
+    let preserved = if is_replacement || !instance_owns_files || !preserve_libs {
         BTreeSet::new()
     } else {
         let old_contents: Vec<String> = portage_vdb::paths(contents_text)

@@ -883,6 +883,10 @@ pub struct UnmergeOptions {
     /// accumulated default set -- setting `FEATURES` to any other token
     /// reads as `false` here, unlike Portage.
     pub unmerge_orphans: bool,
+    /// `preserve-libs` in the resolved `FEATURES`; the package's own `RESTRICT` is checked
+    /// per unmerge. Default token, so `Default` is `true`.
+    /// Portage: vartree.py, dblink.__init__ and dblink.unmerge
+    pub preserve_libs: bool,
     /// `UNINSTALL_IGNORE` paths the unmerge skips (the resolved scalar with
     /// the packdebug fold); mirrors `MergeOptions::uninstall_ignore`, which
     /// is where the three entry points resolve it.
@@ -911,6 +915,7 @@ impl Default for UnmergeOptions {
             config_protect: "/etc".to_string(),
             config_protect_mask: "/etc/env.d".to_string(),
             unmerge_orphans: true,
+            preserve_libs: true,
             uninstall_ignore: "/lib/modules/*".to_string(),
             config_root: PathBuf::from("/dev/null/no-config-root-configured"),
             already_unmerged: Vec::new(),
@@ -1086,6 +1091,8 @@ pub(crate) fn unmerge_pkgfiles_into(
             slot: own_slot.as_deref().unwrap_or("0"),
             contents_text: &contents_text,
             is_replacement,
+            preserve_libs: options.preserve_libs
+                && !ebuild_merge::installed_restricts_preserve_libs(root, category, pf),
             retire: retire.as_deref_mut(),
         })?;
 

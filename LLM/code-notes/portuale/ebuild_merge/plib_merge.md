@@ -62,3 +62,7 @@ Merge-side preserved-library handling: collision takeover, CONTENTS/NEEDED strip
 
 ## fn merge_plib_registration
 - The registry `register_merge_preserved_libs` stores, with the counter given: the freshly loaded (and pruned) registry plus the merging package's `register(...)`. Split out so a database backend can store it in the publishing transaction (feat#157 S4.1), reading the counter from the still-pending entry.
+
+## fn preserve_libs_for_merge (#383)
+
+`dblink._preserve_libs` for a merge (`vartree.py:2053`, `:4541-4545`, `:4560-4564`): `FEATURES` has `preserve-libs`, and no replaced same-slot instance restricts it. `treewalk` reads `PORTAGE_RESTRICT` of the replaced installed instances only (`setcpv(cur_cpv, mydb=vardb)`, so the vdb RESTRICT reduced with that instance's own recorded USE), never the new package's, and one restricted instance restricts all of them. The unmerge arm (`vartree.py:2622-2626`, `:3667`) uses the unmerged package's own vdb RESTRICT and the same FEATURES token; a replace-loop unmerge never selects libraries itself (the merge side did). Hermetic roots used to preserve unconditionally because the synthetic base carried no `preserve-libs`; since the embedded make.globals (#384) every root has the token, so the gate is live everywhere. `installed_restricts_preserve_libs` and `installed_same_slot_pfs` live in `ebuild_merge/preserve_gate.rs`.
