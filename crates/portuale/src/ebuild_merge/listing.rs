@@ -88,6 +88,16 @@ impl MergeListing {
         ));
     }
 
+    /// `eerror` lines: ` * <line>`, the star and its spaces in `BAD` (stdout,
+    /// like Portage's foreground `ebuild`). A no-op unless the listing is on.
+    /// Portage: lib/portage/elog/messages.py, eerror
+    pub(crate) fn eerror(&mut self, lines: &[String]) {
+        let star = self.color.c("BAD", " * ");
+        for line in lines {
+            self.emit(format!("{star}{line}"));
+        }
+    }
+
     /// `>>> Merging <cpv> to <root>/` (exactly one trailing slash).
     /// Portage: vartree.py, `dblink.treewalk`.
     pub(crate) fn merging(&mut self, cpv: &str, root: &std::path::Path) {

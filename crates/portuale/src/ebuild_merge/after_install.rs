@@ -89,6 +89,20 @@ pub(crate) fn merge_after_install(
     // file is copied; masked paths never reach `${ROOT}` nor `CONTENTS`.
     apply_install_mask(&env.d(), &env.build_info(), options)?;
 
+    // A path with a line ending cannot round-trip through `CONTENTS`: refuse
+    // the package before anything is copied.
+    // Portage: vartree.py, dblink.treewalk (`paths_with_newlines`)
+    let line_ending_paths = image_paths_with_line_endings(&env.d())?;
+    if !line_ending_paths.is_empty() {
+        let cpv = format!("{}/{}", env.category, env.split.pf);
+        let lines = refusal_lines(&cpv, &line_ending_paths);
+        if options.direct {
+            MergeListing::new(true).eerror(&lines);
+            return Ok(1);
+        }
+        return Err(lines.join("\n"));
+    }
+
     // The collision abort runs before `pkg_preinst`, and the
     // preserve-libs registry is consulted unconditionally.
     let plib_registry = read_plib_registry(root);

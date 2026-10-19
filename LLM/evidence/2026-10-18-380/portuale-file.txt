@@ -1,0 +1,26 @@
+>>> Not marked as unpacked; recreating WORKDIR...
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/portage/app-misc/nlpkg-1/work
+>>> Preparing source in /var/tmp/portage/app-misc/nlpkg-1/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/portage/app-misc/nlpkg-1/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/portage/app-misc/nlpkg-1/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/nlpkg-1
+
+>>> Install app-misc/nlpkg-1 into /var/tmp/portage/app-misc/nlpkg-1/image
+>>> Completed installing app-misc/nlpkg-1 into /var/tmp/portage/app-misc/nlpkg-1/image
+
+ [32m*[0m Final size of build directory: 1 KiB
+ [32m*[0m Final size of installed tree:  7 KiB
+
+[31;01m * [39;49;00mThis package installs one or more files containing line ending characters:
+[31;01m * [39;49;00m
+[31;01m * [39;49;00m	/usr/share/nlpkg/a\nb
+[31;01m * [39;49;00m	/usr/share/nlpkg/c\rd
+[31;01m * [39;49;00m
+[31;01m * [39;49;00mpackage app-misc/nlpkg-1 NOT merged
+[31;01m * [39;49;00m
+>>> rc=1
+ls: cannot access '/var/db/pkg/app-misc/nlpkg-*': No such file or directory

@@ -174,6 +174,7 @@ mod db_merge;
 mod after_install;
 mod collisions;
 mod installed_instance;
+mod line_endings;
 mod listing;
 mod options;
 mod plib_merge;

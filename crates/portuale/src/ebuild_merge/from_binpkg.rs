@@ -272,6 +272,19 @@ pub fn merge_binpkg(
     // and before any copy; the resolved mask also lands in `build-info`.
     apply_install_mask(&image, &build_info, options)?;
 
+    // Same refusal as `merge_after_install`: the scan repeats for binary
+    // packages.
+    // Portage: vartree.py, dblink.treewalk (`paths_with_newlines`)
+    let line_ending_paths = image_paths_with_line_endings(&image)?;
+    if !line_ending_paths.is_empty() {
+        let lines = refusal_lines(&format!("{category}/{pf}"), &line_ending_paths);
+        if options.direct {
+            MergeListing::new(true).eerror(&lines);
+            return Ok(1);
+        }
+        return Err(lines.join("\n"));
+    }
+
     // The collision check runs before `pkg_preinst` and the file copy,
     // shared with `merge_after_install`. A binpkg carries no ebuild/repo,
     // so the blocker term reads the already-USE-reduced `*DEPEND`
