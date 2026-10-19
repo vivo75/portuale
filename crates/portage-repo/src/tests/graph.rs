@@ -1270,6 +1270,180 @@ fn rebuild_exclude_and_ignore_suppress_the_rebuild() {
 }
 
 #[test]
+fn rebuild_if_deep_restart_rebuilds_a_reached_consumer() {
+    // Backlog #394: `-u --deep --rebuild-if-* dev-libs/r394top` reaches the
+    // installed `rebuildconsumer` (RDEPEND) whose buildtime `DEPEND` on the
+    // merging trigger is stale, so Portage restarts the walk with the
+    // consumer force-reinstalled (`_rebuild_config.trigger_rebuilds`,
+    // `depgraph.py:531-576`): `U rebuildtrigger-2.0 [1.0]` + `rR
+    // rebuildconsumer-1.0` + `N r394top-1` with one backtrack restart
+    // (oracle `LLM/evidence/2026-10-19-394/out/portage-a-unbuilt-deep.txt`).
+    let root = fixtures_root();
+    for (unbuilt, new_rev, new_ver) in [
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+    ] {
+        let result = ResolveRequest {
+            update: true,
+            deep: Deep::Unlimited,
+            rebuild_if_unbuilt: unbuilt,
+            rebuild_if_new_rev: new_rev,
+            rebuild_if_new_ver: new_ver,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/r394top".to_string()],
+                &test_config(),
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving dev-libs/r394top failed: {e}"));
+        let names: Vec<(String, String)> = result
+            .entries
+            .iter()
+            .map(|e| {
+                let outcome = match &e.outcome {
+                    PretendOutcome::New { .. } => "new",
+                    PretendOutcome::Upgrade { .. } => "upgrade",
+                    PretendOutcome::Reinstall { .. } => "reinstall",
+                    PretendOutcome::AlreadyInstalled { .. } => "kept",
+                    _ => "other",
+                };
+                (format!("{}/{}", e.category, e.package), outcome.to_string())
+            })
+            .collect();
+        assert!(
+            names
+                .iter()
+                .any(|(n, o)| n == "dev-libs/rebuildtrigger" && o == "upgrade"),
+            "the trigger upgrade survives (unbuilt={unbuilt}): {names:?}"
+        );
+        assert!(
+            names
+                .iter()
+                .any(|(n, o)| n == "dev-libs/rebuildconsumer" && o == "reinstall"),
+            "the reached consumer rebuilds (unbuilt={unbuilt}): {names:?}"
+        );
+        assert!(
+            names
+                .iter()
+                .any(|(n, o)| n == "dev-libs/r394top" && o == "new"),
+            "the top still merges (unbuilt={unbuilt}): {names:?}"
+        );
+        assert_eq!(
+            result.backtrack_restarts, 1,
+            "the restart consumes one backtrack try (unbuilt={unbuilt})"
+        );
+    }
+}
+
+#[test]
+fn rebuild_if_deep_restart_is_off_at_backtrack_zero() {
+    // With `--backtrack=0` there is no restart to apply the seed set on, so
+    // the first walk's rows stand (the `U` without the `rR`) -- the #24 S3
+    // shape. (Host Portage 3.0.82.2 instead fails silently here -- rc 1,
+    // empty list -- because `trigger_rebuilds` fires ungated and the outer
+    // loop breaks with `success=False`; see the note in
+    // `resolve/feedback/rebuild_if_restart.md`. This slice keeps
+    // skip-and-stand per the brief.)
+    let root = fixtures_root();
+    let result = ResolveRequest {
+        update: true,
+        deep: Deep::Unlimited,
+        rebuild_if_unbuilt: true,
+        backtrack_max: 0,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/r394top".to_string()],
+            &test_config(),
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving dev-libs/r394top failed: {e}"));
+    let names: Vec<(String, String)> = result
+        .entries
+        .iter()
+        .map(|e| {
+            let outcome = match &e.outcome {
+                PretendOutcome::New { .. } => "new",
+                PretendOutcome::Upgrade { .. } => "upgrade",
+                PretendOutcome::Reinstall { .. } => "reinstall",
+                PretendOutcome::AlreadyInstalled { .. } => "kept",
+                _ => "other",
+            };
+            (format!("{}/{}", e.category, e.package), outcome.to_string())
+        })
+        .collect();
+    assert!(
+        names
+            .iter()
+            .any(|(n, o)| n == "dev-libs/rebuildtrigger" && o == "upgrade"),
+        "the trigger upgrade stands: {names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|(n, o)| n == "dev-libs/rebuildconsumer" && o == "kept"),
+        "the consumer stays kept without the restart: {names:?}"
+    );
+}
+
+#[test]
+fn complete_walk_reuses_a_locked_merge_instead_of_dropping_it() {
+    // Backlog #394 half (2): complete mode never wants an update
+    // (`want_update = !complete_mode` in `resolve/pretend.rs`), so a
+    // non-top-level merge would demote to kept on the phase-2 walk.
+    // Locked cps reuse their phase-1 graph node instead, the way Portage's
+    // `_complete_graph` keeps the graph pick (`_select_pkg_from_graph`,
+    // `depgraph.py:8661`) and never demotes a merge.
+    let root = fixtures_root();
+    let mut config = test_config();
+    config.complete_seed_atoms = vec!["dev-libs/r394top".to_string()];
+    config.complete_locked_merges = vec!["dev-libs/rebuildtrigger".to_string()];
+    let mut reuse = HashMap::new();
+    reuse.insert(
+        ("dev-libs".to_string(), "rebuildtrigger".to_string()),
+        PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        },
+    );
+    let result = ResolveRequest {
+        update: true,
+        deep: Deep::Unlimited,
+        complete: true,
+        complete_reuse: reuse,
+        ..ResolveRequest::new(
+            &root,
+            &root,
+            &["dev-libs/r394top".to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        )
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving dev-libs/r394top failed: {e}"));
+    let kept_trigger = result.entries.iter().find(|e| {
+        e.category == "dev-libs"
+            && e.package == "rebuildtrigger"
+            && matches!(e.outcome, PretendOutcome::Upgrade { .. })
+    });
+    assert!(
+        kept_trigger.is_some(),
+        "the locked trigger upgrade survives the complete walk: {:?}",
+        result
+            .entries
+            .iter()
+            .map(|e| (format!("{}/{}", e.category, e.package), e.outcome.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn dynamic_deps_picks_ebuild_vs_vdb_deps_for_an_already_installed_deep_walk() {
     // Installed with a vdb RDEPEND but a current-ebuild RDEPEND naming someone
     // else: dynamic walks the ebuild, =n walks the vdb snapshot.
@@ -4206,6 +4380,7 @@ fn exact_version_update_keeps_arg_pinned_provider() {
             dynamic_deps: true,
             implicit_system_deps: true,
             complete: false,
+            complete_reuse: HashMap::new(),
             set_args: std::collections::HashSet::new(),
             solver: SolverKind::Portage,
         };

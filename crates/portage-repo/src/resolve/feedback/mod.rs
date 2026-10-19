@@ -7,6 +7,7 @@ mod autounmask;
 mod circular_dead_end;
 mod missing_dep;
 mod no_leaf_restart;
+mod rebuild_if_restart;
 mod reverse_dep_pins;
 mod slot_conflict_abi;
 mod slot_conflict_backtrack;
@@ -17,6 +18,7 @@ pub(crate) use autounmask::*;
 pub(crate) use circular_dead_end::*;
 pub(crate) use missing_dep::*;
 pub(crate) use no_leaf_restart::*;
+pub(crate) use rebuild_if_restart::*;
 pub(crate) use reverse_dep_pins::*;
 pub(crate) use slot_conflict_abi::*;
 pub(crate) use slot_conflict_backtrack::*;
@@ -201,6 +203,10 @@ pub(crate) fn collect_feedback(
     }
 
     if let Some(decision) = step_slot_operator_probe(has_nvc, ctx, pass, &mut grown, config) {
+        return decision;
+    }
+
+    if let Some(decision) = step_rebuild_if_restart(has_nvc, ctx, pass, &mut grown) {
         return decision;
     }
 

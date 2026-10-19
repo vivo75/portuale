@@ -144,3 +144,6 @@ The resolver's result and how a run aborts.
 
 ## field AutounmaskChange::atom
 - Original comment citations: Portage: autounmask_unrestricted_atoms default n; check_if_latest (bug #536392)
+
+## field GraphResult::rebuild_if_reinstalls
+- Backlog #394: `(cat, pkg)` of the installed parents the `--rebuild-if-*` restart force-reinstalled (seeded parents that settled as merges). Sorted, deduped. Only the red `r` column reads it (consumer-only -- the merged dep stays untagged); unlike `abi_rebuilds` there is no "causing rebuilds" block. Portage: `_gen_reinstall_sets`; `output.py`, `PkgAttrDisplay.force_reinstall`.

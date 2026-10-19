@@ -1364,3 +1364,272 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
     );
     let _ = fs::remove_dir_all(&base);
 }
+
+// ---- `--rebuild-if-*` restart scan (backlog #394): over the reached set
+// (merges and kept-installed nodes) name the installed parents whose
+// walked buildtime edge lands on a dep this run merges. Portage records
+// those edges in `_rebuild_config.add` and restarts the walk with the
+// parents force-reinstalled (`depgraph.py:424-442`, `:531-576`,
+// `:5692-5698`, outer loop `:12235`); the re-walk prints the `rR` row
+// (oracle `LLM/evidence/2026-10-19-394/out/portage-a-unbuilt-deep.txt`:
+// `U rebuildtrigger-2.0 [1.0]` + `rR rebuildconsumer-1.0` + `N r394top-1`,
+// backtrack 1/20). ----
+
+/// vdb with installed `rebuildtrigger-1.0` + `rebuildconsumer-1.0` (the
+/// `#394` oracle shape; the consumer's walked edge lives on its entry's
+/// `deps`, like the walk records it).
+fn rebuild_if_394_vdb(tag: &str) -> PathBuf {
+    let dir = TempDir::new(&format!("portage-repo-rebuild-if-{tag}")).keep();
+    for name in ["rebuildtrigger-1.0", "rebuildconsumer-1.0"] {
+        let d = dir.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+    }
+    dir
+}
+
+/// One walked edge from the consumer to the trigger; `buildtime` picks the
+/// `DEPEND`/`BDEPEND` key (Portage `DepPriority.buildtime`).
+fn rebuild_if_394_edge(buildtime: bool) -> DepEdge {
+    DepEdge {
+        atom: "dev-libs/rebuildtrigger".to_string(),
+        evaluated: "dev-libs/rebuildtrigger".to_string(),
+        category: "dev-libs".to_string(),
+        package: "rebuildtrigger".to_string(),
+        priority: DepPriority {
+            buildtime,
+            runtime: !buildtime,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: if buildtime { 3 } else { 0 },
+    }
+}
+
+/// The kept-installed consumer node, carrying `edge` as its walked dep.
+fn rebuild_if_394_consumer(edge: DepEdge) -> GraphEntry {
+    GraphEntry {
+        outcome: PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string(),
+        },
+        deps: vec![edge],
+        ..graph_entry("dev-libs", "rebuildconsumer", "1.0")
+    }
+}
+
+/// The trigger merged this run (2.0 over installed 1.0), from `source`.
+fn rebuild_if_394_trigger(source: CandidateSource) -> GraphEntry {
+    GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "2.0".to_string(),
+        },
+        source,
+        ..graph_entry("dev-libs", "rebuildtrigger", "2.0")
+    }
+}
+
+/// Which `--rebuild-if-*` flag the scan runs under.
+#[derive(Clone, Copy)]
+enum RebuildIf394Flag {
+    Unbuilt,
+    NewRev,
+    NewVer,
+    None,
+}
+
+fn rebuild_if_394_scan(
+    root: &Path,
+    entries: &[GraphEntry],
+    flag: RebuildIf394Flag,
+    exclude: &[String],
+    ignore: &[String],
+) -> BTreeSet<(String, String)> {
+    let empty: BTreeSet<(String, String)> = BTreeSet::new();
+    rebuild_if_restart_parents(RebuildIfRestartParentsArgs {
+        root,
+        entries,
+        already: &empty,
+        unbuilt: matches!(flag, RebuildIf394Flag::Unbuilt),
+        new_rev: matches!(flag, RebuildIf394Flag::NewRev),
+        new_ver: matches!(flag, RebuildIf394Flag::NewVer),
+        rebuild_exclude: exclude,
+        rebuild_ignore: ignore,
+    })
+}
+
+#[test]
+fn rebuild_if_restart_names_a_reached_parent_behind_a_merged_build_dep() {
+    // The #394 oracle shape: the trigger upgrades, the consumer is kept but
+    // walked with a buildtime edge to it. Portage restarts and prints the
+    // consumer `rR`.
+    let dir = rebuild_if_394_vdb("reached");
+    let entries = vec![
+        rebuild_if_394_trigger(CandidateSource::Ebuild),
+        rebuild_if_394_consumer(rebuild_if_394_edge(true)),
+    ];
+    for flag in [
+        RebuildIf394Flag::Unbuilt,
+        RebuildIf394Flag::NewRev,
+        RebuildIf394Flag::NewVer,
+    ] {
+        assert_eq!(
+            rebuild_if_394_scan(&dir, &entries, flag, &[], &[]),
+            BTreeSet::from([("dev-libs".to_string(), "rebuildconsumer".to_string())]),
+            "all three flags name the reached consumer"
+        );
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rebuild_if_restart_ignores_an_unreached_parent() {
+    // S2 shape: the consumer is installed but nothing reached it, so it has
+    // no entry. Portage records no edge and prints no row.
+    let dir = rebuild_if_394_vdb("unreached");
+    let entries = vec![rebuild_if_394_trigger(CandidateSource::Ebuild)];
+    assert!(rebuild_if_394_scan(&dir, &entries, RebuildIf394Flag::Unbuilt, &[], &[]).is_empty());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rebuild_if_restart_ignores_a_runtime_only_edge() {
+    // `RDEPEND`/`PDEPEND` never qualify (Portage `add`'s
+    // `priority.buildtime` gate).
+    let dir = rebuild_if_394_vdb("runtime");
+    let entries = vec![
+        rebuild_if_394_trigger(CandidateSource::Ebuild),
+        rebuild_if_394_consumer(rebuild_if_394_edge(false)),
+    ];
+    assert!(
+        rebuild_if_394_scan(&dir, &entries, RebuildIf394Flag::Unbuilt, &[], &[]).is_empty(),
+        "a runtime-only edge never rebuilds"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rebuild_if_restart_splits_new_rev_from_new_ver() {
+    // Merged `2.0-r1` over installed `2.0`: new-rev fires (cpv not
+    // installed), new-ver does not (norev equal). Merged `2.0` over
+    // installed `1.0`: both fire.
+    let dir = TempDir::new("portage-repo-rebuild-if-rev").keep();
+    for name in ["rebuildtrigger-2.0", "rebuildconsumer-1.0"] {
+        let d = dir.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+    }
+    let rev_bump = GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "2.0".to_string(),
+            to: "2.0-r1".to_string(),
+        },
+        ..graph_entry("dev-libs", "rebuildtrigger", "2.0-r1")
+    };
+    let entries = vec![rev_bump, rebuild_if_394_consumer(rebuild_if_394_edge(true))];
+    let consumer = BTreeSet::from([("dev-libs".to_string(), "rebuildconsumer".to_string())]);
+    assert_eq!(
+        rebuild_if_394_scan(&dir, &entries, RebuildIf394Flag::NewRev, &[], &[]),
+        consumer,
+        "new-rev fires for a revision bump"
+    );
+    assert!(
+        rebuild_if_394_scan(&dir, &entries, RebuildIf394Flag::NewVer, &[], &[]).is_empty(),
+        "new-ver ignores a revision-only bump"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rebuild_if_restart_honours_rebuild_exclude_and_ignore() {
+    // `--rebuild-exclude` matches the parent, `--rebuild-ignore` the dep.
+    let dir = rebuild_if_394_vdb("gates");
+    let entries = vec![
+        rebuild_if_394_trigger(CandidateSource::Ebuild),
+        rebuild_if_394_consumer(rebuild_if_394_edge(true)),
+    ];
+    assert!(
+        rebuild_if_394_scan(
+            &dir,
+            &entries,
+            RebuildIf394Flag::Unbuilt,
+            &["dev-libs/rebuildconsumer".to_string()],
+            &[]
+        )
+        .is_empty(),
+        "excluded parents never restart"
+    );
+    assert!(
+        rebuild_if_394_scan(
+            &dir,
+            &entries,
+            RebuildIf394Flag::Unbuilt,
+            &[],
+            &["dev-libs/rebuildtrigger".to_string()]
+        )
+        .is_empty(),
+        "ignored deps never trigger"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rebuild_if_restart_ignores_a_binary_merge_and_a_merging_parent() {
+    // A dep merged from a binary is `built` (Portage `built=(type !=
+    // "ebuild")`), so it never triggers. A parent that already merges needs
+    // no rebuild either (Portage only records edges for built parents).
+    let dir = rebuild_if_394_vdb("source");
+    let binary_entries = vec![
+        rebuild_if_394_trigger(CandidateSource::Binary),
+        rebuild_if_394_consumer(rebuild_if_394_edge(true)),
+    ];
+    assert!(
+        rebuild_if_394_scan(&dir, &binary_entries, RebuildIf394Flag::Unbuilt, &[], &[]).is_empty(),
+        "a binary dep never triggers"
+    );
+    let merging_consumer = GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".to_string(),
+            to: "1.1".to_string(),
+        },
+        deps: vec![rebuild_if_394_edge(true)],
+        ..graph_entry("dev-libs", "rebuildconsumer", "1.1")
+    };
+    let merging_entries = vec![
+        rebuild_if_394_trigger(CandidateSource::Ebuild),
+        merging_consumer,
+    ];
+    assert!(
+        rebuild_if_394_scan(&dir, &merging_entries, RebuildIf394Flag::Unbuilt, &[], &[]).is_empty(),
+        "an already-merging parent is never named"
+    );
+    // No flag at all: the scan stays off.
+    let plain_entries = vec![
+        rebuild_if_394_trigger(CandidateSource::Ebuild),
+        rebuild_if_394_consumer(rebuild_if_394_edge(true)),
+    ];
+    assert!(rebuild_if_394_scan(&dir, &plain_entries, RebuildIf394Flag::None, &[], &[]).is_empty());
+    // An already-seeded parent is stable: no second restart.
+    let seeded: BTreeSet<(String, String)> =
+        BTreeSet::from([("dev-libs".to_string(), "rebuildconsumer".to_string())]);
+    assert!(
+        rebuild_if_restart_parents(RebuildIfRestartParentsArgs {
+            root: &dir,
+            entries: &plain_entries,
+            already: &seeded,
+            unbuilt: true,
+            new_rev: false,
+            new_ver: false,
+            rebuild_exclude: &[],
+            rebuild_ignore: &[],
+        })
+        .is_empty(),
+        "a seeded parent never re-fires"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

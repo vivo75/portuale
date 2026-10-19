@@ -652,6 +652,8 @@ fn graph_result_from_order(
         autounmask_no_clean_tail: false,
         settled_with_backtracking: false,
         abi_rebuilds,
+        // No restart runs, so no rebuild-if reinstall is ever recorded.
+        rebuild_if_reinstalls: Vec::new(),
         circular_deps,
         large_cycle_count,
         cycle_display,
@@ -4341,6 +4343,7 @@ mod tests {
             dynamic_deps: false,
             implicit_system_deps: true,
             complete: false,
+            complete_reuse: HashMap::new(),
             set_args: std::collections::HashSet::new(),
             solver: SolverKind::Portage,
         }

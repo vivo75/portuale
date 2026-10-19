@@ -1,0 +1,10 @@
+# crates/portage-repo/src/resolve/feedback/rebuild_if_restart.rs
+The `--rebuild-if-*` restart: an installed parent's build-time dep merged this run.
+
+## fn step_rebuild_if_restart
+- Backlog #394: Portage `_rebuild_config.trigger_rebuilds` (`depgraph.py:531-576`) plus the `_need_restart` outer loop (`:5692-5698`, `:12235`). A pass that merged a build-time dep of a reached installed parent restarts with that parent seeded (`rebuild_if_replace_installed`) instead of settling, so the parent's own deps re-resolve -- the #24 S3 precedent (route the rebuild through the `Backtracker`, never synthesise an entry post-walk, which would skip the parent's own deps).
+- Fires only on an otherwise-clean pass (no NVC, no slot conflicts -- every earlier arm returns first, exactly as Portage returns before `trigger_rebuilds`), only when a `--rebuild-if-*` flag is on, never under `--nodeps` (Portage records no edges there), and never under `--backtrack=0` (Portage's `_allow_backtracking` gate, `max_retries > 0`). The seed set only grows and seeded parents never re-fire (`already`), so the loop terminates inside the backtrack budget; the restart consumes one try (`passes - 1`).
+- Placed last in `collect_feedback`, after `step_slot_operator_probe`.
+
+## fn step_rebuild_if_restart (#394 `--backtrack=0` Portage wart, kept-skipped)
+- Host Portage 3.0.82.2 with `--backtrack=0` does NOT skip-stand when the restart fires: `trigger_rebuilds` sets `_need_restart` ungated, the outer loop (`:12235`) breaks on `not allow_backtracking` with `success=False`, and with `backtracked == 0` there is no best-run re-pass -- silent rc 1 with an empty merge list (verified by hand 2026-10-19: `-pvuD --rebuild-if-unbuilt --backtrack=0 dev-libs/r394top` on the #394 stage prints no rows, rc 1; the noflag and `--complete-graph` bt0 twins print `U`+`N`, rc 0). The slice keeps skip-stand per the brief ("`--backtrack=0` disables") and pins it (`rebuild_if_deep_restart_is_off_at_backtrack_zero`); mirroring the silent failure would need a new driver failure path for a narrow corner. Revisit if a pin demands it.

@@ -369,6 +369,126 @@ pub(crate) fn strip_revision(version: &str) -> &str {
     }
 }
 
+/// Arguments of [`rebuild_if_restart_parents`].
+pub(crate) struct RebuildIfRestartParentsArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    /// Parents a previous pass already seeded: naming one again would
+    /// restart forever (Portage's `rebuild_list` membership check in
+    /// `_trigger_rebuild`).
+    pub(crate) already: &'a BTreeSet<(String, String)>,
+    pub(crate) unbuilt: bool,
+    pub(crate) new_rev: bool,
+    pub(crate) new_ver: bool,
+    pub(crate) rebuild_exclude: &'a [String],
+    pub(crate) rebuild_ignore: &'a [String],
+}
+
+/// Portage's `_rebuild_config.trigger_rebuilds`
+/// (`--rebuild-if-unbuilt` / `--rebuild-if-new-rev` /
+/// `--rebuild-if-new-ver`): over the walk's reached set (merges *and*
+/// kept-installed nodes), name the installed parents whose walked
+/// buildtime edge lands on a dep this run merges. The caller restarts the
+/// walk with those parents force-reinstalled; only `RDEPEND`/`PDEPEND`
+/// edges never qualify, `--rebuild-exclude` matches the parent,
+/// `--rebuild-ignore` the dep.
+/// // Portage: _emerge/depgraph.py, _rebuild_config
+pub(crate) fn rebuild_if_restart_parents(
+    args: RebuildIfRestartParentsArgs<'_>,
+) -> BTreeSet<(String, String)> {
+    let RebuildIfRestartParentsArgs {
+        root,
+        entries,
+        already,
+        unbuilt,
+        new_rev,
+        new_ver,
+        rebuild_exclude,
+        rebuild_ignore,
+    } = args;
+    if !(unbuilt || new_rev || new_ver) {
+        return BTreeSet::new();
+    }
+    // `cat/pkg` -> merged version, for every entry installed from an ebuild
+    // this run. A dep merged from a binary is `built` and never triggers
+    // (Portage `built=(type_name != "ebuild")`); a removal merges nothing.
+    let mut merged: HashMap<(String, String), String> = HashMap::new();
+    for e in entries {
+        if e.source != CandidateSource::Ebuild {
+            continue;
+        }
+        let version = match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                Some(version)
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
+            PretendOutcome::AlreadyInstalled { .. }
+            | PretendOutcome::NoVisibleCandidate
+            | PretendOutcome::Uninstall { .. } => None,
+        };
+        if let Some(v) = version {
+            merged.insert((e.category.clone(), e.package.clone()), v.clone());
+        }
+    }
+    if merged.is_empty() {
+        return BTreeSet::new();
+    }
+
+    let mut out: BTreeSet<(String, String)> = BTreeSet::new();
+    for e in entries {
+        // Only a kept-installed package can be rebuilt: Portage records the
+        // edge only for a built parent, and a parent that already merges
+        // needs no rebuild.
+        let PretendOutcome::AlreadyInstalled { version } = &e.outcome else {
+            continue;
+        };
+        let cp = (e.category.clone(), e.package.clone());
+        if already.contains(&cp) {
+            continue;
+        }
+        let parent_cpv = format!("{}/{}-{version}", e.category, e.package);
+        if rebuild_exclude
+            .iter()
+            .any(|a| matches_cli_option_atom(a, &parent_cpv))
+        {
+            continue;
+        }
+        // The walked buildtime (`DEPEND`/`BDEPEND`) edges, as the pass
+        // recorded them -- the parent's own expansion, not the vdb snapshot.
+        let triggered = e
+            .deps
+            .iter()
+            .filter(|d| d.priority.buildtime)
+            .filter_map(|d| {
+                let dep_cp = (d.category.clone(), d.package.clone());
+                merged.get(&dep_cp).map(|v| (dep_cp, v.clone()))
+            })
+            .any(|((dc, dp), merged_ver)| {
+                let dep_cpv = format!("{dc}/{dp}-{merged_ver}");
+                if rebuild_ignore
+                    .iter()
+                    .any(|a| matches_cli_option_atom(a, &dep_cpv))
+                {
+                    return false;
+                }
+                if unbuilt {
+                    return true;
+                }
+                let installed = installed_versions(root, &dc, &dp);
+                if new_rev {
+                    return !installed.iter().any(|v| v == &merged_ver);
+                }
+                // new_ver: revision ignored on both sides.
+                let want = strip_revision(&merged_ver);
+                !installed.iter().any(|v| strip_revision(v) == want)
+            });
+        if triggered {
+            out.insert(cp);
+        }
+    }
+    out
+}
+
 /// Arguments of [`rebuild_if_entries`].
 pub(crate) struct RebuildIfEntriesArgs<'a> {
     pub(crate) root: &'a Path,

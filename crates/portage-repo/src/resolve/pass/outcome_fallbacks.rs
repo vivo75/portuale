@@ -192,6 +192,20 @@ pub(crate) fn apply_outcome_fallbacks(
                 new_repo: false,
                 slot_operator_rebuild: true,
             };
+        } else if bp.rebuild_if_replace_installed.contains(key) {
+            // The `--rebuild-if-*` restart seed: a reasonless reinstall, not
+            // a slot-operator one (the red `r` comes from the restart
+            // record, never `slot_operator_rebuild`).
+            // Portage: depgraph.py, _gen_reinstall_sets (`__auto_rebuild__`).
+            outcome = PretendOutcome::Reinstall {
+                version: version.clone(),
+                changed_flags: Vec::new(),
+                deps_changed: false,
+                slot_changed: false,
+                rebuilt_binary: false,
+                new_repo: false,
+                slot_operator_rebuild: false,
+            };
         }
     }
     Ok(outcome)

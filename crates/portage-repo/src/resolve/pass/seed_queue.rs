@@ -62,6 +62,22 @@ pub(crate) fn seed_queue(
             from_disjunction: false,
         });
     }
+    // The `--rebuild-if-*` restart parents ride the same internal-arg shape:
+    // no parent, out of `--deep` accounting, never an `(Argument)` puller.
+    // Portage: depgraph.py, _gen_reinstall_sets (`__auto_rebuild__`,
+    // `force_reinstall=True`, `reset_depth=False`).
+    for (cat, pkg) in &bp.rebuild_if_replace_installed {
+        state.queue.push_back(QueueItem {
+            atom: format!("{cat}/{pkg}"),
+            depth: 1,
+            owner: None,
+            owner_targets_running_root: false,
+            unevaluated: None,
+            targets_running_root: false,
+            buildtime_hard: false,
+            from_disjunction: false,
+        });
+    }
     // The probe's upgraded child rides the same auto set, seeded at the exact
     // candidate the probe chose (Portage's `abi_reinstalls`).
     for (cat, pkg, ver) in &bp.slot_operator_forced_upgrade {

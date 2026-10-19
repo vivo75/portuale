@@ -106,6 +106,15 @@ pub struct ResolveRequest {
     /// the auto-rebuild scans already cover every installed package).
     // Portage: create_depgraph_params.py; depgraph.py _complete_graph
     pub complete: bool,
+    /// Phase-1 merge picks for the complete walk to reuse: `cat/pkg` to the
+    /// outcome the first walk settled. Complete mode never wants an update,
+    /// so without this a non-top-level merge demotes to kept; Portage's
+    /// `_complete_graph` instead keeps the graph node
+    /// (`_select_pkg_from_graph`) and never demotes a merge. Empty on every
+    /// non-complete pass; the walk verifies the pick still satisfies each
+    /// pulling atom and the pass constraints before reusing it.
+    // Portage: depgraph.py, _complete_graph (_select_pkg_from_graph)
+    pub complete_reuse: HashMap<(String, String), PretendOutcome>,
     /// Top-level atoms expanded from a `@world`/`@selected` set argument. A
     /// member selecting no package lands in the missing-args report instead of
     /// failing the run. Empty for direct resolver callers (unit tests), which
@@ -182,6 +191,7 @@ impl ResolveRequest {
             dynamic_deps: true,
             implicit_system_deps: true,
             complete: false,
+            complete_reuse: HashMap::new(),
             set_args: std::collections::HashSet::new(),
             solver: SolverKind::Portage,
         }

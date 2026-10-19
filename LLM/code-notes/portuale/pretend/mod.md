@@ -71,3 +71,6 @@
 - Portage `_emerge/actions.py:525-536`: `--ask` prompts once, after the whole merge list is displayed, before anything is built.
 - Portage `FEATURES=buildpkg` / `--buildpkg`/`-b` (Portage `_emerge/EbuildBinpkg`): a binpkg of each source entry is written into `$PKGDIR` as a side effect of the merge. `--buildpkg=n` wins over the FEATURE.
 - `emerge -k <atom>` (`--usepkg`, no `--getbinpkg`): the resolver put a local-`$PKGDIR` binary on the plan. Portage merges a local `$PKGDIR` binary on `-k`/`-K` alone -- `--getbinpkg` is only about *also* consulting a remote binhost -- so the per-entry binary-vs-source executor (`run_merge_plan`) must run here too, not just under `getbinpkg`.
+
+## abi_rebuild_force_reinstall_cps (#394 restart `r`)
+- Backlog #394: the red `r` set is the ABI pair's both sides *plus* the `--rebuild-if-*` restart parents (`GraphResult::rebuild_if_reinstalls`, consumer-only). Portage tags the rebuilt parent `force_reinstall` via the `__auto_rebuild__` set arg (`output.py:815-816`) while the merged dep stays untagged.

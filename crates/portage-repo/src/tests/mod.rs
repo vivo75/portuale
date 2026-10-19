@@ -694,6 +694,7 @@ fn graph_onlydeps(
         dynamic_deps: true,
         implicit_system_deps: true,
         complete: false,
+        complete_reuse: HashMap::new(),
         set_args: std::collections::HashSet::new(),
         solver: SolverKind::Portage,
     };
@@ -1651,6 +1652,7 @@ fn ctx_161<'a>(
         world_reachable: o.reachable.clone(),
         blocker_retry_closure: o.blocker_closure.clone(),
         complete_locked_merges: o.locked.clone(),
+        complete_reuse: HashMap::new(),
         top_level: o.top_level.iter().map(|s| s.as_str()).collect(),
         top_level_cps: HashSet::new(),
         // Like production's `ResolveCtx::new`: the binary pool

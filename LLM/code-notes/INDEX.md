@@ -109,6 +109,7 @@
 - [crates/portage-repo/src/resolve/feedback/missing_dep.rs](portage-repo/resolve/feedback/missing_dep.md) — Missing-dependency feedback: mask the parent of an unsatisfiable dep and re-run.
 - [crates/portage-repo/src/resolve/feedback/mod.rs](portage-repo/resolve/feedback/mod.md) — Feedback hub: one pass's problems packaged into the next pass's backtrack input.
 - [crates/portage-repo/src/resolve/feedback/no_leaf_restart.rs](portage-repo/resolve/feedback/no_leaf_restart.md) — General no-leaf restart arm for multi-node hard cycles the merge-order walk strands on.
+- [crates/portage-repo/src/resolve/feedback/rebuild_if_restart.rs](portage-repo/resolve/feedback/rebuild_if_restart.md) — The `--rebuild-if-*` restart: an installed parent's build-time dep merged this run.
 - [crates/portage-repo/src/resolve/feedback/reverse_dep_pins.rs](portage-repo/resolve/feedback/reverse_dep_pins.md) — Reverse-dependency pins: an upgrade breaking an installed consumer's recorded dep is pinned or dropped.
 - [crates/portage-repo/src/resolve/feedback/slot_conflict_abi.rs](portage-repo/resolve/feedback/slot_conflict_abi.md) — ABI backtrack arm: rebuild a built parent whose soname/`:=` conflict atom the update probe resolves.
 - [crates/portage-repo/src/resolve/feedback/slot_conflict_backtrack.rs](portage-repo/resolve/feedback/slot_conflict_backtrack.md) — Mask-feedback arm for the first conflicting slot's ranked choices.

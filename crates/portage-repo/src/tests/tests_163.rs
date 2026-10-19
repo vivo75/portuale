@@ -2678,6 +2678,7 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         world_reachable: reachable,
         blocker_retry_closure: HashSet::new(),
         complete_locked_merges: HashSet::new(),
+        complete_reuse: HashMap::new(),
         top_level: TopLevel::from_iter([]),
         top_level_cps: HashSet::new(),
         local_binpkg: build_local_binpkg_index(config),

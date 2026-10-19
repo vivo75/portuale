@@ -301,6 +301,15 @@ pub(crate) struct BacktrackParams {
     /// `cat/pkg`, so `(cat, pkg)` carries the same information here.
     /// Portage: _dynamic_config._slot_operator_replace_installed.
     pub(crate) slot_operator_replace_installed: BTreeSet<(String, String)>,
+    /// The `--rebuild-if-unbuilt` / `--rebuild-if-new-rev` /
+    /// `--rebuild-if-new-ver` twin of the set above: installed parents the
+    /// post-walk scan (`rebuild_if_restart_parents`) found behind a dep this
+    /// run merges. The next pass seeds the walk with their `cat/pkg` atom
+    /// and flips them to a reasonless `Reinstall`, so each parent is a
+    /// **walked graph node** (its own deps re-resolved). Same `(cat, pkg)`
+    /// keying; monotone, so the search terminates.
+    /// Portage: _rebuild_config.rebuild_list + `__auto_rebuild__` (`depgraph.py:5460-5480`).
+    pub(crate) rebuild_if_replace_installed: BTreeSet<(String, String)>,
     /// The child half of Portage's `_slot_operator_update_backtrack`: an
     /// installed child whose update the probe found keeps its own record here
     /// -- `(category, package, version)` of the candidate the restart must

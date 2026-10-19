@@ -45,6 +45,7 @@ pub(crate) fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
         && a.autounmask_use_broke == b.autounmask_use_broke
         && a.autounmask_disabled == b.autounmask_disabled
         && a.slot_operator_replace_installed == b.slot_operator_replace_installed
+        && a.rebuild_if_replace_installed == b.rebuild_if_replace_installed
         && a.slot_operator_forced_upgrade == b.slot_operator_forced_upgrade
         && a.slot_operator_undone == b.slot_operator_undone
         && a.prune_rebuilds == b.prune_rebuilds

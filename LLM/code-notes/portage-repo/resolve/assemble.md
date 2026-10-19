@@ -72,3 +72,6 @@ Assembling the final result.
 
 ## fn assemble_result autounmask_no_clean_tail
 - Backlog #217: the Settle/Feedback params carry the pass's overlay union (see `collect_feedback`'s `grown`) -- i.e. Portage's final pass grew `_needed_use_config_changes` for a digraph node and wanted a restart instead of reaching the `_success_without_autounmask` tail -- or the pass rescued a failed dep via a parent USE flip (Portage `_apply_parent_use_changes` collecting post-failure).
+
+## fn assemble_result (#394 restart record)
+- Backlog #394: `rebuild_if_reinstalls` is the seeded parents that settled as merges (any of the four merge outcomes), sorted and deduped -- the `__auto_rebuild__` record behind the red `r`.

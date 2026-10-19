@@ -98,3 +98,6 @@ Parameters a backtracking pass runs with.
 
 ## fn circular_child_candidate
 - The `cat/pkg-version[:slot[/sub]]` candidate string Portage's `atom.match(circular_child)` sees, shared by the walk's demotion and the merge-order suppression's (see `suppressed_alt_edges`): the two must agree on what matches, or the re-derivation keeps the branch the walk dropped and a phantom edge re-closes the cycle.
+
+## field BacktrackParams::rebuild_if_replace_installed
+- Backlog #394: the `--rebuild-if-*` twin of `slot_operator_replace_installed` -- installed parents the post-walk scan named behind a merged build dep. Seeded and flipped exactly like the slot-operator set (see `seed_queue`, `outcome_fallbacks`), but the flip is a reasonless `Reinstall` (`slot_operator_rebuild: false`; the red `r` comes from `GraphResult::rebuild_if_reinstalls`). Portage: `_rebuild_config.rebuild_list` + `__auto_rebuild__` (`depgraph.py:5460-5480`, `force_reinstall=True`, `reset_depth=False`). Monotone; participates in `params_equal` like the slot-operator set.

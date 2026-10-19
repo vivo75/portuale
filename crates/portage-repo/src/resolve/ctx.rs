@@ -108,6 +108,9 @@ pub(crate) struct ResolveCtx<'a> {
     pub(crate) blocker_retry_closure: HashSet<(String, String)>,
     /// Phase-1 merge set; in the complete pass only these cps may newly merge.
     pub(crate) complete_locked_merges: HashSet<(String, String)>,
+    /// Phase-1 merge picks for the complete pass to reuse instead of
+    /// re-resolving from installed (see `ResolveRequest::complete_reuse`).
+    pub(crate) complete_reuse: HashMap<(String, String), PretendOutcome>,
     /// Top-level atom texts, to tell a top-level `NoVisibleCandidate`
     /// (fatal) from a dependency's (reported).
     pub(crate) top_level: TopLevel<'a>,
@@ -225,6 +228,7 @@ impl<'a> ResolveCtx<'a> {
                         .map(|(c, p)| (c.to_string(), p.to_string()))
                 })
                 .collect(),
+            complete_reuse: req.complete_reuse.clone(),
             top_level: TopLevel {
                 atoms: req.atoms.iter().map(|s| s.as_str()).collect(),
                 sets: &req.argument_sets,

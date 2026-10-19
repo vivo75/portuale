@@ -373,7 +373,13 @@ pub fn run(args: &[String]) -> ExitCode {
     // `N` (a pure install that still caused a rebuild); other-slot installs do
     // not count (`NS`, no `r`).
     // Portage: resolver/output.py, PkgAttrDisplay
-    let force_reinstall_cps = abi_rebuild_force_reinstall_cps(&result, &root);
+    let mut force_reinstall_cps = abi_rebuild_force_reinstall_cps(&result, &root);
+    // The `--rebuild-if-*` restart parents: tagged `force_reinstall` by the
+    // `__auto_rebuild__` set arg, while the merged dep stays untagged (so
+    // unlike the ABI pair above this is consumer-only, and there is no
+    // "causing rebuilds" block).
+    // Portage: _gen_reinstall_sets; output.py, PkgAttrDisplay.force_reinstall
+    force_reinstall_cps.extend(result.rebuild_if_reinstalls.iter().cloned());
     show_resolution_report(ShowResolutionReportArgs {
         gated_abort_partial,
         result: &result,

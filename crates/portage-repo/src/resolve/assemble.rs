@@ -66,6 +66,30 @@ pub(crate) fn assemble_result(
             rebuild_ignore: ctx.rebuild_ignore,
         }));
 
+    // The `--rebuild-if-*` restart record: seeded parents that settled as
+    // merges carry the red `r` (Portage's `__auto_rebuild__`
+    // `force_reinstall`), the merged dep stays untagged.
+    let mut rebuild_if_reinstalls: Vec<(String, String)> = params
+        .rebuild_if_replace_installed
+        .iter()
+        .filter(|cp| {
+            pass.entries.iter().any(|e| {
+                e.category == cp.0
+                    && e.package == cp.1
+                    && matches!(
+                        e.outcome,
+                        PretendOutcome::New { .. }
+                            | PretendOutcome::Upgrade { .. }
+                            | PretendOutcome::Downgrade { .. }
+                            | PretendOutcome::Reinstall { .. }
+                    )
+            })
+        })
+        .cloned()
+        .collect();
+    rebuild_if_reinstalls.sort();
+    rebuild_if_reinstalls.dedup();
+
     // `emerge --pretend --debug` stages 2/4/6: the per-package resolution
     // narration, emitted here on the final entries (before the merge-order
     // sort / `digraph:` dump, matching Portage's order).
@@ -199,6 +223,7 @@ pub(crate) fn assemble_result(
             || pass.parent_flip_rescued,
         settled_with_backtracking: false,
         abi_rebuilds,
+        rebuild_if_reinstalls,
         circular_deps,
         circular_dependency: params.circular_dependency.clone(),
         masked_deps: pass.masked_deps,

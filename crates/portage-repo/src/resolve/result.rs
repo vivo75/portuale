@@ -323,6 +323,14 @@ pub struct GraphResult {
     /// by provider), unless `--verbose-slot-rebuilds=n`.
     // Portage: _compute_abi_rebuild_info _forced_rebuilds; _show_abi_rebuild_info
     pub abi_rebuilds: Vec<(String, String)>,
+    /// `(cat, pkg)` of the installed parents the `--rebuild-if-*` restart
+    /// force-reinstalled this run: each settled as a reasonless `Reinstall`
+    /// entry. Sorted, deduped. Only the red `r` display column reads this
+    /// (Portage tags the rebuilt parent `force_reinstall` via the
+    /// `__auto_rebuild__` set arg); unlike `abi_rebuilds` there is no
+    /// "causing rebuilds" block and the merged dep stays untagged.
+    // Portage: _gen_reinstall_sets; output.py, PkgAttrDisplay.force_reinstall
+    pub rebuild_if_reinstalls: Vec<(String, String)>,
     /// Unbreakable dependency cycles among the merge-bound entries: each inner `Vec`
     /// is one cycle as an ordered `cat/pkg-version` list where every element depends
     /// on the next via an unsatisfied build-time dep with no run-time alternative.

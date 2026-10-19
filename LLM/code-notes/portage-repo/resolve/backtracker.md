@@ -26,3 +26,6 @@ The backtracking search tree.
 
 ## impl Backtracker::feedback MissingDep arm
 - Portage's `dep.parent not in _runtime_pkg_mask` is the mask itself.
+
+## fn params_equal (#394 restart seeds)
+- Backlog #394: `rebuild_if_replace_installed` participates like `slot_operator_replace_installed` -- it is search state (Portage's parameter `__eq__` compares the rebuild/reinstall lists via `backtrack_parameters`).

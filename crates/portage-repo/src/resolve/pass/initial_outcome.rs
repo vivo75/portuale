@@ -54,6 +54,42 @@ pub(crate) fn resolve_initial_outcome(
         && !ctx.complete_locked_merges.is_empty()
         && owner.is_some()
         && !ctx.complete_locked_merges.contains(key);
+    // A locked merge keeps its first-walk node instead of re-resolving from
+    // installed (which never wants an update and would demote it to kept).
+    // The pick is verified against the pulling atom and the pass
+    // constraints first; a masked or conflicting pick falls through to the
+    // normal path below. Top-level atoms always resolve.
+    // Portage: depgraph.py, _complete_graph (_select_pkg_from_graph).
+    if ctx.complete
+        && owner.is_some()
+        && let Some(reused) = ctx.complete_reuse.get(key)
+    {
+        let reused_version = match reused {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                Some(version)
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
+            _ => None,
+        };
+        if let Some(version) = reused_version
+            && let Ok(candidates) = crate::list_candidates(&ctx.repos, &key.0, &key.1)
+            && let Some(candidate) = candidates.iter().find(|c| &c.version == version)
+            && let Some(parsed) = portage_dep::parse_atom(current_atom)
+        {
+            let empty_constraints: Vec<String> = Vec::new();
+            let extra = union_constraints.get(key).unwrap_or(&empty_constraints);
+            let candidate_str = format!(
+                "{}/{}-{version}:{}/{}",
+                key.0, key.1, candidate.slot, candidate.sub_slot
+            );
+            if portage_dep::match_from_list(current_atom, &[candidate_str.as_str()])
+                .is_some_and(|m| !m.is_empty())
+                && crate::satisfies_extra_constraints(candidate, &parsed, extra)
+            {
+                return Ok(ControlFlow::Continue(reused.clone()));
+            }
+        }
+    }
     // Portage `_minimize_children`: per cp with two or more distinct picks,
     // re-point an atom whose pick another selection also satisfies at that
     // one (installed first, ascending). The collapse point: the owner's

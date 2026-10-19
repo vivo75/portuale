@@ -32,6 +32,7 @@ pub(crate) struct ResolveOnceArgs<'a> {
     pub(crate) complete: bool,
     pub(crate) locked: &'a [String],
     pub(crate) with_seeds: bool,
+    pub(crate) reuse: &'a HashMap<(String, String), portage_repo::PretendOutcome>,
 }
 
 /// One resolver run: the request built from the plan and the options.
@@ -48,6 +49,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         complete,
         locked,
         with_seeds,
+        reuse,
     } = args;
     let &ResolvePlan {
         ref complete_seed_atoms,
@@ -172,6 +174,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         dynamic_deps,
         implicit_system_deps,
         complete,
+        complete_reuse: reuse.clone(),
         set_args: set_args.clone(),
         argument_sets: argument_sets.clone(),
         solver,
@@ -209,21 +212,26 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         pretend,
         ..
     } = opts;
-    let run_resolve = |complete: bool, locked: &[String], with_seeds: bool| {
-        resolve_once(ResolveOnceArgs {
-            plan,
-            opts,
-            config,
-            config_root,
-            root,
-            expanded_atoms,
-            set_args,
-            argument_sets,
-            complete,
-            locked,
-            with_seeds,
-        })
-    };
+    let run_resolve =
+        |complete: bool,
+         locked: &[String],
+         with_seeds: bool,
+         reuse: &HashMap<(String, String), portage_repo::PretendOutcome>| {
+            resolve_once(ResolveOnceArgs {
+                plan,
+                opts,
+                config,
+                config_root,
+                root,
+                expanded_atoms,
+                set_args,
+                argument_sets,
+                complete,
+                locked,
+                with_seeds,
+                reuse,
+            })
+        };
     let handle = |r: Result<portage_repo::GraphResult, crate::error::Error>| match r {
         Ok(result) => Ok(result),
         Err(e) => {
@@ -270,7 +278,10 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     // Portage's `_complete_graph` runs after the normal graph is built
     // and only extends it, never adding a new merge.
     // Portage: depgraph.py, _complete_graph
-    let result = match handle(run_resolve(false, &[], false).map_err(crate::error::Error::from)) {
+    let empty_reuse: HashMap<(String, String), portage_repo::PretendOutcome> = HashMap::new();
+    let result = match handle(
+        run_resolve(false, &[], false, &empty_reuse).map_err(crate::error::Error::from),
+    ) {
         Ok(result) => result,
         Err(code) => {
             pretend_end_news_notice(pretend, repos, root, config, color);
@@ -293,6 +304,38 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         })
         .map(|e| format!("{}/{}", e.category, e.package))
         .collect();
+    // Phase 1's `New`/`Upgrade`/`Downgrade` picks for the complete walk:
+    // complete mode never wants an update, so without this a non-top-level
+    // merge demotes to kept; Portage keeps the graph node
+    // (`_select_pkg_from_graph`). `Reinstall`s stay out, all of them: the
+    // complete walk re-derives a reinstall through its own machinery --
+    // the slot-operator scan + eliminate, the `--rebuild-if-*` restart
+    // step, the `--reinstall-atoms`/USE/argument flips -- which is also
+    // what records (or withholds) its red `r` and what latches a refused
+    // display pair. Reusing a reinstall record would freeze a flag the
+    // re-derivation drops -- e.g. a top-level consumer Portage rebuilds
+    // as a plain argument `R`, never `rR` (oracle `soc` cell, host Portage
+    // 3.0.82.2: no pair, no block).
+    // Portage: depgraph.py, _complete_graph
+    let complete_reuse: HashMap<(String, String), portage_repo::PretendOutcome> = result
+        .entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.outcome,
+                portage_repo::PretendOutcome::New { .. }
+                    | portage_repo::PretendOutcome::Upgrade { .. }
+                    | portage_repo::PretendOutcome::Downgrade { .. }
+            )
+        })
+        .map(|e| ((e.category.clone(), e.package.clone()), e.outcome.clone()))
+        .collect();
+    // A `--rebuild-if-*` restart consumes a backtrack try, so phase 1's
+    // count carries into the second walk -- but only then: an unseeded
+    // first walk can misfire a probe the seeded re-walk avoids (r25).
+    // Portage: depgraph.py, _complete_graph
+    let phase1_restarts = result.backtrack_restarts;
+    let phase1_rebuild_if = !result.rebuild_if_reinstalls.is_empty();
     // Phase 2 (`_complete_graph`): run when `--complete-graph` is explicit
     // or auto-enabled (first graph changes an installed package while a
     // `--complete-graph-if-new-*` / `--rebuild-if-new-slot` switch is on).
@@ -312,8 +355,16 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         });
     let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
     let result = if want_complete {
-        match handle(run_resolve(true, &locked_merges, true).map_err(crate::error::Error::from)) {
-            Ok(result) => result,
+        match handle(
+            run_resolve(true, &locked_merges, true, &complete_reuse)
+                .map_err(crate::error::Error::from),
+        ) {
+            Ok(mut result) => {
+                if phase1_rebuild_if {
+                    result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);
+                }
+                result
+            }
             Err(code) => {
                 pretend_end_news_notice(pretend, repos, root, config, color);
                 return Err(code);
@@ -325,8 +376,14 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         // deterministic input means an identical walk; the only delta is
         // the slot-operator-rebuild scan now seeing `slot_op_reachable`.
         // Portage: depgraph.py, _complete_graph
-        match handle(run_resolve(false, &[], true).map_err(crate::error::Error::from)) {
-            Ok(result) => result,
+        match handle(run_resolve(false, &[], true, &empty_reuse).map_err(crate::error::Error::from))
+        {
+            Ok(mut result) => {
+                if phase1_rebuild_if {
+                    result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);
+                }
+                result
+            }
             Err(code) => {
                 pretend_end_news_notice(pretend, repos, root, config, color);
                 return Err(code);
