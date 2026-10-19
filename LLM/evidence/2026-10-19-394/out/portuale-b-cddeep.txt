@@ -1,0 +1,6 @@
+### emerge --pretend --changed-deps --deep dev-libs/r394cdtop
+### binary md5: 5905012f1265807834b5bc9d3b4e5d42
+[ebuild  N     ] dev-libs/newpkg-1.0 to /var/tmp/pt-394/st-portuale/fixtures
+[ebuild   R    ] dev-libs/changeddepspkg-1.0 to /var/tmp/pt-394/st-portuale/fixtures
+[ebuild  N     ] dev-libs/r394cdtop-1 to /var/tmp/pt-394/st-portuale/fixtures
+rc=0

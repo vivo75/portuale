@@ -1,0 +1,7 @@
+a-unbuilt-deep|--pretend --update --deep --rebuild-if-unbuilt dev-libs/r394top
+a-unbuilt-nodeep|--pretend --update --rebuild-if-unbuilt dev-libs/r394top
+a-newrev|--pretend --update --deep --rebuild-if-new-rev dev-libs/r394top
+a-newver|--pretend --update --deep --rebuild-if-new-ver dev-libs/r394top
+a-noflag|--pretend --update --deep dev-libs/r394top
+b-cddeep|--pretend --changed-deps --deep dev-libs/r394cdtop
+b-cdnodeep|--pretend --changed-deps dev-libs/r394cdtop

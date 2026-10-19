@@ -1,0 +1,4 @@
+### emerge --pretend --update --rebuild-if-unbuilt dev-libs/r394top
+### binary md5: 5905012f1265807834b5bc9d3b4e5d42
+[ebuild  N     ] dev-libs/r394top-1 to /var/tmp/pt-394/st-portuale/fixtures
+rc=0

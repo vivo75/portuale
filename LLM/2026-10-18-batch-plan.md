@@ -2,7 +2,7 @@
 
 > **Oracle before code.** Every expected value comes from Portage 3.0.82.2 (container bed `../pmtest/differential-test-bed/`, host `emerge`, or `lib/portage/tests/resolver/`), never from portuale's own output, the harvested corpus, or this plan's source reading. Each slice's test docstring says which. Host Portage files are byte-identical to `3rdparty/portage/lib` for the files cited here (checked in the review), so the line numbers hold for both.
 
-Status: proposed 2026-10-18, revised the same day after `LLM/2026-10-18-batch-plan.review.md` (review item ids D*/G*/P* below). Not started. Owner answers to §6 recorded 2026-10-18. Owner priorities, reviewed with most care: **#408, #409, #401, #383, #384, #372, #405**. Difficulty: F ≈ 1 h, M = one slice with an oracle, A = several slices or research. Ratings now follow the backlog's `[A]` marks where the review showed more work (G12).
+Status: done 2026-10-19 (branch `batch/2026-10-18`, S1–S11 executed; #394 scoped to a design only, #406 not re-opened; commits S8 `021afe61`/`c7f2de0`, S9 `971186f4`/`964fb44`, S10 `9a909749`, `3dd86926`, S11 `719c7f31`, `50de74f2`). Originally: proposed 2026-10-18, revised the same day after `LLM/2026-10-18-batch-plan.review.md` (review item ids D*/G*/P* below). Owner answers to §6 recorded 2026-10-18. Owner priorities, reviewed with most care: **#408, #409, #401, #383, #384, #372, #405**. Difficulty: F ≈ 1 h, M = one slice with an oracle, A = several slices or research. Ratings now follow the backlog's `[A]` marks where the review showed more work (G12).
 
 ## 0. Branch rule and step 0
 
