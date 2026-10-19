@@ -162,6 +162,18 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
     }
 }
 
+/// The databases Portage's similar-name search and `cp_exists` check read besides the
+/// installed one: the ebuild db unless `--usepkgonly` (any value) drops it, and the binary
+/// db under `--usepkg`.
+// Portage: depgraph.py, _show_unsatisfied_dep (`dbs`)
+#[derive(Clone, Copy)]
+pub(crate) struct SimilarNameDbs<'a> {
+    pub(crate) ebuild: bool,
+    pub(crate) pkgdir: Option<&'a Path>,
+    /// The binrepos read under `--getbinpkg`; empty otherwise.
+    pub(crate) binrepos: &'a [portage_profile::BinRepo],
+}
+
 /// `--misspell-suggestions` (default on): when `resolve_pretend_graph`
 /// aborts a top-level atom whose `cat/pkg` genuinely doesn't exist in any
 /// repo, print close `cat/pkg` matches. Returns the block to append to the
@@ -172,6 +184,7 @@ pub(crate) fn misspell_suggestion_block(
     repos: &[portage_repo::RepoConfig],
     root: &Path,
     enabled: bool,
+    dbs: SimilarNameDbs<'_>,
 ) -> Option<String> {
     if !enabled {
         return None;
@@ -183,24 +196,35 @@ pub(crate) fn misspell_suggestion_block(
         .or_else(|| first.strip_prefix("there are no binary packages to satisfy \""))?;
     let atom_str = rest.strip_suffix("\".")?;
     let atom = parse_atom(atom_str)?;
-    // Only when the `cat/pkg` directory has no ebuilds anywhere.
-    if !portage_repo::list_candidates(repos, &atom.category, &atom.package)
-        .map(|c| c.is_empty())
-        .unwrap_or(true)
-    {
-        return None;
-    }
-    // An installed-only cp (`cp_exists` via the installed db) reports no
-    // similar-names block (the S0-backed `360-gone-pv` capture).
-    // Portage: depgraph.py, _show_unsatisfied_dep.
-    if !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty() {
-        return None;
-    }
+    let binary = dbs.pkgdir.map(|pkgdir| {
+        let mut cps = portage_repo::BinaryIndex::from_pkgdir(pkgdir).all_cp();
+        cps.extend(portage_repo::remote_binary_all_cp(dbs.binrepos, root));
+        cps
+    });
     let target = format!("{}/{}", atom.category, atom.package);
-    let all_cp: Vec<String> = portage_repo::all_cp(repos)
+    // Only when no database that is read has the `cat/pkg` (`cp_exists`): an installed
+    // one reports no similar-names block (the S0-backed `360-gone-pv` capture).
+    // Portage: depgraph.py, _show_unsatisfied_dep.
+    let ebuild_has = dbs.ebuild
+        && !portage_repo::list_candidates(repos, &atom.category, &atom.package)
+            .map(|c| c.is_empty())
+            .unwrap_or(true);
+    let installed_has =
+        !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty();
+    let binary_has = binary.as_ref().is_some_and(|cps| cps.contains(&target));
+    if ebuild_has || installed_has || binary_has {
+        return None;
+    }
+    let mut all_cp: std::collections::BTreeSet<String> = portage_repo::all_installed_packages(root)
         .into_iter()
-        .filter(|cp| *cp != target)
+        .map(|p| format!("{}/{}", p.category, p.package))
         .collect();
+    if dbs.ebuild {
+        all_cp.extend(portage_repo::all_cp(repos));
+    }
+    all_cp.extend(binary.into_iter().flatten());
+    all_cp.remove(&target);
+    let all_cp: Vec<String> = all_cp.into_iter().collect();
     let matches = difflib::get_close_matches(&target, &all_cp, 3, 0.6);
     let tail = match matches.len() {
         0 => " nothing similar found.".to_string(),

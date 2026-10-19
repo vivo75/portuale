@@ -691,6 +691,51 @@ pub(crate) fn all_binary_masked_report_with_respect_use(
     render_all_masked_block(xinfo, masked, None)
 }
 
+/// The `--usepkg-exclude`/`--usepkg-include` drop of the only binaries that match the
+/// atom: Portage keeps them in the pool as masked with no reason, so the block lists each
+/// as `- <cpv>::<repo> (masked by: )`. `None` when no version-matching binary was dropped.
+// Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep (usepkg-exclude/include `break`)
+pub(crate) fn usepkg_dropped_binary_report(
+    binaries: &[Candidate],
+    atom_str: &str,
+    xinfo: &str,
+    filters: (&[String], &[String]),
+) -> Option<String> {
+    let atom = portage_dep::parse_atom(atom_str)?;
+    let match_atom = portage_dep::parse_match_atom(atom_str)?;
+    let kept = filter_usepkg_exclude_include(
+        binaries.to_vec(),
+        &atom.category,
+        &atom.package,
+        filters.0,
+        filters.1,
+    );
+    let mut dropped: Vec<&Candidate> = binaries
+        .iter()
+        .filter(|c| {
+            !kept
+                .iter()
+                .any(|k| k.version == c.version && k.build_id == c.build_id)
+        })
+        .filter(|c| {
+            let s = format!(
+                "{}/{}-{}:{}/{}::{}",
+                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
+            );
+            portage_dep::match_atom_matches_candidate(&match_atom, &s, c.build_id.as_deref())
+        })
+        .collect();
+    if dropped.is_empty() {
+        return None;
+    }
+    dropped.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+    let rows = dropped
+        .into_iter()
+        .map(|c| (output_cpv_for_masked_row(c, &atom, &[]), Vec::new()))
+        .collect();
+    render_all_masked_block(xinfo, rows, None)
+}
+
 fn render_all_masked_block(
     xinfo: &str,
     masked: Vec<(String, Vec<String>)>,

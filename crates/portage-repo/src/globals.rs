@@ -78,7 +78,8 @@ pub fn set_ebuild_db_dropped(dropped: bool) {
     EBUILD_DB_DROPPED.store(dropped, AtomicOrdering::Relaxed);
 }
 
-pub(crate) fn ebuild_db_dropped() -> bool {
+/// Whether `--usepkgonly=n` dropped the ebuild database from the run.
+pub fn ebuild_db_dropped() -> bool {
     EBUILD_DB_DROPPED.load(AtomicOrdering::Relaxed)
 }
 

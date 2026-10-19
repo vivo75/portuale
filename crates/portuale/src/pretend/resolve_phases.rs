@@ -243,7 +243,21 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             } else {
                 eprint!("emerge: {msg}");
             }
-            if let Some(extra) = misspell_suggestion_block(&msg, repos, root, misspell_suggestions)
+            let pkgdir = std::path::PathBuf::from(&config.pkgdir);
+            let dbs = SimilarNameDbs {
+                ebuild: !(plan.usepkgonly || portage_repo::ebuild_db_dropped()),
+                // `--usepkgonly` and `--getbinpkg` each imply `--usepkg`.
+                // Portage: actions.py, run_action
+                pkgdir: (plan.usepkg || plan.usepkgonly || plan.getbinpkg)
+                    .then_some(pkgdir.as_path()),
+                binrepos: if plan.getbinpkg {
+                    &config.binrepos
+                } else {
+                    &[]
+                },
+            };
+            if let Some(extra) =
+                misspell_suggestion_block(&msg, repos, root, misspell_suggestions, dbs)
             {
                 eprint!("{extra}");
             }

@@ -205,6 +205,20 @@ pub(crate) fn step_top_level_unsatisfied(
             ) {
                 return Err(Error::Detail(report));
             }
+            // A binary the `--usepkg-exclude`/`--usepkg-include` filters dropped is
+            // reported as a reason-less masked row, not as a miss.
+            // Portage: _show_unsatisfied_dep
+            if ctx.usepkg || ctx.usepkgonly {
+                let binaries = list_binary_candidates(&ctx.local_binpkg, &key.0, &key.1);
+                if let Some(report) = usepkg_dropped_binary_report(
+                    &binaries,
+                    current_atom,
+                    &format!("{current_atom:?}"),
+                    (ctx.usepkg_exclude, ctx.usepkg_include),
+                ) {
+                    return Err(Error::Detail(report));
+                }
+            }
             // Under `--getbinpkg` an atom matching only masked *remote*
             // binaries reports the same block over the remote pool (the
             // ebuild pool above has no version match here, or the walk

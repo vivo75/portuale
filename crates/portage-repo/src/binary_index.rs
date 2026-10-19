@@ -83,6 +83,14 @@ impl BinaryIndex {
         self.entries.is_empty()
     }
 
+    /// Every `category/package` the index lists.
+    pub fn all_cp(&self) -> Vec<String> {
+        self.by_cp
+            .keys()
+            .map(|(category, package)| format!("{category}/{package}"))
+            .collect()
+    }
+
     pub(crate) fn entries(&self) -> &[HashMap<String, String>] {
         &self.entries
     }
@@ -477,6 +485,14 @@ pub(crate) fn dedup_binary_instances(
         }
     }
     out
+}
+
+/// Every `category/package` the binrepos' synced `Packages` indexes list.
+pub fn remote_binary_all_cp(binrepos: &[portage_profile::BinRepo], root: &Path) -> Vec<String> {
+    binrepos
+        .iter()
+        .flat_map(|b| cached_binary_index(&b.packages_dir(root)).all_cp())
+        .collect()
 }
 
 /// `--getbinpkg`/`-g`: binary candidates from every `config.binrepos` binrepo's

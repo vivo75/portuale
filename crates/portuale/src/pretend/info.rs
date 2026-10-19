@@ -403,7 +403,14 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                 color.c("INFORM", &xinfo)
             );
             let msg = format!("there are no ebuilds to satisfy \"{atom_str}\".");
-            if let Some(extra) = misspell_suggestion_block(&msg, repos, root, misspell_suggestions)
+            let pkgdir = std::path::PathBuf::from(&config.pkgdir);
+            let dbs = SimilarNameDbs {
+                ebuild: true,
+                pkgdir: usepkg.then_some(pkgdir.as_path()),
+                binrepos: &[],
+            };
+            if let Some(extra) =
+                misspell_suggestion_block(&msg, repos, root, misspell_suggestions, dbs)
             {
                 eprintln!("{extra}");
             }

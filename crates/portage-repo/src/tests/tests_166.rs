@@ -90,6 +90,27 @@ fn filter_usepkg_166_include_drops_a_non_match() {
     assert_eq!(out.len(), 1);
 }
 
+/// A binary dropped by the filters is a reason-less masked row (backlog #416); the
+/// surviving version is not listed, and nothing dropped means no report.
+#[test]
+fn usepkg_dropped_report_lists_only_the_dropped_matches_without_a_reason() {
+    let binaries = vec![cand_166("1.0"), cand_166("2.0")];
+    let exclude = vec!["=dev-libs/foo-1.0".to_string()];
+    let report = usepkg_dropped_binary_report(
+        &binaries,
+        "dev-libs/foo",
+        "\"dev-libs/foo\"",
+        (&exclude, &[]),
+    )
+    .expect("a dropped match");
+    assert!(
+        report.contains("- dev-libs/foo-1.0::testrepo (masked by: )\n"),
+        "{report}"
+    );
+    assert!(!report.contains("foo-2.0"), "{report}");
+    assert!(usepkg_dropped_binary_report(&binaries, "dev-libs/foo", "x", (&[], &[])).is_none());
+}
+
 // ---- `rebuilt_binary_changed` (Portage's two rebuilt_binary triggers). ----
 
 /// Fresh unique scratch dir per test (vdb lives under it, so the
