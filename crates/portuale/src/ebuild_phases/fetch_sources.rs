@@ -340,6 +340,9 @@ pub(crate) async fn run_nofetch(args: RunNofetchArgs<'_>) {
         .is_some_and(|phases| phases.split_whitespace().any(|p| p == "nofetch"));
     let ebuild = env.pkg_dir.join(format!("{}.ebuild", env.split.pf));
     if ebuild.is_file() && (restrict_fetch || defines_nofetch) {
+        // `${T}/logging` must exist for `pkg_nofetch`'s elog output to be kept.
+        let _ = std::fs::remove_file(env.t().join("logging").join("nofetch"));
+        let _ = create_directories(env);
         let _ = run_one_phase(RunOnePhaseArgs {
             env,
             root,
@@ -351,6 +354,33 @@ pub(crate) async fn run_nofetch(args: RunNofetchArgs<'_>) {
             log_file: PhaseLog::Inherit,
         })
         .await;
+    }
+}
+
+/// Removes the empty directories `run_nofetch` made, so a fetch-only run leaves no build
+/// directory behind (Portage cleans its throw-away builddir the same way).
+pub(crate) fn remove_nofetch_scratch(env: &Environment) {
+    let _ = std::fs::remove_file(env.t().join("logging").join("nofetch"));
+    let files = env.filesdir();
+    if std::fs::symlink_metadata(&files).is_ok_and(|m| m.file_type().is_symlink()) {
+        let _ = std::fs::remove_file(&files);
+    }
+    for dir in [
+        env.t().join("logging"),
+        env.t(),
+        env.d(),
+        env.workdir(),
+        env.home(),
+        env.portage_builddir.join("empty"),
+        env.portage_builddir.clone(),
+    ] {
+        let _ = std::fs::remove_dir(&dir);
+    }
+    if let Some(category_dir) = env.portage_builddir.parent() {
+        let _ = std::fs::remove_dir(category_dir);
+        if let Some(portage_dir) = category_dir.parent() {
+            let _ = std::fs::remove_dir(portage_dir);
+        }
     }
 }
 

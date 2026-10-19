@@ -793,6 +793,7 @@ fn run_fetchonly_action(args: FetchonlyActionArgs<'_>) -> u8 {
         debug: opts.debug,
         pretend: opts.pretend,
         all_uri: opts.fetch_all_uri,
+        keep_going: opts.keep_going,
     });
     u8::try_from(code).unwrap_or(1)
 }

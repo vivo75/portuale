@@ -18,6 +18,83 @@ pub struct RunFetchonlyArgs<'a> {
     pub pretend: bool,
     /// `--fetch-all-uri`: every file of `SRC_URI`, whatever the USE set.
     pub all_uri: bool,
+    /// `--keep-going`: a single failed package is summarised at the end too.
+    pub keep_going: bool,
+}
+
+/// The `* Messages for package <cpv> merged to <root>:` summary of a package whose fetch
+/// failed, printed after its `Failed to emerge` tail: it carries what `pkg_nofetch` logged.
+// Portage: Scheduler.py (_failed_pkg_msg then elog_process via _elog_listener), mod_echo
+fn print_fetch_failure_elog(
+    env: &ebuild_phases::Environment,
+    cpv: &str,
+    root: &Path,
+    features: &str,
+    color: &crate::color::Colorizer,
+) {
+    crate::elog::process_batch(crate::elog::ProcessBatchArgs {
+        logdir: &crate::elog::logdir(root),
+        root_display: &root.display().to_string(),
+        items: &[(cpv.to_string(), env.t())],
+        phases: None,
+        color,
+        split_elog: features.split_whitespace().any(|t| t == "split-elog"),
+    });
+    ebuild_phases::remove_nofetch_scratch(env);
+}
+
+/// ` (cpv:slot/sub::repo, ebuild scheduled for merge to 'root')`, one failed package.
+// Portage: Scheduler.py (`_failed_pkgs_all` summary), Package.__str__
+fn failed_pkg_label(entry: &GraphEntry, cpv_slot: &str, root: &Path) -> String {
+    format!(
+        " ({cpv_slot}::{}, ebuild scheduled for merge to '{}')",
+        entry_repo(entry),
+        root.display()
+    )
+}
+
+/// The end-of-run `The following package(s) have failed to build, install, or execute
+/// postinst:` block on stderr: for two or more failures, or one under `--keep-going`.
+// Portage: _emerge/Scheduler.py, _run_pkg_ops end (`_failed_pkgs_all`)
+fn failed_pkgs_summary(
+    labels: &[String],
+    keep_going: bool,
+    color: &crate::color::Colorizer,
+) -> String {
+    if !(labels.len() > 1 || (!labels.is_empty() && keep_going)) {
+        return String::new();
+    }
+    let msg = if labels.len() > 1 {
+        format!(
+            "The following {} packages have failed to build, install, or execute postinst:",
+            labels.len()
+        )
+    } else {
+        "The following package has failed to build, install, or execute postinst:".to_string()
+    };
+    let star = color.c("BAD", " * ");
+    let mut out = format!("{star}\n");
+    let mut line = String::new();
+    for word in msg.split_whitespace() {
+        if !line.is_empty() && line.len() + 1 + word.len() > 72 {
+            out.push_str(&format!("{star}{line}\n"));
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    out.push_str(&format!("{star}{line}\n{star}\n"));
+    for label in labels {
+        out.push_str(&format!("{star}{label}\n"));
+    }
+    out.push_str(&format!("{star}\n"));
+    out
+}
+
+fn print_failed_pkgs_summary(labels: &[String], keep_going: bool, color: &crate::color::Colorizer) {
+    eprint!("{}", failed_pkgs_summary(labels, keep_going, color));
 }
 
 /// Fetches (or lists) the sources of every source entry of the merge list, in order, and
@@ -37,6 +114,7 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
         debug,
         pretend,
         all_uri,
+        keep_going,
     } = args;
     let run_wide = run_wide_phase_env(config);
     // `FEATURES=mirror` implies `--fetch-all-uri`.
@@ -48,6 +126,8 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
     let progress = merge_progress_map(entries);
     let color = progress_color();
     let mut failed = false;
+    // `(cpv:slot/sub::repo, ebuild scheduled for merge to 'root')` of every fetch failure.
+    let mut failed_pkgs: Vec<String> = Vec::new();
     // The Scheduler's own blank line before the first job (Portage's `-f` output has two
     // blank lines after the resolution notice where a merge has one).
     let mut first_job = true;
@@ -147,14 +227,13 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
                                 },
                             ));
                         }
+                        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
                         print!(
                             "{}",
-                            crate::emerge_getbinpkg::failed_pkg_msg(
-                                &format!("{}/{}-{version}", entry.category, entry.package),
-                                root,
-                                None
-                            )
+                            crate::emerge_getbinpkg::failed_pkg_msg(&cpv, root, None)
                         );
+                        print_fetch_failure_elog(&env, &cpv, root, &features, &color);
+                        failed_pkgs.push(failed_pkg_label(entry, &cpv_slot, root));
                         failed = true;
                     }
                 }
@@ -193,16 +272,46 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
                 }
                 _ => eprintln!("!!! {e}"),
             }
+            let cpv = format!("{}/{}-{version}", entry.category, entry.package);
             print!(
                 "{}",
-                crate::emerge_getbinpkg::failed_pkg_msg(
-                    &format!("{}/{}-{version}", entry.category, entry.package),
-                    root,
-                    None
-                )
+                crate::emerge_getbinpkg::failed_pkg_msg(&cpv, root, None)
             );
+            print_fetch_failure_elog(&env, &cpv, root, &features, &color);
+            failed_pkgs.push(failed_pkg_label(entry, &cpv_slot, root));
             failed = true;
         }
     }
+    print_failed_pkgs_summary(&failed_pkgs, keep_going, &color);
     i32::from(failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plain() -> crate::color::Colorizer {
+        crate::color::Colorizer::new(false)
+    }
+
+    #[test]
+    fn one_failure_is_summarised_only_under_keep_going() {
+        let labels = vec![" (a/b-1:0/0::r, ebuild scheduled for merge to '/x')".to_string()];
+        assert_eq!(failed_pkgs_summary(&labels, false, &plain()), "");
+        assert_eq!(
+            failed_pkgs_summary(&labels, true, &plain()),
+            " * \n * The following package has failed to build, install, or execute postinst:\n \
+             * \n *  (a/b-1:0/0::r, ebuild scheduled for merge to '/x')\n * \n"
+        );
+    }
+
+    #[test]
+    fn several_failures_wrap_the_heading_at_72_columns() {
+        let labels = vec![" (a/b-1)".to_string(), " (c/d-1)".to_string()];
+        assert_eq!(
+            failed_pkgs_summary(&labels, false, &plain()),
+            " * \n * The following 2 packages have failed to build, install, or execute\n \
+             * postinst:\n * \n *  (a/b-1)\n *  (c/d-1)\n * \n"
+        );
+    }
 }
