@@ -1,0 +1,4 @@
+dir /opt
+dir /opt/t385
+dir /opt/t385/kept
+obj /opt/t385/kept/.keep_app-misc_t385-b-0 d41d8cd98f00b204e9800998ecf8427e 1792379934

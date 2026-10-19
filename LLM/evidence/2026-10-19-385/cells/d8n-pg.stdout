@@ -1,0 +1,23 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s385/d8n-pg/tmp/portage/app-misc/t385-d-8/work
+>>> Preparing source in /var/tmp/s385/d8n-pg/tmp/portage/app-misc/t385-d-8/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s385/d8n-pg/tmp/portage/app-misc/t385-d-8/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s385/d8n-pg/tmp/portage/app-misc/t385-d-8/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t385-d-8
+
+>>> Install app-misc/t385-d-8 into /var/tmp/s385/d8n-pg/tmp/portage/app-misc/t385-d-8/image
+>>> Completed installing app-misc/t385-d-8 into /var/tmp/s385/d8n-pg/tmp/portage/app-misc/t385-d-8/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging app-misc/t385-d-8 to /var/tmp/s385/d8n-pg/root/
+>>> /var/tmp/s385/d8n-pg/root/opt/
+>>> /var/tmp/s385/d8n-pg/root/opt/t385/
+>>> /var/tmp/s385/d8n-pg/root/opt/t385/withfile/
+>>> /var/tmp/s385/d8n-pg/root/opt/t385/withfile/payload.txt
+>>> app-misc/t385-d-8 merged.

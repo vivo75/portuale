@@ -1,0 +1,9 @@
+.
+./var
+./var/cache
+./var/cache/edb
+./var/cache/edb/counter
+./var/db
+./var/lib
+./var/lib/portage
+./var/lib/portage/config

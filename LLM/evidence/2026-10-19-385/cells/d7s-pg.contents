@@ -1,0 +1,4 @@
+dir /opt
+dir /opt/t385
+dir /opt/t385/withfile
+obj /opt/t385/withfile/payload.txt 42e55046d789d416d8cd3c234b5b1671 1792379961

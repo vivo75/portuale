@@ -1,0 +1,23 @@
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/s385/b7n-pl/tmp/portage/app-misc/t385-b-7/work
+>>> Preparing source in /var/tmp/s385/b7n-pl/tmp/portage/app-misc/t385-b-7/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/s385/b7n-pl/tmp/portage/app-misc/t385-b-7/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/s385/b7n-pl/tmp/portage/app-misc/t385-b-7/work ...
+>>> Source compiled.
+>>> Test phase [not enabled]: app-misc/t385-b-7
+
+>>> Install app-misc/t385-b-7 into /var/tmp/s385/b7n-pl/tmp/portage/app-misc/t385-b-7/image
+>>> Completed installing app-misc/t385-b-7 into /var/tmp/s385/b7n-pl/tmp/portage/app-misc/t385-b-7/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  0 KiB
+
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging app-misc/t385-b-7 to /var/tmp/s385/b7n-pl/root/
+>>> /var/tmp/s385/b7n-pl/root/opt/
+>>> /var/tmp/s385/b7n-pl/root/opt/t385/
+>>> /var/tmp/s385/b7n-pl/root/opt/t385/kept/
+>>> /var/tmp/s385/b7n-pl/root/opt/t385/kept/.keep_app-misc_t385-b-0
+>>> app-misc/t385-b-7 merged.

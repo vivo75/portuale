@@ -1,0 +1,5 @@
+./opt
+./opt/t385
+./opt/t385/dirempty
+./opt/t385/withfile
+./opt/t385/withfile/payload.txt
