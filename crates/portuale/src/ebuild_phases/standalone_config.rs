@@ -212,6 +212,31 @@ pub(crate) fn standalone_cpv_slot(pkg_dir: &Path, category: &str, pf: &str) -> O
     Some(format!("{category}/{pf}:{slot}/{sub_slot}"))
 }
 
+/// `PORTAGE_BASHRC_FILES` re-derived for one package when any profile node
+/// carries `package.bashrc`; empty otherwise, so the run-wide value stands.
+// Portage: config.py:2008-2022 (`_pbashrc`), doebuild.py (`PORTAGE_BASHRC_FILES`)
+pub(crate) fn package_bashrc_env(
+    config: &portage_profile::Config,
+    cpv_slot: &str,
+) -> Vec<(String, String)> {
+    if config
+        .profile_bashrc_nodes
+        .iter()
+        .all(|n| n.package_bashrc.is_empty())
+    {
+        return Vec::new();
+    }
+    let files: Vec<String> = config
+        .bashrc_files_for(cpv_slot)
+        .iter()
+        .map(|f| f.display().to_string())
+        .collect();
+    if files.is_empty() {
+        return Vec::new();
+    }
+    vec![("PORTAGE_BASHRC_FILES".to_string(), files.join("\n"))]
+}
+
 pub(crate) fn phase_standalone_base_env(
     env: &Environment,
     config_root: &Path,
@@ -306,6 +331,7 @@ pub(crate) fn phase_standalone_base_env(
             flags.push(("FEATURES".to_string(), folded.clone()));
             flags.push(("PORTAGE_FEATURES".to_string(), folded));
         }
+        flags.extend(package_bashrc_env(&config, &cpv_slot));
         Some((display, flags))
     })() else {
         return (String::new(), Vec::new());

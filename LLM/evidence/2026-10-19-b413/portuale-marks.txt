@@ -1,0 +1,6 @@
+rc 0
+profile compile
+userprofile compile
+wild compile
+slot compile
+exact compile

@@ -2782,3 +2782,41 @@ fn user_profile_unmask_counters_chain_mask_and_parent_stays_unwalked() {
     assert_eq!(config.profile_use_layers.len(), 2);
     assert!(config.profile_use_layers[1].package_use.is_empty());
 }
+
+/// `PORTAGE_BASHRC_FILES` per package: each node's `profile.bashrc`, then the
+/// matching `package.bashrc` files, least specific atom first whatever the
+/// file order. Expected order captured with host Portage 3.0.82.2
+/// (`LLM/evidence/2026-10-19-b413/portage-marks.txt`).
+#[test]
+fn bashrc_files_for_orders_package_bashrc_by_atom_specificity() {
+    let p = |s: &str| PathBuf::from(s);
+    let config = Config {
+        profile_bashrc_nodes: vec![
+            ProfileBashrcNode {
+                profile_bashrc: Some(p("/a/profile.bashrc")),
+                package_bashrc: vec![],
+            },
+            ProfileBashrcNode {
+                profile_bashrc: Some(p("/u/profile.bashrc")),
+                package_bashrc: vec![
+                    ("=dev-util/foo-1".into(), vec![p("/u/exact")]),
+                    ("dev-util/foo".into(), vec![p("/u/slot1"), p("/u/slot2")]),
+                    ("dev-util/*".into(), vec![p("/u/wild")]),
+                    ("sys-apps/other".into(), vec![p("/u/nomatch")]),
+                ],
+            },
+        ],
+        ..Config::default()
+    };
+    assert_eq!(
+        config.bashrc_files_for("dev-util/foo-1:0/0"),
+        vec![
+            p("/a/profile.bashrc"),
+            p("/u/profile.bashrc"),
+            p("/u/wild"),
+            p("/u/slot1"),
+            p("/u/slot2"),
+            p("/u/exact"),
+        ]
+    );
+}

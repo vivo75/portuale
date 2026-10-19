@@ -251,6 +251,20 @@ pub(crate) fn rules_for_node(
     node_atom_rules(node, &formats, &default)
 }
 
+/// The `profile-formats` of the repo containing `node` (empty outside any
+/// known repo).
+// Portage: LocationsManager.py:204-233
+pub(crate) fn node_profile_formats(
+    node: &Path,
+    all_repos: &[(String, PathBuf)],
+    repo_rules: &[RepoRules],
+) -> Vec<String> {
+    repo_containing(node, all_repos)
+        .and_then(|(name, _)| repo_rules.iter().find(|r| r.name == name))
+        .map(|r| r.formats.clone())
+        .unwrap_or_default()
+}
+
 /// User-config (`/etc/portage/package.*`) and user-profile
 /// (`/etc/portage/profile/*`) rules: Portage reads both with `eapi=None`
 /// (`verify_eapi=False`) and `allow_repo=True`; wildcards and build-ids

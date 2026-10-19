@@ -223,14 +223,57 @@ pub(crate) fn load_scalar_layers(
         })?;
     }
     // `profile.bashrc` of every node, chain order, user profile last; the
-    // file is taken whatever the node's `profile-formats` (`package.bashrc`
-    // is the format-gated half and is not read, backlog #413).
-    // Portage: config.py:850-853
-    config.profile_bashrc_files = chain
+    // file is taken whatever the node's `profile-formats`. `package.bashrc`
+    // is the format-gated half: only nodes naming `profile-bashrcs` read it.
+    // Portage: config.py:849-853, 921-947
+    let user_rules = user_node
+        .as_ref()
+        .map(|u| user_node_rules(u.eapi.as_deref(), UserNodeFile::PackageUse));
+    let bashrc_nodes: Vec<(&Path, NodeAtomRules, bool)> = chain
         .iter()
-        .chain(user_node.iter().map(|u| &u.path))
-        .map(|node| node.join("profile.bashrc"))
-        .filter(|file| file.is_file())
+        .zip(node_rules.iter())
+        .map(|(node, rules)| {
+            let formats = node_profile_formats(node, all_repos, &repo_rules);
+            let gated = formats.iter().any(|f| f == "profile-bashrcs");
+            (node.as_path(), rules.clone(), gated)
+        })
+        .chain(
+            user_node
+                .iter()
+                .zip(user_rules.iter())
+                .map(|(u, r)| (u.path.as_path(), r.clone(), true)),
+        )
+        .collect();
+    config.profile_bashrc_nodes = Vec::new();
+    for (node, rules, gated) in bashrc_nodes {
+        let profile_bashrc = Some(node.join("profile.bashrc")).filter(|f| f.is_file());
+        let mut package_bashrc = Vec::new();
+        if gated {
+            let mut rules = rules;
+            rules.allow_wildcard = true;
+            let sources =
+                read_config_lines_with_sources(&node.join("package.bashrc")).unwrap_or_default();
+            let lines = filter_atom_lines(
+                &sources,
+                &rules,
+                AtomLineKind::Dict { allow_use: true },
+                WARN_RANK_LICENSE,
+                warnings,
+            );
+            for (atom, names) in parse_package_accept_keywords_lines(&lines) {
+                let files = names.iter().map(|n| node.join("bashrc").join(n)).collect();
+                package_bashrc.push((atom, files));
+            }
+        }
+        config.profile_bashrc_nodes.push(ProfileBashrcNode {
+            profile_bashrc,
+            package_bashrc,
+        });
+    }
+    config.profile_bashrc_files = config
+        .profile_bashrc_nodes
+        .iter()
+        .filter_map(|n| n.profile_bashrc.clone())
         .collect();
     // `scalars` as the profile chain left it, before make.conf/env: a
     // USE_EXPAND variable still at this value folded per-level, not again

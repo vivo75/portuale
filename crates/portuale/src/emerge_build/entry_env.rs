@@ -284,6 +284,15 @@ pub(crate) fn entry_build_env(
         None => options.build_env.clone(),
     };
     env.extend(entry_package_env_vars(options, entry));
+    if let (Some(config), Some(version)) = (
+        reloaded.as_ref().or(options.resolved_config.as_deref()),
+        entry_version(&entry.outcome),
+    ) {
+        env.extend(crate::ebuild_phases::package_bashrc_env(
+            config,
+            &entry_cpv_slot(entry, version),
+        ));
+    }
     // Last-wins: the folded per-entry list overrides the run-wide
     // `FEATURES`/`PORTAGE_FEATURES` pair downstream. `None` appends
     // nothing, so unmatched entries keep byte-identical output.

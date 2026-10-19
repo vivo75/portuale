@@ -34,6 +34,8 @@ use crate::eapi::EapiAttrs;
 use eapi::{EapiValueError, SUPPORTED_EAPIS, eapi_attrs, eapi_is_supported};
 use regex::Captures;
 
+mod specificity;
+pub use specificity::atom_specificity;
 pub mod eapi;
 
 #[cfg(test)]

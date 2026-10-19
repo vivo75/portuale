@@ -533,38 +533,4 @@ pub(crate) fn forced_or_masked_flags_unfiltered(
     result
 }
 
-/// Specificity ranking for config atoms, Portage `best_match_to_list`
-/// (dep:2796-2884): full operators outrank bare atoms; extended atoms rank
-/// below everything (`=*` 0, slotted −1, plain −2 — the code values, which
-/// differ from the docstring). Anything unparseable is −2, like before.
-pub(crate) fn atom_specificity(entry: &str) -> i32 {
-    let opts = portage_dep::AtomOptions {
-        allow_wildcard: true,
-        allow_repo: Some(true),
-        ..portage_dep::AtomOptions::default()
-    };
-    let Ok(atom) = portage_dep::parse_atom_with(entry, &opts, "") else {
-        return -2;
-    };
-    if atom.extended {
-        if atom.operator == portage_dep::Operator::EqGlob {
-            return 0;
-        }
-        if atom.slot.is_some() {
-            return -1;
-        }
-        return -2;
-    }
-    let op_val = match atom.operator {
-        portage_dep::Operator::Eq => 6,
-        portage_dep::Operator::Tilde => 5,
-        portage_dep::Operator::EqGlob => 4,
-        portage_dep::Operator::Gt
-        | portage_dep::Operator::Ge
-        | portage_dep::Operator::Lt
-        | portage_dep::Operator::Le => 2,
-        portage_dep::Operator::None => 1,
-    };
-    let slot_val = if atom.slot.is_some() { 3 } else { i32::MIN };
-    op_val.max(slot_val)
-}
+pub use portage_dep::atom_specificity;

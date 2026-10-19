@@ -14,6 +14,40 @@ pub struct ProfileUseLayer {
 /// One profile chain level's contribution to the `use.force`/`use.mask`
 /// (+ `.stable.` variants) stacking, in file order. A `Default`
 /// (all-empty) level is a valid, common state.
+/// One profile node's bashrc inputs, in chain order (user profile last).
+/// Portage: config.py:849-853, 921-947 (`_profile_bashrc`, `_pbashrcdict`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProfileBashrcNode {
+    /// `<node>/profile.bashrc` when the file exists.
+    pub profile_bashrc: Option<PathBuf>,
+    /// `package.bashrc` entries: an atom and its `<node>/bashrc/<name>` files.
+    pub package_bashrc: Vec<(String, Vec<PathBuf>)>,
+}
+
+impl Config {
+    /// `PORTAGE_BASHRC_FILES` for one `cat/pkg-ver:slot/sub`: per profile node
+    /// its `profile.bashrc`, then the `package.bashrc` files of the atoms that
+    /// match, least specific first. Portage: config.py:2008-2022.
+    pub fn bashrc_files_for(&self, cpv_slot: &str) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        for node in &self.profile_bashrc_nodes {
+            files.extend(node.profile_bashrc.iter().cloned());
+            let mut matched: Vec<&(String, Vec<PathBuf>)> = node
+                .package_bashrc
+                .iter()
+                .filter(|(atom, _)| {
+                    portage_dep::match_from_list(atom, &[cpv_slot]).is_some_and(|m| !m.is_empty())
+                })
+                .collect();
+            matched.sort_by_key(|(atom, _)| portage_dep::atom_specificity(atom));
+            for (_, atom_files) in matched {
+                files.extend(atom_files.iter().cloned());
+            }
+        }
+        files
+    }
+}
+
 /// See [`Config::use_mask_force_levels`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UseMaskForceLevel {
@@ -161,6 +195,10 @@ pub struct Config {
     /// (the user profile last), whatever the node's `profile-formats`.
     /// Sourced by `ebuild.sh` through `PORTAGE_BASHRC_FILES`.
     pub profile_bashrc_files: Vec<PathBuf>,
+    /// The same nodes with their `package.bashrc` (only nodes whose
+    /// `profile-formats` name `profile-bashrcs`), for the per-package
+    /// `PORTAGE_BASHRC_FILES`. See [`ProfileBashrcNode`].
+    pub profile_bashrc_nodes: Vec<ProfileBashrcNode>,
     /// `@system` atoms: profile `packages` files, stacked, `*`-lines only.
     pub system_packages: Vec<String>,
     /// `@profile` atoms: unstarred `packages` lines of `profile-set`
