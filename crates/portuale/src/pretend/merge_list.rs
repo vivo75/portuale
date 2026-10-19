@@ -761,17 +761,25 @@ pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
 
 /// The header printed before the merge list of a non-pretend run.
 pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult) {
-    show_resolution_header_with_counts(opts, result.backtrack_restarts, result.backtrack_max);
+    show_resolution_header_with_counts(
+        opts,
+        result.backtrack_restarts,
+        result.backtrack_max,
+        false,
+    );
 }
 
 /// The same notice with explicit backtrack counts: a non-`--pretend` run
 /// that aborts before any `GraphResult` exists (the top-level all-masked
 /// arm) prints it with zero restarts -- the argument dies on first
 /// dequeue, before any backtrack -- over the run's backtrack max.
+/// `pretend_abort` prints the header of a `--pretend` run that aborts
+/// there (Portage prints it with `-p` too, backlog #406).
 pub(crate) fn show_resolution_header_with_counts(
     opts: &EmergeOpts<'_>,
     backtrack_restarts: u64,
     backtrack_max: u32,
+    pretend_abort: bool,
 ) {
     let &EmergeOpts {
         pretend,
@@ -791,13 +799,14 @@ pub(crate) fn show_resolution_header_with_counts(
     // or not the list itself is shown and whether or not resolution succeeds.
     // See `resolution_header_shown`/`resolution_notice_shown` for the gates.
     // Portage: _emerge/depgraph.py, _start_resolution_display
-    if (!pretend || fetchonly) && !quiet {
+    if (!pretend || fetchonly || pretend_abort) && !quiet {
         if resolution_header_shown(ResolutionHeaderShownArgs {
             ask,
             tree,
             verbose,
             quiet,
         }) || (pretend && fetchonly)
+            || pretend_abort
         {
             // `These are the packages that would be ...`: `in reverse order` for
             // `--tree` (a plain `:` under `--unordered-display`), `built` under

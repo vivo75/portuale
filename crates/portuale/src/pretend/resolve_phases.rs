@@ -228,12 +228,12 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         Ok(result) => Ok(result),
         Err(e) => {
             let msg = e.to_string();
-            // A non-`--pretend` run that aborts on a top-level all-masked
+            // A run that aborts on a top-level all-masked
             // target prints the resolution notice first (stdout), exactly
             // what `show_resolution_header` prints on the other abort arms.
             // Portage: _emerge/depgraph.py, _start_resolution_display
-            if top_level_abort_notice_shown(pretend, &msg) {
-                show_resolution_header_with_counts(opts, 0, opts.backtrack_max);
+            if top_level_abort_notice_shown(&msg) {
+                show_resolution_header_with_counts(opts, 0, opts.backtrack_max, pretend);
             }
             // Portage never prefixes a `!!!`-headed report with `emerge: `;
             // it is emitted verbatim.
