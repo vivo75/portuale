@@ -1,0 +1,4 @@
+dir /usr
+dir /usr/share
+dir /usr/share/t381
+obj /usr/share/t381/f 565ab7bf26ec33c71f09f6bae9d6afe7 1792373514

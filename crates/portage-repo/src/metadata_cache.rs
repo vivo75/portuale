@@ -40,16 +40,10 @@ pub(crate) fn read_md5_cache(
             map.insert(line[..eq].to_string(), line[eq + 1..].to_string());
         }
     }
-    // `profiles/updates/` moves apply here on read: a sync bakes them
-    // into the cache, but portuale reads a static cache.
-    // Portage: update_dbentry over each `*DEPEND` string.
-    for key in ["DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"] {
-        if let Some(dep) = map.get(key)
-            && let Some(updated) = apply_updates_to_dep_string(dep)
-        {
-            map.insert(key.to_string(), updated);
-        }
-    }
+    // Never rewritten for `profiles/updates/` moves: Portage's global updates
+    // touch the vdb, the world file and binary entries, never repository
+    // ebuild metadata (see the code note).
+    // Portage: _global_updates._do_global_updates
 
     let map = std::sync::Arc::new(map);
     if let Ok(mut guard) = cache.write() {
@@ -216,7 +210,7 @@ pub(crate) fn provide_aux_metadata(
 
 /// Whether the on-disk entry passes Portage's `validate_entry` for the
 /// `md5_database` (pairs) format, memoised per path. Validates the raw
-/// text, not the `read_md5_cache` map (which rewrites `*DEPEND` values).
+/// text, which is also what `read_md5_cache` returns verbatim (#391).
 ///
 /// `true` when the ebuild is missing (trust the entry) and when `pf` is
 /// not a `package-version` name at all.

@@ -11,7 +11,7 @@ Installed packages read from the VDB.
 - Backlog #124 E1: the old `.get(&key).cloned()` deep-cloned `Vec<(PathBuf, u64)>` solely to compare and drop it on every one of the 12,684 hits.
 
 ## fn installed_candidates_uncached
-- Portage `profiles/updates/` package moves: `<category>/<package>` may be the *post*-`move` name while the vdb still holds the package under its pre-`move` `cat/pkg` dir. Every source name that maps onto this one (`installed_cp_sources`) is scanned; `slotmove` then rewrites each hit's `(slot, sub_slot)`.
+- Portage `profiles/updates/` package moves: `<category>/<package>` may be the *post*-`move` name while the vdb still holds the package under its pre-`move` `cat/pkg` dir. Every source name that maps onto this one (`installed_cp_sources`) is scanned; `slotmove` then rewrites each hit's `(slot, sub_slot)`. Backlog #391: a query for a *pre*-`move` name scans nothing -- its entry was renamed away (`installed_cp_sources` drops the moved-away self).
 - `resolve_vdb_entry` resolves the same entry back from `(src_cat, src_pkg, version)`, so the value is unchanged on the fallback path (the old read `.trim()`ed, the helper normalises).
 - Live entries only: Portage's `vardbapi._excluded_dirs`, in listing order.
 

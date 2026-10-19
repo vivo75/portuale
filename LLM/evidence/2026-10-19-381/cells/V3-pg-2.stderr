@@ -1,0 +1,11 @@
+
+!!! The following installed packages are masked:
+- app-admin/awscli-bin-2.36.34::gentoo (masked by: package.mask)
+/.gentoo/repos/gentoo/profiles/package.mask:
+# Arthur Zamarin <arthurzam@gentoo.org> (2026-10-18)
+# The built from source package, app-admin/awscli, can be used now.
+# Removal on 2026-11-17.  Bug #984525.
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+

@@ -1,0 +1,4 @@
+### emerge --pretend --package-moves=n dev-libs/movedepconsumer --color=n
+### portuale target/release/emerge -> portuale, md5 fe0b59f25e125bab19349d60bacb07b7 (built from 9a909749 + uncommitted #391 diff; dirty tree also holds the parallel #381 ebuild_unmerge.rs WIP, merge-side only)
+[ebuild  N     ] dev-libs/movedepconsumer-1.0 to /var/tmp/pt-391/st/fixtures
+rc=0

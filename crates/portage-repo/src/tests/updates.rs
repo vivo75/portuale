@@ -23,7 +23,10 @@ fn installed_cp_sources_map_matches_the_command_loop() {
 }
 
 /// A two-command `move` cycle replays back to its start, so neither
-/// side files the other as a source.
+/// side files the other as a source. The second command still renames its
+/// own old name away (Portage threads the entry through every command in
+/// order: `update_dbentries`' loop, `move_ent`'s sequential renames), so a
+/// query for it scans nothing.
 #[test]
 fn installed_cp_sources_cycle_emits_no_duplicate() {
     let cmds = vec![
@@ -45,7 +48,78 @@ fn installed_cp_sources_cycle_emits_no_duplicate() {
     );
     assert_eq!(
         installed_cp_sources_with("b", "x", &cmds),
-        vec![("b".to_string(), "x".to_string())]
+        Vec::<(String, String)>::new()
+    );
+}
+
+/// A `move` renames the vdb entry (Portage: vartree.py, `move_ent`): a vdb
+/// query for the pre-move name must not scan its own stale directory, only
+/// names whose chain lands on the queried one do.
+#[test]
+fn moved_away_cp_sources_drop_the_stale_pre_move_dir() {
+    let cmds = vec![UpdateCmd::Move {
+        old: ("dev-libs".to_string(), "oldmovepkg".to_string()),
+        new: ("dev-libs".to_string(), "newmovepkg".to_string()),
+    }];
+    // The pre-move name resolves away: nothing to scan, not even itself.
+    assert_eq!(
+        installed_cp_sources_with("dev-libs", "oldmovepkg", &cmds),
+        Vec::<(String, String)>::new()
+    );
+    // The post-move name keeps itself first, then the stale directory.
+    assert_eq!(
+        installed_cp_sources_with("dev-libs", "newmovepkg", &cmds),
+        vec![
+            ("dev-libs".to_string(), "newmovepkg".to_string()),
+            ("dev-libs".to_string(), "oldmovepkg".to_string()),
+        ]
+    );
+}
+
+/// A chained move (`a -> b -> c`): only the final name scans anything; the
+/// intermediate name's directory was renamed away twice over.
+#[test]
+fn chained_move_sources_land_only_on_the_final_name() {
+    let cmds = vec![
+        UpdateCmd::Move {
+            old: ("dev-libs".to_string(), "a".to_string()),
+            new: ("dev-libs".to_string(), "b".to_string()),
+        },
+        UpdateCmd::Move {
+            old: ("dev-libs".to_string(), "b".to_string()),
+            new: ("dev-libs".to_string(), "c".to_string()),
+        },
+    ];
+    assert_eq!(
+        installed_cp_sources_with("dev-libs", "a", &cmds),
+        Vec::<(String, String)>::new()
+    );
+    assert_eq!(
+        installed_cp_sources_with("dev-libs", "b", &cmds),
+        Vec::<(String, String)>::new()
+    );
+    assert_eq!(
+        installed_cp_sources_with("dev-libs", "c", &cmds),
+        vec![
+            ("dev-libs".to_string(), "c".to_string()),
+            ("dev-libs".to_string(), "a".to_string()),
+            ("dev-libs".to_string(), "b".to_string()),
+        ]
+    );
+}
+
+/// A `slotmove` never renames the entry: the queried name keeps scanning
+/// itself, with no extra sources.
+#[test]
+fn slotmove_only_sources_keep_the_queried_dir() {
+    let cmds = vec![UpdateCmd::SlotMove {
+        cp: ("dev-libs".to_string(), "slotmovepkg".to_string()),
+        old_slot: "0".to_string(),
+        new_slot: "1".to_string(),
+    }];
+    assert_eq!(
+        installed_cp_sources_with("dev-libs", "slotmovepkg", &cmds),
+        vec![("dev-libs".to_string(), "slotmovepkg".to_string())]
     );
 }
 

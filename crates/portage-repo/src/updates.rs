@@ -384,12 +384,30 @@ pub(crate) fn installed_cp_sources_map() -> &'static InstalledCpSourcesMap {
     MAP.get_or_init(|| installed_cp_sources_map_with(global_package_updates()))
 }
 
-/// Every `cat/pkg` whose `move` chain lands here (including itself),
-/// so a vdb query for the new name also scans the old directory.
+/// Every `cat/pkg` whose `move` chain lands here, so a vdb query for the
+/// new name also scans the old directory. The pre-move name itself is
+/// excluded when a `move` renamed it away: its entry no longer exists
+/// under that name (Portage renames the directory; see the code note).
+/// Portage: vartree.py, move_ent
 pub fn installed_cp_sources(category: &str, package: &str) -> Vec<(String, String)> {
     let target = (category.to_string(), package.to_string());
-    let mut out = vec![target.clone()];
-    if let Some(extra) = installed_cp_sources_map().get(&target) {
+    let moved_away = move_chain_map().contains_key(&target);
+    installed_cp_sources_core(&target, installed_cp_sources_map().get(&target), moved_away)
+}
+
+/// Shared core of [`installed_cp_sources`] and its test seam: `extra` is the
+/// inverted bucket for `target`; `moved_away` drops `target` itself, whose
+/// directory a `move` renamed away.
+fn installed_cp_sources_core(
+    target: &(String, String),
+    extra: Option<&Vec<(String, String)>>,
+    moved_away: bool,
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if !moved_away {
+        out.push(target.clone());
+    }
+    if let Some(extra) = extra {
         out.extend(extra.iter().cloned());
     }
     out
@@ -404,11 +422,12 @@ pub(crate) fn installed_cp_sources_with(
     cmds: &[UpdateCmd],
 ) -> Vec<(String, String)> {
     let target = (category.to_string(), package.to_string());
-    let mut out = vec![target.clone()];
-    if let Some(extra) = installed_cp_sources_map_with(cmds).get(&target) {
-        out.extend(extra.iter().cloned());
-    }
-    out
+    let moved_away = move_chain_map_with(cmds).contains_key(&target);
+    installed_cp_sources_core(
+        &target,
+        installed_cp_sources_map_with(cmds).get(&target),
+        moved_away,
+    )
 }
 
 pub(crate) type SlotMoveMap = HashMap<(String, String), Vec<(String, String)>>;

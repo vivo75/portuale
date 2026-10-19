@@ -1,0 +1,12 @@
+### emerge -pv --deep dev-libs/movedepconsumer --color=n
+### portuale target/release/emerge -> portuale, md5 fe0b59f25e125bab19349d60bacb07b7 (built from 9a909749 + uncommitted #391 diff; dirty tree also holds the parallel #381 ebuild_unmerge.rs WIP, merge-side only)
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+emerge: there are no ebuilds to satisfy "dev-libs/oldmovepkg".
+(dependency required by "dev-libs/movedepconsumer-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/movedepconsumer" [argument])
+rc=1

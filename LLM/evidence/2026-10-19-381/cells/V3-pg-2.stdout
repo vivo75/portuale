@@ -1,0 +1,40 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 5.46 s (backtrack: 0/20).
+
+[ebuild     U  ] app-misc/t381-k-2::t381 [1::t381] to /var/tmp/pt-381-s0/roots/V3-pg/ 0 KiB
+
+Total: 1 package (1 upgrade), Size of downloads: 0 KiB
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 1) app-misc/t381-k-2::t381 for /var/tmp/pt-381-s0/roots/V3-pg/
+
+>>> Install app-misc/t381-k-2 into /var/tmp/pt-381-s0/scratch/V3-pg/tmp/portage/app-misc/t381-k-2/image
+>>> Completed installing app-misc/t381-k-2 into /var/tmp/pt-381-s0/scratch/V3-pg/tmp/portage/app-misc/t381-k-2/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (1 of 1) app-misc/t381-k-2::t381 to /var/tmp/pt-381-s0/roots/V3-pg/
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging app-misc/t381-k-2 to /var/tmp/pt-381-s0/roots/V3-pg/
+--- /var/tmp/pt-381-s0/roots/V3-pg/alias/
+--- /var/tmp/pt-381-s0/roots/V3-pg/alias/sub/
+>>> /var/tmp/pt-381-s0/roots/V3-pg/alias/sub/f
+>>> Safely unmerging already-installed instance...
+<<<          obj /var/tmp/pt-381-s0/roots/V3-pg/usr/share/t381/sub/.keep_app-misc_t381-k-0
+--- replaced dir /var/tmp/pt-381-s0/roots/V3-pg/usr/share/t381/sub
+--- !empty   dir /var/tmp/pt-381-s0/roots/V3-pg/usr/share/t381
+--- !empty   dir /var/tmp/pt-381-s0/roots/V3-pg/usr/share
+--- !empty   dir /var/tmp/pt-381-s0/roots/V3-pg/usr
+>>> Original instance of package unmerged safely.
+>>> app-misc/t381-k-2 merged.
+
+>>> Completed (1 of 1) app-misc/t381-k-2::t381 to /var/tmp/pt-381-s0/roots/V3-pg/
+
+ * GNU info directory index is up-to-date.

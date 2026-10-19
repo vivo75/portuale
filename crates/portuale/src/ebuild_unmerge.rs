@@ -205,6 +205,43 @@ fn recorded_parent_inodes(root: &Path, text: &str) -> BTreeMap<(u64, u64), Vec<S
     map
 }
 
+/// The recorded path Portage's `dblink._match_contents` returns for
+/// `abs_path`: the exact path, or the path rebuilt under a recorded
+/// parent whose live `(dev, ino)` equals the queried parent's (both
+/// stats follow symlinks, so either spelling of one directory matches).
+/// `None` is "not owned". Portage also consults implicit parent `dir`
+/// entries and shortcuts on the basename; with real merges every
+/// ancestor is recorded explicitly, so neither changes the verdict.
+/// Portage: dbapi/vartree.py, dblink._match_contents.
+fn contents_match_contents(
+    root: &Path,
+    text: &str,
+    abs_path: &str,
+    inodes: &BTreeMap<(u64, u64), Vec<String>>,
+) -> Option<String> {
+    if ebuild_merge::contents_text_owns(text, abs_path) {
+        return Some(abs_path.to_string());
+    }
+    let rel = abs_path.trim_start_matches('/');
+    let path = Path::new(rel);
+    let (Some(parent), Some(base)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
+    else {
+        return None;
+    };
+    let Ok(parent_meta) = std::fs::metadata(root.join(parent)) else {
+        return None;
+    };
+    let parents = inodes.get(&(parent_meta.dev(), parent_meta.ino()))?;
+    parents.iter().find_map(|dir| {
+        let rebuilt = if dir.is_empty() {
+            format!("/{base}")
+        } else {
+            format!("/{dir}/{base}")
+        };
+        ebuild_merge::contents_text_owns(text, &rebuilt).then_some(rebuilt)
+    })
+}
+
 /// Whether the package whose `CONTENTS` is `text` owns `abs_path`: the
 /// exact path, or Portage's narrow parent-inode form — the live parent
 /// directory's `(dev, ino)` equals a recorded parent's, and the path
@@ -216,29 +253,7 @@ fn contents_isowner(
     abs_path: &str,
     inodes: &BTreeMap<(u64, u64), Vec<String>>,
 ) -> bool {
-    if ebuild_merge::contents_text_owns(text, abs_path) {
-        return true;
-    }
-    let rel = abs_path.trim_start_matches('/');
-    let path = Path::new(rel);
-    let (Some(parent), Some(base)) = (path.parent(), path.file_name().and_then(|n| n.to_str()))
-    else {
-        return false;
-    };
-    let Ok(parent_meta) = std::fs::metadata(root.join(parent)) else {
-        return false;
-    };
-    let Some(parents) = inodes.get(&(parent_meta.dev(), parent_meta.ino())) else {
-        return false;
-    };
-    parents.iter().any(|dir| {
-        let rebuilt = if dir.is_empty() {
-            format!("/{base}")
-        } else {
-            format!("/{dir}/{base}")
-        };
-        ebuild_merge::contents_text_owns(text, &rebuilt)
-    })
+    contents_match_contents(root, text, abs_path, inodes).is_some()
 }
 
 /// Whether `text` owns `abs_path`: the exact path, or any recorded path
@@ -332,6 +347,16 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
             }
         })
         .collect();
+    // Portage memoizes `_contents_inodes` per dblink; the maps are built
+    // once here so the per-entry `is_owned` check stats nothing itself.
+    let owner_inodes: Vec<BTreeMap<(u64, u64), Vec<String>>> = owner_texts
+        .iter()
+        .map(|text| {
+            text.as_deref()
+                .map(|t| recorded_parent_inodes(root, t))
+                .unwrap_or_default()
+        })
+        .collect();
 
     for entry in entries {
         let relative = entry.abs_path.trim_start_matches('/');
@@ -354,8 +379,11 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
 
         let is_owned = owner_texts
             .iter()
-            .flatten()
-            .any(|text| ebuild_merge::contents_text_owns(text, &entry.abs_path));
+            .zip(owner_inodes.iter())
+            .any(|(text, inodes)| {
+                text.as_deref()
+                    .is_some_and(|t| contents_isowner(root, t, &entry.abs_path, inodes))
+            });
         // A live symlink-to-directory claimed as a literal `dir` entry
         // elsewhere defers to `remove_dirs` (Portage: _unmerge_pkgfiles).
         if is_owned
@@ -365,10 +393,20 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
             && let Ok(target_meta) = std::fs::metadata(&dest)
             && target_meta.is_dir()
         {
-            let symlink_orphan = owner_texts.iter().flatten().any(|text| {
-                ebuild_merge::contents_text_node_type(text, &entry.abs_path).as_deref()
-                    == Some("dir")
-            });
+            let symlink_orphan =
+                owner_texts
+                    .iter()
+                    .zip(owner_inodes.iter())
+                    .any(|(text, inodes)| {
+                        text.as_deref().is_some_and(|t| {
+                            contents_match_contents(root, t, &entry.abs_path, inodes)
+                                .and_then(|matched| {
+                                    ebuild_merge::contents_text_node_type(t, &matched)
+                                })
+                                .as_deref()
+                                == Some("dir")
+                        })
+                    });
             if symlink_orphan {
                 protected_symlinks
                     .entry((target_meta.dev(), target_meta.ino()))
@@ -3127,6 +3165,98 @@ mod tests {
             "the early return skips the search: {text:?}"
         );
         assert!(text.contains("One or more symlinks to directories have been preserved"));
+    }
+
+    #[test]
+    fn replace_keeps_a_file_recorded_under_a_second_symlinked_path() {
+        // Backlog #381 (Portage 3.0.82.2, S0 cell V1): the replacer
+        // records the file under `/alias/f`, the replaced instance
+        // under `/usr/share/t381/f`, both spellings live-resolving to
+        // one directory. Portage prints `--- replaced obj` and keeps
+        // the file; the exact-only check lets the orphan arm delete it.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/t381")).unwrap();
+        std::fs::write(root.join("usr/share/t381/f"), b"alias 2").unwrap();
+        std::os::unix::fs::symlink("usr/share/t381", root.join("alias")).unwrap();
+        let live = root.join("usr/share/t381/f");
+        let mtime = ebuild_merge::mtime_secs(&std::fs::metadata(&live).unwrap()).unwrap();
+        let md5 = ebuild_merge::md5_hex(&live).unwrap();
+        let old = format!("dir /usr/share/t381\nobj /usr/share/t381/f {md5} {mtime}\n");
+        let new_vdb = root.join("var/db/pkg/app-misc/t381-rep-2");
+        std::fs::create_dir_all(&new_vdb).unwrap();
+        std::fs::write(
+            new_vdb.join("CONTENTS"),
+            format!("dir /alias\nobj /alias/f {md5} {mtime}\n"),
+        )
+        .unwrap();
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            pf: "t381-rep-1",
+            others_in_slot: &["t381-rep-2".to_string()],
+            replacing: &["t381-rep-2".to_string()],
+            uninstall_ignore: "",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &old,
+            listing: &mut ebuild_merge::MergeListing::new(false),
+        })
+        .expect("remove_contents succeeds");
+        assert!(
+            live.is_file(),
+            "the replacer's file must survive under either spelling"
+        );
+    }
+
+    #[test]
+    fn replace_keeps_a_file_when_the_old_record_uses_the_alias_spelling() {
+        // Backlog #381 (Portage 3.0.82.2, S0 cell V2): the mirror of the
+        // previous test — the replaced instance records `/alias/f`, the
+        // replacer `/usr/share/t381/f`. Same `--- replaced obj` on Portage.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(root.join("usr/share/t381")).unwrap();
+        std::fs::write(root.join("usr/share/t381/f"), b"normal 2").unwrap();
+        std::os::unix::fs::symlink("usr/share/t381", root.join("alias")).unwrap();
+        let live = root.join("usr/share/t381/f");
+        let mtime = ebuild_merge::mtime_secs(&std::fs::metadata(&live).unwrap()).unwrap();
+        let md5 = ebuild_merge::md5_hex(&live).unwrap();
+        let old = format!("dir /alias\nobj /alias/f {md5} {mtime}\n");
+        let new_vdb = root.join("var/db/pkg/app-misc/t381-rep-2");
+        std::fs::create_dir_all(&new_vdb).unwrap();
+        std::fs::write(
+            new_vdb.join("CONTENTS"),
+            format!("dir /usr/share/t381\nobj /usr/share/t381/f {md5} {mtime}\n"),
+        )
+        .unwrap();
+        remove_contents(RemoveContentsArgs {
+            root: &root,
+            category: "app-misc",
+            pf: "t381-rep-1",
+            others_in_slot: &["t381-rep-2".to_string()],
+            replacing: &["t381-rep-2".to_string()],
+            uninstall_ignore: "",
+            config_protect: "/etc",
+            config_protect_mask: "",
+            unmerge_orphans: true,
+            infodirs_inodes: &BTreeSet::new(),
+            cfgfiledict: &BTreeMap::new(),
+            stale_confmem: &mut Vec::new(),
+            preserved_paths: &BTreeSet::new(),
+            contents_text: &old,
+            listing: &mut ebuild_merge::MergeListing::new(false),
+        })
+        .expect("remove_contents succeeds");
+        assert!(
+            live.is_file(),
+            "the replacer's file must survive under either spelling"
+        );
     }
 
     #[test]

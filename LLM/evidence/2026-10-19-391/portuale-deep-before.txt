@@ -1,0 +1,8 @@
+### emerge -pv --deep dev-libs/movedepconsumer --color=n
+### portuale target/release/emerge -> portuale (BEFORE the #391 fix: binary built 2026-10-19 01:13 from HEAD 9a909749 with a clean tree)
+### env: PORTAGE_CONFIGROOT=ROOT=PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles (fresh stage /var/tmp/pt-391/st/fixtures)
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/pt-391/st/fixtures
+[ebuild  N     ] dev-libs/movedepconsumer-1.0::testrepo to /var/tmp/pt-391/st/fixtures
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+rc=0
