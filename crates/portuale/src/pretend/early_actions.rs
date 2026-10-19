@@ -174,11 +174,8 @@ pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<Ex
         && !rage_clean
         && !info_action
     {
-        eprintln!(
-            "emerge: no targets given (an atom, an @set, or an installed file / \
-             ebuild / tbz2 / gpkg; `emerge --help` for usage)"
-        );
-        return Some(ExitCode::from(2));
+        print!("{}", super::help::SHORT_HELP);
+        return Some(ExitCode::from(1));
     }
     *pretend_out = pretend;
     *ask_out = ask;

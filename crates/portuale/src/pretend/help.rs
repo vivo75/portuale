@@ -21,3 +21,26 @@ pub(crate) fn print_help() {
 }
 
 pub(crate) const HELP_TEXT: &str = include_str!("help.txt");
+
+/// Portage's short usage block, printed (stdout, rc 1) when no target and no
+/// action was given.
+// Portage: _emerge/help.py, emerge_help; _emerge/main.py, emerge_main
+pub(crate) const SHORT_HELP: &str = "\
+emerge: command-line interface to the Portage system
+Usage:
+   emerge [ options ] [ action ] [ ebuild | tbz2 | file | @set | atom ] [ ... ]
+   emerge [ options ] [ action ] < @system | @world >
+   emerge < --sync | --metadata | --info >
+   emerge --resume [ --pretend | --ask | --skipfirst ]
+   emerge --help
+Options: -[abBcCdDefgGhjkKlnNoOpPqrsStuUvVwW]
+          [ --color < y | n >            ] [ --columns    ]
+          [ --complete-graph             ] [ --deep       ]
+          [ --jobs JOBS ] [ --keep-going ] [ --load-average LOAD            ]
+          [ --newrepo   ] [ --newuse     ] [ --noconfmem  ] [ --nospinner   ]
+          [ --oneshot   ] [ --onlydeps   ] [ --quiet-build [ y | n ]        ]
+          [ --reinstall changed-use      ] [ --with-bdeps < y | n >         ]
+Actions:  [ --depclean | --list-sets | --search | --sync | --version        ]
+
+   For more help consult the man page.
+";
