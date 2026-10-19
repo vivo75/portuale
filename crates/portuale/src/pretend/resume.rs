@@ -52,6 +52,8 @@ pub(crate) struct RunResumeArgs<'a> {
     /// notice printed.
     pub(crate) ask: bool,
     pub(crate) read_news: bool,
+    /// The run's options, for `--fetchonly`/`--fetch-all-uri` on a resume.
+    pub(crate) opts: &'a EmergeOpts<'a>,
 }
 
 /// `emerge --resume [--skipfirst] [--pretend]`: replay the saved resume
@@ -77,6 +79,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         quiet,
         ask,
         read_news,
+        opts: emerge_opts,
     } = args;
     let color = Colorizer::new(color::resolve_havecolor(color_opt));
     let repos = match portage_repo::find_repos(config_root) {
@@ -170,6 +173,26 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
             entry
         })
         .collect();
+
+    // `emerge --resume --fetchonly`: fetch the saved list's sources, merge
+    // nothing; `-p` lists their URIs. The saved list stays as it is.
+    // Portage: _emerge/actions.py (`action_build`), Scheduler.py (fetchonly)
+    if emerge_opts.fetchonly {
+        if pretend {
+            println!("\nThese are the packages that would be fetched, in order:\n");
+        }
+        println!("Calculating dependencies ... done!");
+        println!("Dependency resolution took .\n");
+        println!("*** Resuming merge...");
+        return ExitCode::from(super::run_fetchonly_action(super::FetchonlyActionArgs {
+            opts: emerge_opts,
+            entries: &entries,
+            config,
+            repos: &repos,
+            root,
+            config_root,
+        }));
+    }
 
     // `emerge --resume --pretend`: show the saved list and stop, merging
     // nothing and touching neither the resume list nor `world`. Every line

@@ -1,0 +1,40 @@
+=== seed: failing merge saves a resume list
+rc=1
+mtimedb
+=== resume -f
+Calculating dependencies ... done!
+Dependency resolution took .
+
+*** Resuming merge...
+
+>>> Fetching (1 of 1) dev-util/fetchprobe-1::fetchrepo for /var/tmp/b415/root
+>>> Downloading 'https://example.invalid/probe-1.tar.gz'
+ * probe-1.tar.gz BLAKE2B SHA512 size ;-) ...                            [ ok ]
+rc=0
+--- stderr
+--- dist:
+probe-1.tar.gz
+=== resume -pf
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took .
+
+*** Resuming merge...
+
+https://example.invalid/probe-1.tar.gz 
+rc=0
+--- stderr
+=== keep-going -f
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-util/fetchprobe-1::fetchrepo for /var/tmp/b415/root
+>>> Downloading 'https://example.invalid/probe-1.tar.gz'
+
+>>> Failed to emerge dev-util/fetchprobe-1 for /var/tmp/b415/root
+rc=0
+--- stderr
+!!! Couldn't download 'probe-1.tar.gz'. Aborting.

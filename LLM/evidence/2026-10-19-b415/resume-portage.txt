@@ -1,0 +1,45 @@
+=== seed: failing merge saves a resume list
+rc=1
+mtimedb
+=== resume -f
+Calculating dependencies ... done!
+Dependency resolution took 4.16 s.
+
+*** Resuming merge...
+
+>>> Fetching (1 of 1) dev-util/fetchprobe-1::fetchrepo for /var/tmp/b415/root/
+>>> Downloading 'https://example.invalid/probe-1.tar.gz'
+[32m * [39;49;00mprobe-1.tar.gz BLAKE2B SHA512 size ;-) ...                            [34;01m[ [39;49;00m[32;01mok[39;49;00m[34;01m ][39;49;00m
+rc=0
+--- stderr
+--- dist:
+probe-1.tar.gz
+=== resume -pf
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 2.95 s.
+
+*** Resuming merge...
+
+https://example.invalid/probe-1.tar.gz 
+rc=0
+--- stderr
+=== keep-going -f
+Calculating dependencies ... done!
+Dependency resolution took 4.29 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-util/fetchprobe-1::fetchrepo for /var/tmp/b415/root/
+>>> Downloading 'https://example.invalid/probe-1.tar.gz'
+
+>>> Failed to emerge dev-util/fetchprobe-1 for /var/tmp/b415/root/
+rc=0
+--- stderr
+!!! Couldn't download 'probe-1.tar.gz'. Aborting.
+ * 
+ * The following package has failed to build, install, or execute postinst:
+ * 
+ *  (dev-util/fetchprobe-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b415/root/')
+ * 

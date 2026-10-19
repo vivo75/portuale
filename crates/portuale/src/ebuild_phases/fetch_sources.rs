@@ -292,6 +292,68 @@ pub(crate) fn list_sources(
     fetch::list_src_uri(&env.pkg_dir, &src_uri, all_uri, &options)
 }
 
+/// Portage's notice for a `RESTRICT=fetch` package whose files cannot be fetched.
+// Portage: fetch.py (`has fetch restriction turned on`)
+pub(crate) fn fetch_restriction_message(category: &str, pf: &str) -> String {
+    format!(
+        "\n!!! {category}/{pf} has fetch restriction turned on.\n\
+         !!! This probably means that this ebuild's files must be downloaded\n\
+         !!! manually.  See the comments in the ebuild for more information.\n\n"
+    )
+}
+
+/// Whether the package's `RESTRICT` names `fetch`.
+pub(crate) fn package_restricts_fetch(env: &Environment) -> bool {
+    repo_root_for(&env.pkg_dir)
+        .and_then(|repo_root| {
+            portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok()
+        })
+        .and_then(|m| m.get("RESTRICT").cloned())
+        .is_some_and(|r| restrict_fetch_from_restrict(&r))
+}
+
+pub(crate) struct RunNofetchArgs<'a> {
+    pub(crate) env: &'a Environment,
+    pub(crate) root: &'a Path,
+    pub(crate) debug: bool,
+    pub(crate) config_root: &'a Path,
+    pub(crate) shell: ShellBackend,
+    pub(crate) restrict_fetch: bool,
+}
+
+/// Runs `pkg_nofetch` when it can say something: `RESTRICT=fetch`, or an
+/// ebuild that defines its own (`SpawnNofetchWithoutBuilddir`, bug #336499).
+pub(crate) async fn run_nofetch(args: RunNofetchArgs<'_>) {
+    let RunNofetchArgs {
+        env,
+        root,
+        debug,
+        config_root,
+        shell,
+        restrict_fetch,
+    } = args;
+    let defines_nofetch = repo_root_for(&env.pkg_dir)
+        .and_then(|repo_root| {
+            portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok()
+        })
+        .and_then(|m| m.get("DEFINED_PHASES").cloned())
+        .is_some_and(|phases| phases.split_whitespace().any(|p| p == "nofetch"));
+    let ebuild = env.pkg_dir.join(format!("{}.ebuild", env.split.pf));
+    if ebuild.is_file() && (restrict_fetch || defines_nofetch) {
+        let _ = run_one_phase(RunOnePhaseArgs {
+            env,
+            root,
+            phase: "nofetch",
+            debug,
+            extra_env: &[],
+            config_root,
+            shell,
+            log_file: PhaseLog::Inherit,
+        })
+        .await;
+    }
+}
+
 pub(crate) async fn fetch_sources(
     args: FetchSourcesArgs<'_>,
 ) -> Result<(Vec<String>, Vec<String>), String> {
@@ -343,29 +405,25 @@ pub(crate) async fn fetch_sources(
     let a = match a {
         Ok(a) => a,
         Err(e) => {
-            // Unfetchable: run the ebuild's own `pkg_nofetch` phase for its custom
-            // instructions (best-effort; never masks the fetch error), then fail.
+            // Unfetchable: Portage's restriction notice, then the ebuild's own
+            // `pkg_nofetch` phase for its custom instructions (best-effort;
+            // never masks the fetch error), then fail.
             // Portage: fetch.py
-            // Only when it can say something: `RESTRICT=fetch`, or an ebuild that defines
-            // its own `pkg_nofetch` (`SpawnNofetchWithoutBuilddir`, bug #336499).
-            let defines_nofetch = metadata
-                .as_ref()
-                .and_then(|m| m.get("DEFINED_PHASES"))
-                .is_some_and(|phases| phases.split_whitespace().any(|p| p == "nofetch"));
-            let ebuild = env.pkg_dir.join(format!("{}.ebuild", env.split.pf));
-            if ebuild.is_file() && (restrict_fetch || defines_nofetch) {
-                let _ = run_one_phase(RunOnePhaseArgs {
-                    env,
-                    root,
-                    phase: "nofetch",
-                    debug,
-                    extra_env: &[],
-                    config_root,
-                    shell,
-                    log_file: PhaseLog::Inherit,
-                })
-                .await;
+            if restrict_fetch {
+                eprint!(
+                    "{}",
+                    fetch_restriction_message(&env.category, &env.split.pf)
+                );
             }
+            run_nofetch(RunNofetchArgs {
+                env,
+                root,
+                debug,
+                config_root,
+                shell,
+                restrict_fetch,
+            })
+            .await;
             return Err(e);
         }
     };

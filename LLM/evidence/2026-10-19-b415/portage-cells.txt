@@ -1,0 +1,91 @@
+=== restrict-pf
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 3.64 s (backtrack: 0/20).
+
+
+
+
+>>> Failed to emerge dev-util/fetchrestrict-1 for /var/tmp/b415/root/
+
+ * Messages for package dev-util/fetchrestrict-1 merged to /var/tmp/b415/root/:
+
+ * The following files cannot be fetched for fetchrestrict:
+ *    probe-1.tar.gz
+rc=1
+--- stderr
+
+!!! dev-util/fetchrestrict-1 has fetch restriction turned on.
+!!! This probably means that this ebuild's files must be downloaded
+!!! manually.  See the comments in the ebuild for more information.
+
+ [32;01m*[0m The following files cannot be fetched for fetchrestrict:
+ [32;01m*[0m    probe-1.tar.gz
+open('/var/log/portage/elog/summary.log', 'a')
+--- dist:
+=== restrict-f
+Calculating dependencies ... done!
+Dependency resolution took 3.39 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-util/fetchrestrict-1::fetchrepo for /var/tmp/b415/root/
+
+>>> Failed to emerge dev-util/fetchrestrict-1 for /var/tmp/b415/root/
+
+ * Messages for package dev-util/fetchrestrict-1 merged to /var/tmp/b415/root/:
+
+ * The following files cannot be fetched for fetchrestrict:
+ *    probe-1.tar.gz
+rc=1
+--- stderr
+
+!!! dev-util/fetchrestrict-1 has fetch restriction turned on.
+!!! This probably means that this ebuild's files must be downloaded
+!!! manually.  See the comments in the ebuild for more information.
+
+ [32;01m*[0m The following files cannot be fetched for fetchrestrict:
+ [32;01m*[0m    probe-1.tar.gz
+open('/var/log/portage/elog/summary.log', 'a')
+--- dist:
+=== cond-pf
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 3.58 s (backtrack: 0/20).
+
+
+https://example.invalid/probe-1.tar.gz 
+rc=0
+--- stderr
+--- dist:
+=== cond-pf-mirror
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 3.49 s (backtrack: 0/20).
+
+
+https://example.invalid/probe-1.tar.gz 
+
+https://example.invalid/extra-1.tar.gz 
+rc=0
+--- stderr
+--- dist:
+=== cond-pF
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 3.83 s (backtrack: 0/20).
+
+
+https://example.invalid/probe-1.tar.gz 
+
+https://example.invalid/extra-1.tar.gz 
+rc=0
+--- stderr
+--- dist:

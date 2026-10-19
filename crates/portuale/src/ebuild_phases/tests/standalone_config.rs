@@ -687,3 +687,15 @@ fn phase_env_vars_leaves_portage_quiet_unset_unless_the_run_is_quiet() {
     });
     let _ = std::fs::remove_dir_all(&root.tmp);
 }
+
+/// Portage 3.0.82.2 `fetch.py` notice for a `RESTRICT=fetch` package, as
+/// captured on stderr (`LLM/evidence/2026-10-19-b415/portage-cells.txt`).
+#[test]
+fn fetch_restriction_message_matches_portage_bytes() {
+    assert_eq!(
+        fetch_restriction_message("dev-util", "fetchrestrict-1"),
+        "\n!!! dev-util/fetchrestrict-1 has fetch restriction turned on.\n\
+         !!! This probably means that this ebuild's files must be downloaded\n\
+         !!! manually.  See the comments in the ebuild for more information.\n\n"
+    );
+}

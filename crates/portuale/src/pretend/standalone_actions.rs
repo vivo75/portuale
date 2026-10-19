@@ -86,6 +86,7 @@ pub(crate) fn dispatch_standalone_actions(
             quiet,
             ask,
             read_news,
+            opts,
         }));
     }
 

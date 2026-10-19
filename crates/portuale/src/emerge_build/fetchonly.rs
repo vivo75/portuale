@@ -39,6 +39,12 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
         all_uri,
     } = args;
     let run_wide = run_wide_phase_env(config);
+    // `FEATURES=mirror` implies `--fetch-all-uri`.
+    // Portage: Scheduler.py:192-193
+    let all_uri = all_uri
+        || config
+            .resolved_incremental("FEATURES")
+            .is_some_and(|f| f.iter().any(|t| t == "mirror"));
     let progress = merge_progress_map(entries);
     let color = progress_color();
     let mut failed = false;
@@ -104,9 +110,52 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
         if pretend {
             match ebuild_phases::list_sources(fetch_args(), all_uri) {
                 Ok(files) => {
+                    // A file with no URI left (`RESTRICT=fetch` bars them all)
+                    // fails the listing, and the caller then runs `pkg_nofetch`.
+                    // Portage: fetch.py (`fetched != 2` under listonly),
+                    // EbuildFetchonly.py, doebuild.py (bug 657360)
+                    let mut unlisted = false;
                     for uris in files {
                         println!();
-                        println!("{} ", uris.join(" "));
+                        if uris.is_empty() {
+                            unlisted = true;
+                            println!();
+                        } else {
+                            println!("{} ", uris.join(" "));
+                        }
+                    }
+                    if unlisted {
+                        let restrict_fetch = ebuild_phases::package_restricts_fetch(&env);
+                        if restrict_fetch {
+                            eprint!(
+                                "{}",
+                                ebuild_phases::fetch_restriction_message(
+                                    &entry.category,
+                                    &format!("{}-{version}", entry.package)
+                                )
+                            );
+                        }
+                        if let Ok(runtime) = ebuild_phases::shared_runtime() {
+                            runtime.block_on(ebuild_phases::run_nofetch(
+                                ebuild_phases::RunNofetchArgs {
+                                    env: &env,
+                                    root,
+                                    debug,
+                                    config_root,
+                                    shell,
+                                    restrict_fetch,
+                                },
+                            ));
+                        }
+                        print!(
+                            "{}",
+                            crate::emerge_getbinpkg::failed_pkg_msg(
+                                &format!("{}/{}-{version}", entry.category, entry.package),
+                                root,
+                                None
+                            )
+                        );
+                        failed = true;
                     }
                 }
                 Err(e) => {
@@ -137,6 +186,8 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
             // `<file>: …`: Portage's own wording names the file only.
             // Portage: fetch.py, `Couldn't download '%s'. Aborting.`
             match e.split_once(": ") {
+                // `RESTRICT=fetch` printed its notice instead (see `fetch_sources`).
+                _ if ebuild_phases::package_restricts_fetch(&env) => {}
                 Some((file, _)) if !file.contains(' ') => {
                     eprintln!("!!! Couldn't download '{file}'. Aborting.");
                 }
