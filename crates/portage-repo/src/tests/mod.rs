@@ -1144,6 +1144,97 @@ fn graph_entries_real(atom_str: &str) -> Vec<GraphEntry> {
     graph_result_real(atom_str).entries
 }
 
+/// Like `graph_result_real`, but resolved with the pubgrub engine: the S9
+/// (#363/#364/#365) parity probes assert these match the default solver's
+/// abort outcome and notice vectors. Same request, only the resolver differs.
+fn graph_result_pubgrub(atom_str: &str) -> GraphResult {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    active_resolver_for(SolverKind::PubGrub)
+        .resolve(&ResolveRequest::new(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        ))
+        .unwrap_or_else(|e| panic!("pubgrub resolving {atom_str} failed: {e}"))
+}
+
+/// Like `graph_real_err`, but resolved with the pubgrub engine.
+fn graph_pubgrub_err(atom_str: &str) -> String {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    active_resolver_for(SolverKind::PubGrub)
+        .resolve(&ResolveRequest::new(
+            &root,
+            &root,
+            &[atom_str.to_string()],
+            &config,
+            &fixtures_root().join("distfiles"),
+        ))
+        .expect_err(&format!("pubgrub resolving {atom_str} should have failed"))
+        .to_string()
+}
+
+/// Like `graph_result_autounmask`, but resolved with the pubgrub engine.
+fn graph_result_autounmask_pubgrub(atom_str: &str) -> GraphResult {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    graph_result_autounmask_cfg_pubgrub(&config, atom_str)
+}
+
+/// `graph_result_autounmask_pubgrub` with an explicit config.
+fn graph_result_autounmask_cfg_pubgrub(
+    config: &portage_profile::Config,
+    atom_str: &str,
+) -> GraphResult {
+    let root = fixtures_root();
+    let atoms = vec![atom_str.to_string()];
+    active_resolver_for(SolverKind::PubGrub)
+        .resolve(&ResolveRequest {
+            autounmask_suggest_keywords: true,
+            autounmask_suggest_use: true,
+            autounmask_suggest_license: true,
+            autounmask_suggest_masks: true,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &atoms,
+                config,
+                &fixtures_root().join("distfiles"),
+            )
+        })
+        .unwrap_or_else(|e| panic!("pubgrub resolving {atom_str} failed: {e}"))
+}
+
 /// Like `graph_result_real`, but with `blocker_retry_seed_atoms` set (the
 /// `@world ∪ @selected ∪ @system` list of Portage's complete-mode retry).
 fn graph_entries_with_retry_seeds(atom_str: &str, seeds: &[&str]) -> Vec<GraphEntry> {

@@ -13,9 +13,12 @@
 //!
 //! Deliberate v1 cuts (each would be its own slice):
 //! - No autounmask relaxation levels: invisible versions are never offered, but
-//!   a candidate needing a flip fails instead of suggesting one.
-//! - `slot_conflicts` and the `autounmask_*` lists stay empty; a bridge failure
-//!   is one `Error::Detail` line of engine-native text, not a Portage notice.
+//!   a candidate needing a keyword/license/mask flip fails instead of
+//!   suggesting one.
+//! - `slot_conflicts` stays empty and a bridge failure is one `Error::Detail`
+//!   line of engine-native text, not a Portage notice. Since S9 the pubgrub
+//!   path replays the walk's abort predicates read-only over the solved plan,
+//!   so `autounmask_use_changes` and the miss disclosures can fill.
 //! - Merge order is the walk's own `topological_merge_order`; engine install
 //!   order only seeds positions.
 //! - Unparsable dep-string classes feed empty deps; unparsable versions and
@@ -29,13 +32,18 @@ use std::fmt;
 use std::io::Write;
 
 use super::{
-    Deep, EffectiveUseFlagsArgs, GraphEntry, GraphResult, InstalledDepStringArgs,
-    InstalledMetaLayer, InstalledRef, InstalledUseState, PretendOutcome,
-    ReinstallFlagsForUseChangeArgs, RepoConfig, ResolveRequest, Resolver as PortualeResolver,
-    all_installed_packages, effective_use_flags, find_repos, installed_candidates,
+    AbortOutcomeArgs, AutounmaskChange, Deep, EffectiveUseFlagsArgs, GraphEntry, GraphResult,
+    InstalledDepStringArgs, InstalledMetaLayer, InstalledRef, InstalledUseState,
+    MaskedDepChainArgs, MaskedDepReport, PlainMissDepReport, PretendOutcome,
+    ReinstallFlagsForUseChangeArgs, RenderRequiredUseBlockArgs, RepoConfig, ResolveRequest,
+    Resolver as PortualeResolver, TopLevel, UseUnsatCandidatesForAtomArgs, UseUnsatDepReport,
+    abort_outcome, all_installed_packages, autounmask_use_atom_form, effective_use_flags,
+    fill_use_change_chains, find_repos, implicit_iuse_set, installed_candidates,
     installed_dep_string, installed_pkg_iuse_and_use, is_visible, list_candidates,
-    live_metadata_for_installed, read_vdb_flag_set, read_vdb_string,
-    reinstall_flags_for_use_change, repo_aux_metadata, split_slot,
+    live_metadata_for_installed, masked_candidates_for_atom, masked_dep_chain, pkg_use_display_for,
+    read_vdb_flag_set, read_vdb_string, reinstall_flags_for_use_change, render_required_use_block,
+    repo_aux_metadata, required_use_dep_chain, split_slot, suggested_use_flip,
+    use_unsat_candidates_for_atom, valid_iuse,
 };
 
 // --- Lazy fact loading -----------------------------------------------------
@@ -52,6 +60,9 @@ struct LoadedVersion {
     repo_name: String,
     iuse: String,
     keywords: Vec<String>,
+    /// Raw `REQUIRED_USE` for the post-solve abort validator (the engine
+    /// never sees it: `version_row` keeps passing `None`).
+    required_use: String,
     /// DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND in that order.
     deps: [Vec<portage_solver::DepEntry>; 5],
     /// The raw md5-cache strings the trees parsed from, for merge-order edge
@@ -271,6 +282,7 @@ impl LazyRepo {
                     repo_name: candidate.repo_name.clone(),
                     iuse: metadata.get("IUSE").cloned().unwrap_or_default(),
                     keywords: candidate.keywords.clone(),
+                    required_use: metadata.get("REQUIRED_USE").cloned().unwrap_or_default(),
                     deps,
                     raw_deps,
                 });
@@ -375,6 +387,7 @@ impl LazyRepo {
             sub_slot,
             repo_name: read_vdb_string(&self.root, category, package, version, "repository"),
             iuse: read_vdb_string(&self.root, category, package, version, "IUSE"),
+            required_use: read_vdb_string(&self.root, category, package, version, "REQUIRED_USE"),
             keywords: Vec::new(),
             deps,
             raw_deps,
@@ -1448,6 +1461,9 @@ struct KeptInstalled {
     use_drift: HashMap<String, Vec<String>>,
     /// Deep expansion requested (`--deep` or `--emptytree`): no leaf rule.
     deep: bool,
+    /// Build-time deps are traversed (`--with-bdeps`, on unless `--usepkg`
+    /// or `--with-bdeps=n`): gates the kept-buildtime fold below.
+    with_bdeps: bool,
 }
 
 impl KeptInstalled {
@@ -1562,6 +1578,7 @@ impl KeptInstalled {
             use_drift,
             deep,
             downgrade,
+            with_bdeps: req.with_bdeps,
         }
     }
 
@@ -2304,6 +2321,29 @@ fn apply_or_overrides_to_entries(
         .collect()
 }
 
+/// Whether a kept installed version's build-time classes reach the engine:
+/// expanded under deep, bdeps on, and not rebuilding (a rebuild member
+/// already expands every class). Portage's `_add_pkg_deps` traverses
+/// DEPEND/BDEPEND for a built package when `bdeps` is `y`/`auto`, blanking
+/// them only with `--with-bdeps=n`.
+// Portage: _emerge/depgraph.py, _add_pkg_deps (built-package bdeps branch)
+fn keeps_buildtime(kept: &KeptInstalled, cpv: &str) -> bool {
+    kept.deep && kept.with_bdeps && kept.installed.contains(cpv) && !kept.rebuild.contains(cpv)
+}
+
+/// Fold DEPEND/BDEPEND into RDEPEND for [`keeps_buildtime`] versions: the
+/// engine answers a kept installed version with its runtime classes only, so
+/// its build-time edges would never solve. Display still reads the raw split.
+fn fold_buildtime_for_kept(
+    classes: [Vec<portage_solver::DepEntry>; 5],
+) -> [Vec<portage_solver::DepEntry>; 5] {
+    let [depend, rdepend, bdepend, pdepend, idepend] = classes;
+    let mut runtime = rdepend;
+    runtime.extend(depend);
+    runtime.extend(bdepend);
+    [Vec::new(), runtime, Vec::new(), pdepend, idepend]
+}
+
 /// Apply `overrides` to all five dep classes: the traversal both
 /// [`BridgeRepo::versions_for`] (engine facts) and [`or_member_view`]
 /// (post-solve analysis) share, so a group index computed from one solve
@@ -2386,6 +2426,13 @@ fn or_member_view(
             let record = repo_record?;
             (record.deps.clone(), record.slot.clone())
         }
+    };
+    // Same fold as `versions_for`, so the `||` override indices and the walk
+    // simulation see the classes the engine solves under.
+    let classes = if keeps_buildtime(kept, &cpv) {
+        fold_buildtime_for_kept(classes)
+    } else {
+        classes
     };
     // USE: the vdb flags for a deep kept member, else the config USE of
     // the repo record (like `desired_use`; an installed-only version with
@@ -3069,6 +3116,17 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
             let deps = if leaf {
                 empty
             } else {
+                // #390: a kept installed version expanded under deep with bdeps
+                // on folds its build-time classes into the runtime view the
+                // engine reads for it.
+                let folded;
+                let classes: &[Vec<portage_solver::DepEntry>; 5] =
+                    if keeps_buildtime(&self.kept, &record.cpv()) {
+                        folded = fold_buildtime_for_kept(classes.clone());
+                        &folded
+                    } else {
+                        classes
+                    };
                 let stripped =
                     without_self_alternatives(&cp, &record.slot, &self.installed, classes);
                 apply_or_overrides_to_classes(&stripped, &record.cpv(), &self.or_overrides)
@@ -3114,17 +3172,21 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                         }
                     }
                 }
+                // #390: same kept-buildtime fold as the repo path above.
+                let kept_folded;
+                let source: &[Vec<portage_solver::DepEntry>; 5] =
+                    if keeps_buildtime(&self.kept, &record.cpv()) {
+                        kept_folded = fold_buildtime_for_kept(record.deps.clone());
+                        &kept_folded
+                    } else {
+                        &record.deps
+                    };
                 if let Some(row) = version_row(
                     &record,
                     // #34 S5 G3: same self-cycle rule as the repo path above.
                     // #34 S5 G5/G6: same `||` reorder/drop pass.
                     apply_or_overrides_to_classes(
-                        &without_self_alternatives(
-                            &cp,
-                            &record.slot,
-                            &self.installed,
-                            &record.deps,
-                        ),
+                        &without_self_alternatives(&cp, &record.slot, &self.installed, source),
                         &record.cpv(),
                         &self.or_overrides,
                     ),
@@ -3366,6 +3428,536 @@ const OR_FIXPOINT_MAX_PASSES: usize = 8;
 /// than solving forever.
 const PUBGRUB_FIXPOINT_MAX_ROUNDS: usize = 32;
 
+// --- S9 post-solve abort validator -------------------------------------------
+
+/// S9 (#363/#364/#365): what the read-only post-solve validator fills in:
+/// the abort channels `graph_result_from_order` leaves empty when the
+/// engine solved a plan Portage would have refused.
+struct BridgeAbortValidation {
+    autounmask_use_changes: Vec<AutounmaskChange>,
+    masked_deps: Vec<MaskedDepReport>,
+    use_unsat_deps: Vec<UseUnsatDepReport>,
+    plain_miss_deps: Vec<PlainMissDepReport>,
+    nvc_entries: Vec<GraphEntry>,
+    nvc_dep_atoms: HashMap<(String, String), String>,
+}
+
+/// S9 (#363/#364/#365): replay the default path's three abort predicates
+/// over a solved pubgrub plan -- REQUIRED_USE (`entry_use_display`), miss
+/// disclosure (`record_miss_disclosure`) and the USE-change gate
+/// (`entry_use_flags`) -- reusing their helpers. Read-only: `order` and
+/// `parents` are untouched, and `None` (no notices) leaves the result
+/// exactly as `graph_result_from_order` built it. `Err` is a REQUIRED_USE
+/// refusal, the same `Error::Detail` text the walk returns.
+// Portage: depgraph.py need_config_change:11708, _show_unsatisfied_dep, _add_pkg
+fn bridge_validate_aborts(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    parents: &HashMap<String, Vec<(String, String)>>,
+    entries: &[GraphEntry],
+) -> Result<Option<BridgeAbortValidation>, String> {
+    // `--nodeps` never expands deps, so nothing can miss or flip.
+    if req.nodeps {
+        return Ok(None);
+    }
+    // Merge-bound members plus installed-kept solution members: the
+    // engine's plan treats a kept install as the selected version, so its
+    // dependents' atoms match against it (the pg34-nlib shape: the child
+    // is `AlreadyInstalled` while the parent still needs the flip). Only
+    // merge-bound members get the REQUIRED_USE check and edge expansion,
+    // like the walk (installed outcomes skip both).
+    struct Member<'a> {
+        cp: String,
+        version: String,
+        merge_bound: bool,
+        record: LoadedVersion,
+        use_set: HashSet<String>,
+        entry: &'a GraphEntry,
+    }
+    let mut members: Vec<Member<'_>> = Vec::new();
+    for entry in entries {
+        let (version, merge_bound) = match &entry.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                (Some(version.clone()), true)
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                (Some(to.clone()), true)
+            }
+            PretendOutcome::AlreadyInstalled { version } => (Some(version.clone()), false),
+            _ => (None, false),
+        };
+        let Some(version) = version else { continue };
+        let cp = format!("{}/{}", entry.category, entry.package);
+        // An installed-only pick has no repo record: read its vdb deps like
+        // the entry builder does, so its dependents' atoms still match
+        // against it instead of misclassifying as a miss.
+        // Portage: resolve/pretend.rs:787-824 (installed-only AlreadyInstalled).
+        let record = lazy.record(&cp, &version).or_else(|| {
+            let (category, package) = cp.split_once('/')?;
+            lazy.installed_record(category, package, &version)
+        });
+        let Some(record) = record else {
+            continue;
+        };
+        let use_set = lazy.use_of(&record);
+        members.push(Member {
+            cp,
+            version,
+            merge_bound,
+            record,
+            use_set,
+            entry,
+        });
+    }
+    let top_level = TopLevel {
+        atoms: req.atoms.iter().map(String::as_str).collect(),
+        sets: &req.argument_sets,
+    };
+    // (c) REQUIRED_USE first: like `assemble_pass_result`, a violation fails
+    // the whole call, so edge misses never report alongside one.
+    let mut violations: Vec<((bool, usize), String)> = Vec::new();
+    for member in &members {
+        if !member.merge_bound {
+            continue;
+        }
+        let required_use = member.record.required_use.trim();
+        if required_use.is_empty() {
+            continue;
+        }
+        let (category, package) = (
+            member.entry.category.as_str(),
+            member.entry.package.as_str(),
+        );
+        let iuse_set = implicit_iuse_set(&member.record.iuse, &req.config);
+        match portage_required_use::check_required_use(required_use, &member.use_set, &iuse_set) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        let normalized = required_use
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let reduced = match portage_required_use::unsatisfied_reduced(
+            required_use,
+            &member.use_set,
+            &iuse_set,
+        ) {
+            Ok(Some(reduced)) => portage_required_use::human_readable(&reduced),
+            _ => portage_required_use::human_readable(&normalized),
+        };
+        let full = portage_required_use::human_readable(&normalized);
+        let use_display =
+            pkg_use_display_for(&lazy.repos, &req.config, category, package, &member.version);
+        let cpv_repo = if member.record.repo_name.is_empty() {
+            format!("{}/{package}-{}", category, member.version)
+        } else {
+            format!(
+                "{}/{package}-{}::{}",
+                category, member.version, member.record.repo_name
+            )
+        };
+        let owner = parents
+            .get(&format!("{}-{}", member.cp, member.version))
+            .and_then(|requirers| requirers.first().cloned());
+        let dep_chain = required_use_dep_chain(&owner, &top_level, entries);
+        let xinfo = req
+            .atoms
+            .iter()
+            .find(|atom| {
+                portage_dep::parse_atom(atom).is_some_and(|parsed| {
+                    format!("{}/{}", parsed.category, parsed.package) == member.cp
+                })
+            })
+            .cloned()
+            .or_else(|| {
+                entries
+                    .iter()
+                    .flat_map(|entry| entry.deps.iter())
+                    .find(|dep| dep.category == category && dep.package == package)
+                    .map(|dep| dep.evaluated.clone())
+            })
+            .unwrap_or_else(|| member.cp.clone());
+        // Walk (last-declared-first) order for top-level violations; a
+        // dependency-only violation keeps plan order.
+        let key = match req.atoms.iter().rposition(|atom| {
+            portage_dep::parse_atom(atom).is_some_and(|parsed| {
+                format!("{}/{}", parsed.category, parsed.package) == member.cp
+            })
+        }) {
+            Some(position) => (false, usize::MAX - position),
+            None => (true, 0),
+        };
+        violations.push((
+            key,
+            render_required_use_block(RenderRequiredUseBlockArgs {
+                xinfo: &xinfo,
+                cpv_repo: &cpv_repo,
+                use_display: &use_display,
+                reduced_human: &reduced,
+                full_human: &full,
+                dep_chain: &dep_chain,
+            }),
+        ));
+    }
+    if !violations.is_empty() {
+        violations.sort_by_key(|(key, _)| *key);
+        return Err(violations.into_iter().map(|(_, block)| block).collect());
+    }
+    // (a)/(b) edge pass over entry deps (already USE-reduced under the
+    // member's config USE, like the walk's queued atoms): each dep either
+    // resolves to a plan member whose USE satisfies it, needs a
+    // `package.use` flip, or is a miss the disclosure helpers classify.
+    let member_strings: Vec<String> = members
+        .iter()
+        .map(|member| {
+            let entry = member.entry;
+            format!(
+                "{}-{}:{}/{}::{}",
+                member.cp,
+                member.version,
+                entry.slot.clone().unwrap_or_default(),
+                entry.sub_slot.clone().unwrap_or_default(),
+                entry.repo_name.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let member_refs: Vec<&str> = member_strings.iter().map(String::as_str).collect();
+    let mut flips: HashMap<String, HashMap<String, bool>> = HashMap::new();
+    let mut changes: Vec<AutounmaskChange> = Vec::new();
+    struct Miss {
+        category: String,
+        package: String,
+        display: String,
+        evaluated: String,
+        owners: Vec<(String, String)>,
+    }
+    let mut misses: Vec<Miss> = Vec::new();
+    for member in &members {
+        // A kept install's own deps never expand under the engine's leaf
+        // rule, so only merge-bound members contribute edges (they still
+        // serve as match targets above).
+        if !member.merge_bound {
+            continue;
+        }
+        let owner = (member.entry.category.clone(), member.entry.package.clone());
+        for dep in &member.entry.deps {
+            // Choice groups resolve to the taken branch inside the engine;
+            // attributing a USE atom to one branch needs the `||` walk the
+            // fixpoint already ran, so deferred edges stay out.
+            if dep.disjunctive {
+                continue;
+            }
+            // Build-time keys only travel when the walk expands them.
+            if (dep.key == 3 || dep.key == 4) && !req.with_bdeps {
+                continue;
+            }
+            let Some(parsed) = portage_dep::parse_atom(&dep.evaluated) else {
+                continue;
+            };
+            if parsed.blocker != portage_dep::Blocker::None {
+                continue;
+            }
+            let member_matched = portage_dep::match_from_list(&dep.evaluated, &member_refs)
+                .is_some_and(|hits| !hits.is_empty());
+            // The walk settles `AlreadyInstalled` before any miss disclosure:
+            // an installed instance satisfying the atom (USE-aware, like the
+            // installed-only fallback) counts as satisfied even when no plan
+            // member names it. Version-only helpers are repo-candidate-only,
+            // so they must not decide this test.
+            // Portage: resolve/pretend.rs:787-824.
+            let installed_satisfies =
+                super::best_installed_matching(&req.root, &dep.evaluated, &req.config).is_some();
+            let matched = member_matched || installed_satisfies;
+            let use_deps: Vec<portage_dep::UseDep> = parsed
+                .use_deps
+                .clone()
+                .filter(|deps| !deps.is_empty())
+                .unwrap_or_default();
+            if matched {
+                if use_deps.is_empty() {
+                    continue;
+                }
+                // Installed-only satisfaction with no plan member: the vdb USE
+                // already held (`best_installed_matching` above), so the edge
+                // is satisfied like the walk's `AlreadyInstalled`.
+                let Some(child) = members.iter().find(|candidate| {
+                    format!("{}/{}", candidate.entry.category, candidate.entry.package)
+                        == format!("{}/{}", parsed.category, parsed.package)
+                }) else {
+                    continue;
+                };
+                let mut child_use = child.use_set.clone();
+                if let Some(applied) =
+                    flips.get(&format!("{}/{}", child.entry.category, child.entry.package))
+                {
+                    for (flag, enabled) in applied {
+                        if *enabled {
+                            child_use.insert(flag.clone());
+                        } else {
+                            child_use.remove(flag);
+                        }
+                    }
+                }
+                let iuse_declared: HashSet<String> = child
+                    .record
+                    .iuse
+                    .split_whitespace()
+                    .map(|token| token.trim_start_matches(['+', '-']).to_string())
+                    .collect();
+                if portage_dep::use_deps_satisfied(
+                    &use_deps,
+                    &valid_iuse(&iuse_declared, &req.config),
+                    &child_use,
+                ) {
+                    continue;
+                }
+                // The `entry_use_flags` predicate verbatim: an unsatisfied
+                // plain USE-dep with a settable flip becomes a `package.use`
+                // change (the need_config_change gate); otherwise a miss.
+                let flip = list_candidates(&lazy.repos, &parsed.category, &parsed.package)
+                    .ok()
+                    .and_then(|candidates| {
+                        candidates
+                            .iter()
+                            .find(|candidate| candidate.version == child.version)
+                            .and_then(|candidate| {
+                                suggested_use_flip(
+                                    candidate,
+                                    &parsed.category,
+                                    &parsed.package,
+                                    &use_deps,
+                                    &req.config,
+                                )
+                                .map(|flip| (candidate.clone(), flip))
+                            })
+                    });
+                if let Some((candidate, flip)) = flip
+                    && req.autounmask_suggest_use
+                {
+                    let token = flip
+                        .iter()
+                        .map(|(flag, enabled)| {
+                            if *enabled {
+                                flag.clone()
+                            } else {
+                                format!("-{flag}")
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let candidates =
+                        list_candidates(&lazy.repos, &parsed.category, &parsed.package)
+                            .map(|arc| arc.as_ref().clone())
+                            .unwrap_or_default();
+                    changes.push(AutounmaskChange {
+                        atom: autounmask_use_atom_form(
+                            &candidate,
+                            &candidates,
+                            &parsed.category,
+                            &parsed.package,
+                            &req.config,
+                        ),
+                        token,
+                        dep_chain: Vec::new(),
+                        trigger: Some(owner.clone()),
+                    });
+                    flips
+                        .entry(format!("{}/{}", parsed.category, parsed.package))
+                        .or_default()
+                        .extend(flip);
+                    continue;
+                }
+            }
+            match misses
+                .iter_mut()
+                .find(|miss| miss.category == parsed.category && miss.package == parsed.package)
+            {
+                Some(miss) => {
+                    if !miss.owners.contains(&owner) {
+                        miss.owners.push(owner.clone());
+                    }
+                }
+                None => misses.push(Miss {
+                    category: parsed.category.clone(),
+                    package: parsed.package.clone(),
+                    display: dep.atom.clone(),
+                    evaluated: dep.evaluated.clone(),
+                    owners: vec![owner.clone()],
+                }),
+            }
+        }
+    }
+    if changes.is_empty() && misses.is_empty() {
+        return Ok(None);
+    }
+    // (b) miss disclosure, one report per `cat/pkg` exactly like
+    // `record_miss_disclosure` (masked first, then `[use]`, then plain).
+    let mut validation = BridgeAbortValidation {
+        autounmask_use_changes: changes,
+        masked_deps: Vec::new(),
+        use_unsat_deps: Vec::new(),
+        plain_miss_deps: Vec::new(),
+        nvc_entries: Vec::new(),
+        nvc_dep_atoms: HashMap::new(),
+    };
+    for miss in &misses {
+        if let Some(masked) = masked_candidates_for_atom(&lazy.repos, &miss.display, &req.config) {
+            validation.masked_deps.push(MaskedDepReport {
+                category: miss.category.clone(),
+                package: miss.package.clone(),
+                atom: miss.display.clone(),
+                masked,
+                chain: Vec::new(),
+            });
+        } else if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
+            repos: &lazy.repos,
+            root: &req.root,
+            entries,
+            display_atom: &miss.display,
+            evaluated_atom: &miss.evaluated,
+            owner: miss.owners.first(),
+            config: &req.config,
+        }) {
+            validation.use_unsat_deps.push(UseUnsatDepReport {
+                category: miss.category.clone(),
+                package: miss.package.clone(),
+                atom: miss.display.clone(),
+                rows,
+                chain: Vec::new(),
+            });
+        } else {
+            validation.plain_miss_deps.push(PlainMissDepReport {
+                category: miss.category.clone(),
+                package: miss.package.clone(),
+                atom: miss.display.clone(),
+                chain: Vec::new(),
+                binary_only: req.usepkgonly,
+            });
+        }
+        let mut owners = miss.owners.clone();
+        owners.sort();
+        owners.dedup();
+        validation.nvc_entries.push(GraphEntry {
+            discovery: 0,
+            category: miss.category.clone(),
+            package: miss.package.clone(),
+            outcome: PretendOutcome::NoVisibleCandidate,
+            blockers: Vec::new(),
+            slot: None,
+            sub_slot: None,
+            repo_name: None,
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: owners,
+            source: super::CandidateSource::Ebuild,
+            provenance: super::VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        });
+        validation.nvc_dep_atoms.insert(
+            (miss.category.clone(), miss.package.clone()),
+            miss.display.clone(),
+        );
+    }
+    Ok(Some(validation))
+}
+
+/// S9 (#363/#364/#365): file a [`BridgeAbortValidation`] into a
+/// `graph_result_from_order` result: NVC entries join the graph, report
+/// and change chains walk out of the final entries, and the outcome
+/// re-derives through `abort_outcome` exactly like the settled walk.
+fn bridge_apply_validation(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    result: &mut GraphResult,
+    validation: BridgeAbortValidation,
+) {
+    result.entries.extend(validation.nvc_entries);
+    result.masked_deps = validation.masked_deps;
+    result.use_unsat_deps = validation.use_unsat_deps;
+    result.plain_miss_deps = validation.plain_miss_deps;
+    let top_level = TopLevel {
+        atoms: req.atoms.iter().map(String::as_str).collect(),
+        sets: &req.argument_sets,
+    };
+    for report in &mut result.masked_deps {
+        let atom = report.atom.clone();
+        report.chain = masked_dep_chain(MaskedDepChainArgs {
+            repos: &lazy.repos,
+            config: &req.config,
+            entries: &result.entries,
+            category: &report.category,
+            package: &report.package,
+            atoms: &req.atoms,
+            argument_sets: &req.argument_sets,
+            root: &req.root,
+            atom: &atom,
+        });
+    }
+    for report in &mut result.use_unsat_deps {
+        let atom = report.atom.clone();
+        report.chain = masked_dep_chain(MaskedDepChainArgs {
+            repos: &lazy.repos,
+            config: &req.config,
+            entries: &result.entries,
+            category: &report.category,
+            package: &report.package,
+            atoms: &req.atoms,
+            argument_sets: &req.argument_sets,
+            root: &req.root,
+            atom: &atom,
+        });
+    }
+    for report in &mut result.plain_miss_deps {
+        let atom = report.atom.clone();
+        report.chain = masked_dep_chain(MaskedDepChainArgs {
+            repos: &lazy.repos,
+            config: &req.config,
+            entries: &result.entries,
+            category: &report.category,
+            package: &report.package,
+            atoms: &req.atoms,
+            argument_sets: &req.argument_sets,
+            root: &req.root,
+            atom: &atom,
+        });
+    }
+    result.autounmask_use_changes = validation.autounmask_use_changes;
+    fill_use_change_chains(
+        &result.entries,
+        &mut result.autounmask_use_changes,
+        &top_level,
+        &req.root,
+    );
+    // A bare USE-change gate keeps `Complete` (Portage fails it later in
+    // `_display_autounmask`); a disclosed miss aborts like the walk.
+    if !validation.nvc_dep_atoms.is_empty() {
+        result.outcome = abort_outcome(AbortOutcomeArgs {
+            entries: &result.entries,
+            masked_deps: &result.masked_deps,
+            circular_deps: &result.circular_deps,
+            cycle_display: &result.cycle_display,
+            cycle_display_idx: &[],
+            nvc_dep_atoms: &validation.nvc_dep_atoms,
+            virtual_cycle: &[],
+        });
+    }
+}
+
 fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
     let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
     let (seeds, shallow) = closure_seeds(req)?;
@@ -3491,14 +4083,15 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
         }
         previous = Some((order, parents));
     };
-    Ok(graph_result_from_order(
-        req,
-        &lazy.repos,
-        &lazy,
-        &order,
-        &parents,
-        Some(&kept),
-    ))
+    let mut result =
+        graph_result_from_order(req, &lazy.repos, &lazy, &order, &parents, Some(&kept));
+    // S9 (#363/#364/#365): the engine never sees REQUIRED_USE, masked
+    // disclosure or the autounmask gate, so replay them read-only over the
+    // solved plan; passing probes validate clean and keep their output.
+    if let Some(validation) = bridge_validate_aborts(req, &lazy, &parents, &result.entries)? {
+        bridge_apply_validation(req, &lazy, &mut result, validation);
+    }
+    Ok(result)
 }
 
 // --- resolvo backend -------------------------------------------------------
@@ -4662,30 +5255,18 @@ mod tests {
         );
     }
 
-    /// `-pvuD` on pg34-blib plans nothing under pubgrub: an installed,
-    /// already-built parent's BDEPEND is not traversed. Portage prints
-    /// `Total: 0` only with `--usepkg` set (bdeps off); with this request
-    /// (no binary flags) it plans `U pg34-btool-2`, so this pins a known
-    /// divergence, not Portage's output (#390; code note).
+    /// `-pvuD` on pg34-blib plans `U pg34-btool-2` under pubgrub: an
+    /// installed, already-built parent's BDEPEND is traversed when bdeps is
+    /// on (Portage `_add_pkg_deps`; captures
+    /// `361-blib-pvuD-noflags.txt`/`361-blib-pvuD-bdy.txt` plan
+    /// `U pg34-btool-2`, `Total: 1 package (1 upgrade)`).
     #[test]
     fn pg34_blib_pubgrub_pvud_plans_nothing() {
         let req = pg34_s3_request(&["dev-libs/pg34-blib"]);
         let result = active_resolver_for(super::super::SolverKind::PubGrub)
             .resolve(&req)
             .expect("pg34-blib resolves");
-        assert_eq!(pg34_plan(&result), Vec::<String>::new());
-        assert!(
-            result
-                .entries
-                .iter()
-                .all(|e| !format!("{}/{}", e.category, e.package).contains("pg34-btool")),
-            "no btool row in any outcome: {:?}",
-            result
-                .entries
-                .iter()
-                .map(|e| format!("{}/{} {:?}", e.category, e.package, e.outcome))
-                .collect::<Vec<_>>()
-        );
+        assert_eq!(pg34_plan(&result), ["dev-libs/pg34-btool-2:0"]);
     }
 
     /// #34 S3 non-regression: `-pvuD --with-bdeps=n` on pg34-blib plans
@@ -5752,6 +6333,7 @@ mod tests {
             repo_name: "testrepo".to_string(),
             iuse: String::new(),
             keywords: vec!["amd64".to_string()],
+            required_use: String::new(),
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
         };
@@ -5788,6 +6370,7 @@ mod tests {
             repo_name: "testrepo".to_string(),
             iuse: String::new(),
             keywords: Vec::new(),
+            required_use: String::new(),
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
         };
@@ -5884,6 +6467,7 @@ mod tests {
             repo_name: "testrepo".to_string(),
             iuse: "x".to_string(),
             keywords: vec!["amd64".to_string()],
+            required_use: String::new(),
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
         };
@@ -5924,6 +6508,7 @@ mod tests {
             repo_name: "testrepo".to_string(),
             iuse: String::new(),
             keywords: Vec::new(),
+            required_use: String::new(),
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: [
                 "!!dev-libs/pg34-blka".to_string(),
@@ -6564,6 +7149,7 @@ mod tests {
             downgrade: std::collections::HashSet::new(),
             use_drift: std::collections::HashMap::new(),
             deep,
+            with_bdeps: false,
         }
     }
 

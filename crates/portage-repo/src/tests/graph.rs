@@ -2587,6 +2587,105 @@ fn masked_dep_report_carries_the_chain_to_the_argument() {
 }
 
 #[test]
+fn masked_dep_pubgrub_matches_default_abort() {
+    // S9 #364: `--solver=pubgrub` must abort exactly like the default
+    // solver when a dependency is masked-only (Portage's "All ebuilds
+    // that could satisfy … have been masked" block).
+    // Portage: depgraph.py, _show_unsatisfied_dep.
+    let default = graph_result_real("dev-libs/maskneedpkg");
+    assert!(
+        matches!(&default.outcome, ResolveOutcome::Aborted { .. }),
+        "the gate exists on the default path: {:?}",
+        default.outcome
+    );
+    let pubgrub = graph_result_pubgrub("dev-libs/maskneedpkg");
+    assert_eq!(pubgrub.outcome, default.outcome);
+    assert_eq!(pubgrub.masked_deps, default.masked_deps);
+    assert!(pubgrub.use_unsat_deps.is_empty());
+    assert!(pubgrub.plain_miss_deps.is_empty());
+    // Pinned shape (same assertions as
+    // `masked_dep_report_carries_the_chain_to_the_argument`).
+    assert_eq!(pubgrub.masked_deps.len(), 1);
+    let rep = &pubgrub.masked_deps[0];
+    assert_eq!(
+        (
+            rep.category.as_str(),
+            rep.package.as_str(),
+            rep.atom.as_str()
+        ),
+        ("dev-libs", "maskeddep", "dev-libs/maskeddep")
+    );
+    assert_eq!(rep.masked.len(), 1);
+    assert_eq!(rep.masked[0].0, "dev-libs/maskeddep-1.0::testrepo");
+    assert_eq!(
+        rep.chain,
+        vec![
+            (
+                "dev-libs/maskneedpkg-1.0::testrepo".to_string(),
+                "ebuild".to_string()
+            ),
+            ("dev-libs/maskneedpkg".to_string(), "argument".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn pg34_gapp_pubgrub_pvud_keeps_installed_only_dep_satisfied() {
+    // S9 regression: `--solver=pubgrub -pvuD dev-libs/pg34-gapp` must stay
+    // `Complete` with no abort disclosures. `pg34-gone` is installed-only
+    // (vdb, no ebuild; its RDEPEND is `pg34-gextra`) and `pg34-gapp` depends
+    // on it, so the edge is satisfied by the installed instance exactly as
+    // the default walk's `AlreadyInstalled` outcome does before any
+    // masked/use-unsat/plain-miss classification.
+    // Portage: resolve/pretend.rs:787-824 (installed-only `AlreadyInstalled`
+    // fallback); oracle Portage 3.0.82.2 `360-gapp-pvuD` (`N gextra + N gapp`).
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let result = active_resolver_for(SolverKind::PubGrub)
+        .resolve(&ResolveRequest {
+            update: true,
+            deep: Deep::Unlimited,
+            ..ResolveRequest::new(
+                &root,
+                &root,
+                &["dev-libs/pg34-gapp".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        })
+        .unwrap_or_else(|e| panic!("pubgrub resolving dev-libs/pg34-gapp failed: {e}"));
+    assert!(
+        matches!(&result.outcome, ResolveOutcome::Complete),
+        "installed-only pg34-gone satisfies the edge, no abort: {:?}",
+        result.outcome
+    );
+    assert!(
+        result.masked_deps.is_empty(),
+        "no masked disclosure: {:?}",
+        result.masked_deps
+    );
+    assert!(
+        result.use_unsat_deps.is_empty(),
+        "no use-unsat disclosure: {:?}",
+        result.use_unsat_deps
+    );
+    assert!(
+        result.plain_miss_deps.is_empty(),
+        "no plain-miss disclosure: {:?}",
+        result.plain_miss_deps
+    );
+}
+
+#[test]
 fn mia0a_cells_report_missing_iuse_for_the_conditional_dep() {
     // Both `mia0a` cells record one `Missing IUSE` disclosure with a chain to
     // the argument (Portage's lines).
@@ -3185,6 +3284,62 @@ fn required_use_violations_are_collected_across_the_whole_walk_not_just_the_firs
          \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
          \x20   foo? ( bar )\n\n"
     );
+}
+
+#[test]
+fn required_use_pubgrub_top_level_matches_default_refusal() {
+    // S9 #365: `--solver=pubgrub` must refuse exactly like the default
+    // solver when a selected ebuild violates REQUIRED_USE (Portage's
+    // post-selection check in `depgraph.py _add_pkg`).
+    let default = graph_real_err("dev-libs/requiredusebadpkg");
+    let pubgrub = graph_pubgrub_err("dev-libs/requiredusebadpkg");
+    assert_eq!(pubgrub, default);
+}
+
+#[test]
+fn required_use_pubgrub_dependency_matches_default_refusal() {
+    // Same fatal severity reached only as a dependency: the block gains
+    // the chain plus the trailing `[argument]` line.
+    let default = graph_real_err("dev-libs/requiredusebadparentpkg");
+    let pubgrub = graph_pubgrub_err("dev-libs/requiredusebadparentpkg");
+    assert_eq!(pubgrub, default);
+}
+
+#[test]
+fn required_use_pubgrub_two_violations_match_default_order() {
+    // Portage collects every violation before failing; the walk order is
+    // last-declared-first, so badpkg2's block leads.
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let atoms = vec![
+        "dev-libs/requiredusebadpkg".to_string(),
+        "dev-libs/requiredusebadpkg2".to_string(),
+    ];
+    let req = ResolveRequest::new(
+        &root,
+        &root,
+        &atoms,
+        &config,
+        &fixtures_root().join("distfiles"),
+    );
+    let default = req
+        .resolve()
+        .expect_err("both atoms should fail their own REQUIRED_USE")
+        .to_string();
+    let pubgrub = active_resolver_for(SolverKind::PubGrub)
+        .resolve(&req)
+        .expect_err("pubgrub should fail both atoms' REQUIRED_USE too")
+        .to_string();
+    assert_eq!(pubgrub, default);
 }
 
 #[test]

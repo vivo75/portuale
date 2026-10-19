@@ -917,3 +917,39 @@ fn flip_revealed_disjunction_defers_to_the_drained_graph() {
         );
     }
 }
+
+#[test]
+fn pg34_napp_pubgrub_records_the_use_change_gate() {
+    // S9 #363: `--solver=pubgrub` must record Portage's `package.use`
+    // change instead of silently applying it: `pg34-nlib` carries
+    // default-off `f` while its parent needs `nlib[f]`, so the default
+    // solver reports one USE change and stays `Complete` (the CLI fails
+    // the run later in `_display_autounmask`, Portage's `need_config_change`
+    // gate). Portage: depgraph.py need_config_change:11708.
+    let default = graph_result_autounmask("dev-libs/pg34-napp");
+    assert_eq!(
+        default.autounmask_use_changes.len(),
+        1,
+        "the gate exists on the default path: {:?}",
+        default.autounmask_use_changes
+    );
+    assert!(
+        matches!(&default.outcome, ResolveOutcome::Complete),
+        "a bare USE-change gate keeps Complete: {:?}",
+        default.outcome
+    );
+    let pubgrub = graph_result_autounmask_pubgrub("dev-libs/pg34-napp");
+    assert_eq!(
+        pubgrub.autounmask_use_changes,
+        default.autounmask_use_changes
+    );
+    assert_eq!(pubgrub.outcome, default.outcome);
+    assert_eq!(
+        pubgrub.autounmask_no_clean_tail,
+        default.autounmask_no_clean_tail
+    );
+    assert_eq!(
+        pubgrub.autounmask_backtrack_disabled(false),
+        default.autounmask_backtrack_disabled(false)
+    );
+}
