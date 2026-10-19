@@ -23,11 +23,12 @@
 //!   order only seeds positions.
 //! - Unparsable dep-string classes feed empty deps; unparsable versions and
 //!   top-level blocker atoms are skipped.
-//! - Binary candidates (`--usepkg`) are not offered; `--deep=N` counts as
-//!   unlimited; no `_greedy_slots` blocker lookahead (backlog #368).
+//! - Binary candidates (`--usepkg`) are not offered; `--deep=N` bounds kept
+//!   expansion through a pre-solve BFS allowlist (the engine cannot carry
+//!   depth); no `_greedy_slots` blocker lookahead (backlog #368).
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::Write;
 
@@ -1446,6 +1447,146 @@ fn has_installed_parent(
         })
 }
 
+/// Referenced CPNs of parsed dep entries under a USE set: conditional
+/// branches the flags switch off contribute nothing (the engine evaluates
+/// the same way), every choice-group branch is followed (the closure's
+/// over-approximation: branch choice needs the solved plan), and blockers
+/// are skipped (queued separately, never expanded).
+fn refs_under_use(
+    entries: &[portage_solver::DepEntry],
+    use_set: &HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    for entry in entries {
+        match entry {
+            portage_solver::DepEntry::Atom(dep) => {
+                if dep.blocker.is_none() {
+                    out.push(format!("{}", dep.cpn));
+                }
+            }
+            portage_solver::DepEntry::UseConditional {
+                flag,
+                negate,
+                children,
+            } => {
+                if use_set.contains(flag.as_str()) != *negate {
+                    refs_under_use(children, use_set, out);
+                }
+            }
+            portage_solver::DepEntry::AllOf(children)
+            | portage_solver::DepEntry::AnyOf(children)
+            | portage_solver::DepEntry::ExactlyOneOf(children)
+            | portage_solver::DepEntry::AtMostOneOf(children) => {
+                refs_under_use(children, use_set, out);
+            }
+        }
+    }
+}
+
+/// Bounded-`--deep` expansion depths: min dep depth per `cat/pkg` from the
+/// top atoms (depth 0). Installed CPNs contribute their vdb deps under the
+/// vdb USE, repo-visible CPNs their repo deps under the config USE (the two
+/// USE sources [`BridgeRepo::desired_use`] answers the engine with);
+/// DEPEND/BDEPEND ride only with `with_bdeps`, like the walk. Returns
+/// `(bound, depths)`; `None` unless `Deep::Bounded(n)` without
+/// `--emptytree` (which re-resolves everything, unbounded).
+///
+/// The PubGrub engine cannot carry depth, so this pre-solve BFS is the
+/// kept-expansion filter: [`KeptInstalled::deep_expands`] admits an
+/// installed cpv only below the bound. Approximations: choice-group
+/// branches all count (branch choice needs the solve), and a cp that is
+/// both installed and repo-visible contributes both readers' strings (an
+/// in-bound upgrade re-merges fresh).
+// Portage: depgraph.py:7359-7375 (`_too_deep`)
+fn deep_bounded_depths(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    installed: &[super::InstalledPackage],
+) -> Option<(u32, HashMap<String, u32>)> {
+    let Deep::Bounded(n) = req.deep else {
+        return None;
+    };
+    if req.empty {
+        return None;
+    }
+    let mut installed_cps: HashSet<String> = HashSet::new();
+    for inst in installed {
+        installed_cps.insert(format!("{}/{}", inst.category, inst.package));
+    }
+    let mut depths: HashMap<String, u32> = HashMap::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+    for atom in &req.atoms {
+        let Ok(dep) = portage_solver::Dep::parse(atom) else {
+            continue;
+        };
+        if dep.blocker.is_some() {
+            continue;
+        }
+        let cp = format!("{}", dep.cpn);
+        if depths.insert(cp.clone(), 0).is_none() {
+            queue.push_back(cp);
+        }
+    }
+    while let Some(cp) = queue.pop_front() {
+        let depth = depths[&cp];
+        if depth >= n {
+            continue;
+        }
+        let mut refs = Vec::new();
+        if let Some((category, package)) = cp.split_once('/')
+            && installed_cps.contains(&cp)
+        {
+            for inst in installed
+                .iter()
+                .filter(|inst| inst.category == category && inst.package == package)
+            {
+                let (_, use_set) = installed_pkg_iuse_and_use(
+                    &req.root,
+                    &inst.category,
+                    &inst.package,
+                    &inst.version,
+                );
+                for (class, texts) in lazy
+                    .installed_parsed_deps(&inst.category, &inst.package, &inst.version)
+                    .iter()
+                    .enumerate()
+                {
+                    // DEPEND/BDEPEND (classes 0/2) ride only with bdeps, like
+                    // the walk's installed-deps enqueue.
+                    if (class == 0 || class == 2) && !req.with_bdeps {
+                        continue;
+                    }
+                    refs_under_use(texts, &use_set, &mut refs);
+                }
+            }
+        }
+        if let Ok(loaded) = lazy.load_versions(&cp) {
+            for record in &loaded {
+                let use_set = lazy.use_of(record);
+                for (class, texts) in record.deps.iter().enumerate() {
+                    if (class == 0 || class == 2) && !req.with_bdeps {
+                        continue;
+                    }
+                    refs_under_use(texts, &use_set, &mut refs);
+                }
+            }
+        }
+        for dep_cp in refs {
+            if depths.contains_key(&dep_cp) {
+                continue;
+            }
+            if portage_solver::Cpn::parse(&dep_cp).is_err() || !cp_exists(&lazy.repos, &dep_cp) {
+                continue;
+            }
+            depths.insert(dep_cp.clone(), depth + 1);
+            if depth + 1 < n {
+                queue.push_back(dep_cp);
+            }
+        }
+    }
+    Some((n, depths))
+}
+
 /// Installed cpvs the bridge describes to the engine, computed before the provider
 /// exists (deps are converted inside `new_for_targets`, provider/mod.rs:443-560).
 #[derive(Clone)]
@@ -1463,9 +1604,42 @@ struct KeptInstalled {
     use_drift: HashMap<String, Vec<String>>,
     /// Deep expansion requested (`--deep` or `--emptytree`): no leaf rule.
     deep: bool,
+    /// `--deep=N` expansion allowlist: installed cpvs whose min dep depth
+    /// from the top atoms is `< N` (Portage `_too_deep`). `None` for
+    /// unlimited deep/emptytree (every installed cpv expands) and without
+    /// deep (none does); see [`deep_bounded_depths`].
+    deep_allowed: Option<HashSet<String>>,
     /// Build-time deps are traversed (`--with-bdeps`, on unless `--usepkg`
     /// or `--with-bdeps=n`): gates the kept-buildtime fold below.
     with_bdeps: bool,
+}
+
+impl KeptInstalled {
+    /// Whether a kept (installed, non-rebuild) `cpv`'s deps reach the
+    /// engine: unlimited/emptytree deep always expands, `--deep=N` only
+    /// inside the bounded pre-solve BFS set. Fresh versions and rebuild
+    /// members always expand ([`KeptInstalled::expands`]).
+    // Portage: depgraph.py:7359-7375 (`_too_deep`)
+    fn deep_expands(&self, cpv: &str) -> bool {
+        if !self.deep {
+            return false;
+        }
+        match &self.deep_allowed {
+            None => true,
+            Some(allowed) => allowed.contains(cpv),
+        }
+    }
+
+    /// The full kept-leaf rule: fresh versions and rebuild members always
+    /// expand; kept installed versions only when
+    /// [`KeptInstalled::deep_expands`].
+    // Portage: depgraph.py:3815-3824 (`_ignored_deps`), :7359-7375 (`_too_deep`)
+    fn expands(&self, cpv: &str) -> bool {
+        if !self.installed.contains(cpv) || self.rebuild.contains(cpv) {
+            return true;
+        }
+        self.deep_expands(cpv)
+    }
 }
 
 impl KeptInstalled {
@@ -1570,15 +1744,41 @@ impl KeptInstalled {
                 }
             }
         }
+        // #432: bounded `--deep=N` expansion depths: the kept-expansion
+        // allowlist (min depth `< N`) and the update-walk reach (min depth
+        // `<= N`, Portage `want_update`). Empty without a bound.
+        let bounded = deep_bounded_depths(req, lazy, installed);
+        let deep_allowed: Option<HashSet<String>> = bounded.as_ref().map(|(n, depths)| {
+            installed
+                .iter()
+                .filter(|inst| {
+                    depths
+                        .get(&format!("{}/{}", inst.category, inst.package))
+                        .is_some_and(|depth| *depth < *n)
+                })
+                .map(|inst| inst.cpv())
+                .collect()
+        });
+        let bounded_reached: HashSet<String> = bounded
+            .as_ref()
+            .map(|(n, depths)| {
+                depths
+                    .iter()
+                    .filter(|(_, depth)| **depth <= *n)
+                    .map(|(cp, _)| cp.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         // #34 S5 G1: hoisted so the G2 pass below can skip children Portage
         // re-selects away from (their version changes; a USE atom against
         // the installed version no longer applies).
-        let downgrade = Self::downgrade_set(req, lazy, installed, deep);
+        let downgrade = Self::downgrade_set(req, lazy, installed, deep, &bounded_reached);
         Self {
             installed: all,
             rebuild,
             use_drift,
             deep,
+            deep_allowed,
             downgrade,
             with_bdeps: req.with_bdeps,
         }
@@ -1627,6 +1827,9 @@ impl KeptInstalled {
     /// `want_update` true). Without update/deep Portage keeps the installed
     /// instance (`_want_update_pkg` false → the installed early return), so
     /// the set stays empty there and registration/offering are unchanged.
+    /// Under `--deep=N` with update only the walk's reach (min depth `<= N`,
+    /// [`deep_bounded_depths`]) probes; unlimited deep keeps the historical
+    /// whole-installed-world probe.
     /// Portage: depgraph.py:2946-2957 (`_downgrade_probe`), :3805-3809
     /// (`want_update`), :7304-7333 (`_want_update_pkg`).
     fn downgrade_set(
@@ -1634,6 +1837,7 @@ impl KeptInstalled {
         lazy: &LazyRepo,
         installed: &[super::InstalledPackage],
         deep: bool,
+        bounded_reached: &HashSet<String>,
     ) -> HashSet<String> {
         let mut named = HashSet::new();
         for atom in &req.atoms {
@@ -1647,10 +1851,14 @@ impl KeptInstalled {
             named.insert(format!("{}", dep.cpn));
         }
         let update_walk = req.empty || (req.update && deep);
+        let update_walk_all = update_walk && !matches!(req.deep, Deep::Bounded(_));
         let mut downgrade = HashSet::new();
         for inst in installed {
             let cp = format!("{}/{}", inst.category, inst.package);
-            if !named.contains(&cp) && !update_walk {
+            if !named.contains(&cp)
+                && !update_walk_all
+                && !(req.update && update_walk && bounded_reached.contains(&cp))
+            {
                 continue;
             }
             let Ok(installed_ver) = portage_solver::Version::parse(&inst.version) else {
@@ -1754,7 +1962,6 @@ fn parent_use_reinstalls(
     kept: &KeptInstalled,
     plan: &SolvedPlan,
 ) -> Vec<(String, Vec<String>)> {
-    let deep = !matches!(req.deep, Deep::NotRequested) || req.empty;
     // Under emptytree every installed cpv already rebuilds; with nothing
     // installed there is no child to reinstall.
     if req.empty || installed.is_empty() {
@@ -1841,7 +2048,9 @@ fn parent_use_reinstalls(
                 continue;
             }
             let is_rebuild = kept.rebuild.contains(&cpv);
-            if !deep && !is_rebuild {
+            // A kept leaf's deps go to `_ignored_deps` without deep -- and
+            // past the bound under `--deep=N` -- so it contributes nothing.
+            if !is_rebuild && !kept.deep_expands(&cpv) {
                 continue;
             }
             let Ok(loaded) = lazy.load_versions(cp) else {
@@ -1850,7 +2059,7 @@ fn parent_use_reinstalls(
             let repo_record = loaded
                 .iter()
                 .find(|r| r.version == inst.version && r.slot == inst.slot);
-            if deep {
+            if kept.deep {
                 let parsed =
                     lazy.installed_parsed_deps(&inst.category, &inst.package, &inst.version);
                 let vdb_use = installed_pkg_iuse_and_use(
@@ -2330,7 +2539,10 @@ fn apply_or_overrides_to_entries(
 /// them only with `--with-bdeps=n`.
 // Portage: _emerge/depgraph.py, _add_pkg_deps (built-package bdeps branch)
 fn keeps_buildtime(kept: &KeptInstalled, cpv: &str) -> bool {
-    kept.deep && kept.with_bdeps && kept.installed.contains(cpv) && !kept.rebuild.contains(cpv)
+    kept.deep_expands(cpv)
+        && kept.with_bdeps
+        && kept.installed.contains(cpv)
+        && !kept.rebuild.contains(cpv)
 }
 
 /// Fold DEPEND/BDEPEND into RDEPEND for [`keeps_buildtime`] versions: the
@@ -2398,18 +2610,20 @@ fn or_member_view(
     overrides: &OrChoiceOverrides,
 ) -> Option<([Vec<portage_solver::DepEntry>; 5], HashSet<String>)> {
     let cpv = format!("{cp}-{version}");
-    // Same leaf rule as `versions_for`: a kept non-rebuild member without
-    // deep contributes no edges, so none of its `||` groups is evaluated.
-    if !kept.deep && kept.installed.contains(&cpv) && !kept.rebuild.contains(&cpv) {
+    // Same leaf rule as `versions_for`: a kept non-rebuild member past the
+    // `--deep=N` bound contributes no edges, so none of its `||` groups is
+    // evaluated.
+    if !kept.expands(&cpv) {
         return None;
     }
     let loaded = lazy.load_versions(cp).ok()?;
     let repo_record = loaded.iter().find(|record| record.version == version);
-    // Classes: the vdb reader for a deep installed member (like
+    // Classes: the vdb reader for an expanding installed member (like
     // `versions_for`, including versions gone from the repo), otherwise
     // the repo record.
     let (classes, slot) = match (
-        kept.deep && kept.installed.contains(&cpv),
+        kept.installed.contains(&cpv)
+            && (kept.deep_expands(&cpv) || (kept.deep && kept.rebuild.contains(&cpv))),
         cp.split_once('/'),
     ) {
         (true, Some((category, package))) => {
@@ -2436,21 +2650,23 @@ fn or_member_view(
     } else {
         classes
     };
-    // USE: the vdb flags for a deep kept member, else the config USE of
+    // USE: the vdb flags for an expanding kept member, else the config USE of
     // the repo record (like `desired_use`; an installed-only version with
     // no repo record answers empty there too).
-    let use_set = if kept.deep && kept.installed.contains(&cpv) && !kept.rebuild.contains(&cpv) {
-        match cp.split_once('/') {
-            Some((category, package)) => {
-                installed_pkg_iuse_and_use(&lazy.root, category, package, version).1
+    let use_set =
+        if kept.deep_expands(&cpv) && kept.installed.contains(&cpv) && !kept.rebuild.contains(&cpv)
+        {
+            match cp.split_once('/') {
+                Some((category, package)) => {
+                    installed_pkg_iuse_and_use(&lazy.root, category, package, version).1
+                }
+                None => HashSet::new(),
             }
-            None => HashSet::new(),
-        }
-    } else if let Some(record) = repo_record {
-        lazy.use_of(record)
-    } else {
-        HashSet::new()
-    };
+        } else if let Some(record) = repo_record {
+            lazy.use_of(record)
+        } else {
+            HashSet::new()
+        };
     // What the engine converts: the G3 self-cycle strip, then the current
     // `||` overrides (the shared traversal, so group indices line up with
     // the facts `versions_for` hands the engine).
@@ -3070,18 +3286,21 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
         for record in &versions {
             // #34 S2: without deep, an installed package that is not being rebuilt
             // is a leaf: Portage sends its deps to `_ignored_deps` instead of
-            // expanding them. The trace then shows no edges for it, like the engine.
+            // expanding them. #432: under `--deep=N` only installed cpvs
+            // inside the bounded pre-solve BFS set expand. The trace then
+            // shows no edges for it, like the engine.
             // Portage: depgraph.py:3815-3824, :7359-7375
-            let leaf = !self.kept.deep
-                && self.kept.installed.contains(&record.cpv())
-                && !self.kept.rebuild.contains(&record.cpv());
+            let leaf = !self.kept.expands(&record.cpv());
             // #34 S3: under deep, an installed cpv's deps come from the vdb
             // (the default resolver's dynamic-deps reader), not the repo
             // md5-cache: Portage expands the installed node with the flags it
             // was built with. Portage: FakeVartree.py, _apply_dynamic_deps.
             let vdb_classes;
+            let cpv = record.cpv();
             let classes: &[Vec<portage_solver::DepEntry>; 5] = match (
-                self.kept.deep && self.kept.installed.contains(&record.cpv()),
+                self.kept.installed.contains(&cpv)
+                    && (self.kept.deep_expands(&cpv)
+                        || (self.kept.deep && self.kept.rebuild.contains(&cpv))),
                 cp.split_once('/'),
             ) {
                 (true, Some((category, package))) => {
@@ -3175,6 +3394,9 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                     }
                 }
                 // #390: same kept-buildtime fold as the repo path above.
+                // #432: past the `--deep=N` bound the offer is a leaf (empty
+                // deps), like the repo path above.
+                let leaf = !self.kept.expands(&record.cpv());
                 let kept_folded;
                 let source: &[Vec<portage_solver::DepEntry>; 5] =
                     if keeps_buildtime(&self.kept, &record.cpv()) {
@@ -3183,15 +3405,20 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                     } else {
                         &record.deps
                     };
+                let empty: [Vec<portage_solver::DepEntry>; 5] = Default::default();
                 if let Some(row) = version_row(
                     &record,
-                    // #34 S5 G3: same self-cycle rule as the repo path above.
-                    // #34 S5 G5/G6: same `||` reorder/drop pass.
-                    apply_or_overrides_to_classes(
-                        &without_self_alternatives(&cp, &record.slot, &self.installed, source),
-                        &record.cpv(),
-                        &self.or_overrides,
-                    ),
+                    if leaf {
+                        empty
+                    } else {
+                        // #34 S5 G3: same self-cycle rule as the repo path above.
+                        // #34 S5 G5/G6: same `||` reorder/drop pass.
+                        apply_or_overrides_to_classes(
+                            &without_self_alternatives(&cp, &record.slot, &self.installed, source),
+                            &record.cpv(),
+                            &self.or_overrides,
+                        )
+                    },
                 ) {
                     out.push(row);
                 }
@@ -3212,8 +3439,10 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
         // conditional deps on or off. Portage: depgraph.py, _pkg_use_enabled.
         // #34 S4: except a rebuild member, which Portage rebuilds with the
         // current config USE (its `x?` deps switch on for the rebuild, e.g.
-        // `R pg34-ulib` pulling `N pg34-uextra`).
-        if self.kept.deep
+        // `R pg34-ulib` pulling `N pg34-uextra`). #432: past the `--deep=N`
+        // bound the kept leaf's deps never reach the engine, so the config
+        // USE answers there too.
+        if self.kept.deep_expands(&cpv_str)
             && self.kept.installed.contains(&cpv_str)
             && !self.kept.rebuild.contains(&cpv_str)
             && let Some((category, package)) = cp_text.split_once('/')
@@ -5285,6 +5514,36 @@ mod tests {
         assert_eq!(pg34_plan(&result), Vec::<String>::new());
     }
 
+    /// #432 S-11(c): `-pvu --deep=1` on dev-libs/deeppkg plans nothing.
+    /// deeppkg (installed, depth 0) recurses since 0 < 1, discovering
+    /// installed deeppkg2 at depth 1 -- but deeppkg2 itself does NOT
+    /// recurse (1 < 1 is false), so newpkg is never reached, exactly like
+    /// the default solver (Portage `_too_deep`, `depgraph.py:7359-7375`;
+    /// pmtest `test_deep_bounded_depth_stops_short_of_the_full_chain`).
+    #[test]
+    fn pg432_deep_bounded_one_plans_nothing() {
+        let mut req = pg34_s3_request(&["dev-libs/deeppkg"]);
+        req.deep = super::super::Deep::Bounded(1);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("deeppkg resolves");
+        assert_eq!(pg34_plan(&result), Vec::<String>::new());
+    }
+
+    /// #432 S-11(c): `-pvu --deep=2` on dev-libs/deeppkg plans newpkg.
+    /// deeppkg2 at depth 1 recurses since 1 < 2, reaching newpkg (New) --
+    /// the same plan the default solver prints, and the same as unlimited
+    /// `--deep`.
+    #[test]
+    fn pg432_deep_bounded_two_plans_newpkg() {
+        let mut req = pg34_s3_request(&["dev-libs/deeppkg"]);
+        req.deep = super::super::Deep::Bounded(2);
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("deeppkg resolves");
+        assert_eq!(pg34_plan(&result), ["dev-libs/newpkg-1.0:0"]);
+    }
+
     /// #34 S4 request: like the S3 `-pvuD` folds, plus the S4 engine-switch
     /// inputs (`newuse`, `empty`, `nodeps`) set explicitly per test, mirroring
     /// the CLI fold (`resolve_plan.rs`: selective = update||newuse||…; the
@@ -7152,6 +7411,7 @@ mod tests {
             downgrade: std::collections::HashSet::new(),
             use_drift: std::collections::HashMap::new(),
             deep,
+            deep_allowed: None,
             with_bdeps: false,
         }
     }
