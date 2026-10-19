@@ -786,6 +786,7 @@ fn run_fetchonly_action(args: FetchonlyActionArgs<'_>) -> u8 {
         config,
         repos,
         root,
+        pkgdir: &std::path::PathBuf::from(&config.pkgdir),
         portage_tmpdir: &portage_tmpdir,
         distdir: &distdir,
         config_root,

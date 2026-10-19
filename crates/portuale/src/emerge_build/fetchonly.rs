@@ -9,6 +9,8 @@ pub struct RunFetchonlyArgs<'a> {
     pub config: &'a portage_profile::Config,
     pub repos: &'a [RepoConfig],
     pub root: &'a Path,
+    /// `$PKGDIR`, where a remote binary lands unless its binrepo sets `location`.
+    pub pkgdir: &'a Path,
     pub portage_tmpdir: &'a Path,
     pub distdir: &'a Path,
     pub config_root: &'a Path,
@@ -41,6 +43,106 @@ fn print_fetch_failure_elog(
         split_elog: features.split_whitespace().any(|t| t == "split-elog"),
     });
     ebuild_phases::remove_nofetch_scratch(env);
+}
+
+/// One remote binary entry of a fetch-only run.
+struct RemoteBinaryJob<'a> {
+    entry: &'a GraphEntry,
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    pkgdir: &'a Path,
+    pretend: bool,
+    progress: mrg_director::MergeProgress,
+    color: &'a crate::color::Colorizer,
+}
+
+impl RemoteBinaryJob<'_> {
+    /// Lists (`--pretend`) or downloads the binary into its binrepo's `location` (else
+    /// `$PKGDIR`); a binary already there is not fetched again but still verified.
+    /// Returns `false` when the package failed.
+    // Portage: _emerge/Binpkg.py (fetchonly arm), BinpkgFetcher.py, BinpkgVerifier.py
+    fn run(&self, first_job: &mut bool) -> bool {
+        let entry = self.entry;
+        let Some(version) = entry_version(&entry.outcome) else {
+            return true;
+        };
+        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
+        let local = portage_repo::BinaryIndex::from_pkgdir(self.pkgdir);
+        let remote = mrg_director::RemoteBinhostIndex {
+            config: self.config,
+            root: self.root,
+            local: &local,
+        };
+        use mrg_director::BinpkgIndex as _;
+        let Some((binrepo_name, record)) = remote.metadata_with_source_instance(
+            &entry.category,
+            &entry.package,
+            version,
+            entry.build_id.as_deref(),
+        ) else {
+            eprintln!("emerge: {cpv}: not in any binhost `Packages` index");
+            return false;
+        };
+        let Some(binrepo) = self.config.binrepos.iter().find(|b| b.name == binrepo_name) else {
+            return true;
+        };
+        let rel = record
+            .get("PATH")
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .unwrap_or_else(|| format!("{}/{}-{version}.tbz2", entry.category, entry.package));
+        let dir = binrepo
+            .location
+            .as_deref()
+            .map_or_else(|| self.pkgdir.to_path_buf(), std::path::PathBuf::from);
+        let dest = dir.join(&rel);
+        let uri = format!("{}/{rel}", binrepo.sync_uri.trim_end_matches('/'));
+        if self.pretend {
+            if !dest.is_file() {
+                println!();
+                println!("{uri}");
+            }
+            return true;
+        }
+        if std::mem::take(first_job) {
+            println!();
+        }
+        println!(
+            "{}",
+            fetching_line(entry, version, self.progress, self.root, self.color)
+        );
+        let fetched = if dest.is_file() {
+            Ok(dest.clone())
+        } else {
+            crate::emerge_getbinpkg::download_and_verify(
+                crate::emerge_getbinpkg::DownloadAndVerifyArgs {
+                    sync_uri: &binrepo.sync_uri,
+                    record: &record,
+                    category: &entry.category,
+                    package: &entry.package,
+                    version,
+                    pkgdir: &dir,
+                },
+            )
+        };
+        match fetched {
+            Ok(path) => {
+                let name = path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                crate::fetch::print_verified_names(&name, &["size"]);
+                true
+            }
+            Err(e) => {
+                eprintln!("!!! {e}");
+                print!(
+                    "{}",
+                    crate::emerge_getbinpkg::failed_pkg_msg(&cpv, self.root, None)
+                );
+                false
+            }
+        }
+    }
 }
 
 /// ` (cpv:slot/sub::repo, ebuild scheduled for merge to 'root')`, one failed package.
@@ -107,6 +209,7 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
         config,
         repos,
         root,
+        pkgdir,
         portage_tmpdir,
         distdir,
         config_root,
@@ -132,6 +235,21 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
     // blank lines after the resolution notice where a merge has one).
     let mut first_job = true;
     for (idx, entry) in entries.iter().enumerate() {
+        if entry.source == CandidateSource::Binary && entry.remote_binary {
+            let job = RemoteBinaryJob {
+                entry,
+                config,
+                root,
+                pkgdir,
+                pretend,
+                progress: progress[idx],
+                color: &color,
+            };
+            if !job.run(&mut first_job) {
+                failed = true;
+            }
+            continue;
+        }
         if !scheduler_needs_build(entry) {
             continue;
         }

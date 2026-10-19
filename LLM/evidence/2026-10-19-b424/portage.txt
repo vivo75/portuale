@@ -1,0 +1,95 @@
+=== pf-getbinpkg
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.74 s (backtrack: 0/20).
+
+
+http://127.0.0.1:18424/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+rc=0
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- pkgdir:
+find: ‘binrepo’: No such file or directory
+=== pfv-getbinpkgonly
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.75 s (backtrack: 0/20).
+
+
+http://127.0.0.1:18424/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+rc=0
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- pkgdir:
+find: ‘binrepo’: No such file or directory
+=== f-getbinpkg
+Calculating dependencies ... done!
+Dependency resolution took 1.79 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b424/root/
+ * gpkgreadpkg-1.0.gpkg.tar size ;-) ...                                 [ ok ]
+rc=0
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- pkgdir:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+=== f-getbinpkg-again
+Calculating dependencies ... done!
+Dependency resolution took 1.74 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b424/root/
+ * gpkgreadpkg-1.0.gpkg.tar size ;-) ...                                 [ ok ]
+rc=0
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- pkgdir:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+=== f-getbinpkgonly
+Calculating dependencies ... done!
+Dependency resolution took 1.75 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b424/root/
+ * gpkgreadpkg-1.0.gpkg.tar size ;-) ...                                 [ ok ]
+rc=0
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- pkgdir:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+=== pf-getbinpkg-after
+
+These are the packages that would be fetched, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.74 s (backtrack: 0/20).
+rc=0
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- pkgdir:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+--- http.log
+ code 404, message File not found
+ "GET /Packages.gz HTTP/1.1" 404 -
+ "GET /Packages HTTP/1.1" 200 -
+ code 404, message File not found
+ "GET /Packages.gz HTTP/1.1" 404 -
+ "GET /Packages HTTP/1.1" 200 -
+ code 404, message File not found
+ "GET /Packages.gz HTTP/1.1" 404 -
+ "GET /Packages HTTP/1.1" 200 -
+ "GET /dev-libs/gpkgreadpkg-1.0.gpkg.tar HTTP/1.1" 200 -
+ code 404, message File not found
+ "GET /Packages.gz HTTP/1.1" 404 -
+ "GET /Packages HTTP/1.1" 200 -
+ code 404, message File not found
+ "GET /Packages.gz HTTP/1.1" 404 -
+ "GET /Packages HTTP/1.1" 200 -
+ code 404, message File not found
+ "GET /Packages.gz HTTP/1.1" 404 -
+ "GET /Packages HTTP/1.1" 200 -

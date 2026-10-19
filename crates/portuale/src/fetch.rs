@@ -705,6 +705,11 @@ fn print_verified_line(filename: &str, digests: &portage_fetch::DistfileDigests)
     let mut names: Vec<&str> = digests.hashes.keys().map(String::as_str).collect();
     names.push("size");
     names.sort_unstable();
+    print_verified_names(filename, &names);
+}
+
+/// [`print_verified_line`] for an already-sorted list of checked digest names.
+pub(crate) fn print_verified_names(filename: &str, names: &[&str]) {
     let color = crate::color::Colorizer::new(crate::color::resolve_havecolor(None));
     let msg = format!("{filename} {} ;-) ...", names.join(" "));
     let columns = std::env::var("COLUMNS")
