@@ -2,7 +2,7 @@
 
 > **Oracle before code.** Every expected value comes from Portage 3.0.82.2 (host `emerge`, container bed `../pmtest/differential-test-bed/`, or `lib/portage/tests/resolver/`), never from portuale's own output. Call the reference "Portage", never "real". Reports to the owner are in Italian.
 
-Status: proposed (2026-10-19), revised after two reviews (`2026-10-19-open-backlog-plan.review.md` by `plan-reviewer`, `…review-gemini.md` by `gemini-argon-ro`). Nothing below is executed yet.
+Status: proposed (2026-10-19), revised after two reviews (`2026-10-19-open-backlog-plan.review.md` by `plan-reviewer`, `…review-gemini.md` by `gemini-argon-ro`), updated 2026-10-19 for the state of the tree. Step 0 is done; no slice has started (W0 next). Backlog text of all 21 items re-checked: every one is still OPEN, none shipped since the plan was written; next free number is still #421.
 
 Scope: every open backlog item ≥ #300 as listed to the owner on 2026-10-19: #410 #414 #415 #412 #413 #416 #417 #418 #406 #405(tail) | #411 #376 #407 | #390 #394 #363 #364 #365 #368 #420 | #419 #352.
 Owner instructions: implement all of them; at most **three operations active at once**; use the `gemini-*` opencode agents; sub-agents only if read-only; commits at the executor's discretion when the tree is clean and the diff against the previous commit has value.
@@ -11,9 +11,9 @@ Backlog layout note: #410–#418 live in `backlog-tasks.md`; #363–#368, #376, 
 
 ## 0. Branch rule and step 0
 
-- Open `batch/2026-10-19` from `batch/2026-10-18` in **both** repos. The plan file and its two reviews are untracked: commit them first (portuale only, standalone commit saying "plan only, no pmtest counterpart"), so the clean-tree rule holds afterwards.
+- **Done (2026-10-19):** `batch/2026-10-19` exists in both repos (from `batch/2026-10-18`, portuale `b76ee705`, pmtest `19a2d8e`); both trees are clean. The plan and its two reviews are committed in portuale (`0f4c7735`, plan only, no pmtest counterpart), and the baseline logs were saved by `21240314` into `LLM/evidence/2026-10-19-baseline/`. Nothing else to do for step 0.
 - Next free backlog number is **#421**; re-check with `grep -nE '^[0-9]+\. \*\*' LLM/backlog-tasks*.md` before filing a residue.
-- Evidence root: `LLM/evidence/2026-10-19-b<item>-*/` (captures verbatim with argv and binary mtime). Baselines are stored under `LLM/evidence/2026-10-19-baseline/` (W0), not only on tmpfs.
+- Evidence root: `LLM/evidence/2026-10-19-b<item>-*/` (captures verbatim with argv and binary mtime). Baselines are stored under `LLM/evidence/2026-10-19-baseline/`, not only on tmpfs: the three logs of 2026-10-18 are already there (suite log has dots only, no test names).
 - Bed findings go to `../pmtest/differential-test-bed/findings/*.md`.
 - Commits: pmtest first, the portuale commit quotes the pmtest short sha; title `<what>: <why>`; English, plain words; trailer `Co-Authored-By: <actual model name of whoever commits> <noreply@anthropic.com>`; **no push**; no squash. The commit grant is the owner's message of 2026-10-19 ("commit when revisions arrive" and "i commit saranno a discrezione di chi esegue il piano"); no push permission exists.
 
@@ -76,7 +76,7 @@ Claude sub-agents only `portage-oracle` and `plan-reviewer`.
 
 ## 3. Gates
 
-Per slice (AGENTS.md step 8): `cargo fmt --check`; `cargo clippy --release --all-targets` (0 warnings); `cargo build --release`, `cargo test --release`; then in `../pmtest` `python3 -m pytest pytests-contract-suite -q`, failures compared by test **name** against `LLM/evidence/2026-10-19-baseline/` (W0; reference of 2026-10-19: 4102 passed, 37 skipped, 2 xfailed). Corpus drift: review, bless only in the pmtest commit and only when the new output equals a Portage capture. When comments are trimmed run `LLM/tools/fact_coverage.py`; when a code note is added run `python3 LLM/tools/code_notes_index.py`.
+Per slice (AGENTS.md step 8): `cargo fmt --check`; `cargo clippy --release --all-targets` (0 warnings); `cargo build --release`, `cargo test --release`; then in `../pmtest` `python3 -m pytest pytests-contract-suite -q`, failures compared by test **name** against `LLM/evidence/2026-10-19-baseline/` (W0 re-run by name; reference of 2026-10-18: 4102 passed, 37 skipped, 2 xfailed). Corpus drift: review, bless only in the pmtest commit and only when the new output equals a Portage capture. When comments are trimmed run `LLM/tools/fact_coverage.py`; when a code note is added run `python3 LLM/tools/code_notes_index.py`.
 
 - **G-R resolver:** `l0-resolver.sh` (reference 120 probes / 101 clean / 31 UNEXPLAINED) and `l0-fixture-oracle.sh` (48 probes, 0 UNEXPLAINED with `FX_HOST_RUNNING_ROOT=1`), no new UNEXPLAINED row. Applies to: #390 #363–365 #368 #394 #420 #416 and any slice touching `portage-repo/src/resolve*`, `masked_deps.rs`.
 - **G-PB pubgrub:** the five pubgrub bed modes for #363–365/#390; #368(a) first builds the "with binaries" mode.
@@ -88,7 +88,7 @@ Per slice (AGENTS.md step 8): `cargo fmt --check`; `cargo clippy --release --all
 
 | Wave | Slot W (writer) | Slot O (oracle/fixtures/review) | Slot B (bed/suite) |
 |---|---|---|---|
-| W0 | — | — | baseline: suite + L0 + fixture-oracle stored in `evidence/2026-10-19-baseline/`; **S-376/#407** verification here, tree quiet |
+| W0 | — | — | by-name baseline: re-run the suite with `-rA` or `--junitxml` (the saved log has no names) and store it next to the three saved logs; L0 and fixture-oracle logs already exist, re-run only if the binary changed; **S-376/#407** verification here, tree quiet |
 | W1 | **S-1** #410 | **P1** captures: #414 #415a–d #412 #413 #405tail #418(`--package-moves=n`) #406; **P1b** pty capture of Portage for #411 | — (gate window for S-1) |
 | W2 | **S-2** #414, #412 | **P2** review of S-1 diff (argon-ro); fixtures for #420 | bed G-P on S-2 frozen copy |
 | W3 | **S-3** #413, **S-4** #415 (serial) | P3 captures for #368 sub-plan, #394 re-capture | bed G-P |
