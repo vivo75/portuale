@@ -1,0 +1,127 @@
+>>> building portuale (profile release, registry version 365226a1-dirty)
+    Finished `release` profile [optimized] target(s) in 0.16s
+>>> PM under test: portuale 365226a1-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-20261018T225818Z/pm.json)
+>>> running fixture-oracle cases in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-20261018T225818Z)
+staging the fixture tree
+running fixture-oracle cases
+  dev-libs/diamond  (Portage rc=0  ptl rc=0)
+  dev-libs/common  (Portage rc=0  ptl rc=0)
+  dev-libs/anyof  (Portage rc=0  ptl rc=0)
+  dev-libs/altconsumer  (Portage rc=0  ptl rc=0)
+  -D dev-libs/slotdedupconsumer  (Portage rc=0  ptl rc=0)
+  dev-libs/iusedefaultpkg  (Portage rc=0  ptl rc=0)
+  dev-libs/dualslotpkg  (Portage rc=0  ptl rc=0)
+  --update dev-libs/paired  (Portage rc=0  ptl rc=0)
+  dev-libs/autounmaskkeywordpkg  (Portage rc=1  ptl rc=1)
+  dev-libs/kwneedpkg  (Portage rc=1  ptl rc=1)
+  dev-libs/needer  (Portage rc=0  ptl rc=0)
+  dev-libs/needer dev-libs/othermod  (Portage rc=1  ptl rc=1)
+  dev-libs/othermod dev-libs/needer  (Portage rc=1  ptl rc=1)
+  dev-libs/plainuser dev-libs/needer  (Portage rc=0  ptl rc=0)
+  dev-libs/needer dev-libs/plainuser  (Portage rc=0  ptl rc=0)
+  =dev-libs/paired-2.0  (Portage rc=0  ptl rc=0)
+  dev-libs/blockusedeptarget  (Portage rc=0  ptl rc=0)
+  dev-libs/requiredusebadpkg  (Portage rc=1  ptl rc=1)
+  app-misc/mopodman  (Portage rc=0  ptl rc=0)
+  app-misc/mopodmanok  (Portage rc=0  ptl rc=0)
+  =dev-libs/nomtarget-1.5  (Portage rc=0  ptl rc=0)
+  --tree =dev-libs/nomtarget-1.5  (Portage rc=0  ptl rc=0)
+  --tree dev-libs/blockerpkg  (Portage rc=0  ptl rc=0)
+  --tree dev-libs/diamond  (Portage rc=0  ptl rc=0)
+  --tree --unordered-display dev-libs/treeorderpkg  (Portage rc=0  ptl rc=0)
+  -v dev-libs/treeslotuser  (Portage rc=0  ptl rc=0)
+  --tree dev-libs/treeslotuser  (Portage rc=0  ptl rc=0)
+  --tree dev-libs/slotorderroot  (Portage rc=0  ptl rc=0)
+  =dev-libs/rdisjtarget-2.0  (Portage rc=0  ptl rc=0)
+  --tree --update dev-libs/p2btarget dev-libs/p2bowner dev-libs/newpkg  (Portage rc=0  ptl rc=0)
+  -D dev-libs/deepusedepconsumer  (Portage rc=1  ptl rc=1)
+  -D dev-libs/deepusedepbconsumer  (Portage rc=0  ptl rc=0)
+  -D dev-libs/deepusedepokconsumer  (Portage rc=0  ptl rc=0)
+  -D dev-libs/deepusedepfconsumer  (Portage rc=1  ptl rc=1)
+  -D --root-deps dev-libs/deeprootdepconsumer  (Portage rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0a dev-libs/blk0c dev-libs/blk0b  (Portage rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0a dev-libs/blk0b dev-libs/blk0c  (Portage rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0b dev-libs/blk0a dev-libs/blk0c  (Portage rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0b dev-libs/blk0c dev-libs/blk0a  (Portage rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0c dev-libs/blk0a dev-libs/blk0b  (Portage rc=0  ptl rc=0)
+  --backtrack=0 dev-libs/blk0c dev-libs/blk0b dev-libs/blk0a  (Portage rc=0  ptl rc=0)
+  --buildpkgonly dev-libs/blk1c  (Portage rc=0  ptl rc=0)
+  --buildpkgonly dev-libs/blk1a  (Portage rc=1  ptl rc=1)
+  dev-libs/blockerpkg dev-libs/graphblockerparent  (Portage rc=1  ptl rc=1)
+  --update --deep --newuse --oneshot dev-libs/whpuller  (Portage rc=0  ptl rc=0)
+  -D --autounmask-use=n dev-libs/r135consumer  (Portage rc=1  ptl rc=1)
+  dev-libs/slcirc  (Portage rc=0  ptl rc=0)
+  dev-libs/condanyof  (Portage rc=1  ptl rc=1)
+done: 48 case(s) -> /TEST/logs/l0-fx-20261018T225818Z
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  date_utc	2026-10-18T22:58:21Z
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.82.2 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.82.2
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 48
+  clean            : 38
+  parity_rate      : 0.792
+  explained        : 19
+  UNEXPLAINED      : 4
+    skipped-updates : 4
+
+## unexplained findings
+
+### --backtrack_0_dev-libs_blk0a_dev-libs_blk0b_dev-libs_blk0c
+  [skipped-updates] dev-libs/blk0x:0: skipped-update explanation differs: real-only (1): (dev-libs/blk0x-2:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)" conflicts with | portuale-only (1): (dev-libs/blk0x-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" conflicts with
+
+### --backtrack_0_dev-libs_blk0b_dev-libs_blk0a_dev-libs_blk0c
+  [skipped-updates] dev-libs/blk0x:0: skipped-update explanation differs: real-only (1): (dev-libs/blk0x-2:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)" conflicts with | portuale-only (1): (dev-libs/blk0x-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" conflicts with
+
+### --backtrack_0_dev-libs_blk0b_dev-libs_blk0c_dev-libs_blk0a
+  [skipped-updates] dev-libs/blk0x:0: skipped-update explanation differs: real-only (1): (dev-libs/blk0x-3:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)" conflicts with | portuale-only (1): (dev-libs/blk0x-3:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" conflicts with
+
+### --backtrack_0_dev-libs_blk0c_dev-libs_blk0b_dev-libs_blk0a
+  [skipped-updates] dev-libs/blk0x:0: skipped-update explanation differs: real-only (1): (dev-libs/blk0x-3:0/0::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)" conflicts with | portuale-only (1): (dev-libs/blk0x-3:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" conflicts with
+
+## explained (allowlisted) findings
+
+### dev-libs_autounmaskkeywordpkg
+  [advice] (fixture-masked-path-suffix) real-only: masked: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/autounmaskkeywordpkg
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" have been masked.
+  [error] (fixture-masked-path-suffix) real-only message: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" have been masked.
+
+### dev-libs_kwneedpkg
+  [advice] (fixture-masked-path-suffix) real-only: masked: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/kwmaskeddep
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" have been masked.
+  [error] (fixture-masked-path-suffix) real-only message: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" have been masked.
+
+### dev-libs_requiredusebadpkg
+  [error] (fixture-problem-resolving-header) real-only message: !!! Problem resolving dependencies for dev-libs/requiredusebadpkg
+  [error] (fixture-masked-path-suffix) real-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+  [error] (fixture-unmet-requirements-wording) portuale-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" has unmet requirements.
+
+### -D_dev-libs_deepusedepfconsumer
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "~dev-libs/deepusedepfchild-1.0[flip=]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "~dev-libs/deepusedepfchild-1.0[flip=]".
+
+### -D_--autounmask-use_n_dev-libs_r135consumer
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "~dev-libs/r135leaf-1.0[flip=]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "~dev-libs/r135leaf-1.0[flip=]".
+
+### dev-libs_condanyof
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "__const__/empty-any-of" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "__const__/empty-any-of".
+
+## allowlist entries that matched nothing (candidates for removal)
+  slotop-world-complete-graph-order
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-20261018T225818Z/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-20261018T225818Z/l0-report.json
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-fx-20261018T225818Z/l0-report.txt   (rc=1)
+exit=1

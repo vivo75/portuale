@@ -1,0 +1,264 @@
+>>> building portuale (profile release, registry version 365226a1-dirty)
+    Finished `release` profile [optimized] target(s) in 0.22s
+>>> PM under test: portuale 365226a1-dirty (profile release)  (stamped in /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-20261018T225931Z/pm.json)
+>>> running L0 probes in localhost/test-portuale:latest  (out: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-20261018T225931Z)
+fingerprint:
+  date_utc	2026-10-18T22:59:32Z
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  repo_gentoo	11c58b7af1df0fbc3e9f2560a82c4355231967a6
+  repo_buildovl	3b1df68114f4c486520864338b1b6a42efcaec7e
+  repo_porttest	b4b5d17a6cff60bbe260bcfea0e37f5ed82a91be
+  profile	default/linux/amd64/23.0/systemd
+  python	Python 3.14.6
+  fs	overlayfs
+portage already 3.0.82.2
+seeded @world:
+  app-misc/tmux
+  app-portage/eix
+  app-portage/gentoolkit
+  dev-libs/blake3
+vdb snapshot: 320 installed package(s)
+running probes from /TEST/atomlists/l0-resolve.txt
+  [atom] sys-apps/portage  (Portage rc=0  ptl rc=0)
+  [atom] sys-devel/gcc  (Portage rc=0  ptl rc=0)
+  [atom] sys-libs/glibc  (Portage rc=0  ptl rc=0)
+  [atom] sys-devel/binutils  (Portage rc=0  ptl rc=0)
+  [atom] dev-build/make  (Portage rc=0  ptl rc=0)
+  [atom] dev-build/cmake  (Portage rc=0  ptl rc=0)
+  [atom] dev-build/meson  (Portage rc=0  ptl rc=0)
+  [atom] dev-build/autoconf  (Portage rc=0  ptl rc=0)
+  [atom] dev-build/automake  (Portage rc=0  ptl rc=0)
+  [atom] dev-build/libtool  (Portage rc=0  ptl rc=0)
+  [atom] sys-apps/coreutils  (Portage rc=0  ptl rc=0)
+  [atom] sys-apps/util-linux  (Portage rc=0  ptl rc=0)
+  [atom] sys-apps/systemd  (Portage rc=0  ptl rc=0)
+  [atom] sys-apps/systemd-utils  (Portage rc=1  ptl rc=1)
+  [atom] app-shells/bash  (Portage rc=0  ptl rc=0)
+  [atom] sys-libs/ncurses  (Portage rc=0  ptl rc=0)
+  [atom] sys-libs/readline  (Portage rc=0  ptl rc=0)
+  [atom] sys-libs/zlib  (Portage rc=0  ptl rc=0)
+  [atom] dev-libs/openssl  (Portage rc=0  ptl rc=0)
+  [atom] dev-lang/python:3.14  (Portage rc=0  ptl rc=0)
+  [atom] dev-python/setuptools  (Portage rc=0  ptl rc=0)
+  [atom] dev-python/pip  (Portage rc=0  ptl rc=0)
+  [atom] dev-python/cython  (Portage rc=0  ptl rc=0)
+  [atom] dev-python/jinja2  (Portage rc=0  ptl rc=0)
+  [atom] dev-python/lxml  (Portage rc=0  ptl rc=0)
+  [atom] dev-python/pyyaml  (Portage rc=0  ptl rc=0)
+  [atom] dev-python/certifi  (Portage rc=0  ptl rc=0)
+  [atom] app-portage/gentoolkit  (Portage rc=0  ptl rc=0)
+  [atom] app-portage/eix  (Portage rc=0  ptl rc=0)
+  [atom] dev-build/ninja  (Portage rc=0  ptl rc=0)
+  [atom] dev-python/pygments  (Portage rc=0  ptl rc=0)
+  [atom] dev-lang/perl  (Portage rc=0  ptl rc=0)
+  [atom] dev-perl/XML-Parser  (Portage rc=0  ptl rc=0)
+  [atom] dev-perl/Locale-gettext  (Portage rc=0  ptl rc=0)
+  [atom] app-admin/perl-cleaner  (Portage rc=0  ptl rc=0)
+  [atom] virtual/perl-ExtUtils-MakeMaker  (Portage rc=0  ptl rc=0)
+  [atom] dev-lang/ruby  (Portage rc=0  ptl rc=0)
+  [atom] dev-ruby/rake  (Portage rc=0  ptl rc=0)
+  [atom] app-admin/sudo  (Portage rc=0  ptl rc=0)
+  [atom] dev-lang/go  (Portage rc=0  ptl rc=0)
+  [atom] app-containers/podman  (Portage rc=1  ptl rc=1)
+  [atom] app-containers/runc  (Portage rc=0  ptl rc=0)
+  [atom] sys-cluster/nerdctl  (Portage rc=1  ptl rc=1)
+  [atom] dev-lang/rust  (Portage rc=0  ptl rc=0)
+  [atom] dev-lang/rust-bin  (Portage rc=0  ptl rc=0)
+  [atom] app-shells/starship  (Portage rc=0  ptl rc=0)
+  [atom] sys-apps/ripgrep  (Portage rc=0  ptl rc=0)
+  [atom] sys-apps/bat  (Portage rc=0  ptl rc=0)
+  [atom] sys-apps/fd  (Portage rc=0  ptl rc=0)
+  [atom] dev-qt/qtbase:6  (Portage rc=0  ptl rc=0)
+  [atom] dev-qt/qtcore:5  (Portage rc=1  ptl rc=1)
+  [atom] kde-frameworks/kcoreaddons  (Portage rc=0  ptl rc=0)
+  [atom] kde-plasma/plasma-meta  (Portage rc=1  ptl rc=1)
+  [atom] kde-apps/kdecore-meta  (Portage rc=0  ptl rc=0)
+  [atom] media-libs/phonon  (Portage rc=1  ptl rc=1)
+  [atom] gui-libs/gtk:4  (Portage rc=1  ptl rc=1)
+  [atom] x11-libs/gtk+:3  (Portage rc=1  ptl rc=1)
+  [atom] gnome-base/gnome-shell  (Portage rc=1  ptl rc=1)
+  [atom] gnome-base/nautilus  (Portage rc=1  ptl rc=1)
+  [atom] app-editors/gedit  (Portage rc=1  ptl rc=1)
+  [atom] media-libs/gstreamer  (Portage rc=0  ptl rc=0)
+  [atom] media-libs/mesa  (Portage rc=0  ptl rc=0)
+  [atom] sys-libs/glibc[multilib]  (Portage rc=0  ptl rc=0)
+  [atom] dev-libs/glib  (Portage rc=0  ptl rc=0)
+  [atom] media-libs/libpng  (Portage rc=0  ptl rc=0)
+  [atom] media-libs/freetype  (Portage rc=0  ptl rc=0)
+  [atom] app-emulation/wine-vanilla  (Portage rc=1  ptl rc=1)
+  [atom] app-emulation/wine-staging  (Portage rc=1  ptl rc=1)
+  [atom] sys-apps/dbus  (Portage rc=0  ptl rc=0)
+  [atom] net-misc/networkmanager  (Portage rc=0  ptl rc=0)
+  [atom] sys-fs/lvm2  (Portage rc=0  ptl rc=0)
+  [atom] sys-auth/polkit  (Portage rc=0  ptl rc=0)
+  [atom] app-crypt/gnupg  (Portage rc=0  ptl rc=0)
+  [atom] app-text/texlive  (Portage rc=0  ptl rc=0)
+  [atom] app-text/texlive-core  (Portage rc=0  ptl rc=0)
+  [atom] dev-texlive/texlive-latex  (Portage rc=0  ptl rc=0)
+  [atom] virtual/libc  (Portage rc=0  ptl rc=0)
+  [atom] virtual/editor  (Portage rc=0  ptl rc=0)
+  [atom] virtual/pager  (Portage rc=0  ptl rc=0)
+  [atom] virtual/mta  (Portage rc=0  ptl rc=0)
+  [atom] virtual/cron  (Portage rc=0  ptl rc=0)
+  [atom] app-alternatives/awk  (Portage rc=0  ptl rc=0)
+  [atom] virtual/jpeg  (Portage rc=0  ptl rc=0)
+  [atom] virtual/libudev  (Portage rc=0  ptl rc=0)
+  [atom] virtual/rust  (Portage rc=1  ptl rc=1)
+  [atom] virtual/pkgconfig  (Portage rc=0  ptl rc=0)
+  [atom] dev-libs/icu  (Portage rc=0  ptl rc=0)
+  [atom] dev-libs/boost  (Portage rc=0  ptl rc=0)
+  [atom] net-libs/nodejs  (Portage rc=0  ptl rc=0)
+  [atom] media-video/ffmpeg  (Portage rc=0  ptl rc=0)
+  [atom] dev-db/sqlite  (Portage rc=0  ptl rc=0)
+  [atom] www-client/firefox  (Portage rc=1  ptl rc=1)
+  [atom] mail-client/thunderbird  (Portage rc=1  ptl rc=1)
+  [atom] app-office/libreoffice  (Portage rc=1  ptl rc=1)
+  [atom] media-gfx/gimp  (Portage rc=1  ptl rc=1)
+  [atom] net-misc/openssh  (Portage rc=0  ptl rc=0)
+  [atom] www-servers/nginx  (Portage rc=1  ptl rc=1)
+  [atom] www-servers/apache  (Portage rc=0  ptl rc=0)
+  [atom] dev-db/postgresql  (Portage rc=0  ptl rc=0)
+  [atom] dev-db/mariadb  (Portage rc=0  ptl rc=0)
+  [atom] app-misc/tmux  (Portage rc=0  ptl rc=0)
+  [atom] app-editors/vim  (Portage rc=0  ptl rc=0)
+  [atom] app-editors/neovim  (Portage rc=0  ptl rc=0)
+  [atom] app-editors/emacs  (Portage rc=0  ptl rc=0)
+  [atom] sys-process/htop  (Portage rc=0  ptl rc=0)
+  [atom] sys-apps/pciutils  (Portage rc=0  ptl rc=0)
+  [atom] net-analyzer/wireshark  (Portage rc=1  ptl rc=1)
+  [atom] media-sound/pulseaudio  (Portage rc=1  ptl rc=1)
+  [atom] media-video/vlc  (Portage rc=0  ptl rc=0)
+  [atom] x11-base/xorg-server  (Portage rc=0  ptl rc=0)
+  [atom] x11-wm/i3  (Portage rc=1  ptl rc=1)
+  [atom] >=app-shells/bash-5.2  (Portage rc=0  ptl rc=0)
+  [atom] =sys-apps/coreutils-9.7*  (Portage rc=1  ptl rc=1)
+  [atom] <dev-lang/python-3.15  (Portage rc=0  ptl rc=0)
+  [atom] ~dev-libs/libevent-2.1.12  (Portage rc=0  ptl rc=0)
+  [set] @system  (Portage rc=0  ptl rc=0)
+  [set] @world  (Portage rc=0  ptl rc=0)
+dep-classes: 8904 (child, owner) edge(s)
+  [multi] emptytree-system  (Portage rc=0  ptl rc=0)
+  [multi] deep-update-world  (Portage rc=0  ptl rc=0)
+  [multi] depclean  (Portage rc=0  ptl rc=0)
+done: 117 atoms + 3 multi-graph runs -> /TEST/logs/l0-20261018T225931Z
+>>> comparing
+# L0 resolver-parity report
+
+## environment
+  date_utc	2026-10-18T22:59:32Z
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  repo_gentoo	11c58b7af1df0fbc3e9f2560a82c4355231967a6
+  repo_buildovl	3b1df68114f4c486520864338b1b6a42efcaec7e
+  repo_porttest	b4b5d17a6cff60bbe260bcfea0e37f5ed82a91be
+  profile	default/linux/amd64/23.0/systemd
+  python	Python 3.14.6
+  fs	overlayfs
+  Portage 3.0.82.2 (python 3.14.6-final-0, default/linux/amd64/23.0/systemd, gcc-15, glibc-2.43-r2, 6.18.39-serv x86_64)
+
+## summary
+  probes           : 120
+  clean            : 101
+  parity_rate      : 0.842
+  explained        : 6
+  UNEXPLAINED      : 31
+    advice       : 9
+    error        : 6
+    order        : 14
+    truncated    : 2
+
+## unexplained findings
+
+### dev-lang_ruby
+  [order] merge order diverges at #20: real dev-ruby/did_you_mean vs portuale dev-ruby/matrix
+
+### dev-ruby_rake
+  [order] merge order diverges at #20: real dev-ruby/did_you_mean vs portuale dev-ruby/matrix
+
+### app-containers_podman
+  [truncated] autounmask backtracking terminated early (real Total 8 / 8 lines, portuale Total 43 / 43 lines) -- merge-list set/order/totals comparison suppressed
+
+### kde-plasma_plasma-meta
+  [advice] real-only: masked-atom: >=x11-base/xwayland-23.1.0[libei]
+  [advice] real-only: masked: !!! All ebuilds that could satisfy ">=x11-base/xwayland-23.1.0[libei]" have been masked.
+  [advice] real-only: masked: !!! One of the following masked packages is required to complete your request:
+  [truncated] autounmask backtracking terminated early (real Total 4 / 4 lines, portuale Total 465 / 465 lines) -- merge-list set/order/totals comparison suppressed
+  [error] real-only message: !!! All ebuilds that could satisfy ">=x11-base/xwayland-23.1.0[libei]" have been masked.
+  [error] real-only message: !!! One of the following masked packages is required to complete your request:
+
+### kde-apps_kdecore-meta
+  [order] merge order diverges at #95: real x11-libs/libXau vs portuale dev-python/pyproject-metadata
+
+### gui-libs_gtk_4
+  [order] merge order diverges at #30: real x11-base/xcb-proto vs portuale dev-python/pyproject-metadata
+
+### x11-libs_gtk__3
+  [order] merge order diverges at #30: real dev-libs/libgit2 vs portuale dev-python/pyproject-metadata
+
+### gnome-base_nautilus
+  [advice] real-only: masked-atom: >=app-crypt/gcr-3.27.90:0=[gtk]
+  [advice] real-only: masked: !!! All ebuilds that could satisfy ">=app-crypt/gcr-3.27.90:0=[gtk]" have been masked.
+  [advice] real-only: masked: !!! One of the following masked packages is required to complete your request:
+  [error] real-only message: !!! All ebuilds that could satisfy ">=app-crypt/gcr-3.27.90:0=[gtk]" have been masked.
+  [error] real-only message: !!! One of the following masked packages is required to complete your request:
+
+### app-editors_gedit
+  [advice] real-only: masked-atom: >=app-crypt/gcr-3.27.90:0=[gtk]
+  [advice] real-only: masked: !!! All ebuilds that could satisfy ">=app-crypt/gcr-3.27.90:0=[gtk]" have been masked.
+  [advice] real-only: masked: !!! One of the following masked packages is required to complete your request:
+  [error] real-only message: !!! All ebuilds that could satisfy ">=app-crypt/gcr-3.27.90:0=[gtk]" have been masked.
+  [error] real-only message: !!! One of the following masked packages is required to complete your request:
+
+### net-misc_networkmanager
+  [order] merge order diverges at #26: real x11-libs/pixman vs portuale dev-python/pyproject-metadata
+
+### www-client_firefox
+  [order] merge order diverges at #37: real dev-lang/nasm vs portuale media-libs/freetype
+
+### mail-client_thunderbird
+  [order] merge order diverges at #38: real dev-lang/nasm vs portuale media-libs/freetype
+
+### app-office_libreoffice
+  [order] merge order diverges at #28: real app-arch/cpio vs portuale media-gfx/graphite2
+
+### media-gfx_gimp
+  [order] merge order diverges at #54: real dev-libs/libyaml vs portuale media-libs/freetype
+
+### net-analyzer_wireshark
+  [order] merge order diverges at #47: real dev-libs/libgit2 vs portuale dev-python/pyproject-metadata
+
+### media-video_vlc
+  [order] merge order diverges at #7: real sys-libs/mtdev vs portuale x11-libs/xtrans
+
+### x11-base_xorg-server
+  [order] merge order diverges at #74: real x11-drivers/xf86-video-vesa vs portuale x11-drivers/xf86-video-amdgpu
+
+### MULTI_emptytree-system
+  [order] merge order diverges at #304: real sys-auth/pambase vs portuale sys-apps/portage
+
+## explained (allowlisted) findings
+
+### gnome-base_gnome-shell
+  [advice] (gnome-shell-cluster-a-abort) real-only: masked: !!! One of the following packages is required to complete your request:
+  [order] (gnome-shell-cluster-a-abort) merge order diverges at #0: real sys-apps/hwdata vs portuale app-crypt/libmd
+  [error] (gnome-shell-cluster-a-abort) real-only message: !!! One of the following packages is required to complete your request:
+  [error] (gnome-shell-cluster-a-abort) real-only message: emerge: there are no ebuilds built with USE flags to satisfy ">=net-fs/samba-4.0.0[client]".
+
+### gnome-base_nautilus
+  [order] (gedit-nautilus-cluster-a-rewalk-abort) merge order diverges at #8: real net-libs/nghttp2 vs portuale x11-themes/hicolor-icon-theme
+
+### app-editors_gedit
+  [order] (gedit-nautilus-cluster-a-rewalk-abort) merge order diverges at #5: real net-libs/nghttp2 vs portuale x11-themes/hicolor-icon-theme
+
+## allowlist entries that matched nothing (candidates for removal)
+  pubgrub-exit-autounmask-use-gate
+  pubgrub-exit-autounmask-use-gate-suppressed
+  pubgrub-exit-masked-dependency
+  pubgrub-exit-masked-dependency-suppressed
+  pubgrub-exit-required-use
+  pubgrub-exit-required-use-suppressed
+
+
+wrote /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-20261018T225931Z/l0-report.txt and /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-20261018T225931Z/l0-report.json
+invariants: 120 probes, 0 portuale violation(s), 0 control violation(s) on Portage output
+>>> report: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l0-20261018T225931Z/l0-report.txt   (rc=1)
+exit=1
