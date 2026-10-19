@@ -228,6 +228,36 @@ fn merge_driver_aborts_on_unowned_collision() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A foreign package owning `/usr/share/a b.txt` does not own `/usr/share/a`:
+/// the ownership scan used to cut the CONTENTS path at the space, so shipping
+/// the unowned `usr/share/a` over an orphan file aborted as a collision
+/// (backlog #419; Portage's `_contents_re` keeps the whole path).
+#[test]
+fn merge_driver_ownership_scan_keeps_spaces_in_foreign_paths() {
+    let tmp = TempDir::new("portuale-remote-space-collide").keep();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("usr/share")).unwrap();
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    std::fs::write(root.join("usr/share/a"), "orphan\n").unwrap();
+    let (unit, staged) = synthetic_unit(&tmp, &[("usr/share/a", "new\n")]);
+    let owner = root.join("var/db/pkg/dev-libs/owner-1.0");
+    std::fs::create_dir_all(&owner).unwrap();
+    std::fs::write(owner.join("SLOT"), "0\n").unwrap();
+    std::fs::write(
+        owner.join("CONTENTS"),
+        "obj /usr/share/a b.txt deadbeef 100\nsym /usr/share/c d -> a 100\n",
+    )
+    .unwrap();
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("no false collision");
+    assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+    assert_eq!(
+        std::fs::read_to_string(root.join("usr/share/a")).unwrap(),
+        "new\n"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// A merge plus the regen postinst run leaves `environment.bz2` holding
 /// the postinst-time env, and no plain `environment` file.
 #[test]

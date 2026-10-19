@@ -21,7 +21,9 @@ if [ "$STATELESS" != 1 ]; then
 for c in "$VDB"/*/*/CONTENTS; do
   [ -f "$c" ] || continue
   pfdir=${c%/*}; pfdir=${pfdir##*/}
-  awk '$1=="obj"||$1=="sym"{print $2}' "$c" > "$UNIT/scan.list"
+  # CONTENTS paths may hold spaces: strip the kind and the trailing fields.
+  awk '$1=="obj"{s=$0; sub(/^obj /,"",s); sub(/ [^ ]+ [^ ]+$/,"",s); print s}
+       $1=="sym"{s=$0; sub(/^sym /,"",s); sub(/ -> .*$/,"",s); print s}' "$c" > "$UNIT/scan.list"
   if [ "$pfdir" = "$NEWPF" ] || { [ -n "$OLD_PF" ] && [ "$pfdir" = "$OLD_PF" ]; }; then
     cat "$UNIT/scan.list" >> "$REPLACED_OWN"
   else
