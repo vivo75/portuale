@@ -430,6 +430,7 @@
 - [crates/portuale/src/remote/config_place.rs](portuale/remote/config_place.md) — Placing the client's config root on the server for resolve runs.
 - [crates/portuale/src/remote/host_keys.rs](portuale/remote/host_keys.md) — Known-hosts lookups and host-key fingerprints for the ssh transport.
 - [crates/portuale/src/remote/ledger.rs](portuale/remote/ledger.md) — The server/client merge ledger: per-host provenance lines on both sides.
+- [crates/portuale/src/remote/merge_flow.sh](portuale/remote/merge_flow.sh.md) — The client-side merge driver for one remote unit (backlog #382: one unmerge path).
 - [crates/portuale/src/remote/merge_script.rs](portuale/remote/merge_script.md) — The phase and merge shell scripts sent to the client.
 - [crates/portuale/src/remote/mod.rs](portuale/remote/mod.md) — Remote binary-package merge over SSH (`mrg --remote-*`): option validation and shared context.
 - [crates/portuale/src/remote/plan.rs](portuale/remote/plan.md) — The remote entry points: resolve, plan, and run each unit.

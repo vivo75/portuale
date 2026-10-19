@@ -526,3 +526,72 @@ fn user_package_use_build_id_line_applies_only_to_the_equal_instance() {
         );
     }
 }
+
+/// Backlog #402: under `--binpkg-respect-use`, a top-level atom whose only
+/// binaries are USE-mismatched reports Portage's masked block — one
+/// cpv-deduped `use flag configuration mismatch` row — not the plain
+/// `no binary packages` miss.
+///
+/// Portage 3.0.82.2, S0 cell `b03-use-bid2-respect` (rc 1, full argv
+/// `emerge -pv --package-moves=n --usepkgonly=y --binpkg-respect-use=y
+/// dev-libs/t341-dep`, re-run live on this host 2026-10-19): user
+/// `package.use` `=dev-libs/t341-dep-1-2 x`, build 1 baked `USE: x`,
+/// build 2 baked `USE:` empty — both builds mismatch, stderr
+/// `!!! All ebuilds that could satisfy "dev-libs/t341-dep" ...` +
+/// `- dev-libs/t341-dep-1::t341 (masked by: use flag configuration mismatch)`.
+#[test]
+fn binary_masked_report_lists_respect_use_mismatches_as_masked() {
+    let build = |bid: &str, baked: &[&str]| {
+        let mut c = candidate("1", &["amd64"]);
+        c.source = CandidateSource::Binary;
+        c.repo_name = "t341".to_string();
+        c.slot = "0".to_string();
+        c.sub_slot = "1".to_string();
+        c.iuse = "x".to_string();
+        c.binary_use = Some(baked.iter().map(|s| s.to_string()).collect());
+        c.build_id = Some(bid.to_string());
+        c
+    };
+    let config = portage_profile::Config {
+        package_use_user: vec![("=dev-libs/t341-dep-1-2".to_string(), vec!["x".to_string()])],
+        ..test_config()
+    };
+    let binaries = vec![build("1", &["x"]), build("2", &[])];
+    // The plain binary pool sees no masked row (every match is `is_visible`),
+    // so the top-level path fell through to the plain miss.
+    assert!(
+        all_binary_masked_report(
+            &binaries,
+            "dev-libs/t341-dep",
+            &config,
+            "\"dev-libs/t341-dep\"",
+        )
+        .is_none()
+    );
+    // With the respect-use gate the same pool reports one cpv-deduped row.
+    let report = all_binary_masked_report_with_respect_use(
+        &binaries,
+        "dev-libs/t341-dep",
+        &config,
+        "\"dev-libs/t341-dep\"",
+        BinaryRespectUseGate {
+            respect_use: true,
+            newuse: false,
+            changed_use: false,
+            ebuilds: &[],
+        },
+    )
+    .expect("USE-mismatched binaries report as masked");
+    assert!(
+        report
+            .contains("- dev-libs/t341-dep-1::t341 (masked by: use flag configuration mismatch)\n"),
+        "{report}"
+    );
+    assert_eq!(
+        report
+            .matches("(masked by: use flag configuration mismatch)")
+            .count(),
+        1,
+        "one cpv-deduped row for both builds:\n{report}"
+    );
+}

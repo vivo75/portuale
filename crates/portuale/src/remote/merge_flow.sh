@@ -14,18 +14,8 @@ for d in "$VDBROOT"/"$PKG"-*/; do
 done
 fi
 if [ -n "$OLD_PF" ]; then OLDVDB="$VDBROOT/$OLD_PF"; else OLDVDB=""; fi
-if [ "$STATELESS" = 1 ]; then
-  echo "MERGE_PRERM=skip:stateless-no-vdb"
-elif [ -n "$OLD_PF" ]; then
-  if run_old_hook "$OLDVDB" prerm; then
-    echo "MERGE_PRERM=ok $OLD_PF"
-  else
-    rc=$?
-    if [ "$rc" = 2 ]; then echo "MERGE_PRERM=skip $OLD_PF"; else echo "MERGE_PRERM=warn $OLD_PF"; fi
-  fi
-else
-  echo "MERGE_PRERM=skip:none-installed"
-fi
+# The old instance's prerm runs inside the Rust unmerge below (after the
+# new files merge, like Portage's replace loop), not up here.
 : > "$REPLACED_OWN"; : > "$OTHERS_OWN"
 if [ "$STATELESS" != 1 ]; then
 for c in "$VDB"/*/*/CONTENTS; do
@@ -40,7 +30,7 @@ for c in "$VDB"/*/*/CONTENTS; do
 done
 rm -f "$UNIT/scan.list"
 fi
-: > "$NEWCONTENTS"; : > "$NEWPATHS"
+: > "$NEWCONTENTS"
 ROOTUID=$(id -u)
 while read -r line; do
   [ -n "$line" ] || continue
@@ -125,7 +115,6 @@ while read -r line; do
       echo "sym $apath -> $target $mtime" >> "$NEWCONTENTS"
       ;;
   esac
-  echo "$apath" >> "$NEWPATHS"
 done < "$UNIT/filemeta"
 echo "MERGE_COPY=ok"
 # Stateless clients keep no vdb at all (plan §7: the server owns
@@ -173,49 +162,41 @@ rm -rf "$NEWVDB"
 mv "$TMPVDB" "$NEWVDB" || mfail vdb "rename into place"
 echo "MERGE_VDB=ok"
 fi
+# ONE unmerge path (backlog #382): the shipped Rust binary retires the
+# old instance -- same code as `ebuild <file> unmerge` and the local
+# replace loop: prerm, orphan/CONFIG_PROTECT/!md5 arms, UNINSTALL_IGNORE,
+# postrm, then the vdb delete. No shell copy of that logic stays here.
+# Portage: vartree.py, dblink.treewalk (merge new, then old unmerge).
 if [ -n "$OLD_PF" ]; then
-  if [ -f "$OLDVDB/CONTENTS" ]; then
-    : > "$UNIT/olddirs.list"
-    while read -r line; do
-      [ -n "$line" ] || continue
-      set -f; set -- $line; set +f; kind=$1
-      case "$kind" in
-        obj|sym)
-          apath=$2; recorded=${line##* }
-          grep -Fxq "$apath" "$NEWPATHS" && continue
-          if [ ! -e "$ROOT$apath" ] && [ ! -L "$ROOT$apath" ]; then continue; fi
-          if [ "$(stat -c %Y "$ROOT$apath" 2>/dev/null)" = "$recorded" ]; then
-            rm -f "$ROOT$apath" || warn remove "cannot remove $apath"
-          else
-            warn remove "modified-kept $apath"
-          fi
-          ;;
-        dir) echo "$2" >> "$UNIT/olddirs.list" ;;
-        *) warn remove "unmerge-skip $line" ;;
-      esac
-    done < "$OLDVDB/CONTENTS"
-    sort -r "$UNIT/olddirs.list" | while read -r d; do
-      [ -n "$d" ] && rmdir "$ROOT$d" 2>/dev/null || true
-    done
-    rm -f "$UNIT/olddirs.list"
+  if [ -f "$OLDVDB/CONTENTS" ] && [ -f "$OLDVDB/$OLD_PF.ebuild" ]; then
+    # The CLI parses `<category>/<pn>/<pf>.ebuild` paths only (like the
+    # local replace loop's scratch copy): stage a repo-layout copy of the
+    # vdb ebuild -- a symlink won't do, the CLI canonicalizes.
+    OLDEBUILD="$UNIT/old-ebuild/$CAT/$PKG/$OLD_PF.ebuild"
+    if mkdir -p "${OLDEBUILD%/*}" && cp "$OLDVDB/$OLD_PF.ebuild" "$OLDEBUILD" && \
+        ROOT="$ROOT" PORTAGE_TMPDIR="$WORKDIR" \
+        CONFIG_PROTECT="$PROTECT" CONFIG_PROTECT_MASK="$MASK" \
+        "$PORTUALE_BIN" ebuild "$OLDEBUILD" unmerge; then
+      echo "MERGE_PRERM=ok $OLD_PF"
+      echo "MERGE_REMOVE=ok $OLD_PF"
+      echo "MERGE_POSTRM=ok $OLD_PF"
+    else
+      warn remove "unmerge $OLD_PF failed, old files kept"
+      echo "MERGE_PRERM=warn $OLD_PF"
+      echo "MERGE_POSTRM=warn $OLD_PF"
+    fi
   else
-    warn remove "no CONTENTS in $OLD_PF, files kept"
+    warn remove "no CONTENTS or ebuild in $OLD_PF, files kept"
+    echo "MERGE_PRERM=skip $OLD_PF"
+    echo "MERGE_POSTRM=skip $OLD_PF"
   fi
-  echo "MERGE_REMOVE=ok $OLD_PF"
 elif [ "$STATELESS" = 1 ]; then
+  echo "MERGE_PRERM=skip:stateless-no-vdb"
   echo "MERGE_REMOVE=skip:stateless-no-vdb"
-else
-  echo "MERGE_REMOVE=skip:none-installed"
-fi
-if [ "$STATELESS" = 1 ]; then
   echo "MERGE_POSTRM=skip:stateless-no-vdb"
-elif [ -n "$OLD_PF" ]; then
-  if run_old_hook "$OLDVDB" postrm; then echo "MERGE_POSTRM=ok $OLD_PF"; else
-    rc=$?
-    if [ "$rc" = 2 ]; then echo "MERGE_POSTRM=skip $OLD_PF"; else echo "MERGE_POSTRM=warn $OLD_PF"; fi
-  fi
-  rm -rf "$OLDVDB"
 else
+  echo "MERGE_PRERM=skip:none-installed"
+  echo "MERGE_REMOVE=skip:none-installed"
   echo "MERGE_POSTRM=skip:none-installed"
 fi
 if command -v ldconfig >/dev/null 2>&1; then

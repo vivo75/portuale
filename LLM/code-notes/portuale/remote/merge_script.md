@@ -8,7 +8,7 @@ The phase and merge shell scripts sent to the client.
 - Portage `eapi_exports_merge_type` (`lib/portage/eapi.py:63`, attrs table `:300`: `exports_merge_type = eapi >= Eapi("4")`): `MERGE_TYPE` reaches the phase env only for EAPI 4+ (Portage `config.py:3335-3336` pops it otherwise). An unsupported or unparseable EAPI takes Portage's `_get_eapi_attrs` fallback row (`eapi.py:247-258`), which exports.
 
 ## fn phase_exports
-- The replaced instance's prerm/postrm go through the merge driver's own `run_old_hook`, which deliberately exports no `MERGE_TYPE`: Portage's unmerge re-creates the old instance's settings (`vartree.py:4535-4540`) and never passes through the scheduler that sets it. `unit_bin` is the shipped runtime dir (`$UNIT/bin`, `$OLD_TMP/bin` symlink or copy; callers decide).
+- The replaced instance's prerm/postrm used to go through the merge driver's own `run_old_hook`, which deliberately exported no `MERGE_TYPE`: Portage's unmerge re-creates the old instance's settings (`vartree.py:4535-4540`) and never passes through the scheduler that sets it. Since #382 the flow retires the old instance through the Rust unmerge instead (`merge_flow.sh`), and `run_old_hook` survives only for its own tests. `unit_bin` is the shipped runtime dir (`$UNIT/bin`, `$OLD_TMP/bin` symlink or copy; callers decide).
 - `MERGE_TYPE=binary` rides the same line as `EMERGE_FROM` (Portage `_emerge/Binpkg.py:92` sets it for every binpkg merge; `mrg` only merges binpkgs).
 - `portuale_bin` is the S8.1-resolved absolute client path (#326 D5). `PORTAGE_PYTHON` is the shipped `portuale-python` shim through the script's own `$UNITBIN` (`$UNIT/bin`, defined by each script header), `PORTAGE_PYM_PATH` is `/` (no checkout on the client), and `PORTAGE_IPC_DAEMON` is unset (no IPC daemon, #326 D6; this also scrubs a value inherited over the local transport).
 
@@ -45,7 +45,7 @@ The phase and merge shell scripts sent to the client.
 ## const MERGE_FLOW
 - Client merge flow (slice 4). Shell vars (`UNIT`, `ROOT`, `VDB`, `VDBROOT`, `NEWPF`, `PKG`, `MAINS`, `PROTECT`, `MASK`, `STATELESS`, …) come from `merge_script`'s header.
 - Any existing file/symlink destination outside the `CONFIG_PROTECT` divert is a fail-closed collision, and old hooks never run in stateless mode.
-- The `client:<path>` VDB is read and written by this bash on the client, so it stays in the files format by construction: portuale has no code there to call `portage-vdb` from (feat#157 design §6.3). Only the server-side `VdbShadow` read goes through `portage-vdb`. New-postinst runs separately afterwards (see `run_bundle_stage`).
+- Since #382 the old instance is retired by the shipped Rust binary (`$PORTUALE_BIN ebuild … unmerge`), which reads and writes the client vdb through `portage-vdb` like any local unmerge; the "no portuale code on the client" shape (feat#157 design §6.3) now covers only the copy/vdb-write half of the driver. Only the server-side `VdbShadow` read goes through `portage-vdb` from the server. New-postinst runs separately afterwards (see `run_bundle_stage`).
 
 ## fn merge_script
-- The `--remote-binpkg` trial path keeps no ledger; the resolve path always records. `PORTAGE_PYM_PATH` is `/` and `PORTAGE_IPC_DAEMON` is unset, like the phase scripts. The old hooks inherit the header's exports.
+- The `--remote-binpkg` trial path keeps no ledger; the resolve path always records. `PORTAGE_PYM_PATH` is `/` and `PORTAGE_IPC_DAEMON` is unset, like the phase scripts. The old-instance unmerge child inherits the header's exports (`PORTUALE_BIN`).

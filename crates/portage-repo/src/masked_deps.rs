@@ -498,6 +498,56 @@ fn masked_rows_for_pool(
     atom: &portage_dep::Atom,
     config: &portage_profile::Config,
 ) -> Option<Vec<(String, Vec<String>)>> {
+    masked_rows_for_pool_inner(candidates, atom_str, atom, config, None)
+}
+
+/// The `--binpkg-respect-use`/`--newuse`/`--changed-use` gate for
+/// [`all_binary_masked_report_with_respect_use`]: the same-version ebuild
+/// pool selection compared against (`&[]` under `--usepkgonly`, where
+/// selection saw no ebuilds — mirroring `resolve_pretend`'s empty pool),
+/// plus the three flags gating selection's `retain`.
+pub(crate) struct BinaryRespectUseGate<'a> {
+    pub(crate) respect_use: bool,
+    pub(crate) newuse: bool,
+    pub(crate) changed_use: bool,
+    pub(crate) ebuilds: &'a [Candidate],
+}
+
+/// The `- <cpv>` text of a masked row: bare when EAPI-masked or the
+/// repo is unknown, `::repo` otherwise (Portage's `show_masked_packages`
+/// appends the repo only `if repo:`, and prints EAPI-masked rows bare).
+// Portage: lib/_emerge/depgraph.py, show_masked_packages
+fn output_cpv_for_masked_row(
+    c: &Candidate,
+    atom: &portage_dep::Atom,
+    reasons: &[String],
+) -> String {
+    let repo_unknown = c.repo_name.is_empty() || c.repo_name == "__unknown__";
+    let eapi_masked_binary =
+        c.source == CandidateSource::Binary && reasons.iter().any(|r| r.starts_with("EAPI "));
+    if eapi_masked_binary || repo_unknown {
+        format!("{}/{}-{}", atom.category, atom.package, c.version)
+    } else {
+        format!(
+            "{}/{}-{}::{}",
+            atom.category, atom.package, c.version, c.repo_name
+        )
+    }
+}
+
+/// A version-matching binary that is [`is_visible`] but rejected by the
+/// respect-use gate is Portage's `use flag configuration mismatch` mask —
+/// a row, not a silent pool drop. Only when some other mask already fires
+/// does that mask's own reason win (Portage checks the ignored-binaries
+/// reasons only `elif ... not mreasons`).
+// Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep
+fn masked_rows_for_pool_inner(
+    candidates: &[Candidate],
+    atom_str: &str,
+    atom: &portage_dep::Atom,
+    config: &portage_profile::Config,
+    use_gate: Option<&BinaryRespectUseGate<'_>>,
+) -> Option<Vec<(String, Vec<String>)>> {
     // Version/slot filter, USE and visibility ignored. The match runs
     // per candidate (not per string): binpkg-multi-instance builds share
     // one string, and only the instance with the equal build-id may report
@@ -513,36 +563,60 @@ fn masked_rows_for_pool(
             portage_dep::match_atom_matches_candidate(&match_atom, &s, c.build_id.as_deref())
         })
         .collect();
-    if masked.is_empty()
-        || masked
-            .iter()
-            .any(|c| is_visible(c, &atom.category, &atom.package, config))
-    {
+    if masked.is_empty() {
         return None;
     }
+    let gate_active = use_gate.is_some_and(|g| g.respect_use || g.newuse || g.changed_use);
     // Descending version.
     masked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
 
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for c in masked {
+        // A selectable match silences the report. Without a gate this is
+        // exactly the old any-visible rule; with one, a use-mismatched
+        // binary counts as masked instead of selectable.
+        if is_visible(c, &atom.category, &atom.package, config) {
+            let mismatched = gate_active
+                && use_gate.is_some_and(|g| {
+                    let ebuild_at_version = g
+                        .ebuilds
+                        .iter()
+                        .find(|e| e.source == CandidateSource::Ebuild && e.version == c.version);
+                    !binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+                        candidate: c,
+                        ebuild_at_version,
+                        category: &atom.category,
+                        package: &atom.package,
+                        config,
+                        newuse: g.newuse,
+                        changed_use: g.changed_use,
+                        respect_use: g.respect_use,
+                    })
+                });
+            if !mismatched {
+                return None;
+            }
+            let output_cpv = output_cpv_for_masked_row(
+                c,
+                atom,
+                &["use flag configuration mismatch".to_string()],
+            );
+            if seen.insert(output_cpv.clone()) {
+                out.push((
+                    output_cpv,
+                    vec!["use flag configuration mismatch".to_string()],
+                ));
+            }
+            continue;
+        }
         let reasons = candidate_masking_reasons(c, &atom.category, &atom.package, config);
         // Portage prints an EAPI-masked binary row bare (verified live on
         // 3.0.82.2: `- app-misc/t348-d-good-1 (masked by: EAPI 99)` even
         // with `REPO: t348` in the stanza, while a keyword-masked twin
         // prints `::t348`), and omits `::repo` whenever the row's repo is
         // unknown (`show_masked_packages` appends it only `if repo:`).
-        let repo_unknown = c.repo_name.is_empty() || c.repo_name == "__unknown__";
-        let eapi_masked_binary =
-            c.source == CandidateSource::Binary && reasons.iter().any(|r| r.starts_with("EAPI "));
-        let output_cpv = if eapi_masked_binary || repo_unknown {
-            format!("{}/{}-{}", atom.category, atom.package, c.version)
-        } else {
-            format!(
-                "{}/{}-{}::{}",
-                atom.category, atom.package, c.version, c.repo_name
-            )
-        };
+        let output_cpv = output_cpv_for_masked_row(c, atom, &reasons);
         if !seen.insert(output_cpv.clone()) {
             continue;
         }
@@ -577,14 +651,43 @@ pub(crate) fn all_masked_report(
 /// resolve proceeds, or the ebuild-side paths below report).
 // Portage: S0 cell `F-binary-rewritten` (`emerge -pv --usepkgonly=y
 // app-misc/t341-good` against the rewritten `RDEPEND`).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn all_binary_masked_report(
     binaries: &[Candidate],
     atom_str: &str,
     config: &portage_profile::Config,
     xinfo: &str,
 ) -> Option<String> {
+    all_binary_masked_report_with_respect_use(
+        binaries,
+        atom_str,
+        config,
+        xinfo,
+        BinaryRespectUseGate {
+            respect_use: false,
+            newuse: false,
+            changed_use: false,
+            ebuilds: &[],
+        },
+    )
+}
+
+/// [`all_binary_masked_report`] with the respect-use gate threaded through:
+/// a binary selection rejected for its USE still reports
+/// `use flag configuration mismatch` instead of vanishing into the plain
+/// `no binary packages` miss. The installable set is unchanged — this only
+/// widens what the masked builder sees, mirroring Portage's
+/// `ignored_binaries[respect_use]` reason in `_show_unsatisfied_dep`.
+// Portage: lib/_emerge/depgraph.py
+pub(crate) fn all_binary_masked_report_with_respect_use(
+    binaries: &[Candidate],
+    atom_str: &str,
+    config: &portage_profile::Config,
+    xinfo: &str,
+    gate: BinaryRespectUseGate<'_>,
+) -> Option<String> {
     let atom = portage_dep::parse_atom(atom_str)?;
-    let masked = masked_rows_for_pool(binaries, atom_str, &atom, config)?;
+    let masked = masked_rows_for_pool_inner(binaries, atom_str, &atom, config, Some(&gate))?;
     render_all_masked_block(xinfo, masked, None)
 }
 

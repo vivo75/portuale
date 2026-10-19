@@ -864,6 +864,97 @@ fn old_hook_uses_server_decompressed_env_without_client_bzip2() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// Replacing an old instance whose CONTENTS records a path with a space
+/// removes that file. The shell removal cut the path at the space (`set --
+/// $line` takes `$2`, the ownership scan `awk '{print $2}'`), so the file
+/// survived every remote replace; the shipped Rust unmerge parses CONTENTS
+/// space-safely (backlog #382).
+#[test]
+fn merge_driver_removes_an_old_file_with_a_space_in_its_path() {
+    use std::os::unix::fs::MetadataExt as _;
+    let tmp = TempDir::new("portuale-remote-space-unmerge").keep();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+    // Old instance owning a spaced path, with matching md5+mtime.
+    let spaced_rel = "usr/share/probe/a b.txt";
+    let spaced = root.join(spaced_rel);
+    std::fs::create_dir_all(spaced.parent().unwrap()).unwrap();
+    std::fs::write(&spaced, "old spaced bytes\n").unwrap();
+    let md5 = crate::ebuild_merge::md5_hex(&spaced).unwrap();
+    let mtime = std::fs::metadata(&spaced).unwrap().mtime();
+    let oldvdb = root.join("var/db/pkg/dev-libs/probe-1.0");
+    std::fs::create_dir_all(&oldvdb).unwrap();
+    std::fs::write(oldvdb.join("SLOT"), "0\n").unwrap();
+    std::fs::write(oldvdb.join("COUNTER"), "3\n").unwrap();
+    std::fs::write(
+        oldvdb.join("probe-1.0.ebuild"),
+        "EAPI=8\nDESCRIPTION=\"synthetic space probe\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        oldvdb.join("CONTENTS"),
+        format!("obj /{spaced_rel} {md5} {mtime}\ndir /usr/share/probe\n"),
+    )
+    .unwrap();
+    // New instance, same slot, disjoint files.
+    let (unit, staged) = spaced_replacement_unit(&tmp);
+    let ctx = local_ctx(root.to_str().unwrap(), tmp.join("work").to_str().unwrap());
+    let markers = run_merge_stage(&ctx, None, &unit, &staged, None).expect("merge succeeds");
+    assert!(markers.iter().any(|m| m == "MERGE_COPY=ok"), "{markers:?}");
+    assert!(
+        !spaced.exists(),
+        "the spaced old file must be removed, not cut at the space"
+    );
+    assert!(!oldvdb.exists(), "the replaced vdb entry must be retired");
+    assert!(root.join("usr/share/probe/new.txt").is_file());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A synthetic replacement unit with a caller-chosen pf (the shared
+/// helper hardcodes `probe-1.0`, which the old instance already takes).
+fn spaced_replacement_unit(tmp: &std::path::Path) -> (String, crate::remote_bundle::StagedBundle) {
+    let unit = tmp.join("work/probe-2.0");
+    let image = unit.join("image");
+    let build_info = unit.join("build-info");
+    std::fs::create_dir_all(&build_info).unwrap();
+    let path = image.join("usr/share/probe/new.txt");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "new\n").unwrap();
+    for (name, content) in [
+        ("PF", "probe-2.0"),
+        ("CATEGORY", "dev-libs"),
+        ("SLOT", "0"),
+        ("DEFINED_PHASES", "-"),
+    ] {
+        std::fs::write(build_info.join(name), content).unwrap();
+    }
+    let entries = crate::remote_bundle::collect_filemeta(&image).unwrap();
+    let filemeta = crate::remote_bundle::render_filemeta(&entries).unwrap();
+    std::fs::write(unit.join("filemeta"), &filemeta).unwrap();
+    let staged = crate::remote_bundle::StagedBundle {
+        tarball: tmp.join("bundle.tar"),
+        byte_count: 0,
+        manifest: crate::remote_bundle::BundleManifest {
+            format: 1,
+            cpv: "dev-libs/probe-2.0".to_string(),
+            slot: "0".to_string(),
+            repo: "test".to_string(),
+            has_environment: false,
+        },
+        eapi: "8".to_string(),
+        category: "dev-libs".to_string(),
+        pn: "probe".to_string(),
+        pv: "2.0".to_string(),
+        pr: "r0".to_string(),
+        pvr: "2.0".to_string(),
+        p: "probe-2.0".to_string(),
+        pf: "probe-2.0".to_string(),
+        phases: Vec::new(),
+        postinst_defined: false,
+    };
+    (unit.to_str().unwrap().to_string(), staged)
+}
+
 /// An entry with both files whose staging failed still runs its hooks
 /// from the plain `environment` final fallback.
 #[test]

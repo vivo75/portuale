@@ -170,14 +170,24 @@ pub(crate) fn step_top_level_unsatisfied(
             // Under `--usepkgonly` ebuilds are ineligible rather than
             // masked, so a masked-only binary pool reports its own rows
             // (S4; Portage lists the binary, e.g. S0 `F-binary-rewritten`).
+            // A binary selection rejected for its USE reports Portage's
+            // `use flag configuration mismatch` row instead of vanishing
+            // into the plain miss (#402: selection saw no ebuilds, so the
+            // gate carries none — mirroring the empty `candidates` pool).
             // Otherwise the ebuild-side report below applies unchanged.
             if ctx.usepkgonly {
                 let binaries = list_binary_candidates(&ctx.local_binpkg, &key.0, &key.1);
-                if let Some(report) = all_binary_masked_report(
+                if let Some(report) = all_binary_masked_report_with_respect_use(
                     &binaries,
                     current_atom,
                     config,
                     &format!("{current_atom:?}"),
+                    BinaryRespectUseGate {
+                        respect_use: ctx.binpkg_respect_use,
+                        newuse: ctx.newuse,
+                        changed_use: ctx.changed_use,
+                        ebuilds: &[],
+                    },
                 ) {
                     return Err(Error::Detail(report));
                 }
@@ -199,7 +209,11 @@ pub(crate) fn step_top_level_unsatisfied(
             // binaries reports the same block over the remote pool (the
             // ebuild pool above has no version match here, or the walk
             // would have selected it). Local `PKGDIR` binaries keep the
-            // miss text below (no cell covers that shape).
+            // miss text below (no cell covers that shape). A remote
+            // rejected for its USE reports the mismatch row too (#402);
+            // the gate compares against the same-version ebuild, or
+            // nothing under `--usepkgonly`/a dropped ebuild db, exactly
+            // like selection's `retain`.
             // Portage: _show_unsatisfied_dep over the bintree;
             // S0 cell `g07-partly-excluded`.
             if ctx.getbinpkg {
@@ -210,11 +224,27 @@ pub(crate) fn step_top_level_unsatisfied(
                     &key.0,
                     &key.1,
                 );
-                if let Some(report) = all_binary_masked_report(
+                let ebuilds;
+                let ebuild_pool: &[Candidate] =
+                    if ctx.usepkgonly || crate::globals::ebuild_db_dropped() {
+                        &[]
+                    } else {
+                        ebuilds = list_candidates(&ctx.repos, &key.0, &key.1)
+                            .map(|c| c.to_vec())
+                            .unwrap_or_default();
+                        &ebuilds
+                    };
+                if let Some(report) = all_binary_masked_report_with_respect_use(
                     &remote,
                     current_atom,
                     config,
                     &format!("{current_atom:?}"),
+                    BinaryRespectUseGate {
+                        respect_use: ctx.binpkg_respect_use,
+                        newuse: ctx.newuse,
+                        changed_use: ctx.changed_use,
+                        ebuilds: ebuild_pool,
+                    },
                 ) {
                     return Err(Error::Detail(report));
                 }

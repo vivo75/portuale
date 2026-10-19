@@ -64,6 +64,13 @@ Masked-dependency reports.
 
 ## fn all_binary_masked_report
 - S4 (#341): binary-only twin of `all_masked_report` for `--usepkgonly`, where ebuilds are ineligible rather than masked. When every version-matching binary is masked the block lists the binary rows (Portage's `_show_unsatisfied_dep` over the binary pool; S0 cell `F-binary-rewritten` shows the binary row under the same "All ebuilds" header). `None` when no binary matches or some match is visible. Wired only at the top-level unsatisfied step; `--usepkg` (ebuild fallback alive) keeps the ebuild-side report. Remote-binrepo rows are not included (no S0 cell).
+- #402: now a no-gate convenience over `all_binary_masked_report_with_respect_use` (inactive gate: byte-identical rows); kept because the `masked_deps` tests pin the no-gate shape directly.
+
+## struct BinaryRespectUseGate
+- #402: the same-version ebuild pool selection compared against (`&[]` under `--usepkgonly`/a dropped ebuild db, where selection saw no ebuilds) plus the three flags gating selection's `retain` (`binpkg_respect_use || newuse || changed_use`, `pretend.rs:1243`).
+
+## fn all_binary_masked_report_with_respect_use
+- #402: a version-matching binary that is `is_visible` but rejected by the gate reports `use flag configuration mismatch` instead of vanishing into the plain miss (S0 `b03-use-bid2-respect`, re-run live on host 3.0.82.2 2026-10-19: one cpv-deduped row for both builds, rc 1). Portage models the mismatch as a mask, not a miss: built pkgs whose `ignored_binaries` carry `respect_use` get exactly that reason, and only when no other mask fires (`depgraph.py:6658-6663`, the `elif ... not mreasons` chain in `_show_unsatisfied_dep`; rows deduped by cpv in `show_masked_packages`, `depgraph.py:12453`). A selectable match (visible and gate-ok) still silences the report, and a non-visible binary keeps its own `candidate_masking_reasons` row — the mismatch row never overrides another mask. The installable set is unchanged (the `retain` sites are untouched); only the masked builder sees the dropped binaries. The ebuild pool (`masked_candidates_for_atom`) is unaffected — `all_masked_report` still delegates with no gate.
 
 ## fn candidate_masking_reasons
 - #348 S5: an unsupported EAPI reports the lone `EAPI <eapi>` reason before every other mask (raw head/index value: `EAPI 99`, `EAPI 7_alpha`). Portage: `getmaskingstatus.py`.

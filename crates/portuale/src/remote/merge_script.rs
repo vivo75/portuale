@@ -395,8 +395,8 @@ pub(crate) const MERGE_HELPERS: &str = include_str!("merge_helpers.sh");
 
 // --- Client merge flow -------------------------------------------------------------
 
-/// Merge flow: old-prerm → ownership scan → gate+copy → vdb → remove-old
-/// → old-postrm → env-update, appended after `MERGE_HELPERS`. Machine
+/// Merge flow: ownership scan → gate+copy → vdb → Rust unmerge of the
+/// old instance → env-update, appended after `MERGE_HELPERS`. Machine
 /// lines `MERGE_<STEP>=…` plus a final `STATUS=merged` (or
 /// `STATUS=failed:<step>` from `mfail`); any `mfail` prints
 /// `MERGE_FAIL=<step> <detail>` and exits 1. `STATELESS=1` (server-side
@@ -408,7 +408,8 @@ pub(crate) const MERGE_FLOW: &str = include_str!("merge_flow.sh");
 /// mirrors the local merge (`image/`, `build-info/`, shipped `bin/`).
 /// Client ledger destination + line baked into the merge driver; `None`
 /// file skips the client record. `portuale_bin` is the resolved absolute
-/// client path, exported for the whole driver (including the old hooks).
+/// client path, exported for the whole driver (the old-instance unmerge
+/// child runs through it).
 #[derive(Debug, Clone)]
 pub(crate) struct LedgerSpec {
     pub file: String,
@@ -471,7 +472,6 @@ pub(crate) fn merge_script(args: MergeScriptArgs<'_>) -> Result<String, String> 
             "LEDGER_FILE={ledger_file}\n",
             "LEDGER_LINE={ledger_line}\n",
             "NEWCONTENTS=\"$UNIT/CONTENTS.new\"\n",
-            "NEWPATHS=\"$UNIT/paths.new\"\n",
             "REPLACED_OWN=\"$UNIT/replaced.own\"\n",
             "OTHERS_OWN=\"$UNIT/others.own\"\n",
             "{helpers}",
