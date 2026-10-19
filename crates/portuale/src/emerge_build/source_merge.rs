@@ -51,6 +51,9 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
     // count here.
     let total_builds = entries.iter().filter(|e| scheduler_needs_build(e)).count();
     let display = StatusDisplay::new(mode, total_builds, progress_color());
+    // `^C` / `SIGTERM` stop the phases and exit 128+N, like Portage.
+    let _exit_on_signal =
+        crate::ebuild_phases::ExitOnSignalGuard::install(|code| std::process::exit(code));
     if jobs > 1 {
         // A bare `-j` (mapped to `usize::MAX` by the CLI layer) runs
         // uncapped; a numbered `--jobs=N` runs capped. Both keep the

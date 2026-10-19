@@ -1,0 +1,18 @@
+]0;portuale: emergeCalculating dependencies [?25l-\|/-\|/-\|/-\|/-\|/-Calculating dependencies ... done![K
+[?25hDependency resolution took [32m1.73[39;49;00m s (backtrack: 0/20).
+
+
+>>> Verifying ebuild manifestsE
+>>> Emerging ([33;01m1[39;49;00m of [33;01m1[39;49;00m) [32mdev-util/slowprobe-1::fetchrepo[39;49;00m for /var/tmp/b411/root/E]0;portuale: emerge: (1 of 1) dev-util/slowprobe-1 Clean]0;portuale: emerge: (1 of 1) dev-util/slowprobe-1 Compile>>> Unpacking source...
+>>> Source unpacked in /var/tmp/b411/tmp/portage/dev-util/slowprobe-1/work
+>>> Preparing source in /var/tmp/b411/tmp/portage/dev-util/slowprobe-1/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/b411/tmp/portage/dev-util/slowprobe-1/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/b411/tmp/portage/dev-util/slowprobe-1/work ...
+^C
+
+Exiting on signal 2
+]0;vivo@:~/repo/PORTUALE/portuale/LLM/evidence/2026-10-19-b411[?25h
+status 33280 exit 130 sig None
+sleep survivors: 0

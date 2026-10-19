@@ -138,6 +138,7 @@ pub(crate) fn spawn_trackable(
     }
     let mut child = cmd.spawn()?;
     let pgid = child.id() as i32;
+    super::signal_exit::note_spawned(pgid, placement);
     let registry = SCHEDULER_REGISTRY.with(|cell| cell.borrow().clone());
     if let Some(reg) = &registry {
         let terminated = {
@@ -161,6 +162,7 @@ pub(crate) fn spawn_trackable(
         }
     }
     let status = child.wait();
+    super::signal_exit::note_exited(pgid);
     if let Some(reg) = &registry {
         let mut registry = reg.lock().unwrap();
         registry.pgids.remove(&pgid);

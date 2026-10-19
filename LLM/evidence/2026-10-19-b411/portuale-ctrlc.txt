@@ -1,0 +1,18 @@
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging ([33;01m1[39;49;00m of [33;01m1[39;49;00m) [32mdev-util/slowprobe-1::fetchrepo[39;49;00m for /var/tmp/b411/root
+>>> Unpacking source...
+>>> Source unpacked in /var/tmp/b411/tmp/portage/dev-util/slowprobe-1/work
+>>> Preparing source in /var/tmp/b411/tmp/portage/dev-util/slowprobe-1/work ...
+>>> Source prepared.
+>>> Configuring source in /var/tmp/b411/tmp/portage/dev-util/slowprobe-1/work ...
+>>> Source configured.
+>>> Compiling source in /var/tmp/b411/tmp/portage/dev-util/slowprobe-1/work ...
+^C
+
+Exiting on signal 2
+
+status 33280 exit 130 sig None
+sleep survivors: 0

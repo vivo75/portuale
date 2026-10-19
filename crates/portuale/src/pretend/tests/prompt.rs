@@ -159,9 +159,9 @@ fn ask_config_select_sigint_prints_interrupted_and_exits_130_like_portage() {
 
 #[test]
 #[cfg(unix)]
-fn sigint_during_merge_still_dies_by_signal_like_before() {
-    // The guard lives inside the prompt functions only; a `^C` during a merge
-    // still kills by signal.
+fn sigint_during_merge_exits_130_after_exiting_on_signal_like_portage() {
+    // Portage: Scheduler.py, merge (`sighandler`). A `^C` during a merge prints
+    // `Exiting on signal 2` and exits 128+2 (backlog #411).
     use std::io::Write;
     use std::os::unix::process::ExitStatusExt;
     let portuale_bin = built_portuale_bin();
@@ -189,17 +189,17 @@ fn sigint_during_merge_still_dies_by_signal_like_before() {
     stdout.extend(out_handle.join().expect("stdout drain"));
     let stderr = err_handle.join().expect("stderr drain");
     assert_eq!(
-        status.signal(),
-        Some(libc::SIGINT),
-        "SIGINT outside a prompt must kill the process: stdout: {}\nstderr: {}",
+        status.code(),
+        Some(128 + libc::SIGINT),
+        "SIGINT outside a prompt must exit 130: stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&stdout),
         String::from_utf8_lossy(&stderr)
     );
-    assert_eq!(
-        status.code(),
-        None,
-        "a signal death has no exit code: stdout: {}",
-        String::from_utf8_lossy(&stdout),
+    assert_eq!(status.signal(), None);
+    assert!(
+        String::from_utf8_lossy(&stderr).contains("\n\nExiting on signal 2\n"),
+        "{}",
+        String::from_utf8_lossy(&stderr)
     );
     let text = String::from_utf8_lossy(&stdout);
     assert!(
