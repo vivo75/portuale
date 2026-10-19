@@ -449,6 +449,48 @@ fn candidate_use_flags_display_resolves_use_expand_flags_for_a_resume_entry() {
 }
 
 #[test]
+fn candidate_interactive_reads_the_use_evaluated_properties_of_a_resume_entry() {
+    // Portage: output.py (`I` column), Scheduler._get_interactive_tasks.
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf resolves");
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    assert!(candidate_interactive(
+        &repos,
+        &config,
+        "dev-libs",
+        "interactivemergepkg",
+        "1.0"
+    ));
+    // `gtk? ( interactive )` with `gtk` off, a plain package, an unknown one.
+    assert!(!candidate_interactive(
+        &repos,
+        &config,
+        "dev-libs",
+        "interactivecondpkg",
+        "1.0"
+    ));
+    assert!(!candidate_interactive(
+        &repos, &config, "dev-libs", "schedok", "1.0"
+    ));
+    assert!(!candidate_interactive(
+        &repos,
+        &config,
+        "dev-libs",
+        "nope-does-not-exist",
+        "9"
+    ));
+}
+
+#[test]
 fn candidate_effective_use_flags_treats_a_missing_iuse_key_as_empty_iuse() {
     // Portage's md5-cache writer omits empty fields, but a package with an
     // empty IUSE still has the full effective USE.

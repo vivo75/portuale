@@ -534,6 +534,38 @@ pub fn candidate_use_flags_display(
     display
 }
 
+/// Whether the ebuild candidate's USE-evaluated `PROPERTIES` names `interactive`: the
+/// `I` column and the scheduler's foreground fallback, for entries a `--resume` list
+/// rebuilds from `cat/pkg-ver` alone. False when the candidate is unlocatable.
+// Portage: output.py; Scheduler.py, _get_interactive_tasks
+pub fn candidate_interactive(
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> bool {
+    let Some(candidate) = list_candidates(repos, category, package)
+        .ok()
+        .and_then(|cs| cs.iter().find(|c| c.version == version).cloned())
+    else {
+        return false;
+    };
+    let candidate_str = format!(
+        "{category}/{package}-{version}:{}/{}::{}",
+        candidate.slot, candidate.sub_slot, candidate.repo_name
+    );
+    evaluated_metadata_tokens(EvaluatedMetadataTokensArgs {
+        value_str: &candidate.properties,
+        candidate: &candidate,
+        category,
+        package,
+        candidate_str: &candidate_str,
+        config,
+    })
+    .contains("interactive")
+}
+
 /// The package's **full** effective `USE` set -- everything `effective_use_flags` resolved
 /// enabled, including implicit profile flags no package declares in `IUSE`. The caller narrows
 /// it through `portage_profile::portage_use`. Empty when the candidate/md5-cache is unavailable.

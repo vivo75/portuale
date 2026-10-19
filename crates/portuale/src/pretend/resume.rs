@@ -169,6 +169,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
             if source == portage_repo::CandidateSource::Ebuild {
                 entry.use_flags_display =
                     portage_repo::candidate_use_flags_display(&repos, config, c, p, v);
+                entry.interactive = portage_repo::candidate_interactive(&repos, config, c, p, v);
             }
             entry
         })
@@ -245,6 +246,8 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // resume mergelist can mix both). The saved `myopts` carries no
     // `--quiet`/`--verbose`, so the display is serial unless `-j` > 1.
     let resume_mode = emerge_build::scheduler_status_mode(jobs, false, None, entries.len(), false);
+    let (resume_mode, jobs) =
+        emerge_build::apply_interactive_tasks(resume_mode, jobs, &entries, root, &color);
     if let Some(code) = resume_merge(ResumeMergeArgs {
         entries: &entries,
         repos: &repos,

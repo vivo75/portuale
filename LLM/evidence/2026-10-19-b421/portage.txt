@@ -1,0 +1,84 @@
+=== seed
+rc=1
+=== resume -p
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 3.91 s.
+
+[ebuild  N     ] dev-util/fetchprobe-1 to /var/tmp/b421/root/
+[ebuild IN     ] dev-util/intprobe-1 to /var/tmp/b421/root/
+rc=0
+=== resume -j2
+Calculating dependencies ... done!
+Dependency resolution took 2.98 s.
+
+*** Resuming merge...
+>>> Sending package output to stdio due to interactive package(s):
+
+  dev-util/intprobe-1 for /var/tmp/b421/root/
+
+>>> Setting --jobs=1 due to the above interactive package(s)
+>>> In order to temporarily mask interactive updates, you may
+>>> specify --accept-properties=-interactive
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 2) dev-util/fetchprobe-1::fetchrepo for /var/tmp/b421/root/
+ * Fetching files in the background.
+ * To view fetch progress, run in another terminal:
+ * tail -f /var/tmp/b421/log/emerge-fetch.log
+ * probe-1.tar.gz BLAKE2B SHA512 size ;-) ...                            [ ok ]
+>>> Unpacking source...
+>>> Unpacking 'probe-1.tar.gz' to /var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/work
+gtar: This does not look like a tar archive
+
+gzip: stdin: not in gzip format
+gtar: Child returned status 1
+gtar: Error is not recoverable: exiting now
+ [31;01m*[0m ERROR: dev-util/fetchprobe-1::fetchrepo failed (unpack phase):
+ [31;01m*[0m   unpack: failure unpacking 'probe-1.tar.gz'
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m            ebuild.sh, line 143:  Called src_unpack
+ [31;01m*[0m          environment, line 231:  Called default
+ [31;01m*[0m   phase-functions.sh, line 918:  Called default_src_unpack
+ [31;01m*[0m   phase-functions.sh, line 947:  Called __eapi0_src_unpack
+ [31;01m*[0m     phase-helpers.sh, line 744:  Called unpack 'probe-1.tar.gz'
+ [31;01m*[0m     phase-helpers.sh, line 506:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m   		esac || die "unpack: failure unpacking ${f@Q}"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/fetchprobe-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/fetchprobe-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/work'
+ [31;01m*[0m S: '/var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/work/fetchprobe-1'
+open('/var/log/portage/elog/summary.log', 'a')
+
+>>> Failed to emerge dev-util/fetchprobe-1 for /var/tmp/b421/root/, Log file:
+
+>>>  '/var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/temp/build.log'
+
+ * Messages for package dev-util/fetchprobe-1 merged to /var/tmp/b421/root/:
+
+ * ERROR: dev-util/fetchprobe-1::fetchrepo failed (unpack phase):
+ *   unpack: failure unpacking 'probe-1.tar.gz'
+ * Call stack:
+ *            ebuild.sh, line 143:  Called src_unpack
+ *          environment, line 231:  Called default
+ *   phase-functions.sh, line 918:  Called default_src_unpack
+ *   phase-functions.sh, line 947:  Called __eapi0_src_unpack
+ *     phase-helpers.sh, line 744:  Called unpack 'probe-1.tar.gz'
+ *     phase-helpers.sh, line 506:  Called die
+ * The specific snippet of code:
+ *   		esac || die "unpack: failure unpacking ${f@Q}"
+ * If you need support, post the output of `emerge --info '=dev-util/fetchprobe-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/fetchprobe-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/temp/environment'.
+ * Working directory: '/var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/work'
+ * S: '/var/tmp/b421/tmp/portage/dev-util/fetchprobe-1/work/fetchprobe-1'
+rc=1
