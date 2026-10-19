@@ -11,6 +11,8 @@ use std::path::PathBuf;
 /// What [`merge_setup`] hands back to its caller.
 pub(crate) struct MergeSetupOut {
     pub(crate) status_mode: StatusMode,
+    /// `--jobs` after the interactive-package fallback.
+    pub(crate) jobs: usize,
     pub(crate) package_options: PackageOptions,
     pub(crate) portage_tmpdir: PathBuf,
     pub(crate) merge_options: MergeOptions,
@@ -42,6 +44,13 @@ pub(crate) fn merge_setup(
         quiet_build,
         entries.len(),
         verbose,
+    );
+    let (status_mode, jobs) = crate::emerge_build::apply_interactive_tasks(
+        status_mode,
+        jobs,
+        entries,
+        root,
+        &crate::emerge_build::progress_color(),
     );
     // Compressor/package-dir resolution; see `package_options_from_env`.
     let mut package_options = package_options_from_env(
@@ -98,6 +107,7 @@ pub(crate) fn merge_setup(
     crate::mtimedb::rotate_resume_to_backup(root);
     MergeSetupOut {
         status_mode,
+        jobs,
         package_options,
         portage_tmpdir,
         merge_options,

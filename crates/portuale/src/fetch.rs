@@ -504,7 +504,7 @@ pub fn fetch_src_uri(
             ));
         };
         let _lock = if options.distlocks {
-            Some(PortageLockfile::acquire(&dest)?)
+            Some(PortageLockfile::acquire_new_lockfile(&dest)?)
         } else {
             None
         };
@@ -897,7 +897,7 @@ mod tests {
         let dir = tempdir();
         let dest = dir.join("foo-1.0.tar.gz");
 
-        let _lock = PortageLockfile::acquire(&dest).expect("acquire succeeds");
+        let _lock = PortageLockfile::acquire_new_lockfile(&dest).expect("acquire succeeds");
 
         assert!(
             dir.join(".foo-1.0.tar.gz.portage_lockfile").is_file(),
@@ -910,12 +910,13 @@ mod tests {
         let dir = tempdir();
         let dest = dir.join("foo-1.0.tar.gz");
 
-        let lock1 = PortageLockfile::acquire(&dest).expect("first acquire succeeds");
+        let lock1 = PortageLockfile::acquire_new_lockfile(&dest).expect("first acquire succeeds");
         drop(lock1);
 
-        // The lockfile persists after release, just unlocked: a second acquire
+        // The lockfile is gone after release: a second acquire
         // must succeed immediately, not block on itself.
-        PortageLockfile::acquire(&dest).expect("second acquire succeeds once the first is dropped");
+        PortageLockfile::acquire_new_lockfile(&dest)
+            .expect("second acquire succeeds once the first is dropped");
     }
 
     /// A second acquire from another thread genuinely blocks until the first
@@ -925,13 +926,13 @@ mod tests {
         let dir = tempdir();
         let dest = dir.join("foo-1.0.tar.gz");
 
-        let lock1 = PortageLockfile::acquire(&dest).expect("first acquire succeeds");
+        let lock1 = PortageLockfile::acquire_new_lockfile(&dest).expect("first acquire succeeds");
 
         let dest2 = dest.to_path_buf();
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
-            let _lock2 =
-                PortageLockfile::acquire(&dest2).expect("second acquire succeeds once unblocked");
+            let _lock2 = PortageLockfile::acquire_new_lockfile(&dest2)
+                .expect("second acquire succeeds once unblocked");
             tx.send(()).unwrap();
         });
 
@@ -1067,6 +1068,12 @@ mod tests {
         assert_eq!(
             fs::read(distdir.join("hello-1.0.tar.gz")).unwrap(),
             b"hello world"
+        );
+        // Portage: fetch.py locks with `wantnewlockfile=1`, so `unlockfile`
+        // removes the dotfile (host `-f app-misc/hello` leaves none).
+        assert!(
+            !distdir.join(".hello-1.0.tar.gz.portage_lockfile").exists(),
+            "the distlocks lockfile is removed after the fetch"
         );
         handle.join().unwrap();
     }

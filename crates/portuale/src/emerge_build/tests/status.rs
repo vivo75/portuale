@@ -329,3 +329,69 @@ fn status_display_counters_feed_the_jobs_line() {
         ">>> Jobs: 1 of 3 complete, 1 failed                                     "
     );
 }
+
+/// An interactive package forces a background run into the foreground and a
+/// parallel `--jobs` down to 1, with the three-part text of
+/// `Scheduler._background_mode` (Portage 3.0.82.2 `Scheduler.py:483-519`).
+#[test]
+fn interactive_package_forces_foreground_and_one_job() {
+    let mut inter = source_entry(
+        "inter",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    inter.interactive = true;
+    let plain = source_entry(
+        "plain",
+        PretendOutcome::New {
+            version: "2.0".into(),
+        },
+    );
+    let entries = vec![plain, inter];
+    let color = crate::color::Colorizer::new(false);
+    let root = std::path::Path::new("/");
+    let (mode, jobs) = apply_interactive_tasks(
+        scheduler_status_mode(4, false, None, 2, false),
+        4,
+        &entries,
+        root,
+        &color,
+    );
+    assert!(!mode.background && !mode.show_jobs);
+    assert_eq!(jobs, 1);
+    // A serial, non-background run is left alone.
+    let (mode, jobs) = apply_interactive_tasks(
+        scheduler_status_mode(1, false, None, 2, false),
+        1,
+        &entries,
+        root,
+        &color,
+    );
+    assert!(!mode.background);
+    assert_eq!(jobs, 1);
+    // `--quiet` stays background-capable: the interactive entry turns it off,
+    // but `--jobs=1` needs no change.
+    let (mode, jobs) = apply_interactive_tasks(
+        scheduler_status_mode(1, true, None, 2, false),
+        1,
+        &entries,
+        root,
+        &color,
+    );
+    assert!(!mode.background);
+    assert_eq!(jobs, 1);
+    let list: Vec<&GraphEntry> = entries.iter().filter(|e| e.interactive).collect();
+    assert_eq!(
+        interactive_notice(&list, true, root, &color),
+        ">>> Sending package output to stdio due to interactive package(s):\n\n  \
+         dev-libs/inter-1.0\n\n\
+         >>> Setting --jobs=1 due to the above interactive package(s)\n\
+         >>> In order to temporarily mask interactive updates, you may\n\
+         >>> specify --accept-properties=-interactive\n"
+    );
+    assert!(
+        interactive_notice(&list, false, std::path::Path::new("/t"), &color)
+            .contains("  dev-libs/inter-1.0 for /t\n\n")
+    );
+}

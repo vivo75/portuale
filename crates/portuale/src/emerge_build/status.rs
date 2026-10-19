@@ -91,10 +91,9 @@ pub(crate) fn progress_color() -> crate::color::Colorizer {
 /// serial and non-background); `show_jobs` is `background &&
 /// (!quiet || verbose)`.
 ///
-/// Two deliberate cuts: interactive packages (the phase spawn honours
-/// `PROPERTIES=interactive` for stdin, but this mode ignores it: no forced
-/// foreground / `--jobs=1`, backlog #412) and the `--pretend`/`--fetchonly`/
-/// `--fetch-all-uri` exemption (those modes never reach this code).
+/// One deliberate cut: the `--pretend`/`--fetchonly`/`--fetch-all-uri`
+/// exemption (those modes never reach this code). Interactive packages are
+/// handled by [`apply_interactive_tasks`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct StatusMode {
     /// Real `Scheduler._background`: status lines print with no leading
@@ -134,6 +133,70 @@ pub(crate) fn scheduler_status_mode(
         background,
         show_jobs: background && (!quiet || verbose),
     }
+}
+
+/// The interactive-package half of `Scheduler._background_mode`: a
+/// background run holding a merge entry with `PROPERTIES=interactive`
+/// falls back to the foreground, lists the packages, and drops a parallel
+/// `--jobs` to 1. Returns the effective `--jobs` and mode; prints the notice
+/// on stdout like Portage's `writemsg_level` at INFO.
+// Portage: Scheduler.py, _background_mode / _get_interactive_tasks
+pub(crate) fn apply_interactive_tasks(
+    mode: StatusMode,
+    jobs: usize,
+    entries: &[GraphEntry],
+    root: &std::path::Path,
+    color: &crate::color::Colorizer,
+) -> (StatusMode, usize) {
+    let interactive: Vec<&GraphEntry> = entries
+        .iter()
+        .filter(|e| e.interactive && entry_counts_toward_progress(e))
+        .collect();
+    if !mode.background || interactive.is_empty() {
+        return (mode, jobs);
+    }
+    print!(
+        "{}",
+        interactive_notice(&interactive, jobs > 1, root, color)
+    );
+    (
+        StatusMode {
+            background: false,
+            show_jobs: false,
+        },
+        if jobs > 1 { 1 } else { jobs },
+    )
+}
+
+/// The notice text of [`apply_interactive_tasks`].
+pub(crate) fn interactive_notice(
+    interactive: &[&GraphEntry],
+    parallel: bool,
+    root: &std::path::Path,
+    color: &crate::color::Colorizer,
+) -> String {
+    let mut out =
+        String::from(">>> Sending package output to stdio due to interactive package(s):\n\n");
+    for entry in interactive {
+        let version = scheduler_cp_version(entry)
+            .map(|(_, v)| v)
+            .unwrap_or_default();
+        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
+        out.push_str(&format!("  {}", color.c("INFORM", &cpv)));
+        if root != std::path::Path::new("/") {
+            out.push_str(&format!(" for {}", root.display()));
+        }
+        out.push('\n');
+    }
+    out.push('\n');
+    if parallel {
+        out.push_str(
+            ">>> Setting --jobs=1 due to the above interactive package(s)\n\
+             >>> In order to temporarily mask interactive updates, you may\n\
+             >>> specify --accept-properties=-interactive\n",
+        );
+    }
+    out
 }
 
 /// The `>>> Jobs:` line plus the `Scheduler._status_msg` half that prefixes

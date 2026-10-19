@@ -10,6 +10,8 @@ use portage_repo::RepoConfig;
 /// The values [`run_source_merge_plan`] reads from its caller.
 pub(crate) struct RunSourceMergePlanArgs<'a> {
     pub(crate) opts: &'a EmergeOpts<'a>,
+    /// `--jobs` after the interactive-package fallback.
+    pub(crate) jobs: usize,
     pub(crate) entries: &'a Vec<GraphEntry>,
     pub(crate) root: &'a Path,
     pub(crate) repos: &'a [RepoConfig],
@@ -25,6 +27,7 @@ pub(crate) struct RunSourceMergePlanArgs<'a> {
 pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<ExitCode> {
     let RunSourceMergePlanArgs {
         opts,
+        jobs,
         entries,
         root,
         repos,
@@ -41,7 +44,6 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         ref atom_args,
         keep_going,
         ref buildpkg_exclude,
-        jobs,
         load_average,
         quiet_build,
         quiet,

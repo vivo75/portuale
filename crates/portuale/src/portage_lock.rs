@@ -17,10 +17,6 @@ pub(crate) struct PortageLockfile {
 }
 
 impl PortageLockfile {
-    pub(crate) fn acquire(mypath: &Path) -> Result<Self, String> {
-        Self::acquire_inner(mypath, None)
-    }
-
     /// Portage's `lockfile(path, wantnewlockfile=1)`: the sibling lock file
     /// is removed on release (`locks.py` forces `unlinkfile=1` for this
     /// shape, and `unlockfile` unlinks it once it holds the only link).

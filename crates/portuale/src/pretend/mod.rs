@@ -894,6 +894,7 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
         }
         let MergeSetupOut {
             status_mode,
+            jobs,
             package_options,
             portage_tmpdir,
             merge_options,
@@ -942,6 +943,7 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
             }
         } else if let Some(code) = run_source_merge_plan(RunSourceMergePlanArgs {
             opts,
+            jobs,
             entries,
             root,
             repos,
