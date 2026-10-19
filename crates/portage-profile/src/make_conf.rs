@@ -9,6 +9,8 @@ pub(crate) fn logical_lines(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
+    // The previous line ended in a `\` that continues an unquoted word.
+    let mut word_bs = false;
     for raw in text.lines() {
         // A full-line `#` comment outside any continuation is skipped whole;
         // without this a `#` in prose (e.g. `Don't`) would open a bogus
@@ -22,9 +24,10 @@ pub(crate) fn logical_lines(text: &str) -> Vec<String> {
         if !cur.is_empty() {
             // Inside a quote a trailing `\` stays with the next line's
             // newline so `varexpand` drops the pair, as `getconfig` does.
-            let kept_backslash = quote.is_some() && cur.ends_with('\\');
+            let kept_backslash = (quote.is_some() || word_bs) && cur.ends_with('\\');
             cur.push(if kept_backslash { '\n' } else { ' ' });
         }
+        word_bs = false;
         let mut prev = ' ';
         let mut escaped = false;
         for (idx, c) in line.char_indices() {
@@ -60,7 +63,13 @@ pub(crate) fn logical_lines(text: &str) -> Vec<String> {
         // A trailing `\` continues the line only outside a quote; inside one
         // it is kept for the next line (see above).
         if quote.is_none() && ends_with_escape && !line.is_empty() {
-            line = &line[..line.len() - 1];
+            // Glued to a word (`a\`), the pair stays for `shlex_token`,
+            // which turns it into a space; after a space it just vanishes.
+            word_bs = !line[..line.len() - 1].ends_with(char::is_whitespace)
+                && !line[..line.len() - 1].is_empty();
+            if !word_bs {
+                line = &line[..line.len() - 1];
+            }
             cont = true;
         }
         cur.push_str(line);
@@ -119,7 +128,12 @@ pub(crate) fn shlex_token(raw: &str) -> String {
                     pos += 1;
                 } else if current == '\\' {
                     if pos + 1 < chars.len() {
-                        out.push(chars[pos + 1]);
+                        // Portage: an escaped newline in a bare word reads as a space.
+                        out.push(if chars[pos + 1] == '\n' {
+                            ' '
+                        } else {
+                            chars[pos + 1]
+                        });
                         pos += 2;
                     } else {
                         out.push('\\');

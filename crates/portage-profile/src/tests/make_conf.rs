@@ -67,6 +67,20 @@ fn backslash_newline_in_quotes_is_removed_like_portage_getconfig() {
     assert_eq!(value("H=\"a  \\\n   b\"\n"), "a     b");
 }
 
+/// Unquoted `C=a\<newline>b`: the same capture, case C, reads `a b`; the
+/// token must not stop at the joined space (backlog #410).
+#[test]
+fn backslash_newline_in_an_unquoted_word_reads_as_a_space() {
+    let scalars = HashMap::new();
+    let value = |text: &str| {
+        let lines = logical_lines(text);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let (_, raw) = parse_kv_line(&lines[0]).expect("kv line");
+        substitute(&raw, &scalars)
+    };
+    assert_eq!(value("C=a\\\nb\n"), "a b");
+}
+
 /// The owner's `llvm-lto` env file (#409): `package.env` values keep no
 /// stray `\` from a continued `RUSTFLAGS`.
 #[test]
