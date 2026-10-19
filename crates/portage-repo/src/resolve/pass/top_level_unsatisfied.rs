@@ -174,6 +174,8 @@ pub(crate) fn step_top_level_unsatisfied(
             // `use flag configuration mismatch` row instead of vanishing
             // into the plain miss (#402: selection saw no ebuilds, so the
             // gate carries none — mirroring the empty `candidates` pool).
+            // One rejected for stale baked deps reports `changed deps`
+            // under `binpkg_changed_deps_active` (#420).
             // Otherwise the ebuild-side report below applies unchanged.
             if ctx.usepkgonly {
                 let binaries = list_binary_candidates(&ctx.local_binpkg, &key.0, &key.1);
@@ -187,6 +189,13 @@ pub(crate) fn step_top_level_unsatisfied(
                         newuse: ctx.newuse,
                         changed_use: ctx.changed_use,
                         ebuilds: &[],
+                        changed_deps: binpkg_changed_deps_active(ctx.usepkgonly).then_some(
+                            BinaryChangedDepsGate {
+                                root: ctx.root,
+                                repos: &ctx.repos,
+                                with_bdeps: ctx.with_bdeps,
+                            },
+                        ),
                     },
                 ) {
                     return Err(Error::Detail(report));
@@ -225,9 +234,11 @@ pub(crate) fn step_top_level_unsatisfied(
             // would have selected it). Local `PKGDIR` binaries keep the
             // miss text below (no cell covers that shape). A remote
             // rejected for its USE reports the mismatch row too (#402);
-            // the gate compares against the same-version ebuild, or
-            // nothing under `--usepkgonly`/a dropped ebuild db, exactly
-            // like selection's `retain`.
+            // one rejected for stale baked deps reports `changed deps`
+            // under `binpkg_changed_deps_active` (#420); the gates compare
+            // against the same-version ebuild, or nothing under
+            // `--usepkgonly`/a dropped ebuild db, exactly like selection's
+            // `retain`.
             // Portage: _show_unsatisfied_dep over the bintree;
             // S0 cell `g07-partly-excluded`.
             if ctx.getbinpkg {
@@ -258,6 +269,13 @@ pub(crate) fn step_top_level_unsatisfied(
                         newuse: ctx.newuse,
                         changed_use: ctx.changed_use,
                         ebuilds: ebuild_pool,
+                        changed_deps: binpkg_changed_deps_active(ctx.usepkgonly).then_some(
+                            BinaryChangedDepsGate {
+                                root: ctx.root,
+                                repos: &ctx.repos,
+                                with_bdeps: ctx.with_bdeps,
+                            },
+                        ),
                     },
                 ) {
                     return Err(Error::Detail(report));

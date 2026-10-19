@@ -504,3 +504,151 @@ fn highest_available_candidate_ignoring_use_honours_extra_constraints() {
         "the highest UNMASKED candidate is returned once backtracking excludes 2.0"
     );
 }
+
+/// Backlog #420 cell B: under `--binpkg-changed-deps`, a binary built
+/// against since-changed deps reports Portage's `changed deps` masked row
+/// instead of vanishing into the plain `no binary packages` miss.
+/// Without the gate the same visible binary is selectable (no rows).
+///
+/// Portage 3.0.82.2, s10x cell B on the real fixtures (rc 1, full argv
+/// `emerge -pv --package-moves=n --usepkgonly=y --binpkg-changed-deps=y
+/// dev-libs/bcdeppkg`): tree `RDEPEND dev-libs/bcdepnew`, local binary
+/// `RDEPEND dev-libs/bcdepold`, stderr `- dev-libs/bcdeppkg-1.0::testrepo
+/// (masked by: changed deps)`.
+#[test]
+fn binary_masked_rows_report_changed_deps_rejections() {
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let config = test_config();
+    let root = TempDir::new("portuale-420-changed-deps").keep();
+    let binary = Candidate {
+        source: CandidateSource::Binary,
+        binary_deps: HashMap::from([("RDEPEND".to_string(), "dev-libs/bcdepold".to_string())]),
+        binary_use: Some(HashSet::new()),
+        eapi: "8".to_string(),
+        repo_name: "testrepo".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    let no_gate = || BinaryRespectUseGate {
+        respect_use: false,
+        newuse: false,
+        changed_use: false,
+        ebuilds: &[],
+        changed_deps: None,
+    };
+    // Gate off: the visible binary is selectable, so no rows.
+    assert!(
+        binary_masked_rows_for_atom(BinaryMaskedRowsArgs {
+            binaries: std::slice::from_ref(&binary),
+            atom_str: "dev-libs/bcdeppkg",
+            config: &config,
+            gate: no_gate(),
+        })
+        .is_none()
+    );
+    // Gate on: the stale binary reports one `changed deps` row.
+    let rows = binary_masked_rows_for_atom(BinaryMaskedRowsArgs {
+        binaries: std::slice::from_ref(&binary),
+        atom_str: "dev-libs/bcdeppkg",
+        config: &config,
+        gate: BinaryRespectUseGate {
+            changed_deps: Some(BinaryChangedDepsGate {
+                root: &root,
+                repos: &repos,
+                with_bdeps: false,
+            }),
+            ..no_gate()
+        },
+    })
+    .expect("stale binary reports");
+    assert_eq!(
+        rows,
+        vec![(
+            "dev-libs/bcdeppkg-1.0::testrepo".to_string(),
+            vec!["changed deps".to_string()]
+        )]
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Backlog #420: a binary rejected by both gates reports Portage's first
+/// reason (`respect_use` before `changed_deps`, the `elif` order at
+/// depgraph.py:6655-6671), never both.
+#[test]
+fn binary_masked_rows_prefer_respect_use_over_changed_deps() {
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    // The user enables `x`, the binary was baked without it (the #402
+    // mismatch shape), and its RDEPEND is stale too (the #420 shape).
+    let mut config = test_config();
+    config.package_use_user = vec![("=dev-libs/bcdeppkg-1.0".to_string(), vec!["x".to_string()])];
+    let root = TempDir::new("portuale-420-gate-order").keep();
+    let binary = Candidate {
+        source: CandidateSource::Binary,
+        binary_deps: HashMap::from([("RDEPEND".to_string(), "dev-libs/bcdepold".to_string())]),
+        binary_use: Some(HashSet::new()),
+        eapi: "8".to_string(),
+        iuse: "x".to_string(),
+        repo_name: "testrepo".to_string(),
+        ..candidate("1.0", &["amd64"])
+    };
+    let rows = binary_masked_rows_for_atom(BinaryMaskedRowsArgs {
+        binaries: std::slice::from_ref(&binary),
+        atom_str: "dev-libs/bcdeppkg",
+        config: &config,
+        gate: BinaryRespectUseGate {
+            respect_use: true,
+            newuse: false,
+            changed_use: false,
+            ebuilds: &[],
+            changed_deps: Some(BinaryChangedDepsGate {
+                root: &root,
+                repos: &repos,
+                with_bdeps: false,
+            }),
+        },
+    })
+    .expect("twice-rejected binary reports");
+    assert_eq!(
+        rows,
+        vec![(
+            "dev-libs/bcdeppkg-1.0::testrepo".to_string(),
+            vec!["use flag configuration mismatch".to_string()]
+        )]
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Backlog #420: the dependency disclosure merges the ebuild and binary
+/// pools into one block, cpv-deduped like Portage's `show_masked_packages`
+/// (`shown_cpvs`) — ebuild rows first, a binary twin of a listed row dropped.
+#[test]
+fn merge_masked_rows_dedups_binary_twins_of_ebuild_rows() {
+    let merged = merge_masked_rows(
+        vec![(
+            "dev-libs/x-1.0::testrepo".to_string(),
+            vec!["package.mask".to_string()],
+        )],
+        vec![
+            (
+                "dev-libs/x-1.0::testrepo".to_string(),
+                vec!["changed deps".to_string()],
+            ),
+            (
+                "dev-libs/x-1.0::other".to_string(),
+                vec!["changed deps".to_string()],
+            ),
+        ],
+    );
+    assert_eq!(
+        merged,
+        vec![
+            (
+                "dev-libs/x-1.0::testrepo".to_string(),
+                vec!["package.mask".to_string()],
+            ),
+            (
+                "dev-libs/x-1.0::other".to_string(),
+                vec!["changed deps".to_string()],
+            ),
+        ]
+    );
+}

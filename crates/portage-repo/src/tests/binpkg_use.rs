@@ -579,6 +579,7 @@ fn binary_masked_report_lists_respect_use_mismatches_as_masked() {
             newuse: false,
             changed_use: false,
             ebuilds: &[],
+            changed_deps: None,
         },
     )
     .expect("USE-mismatched binaries report as masked");

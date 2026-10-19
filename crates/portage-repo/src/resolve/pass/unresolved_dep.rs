@@ -261,7 +261,7 @@ pub(crate) fn dedup_repeat_visit(args: DedupRepeatVisitArgs<'_>) -> ControlFlow<
                 .get(key)
                 .is_some_and(|old| live_miss_atom_supersedes(old, display_atom))
             {
-                let masked_rows = masked_candidates_for_atom(&ctx.repos, display_atom, config);
+                let masked_rows = dep_masked_rows(ctx, config, key, display_atom);
                 let use_rows = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
                     repos: &ctx.repos,
                     root: ctx.root,
@@ -283,8 +283,8 @@ pub(crate) fn dedup_repeat_visit(args: DedupRepeatVisitArgs<'_>) -> ControlFlow<
                 {
                     if live_miss_atom_supersedes(&rep.atom, display_atom) {
                         rep.atom = display_atom.to_string();
-                        if let Some(masked) = masked_rows.clone() {
-                            rep.masked = masked;
+                        if !masked_rows.is_empty() {
+                            rep.masked = masked_rows.clone();
                         }
                     }
                 }
@@ -492,6 +492,34 @@ pub(crate) fn compute_nvc_suggestions(args: ComputeNvcSuggestionsArgs<'_>) -> Nv
     }
 }
 
+/// The merged ebuild+binary masked rows for a dependency atom: what
+/// [`record_miss_disclosure`] (and the dedup-refresh below) files under
+/// `masked_deps`.
+fn dep_masked_rows(
+    ctx: &ResolveCtx<'_>,
+    config: &Config,
+    key: &(String, String),
+    display_atom: &str,
+) -> Vec<(String, Vec<String>)> {
+    masked_rows_for_dep(MaskedRowsForDepArgs {
+        repos: &ctx.repos,
+        root: ctx.root,
+        local_binpkg: &ctx.local_binpkg,
+        binrepos: &config.binrepos,
+        usepkg: ctx.usepkg,
+        usepkgonly: ctx.usepkgonly,
+        getbinpkg: ctx.getbinpkg,
+        binpkg_respect_use: ctx.binpkg_respect_use,
+        newuse: ctx.newuse,
+        changed_use: ctx.changed_use,
+        with_bdeps: ctx.with_bdeps,
+        category: &key.0,
+        package: &key.1,
+        atom_str: display_atom,
+        config,
+    })
+}
+
 /// The values [`record_miss_disclosure`] reads from its caller.
 pub(crate) struct RecordMissDisclosureArgs<'a> {
     pub(crate) outcome: &'a PretendOutcome,
@@ -539,7 +567,13 @@ pub(crate) fn record_miss_disclosure(args: RecordMissDisclosureArgs<'_>) {
         // item from display); the change block is its whole output.
         // `nvc_dep_atoms` is still kept for the abort reason.
         if !state.parent_flip_recorded.contains(key) {
-            if let Some(masked) = masked_candidates_for_atom(&ctx.repos, display_atom, config) {
+            // The masked disclosure merges the ebuild pool with every binary
+            // pool selection consulted (Portage's one block over all dbs): a
+            // binary selection rejected for its USE or stale baked deps
+            // discloses here with the same chain walk, instead of falling
+            // through to the plain miss (#420).
+            let masked = dep_masked_rows(ctx, config, key, display_atom);
+            if !masked.is_empty() {
                 // A supersede refreshes the just-computed rows too.
                 match state
                     .masked_deps

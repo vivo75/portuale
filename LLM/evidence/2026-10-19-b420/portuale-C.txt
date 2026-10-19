@@ -1,0 +1,11 @@
+$ env PORTAGE_CONFIGROOT=/var/tmp/w0/s10/root420 ROOT=/var/tmp/w0/s10/root420/root /home/vivo/repo/PORTUALE/portuale/target/release/portuale emerge -pv --package-moves=n --usepkgonly=y --binpkg-changed-deps=y dev-libs/t420cparent
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+emerge: there are no binary packages to satisfy "dev-libs/t420cdep" for /var/tmp/w0/s10/root420/root/.
+(dependency required by "dev-libs/t420cparent-1.0::t420repo" [binary])
+(dependency required by "dev-libs/t420cparent" [argument])
+[rc=1]

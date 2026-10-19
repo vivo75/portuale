@@ -511,6 +511,19 @@ pub(crate) struct BinaryRespectUseGate<'a> {
     pub(crate) newuse: bool,
     pub(crate) changed_use: bool,
     pub(crate) ebuilds: &'a [Candidate],
+    /// The `--binpkg-changed-deps` inputs selection's second `retain` read
+    /// (`None` when `binpkg_changed_deps_active` is off, so a kept binary
+    /// stays selectable here too).
+    pub(crate) changed_deps: Option<BinaryChangedDepsGate<'a>>,
+}
+
+/// The `--binpkg-changed-deps` side of [`BinaryRespectUseGate`]: the same
+/// `root`/`repos`/`with_bdeps` selection's `binary_deps_changed` check ran
+/// with, so the report re-derives the identical rejection.
+pub(crate) struct BinaryChangedDepsGate<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) with_bdeps: bool,
 }
 
 /// The `- <cpv>` text of a masked row: bare when EAPI-masked or the
@@ -539,7 +552,9 @@ fn output_cpv_for_masked_row(
 /// respect-use gate is Portage's `use flag configuration mismatch` mask —
 /// a row, not a silent pool drop. Only when some other mask already fires
 /// does that mask's own reason win (Portage checks the ignored-binaries
-/// reasons only `elif ... not mreasons`).
+/// reasons only `elif ... not mreasons`). A visible binary the
+/// `--binpkg-changed-deps` gate rejects reports `changed deps` next, the
+/// `elif` after `respect_use` (depgraph.py:6655-6671).
 // Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep
 fn masked_rows_for_pool_inner(
     candidates: &[Candidate],
@@ -566,7 +581,7 @@ fn masked_rows_for_pool_inner(
     if masked.is_empty() {
         return None;
     }
-    let gate_active = use_gate.is_some_and(|g| g.respect_use || g.newuse || g.changed_use);
+    let respect_use_active = use_gate.is_some_and(|g| g.respect_use || g.newuse || g.changed_use);
     // Descending version.
     masked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
 
@@ -574,10 +589,11 @@ fn masked_rows_for_pool_inner(
     let mut seen = std::collections::HashSet::new();
     for c in masked {
         // A selectable match silences the report. Without a gate this is
-        // exactly the old any-visible rule; with one, a use-mismatched
-        // binary counts as masked instead of selectable.
+        // exactly the old any-visible rule; with one, a gate-rejected
+        // binary (USE mismatch, then stale baked deps) counts as masked
+        // instead of selectable.
         if is_visible(c, &atom.category, &atom.package, config) {
-            let mismatched = gate_active
+            let mismatched = respect_use_active
                 && use_gate.is_some_and(|g| {
                     let ebuild_at_version = g
                         .ebuilds
@@ -594,21 +610,42 @@ fn masked_rows_for_pool_inner(
                         respect_use: g.respect_use,
                     })
                 });
-            if !mismatched {
-                return None;
+            if mismatched {
+                let output_cpv = output_cpv_for_masked_row(
+                    c,
+                    atom,
+                    &["use flag configuration mismatch".to_string()],
+                );
+                if seen.insert(output_cpv.clone()) {
+                    out.push((
+                        output_cpv,
+                        vec!["use flag configuration mismatch".to_string()],
+                    ));
+                }
+                continue;
             }
-            let output_cpv = output_cpv_for_masked_row(
-                c,
-                atom,
-                &["use flag configuration mismatch".to_string()],
-            );
-            if seen.insert(output_cpv.clone()) {
-                out.push((
-                    output_cpv,
-                    vec!["use flag configuration mismatch".to_string()],
-                ));
+            // Portage's `elif ... changed_deps`: a visible binary selection
+            // dropped for stale baked deps reports `changed deps`.
+            let deps_changed = use_gate.is_some_and(|g| {
+                g.changed_deps.as_ref().is_some_and(|d| {
+                    binary_deps_changed(BinaryDepsChangedArgs {
+                        root: d.root,
+                        repos: d.repos,
+                        candidate: c,
+                        category: &atom.category,
+                        package: &atom.package,
+                        with_bdeps: d.with_bdeps,
+                    })
+                })
+            });
+            if deps_changed {
+                let output_cpv = output_cpv_for_masked_row(c, atom, &["changed deps".to_string()]);
+                if seen.insert(output_cpv.clone()) {
+                    out.push((output_cpv, vec!["changed deps".to_string()]));
+                }
+                continue;
             }
-            continue;
+            return None;
         }
         let reasons = candidate_masking_reasons(c, &atom.category, &atom.package, config);
         // Portage prints an EAPI-masked binary row bare (verified live on
@@ -668,6 +705,7 @@ pub(crate) fn all_binary_masked_report(
             newuse: false,
             changed_use: false,
             ebuilds: &[],
+            changed_deps: None,
         },
     )
 }
@@ -675,9 +713,11 @@ pub(crate) fn all_binary_masked_report(
 /// [`all_binary_masked_report`] with the respect-use gate threaded through:
 /// a binary selection rejected for its USE still reports
 /// `use flag configuration mismatch` instead of vanishing into the plain
-/// `no binary packages` miss. The installable set is unchanged — this only
-/// widens what the masked builder sees, mirroring Portage's
-/// `ignored_binaries[respect_use]` reason in `_show_unsatisfied_dep`.
+/// `no binary packages` miss, and one rejected for stale baked deps reports
+/// `changed deps` next (Portage's `elif` order). The installable set is
+/// unchanged — this only widens what the masked builder sees, mirroring
+/// Portage's `ignored_binaries[respect_use]`/`[changed_deps]` reasons in
+/// `_show_unsatisfied_dep`.
 // Portage: lib/_emerge/depgraph.py
 pub(crate) fn all_binary_masked_report_with_respect_use(
     binaries: &[Candidate],
@@ -689,6 +729,140 @@ pub(crate) fn all_binary_masked_report_with_respect_use(
     let atom = portage_dep::parse_atom(atom_str)?;
     let masked = masked_rows_for_pool_inner(binaries, atom_str, &atom, config, Some(&gate))?;
     render_all_masked_block(xinfo, masked, None)
+}
+
+/// The values [`binary_masked_rows_for_atom`] reads from its caller.
+pub(crate) struct BinaryMaskedRowsArgs<'a> {
+    pub(crate) binaries: &'a [Candidate],
+    pub(crate) atom_str: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: BinaryRespectUseGate<'a>,
+}
+
+/// The version-matching-but-masked rows for one binary pool: `None` when the
+/// pool has no match at all, or when some match is fully selectable (then
+/// selection took it — the miss came from elsewhere). The dependency
+/// disclosure merges these into the ebuild rows.
+pub(crate) fn binary_masked_rows_for_atom(
+    args: BinaryMaskedRowsArgs<'_>,
+) -> Option<Vec<(String, Vec<String>)>> {
+    let BinaryMaskedRowsArgs {
+        binaries,
+        atom_str,
+        config,
+        gate,
+    } = args;
+    let atom = portage_dep::parse_atom(atom_str)?;
+    masked_rows_for_pool_inner(binaries, atom_str, &atom, config, Some(&gate))
+}
+
+/// Merge binary masked rows into ebuild ones, cpv-deduped like Portage's
+/// `show_masked_packages` (`shown_cpvs`): ebuild rows first, a binary twin
+/// of a listed row dropped, any other-repo binary row appended.
+// Portage: lib/_emerge/depgraph.py, show_masked_packages
+pub(crate) fn merge_masked_rows(
+    mut masked: Vec<(String, Vec<String>)>,
+    binaries: Vec<(String, Vec<String>)>,
+) -> Vec<(String, Vec<String>)> {
+    for (cpv, reasons) in binaries {
+        if !masked.iter().any(|(listed, _)| *listed == cpv) {
+            masked.push((cpv, reasons));
+        }
+    }
+    masked
+}
+
+/// The values [`masked_rows_for_dep`] reads from its caller.
+pub(crate) struct MaskedRowsForDepArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) local_binpkg: &'a BinaryIndex,
+    pub(crate) binrepos: &'a [portage_profile::BinRepo],
+    pub(crate) usepkg: bool,
+    pub(crate) usepkgonly: bool,
+    pub(crate) getbinpkg: bool,
+    pub(crate) binpkg_respect_use: bool,
+    pub(crate) newuse: bool,
+    pub(crate) changed_use: bool,
+    pub(crate) with_bdeps: bool,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) atom_str: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+}
+
+/// The version-matching masked rows for a dependency atom across the ebuild
+/// pool and every binary pool selection consulted (local under
+/// `--usepkg`/`--usepkgonly`, remote under `--getbinpkg`), merged
+/// ebuild-first. Empty when no pool version-matches, or a binary is fully
+/// selectable. Both gates mirror selection's `retain`s exactly
+/// (`binpkg_respect_use_ok` with the same-version ebuild pool selection saw
+/// — `&[]` under `--usepkgonly`/a dropped ebuild db — and
+/// `binary_deps_changed` under `binpkg_changed_deps_active`).
+// Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep
+pub(crate) fn masked_rows_for_dep(args: MaskedRowsForDepArgs<'_>) -> Vec<(String, Vec<String>)> {
+    let MaskedRowsForDepArgs {
+        repos,
+        root,
+        local_binpkg,
+        binrepos,
+        usepkg,
+        usepkgonly,
+        getbinpkg,
+        binpkg_respect_use,
+        newuse,
+        changed_use,
+        with_bdeps,
+        category,
+        package,
+        atom_str,
+        config,
+    } = args;
+    let mut merged = masked_candidates_for_atom(repos, atom_str, config).unwrap_or_default();
+    if !(usepkg || usepkgonly) && !getbinpkg {
+        return merged;
+    }
+    let ebuilds: Vec<Candidate> = if usepkgonly || crate::globals::ebuild_db_dropped() {
+        Vec::new()
+    } else {
+        list_candidates(repos, category, package)
+            .map(|c| c.to_vec())
+            .unwrap_or_default()
+    };
+    let changed_deps = binpkg_changed_deps_active(usepkgonly).then_some(BinaryChangedDepsGate {
+        root,
+        repos,
+        with_bdeps,
+    });
+    let mut binaries = if usepkg || usepkgonly {
+        list_binary_candidates(local_binpkg, category, package)
+    } else {
+        Vec::new()
+    };
+    if getbinpkg {
+        binaries.extend(list_remote_binary_candidates(
+            binrepos,
+            root,
+            local_binpkg,
+            category,
+            package,
+        ));
+    }
+    if let Some(rows) = binary_masked_rows_for_atom(BinaryMaskedRowsArgs {
+        binaries: &binaries,
+        atom_str,
+        config,
+        gate: BinaryRespectUseGate {
+            respect_use: binpkg_respect_use,
+            newuse,
+            changed_use,
+            ebuilds: &ebuilds,
+            changed_deps,
+        },
+    }) {
+        merged = merge_masked_rows(merged, rows);
+    }
+    merged
 }
 
 /// The `--usepkg-exclude`/`--usepkg-include` drop of the only binaries that match the

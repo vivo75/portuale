@@ -68,9 +68,24 @@ Masked-dependency reports.
 
 ## struct BinaryRespectUseGate
 - #402: the same-version ebuild pool selection compared against (`&[]` under `--usepkgonly`/a dropped ebuild db, where selection saw no ebuilds) plus the three flags gating selection's `retain` (`binpkg_respect_use || newuse || changed_use`, `pretend.rs:1243`).
+- #420: widened with the `--binpkg-changed-deps` side (`changed_deps: Option<BinaryChangedDepsGate>`, `None` when `binpkg_changed_deps_active` is off), same `root`/`repos`/`with_bdeps` selection's second `retain` runs with (`pretend.rs:1267`).
+
+## struct BinaryChangedDepsGate
+- #420: the `--binpkg-changed-deps` side of `BinaryRespectUseGate`: the report re-derives selection's `binary_deps_changed` rejection with identical inputs, so report and selection cannot drift (the recorded-rejects alternative would have touched the hot path; the re-derivation is pure).
 
 ## fn all_binary_masked_report_with_respect_use
 - #402: a version-matching binary that is `is_visible` but rejected by the gate reports `use flag configuration mismatch` instead of vanishing into the plain miss (S0 `b03-use-bid2-respect`, re-run live on host 3.0.82.2 2026-10-19: one cpv-deduped row for both builds, rc 1). Portage models the mismatch as a mask, not a miss: built pkgs whose `ignored_binaries` carry `respect_use` get exactly that reason, and only when no other mask fires (`depgraph.py:6658-6663`, the `elif ... not mreasons` chain in `_show_unsatisfied_dep`; rows deduped by cpv in `show_masked_packages`, `depgraph.py:12453`). A selectable match (visible and gate-ok) still silences the report, and a non-visible binary keeps its own `candidate_masking_reasons` row — the mismatch row never overrides another mask. The installable set is unchanged (the `retain` sites are untouched); only the masked builder sees the dropped binaries. The ebuild pool (`masked_candidates_for_atom`) is unaffected — `all_masked_report` still delegates with no gate.
+- #420: a visible binary the changed-deps gate rejects reports `changed deps` next — the `elif` after `respect_use` (`depgraph.py:6655-6671`; respect-use wins when both fire, verified by the both-fire unit leg). S0 cell B (`b420-changed-deps-top`, root420 `t420cdep`, rc 1). Both top-level report sites (`step_top_level_unsatisfied` local/remote) thread the gate through; the no-gate `all_binary_masked_report` passes `None`, byte-identical to before.
+
+## fn binary_masked_rows_for_atom
+- #420: one binary pool through `masked_rows_for_pool_inner` with the widened gate: `None` when the pool has no version match, or when some match is fully selectable (then selection took it — the miss came from elsewhere).
+
+## fn merge_masked_rows
+- #420: ebuild rows first, a binary twin of a listed row dropped, any other-repo binary row appended — Portage's one block over all dbs, whose `show_masked_packages` dedups by cpv (`shown_cpvs`, `depgraph.py:12453-12463`: "Maybe there is both an ebuild and a binary. Only show one of them").
+
+## fn masked_rows_for_dep
+- #420: the version-matching masked rows for a dependency atom across the ebuild pool and every binary pool selection consulted (local under `--usepkg`/`--usepkgonly`, remote under `--getbinpkg`), merged ebuild-first. Portage's `_show_unsatisfied_dep` loops `dbs` the same way (`porttree` skipped under `--usepkgonly`, `depgraph.py:809-817`; ebuild rows are still merged here under `--usepkgonly` — pre-existing portuale behaviour, out of scope). Empty when no pool version-matches, or a binary is fully selectable. Both gates mirror selection's `retain`s exactly.
+- #420 real-fixture grounding (s10x, host Portage 3.0.82.2 live): cell A needs a synthetic *parent* binary row — without one Portage reports the parent miss (`there are no binary packages to satisfy "app-misc/t341-built"`) and never reaches the dep. The slot-op dep atom prints whole (`"dev-libs/t341-dep:0/1="`). Local cells read `::testrepo` (the synthetic row's REPO). The remote twin (`--getbinpkgonly`, `::gentoo` row) shares this helper but is portuale-verified only: live Portage cannot consume the fixture binhost index (zero `PATH` lines — `get_binpkg_format` rejects every entry), so no live remote oracle exists.
 
 ## fn candidate_masking_reasons
 - #348 S5: an unsupported EAPI reports the lone `EAPI <eapi>` reason before every other mask (raw head/index value: `EAPI 99`, `EAPI 7_alpha`). Portage: `getmaskingstatus.py`.
