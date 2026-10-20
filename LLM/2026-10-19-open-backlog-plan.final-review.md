@@ -11,7 +11,7 @@ Branch `batch/2026-10-19`, portuale `b76ee705..f8961146` (33 commits), pmtest pa
 - G-R: `l0-fixture-oracle` 48 probes / 0 unexplained; `l0-resolver` no newly unexplained cell (one newly clean). Measured on `330dbcf4`; later commits touch only the pubgrub bridge and `--resume --fetchonly`.
 - G-PB (pubgrub, five modes): clean cells 61 / 64 / 67 / 14 / 85 against baseline 60 / 63 / 66 / 14 / 84, no exit or `python_targets` findings. The first run on `330dbcf4` found a real regression (see below); the table is the re-run after the fix.
 - G-M: reinstall runs of glibc + bash (plain and with `INSTALL_MASK`) 2/2 merged, 0 unexplained; `l31` control 0 unexplained. The plain first run is vacuous (the image already holds those versions); it is not counted.
-- G-P: `l2` builder 0 unexplained, `l3` smoke 0 unexplained. The `l3` merge-gate cell compiled gcc for over 3 h and was stopped; it is **not claimed**.
+- G-P: `l2` builder 0 unexplained, `l3` smoke 0 unexplained. The `l3` merge-gate cell (glibc, bash, mpdecimal, with gcc rebuilt; `L3_JOBS=12 L3_CONTROL=1`, run `l3-20261020T090327Z`) is green: 44 packages touched on every side, candidate 35 hard findings all explained, 0 unexplained; control (Portage vs Portage) 0 findings. The first attempt at `-j1` was stopped after 3 h.
 
 ## Found late, fixed
 - Bed G-PB, `-pvuD` / `-pvuDN`: #429's rebuild-with-flip planning also fired for alternatives of `||` groups and for deps of kept installed packages, planning `setuptools`/`jinja2` reinstalls and `python_targets` changes (`@system` and `@world` went from rc 0 to rc 1). Fixed in `f8961146`; probe `app-editors/emacs -pvuDN --solver=pubgrub`.
