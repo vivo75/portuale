@@ -16,7 +16,7 @@ Dependency resolution took (backtrack: 0/20).
  [31;01m*[0m 
  [31;01m*[0m Call stack:
  [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
- [31;01m*[0m   environment, line 215:  Called die
+ [31;01m*[0m   environment, line 216:  Called die
  [31;01m*[0m The specific snippet of code:
  [31;01m*[0m       die "compile exploded"
  [31;01m*[0m 
@@ -75,7 +75,7 @@ Dependency resolution took (backtrack: 0/20).
  [31;01m*[0m 
  [31;01m*[0m Call stack:
  [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
- [31;01m*[0m   environment, line 215:  Called die
+ [31;01m*[0m   environment, line 216:  Called die
  [31;01m*[0m The specific snippet of code:
  [31;01m*[0m       die "compile exploded"
  [31;01m*[0m 
@@ -109,7 +109,7 @@ Dependency resolution took (backtrack: 0/20).
  [31;01m*[0m 
  [31;01m*[0m Call stack:
  [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
- [31;01m*[0m   environment, line 215:  Called die
+ [31;01m*[0m   environment, line 216:  Called die
  [31;01m*[0m The specific snippet of code:
  [31;01m*[0m       die "compile exploded"
  [31;01m*[0m 
@@ -164,7 +164,7 @@ emerge: 1 package(s) failed to merge (--keep-going):
  [31;01m*[0m 
  [31;01m*[0m Call stack:
  [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
- [31;01m*[0m   environment, line 215:  Called die
+ [31;01m*[0m   environment, line 216:  Called die
  [31;01m*[0m The specific snippet of code:
  [31;01m*[0m       die "compile exploded"
  [31;01m*[0m 

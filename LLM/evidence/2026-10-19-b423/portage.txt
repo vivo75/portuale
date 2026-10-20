@@ -1,41 +1,6 @@
 === kg-bad-good-top
-
-Performing Global Updates
-(Could take a couple of minutes if you have a lot of binary packages.)
-  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
-  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
-  p='update /etc/portage/package.*'
-/.gentoo/repos/gentoo/profiles/updates/4Q-2022........
-/.gentoo/repos/gentoo/profiles/updates/3Q-2020..............
-/.gentoo/repos/gentoo/profiles/updates/1Q-2023.......................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2024........................................................................................
-/.gentoo/repos/gentoo/profiles/updates/2Q-2020.........
-/.gentoo/repos/gentoo/profiles/updates/4Q-2025...
-/.gentoo/repos/gentoo/profiles/updates/2Q-2024...........
-/.gentoo/repos/gentoo/profiles/updates/4Q-2021.......................................................................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2020.........
-/.gentoo/repos/gentoo/profiles/updates/3Q-2023..................
-/.gentoo/repos/gentoo/profiles/updates/3Q-2024.............
-/.gentoo/repos/gentoo/profiles/updates/4Q-2026..
-/.gentoo/repos/gentoo/profiles/updates/2Q-2023..............................
-/.gentoo/repos/gentoo/profiles/updates/2Q-2021.......
-/.gentoo/repos/gentoo/profiles/updates/4Q-2024...............................................................................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2025...........................
-/.gentoo/repos/gentoo/profiles/updates/3Q-2026.
-/.gentoo/repos/gentoo/profiles/updates/3Q-2021...........
-/.gentoo/repos/gentoo/profiles/updates/4Q-2023........................................
-/.gentoo/repos/gentoo/profiles/updates/2Q-2026......
-/.gentoo/repos/gentoo/profiles/updates/2Q-2022...........
-/.gentoo/repos/gentoo/profiles/updates/3Q-2025.......
-/.gentoo/repos/gentoo/profiles/updates/1Q-2026...
-/.gentoo/repos/gentoo/profiles/updates/3Q-2022.....................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2021.......
-/.gentoo/repos/gentoo/profiles/updates/2Q-2025......
-/.gentoo/repos/gentoo/profiles/updates/4Q-2020.......
-
-
 Calculating dependencies ... done!
-Dependency resolution took 1.73 s (backtrack: 0/20).
+Dependency resolution took 1.69 s (backtrack: 0/20).
 
 
 >>> Verifying ebuild manifests
@@ -43,7 +8,7 @@ Dependency resolution took 1.73 s (backtrack: 0/20).
 >>> Emerging (1 of 3) dev-util/bad-1::fetchrepo for /var/tmp/b423/root/
  * Fetching files in the background.
  * To view fetch progress, run in another terminal:
- * tail -f /var/tmp/b423log/emerge-fetch.log
+ * tail -f /var/log/emerge-fetch.log
 >>> Unpacking source...
 >>> Source unpacked in /var/tmp/b423/tmp/portage/dev-util/bad-1/work
 >>> Preparing source in /var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1 ...
@@ -72,7 +37,7 @@ Dependency resolution took 1.73 s (backtrack: 0/20).
 >>>  '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
 *** Resuming merge...
 Calculating dependencies ... done!
-Dependency resolution took 1.16 s.
+Dependency resolution took 1.11 s.
 
  * emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root/ dropped because
  * it requires dev-util/bad
@@ -80,7 +45,7 @@ Dependency resolution took 1.16 s.
 >>> Emerging (1 of 1) dev-util/good-1::fetchrepo for /var/tmp/b423/root/
  * Fetching files in the background.
  * To view fetch progress, run in another terminal:
- * tail -f /var/tmp/b423log/emerge-fetch.log
+ * tail -f /var/log/emerge-fetch.log
 >>> Unpacking source...
 >>> Source unpacked in /var/tmp/b423/tmp/portage/dev-util/good-1/work
 >>> Preparing source in /var/tmp/b423/tmp/portage/dev-util/good-1/work/good-1 ...
@@ -128,9 +93,19 @@ Dependency resolution took 1.16 s.
  * GNU info directory index is up-to-date.
 rc=1
 --- stderr
+open('/var/log/portage/elog/summary.log', 'a')
+open('/var/log/portage/elog/summary.log', 'a')
+ * 
+ * The following 2 packages have failed to build, install, or execute
+ * postinst:
+ * 
+ *  (dev-util/bad-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root/'), Log file:
+ *   '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
+ *  (dev-util/top-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root/')
+ * 
 === nokg-bad-good-top
 Calculating dependencies ... done!
-Dependency resolution took 1.70 s (backtrack: 0/20).
+Dependency resolution took 1.65 s (backtrack: 0/20).
 
 
 >>> Verifying ebuild manifests
@@ -138,7 +113,7 @@ Dependency resolution took 1.70 s (backtrack: 0/20).
 >>> Emerging (1 of 3) dev-util/bad-1::fetchrepo for /var/tmp/b423/root/
  * Fetching files in the background.
  * To view fetch progress, run in another terminal:
- * tail -f /var/tmp/b423log/emerge-fetch.log
+ * tail -f /var/log/emerge-fetch.log
 >>> Unpacking source...
 >>> Source unpacked in /var/tmp/b423/tmp/portage/dev-util/bad-1/work
 >>> Preparing source in /var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1 ...
@@ -151,7 +126,7 @@ Dependency resolution took 1.70 s (backtrack: 0/20).
  [31;01m*[0m 
  [31;01m*[0m Call stack:
  [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
- [31;01m*[0m   environment, line 213:  Called die
+ [31;01m*[0m   environment, line 214:  Called die
  [31;01m*[0m The specific snippet of code:
  [31;01m*[0m       die "compile exploded"
  [31;01m*[0m 
@@ -172,7 +147,7 @@ Dependency resolution took 1.70 s (backtrack: 0/20).
  *   compile exploded
  * Call stack:
  *     ebuild.sh, line 143:  Called src_compile
- *   environment, line 213:  Called die
+ *   environment, line 214:  Called die
  * The specific snippet of code:
  *       die "compile exploded"
  * If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
@@ -185,43 +160,8 @@ rc=1
 --- stderr
 open('/var/log/portage/elog/summary.log', 'a')
 === kg-bad-only
-
-Performing Global Updates
-(Could take a couple of minutes if you have a lot of binary packages.)
-  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
-  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
-  p='update /etc/portage/package.*'
-/.gentoo/repos/gentoo/profiles/updates/4Q-2022........
-/.gentoo/repos/gentoo/profiles/updates/3Q-2020..............
-/.gentoo/repos/gentoo/profiles/updates/1Q-2023.......................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2024........................................................................................
-/.gentoo/repos/gentoo/profiles/updates/2Q-2020.........
-/.gentoo/repos/gentoo/profiles/updates/4Q-2025...
-/.gentoo/repos/gentoo/profiles/updates/2Q-2024...........
-/.gentoo/repos/gentoo/profiles/updates/4Q-2021.......................................................................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2020.........
-/.gentoo/repos/gentoo/profiles/updates/3Q-2023..................
-/.gentoo/repos/gentoo/profiles/updates/3Q-2024.............
-/.gentoo/repos/gentoo/profiles/updates/4Q-2026..
-/.gentoo/repos/gentoo/profiles/updates/2Q-2023..............................
-/.gentoo/repos/gentoo/profiles/updates/2Q-2021.......
-/.gentoo/repos/gentoo/profiles/updates/4Q-2024...............................................................................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2025...........................
-/.gentoo/repos/gentoo/profiles/updates/3Q-2026.
-/.gentoo/repos/gentoo/profiles/updates/3Q-2021...........
-/.gentoo/repos/gentoo/profiles/updates/4Q-2023........................................
-/.gentoo/repos/gentoo/profiles/updates/2Q-2026......
-/.gentoo/repos/gentoo/profiles/updates/2Q-2022...........
-/.gentoo/repos/gentoo/profiles/updates/3Q-2025.......
-/.gentoo/repos/gentoo/profiles/updates/1Q-2026...
-/.gentoo/repos/gentoo/profiles/updates/3Q-2022.....................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2021.......
-/.gentoo/repos/gentoo/profiles/updates/2Q-2025......
-/.gentoo/repos/gentoo/profiles/updates/4Q-2020.......
-
-
 Calculating dependencies ... done!
-Dependency resolution took 1.67 s (backtrack: 0/20).
+Dependency resolution took 1.66 s (backtrack: 0/20).
 
 
 >>> Verifying ebuild manifests
@@ -278,69 +218,31 @@ open('/var/log/portage/elog/summary.log', 'a')
  *  (dev-util/bad-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root/'), Log file:
  *   '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
  * 
-p/b423/tmp/portage/dev-util/bad-1/temp/build.log'
- *  (dev-util/top-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root/')
- * 
 === kg-bad-good-jobs
-
-Performing Global Updates
-(Could take a couple of minutes if you have a lot of binary packages.)
-  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
-  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
-  p='update /etc/portage/package.*'
-/.gentoo/repos/gentoo/profiles/updates/4Q-2022........
-/.gentoo/repos/gentoo/profiles/updates/3Q-2020..............
-/.gentoo/repos/gentoo/profiles/updates/1Q-2023.......................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2024........................................................................................
-/.gentoo/repos/gentoo/profiles/updates/2Q-2020.........
-/.gentoo/repos/gentoo/profiles/updates/4Q-2025...
-/.gentoo/repos/gentoo/profiles/updates/2Q-2024...........
-/.gentoo/repos/gentoo/profiles/updates/4Q-2021.......................................................................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2020.........
-/.gentoo/repos/gentoo/profiles/updates/3Q-2023..................
-/.gentoo/repos/gentoo/profiles/updates/3Q-2024.............
-/.gentoo/repos/gentoo/profiles/updates/4Q-2026..
-/.gentoo/repos/gentoo/profiles/updates/2Q-2023..............................
-/.gentoo/repos/gentoo/profiles/updates/2Q-2021.......
-/.gentoo/repos/gentoo/profiles/updates/4Q-2024...............................................................................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2025...........................
-/.gentoo/repos/gentoo/profiles/updates/3Q-2026.
-/.gentoo/repos/gentoo/profiles/updates/3Q-2021...........
-/.gentoo/repos/gentoo/profiles/updates/4Q-2023........................................
-/.gentoo/repos/gentoo/profiles/updates/2Q-2026......
-/.gentoo/repos/gentoo/profiles/updates/2Q-2022...........
-/.gentoo/repos/gentoo/profiles/updates/3Q-2025.......
-/.gentoo/repos/gentoo/profiles/updates/1Q-2026...
-/.gentoo/repos/gentoo/profiles/updates/3Q-2022.....................
-/.gentoo/repos/gentoo/profiles/updates/1Q-2021.......
-/.gentoo/repos/gentoo/profiles/updates/2Q-2025......
-/.gentoo/repos/gentoo/profiles/updates/4Q-2020.......
-
-
 Calculating dependencies ... done!
-Dependency resolution took 1.67 s (backtrack: 0/20).
+Dependency resolution took 2.03 s (backtrack: 0/20).
 
 >>> Verifying ebuild manifests
->>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 1.30, 2.04, 8.14
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 3.08, 3.84, 4.43
 >>> Emerging (1 of 3) dev-util/bad-1::fetchrepo for /var/tmp/b423/root/
->>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 1.30, 2.04, 8.14
->>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 1.30, 2.04, 8.14
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 3.08, 3.84, 4.43
+>>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 3.08, 3.84, 4.43
 >>> Emerging (2 of 3) dev-util/good-1::fetchrepo for /var/tmp/b423/root/
->>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 1.30, 2.04, 8.14
+>>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 3.08, 3.84, 4.43
 >>> Failed to emerge dev-util/bad-1 for /var/tmp/b423/root/, Log file:
->>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 1.30, 2.04, 8.14
+>>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 3.08, 3.84, 4.43
 >>>  '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
->>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 1.30, 2.04, 8.14
->>> Jobs: 0 of 3 complete, 2 running, 1 failed                          Load avg: 1.30, 2.04, 8.14
->>> Jobs: 0 of 3 complete, 1 running, 1 failed                          Load avg: 1.30, 2.04, 8.14
->>> Jobs: 0 of 3 complete, 1 failed                                     Load avg: 1.30, 2.04, 8.14
+>>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 3.08, 3.84, 4.43
+>>> Jobs: 0 of 3 complete, 2 running, 1 failed                          Load avg: 3.08, 3.84, 4.43
+>>> Jobs: 0 of 3 complete, 1 running, 1 failed                          Load avg: 3.08, 3.84, 4.43
+>>> Jobs: 0 of 3 complete, 1 failed                                     Load avg: 3.08, 3.84, 4.43
 >>> Installing (2 of 3) dev-util/good-1::fetchrepo to /var/tmp/b423/root/
->>> Jobs: 0 of 3 complete, 1 failed, 1 merge wait                       Load avg: 1.30, 2.04, 8.14
+>>> Jobs: 0 of 3 complete, 1 failed, 1 merge wait                       Load avg: 3.08, 3.84, 4.43
 >>> Recording dev-util/good in "world" favorites file...
->>> Jobs: 0 of 3 complete, 1 failed                                     Load avg: 1.30, 2.04, 8.14
+>>> Jobs: 0 of 3 complete, 1 failed                                     Load avg: 2.91, 3.79, 4.41
 >>> Completed (2 of 3) dev-util/good-1::fetchrepo to /var/tmp/b423/root/
->>> Jobs: 0 of 3 complete, 1 failed                                     Load avg: 1.30, 2.04, 8.14
->>> Jobs: 1 of 3 complete, 1 failed                                     Load avg: 1.30, 2.04, 8.14
+>>> Jobs: 0 of 3 complete, 1 failed                                     Load avg: 2.91, 3.79, 4.41
+>>> Jobs: 1 of 3 complete, 1 failed                                     Load avg: 2.91, 3.79, 4.41
 
 *** Resuming merge...
 Calculating dependencies ... done!
@@ -375,52 +277,6 @@ rc=1
 --- stderr
 open('/var/log/portage/elog/summary.log', 'a')
 open('/var/log/portage/elog/summary.log', 'a')
- * 
- * The following 2 packages have failed to build, install, or execute
- * postinst:
- * 
- *  (dev-util/bad-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root/'), Log file:
- *   '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
- *  (dev-util/top-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root/')
- * 
-> Recording dev-util/good in "world" favorites file...
->>> Jobs: 0 of 3 complete, 1 failed                                     Load avg: 1.33, 2.06, 8.17
->>> Completed (2 of 3) dev-util/good-1::fetchrepo to /var/tmp/b423/root/
->>> Jobs: 0 of 3 complete, 1 failed                                     Load avg: 1.33, 2.06, 8.17
->>> Jobs: 1 of 3 complete, 1 failed                                     Load avg: 1.33, 2.06, 8.17
-
-*** Resuming merge...
-Calculating dependencies ... done!
-Dependency resolution took 0.74 s.
-
- * emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root/ dropped because
- * it requires dev-util/bad
-
- * Messages for package dev-util/bad-1 merged to /var/tmp/b423/root/:
-
- * ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
- *   compile exploded
- * Call stack:
- *     ebuild.sh, line 143:  Called src_compile
- *   environment, line 214:  Called die
- * The specific snippet of code:
- *       die "compile exploded"
- * If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
- * the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
- * The complete build log is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'.
- * The ebuild environment file is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/environment'.
- * Working directory: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
- * S: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
-
- * Messages for package dev-util/top-1 merged to /var/tmp/b423/root/:
-
- * emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root/ dropped because
- * it requires dev-util/bad
-
- * GNU info directory index is up-to-date.
-rc=1
---- stderr
-                                               open('/var/log/portage/elog/summary.log', 'a')
  * 
  * The following 2 packages have failed to build, install, or execute
  * postinst:
