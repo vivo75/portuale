@@ -263,3 +263,13 @@ Counts are tests or rows affected. Steps 1 to 3 are zero-behaviour-change and ca
 | 8 | Section C (the 319 CASES rows) and section B (the 14 groups): review only. Their argv is shared, but env and fixtures are not, so each needs a human check. | 319 + 30 tests | none unless reviewed |
 
 Not in scope but noticed: `test_atom_contract.py`, `test_versions_contract.py`, `test_use_reduce_contract.py` and `test_required_use_contract.py` still run a `rust == python` parity against `python-harness/cached_harness.py`. Their rc is enforced by `check=True`, so they are not vacuous, but the Python side is the thing the owner has been removing elsewhere. Worth a separate decision.
+
+
+## Corrections after review (2026-10-20)
+
+- D: `_assert_harvested` is not warning-only. It asserts the call has a corpus entry and fails on drift unless `PORTUALE_CORPUS_BLESS=1`; the 13 corpus-only tests are real pins (their values live in the compressed corpus).
+- D: the `ebuild` dry-run tests listed as having no rc check use `check=True`, so rc is enforced.
+- E: the 14 identical-args groups held 32 rows, so 18 were redundant, not 20. Removed in pmtest `863ed62`.
+- B: the remaining groups differ in one input each (`=` vs `>=`, BDEPEND vs RDEPEND, `use.mask` vs `package.use.mask`) and are separate Portage cells; kept. B7 was the duplicate removed in `64f8be5`.
+- A3: the four extra asserts in the dead qmerge copy referred to another package (`binpkgrmpkg`); dropped, not ported.
+- F: the rename gap in `write_harvest` is fixed in pmtest `8f5b592`/`863ed62`; case ids are index-free.
