@@ -25,7 +25,7 @@
 //!   top-level blocker atoms are skipped.
 //! - Binary candidates (`--usepkg`) are not offered; `--deep=N` bounds kept
 //!   expansion through a pre-solve BFS allowlist (the engine cannot carry
-//!   depth); no `_greedy_slots` blocker lookahead (backlog #368).
+//!   depth).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1212,7 +1212,7 @@ fn target_slots(
     let (top_slot, top) = (top_slot.to_string(), top.clone());
     let pairs: Vec<(&str, &portage_solver::Version)> = best.iter().map(|(s, v)| (*s, v)).collect();
     // The slot filter is shared with the default solver's greedy expansion.
-    super::greedy_slots_below_best(
+    let mut slots = super::greedy_slots_below_best(
         super::GreedySlotsBelowBestArgs {
             top_slot: &top_slot,
             top: &top,
@@ -1221,7 +1221,56 @@ fn target_slots(
             update,
         },
         |a, b| a < b,
-    )
+    );
+    if slots.len() > 1 {
+        slots = greedy_blocker_lookahead(lazy, cp, versions, &loaded, slots);
+    }
+    slots
+}
+
+/// The second `_greedy_slots` pass: drop an added slot whose best package and
+/// the overall best block each other, then the lower of mutually blocking
+/// added slots. `slots` is the top slot first; the shared default-solver
+/// revision runs over each slot's best loaded candidate.
+// Portage: depgraph.py, _greedy_slots (blocker_lookahead=True)
+fn greedy_blocker_lookahead(
+    lazy: &LazyRepo,
+    cp: &str,
+    versions: &portage_atom_pubgrub::PortageVersionSet,
+    loaded: &[LoadedVersion],
+    slots: Vec<String>,
+) -> Vec<String> {
+    let Some((category, package)) = cp.split_once('/') else {
+        return slots;
+    };
+    let Ok(candidates) = list_candidates(&lazy.repos, category, package) else {
+        return slots;
+    };
+    let visible: HashSet<(&str, &str)> = loaded
+        .iter()
+        .map(|v| (v.slot.as_str(), v.version.as_str()))
+        .collect();
+    let best_in = |slot: &str| -> Option<&Candidate> {
+        candidates
+            .iter()
+            .filter(|c| c.slot == slot && visible.contains(&(c.slot.as_str(), c.version.as_str())))
+            .filter(|c| {
+                portage_solver::Version::parse(&c.version)
+                    .is_ok_and(|version| versions.contains(&version))
+            })
+            .max_by(|a, b| super::vercmp_ordering(&a.version, &b.version))
+    };
+    let Some(top) = best_in(&slots[0]) else {
+        return slots;
+    };
+    let per_slot_best: Vec<(String, &Candidate)> = slots[1..]
+        .iter()
+        .filter_map(|slot| best_in(slot).map(|c| (slot.clone(), c)))
+        .collect();
+    let key = (category.to_string(), package.to_string());
+    let kept =
+        super::greedy_lookahead(&lazy.config, &key, top, slots[1..].to_vec(), &per_slot_best);
+    std::iter::once(slots[0].clone()).chain(kept).collect()
 }
 
 /// Root-target slots for one request atom: a named `:slot` pins one, else S1's
@@ -9156,6 +9205,27 @@ mod tests {
             "the tied installed slot never rejoins: {slots:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The blocker lookahead drops the installed slot whose best package is
+    /// blocked by the overall best: `gsblk-2` blocks `:1`, so only `:2` is
+    /// selected under `--update` (Portage `_greedy_slots`, second pass).
+    #[test]
+    fn target_slots_drops_a_greedy_slot_the_best_blocks() {
+        let req = fixture_request(&["dev-libs/pg359-gsblk"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let slots = super::target_slots(
+            &lazy,
+            "dev-libs/pg359-gsblk",
+            &portage_atom_pubgrub::PortageVersionSet::any(),
+            &["1".to_string()],
+            true,
+        );
+        assert_eq!(slots, vec!["2".to_string()], "{slots:?}");
     }
 
     /// `target_slots` takes each slot's own maximum: with slot 1 peaking
