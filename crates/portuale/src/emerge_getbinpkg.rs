@@ -828,8 +828,16 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
                 category: &entry.category,
                 package: &entry.package,
                 version: &version,
-                pkgdir,
+                pkgdir: &binrepo_download_dir(config, binrepo, root, pkgdir),
+                config,
             })?;
+            if let Some(names) = verified_digest_names(&record) {
+                let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                let file = path
+                    .file_name()
+                    .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                crate::fetch::print_verified_names(&file, &names);
+            }
             let features = if merge_options.features.is_empty() {
                 std::env::var("FEATURES").unwrap_or_default()
             } else {
@@ -1162,6 +1170,30 @@ pub(crate) fn resolve_local_binpkg(
     candidates.into_iter().map(|(_, p)| p).next()
 }
 
+/// Where a binrepo's packages are downloaded: its `location`, else (only when
+/// `PORTAGE_BINHOST` is unset) `<root>/var/cache/binhost/<name>`, else `$PKGDIR`.
+/// Portage roots the default at `EPREFIX`; under `ROOT` here so hermetic roots
+/// never write to the host.
+// Portage: lib/portage/binrepo/config.py (BinRepoConfigLoader), bintree.py (get_local_repo_location)
+pub(crate) fn binrepo_download_dir(
+    config: &portage_profile::Config,
+    binrepo: &portage_profile::BinRepo,
+    root: &Path,
+    pkgdir: &Path,
+) -> std::path::PathBuf {
+    if let Some(location) = binrepo.location.as_deref() {
+        return std::path::PathBuf::from(location);
+    }
+    if config
+        .other_vars
+        .get("PORTAGE_BINHOST")
+        .is_some_and(|v| !v.trim().is_empty())
+    {
+        return pkgdir.to_path_buf();
+    }
+    root.join("var/cache/binhost").join(&binrepo.name)
+}
+
 /// Arguments of [`download_and_verify`].
 pub(crate) struct DownloadAndVerifyArgs<'a> {
     pub(crate) sync_uri: &'a str,
@@ -1170,6 +1202,29 @@ pub(crate) struct DownloadAndVerifyArgs<'a> {
     pub(crate) package: &'a str,
     pub(crate) version: &'a str,
     pub(crate) pkgdir: &'a Path,
+    /// The resolved `FETCHCOMMAND` family and `PORTAGE_SSH_OPTS`, from the config.
+    pub(crate) config: &'a portage_profile::Config,
+}
+
+/// The digest names Portage prints on a binary's verify line: the uppercase
+/// checksum keys present in the index record plus `size`, ASCII-sorted
+/// (`MD5 SHA1 size`). `None` without a parseable `SIZE`: then nothing is
+/// verified and no line prints.
+// Portage: _emerge/BinpkgVerifier.py (_start, _display_success); bintree.py, _get_digests
+pub(crate) fn verified_digest_names(
+    record: &std::collections::HashMap<String, String>,
+) -> Option<Vec<String>> {
+    record.get("SIZE")?.trim().parse::<u64>().ok()?;
+    let mut names: Vec<String> = [
+        "BLAKE2B", "BLAKE2S", "MD5", "SHA1", "SHA256", "SHA3_256", "SHA3_512", "SHA512",
+    ]
+    .iter()
+    .filter(|k| record.get(**k).is_some_and(|v| !v.is_empty()))
+    .map(|k| (*k).to_string())
+    .collect();
+    names.push("size".to_string());
+    names.sort();
+    Some(names)
 }
 
 /// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into `$PKGDIR`,
@@ -1186,22 +1241,40 @@ pub(crate) fn download_and_verify(
         package,
         version,
         pkgdir,
+        config,
     } = args;
     let rel = record
         .get("PATH")
         .filter(|s| !s.is_empty())
         .cloned()
         .unwrap_or_else(|| format!("{category}/{package}-{version}.tbz2"));
-    let dest = pkgdir.join(&rel);
-    if let Some(parent) = dest.parent() {
+    let final_dest = pkgdir.join(&rel);
+    if let Some(parent) = final_dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     let uri = format!("{}/{rel}", sync_uri.trim_end_matches('/'));
+    // Downloaded as `<file>.partial`, renamed once verified.
+    // Portage: _emerge/BinpkgFetcher.py, Binpkg.py (`_verifier_exit`)
+    let mut partial = final_dest.clone().into_os_string();
+    partial.push(".partial");
+    let dest = std::path::PathBuf::from(partial);
 
     if let Some(local) = uri.strip_prefix("file://") {
         std::fs::copy(local, &dest).map_err(|e| format!("{local}: {e}"))?;
     } else {
-        crate::fetch::wget_fetch(&uri, &dest)?;
+        let commands = crate::fetch::fetch_commands_from_config(config);
+        let ssh_opts = crate::fetch::portage_ssh_opts_from_config(config);
+        portage_fetch::download_with_commands_stdout(portage_fetch::DownloadWithCommandsArgs {
+            uri: &uri,
+            dest: &dest,
+            resume: false,
+            distdir: dest.parent().unwrap_or(pkgdir),
+            vars: portage_fetch::FetchCommandVars {
+                digests: None,
+                portage_ssh_opts: ssh_opts.as_deref(),
+            },
+            commands: &commands,
+        })?;
     }
 
     if let Some(expected) = record.get("SIZE").and_then(|s| s.parse::<u64>().ok()) {
@@ -1252,7 +1325,8 @@ pub(crate) fn download_and_verify(
             }
         }
     }
-    Ok(dest)
+    std::fs::rename(&dest, &final_dest).map_err(|e| format!("{}: {e}", final_dest.display()))?;
+    Ok(final_dest)
 }
 
 #[cfg(test)]
@@ -2283,6 +2357,114 @@ mod tests {
     }
 
     #[test]
+    fn download_and_verify_runs_the_configured_fetchcommand_into_partial() {
+        // Portage 3.0.82.2 (LLM/evidence/2026-10-20-b428, `f-fetchcommand`): the
+        // FETCHCOMMAND runs with DISTDIR=<dir>, FILE=<name>.partial, then the
+        // file is renamed once verified.
+        let tmp = tempdir();
+        let pkgdir = tmp.join("pkgdir");
+        let body =
+            std::fs::read(fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
+        let mut routes = HashMap::new();
+        routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), body.clone());
+        let (base, _h) = serve(routes, 4);
+        let marker = tmp.join("ran");
+        let script = tmp.join("fc.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$1 $2\" > {}\nexec wget -q -O \"$1/$2\" \"$3\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut config = Config::default();
+        config.other_vars.insert(
+            "FETCHCOMMAND".to_string(),
+            format!("{} ${{DISTDIR}} ${{FILE}} ${{URI}}", script.display()),
+        );
+        let record: HashMap<String, String> =
+            [("SIZE", "4618"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        let got = download_and_verify(DownloadAndVerifyArgs {
+            sync_uri: &base,
+            record: &record,
+            category: "dev-libs",
+            package: "packagepkg",
+            version: "1.0",
+            pkgdir: &pkgdir,
+            config: &config,
+        })
+        .unwrap();
+        assert_eq!(got, pkgdir.join("dev-libs/packagepkg-1.0.tbz2"));
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap().trim(),
+            format!(
+                "{} packagepkg-1.0.tbz2.partial",
+                pkgdir.join("dev-libs").display()
+            )
+        );
+        assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2.partial").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn verified_digest_names_sort_uppercase_hashes_before_size() {
+        let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            verified_digest_names(&rec(&[("SIZE", "1"), ("SHA1", "x"), ("MD5", "y")])),
+            Some(vec!["MD5".into(), "SHA1".into(), "size".into()])
+        );
+        assert_eq!(
+            verified_digest_names(&rec(&[("SIZE", "1")])),
+            Some(vec!["size".into()])
+        );
+        // No parseable SIZE: Portage verifies nothing and prints no line.
+        assert_eq!(verified_digest_names(&rec(&[("MD5", "y")])), None);
+    }
+
+    #[test]
+    fn binrepo_download_dir_follows_location_then_binhost_then_default() {
+        let root = Path::new("/r");
+        let pkgdir = Path::new("/p");
+        let mut repo = portage_profile::BinRepo {
+            name: "bh".into(),
+            sync_uri: "http://x".into(),
+            priority: 0,
+            location: Some("/loc".into()),
+            verify_signature: true,
+            frozen: false,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
+        };
+        let mut config = Config::default();
+        assert_eq!(
+            binrepo_download_dir(&config, &repo, root, pkgdir),
+            Path::new("/loc")
+        );
+        repo.location = None;
+        assert_eq!(
+            binrepo_download_dir(&config, &repo, root, pkgdir),
+            Path::new("/r/var/cache/binhost/bh")
+        );
+        config
+            .other_vars
+            .insert("PORTAGE_BINHOST".into(), "http://x".into());
+        assert_eq!(binrepo_download_dir(&config, &repo, root, pkgdir), pkgdir);
+    }
+
+    #[test]
     fn download_and_verify_fetches_then_size_and_md5_checks() {
         // Committed fixture .tbz2 digests (`md5sum`/`sha1sum`, not invented).
         const FIXTURE_MD5: &str = "54cab52a68eda02d7d41561b8f7d318a";
@@ -2316,10 +2498,13 @@ mod tests {
             package: "packagepkg",
             version: "1.0",
             pkgdir: &pkgdir,
+            config: &Config::default(),
         })
         .unwrap();
         assert_eq!(got, pkgdir.join("dev-libs/packagepkg-1.0.tbz2"));
         assert_eq!(std::fs::metadata(&got).unwrap().len(), 4618);
+
+        std::fs::remove_file(&got).unwrap();
 
         // Wrong SIZE -> rejected, file removed.
         let bad_size = record(&[("SIZE", "9999"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]);
@@ -2330,10 +2515,12 @@ mod tests {
             package: "packagepkg",
             version: "1.0",
             pkgdir: &pkgdir,
+            config: &Config::default(),
         })
         .unwrap_err();
         assert!(err.contains("!= index SIZE 9999"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
+        assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2.partial").exists());
 
         // Right SIZE, wrong MD5 -> rejected, file removed.
         let bad_md5 = record(&[
@@ -2348,6 +2535,7 @@ mod tests {
             package: "packagepkg",
             version: "1.0",
             pkgdir: &pkgdir,
+            config: &Config::default(),
         })
         .unwrap_err();
         assert!(err.contains("MD5 mismatch"), "{err}");
@@ -2368,6 +2556,7 @@ mod tests {
             package: "packagepkg",
             version: "1.0",
             pkgdir: &pkgdir,
+            config: &Config::default(),
         })
         .unwrap_err();
         assert!(err.contains("SHA1 mismatch"), "{err}");
@@ -3230,8 +3419,11 @@ mod tests {
         .expect("getbinpkg merge succeeds");
 
         assert!(
-            pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file(),
-            "the binpkg was downloaded into $PKGDIR"
+            root.join("var/cache/binhost")
+                .join(&config.binrepos[0].name)
+                .join("dev-libs/packagepkg-1.0.tbz2")
+                .is_file(),
+            "a binrepo without `location` downloads under <root>/var/cache/binhost/<name>"
         );
         assert!(
             root.join("usr/share/packagepkg/hello.txt").is_file(),

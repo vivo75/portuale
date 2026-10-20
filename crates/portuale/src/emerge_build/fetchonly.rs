@@ -91,10 +91,12 @@ impl RemoteBinaryJob<'_> {
             .filter(|s| !s.is_empty())
             .cloned()
             .unwrap_or_else(|| format!("{}/{}-{version}.tbz2", entry.category, entry.package));
-        let dir = binrepo
-            .location
-            .as_deref()
-            .map_or_else(|| self.pkgdir.to_path_buf(), std::path::PathBuf::from);
+        let dir = crate::emerge_getbinpkg::binrepo_download_dir(
+            self.config,
+            binrepo,
+            self.root,
+            self.pkgdir,
+        );
         let dest = dir.join(&rel);
         let uri = format!("{}/{rel}", binrepo.sync_uri.trim_end_matches('/'));
         if self.pretend {
@@ -122,6 +124,7 @@ impl RemoteBinaryJob<'_> {
                     package: &entry.package,
                     version,
                     pkgdir: &dir,
+                    config: self.config,
                 },
             )
         };
@@ -130,7 +133,10 @@ impl RemoteBinaryJob<'_> {
                 let name = path
                     .file_name()
                     .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                crate::fetch::print_verified_names(&name, &["size"]);
+                if let Some(names) = crate::emerge_getbinpkg::verified_digest_names(&record) {
+                    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                    crate::fetch::print_verified_names(&name, &names);
+                }
                 true
             }
             Err(e) => {

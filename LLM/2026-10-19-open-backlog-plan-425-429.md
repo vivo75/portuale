@@ -2,7 +2,7 @@
 
 > **Oracle before code.** Every expected value comes from Portage 3.0.82.2 (host `emerge`, container bed `../pmtest/differential-test-bed/`, or `lib/portage/tests/resolver/`), never from portuale's own output. Call the reference "Portage", never "real". Reports to the owner are in Italian.
 
-Status: proposed (2026-10-19), revised after pre-execution review (D1–D5, G1–G3, P1–P2 incorporated). Next free backlog number is **#436** (#430–#433 were filed by the #368 split, #434 by bed G-R, #435 by S-19) (`grep -nE '^[0-9]+\. \*\*' LLM/backlog-tasks*.md`).
+Status: proposed (2026-10-19), revised after pre-execution review (D1–D5, G1–G3, P1–P2 incorporated). Next free backlog number is **#437** (#430–#433 were filed by the #368 split, #434 by bed G-R, #435 by S-19, #436 by S-21) (`grep -nE '^[0-9]+\. \*\*' LLM/backlog-tasks*.md`).
 
 Scope: the five OPEN Tier-1 items in `LLM/backlog-tasks.md:147-155`: #425 #426 #427 #428 #429, plus close-out header hygiene in `LLM/backlog-tasks-2026-10.md` for items already shipped earlier on `batch/2026-10-19` (#390 #363 #364 #365 #419 #405). Nothing else. A residue gets a real number #430+ before its slice is called done.
 

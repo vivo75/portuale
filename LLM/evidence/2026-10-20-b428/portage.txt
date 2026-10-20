@@ -1,0 +1,254 @@
+##### LOC=explicit
+=== f-getbinpkg
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/.gentoo/repos/gentoo/profiles/updates/4Q-2022........
+/.gentoo/repos/gentoo/profiles/updates/3Q-2020..............
+/.gentoo/repos/gentoo/profiles/updates/1Q-2023.......................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2024........................................................................................
+/.gentoo/repos/gentoo/profiles/updates/2Q-2020.........
+/.gentoo/repos/gentoo/profiles/updates/4Q-2025...
+/.gentoo/repos/gentoo/profiles/updates/2Q-2024...........
+/.gentoo/repos/gentoo/profiles/updates/4Q-2021.......................................................................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2020.........
+/.gentoo/repos/gentoo/profiles/updates/3Q-2023..................
+/.gentoo/repos/gentoo/profiles/updates/3Q-2024.............
+/.gentoo/repos/gentoo/profiles/updates/4Q-2026..
+/.gentoo/repos/gentoo/profiles/updates/2Q-2023..............................
+/.gentoo/repos/gentoo/profiles/updates/2Q-2021.......
+/.gentoo/repos/gentoo/profiles/updates/4Q-2024...............................................................................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2025...........................
+/.gentoo/repos/gentoo/profiles/updates/3Q-2026.
+/.gentoo/repos/gentoo/profiles/updates/3Q-2021...........
+/.gentoo/repos/gentoo/profiles/updates/4Q-2023........................................
+/.gentoo/repos/gentoo/profiles/updates/2Q-2026......
+/.gentoo/repos/gentoo/profiles/updates/2Q-2022...........
+/.gentoo/repos/gentoo/profiles/updates/3Q-2025.......
+/.gentoo/repos/gentoo/profiles/updates/1Q-2026...
+/.gentoo/repos/gentoo/profiles/updates/3Q-2022.....................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2021.......
+/.gentoo/repos/gentoo/profiles/updates/2Q-2025......
+/.gentoo/repos/gentoo/profiles/updates/4Q-2020.......
+
+
+Calculating dependencies ... done!
+Dependency resolution took 2.05 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root/
+--2026-10-20 00:39:19--  http://127.0.0.1:18428/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+Connecting to 127.0.0.1:18428... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 10240 (10K) [application/x-tar]
+Saving to: ‘/var/tmp/b428/binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’
+
+     0K ..........                                            100% 1.18G=0s
+
+2026-10-20 00:39:19 (1.18 GB/s) - ‘/var/tmp/b428/binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’ saved [10240/10240]
+
+ * gpkgreadpkg-1.0.gpkg.tar MD5 SHA1 size ;-) ...                        [ ok ]
+rc=0
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- files:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+=== merge-getbinpkgonly
+Calculating dependencies ... done!
+Dependency resolution took 1.78 s (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root/
+--2026-10-20 00:39:32--  http://127.0.0.1:18428/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+Connecting to 127.0.0.1:18428... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 10240 (10K) [application/x-tar]
+Saving to: ‘/var/tmp/b428/binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’
+
+     0K ..........                                            100% 1.59G=0s
+
+2026-10-20 00:39:32 (1.59 GB/s) - ‘/var/tmp/b428/binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’ saved [10240/10240]
+
+ * gpkgreadpkg-1.0.gpkg.tar MD5 SHA1 size ;-) ...                        [ ok ]
+>>> Extracting info
+bzip2: Can't open input file /var/tmp/b428/tmp/portage/dev-libs/gpkgreadpkg-1.0/build-info/environment.bz2: No such file or directory.
+
+>>> Failed to emerge dev-libs/gpkgreadpkg-1.0 for /var/tmp/b428/root/, Log file:
+
+>>>  '/var/tmp/b428/tmp/portage/dev-libs/gpkgreadpkg-1.0/temp/build.log'
+rc=1
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+!!! Error extracting '/var/tmp/b428/binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar', failed to extract environment for dev-libs/gpkgreadpkg-1.0
+--- files:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+=== f-fetchcommand
+Calculating dependencies ... done!
+Dependency resolution took 1.81 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root/
+ * gpkgreadpkg-1.0.gpkg.tar MD5 SHA1 size ;-) ...                        [ ok ]
+rc=0
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+--- files:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+--- fc.log
+FETCHCOMMAND-RAN /var/tmp/b428/binrepo/dev-libs gpkgreadpkg-1.0.gpkg.tar.partial
+##### LOC=default
+=== f-getbinpkg
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/.gentoo/repos/gentoo/profiles/updates/4Q-2022........
+/.gentoo/repos/gentoo/profiles/updates/3Q-2020..............
+/.gentoo/repos/gentoo/profiles/updates/1Q-2023.......................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2024........................................................................................
+/.gentoo/repos/gentoo/profiles/updates/2Q-2020.........
+/.gentoo/repos/gentoo/profiles/updates/4Q-2025...
+/.gentoo/repos/gentoo/profiles/updates/2Q-2024...........
+/.gentoo/repos/gentoo/profiles/updates/4Q-2021.......................................................................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2020.........
+/.gentoo/repos/gentoo/profiles/updates/3Q-2023..................
+/.gentoo/repos/gentoo/profiles/updates/3Q-2024.............
+/.gentoo/repos/gentoo/profiles/updates/4Q-2026..
+/.gentoo/repos/gentoo/profiles/updates/2Q-2023..............................
+/.gentoo/repos/gentoo/profiles/updates/2Q-2021.......
+/.gentoo/repos/gentoo/profiles/updates/4Q-2024...............................................................................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2025...........................
+/.gentoo/repos/gentoo/profiles/updates/3Q-2026.
+/.gentoo/repos/gentoo/profiles/updates/3Q-2021...........
+/.gentoo/repos/gentoo/profiles/updates/4Q-2023........................................
+/.gentoo/repos/gentoo/profiles/updates/2Q-2026......
+/.gentoo/repos/gentoo/profiles/updates/2Q-2022...........
+/.gentoo/repos/gentoo/profiles/updates/3Q-2025.......
+/.gentoo/repos/gentoo/profiles/updates/1Q-2026...
+/.gentoo/repos/gentoo/profiles/updates/3Q-2022.....................
+/.gentoo/repos/gentoo/profiles/updates/1Q-2021.......
+/.gentoo/repos/gentoo/profiles/updates/2Q-2025......
+/.gentoo/repos/gentoo/profiles/updates/4Q-2020.......
+
+
+Calculating dependencies ... done!
+Dependency resolution took 1.84 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root/
+rc=143
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+[ERROR] Exception in callback AsynchronousTask._exit_listener_cb()
+handle: <Handle AsynchronousTask._exit_listener_cb()>
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/portage/util/__init__.py", line 1554, in ensure_dirs
+    os.makedirs(dir_path)
+    ~~~~~~~~~~~^^^^^^^^^^
+  File "<frozen os>", line 226, in makedirs
+  File "<frozen os>", line 226, in makedirs
+  File "<frozen os>", line 236, in makedirs
+PermissionError: [Errno 13] Permission denied: '/var/cache/binhost'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py", line 208, in _exit_listener_cb
+    listener(self)
+    ~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/BinpkgFetcher.py", line 139, in _main_exit
+    main_task.returncode = main_task.future.result()
+                           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/BinpkgFetcher.py", line 77, in _main
+    portage.util.ensure_dirs(os.path.dirname(self.pkg_path))
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/util/__init__.py", line 1570, in ensure_dirs
+    raise PermissionDenied(func_call)
+portage.exception.PermissionDenied: makedirs('/var/cache/binhost/tmpbinhost/dev-libs')
+--- files:
+=== merge-getbinpkgonly
+Calculating dependencies ... done!
+Dependency resolution took 1.78 s (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root/
+rc=143
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+[ERROR] Exception in callback AsynchronousTask._exit_listener_cb()
+handle: <Handle AsynchronousTask._exit_listener_cb()>
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/portage/util/__init__.py", line 1554, in ensure_dirs
+    os.makedirs(dir_path)
+    ~~~~~~~~~~~^^^^^^^^^^
+  File "<frozen os>", line 226, in makedirs
+  File "<frozen os>", line 226, in makedirs
+  File "<frozen os>", line 236, in makedirs
+PermissionError: [Errno 13] Permission denied: '/var/cache/binhost'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py", line 208, in _exit_listener_cb
+    listener(self)
+    ~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/BinpkgFetcher.py", line 139, in _main_exit
+    main_task.returncode = main_task.future.result()
+                           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/BinpkgFetcher.py", line 77, in _main
+    portage.util.ensure_dirs(os.path.dirname(self.pkg_path))
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/util/__init__.py", line 1570, in ensure_dirs
+    raise PermissionDenied(func_call)
+portage.exception.PermissionDenied: makedirs('/var/cache/binhost/tmpbinhost/dev-libs')
+--- files:
+=== f-fetchcommand
+Calculating dependencies ... done!
+Dependency resolution took 1.78 s (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root/
+rc=143
+--- stderr
+[f1r] Local copy of remote index is up-to-date and will be used.
+[ERROR] Exception in callback AsynchronousTask._exit_listener_cb()
+handle: <Handle AsynchronousTask._exit_listener_cb()>
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/site-packages/portage/util/__init__.py", line 1554, in ensure_dirs
+    os.makedirs(dir_path)
+    ~~~~~~~~~~~^^^^^^^^^^
+  File "<frozen os>", line 226, in makedirs
+  File "<frozen os>", line 226, in makedirs
+  File "<frozen os>", line 236, in makedirs
+PermissionError: [Errno 13] Permission denied: '/var/cache/binhost'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py", line 208, in _exit_listener_cb
+    listener(self)
+    ~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/BinpkgFetcher.py", line 139, in _main_exit
+    main_task.returncode = main_task.future.result()
+                           ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/_emerge/BinpkgFetcher.py", line 77, in _main
+    portage.util.ensure_dirs(os.path.dirname(self.pkg_path))
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/util/__init__.py", line 1570, in ensure_dirs
+    raise PermissionDenied(func_call)
+portage.exception.PermissionDenied: makedirs('/var/cache/binhost/tmpbinhost/dev-libs')
+--- files:

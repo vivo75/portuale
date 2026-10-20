@@ -1,0 +1,158 @@
+##### LOC=explicit
+=== f-getbinpkg
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root
+--2026-10-20 00:51:56--  http://127.0.0.1:18428/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+Connecting to 127.0.0.1:18428... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 10240 (10K) [application/x-tar]
+Saving to: ‘/var/tmp/b428/binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’
+
+     0K ..........                                            100% 1.55G=0s
+
+2026-10-20 00:51:56 (1.55 GB/s) - ‘/var/tmp/b428/binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’ saved [10240/10240]
+
+ * gpkgreadpkg-1.0.gpkg.tar MD5 SHA1 size ;-) ...                        [ ok ]
+rc=0
+--- stderr
+--- files:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+=== merge-getbinpkgonly
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root
+--2026-10-20 00:51:56--  http://127.0.0.1:18428/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+Connecting to 127.0.0.1:18428... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 10240 (10K) [application/x-tar]
+Saving to: ‘/var/tmp/b428/binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’
+
+     0K ..........                                            100% 1.80G=0s
+
+2026-10-20 00:51:56 (1.80 GB/s) - ‘/var/tmp/b428/binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’ saved [10240/10240]
+
+ * gpkgreadpkg-1.0.gpkg.tar MD5 SHA1 size ;-) ...                        [ ok ]
+
+>>> Installing (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo to /var/tmp/b428/root
+
+>>> Completed (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo to /var/tmp/b428/root
+>>> Recording dev-libs/gpkgreadpkg in "world" favorites file...
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+--- files:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/BINPKGMD5
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/BUILD_TIME
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/CATEGORY
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/COUNTER
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/DEFINED_PHASES
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/DEPEND
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/DESCRIPTION
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/EAPI
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/IUSE
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/KEYWORDS
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/PF
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/RDEPEND
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/SLOT
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/USE
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/metadata
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/repository
+=== f-fetchcommand
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root
+ * gpkgreadpkg-1.0.gpkg.tar MD5 SHA1 size ;-) ...                        [ ok ]
+rc=0
+--- stderr
+--- files:
+binrepo/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+--- fc.log
+FETCHCOMMAND-RAN /var/tmp/b428/binrepo/dev-libs gpkgreadpkg-1.0.gpkg.tar.partial
+##### LOC=default
+=== f-getbinpkg
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root
+--2026-10-20 00:51:58--  http://127.0.0.1:18428/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+Connecting to 127.0.0.1:18428... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 10240 (10K) [application/x-tar]
+Saving to: ‘/var/tmp/b428/root/var/cache/binhost/tmpbinhost/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’
+
+     0K ..........                                            100% 1.69G=0s
+
+2026-10-20 00:51:58 (1.69 GB/s) - ‘/var/tmp/b428/root/var/cache/binhost/tmpbinhost/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’ saved [10240/10240]
+
+ * gpkgreadpkg-1.0.gpkg.tar MD5 SHA1 size ;-) ...                        [ ok ]
+rc=0
+--- stderr
+--- files:
+root/var/cache/binhost/tmpbinhost/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+=== merge-getbinpkgonly
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root
+--2026-10-20 00:51:58--  http://127.0.0.1:18428/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+Connecting to 127.0.0.1:18428... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 10240 (10K) [application/x-tar]
+Saving to: ‘/var/tmp/b428/root/var/cache/binhost/tmpbinhost/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’
+
+     0K ..........                                            100% 1.68G=0s
+
+2026-10-20 00:51:58 (1.68 GB/s) - ‘/var/tmp/b428/root/var/cache/binhost/tmpbinhost/dev-libs/gpkgreadpkg-1.0.gpkg.tar.partial’ saved [10240/10240]
+
+ * gpkgreadpkg-1.0.gpkg.tar MD5 SHA1 size ;-) ...                        [ ok ]
+
+>>> Installing (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo to /var/tmp/b428/root
+
+>>> Completed (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo to /var/tmp/b428/root
+>>> Recording dev-libs/gpkgreadpkg in "world" favorites file...
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+--- files:
+root/var/cache/binhost/tmpbinhost/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/BINPKGMD5
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/BUILD_TIME
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/CATEGORY
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/COUNTER
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/DEFINED_PHASES
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/DEPEND
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/DESCRIPTION
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/EAPI
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/IUSE
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/KEYWORDS
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/PF
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/RDEPEND
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/SLOT
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/USE
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/metadata
+root/var/db/pkg/dev-libs/gpkgreadpkg-1.0/repository
+=== f-fetchcommand
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Fetching (1 of 1) dev-libs/gpkgreadpkg-1.0::fetchrepo for /var/tmp/b428/root
+ * gpkgreadpkg-1.0.gpkg.tar MD5 SHA1 size ;-) ...                        [ ok ]
+rc=0
+--- stderr
+--- files:
+root/var/cache/binhost/tmpbinhost/dev-libs/gpkgreadpkg-1.0.gpkg.tar
+--- fc.log
+FETCHCOMMAND-RAN /var/tmp/b428/root/var/cache/binhost/tmpbinhost/dev-libs gpkgreadpkg-1.0.gpkg.tar.partial

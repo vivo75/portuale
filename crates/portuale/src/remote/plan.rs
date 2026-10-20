@@ -411,7 +411,10 @@ pub(crate) fn run_one_remote_unit(args: RunOneRemoteUnitArgs<'_>) -> Result<(), 
                 category: &entry.category,
                 package: &entry.package,
                 version,
-                pkgdir,
+                pkgdir: &crate::emerge_getbinpkg::binrepo_download_dir(
+                    config, binrepo, root, pkgdir,
+                ),
+                config,
             },
         )?
     } else {

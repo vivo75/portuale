@@ -660,6 +660,54 @@ pub fn download_with_commands(args: DownloadWithCommandsArgs<'_>) -> Result<(), 
     Ok(())
 }
 
+/// [`download_with_commands`], with the child's stderr sent to stdout like
+/// `BinpkgFetcher` does (`fd_pipes[2] = sys.__stdout__`): wget writes its
+/// transcript to stderr and Portage shows it on stdout.
+// Portage: _emerge/BinpkgFetcher.py, _start
+pub fn download_with_commands_stdout(args: DownloadWithCommandsArgs<'_>) -> Result<(), String> {
+    use std::io::Write as _;
+    use std::os::fd::AsFd as _;
+    let DownloadWithCommandsArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    } = args;
+    let planned = plan_fetch_command(PlanFetchCommandArgs {
+        uri,
+        dest,
+        resume,
+        distdir,
+        vars,
+        commands,
+    })?;
+    if let Some(warning) = planned.file_param_warning {
+        eprint!("{warning}");
+    }
+    let _ = std::io::stdout().flush();
+    let out = std::io::stdout()
+        .as_fd()
+        .try_clone_to_owned()
+        .map_err(|e| format!("stdout: {e}"))?;
+    let status = std::process::Command::new(&planned.prog)
+        .args(&planned.args)
+        .stderr(std::process::Stdio::from(out))
+        .status()
+        .map_err(|e| format!("failed to spawn {}: {e}", planned.prog))?;
+    if !status.success() {
+        if !resume {
+            let _ = std::fs::remove_file(dest);
+        }
+        return Err(format!(
+            "{} failed to fetch {uri:?} ({status})",
+            planned.prog
+        ));
+    }
+    Ok(())
+}
+
 /// A quiet fetch failure: the same one-line summary
 /// [`download_with_commands`] would return, plus everything the fetch
 /// command wrote to stderr (its stdout is discarded).
