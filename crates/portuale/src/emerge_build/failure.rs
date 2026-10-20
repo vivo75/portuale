@@ -325,19 +325,19 @@ impl Ledger {
             return;
         };
         let gz = PathBuf::from(format!("{}.gz", log.display()));
-        let bytes = if let Ok(raw) = std::fs::read(log) {
-            raw
-        } else if let Ok(raw) = std::fs::read(&gz) {
-            let mut out = Vec::new();
-            match flate2::read::MultiGzDecoder::new(&raw[..]).read_to_end(&mut out) {
-                Ok(_) => out,
-                Err(e) => {
-                    eprintln!("{e}");
-                    return;
-                }
-            }
-        } else {
+        let Some(raw) = std::fs::read(log).ok().or_else(|| std::fs::read(&gz).ok()) else {
             return;
+        };
+        // `compress-build-logs` leaves a gzip file whatever name the path has.
+        let bytes = if raw.starts_with(&[0x1f, 0x8b]) {
+            let mut out = Vec::new();
+            if let Err(e) = flate2::read::MultiGzDecoder::new(&raw[..]).read_to_end(&mut out) {
+                eprintln!("{e}");
+                return;
+            }
+            out
+        } else {
+            raw
         };
         let mut stdout = std::io::stdout().lock();
         let _ = stdout.write_all(&bytes);
