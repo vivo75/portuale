@@ -2,7 +2,7 @@
 
 > **Oracle before code.** Every expected value comes from Portage 3.0.82.2 (host `emerge`, container bed `../pmtest/differential-test-bed/`, or `lib/portage/tests/resolver/`), never from portuale's own output. Call the reference "Portage", never "real". Reports to the owner are in Italian.
 
-Status: done 2026-10-20 (branch batch/2026-10-19, portuale 330dbcf4..f8961146; review `2026-10-19-open-backlog-plan.final-review.md`); was proposed (2026-10-19), revised after two reviews (`2026-10-19-open-backlog-plan.review.md` by `plan-reviewer`, `…review-gemini.md` by `gemini-argon-ro`), updated 2026-10-19 for the state of the tree + §8 addendum (#421–#424). Next free number is **#441**.
+Status: done 2026-10-20 (branch batch/2026-10-19, portuale 330dbcf4..f8961146; review `2026-10-19-open-backlog-plan.final-review.md`); was proposed (2026-10-19), revised after two reviews (`2026-10-19-open-backlog-plan.review.md` by `plan-reviewer`, `…review-gemini.md` by `gemini-argon-ro`), updated 2026-10-19 for the state of the tree + §8 addendum (#421–#424). Next free number is **#442**.
 
 Scope: every open backlog item ≥ #300 as listed to the owner on 2026-10-19: #410 #414 #415 #412 #413 #416 #417 #418 #406 #405(tail) | #411 #376 #407 | #390 #394 #363 #364 #365 #368 #420 | #419 #352 | plus §8 addendum #421 #422 #423 #424.
 Owner instructions: implement all of them; at most **three operations active at once**; use the `gemini-*` opencode agents; sub-agents only if read-only; commits at the executor's discretion when the tree is clean and the diff against the previous commit has value.
