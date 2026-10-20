@@ -19,4 +19,4 @@ Branch `batch/2026-10-19`, portuale `b76ee705..f8961146` (33 commits), pmtest pa
 - Review R2 (read-only, gemini): `resume --fetchonly` printed the resolution notice under `--quiet`/`--nodeps` (fixed `01c5c03f`); `complete_reuse` without a visibility gate (filed #440); `--quiet` on the keep-going re-plan and the binary verify line (already filed as #437e and #436c).
 
 ## Open after close-out
-#430–#440 (see `backlog-tasks.md`). Next free number: **#442**.
+#430–#440 (see `backlog-tasks.md`). Next free number: **#443**.
