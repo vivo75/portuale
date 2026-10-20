@@ -1094,15 +1094,7 @@ pub fn process_batch(args: ProcessBatchArgs<'_>) {
             };
             if !all.is_empty() {
                 match save_modules_process(logdir, cpv, &all, split_elog) {
-                    Ok(paths) => {
-                        for p in paths {
-                            println!(
-                                "{}Elog messages for {cpv} written to {}",
-                                color.c("INFO", " * "),
-                                p.display()
-                            );
-                        }
-                    }
+                    Ok(_) => {}
                     Err(e) => eprintln!("elog: {e}"),
                 }
             }
