@@ -182,8 +182,10 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         if pretend {
             println!("\nThese are the packages that would be fetched, in order:\n");
         }
-        println!("Calculating dependencies ... done!");
-        println!("Dependency resolution took .\n");
+        if super::gates::resolution_notice_shown(quiet, emerge_opts.nodeps) {
+            println!("Calculating dependencies ... done!");
+            println!("Dependency resolution took .\n");
+        }
         println!("*** Resuming merge...");
         return ExitCode::from(super::run_fetchonly_action(super::FetchonlyActionArgs {
             opts: emerge_opts,
