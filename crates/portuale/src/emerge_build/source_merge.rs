@@ -100,11 +100,13 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
         buildpkg_exclude,
         display: &display,
     };
-    // Every entry below prints its own positional snapshot of these
-    // counters.
-    let progress = merge_progress_map(entries);
-    run_merge_loop(entries, keep_going, root, |idx, entry| {
-        let entry_progress = progress[idx];
+    let source_paths = |entry: &GraphEntry| source_paths_for(options, entry, portage_tmpdir);
+    let report = FailReport {
+        root,
+        source_paths: &source_paths,
+        features: resolved_features(options),
+    };
+    run_merge_loop(entries, keep_going, &report, |_, entry, entry_progress| {
         let bp = buildpkg.filter(|opts| {
             entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
         });
@@ -157,18 +159,19 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
 
 /// The shared per-entry loop for `run_source_merge` /
 /// `emerge_getbinpkg::run_merge_plan`. Without `keep_going` stops at the
-/// first failure. With `--keep-going` records the failure, drops every
-/// entry that (transitively) depends on the failed one via `required_by`,
-/// and merges the rest, then returns a combined `Err`.
-// Portage: Scheduler.py, _calc_resume_list
+/// first failure. With `--keep-going` records the failure, re-plans like
+/// Portage's resume pass (the entries that (transitively) require the failed
+/// one are dropped with a notice, the progress counter restarts over what is
+/// left) and merges the rest. Every failure is reported through `report`.
+// Portage: Scheduler.py, _merge (resume loop), _calc_resume_list
 pub(crate) fn run_merge_loop<F>(
     entries: &[GraphEntry],
     keep_going: bool,
-    root: &Path,
+    report: &FailReport<'_>,
     mut merge_one: F,
 ) -> Result<(), String>
 where
-    F: FnMut(usize, &GraphEntry) -> Result<(), String>,
+    F: FnMut(usize, &GraphEntry, mrg_director::MergeProgress) -> Result<(), String>,
 {
     use std::collections::{HashMap, HashSet};
 
@@ -182,66 +185,78 @@ where
             )
         })
         .collect();
+    let cp_of = |e: &GraphEntry| (e.category.clone(), e.package.clone());
 
-    let mut skip: HashSet<(String, String)> = HashSet::new();
-    let mut failures: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-
-    for (idx, entry) in entries.iter().enumerate() {
-        let cp = (entry.category.clone(), entry.package.clone());
-        if skip.contains(&cp) {
-            skipped.push(format!("{}/{}", entry.category, entry.package));
-            continue;
-        }
-        if let Err(e) = merge_one(idx, entry) {
-            if !keep_going {
-                return Err(e);
+    let mut ledger = Ledger::default();
+    let mut unreported: Vec<String> = Vec::new();
+    // cps that failed or were dropped, and the dropped ones already announced.
+    let mut gone: HashSet<(String, String)> = HashSet::new();
+    let mut pending: Vec<usize> = (0..entries.len()).collect();
+    let mut progress = merge_progress_map(entries);
+    let mut pos = 0;
+    while pos < pending.len() {
+        let idx = pending[pos];
+        let entry = &entries[idx];
+        let Err(e) = merge_one(idx, entry, progress[idx]) else {
+            if let Some(cpv) = resume_cpv(entry) {
+                // Each successful merge removes its own package from the
+                // up-front-saved resume list, so a SIGKILL leaves exactly the
+                // tail for `--resume`.
+                crate::mtimedb::remove_merged_entry(report.root, &cpv);
             }
-            failures.push(e);
-            // Every (transitive) dependent of the failed package can no
-            // longer be merged.
-            let mut queue = vec![cp];
-            while let Some(x) = queue.pop() {
-                if let Some(deps) = dependents.get(&x) {
-                    for p in deps {
-                        if skip.insert(p.clone()) {
-                            queue.push(p.clone());
-                        }
-                    }
+            pos += 1;
+            continue;
+        };
+        if !ledger.failed(report, entry, &e) {
+            unreported.push(e);
+        }
+        if !keep_going {
+            break;
+        }
+        // Every (transitive) dependent of the failed package can no longer be
+        // merged.
+        let mut dropped_cps: HashSet<(String, String)> = HashSet::new();
+        let mut queue = vec![cp_of(entry)];
+        gone.insert(cp_of(entry));
+        while let Some(x) = queue.pop() {
+            for p in dependents.get(&x).into_iter().flatten() {
+                if gone.insert(p.clone()) {
+                    dropped_cps.insert(p.clone());
+                    queue.push(p.clone());
                 }
             }
-        } else if let Some(cpv) = resume_cpv(entry) {
-            // Each successful merge removes its own package from the
-            // up-front-saved resume list, so a SIGKILL leaves exactly the
-            // tail for `--resume`.
-            crate::mtimedb::remove_merged_entry(root, &cpv);
         }
+        let rest: Vec<usize> = pending[pos + 1..].to_vec();
+        if rest.is_empty() {
+            break;
+        }
+        ledger.resuming();
+        let mut survivors = Vec::new();
+        for i in rest {
+            let e = &entries[i];
+            if dropped_cps.contains(&cp_of(e)) {
+                let atoms: Vec<String> = {
+                    let mut atoms: Vec<String> =
+                        gone.iter().flat_map(|cp| atoms_requiring(e, cp)).collect();
+                    atoms.sort();
+                    atoms.dedup();
+                    atoms
+                };
+                ledger.dropped(report, e, &atoms);
+            } else if !gone.contains(&cp_of(e)) {
+                survivors.push(i);
+            }
+        }
+        // The counter restarts over what is left.
+        let remaining: Vec<GraphEntry> = survivors.iter().map(|&i| entries[i].clone()).collect();
+        for (k, m) in merge_progress_map(&remaining).into_iter().enumerate() {
+            progress[survivors[k]] = m;
+        }
+        pending = survivors;
+        pos = 0;
     }
-
-    if failures.is_empty() {
-        return Ok(());
-    }
-    let mut msg = format!(
-        "{} package(s) failed to merge (--keep-going):\n{}",
-        failures.len(),
-        failures
-            .iter()
-            .map(|f| format!("  {f}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    if !skipped.is_empty() {
-        msg.push_str(&format!(
-            "\n{} dependent package(s) not merged:\n{}",
-            skipped.len(),
-            skipped
-                .iter()
-                .map(|s| format!("  {s}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
-    }
-    Err(msg)
+    let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
+    ledger.finish(report, keep_going, first)
 }
 
 /// Arguments of [`merge_one_source_entry`].

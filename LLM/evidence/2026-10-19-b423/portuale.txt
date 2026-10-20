@@ -27,7 +27,17 @@ Dependency resolution took (backtrack: 0/20).
  [31;01m*[0m Working directory: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
  [31;01m*[0m S: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
 
->>> Emerging (2 of 3) dev-util/good-1::fetchrepo for /var/tmp/b423/root
+>>> Failed to emerge dev-util/bad-1 for /var/tmp/b423/root, Log file:
+
+>>>  '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
+*** Resuming merge...
+Calculating dependencies ... done!
+Dependency resolution took .
+
+ * emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root dropped because
+ * it requires dev-util/bad
+
+>>> Emerging (1 of 1) dev-util/good-1::fetchrepo for /var/tmp/b423/root
 >>> Unpacking source...
 >>> Source unpacked in /var/tmp/b423/tmp/portage/dev-util/good-1/work
 >>> Preparing source in /var/tmp/b423/tmp/portage/dev-util/good-1/work/good-1 ...
@@ -45,18 +55,43 @@ Dependency resolution took (backtrack: 0/20).
  [32m*[0m Final size of installed tree:  0 KiB
 
 
->>> Installing (2 of 3) dev-util/good-1::fetchrepo to /var/tmp/b423/root
+>>> Installing (1 of 1) dev-util/good-1::fetchrepo to /var/tmp/b423/root
 
->>> Completed (2 of 3) dev-util/good-1::fetchrepo to /var/tmp/b423/root
+>>> Completed (1 of 1) dev-util/good-1::fetchrepo to /var/tmp/b423/root
+
+ * Messages for package dev-util/bad-1 merged to /var/tmp/b423/root:
+
+ * ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
+ *   compile exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called src_compile
+ *   environment, line 216:  Called die
+ * The specific snippet of code:
+ *       die "compile exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/environment'.
+ * Working directory: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
+ * S: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
+
+ * Messages for package dev-util/top-1 merged to /var/tmp/b423/root:
+
+ * emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root dropped because
+ * it requires dev-util/bad
+>>> Recording dev-util/good in "world" favorites file...
+
+ * GNU info directory index is up-to-date.
 rc=1
 --- stderr
-
- * The resume list contains packages that could not be merged.
- * Use `emerge --resume` to retry, or `emerge --resume --skipfirst` to skip the first one.
-emerge: 1 package(s) failed to merge (--keep-going):
-  dev-util/bad-1: merge failed (1)
-1 dependent package(s) not merged:
-  dev-util/top
+ * 
+ * The following 2 packages have failed to build, install, or execute
+ * postinst:
+ * 
+ *  (dev-util/bad-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root'), Log file:
+ *   '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
+ *  (dev-util/top-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root')
+ * 
 === nokg-bad-good-top
 Calculating dependencies ... done!
 Dependency resolution took (backtrack: 0/20).
@@ -85,12 +120,28 @@ Dependency resolution took (backtrack: 0/20).
  [31;01m*[0m The ebuild environment file is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/environment'.
  [31;01m*[0m Working directory: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
  [31;01m*[0m S: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
+
+>>> Failed to emerge dev-util/bad-1 for /var/tmp/b423/root, Log file:
+
+>>>  '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
+
+ * Messages for package dev-util/bad-1 merged to /var/tmp/b423/root:
+
+ * ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
+ *   compile exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called src_compile
+ *   environment, line 216:  Called die
+ * The specific snippet of code:
+ *       die "compile exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/environment'.
+ * Working directory: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
+ * S: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
 rc=1
 --- stderr
-
- * The resume list contains packages that could not be merged.
- * Use `emerge --resume` to retry, or `emerge --resume --skipfirst` to skip the first one.
-emerge: dev-util/bad-1: merge failed (1)
 === kg-bad-only
 Calculating dependencies ... done!
 Dependency resolution took (backtrack: 0/20).
@@ -119,13 +170,34 @@ Dependency resolution took (backtrack: 0/20).
  [31;01m*[0m The ebuild environment file is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/environment'.
  [31;01m*[0m Working directory: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
  [31;01m*[0m S: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
+
+>>> Failed to emerge dev-util/bad-1 for /var/tmp/b423/root, Log file:
+
+>>>  '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
+
+ * Messages for package dev-util/bad-1 merged to /var/tmp/b423/root:
+
+ * ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
+ *   compile exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called src_compile
+ *   environment, line 216:  Called die
+ * The specific snippet of code:
+ *       die "compile exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/environment'.
+ * Working directory: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
+ * S: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
 rc=1
 --- stderr
-
- * The resume list contains packages that could not be merged.
- * Use `emerge --resume` to retry, or `emerge --resume --skipfirst` to skip the first one.
-emerge: 1 package(s) failed to merge (--keep-going):
-  dev-util/bad-1: merge failed (1)
+ * 
+ * The following package has failed to build, install, or execute postinst:
+ * 
+ *  (dev-util/bad-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root'), Log file:
+ *   '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
+ * 
 === kg-bad-good-jobs
 Calculating dependencies ... done!
 Dependency resolution took (backtrack: 0/20).
@@ -138,41 +210,52 @@ Dependency resolution took (backtrack: 0/20).
 >>> Jobs: 0 of 3 complete, 2 running                                    
 >>> Jobs: 0 of 3 complete, 2 running, 1 failed                          
 >>> Jobs: 0 of 3 complete, 1 running, 1 failed                          
+
+>>> Failed to emerge dev-util/bad-1 for /var/tmp/b423/root, Log file:
+
+>>>  '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
 >>> Jobs: 0 of 3 complete, 1 failed                                     
 >>> Installing (2 of 3) dev-util/good-1::fetchrepo to /var/tmp/b423/root
 >>> Jobs: 0 of 3 complete, 1 failed                                     
 >>> Completed (2 of 3) dev-util/good-1::fetchrepo to /var/tmp/b423/root
 >>> Jobs: 0 of 3 complete, 1 failed                                     
 >>> Jobs: 1 of 3 complete, 1 failed                                     
+*** Resuming merge...
+Calculating dependencies ... done!
+Dependency resolution took .
+
+ * emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root dropped because
+ * it requires dev-util/bad
+
+ * Messages for package dev-util/bad-1 merged to /var/tmp/b423/root:
+
+ * ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
+ *   compile exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called src_compile
+ *   environment, line 216:  Called die
+ * The specific snippet of code:
+ *       die "compile exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
+ * The ebuild environment file is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/environment'.
+ * Working directory: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
+ * S: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
+
+ * Messages for package dev-util/top-1 merged to /var/tmp/b423/root:
+
+ * emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root dropped because
+ * it requires dev-util/bad
+>>> Recording dev-util/good in "world" favorites file...
+
+ * GNU info directory index is up-to-date.
 rc=1
 --- stderr
-
- * The resume list contains packages that could not be merged.
- * Use `emerge --resume` to retry, or `emerge --resume --skipfirst` to skip the first one.
-emerge: 1 package(s) failed to merge (--keep-going):
-  dev-util/bad-1: build failed (1)
------ last lines of /var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log -----
->>> Unpacking source...
->>> Source unpacked in /var/tmp/b423/tmp/portage/dev-util/bad-1/work
->>> Preparing source in /var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1 ...
->>> Source prepared.
->>> Configuring source in /var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1 ...
->>> Source configured.
->>> Compiling source in /var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1 ...
- [31;01m*[0m ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
- [31;01m*[0m   compile exploded
- [31;01m*[0m 
- [31;01m*[0m Call stack:
- [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
- [31;01m*[0m   environment, line 216:  Called die
- [31;01m*[0m The specific snippet of code:
- [31;01m*[0m       die "compile exploded"
- [31;01m*[0m 
- [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
- [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
- [31;01m*[0m The ebuild environment file is located at '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/environment'.
- [31;01m*[0m Working directory: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
- [31;01m*[0m S: '/var/tmp/b423/tmp/portage/dev-util/bad-1/work/bad-1'
-----------
-1 dependent package(s) not merged:
-  dev-util/top
+ * 
+ * The following 2 packages have failed to build, install, or execute
+ * postinst:
+ * 
+ *  (dev-util/bad-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root'), Log file:
+ *   '/var/tmp/b423/tmp/portage/dev-util/bad-1/temp/build.log'
+ *  (dev-util/top-1:0/0::fetchrepo, ebuild scheduled for merge to '/var/tmp/b423/root')
+ * 

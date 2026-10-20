@@ -189,3 +189,59 @@ pub(crate) fn record_world_after_merge(args: RecordWorldAfterMergeArgs<'_>) -> O
     }
     None
 }
+
+/// Arguments of [`finish_failed_merge`].
+pub(crate) struct FinishFailedMergeArgs<'a> {
+    pub(crate) failed: FailedMerge,
+    pub(crate) opts: &'a EmergeOpts<'a>,
+    pub(crate) root: &'a Path,
+    pub(crate) system_atoms: &'a Vec<String>,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a Config,
+    pub(crate) config_root: &'a Path,
+    pub(crate) selected_set_args: &'a [String],
+    pub(crate) color: Colorizer,
+}
+
+/// After a failed merge run: what did land (a `--keep-going` run, or a failure
+/// after earlier packages) is recorded in `world`, then the info index and the
+/// GLEP 42 notice run when the vdb changed, like the end of a good run. A
+/// failure that merged nothing is silent.
+// Portage: Scheduler.py (world update per merged package), post_emerge.py
+pub(crate) fn finish_failed_merge(args: FinishFailedMergeArgs<'_>) -> ExitCode {
+    let FinishFailedMergeArgs {
+        failed,
+        opts,
+        root,
+        system_atoms,
+        repos,
+        config,
+        config_root,
+        selected_set_args,
+        color,
+    } = args;
+    if failed.merged.is_empty() {
+        return failed.code;
+    }
+    if let Some(code) = record_world_after_merge(RecordWorldAfterMergeArgs {
+        opts,
+        root,
+        entries: &failed.merged,
+        system_atoms,
+        repos,
+        config_root,
+        selected_set_args,
+    }) {
+        return code;
+    }
+    if !opts.buildpkgonly {
+        let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
+        if let Err(e) = crate::info_files::post_merge_info_update(root, &color, opts.quiet, noinfo)
+        {
+            eprintln!("emerge: {e}");
+            return ExitCode::from(1);
+        }
+    }
+    merge_failure_news_notice(true, repos, root, config, &color);
+    failed.code
+}

@@ -667,8 +667,7 @@ fn run_build_scheduler_keep_going_skips_a_failed_builds_dependents() {
         mode: StatusMode::for_tests(),
     })
     .expect_err("a failed build must make the whole run fail under --keep-going");
-    assert!(err.contains("schedbad-1.0"), "{err}");
-    assert!(err.contains("schedbaddep"), "{err}");
+    assert!(is_reported_failure(&err), "{err}");
 
     assert!(
         root.join("var/db/pkg/dev-libs/schedok-1.0/CONTENTS")
@@ -729,7 +728,7 @@ fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
         mode: StatusMode::for_tests(),
     })
     .expect_err("schedbad's own failure must fail the whole run");
-    assert!(err.contains("schedbad-1.0"), "{err}");
+    assert!(is_reported_failure(&err), "{err}");
     // Generously bounded for loaded machines: well under schedslow's 120s
     // sleep, proving the scheduler didn't just wait it out.
     assert!(
@@ -798,7 +797,14 @@ fn run_merge_loop_without_keep_going_stops_at_the_first_failure() {
     let mut seen: Vec<String> = Vec::new();
     // No resume list under this fresh root, so the per-merge shrink
     // is a silent no-op.
-    let err = run_merge_loop(&[a, b], false, &tempdir(), |_, e| {
+    let root = tempdir();
+    let no_paths = |_: &GraphEntry| None;
+    let report = FailReport {
+        root: &root,
+        source_paths: &no_paths,
+        features: String::new(),
+    };
+    let err = run_merge_loop(&[a, b], false, &report, |_, e, _| {
         seen.push(e.package.clone());
         Err(format!("{} boom", e.package))
     })
@@ -842,7 +848,14 @@ fn run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents() {
     let mut merged: Vec<String> = Vec::new();
     // No resume list under this fresh root, so the per-merge shrink
     // is a silent no-op.
-    let err = run_merge_loop(&[dep, mid, top, other], true, &tempdir(), |_, e| {
+    let root = tempdir();
+    let no_paths = |_: &GraphEntry| None;
+    let report = FailReport {
+        root: &root,
+        source_paths: &no_paths,
+        features: String::new(),
+    };
+    let err = run_merge_loop(&[dep, mid, top, other], true, &report, |_, e, _| {
         if e.package == "dep" {
             return Err("dep boom".into());
         }
@@ -852,14 +865,68 @@ fn run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents() {
     .unwrap_err();
 
     assert_eq!(merged, vec!["other".to_string()]);
-    assert!(
-        err.contains("1 package(s) failed to merge (--keep-going):"),
-        "{err}"
+    // The failure is not a phase failure, so it is returned for the `emerge:`
+    // line; the dropped dependents are announced, not folded into the message.
+    assert_eq!(err, "dep boom");
+}
+
+#[test]
+fn run_merge_loop_keep_going_restarts_the_progress_counter() {
+    // bad <- top; `good` is independent. After `bad` fails and `top` is dropped,
+    // `good` is the only package left: Portage prints `(1 of 1)`, not `(2 of 3)`.
+    let mut bad = source_entry(
+        "bad",
+        PretendOutcome::New {
+            version: "1".into(),
+        },
     );
-    assert!(err.contains("  dep boom"), "{err}");
-    assert!(err.contains("2 dependent package(s) not merged:"), "{err}");
-    assert!(err.contains("  dev-libs/mid"), "{err}");
-    assert!(err.contains("  dev-libs/top"), "{err}");
+    bad.required_by = vec![("dev-libs".into(), "top".into())];
+    let good = source_entry(
+        "good",
+        PretendOutcome::New {
+            version: "1".into(),
+        },
+    );
+    let top = source_entry(
+        "top",
+        PretendOutcome::New {
+            version: "1".into(),
+        },
+    );
+    let root = tempdir();
+    let no_paths = |_: &GraphEntry| None;
+    let report = FailReport {
+        root: &root,
+        source_paths: &no_paths,
+        features: String::new(),
+    };
+    let mut seen: Vec<(String, usize, usize)> = Vec::new();
+    let _ = run_merge_loop(&[bad, good, top], true, &report, |_, e, p| {
+        seen.push((e.package.clone(), p.cur, p.max));
+        if e.package == "bad" {
+            return Err("bad boom".into());
+        }
+        Ok(())
+    });
+    assert_eq!(
+        seen,
+        vec![("bad".to_string(), 1, 3), ("good".to_string(), 1, 1),]
+    );
+}
+
+#[test]
+fn wrap_words_breaks_like_textwrap() {
+    assert_eq!(
+        wrap_words(
+            "emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root/ dropped because it requires dev-util/bad",
+            75
+        ),
+        vec![
+            "emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root/ dropped because"
+                .to_string(),
+            "it requires dev-util/bad".to_string(),
+        ]
+    );
 }
 
 #[test]

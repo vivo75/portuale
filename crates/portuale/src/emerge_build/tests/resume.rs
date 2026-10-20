@@ -234,7 +234,13 @@ fn run_merge_loop_shrinks_the_saved_resume_list_per_successful_merge() {
     )
     .unwrap();
 
-    run_merge_loop(&entries, false, &root, |_, entry| {
+    let no_paths = |_: &GraphEntry| None;
+    let report = FailReport {
+        root: &root,
+        source_paths: &no_paths,
+        features: String::new(),
+    };
+    run_merge_loop(&entries, false, &report, |_, entry, _| {
         // By the time this entry's own merge runs, every earlier entry
         // has already left the on-disk list.
         let pos = full

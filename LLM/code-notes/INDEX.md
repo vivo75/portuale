@@ -337,6 +337,7 @@
 - [crates/portuale/src/embedded_runtime.rs](portuale/embedded_runtime.md) — The phase runtime and package-set definitions compiled into the binary.
 - [crates/portuale/src/emerge_build/buildpkgonly.rs](portuale/emerge_build/buildpkgonly.md) — `--buildpkgonly`: builds binary packages without merging, serially, with `--keep-going` support.
 - [crates/portuale/src/emerge_build/entry_env.rs](portuale/emerge_build/entry_env.md) — The per-entry build environment: tmpdir, FEATURES, USE, identity and metadata rows.
+- [crates/portuale/src/emerge_build/failure.rs](portuale/emerge_build/failure.md) — The failed-build endgame (backlog #426). Ground truth: `LLM/evidence/2026-10-19-b423/portage.txt`, design `LLM/evidence/2026-10-19-b426-design.md`.
 - [emerge_build/fetchonly.rs](portuale/emerge_build/fetchonly.md) — 
 - [crates/portuale/src/emerge_build/logs.rs](portuale/emerge_build/logs.md) — Build logs: per-package `build.log` placement, `PORTAGE_LOGDIR` symlinks, and failure tails.
 - [crates/portuale/src/emerge_build/mod.rs](portuale/emerge_build/mod.md) — `--buildpkgonly` execution without `--pretend`: builds a binary package per entry the pretend gate proved safe.

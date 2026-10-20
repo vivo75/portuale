@@ -664,8 +664,6 @@ pub fn run_merge_plan(args: RunMergePlanArgs<'_>) -> Result<(), String> {
     }) {
         crate::ebuild_phases::require_phase_runtime()?;
     }
-    // Every entry below prints its own snapshot of these counters.
-    let progress = crate::emerge_build::merge_progress_map(entries);
     // One display per merge run.
     let total_builds = entries
         .iter()
@@ -679,11 +677,18 @@ pub fn run_merge_plan(args: RunMergePlanArgs<'_>) -> Result<(), String> {
         total_builds,
         crate::emerge_build::progress_color(),
     );
-    crate::emerge_build::run_merge_loop(entries, keep_going, root, |idx, entry| {
+    let source_paths = |entry: &GraphEntry| {
+        crate::emerge_build::source_paths_for(merge_options, entry, portage_tmpdir)
+    };
+    let report = crate::emerge_build::FailReport {
+        root,
+        source_paths: &source_paths,
+        features: crate::emerge_build::resolved_features(merge_options),
+    };
+    crate::emerge_build::run_merge_loop(entries, keep_going, &report, |_, entry, entry_progress| {
         // Derive the entry's `MergeUnit` and dispatch on its kind through the
         // source/binary engines. An entry with nothing to merge stays a silent
         // no-op, exactly the merge functions' own early return.
-        let entry_progress = progress[idx];
         let Some(unit) = crate::merge_engines::merge_unit_for_entry(entry, root, entry_progress)
         else {
             return Ok(());

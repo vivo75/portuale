@@ -7,6 +7,35 @@ use crate::pretend::*;
 use portage_profile::Config;
 use portage_repo::RepoConfig;
 
+/// A merge run that failed: the exit code, and the entries that did merge before
+/// the failure (empty when nothing landed) for the world and post-merge steps.
+pub(crate) struct FailedMerge {
+    pub(crate) code: ExitCode,
+    pub(crate) merged: Vec<GraphEntry>,
+}
+
+impl FailedMerge {
+    fn plain(code: ExitCode) -> Option<Self> {
+        Some(Self {
+            code,
+            merged: Vec::new(),
+        })
+    }
+}
+
+/// The entries of `entries` that landed before a failure: those whose
+/// resume item is no longer left over.
+fn merged_entries(
+    entries: &[GraphEntry],
+    unmerged: &[crate::mtimedb::ResumeCpv],
+) -> Vec<GraphEntry> {
+    entries
+        .iter()
+        .filter(|e| emerge_build::resume_cpv(e).is_some_and(|c| !unmerged.contains(&c)))
+        .cloned()
+        .collect()
+}
+
 /// The values [`run_source_merge_plan`] reads from its caller.
 pub(crate) struct RunSourceMergePlanArgs<'a> {
     pub(crate) opts: &'a EmergeOpts<'a>,
@@ -19,12 +48,10 @@ pub(crate) struct RunSourceMergePlanArgs<'a> {
     pub(crate) merge_options: &'a MergeOptions,
     pub(crate) buildpkg: Option<&'a PackageOptions>,
     pub(crate) status_mode: StatusMode,
-    pub(crate) config: &'a Config,
-    pub(crate) color: Colorizer,
 }
 
 /// Build and merge the plan from source, after saving it as the resume list.
-pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<ExitCode> {
+pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<FailedMerge> {
     let RunSourceMergePlanArgs {
         opts,
         jobs,
@@ -35,8 +62,6 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         merge_options,
         buildpkg,
         status_mode,
-        config,
-        color,
     } = args;
     let &EmergeOpts {
         oneshot,
@@ -80,24 +105,22 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         // Portage: Scheduler.py, _save_resume_list
         let unmerged = entries_not_merged(root, entries);
         let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-        if !unmerged.is_empty() {
-            if let Err(w) =
+        if !unmerged.is_empty()
+            && let Err(w) =
                 crate::mtimedb::write_resume_list(root, atom_args, &unmerged, &resume_opts)
-            {
-                eprintln!("emerge: warning: could not save the resume list: {w}");
-            } else {
-                eprintln!(
-                    "\n * The resume list contains packages that could not be \
-                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                             --skipfirst` to skip the first one."
-                );
-            }
+        {
+            eprintln!("emerge: warning: could not save the resume list: {w}");
         }
-        // The GLEP 42 notice prints regardless of retval, gated on the vdb
-        // having changed. Portage: post_emerge.py
-        merge_failure_news_notice(unmerged.len() < entries.len(), repos, root, config, &color);
-        eprintln!("emerge: {e}");
-        return Some(ExitCode::from(1));
+        // A failure already shown (the `Failed to emerge` block, the elog
+        // summary and the failed-package list) adds no `emerge:` line.
+        // Portage: Scheduler.py, merge
+        if !emerge_build::is_reported_failure(&e) {
+            eprintln!("emerge: {e}");
+        }
+        return Some(FailedMerge {
+            code: ExitCode::from(1),
+            merged: merged_entries(entries, &unmerged),
+        });
     }
     None
 }
@@ -114,11 +137,10 @@ pub(crate) struct RunBinaryMergePlanArgs<'a> {
     pub(crate) merge_options: &'a MergeOptions,
     pub(crate) buildpkg: Option<&'a PackageOptions>,
     pub(crate) status_mode: StatusMode,
-    pub(crate) color: Colorizer,
 }
 
 /// Merge a plan with binary packages: on a remote host, or here after saving the resume list.
-pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<ExitCode> {
+pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<FailedMerge> {
     let RunBinaryMergePlanArgs {
         opts,
         entries,
@@ -130,7 +152,6 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         merge_options,
         buildpkg,
         status_mode,
-        color,
     } = args;
     let &EmergeOpts {
         keep_going,
@@ -147,7 +168,7 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
     if let Some(mut rctx) = crate::remote::take_remote_exec() {
         if let Err(e) = crate::remote::check_binary_plan(entries) {
             eprintln!("emerge: {e}");
-            return Some(ExitCode::from(2));
+            return FailedMerge::plain(ExitCode::from(2));
         }
         // `CONFIG_PROTECT` comes from the placed config unless explicitly
         // flagged, so the client merge protects what the client config protects.
@@ -174,13 +195,13 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
             keep_going,
         }) {
             eprintln!("emerge: {e}");
-            return Some(ExitCode::from(1));
+            return FailedMerge::plain(ExitCode::from(1));
         }
         // No post-merge notice here by construction: the remote plan merges onto
         // the remote host (the local vdb is never touched), so Portage's
         // vdb-changed gate evaluates false; and this path is never `--pretend`.
         // Portage: post_emerge.py
-        return Some(ExitCode::from(0));
+        return FailedMerge::plain(ExitCode::from(0));
     }
     // Persist the full mergelist BEFORE the first merge runs, so a SIGKILL
     // mid-merge still leaves `--resume` something to replay. Unconditional:
@@ -208,13 +229,13 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         mode: status_mode,
     }) {
         // A merge-time binpkg digest/missing-file failure already printed
-        // Portage's full tail and needs no resume notice or `emerge:` line;
-        // the up-front save already leaves the tail for `--resume`.
+        // Portage's full tail and needs no `emerge:` line; the up-front save
+        // already leaves the tail for `--resume`.
         // Portage: Scheduler.py, _failed_pkg_msg
         if crate::emerge_getbinpkg::is_binpkg_digest_failure(&e)
             || crate::emerge_getbinpkg::is_binpkg_missing_failure(&e)
         {
-            return Some(ExitCode::from(1));
+            return FailedMerge::plain(ExitCode::from(1));
         }
         // On failure, record every still-unmerged package (source or binary)
         // for `emerge --resume`; a failure with nothing unmerged leaves the
@@ -222,25 +243,19 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         // Portage: Scheduler.py, _save_resume_list
         let unmerged = entries_not_merged(root, entries);
         let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
-        if !unmerged.is_empty() {
-            if let Err(w) =
+        if !unmerged.is_empty()
+            && let Err(w) =
                 crate::mtimedb::write_resume_list(root, atom_args, &unmerged, &resume_opts)
-            {
-                eprintln!("emerge: warning: could not save the resume list: {w}");
-            } else {
-                eprintln!(
-                    "\n * The resume list contains packages that could not be \
-                             merged.\n * Use `emerge --resume` to retry, or `emerge --resume \
-                             --skipfirst` to skip the first one."
-                );
-            }
+        {
+            eprintln!("emerge: warning: could not save the resume list: {w}");
         }
-        // The GLEP 42 notice prints regardless of retval, gated on the vdb
-        // having changed (here: at least one entry landed).
-        // Portage: post_emerge.py
-        merge_failure_news_notice(unmerged.len() < entries.len(), repos, root, config, &color);
-        eprintln!("emerge: {e}");
-        return Some(ExitCode::from(1));
+        if !emerge_build::is_reported_failure(&e) {
+            eprintln!("emerge: {e}");
+        }
+        return Some(FailedMerge {
+            code: ExitCode::from(1),
+            merged: merged_entries(entries, &unmerged),
+        });
     }
     None
 }

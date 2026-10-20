@@ -101,15 +101,7 @@ pub(crate) fn build_one_source_entry(args: BuildOneSourceEntryArgs<'_>) -> Resul
         build_env: &build_env,
     })?;
     if status != 0 {
-        let mut msg = format!("{cp}-{version}: build failed ({status})");
-        if let Some(lp) = &log_path {
-            msg.push_str(&format!(
-                "\n----- last lines of {} -----\n{}\n----------",
-                lp.display(),
-                tail_of(lp, 40)
-            ));
-        }
-        return Err(msg);
+        return Err(format!("{cp}-{version}: build failed ({status})"));
     }
     if let Some(package_options) = buildpkg {
         println!(">>> Building package for {cp}-{version}...");
@@ -344,8 +336,15 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
         .collect();
     let mut started: HashSet<usize> = HashSet::new();
     let mut skip: HashSet<usize> = HashSet::new();
-    let mut failures: Vec<String> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
+    let mut ledger = Ledger::default();
+    let mut unreported: Vec<String> = Vec::new();
+    let mut gone: HashSet<usize> = HashSet::new();
+    let source_paths = |entry: &GraphEntry| source_paths_for(options, entry, portage_tmpdir);
+    let report = FailReport {
+        root,
+        source_paths: &source_paths,
+        features: resolved_features(options),
+    };
     // One registry for this call only, shared with the worker threads it
     // spawns (never process-wide, so another test thread's subprocess is
     // unreachable from here).
@@ -353,7 +352,7 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
     // Every build/merge half below prints its entry's own snapshot.
     let progress = merge_progress_map(entries);
 
-    std::thread::scope(|scope| -> Result<(), String> {
+    let loop_result = std::thread::scope(|scope| -> Result<(), String> {
         let (tx, rx) = mpsc::channel::<(usize, Result<PathBuf, String>)>();
         let mut in_flight = 0usize;
         loop {
@@ -459,44 +458,54 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
                     display.merge_finished();
                 }
                 Some(e) => {
+                    if !ledger.failed(&report, &entries[idx], &e) {
+                        unreported.push(e);
+                    }
                     if !keep_going {
                         // Without `--keep-going` no new work is scheduled and
                         // still-running builds are killed, not waited out.
                         ebuild_phases::kill_registered_children(&registry);
-                        return Err(e);
+                        return Ok(());
                     }
-                    failures.push(e);
+                    gone.insert(idx);
+                    let mut skipped = Vec::new();
                     scheduler_skip_dependents(idx, entries, &cp_to_idx, &mut skip, &mut skipped);
                 }
             }
         }
         Ok(())
-    })?;
+    });
+    loop_result?;
 
-    if failures.is_empty() {
-        return Ok(());
-    }
-    let mut msg = format!(
-        "{} package(s) failed to merge (--keep-going):\n{}",
-        failures.len(),
-        failures
+    // The resumed pass: whatever never ran because a dependency failed is
+    // dropped with a notice.
+    // Portage: Scheduler.py, _merge (resume loop), _calc_resume_list
+    if keep_going && !skip.is_empty() {
+        ledger.resuming();
+        let mut dropped: Vec<usize> = skip
             .iter()
-            .map(|f| format!("  {f}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    if !skipped.is_empty() {
-        msg.push_str(&format!(
-            "\n{} dependent package(s) not merged:\n{}",
-            skipped.len(),
-            skipped
+            .copied()
+            .filter(|i| !merged.contains(i))
+            .collect();
+        dropped.sort_unstable();
+        for i in dropped {
+            let mut atoms: Vec<String> = gone
                 .iter()
-                .map(|s| format!("  {s}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
+                .chain(skip.iter())
+                .flat_map(|&g| {
+                    atoms_requiring(
+                        &entries[i],
+                        &(entries[g].category.clone(), entries[g].package.clone()),
+                    )
+                })
+                .collect();
+            atoms.sort();
+            atoms.dedup();
+            ledger.dropped(&report, &entries[i], &atoms);
+        }
     }
-    Err(msg)
+    let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
+    ledger.finish(&report, keep_going, first)
 }
 
 /// The failure a worker thread that panicked reports in place of its result.

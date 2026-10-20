@@ -934,7 +934,7 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
                 return Some(ExitCode::from(1));
             }
         } else if plan.getbinpkg || has_binary_entry {
-            if let Some(code) = run_binary_merge_plan(RunBinaryMergePlanArgs {
+            if let Some(failed) = run_binary_merge_plan(RunBinaryMergePlanArgs {
                 opts,
                 entries,
                 config,
@@ -945,11 +945,20 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
                 merge_options: &merge_options,
                 buildpkg,
                 status_mode,
-                color,
             }) {
-                return Some(code);
+                return Some(finish_failed_merge(FinishFailedMergeArgs {
+                    failed,
+                    opts,
+                    root,
+                    system_atoms,
+                    repos,
+                    config,
+                    config_root,
+                    selected_set_args,
+                    color,
+                }));
             }
-        } else if let Some(code) = run_source_merge_plan(RunSourceMergePlanArgs {
+        } else if let Some(failed) = run_source_merge_plan(RunSourceMergePlanArgs {
             opts,
             jobs,
             entries,
@@ -959,10 +968,18 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
             merge_options: &merge_options,
             buildpkg,
             status_mode,
-            config,
-            color,
         }) {
-            return Some(code);
+            return Some(finish_failed_merge(FinishFailedMergeArgs {
+                failed,
+                opts,
+                root,
+                system_atoms,
+                repos,
+                config,
+                config_root,
+                selected_set_args,
+                color,
+            }));
         }
 
         if let Some(code) = record_world_after_merge(RecordWorldAfterMergeArgs {

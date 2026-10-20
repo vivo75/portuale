@@ -151,60 +151,6 @@ impl RemoteBinaryJob<'_> {
     }
 }
 
-/// ` (cpv:slot/sub::repo, ebuild scheduled for merge to 'root')`, one failed package.
-// Portage: Scheduler.py (`_failed_pkgs_all` summary), Package.__str__
-fn failed_pkg_label(entry: &GraphEntry, cpv_slot: &str, root: &Path) -> String {
-    format!(
-        " ({cpv_slot}::{}, ebuild scheduled for merge to '{}')",
-        entry_repo(entry),
-        root.display()
-    )
-}
-
-/// The end-of-run `The following package(s) have failed to build, install, or execute
-/// postinst:` block on stderr: for two or more failures, or one under `--keep-going`.
-// Portage: _emerge/Scheduler.py, _run_pkg_ops end (`_failed_pkgs_all`)
-fn failed_pkgs_summary(
-    labels: &[String],
-    keep_going: bool,
-    color: &crate::color::Colorizer,
-) -> String {
-    if !(labels.len() > 1 || (!labels.is_empty() && keep_going)) {
-        return String::new();
-    }
-    let msg = if labels.len() > 1 {
-        format!(
-            "The following {} packages have failed to build, install, or execute postinst:",
-            labels.len()
-        )
-    } else {
-        "The following package has failed to build, install, or execute postinst:".to_string()
-    };
-    let star = color.c("BAD", " * ");
-    let mut out = format!("{star}\n");
-    let mut line = String::new();
-    for word in msg.split_whitespace() {
-        if !line.is_empty() && line.len() + 1 + word.len() > 72 {
-            out.push_str(&format!("{star}{line}\n"));
-            line.clear();
-        }
-        if !line.is_empty() {
-            line.push(' ');
-        }
-        line.push_str(word);
-    }
-    out.push_str(&format!("{star}{line}\n{star}\n"));
-    for label in labels {
-        out.push_str(&format!("{star}{label}\n"));
-    }
-    out.push_str(&format!("{star}\n"));
-    out
-}
-
-fn print_failed_pkgs_summary(labels: &[String], keep_going: bool, color: &crate::color::Colorizer) {
-    eprint!("{}", failed_pkgs_summary(labels, keep_going, color));
-}
-
 /// Fetches (or lists) the sources of every source entry of the merge list, in order, and
 /// returns the exit code: 1 when any package failed. A failure does not stop the others,
 /// and nothing is written to the vdb, the world file or the resume list.

@@ -221,26 +221,3 @@ pub(crate) fn foreground_log_path(args: ForegroundLogArgs<'_>) -> PathBuf {
         Err(_) => tmpdir_log_path,
     }
 }
-/// Last `n` lines of `path`, or a short "(build log unavailable)" note.
-/// A `.gz` path is gunzipped first.
-pub(crate) fn tail_of(path: &Path, n: usize) -> String {
-    let is_gz = path.extension().is_some_and(|ext| ext == "gz");
-    let text: Option<String> = if is_gz {
-        std::fs::File::open(path).ok().and_then(|f| {
-            use std::io::Read;
-            let mut decoder = flate2::read::MultiGzDecoder::new(f);
-            let mut s = String::new();
-            decoder.read_to_string(&mut s).ok().map(|_| s)
-        })
-    } else {
-        std::fs::read_to_string(path).ok()
-    };
-    match text {
-        Some(s) => {
-            let lines: Vec<&str> = s.lines().collect();
-            let start = lines.len().saturating_sub(n);
-            lines[start..].join("\n")
-        }
-        None => "(build log unavailable)".to_string(),
-    }
-}
