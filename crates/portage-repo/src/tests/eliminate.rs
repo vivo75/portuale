@@ -544,3 +544,39 @@ fn required_set_reachable_cps_follows_the_forward_installed_dep_graph() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn installed_reachability_walks_match_independent_calls() {
+    let dir = TempDir::new("portage-repo-reach-shared").keep();
+    let mk = |name: &str, rdepend: &str| {
+        let d = dir.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+        fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+    };
+    mk("tail-1.0", "dev-libs/mid");
+    mk("mid-1.0", "dev-libs/target");
+    mk("target-1.0", "");
+    mk("sysmember-1.0", "dev-libs/sysdep");
+    mk("sysdep-1.0", "");
+    let tail = ["dev-libs/tail".to_string()];
+    let sys = ["dev-libs/sysmember".to_string()];
+
+    let graph = InstalledReachability::new(&dir);
+    assert_eq!(
+        graph.reachable(&tail, &[]),
+        required_set_reachable_cps(&dir, &tail, &[])
+    );
+    assert_eq!(
+        graph.reachable(&tail, &sys),
+        required_set_reachable_cps(&dir, &tail, &sys)
+    );
+    // A second walk with other seeds on the same graph still agrees.
+    assert_eq!(
+        graph.reachable(&[], &sys),
+        required_set_reachable_cps(&dir, &[], &sys)
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

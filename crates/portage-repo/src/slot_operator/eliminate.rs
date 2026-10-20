@@ -313,33 +313,56 @@ pub fn required_set_reachable_cps(
     world_selected_atoms: &[String],
     system_atoms: &[String],
 ) -> HashSet<(String, String)> {
-    let installed = all_installed_packages(root);
-    let by_cp: HashMap<(&str, &str), &InstalledPackage> = installed
-        .iter()
-        .map(|p| ((p.category.as_str(), p.package.as_str()), p))
-        .collect();
-    let matches_cp = |atom_str: &str| -> Option<(String, String)> {
-        let a = portage_dep::parse_atom(atom_str)?;
-        let p = by_cp.get(&(a.category.as_str(), a.package.as_str()))?;
-        // A slot/version-constrained seed still only needs cp-level
-        // reachability here.
-        Some((p.category.clone(), p.package.clone()))
-    };
+    InstalledReachability::new(root).reachable(world_selected_atoms, system_atoms)
+}
 
-    let mut reachable: HashSet<(String, String)> = HashSet::new();
-    let mut queue: Vec<(String, String)> = Vec::new();
-    for atom_str in world_selected_atoms.iter().chain(system_atoms) {
-        if let Some(cp) = matches_cp(atom_str)
-            && reachable.insert(cp.clone())
-        {
-            queue.push(cp);
+type Cp = (String, String);
+
+/// The installed dependency graph of one `root`, with each package's outgoing
+/// `cat/pkg` edges parsed once. Several [`reachable`](Self::reachable) walks
+/// (the seed sets differ, the edges do not) share the `USE` and four `*DEPEND`
+/// reads. Lives for one caller; nothing is cached across calls.
+pub struct InstalledReachability {
+    installed: std::sync::Arc<Vec<InstalledPackage>>,
+    by_cp: HashMap<Cp, usize>,
+    root: PathBuf,
+    edges: RefCell<HashMap<usize, Vec<Cp>>>,
+}
+
+impl InstalledReachability {
+    /// Index the installed packages of `root` by `cat/pkg`.
+    pub fn new(root: &Path) -> Self {
+        let installed = all_installed_packages(root);
+        let by_cp = installed
+            .iter()
+            .enumerate()
+            .map(|(i, p)| ((p.category.clone(), p.package.clone()), i))
+            .collect();
+        Self {
+            installed,
+            by_cp,
+            root: root.to_path_buf(),
+            edges: RefCell::new(HashMap::new()),
         }
     }
-    while let Some((cat, pkg)) = queue.pop() {
-        let Some(p) = by_cp.get(&(cat.as_str(), pkg.as_str())) else {
-            continue;
-        };
+
+    fn matches_cp(&self, atom_str: &str) -> Option<Cp> {
+        let a = portage_dep::parse_atom(atom_str)?;
+        let cp = (a.category, a.package);
+        // A slot/version-constrained seed still only needs cp-level
+        // reachability here.
+        self.by_cp.contains_key(&cp).then_some(cp)
+    }
+
+    /// Installed `cat/pkg` edges out of package `i`, in dep-string order.
+    fn edges_of(&self, i: usize) -> Vec<Cp> {
+        if let Some(found) = self.edges.borrow().get(&i) {
+            return found.clone();
+        }
+        let p = &self.installed[i];
+        let root = self.root.as_path();
         let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+        let mut out = Vec::new();
         for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
             let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
             if depstr.trim().is_empty() {
@@ -348,16 +371,39 @@ pub fn required_set_reachable_cps(
             let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
                 continue;
             };
-            for atom_str in atoms {
-                if let Some(cp) = matches_cp(&atom_str)
-                    && reachable.insert(cp.clone())
-                {
-                    queue.push(cp);
+            out.extend(atoms.iter().filter_map(|a| self.matches_cp(a)));
+        }
+        self.edges.borrow_mut().insert(i, out.clone());
+        out
+    }
+
+    /// The closure of `world_selected_atoms` ∪ `system_atoms` over the edges.
+    pub fn reachable(
+        &self,
+        world_selected_atoms: &[String],
+        system_atoms: &[String],
+    ) -> HashSet<Cp> {
+        let mut reachable: HashSet<Cp> = HashSet::new();
+        let mut queue: Vec<Cp> = Vec::new();
+        for atom_str in world_selected_atoms.iter().chain(system_atoms) {
+            if let Some(cp) = self.matches_cp(atom_str)
+                && reachable.insert(cp.clone())
+            {
+                queue.push(cp);
+            }
+        }
+        while let Some(cp) = queue.pop() {
+            let Some(&i) = self.by_cp.get(&cp) else {
+                continue;
+            };
+            for next in self.edges_of(i) {
+                if reachable.insert(next.clone()) {
+                    queue.push(next);
                 }
             }
         }
+        reachable
     }
-    reachable
 }
 
 /// `<version>` with a trailing `-r<digits>` revision suffix removed.

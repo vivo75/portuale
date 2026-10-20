@@ -142,6 +142,8 @@ impl<'a> ResolveCtx<'a> {
         };
         // Requested atoms seed the required-set walk too; an empty seed set
         // still means "not complete mode".
+        // One index and one set of parsed `*DEPEND` edges serve all three walks.
+        let installed_graph = InstalledReachability::new(&req.root);
         let slot_op_reachable: HashSet<(String, String)> =
             if req.config.complete_seed_atoms.is_empty() {
                 HashSet::new()
@@ -150,7 +152,7 @@ impl<'a> ResolveCtx<'a> {
                 seeds.extend(req.atoms.iter().cloned());
                 seeds.sort();
                 seeds.dedup();
-                required_set_reachable_cps(&req.root, &seeds, &[])
+                installed_graph.reachable(&seeds, &[])
             };
         // Without the requested atoms, so the reverse scan can tell a
         // world-reached consumer from a merely requested one.
@@ -158,7 +160,7 @@ impl<'a> ResolveCtx<'a> {
             if req.config.complete_seed_atoms.is_empty() {
                 HashSet::new()
             } else {
-                required_set_reachable_cps(&req.root, &req.config.complete_seed_atoms, &[])
+                installed_graph.reachable(&req.config.complete_seed_atoms, &[])
             };
         // The blocker classification reads this closure on every pass.
         let blocker_retry_closure: HashSet<(String, String)> = {
@@ -167,7 +169,7 @@ impl<'a> ResolveCtx<'a> {
             seeds.sort();
             seeds.dedup();
             let system = req.config.system_packages.clone();
-            required_set_reachable_cps(&req.root, &seeds, &system)
+            installed_graph.reachable(&seeds, &system)
         };
         Ok(ResolveCtx {
             root: &req.root,
