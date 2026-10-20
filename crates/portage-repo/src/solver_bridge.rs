@@ -19,6 +19,10 @@
 //!   line of engine-native text, not a Portage notice. Since S9 the pubgrub
 //!   path replays the walk's abort predicates read-only over the solved plan,
 //!   so `autounmask_use_changes` and the miss disclosures can fill.
+//! - When the solver fails and the default walk fails too, `PubGrubResolver`
+//!   returns the walk's own report (partial merge list, notices, exit), since
+//!   a solver stops at one failing branch where Portage prints all it walked
+//!   (backlog #434).
 //! - Merge order is the walk's own `topological_merge_order`; engine install
 //!   order only seeds positions.
 //! - Unparsable dep-string classes feed empty deps; unparsable versions and
@@ -3449,8 +3453,41 @@ pub struct PubGrubResolver;
 
 impl PortualeResolver for PubGrubResolver {
     fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, super::Error> {
-        resolve_pubgrub(req).map_err(super::Error::Detail)
+        let result = match resolve_pubgrub(req) {
+            Ok(result) if !reports_failure(&result) => return Ok(result),
+            Ok(result) => result,
+            // The engine found no solution: the walk's report replaces the
+            // engine-native text when the walk fails too.
+            Err(detail) => {
+                return match super::backtracking_resolve(req) {
+                    Ok(walk) if !reports_failure(&walk) => Err(super::Error::Detail(detail)),
+                    walk => walk,
+                };
+            }
+        };
+        // Both solvers fail: Portage prints every package it walked before the
+        // failure, which the solver's single failing branch cannot reproduce, so
+        // the walk's own report (rows, notices, exit) stands in for it. A failure
+        // only the solver reaches keeps the solver's report.
+        // Portage: depgraph.py, _create_graph (partial merge list on failure)
+        match super::backtracking_resolve(req) {
+            Ok(walk) if !reports_failure(&walk) => Ok(result),
+            walk => walk,
+        }
     }
+}
+
+/// Whether the settled result ends the run with a failure report (an abort, a
+/// circular dependency, a disclosed miss, an autounmask gate or a slot conflict).
+fn reports_failure(result: &GraphResult) -> bool {
+    matches!(result.outcome, super::ResolveOutcome::Aborted { .. })
+        || !result.circular_deps.is_empty()
+        || !result.virtual_cycle.is_empty()
+        || !result.masked_deps.is_empty()
+        || !result.use_unsat_deps.is_empty()
+        || !result.plain_miss_deps.is_empty()
+        || !result.autounmask_use_changes.is_empty()
+        || !result.slot_conflicts.is_empty()
 }
 
 /// Facts over a [`LazyRepo`]: answers from memoized per-CPN loads, so the
