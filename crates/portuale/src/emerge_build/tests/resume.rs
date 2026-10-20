@@ -241,6 +241,9 @@ fn run_merge_loop_shrinks_the_saved_resume_list_per_successful_merge() {
         root: &root,
         source_paths: &no_paths,
         features: String::new(),
+        quiet: false,
+        background: false,
+        quiet_fail: false,
     };
     run_merge_loop(&entries, false, &report, |_, entry, _| {
         // By the time this entry's own merge runs, every earlier entry

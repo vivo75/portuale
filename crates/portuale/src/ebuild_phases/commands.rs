@@ -111,7 +111,7 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
         }
         resolved => resolved,
     };
-    if let PhaseLog::Tee(path) = log_file {
+    if let PhaseLog::Tee(path) | PhaseLog::Capture(path) = log_file {
         extra_env.push(("PORTAGE_LOG_FILE".to_string(), path.display().to_string()));
     }
     // A direct `ebuild <file> <phase>` run is a source merge

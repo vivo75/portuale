@@ -33,6 +33,13 @@ pub(crate) struct FailReport<'a> {
     pub(crate) source_paths: &'a dyn Fn(&GraphEntry) -> Option<SourcePaths>,
     /// The resolved `FEATURES`, for `split-elog`.
     pub(crate) features: String,
+    /// `--quiet`: no `Calculating dependencies` notice on the resumed pass.
+    pub(crate) quiet: bool,
+    /// The run is in the scheduler's background mode (`-jN`, `--quiet`): status lines carry
+    /// no leading blank and a lone failure shows its whole build log.
+    pub(crate) background: bool,
+    /// `--quiet-fail`: no whole-log dump.
+    pub(crate) quiet_fail: bool,
 }
 
 /// The `${T}/build.log` and `${T}` of `entry` under `portage_tmpdir`.
@@ -62,8 +69,15 @@ pub(crate) fn source_paths_for(
 }
 
 enum ElogItem {
-    Failed { cpv: String, t_dir: PathBuf },
-    Dropped { cpv: String, text: Vec<String> },
+    Failed {
+        cpv: String,
+        t_dir: PathBuf,
+        log: PathBuf,
+    },
+    Dropped {
+        cpv: String,
+        text: Vec<String>,
+    },
 }
 
 /// The failures of one merge run, in the order they happened.
@@ -219,9 +233,15 @@ impl Ledger {
         if let Some(paths) = &paths
             && is_phase_failure(err)
         {
+            let msg = crate::emerge_getbinpkg::failed_pkg_msg(&cpv, report.root, Some(&paths.log));
+            // `_status_msg` writes a leading blank line only in the foreground.
             print!(
                 "{}",
-                crate::emerge_getbinpkg::failed_pkg_msg(&cpv, report.root, Some(&paths.log))
+                if report.background {
+                    msg.trim_start_matches('\n').replace("\n\n", "\n")
+                } else {
+                    msg
+                }
             );
             label.push_str(&format!(
                 ", Log file:\n{}  '{}'",
@@ -231,6 +251,7 @@ impl Ledger {
             self.elog.push(ElogItem::Failed {
                 cpv,
                 t_dir: paths.t_dir.clone(),
+                log: paths.log.clone(),
             });
             reported = true;
         } else if crate::emerge_getbinpkg::is_binpkg_digest_failure(err)
@@ -246,9 +267,12 @@ impl Ledger {
     /// `*** Resuming merge...` plus the re-resolution notice, once per pass that
     /// still has packages left.
     // Portage: Scheduler.py, _merge (resume loop); depgraph.py, backtrack_depgraph
-    pub(crate) fn resuming(&self) {
+    pub(crate) fn resuming(&self, quiet: bool) {
         let color = progress_color();
         println!("{}", color.c("GOOD", "*** Resuming merge..."));
+        if quiet {
+            return;
+        }
         println!("Calculating dependencies ... done!");
         println!("Dependency resolution took .\n");
     }
@@ -289,6 +313,37 @@ impl Ledger {
         self.elog.push(ElogItem::Dropped { cpv, text: lines });
     }
 
+    /// A background run whose only failure is one built package shows that
+    /// package's whole build log, before the elog blocks.
+    // Portage: Scheduler.py, merge (`failure_log_shown`), `_locate_failure_log`
+    fn show_lone_failure_log(&self, report: &FailReport<'_>) {
+        use std::io::{Read, Write};
+        if !report.background || report.quiet_fail || self.rows.len() != 1 {
+            return;
+        }
+        let [ElogItem::Failed { log, .. }] = self.elog.as_slice() else {
+            return;
+        };
+        let gz = PathBuf::from(format!("{}.gz", log.display()));
+        let bytes = if let Ok(raw) = std::fs::read(log) {
+            raw
+        } else if let Ok(raw) = std::fs::read(&gz) {
+            let mut out = Vec::new();
+            match flate2::read::MultiGzDecoder::new(&raw[..]).read_to_end(&mut out) {
+                Ok(_) => out,
+                Err(e) => {
+                    eprintln!("{e}");
+                    return;
+                }
+            }
+        } else {
+            return;
+        };
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(&bytes);
+        let _ = stdout.flush();
+    }
+
     /// The end of the run: the elog `Messages for package` blocks on stdout, in the
     /// order the failures happened.
     // Portage: Scheduler.py, merge (`_flush_elog_mod_echo`)
@@ -297,7 +352,7 @@ impl Ledger {
         let root = report.root.display().to_string();
         for item in std::mem::take(&mut self.elog) {
             match item {
-                ElogItem::Failed { cpv, t_dir } => {
+                ElogItem::Failed { cpv, t_dir, .. } => {
                     crate::elog::process_batch(crate::elog::ProcessBatchArgs {
                         logdir: &crate::elog::logdir(report.root),
                         root_display: &root,
@@ -347,6 +402,7 @@ impl Ledger {
         if self.rows.is_empty() {
             return Ok(());
         }
+        self.show_lone_failure_log(report);
         self.flush_elog(report);
         print_failed_pkgs_summary(&self.rows, keep_going, &progress_color());
         match first_error {

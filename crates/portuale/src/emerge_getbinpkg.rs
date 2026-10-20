@@ -687,6 +687,9 @@ pub fn run_merge_plan(args: RunMergePlanArgs<'_>) -> Result<(), String> {
         root,
         source_paths: &source_paths,
         features: crate::emerge_build::resolved_features(merge_options),
+        quiet: merge_options.quiet,
+        background: mode.background,
+        quiet_fail: merge_options.quiet_fail,
     };
     crate::emerge_build::run_merge_loop(entries, keep_going, &report, |_, entry, entry_progress| {
         // An `IDEPEND` dep merges into the running root, like Portage.
@@ -983,6 +986,11 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
     let status = ebuild_merge::merge_binpkg(&binpkg_path, root, portage_tmpdir, merge_options)?;
     if status != 0 {
         return Err(format!("{cp}-{version}: binpkg merge failed ({status})"));
+    }
+    if let Some(record) = &merge_options.world_recorder {
+        for line in record(entry) {
+            display.status(&line);
+        }
     }
     // The per-package `Completed (N of M) cpv::repo` line.
     display.status(&crate::emerge_build::completed_line(

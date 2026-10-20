@@ -905,8 +905,11 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
             jobs,
             package_options,
             portage_tmpdir,
-            merge_options,
+            mut merge_options,
         } = merge_setup(opts, entries, config, root);
+        merge_options.world_recorder = world_recorder(root, opts, system_atoms, repos);
+        merge_options.quiet = opts.quiet;
+        merge_options.quiet_fail = opts.quiet_fail;
 
         // With `FEATURES=buildpkg` / `--buildpkg`, a binpkg of each source entry
         // is written into `$PKGDIR` as a side effect of the merge.

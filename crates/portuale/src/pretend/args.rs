@@ -92,6 +92,8 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) fetch_all_uri: bool,
     pub(crate) buildpkg_opt: Option<bool>,
     pub(crate) quiet_build: Option<bool>,
+    /// `--quiet-fail[=y|n]`: no whole-log dump when the only build in a background run fails.
+    pub(crate) quiet_fail: bool,
     pub(crate) buildpkg_exclude: Vec<String>,
     pub(crate) keep_going: bool,
     pub(crate) debug: bool,
@@ -301,6 +303,7 @@ impl<'a> Default for EmergeOpts<'a> {
             // `--quiet-build[=y|n]`: redirect a build's phase output to
             // `${T}/build.log`. `None` = not given. Also implied by `-q` and `-j` >1.
             quiet_build: None,
+            quiet_fail: false,
             // --buildpkg-exclude: matching source entries are merged but not binpkg'd.
             buildpkg_exclude: Vec::new(),
             // --keep-going: bare/`y` form only; only meaningful alongside
@@ -1608,6 +1611,27 @@ fn parse_build_opts<'a>(
     } else if arg == "--buildpkg=n" {
         opts.buildpkg_opt = Some(false);
         *idx += 1;
+        Ok(true)
+    } else if arg == "--quiet-fail" || arg == "--quiet-fail=y" || arg == "--quiet-fail=n" {
+        // Bare means `y` (Portage: `--quiet-fail` is a y/n choice).
+        match (arg, args.get(*idx + 1).map(String::as_str)) {
+            ("--quiet-fail=n", _) => {
+                opts.quiet_fail = false;
+                *idx += 1;
+            }
+            ("--quiet-fail", Some("n")) => {
+                opts.quiet_fail = false;
+                *idx += 2;
+            }
+            ("--quiet-fail", Some("y")) => {
+                opts.quiet_fail = true;
+                *idx += 2;
+            }
+            _ => {
+                opts.quiet_fail = true;
+                *idx += 1;
+            }
+        }
         Ok(true)
     } else if arg == "--quiet-build" {
         // Bare / `y` -> redirect build output to `${T}/build.log`.
