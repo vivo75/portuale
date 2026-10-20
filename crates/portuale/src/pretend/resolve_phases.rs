@@ -330,6 +330,20 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         })
         .map(|e| ((e.category.clone(), e.package.clone()), e.outcome.clone()))
         .collect();
+    // A cp with picks in more than one slot is keyed once but settles per
+    // slot: reusing one slot's pick would drop the other (firefox's
+    // rust-bin:1.96.1 next to :1.94.1), so those re-resolve as before.
+    let multi_slot: std::collections::HashSet<(String, String)> = {
+        let mut seen = std::collections::HashSet::new();
+        result
+            .entries
+            .iter()
+            .map(|e| (e.category.clone(), e.package.clone()))
+            .filter(|k| !seen.insert(k.clone()))
+            .collect()
+    };
+    let mut complete_reuse = complete_reuse;
+    complete_reuse.retain(|k, _| !multi_slot.contains(k));
     // A `--rebuild-if-*` restart consumes a backtrack try, so phase 1's
     // count carries into the second walk -- but only then: an unseeded
     // first walk can misfire a probe the seeded re-walk avoids (r25).

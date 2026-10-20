@@ -20,3 +20,11 @@ Running the resolver: the first pass, the locked merges, the complete-graph pass
 
 ## fn run_resolve_phases (#394 reuse excludes reinstalls)
 - `complete_reuse` carries only `New`/`Upgrade`/`Downgrade` picks: every `Reinstall` re-derives through the complete walk's own machinery, so a reused record can neither freeze a dropped `r` (the `soc` top-level consumer) nor skip the eliminate latch that withholds the display pair. `--reinstall-atoms`/USE/argument reinstalls re-derive identically through their complete-safe flips.
+
+## fn run_resolve_phases (complete_reuse, multi-slot)
+Bed G-R (2026-10-20) found that reusing phase 1's picks keyed by cp lost one
+slot of a multi-slot cp: `www-client/firefox`, thunderbird, nautilus and
+gnome-shell dropped `dev-lang/rust-bin:1.96.1` next to `:1.94.1` (Total off by
+one). Cps with more than one phase-1 entry are now removed from the reuse map
+and re-resolve as before the #394 change. Verified on the bed: the four probes
+are byte-identical to the pre-#394 baseline.
