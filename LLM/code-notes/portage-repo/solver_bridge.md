@@ -218,3 +218,6 @@ Backlog #429(b). The default walk's record-and-fail arm (`resolve/pass/parent_us
 
 ## fn parent_use_reinstalls (autounmask flips)
 Backlog #429(a). When the config USE of the same-version repo ebuild misses the parent's USE-dep, `suggested_use_flip` supplies the flip Portage would suggest; the installed child becomes a rebuild member planned with those flags (`KeptInstalled.autounmask_use`, applied by `desired_use` and the entry builder) while `bridge_validate_aborts` keeps checking the unflipped config USE so the `AutounmaskChange` still fires.
+
+## fn parent_use_reinstalls — flip planning limits (#429, bed fix 2026-10-20)
+The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) applies only to a plain edge of a built parent (new or rebuilt). It is skipped for atoms inside a choice group (`|| ( pkg[a] pkg[b] )` lists every python target as an alternative, and the walk takes one) and for a kept installed parent (its unsatisfied deps are left alone). Without the limits `-pvuD`/`-pvuDN` on the L0 bed planned `setuptools` and `jinja2` reinstalls and `python_targets_python3_12/13` changes that Portage never makes (46 new unexplained cells in the first G-R run at `330dbcf4`). Probe: `app-editors/emacs` with `-pvuDN --solver=pubgrub`.

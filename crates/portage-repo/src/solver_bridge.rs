@@ -2020,53 +2020,63 @@ fn parent_use_reinstalls(
     }
     // USE-dep atoms grouped by target cp, with the requiring parent's
     // effective USE (for the `?`/`=` kinds, which read the parent's flags).
-    let mut wanted: HashMap<String, Vec<(portage_solver::Dep, HashSet<String>)>> = HashMap::new();
-    let mut push_entries =
-        |entries: &[portage_solver::DepEntry], parent_use: &HashSet<String>, parent_cp: &str| {
-            let mut stack: Vec<&portage_solver::DepEntry> = entries.iter().collect();
-            while let Some(entry) = stack.pop() {
-                match entry {
-                    portage_solver::DepEntry::Atom(dep) => {
-                        if dep.blocker.is_none()
-                            && dep.use_deps.as_ref().is_some_and(|uds| !uds.is_empty())
+    // `flippable`: the atom is a plain edge of a built parent (new or rebuilt),
+    // not one alternative of a choice group and not a kept install's dep; the
+    // walk leaves those unsatisfied, so no flip is planned for them.
+    let mut wanted: HashMap<String, Vec<(portage_solver::Dep, HashSet<String>, bool)>> =
+        HashMap::new();
+    let mut push_entries = |entries: &[portage_solver::DepEntry],
+                            parent_use: &HashSet<String>,
+                            parent_cp: &str,
+                            flippable: bool| {
+        let mut stack: Vec<(&portage_solver::DepEntry, bool)> =
+            entries.iter().map(|entry| (entry, false)).collect();
+        while let Some((entry, in_choice)) = stack.pop() {
+            match entry {
+                portage_solver::DepEntry::Atom(dep) => {
+                    if dep.blocker.is_none()
+                        && dep.use_deps.as_ref().is_some_and(|uds| !uds.is_empty())
+                    {
+                        wanted.entry(format!("{}", dep.cpn)).or_default().push((
+                            dep.clone(),
+                            parent_use.clone(),
+                            flippable && !in_choice,
+                        ));
+                    }
+                }
+                portage_solver::DepEntry::UseConditional {
+                    flag,
+                    negate,
+                    children,
+                } => {
+                    if parent_use.contains(flag.as_str()) != *negate {
+                        stack.extend(children.iter().map(|child| (child, in_choice)));
+                    }
+                }
+                portage_solver::DepEntry::AllOf(children) => {
+                    stack.extend(children.iter().map(|child| (child, in_choice)));
+                }
+                // Choice groups resolve to the taken branch: an
+                // alternative the solve edged from this parent counts (a
+                // USE atom there is really evaluated), an untaken one
+                // stays out (triage G5). See the fn doc.
+                portage_solver::DepEntry::AnyOf(children)
+                | portage_solver::DepEntry::ExactlyOneOf(children)
+                | portage_solver::DepEntry::AtMostOneOf(children) => {
+                    for child in children {
+                        let mut refs = Vec::new();
+                        referenced_cpns(std::slice::from_ref(child), &mut refs);
+                        if refs
+                            .iter()
+                            .any(|cp| plan.taken.contains(&(parent_cp.to_string(), cp.clone())))
                         {
-                            wanted
-                                .entry(format!("{}", dep.cpn))
-                                .or_default()
-                                .push((dep.clone(), parent_use.clone()));
-                        }
-                    }
-                    portage_solver::DepEntry::UseConditional {
-                        flag,
-                        negate,
-                        children,
-                    } => {
-                        if parent_use.contains(flag.as_str()) != *negate {
-                            stack.extend(children.iter());
-                        }
-                    }
-                    portage_solver::DepEntry::AllOf(children) => stack.extend(children.iter()),
-                    // Choice groups resolve to the taken branch: an
-                    // alternative the solve edged from this parent counts (a
-                    // USE atom there is really evaluated), an untaken one
-                    // stays out (triage G5). See the fn doc.
-                    portage_solver::DepEntry::AnyOf(children)
-                    | portage_solver::DepEntry::ExactlyOneOf(children)
-                    | portage_solver::DepEntry::AtMostOneOf(children) => {
-                        for child in children {
-                            let mut refs = Vec::new();
-                            referenced_cpns(std::slice::from_ref(child), &mut refs);
-                            if refs
-                                .iter()
-                                .any(|cp| plan.taken.contains(&(parent_cp.to_string(), cp.clone())))
-                            {
-                                stack.push(child);
-                            }
+                            stack.push((child, true));
                         }
                     }
                 }
             }
-        };
+        }
+    };
     // Member-driven parent scan: only solution members whose deps
     // expand contribute USE-dep atoms. Sorted for a stable visit order
     // (`wanted`/`out` downstream are order-insensitive).
@@ -2134,6 +2144,7 @@ fn parent_use_reinstalls(
                         classes,
                         &parent_use,
                         &format!("{}/{}", inst.category, inst.package),
+                        is_rebuild,
                     );
                 }
             } else if let Some(record) = repo_record {
@@ -2143,6 +2154,7 @@ fn parent_use_reinstalls(
                         classes,
                         &parent_use,
                         &format!("{}/{}", inst.category, inst.package),
+                        is_rebuild,
                     );
                 }
             }
@@ -2169,7 +2181,7 @@ fn parent_use_reinstalls(
         }
         let parent_use = lazy.use_of(record);
         for classes in &record.deps {
-            push_entries(classes, &parent_use, cp);
+            push_entries(classes, &parent_use, cp, true);
         }
     }
     // One load per target cp; union the changed flags across parents.
@@ -2181,7 +2193,8 @@ fn parent_use_reinstalls(
         let Ok(loaded) = lazy.load_versions(cp) else {
             continue;
         };
-        for (atom, parent_use) in atoms {
+        for (atom, parent_use, flippable) in atoms {
+            let flippable = *flippable;
             let Some(uds) = atom.use_deps.as_ref() else {
                 continue;
             };
@@ -2224,7 +2237,7 @@ fn parent_use_reinstalls(
                 // reported too.
                 let mut flips: Vec<(String, bool)> = Vec::new();
                 if !use_deps_satisfied(uds, parent_use, &repo_iuse, &effective) {
-                    if !req.autounmask_suggest_use {
+                    if !req.autounmask_suggest_use || !flippable {
                         continue;
                     }
                     let plain = evaluated_plain_use_deps(uds, parent_use);
