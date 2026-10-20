@@ -48,7 +48,30 @@ pub struct ElogPackage {
     pub cpv: String,
     /// The `ROOT` the package merged to (`/` renders the short header).
     pub root: String,
+    /// `PORTAGE_LOG_FILE` when `PORTAGE_LOGDIR` is set (`mod_echo.process`).
+    pub logfile: Option<String>,
     pub messages: Vec<ElogMessage>,
+}
+
+/// `PORTAGE_LOG_FILE` when `PORTAGE_LOGDIR` (or `PORT_LOGDIR`) is set and
+/// `${T}/build.log` (or `.gz`) links into it (`mod_echo.process`).
+pub(crate) fn echo_logfile_for(t_dir: &Path) -> Option<String> {
+    let (logdir, _) = crate::emerge_build::foreground_log_env();
+    let logdir = logdir?;
+    for name in ["build.log.gz", "build.log"] {
+        let link = t_dir.join(name);
+        if let Ok(target) = std::fs::read_link(&link) {
+            let real = if target.is_absolute() {
+                target
+            } else {
+                t_dir.join(target)
+            };
+            if real.starts_with(&logdir) {
+                return Some(real.display().to_string());
+            }
+        }
+    }
+    None
 }
 
 fn elog_system_tokens() -> Vec<String> {
@@ -1105,6 +1128,7 @@ pub fn process_batch(args: ProcessBatchArgs<'_>) {
                 packages.push(ElogPackage {
                     cpv: cpv.clone(),
                     root: root_display.to_string(),
+                    logfile: echo_logfile_for(t_dir),
                     messages,
                 });
             }
@@ -1115,20 +1139,26 @@ pub fn process_batch(args: ProcessBatchArgs<'_>) {
     }
 }
 
-/// The `* Messages for package <cpv>:` block for every accumulated
-/// package, all message types on stdout.
-/// Portage: mod_echo._finalize.
-pub fn echo_summary(packages: &[ElogPackage], color: &Colorizer) {
+/// Formats the `* Messages for package <cpv>:` block for every accumulated
+/// package (`mod_echo._finalize`).
+pub fn format_echo_summary(packages: &[ElogPackage], color: &Colorizer) -> String {
+    let mut out = String::new();
     for pkg in packages {
-        println!();
+        out.push('\n');
         let key = color.c("INFORM", &pkg.cpv);
         let star = color.c("INFO", " * ");
         if pkg.root == "/" {
-            println!("{star}Messages for package {key}:");
+            out.push_str(&format!("{star}Messages for package {key}:\n"));
         } else {
-            println!("{star}Messages for package {key} merged to {}:", pkg.root);
+            out.push_str(&format!(
+                "{star}Messages for package {key} merged to {}:\n",
+                pkg.root
+            ));
         }
-        println!();
+        if let Some(logfile) = &pkg.logfile {
+            out.push_str(&format!("{star}Log file: {}\n", color.c("INFORM", logfile)));
+        }
+        out.push('\n');
         for msg in &pkg.messages {
             let style = match msg.level.as_str() {
                 "INFO" => "INFO",
@@ -1137,9 +1167,17 @@ pub fn echo_summary(packages: &[ElogPackage], color: &Colorizer) {
                 "ERROR" => "ERR",
                 _ => "QAWARN", // QA
             };
-            println!("{}{}", color.c(style, " * "), msg.text);
+            out.push_str(&format!("{}{}\n", color.c(style, " * "), msg.text));
         }
     }
+    out
+}
+
+/// The `* Messages for package <cpv>:` block for every accumulated
+/// package, all message types on stdout.
+/// Portage: mod_echo._finalize.
+pub fn echo_summary(packages: &[ElogPackage], color: &Colorizer) {
+    print!("{}", format_echo_summary(packages, color));
 }
 
 #[cfg(test)]
@@ -1224,6 +1262,7 @@ mod tests {
         let pkg = ElogPackage {
             cpv: "dev-libs/foo-1.0".to_string(),
             root: "/".to_string(),
+            logfile: None,
             messages: vec![
                 ElogMessage {
                     phase: "postinst".to_string(),
@@ -1237,9 +1276,62 @@ mod tests {
                 },
             ],
         };
-        // No colour -> plain " * " prefixes; capture is covered by a run in
-        // test_portuale.py, this just exercises the non-panicking path.
+        assert_eq!(
+            format_echo_summary(std::slice::from_ref(&pkg), &color),
+            "\n * Messages for package dev-libs/foo-1.0:\n\n * read the docs\n * watch out\n"
+        );
+        let with_log = ElogPackage {
+            cpv: "dev-libs/foo-1.0".to_string(),
+            root: "/target".to_string(),
+            logfile: Some("/var/log/portage/dev-libs:foo-1.0:20261020-120000.log".to_string()),
+            messages: vec![ElogMessage {
+                phase: "postinst".to_string(),
+                level: "LOG".to_string(),
+                text: "read the docs".to_string(),
+            }],
+        };
+        assert_eq!(
+            format_echo_summary(std::slice::from_ref(&with_log), &color),
+            "\n * Messages for package dev-libs/foo-1.0 merged to /target:\n * Log file: /var/log/portage/dev-libs:foo-1.0:20261020-120000.log\n\n * read the docs\n"
+        );
         echo_summary(std::slice::from_ref(&pkg), &color);
+    }
+
+    #[test]
+    fn echo_logfile_for_returns_portage_logdir_target_only_when_configured() {
+        let d = TempDir::new("elog_logfile_test").keep();
+        let builddir = d.join("portage/dev-libs/foo-1.0");
+        let t_dir = builddir.join("temp");
+        let logdir = d.join("logs");
+        std::fs::create_dir_all(&t_dir).unwrap();
+        crate::emerge_build::ensure_portage_logdir_symlink(
+            crate::emerge_build::EnsurePortageLogdirSymlinkArgs {
+                tmpdir_log_path: &t_dir.join("build.log"),
+                builddir: &builddir,
+                category: "dev-libs",
+                pf: "foo-1.0",
+                logdir: Some(&logdir),
+                sep: ":",
+                split_log: false,
+                compress: false,
+            },
+        );
+        temp_env(&[("PORTAGE_LOGDIR", None), ("PORT_LOGDIR", None)], || {
+            assert_eq!(echo_logfile_for(&t_dir), None);
+        });
+        let logdir_str = logdir.to_str().unwrap().to_string();
+        temp_env(
+            &[
+                ("PORTAGE_LOGDIR", Some(logdir_str.as_str())),
+                ("PORT_LOGDIR", None),
+            ],
+            || {
+                let got = echo_logfile_for(&t_dir).expect("PORTAGE_LOGDIR symlink should resolve");
+                assert!(got.starts_with(&logdir_str), "got: {got}");
+                assert!(got.contains("dev-libs:foo-1.0:"), "got: {got}");
+            },
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

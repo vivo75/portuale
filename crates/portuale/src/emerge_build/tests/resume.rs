@@ -130,6 +130,8 @@ fn resume_binary_repo_comes_from_the_binary_pool_not_the_ebuild_repos() {
         location: None,
         verify_signature: false,
         frozen: false,
+        fetchcommand: None,
+        resumecommand: None,
         getbinpkg_exclude: Vec::new(),
         getbinpkg_include: Vec::new(),
     }];

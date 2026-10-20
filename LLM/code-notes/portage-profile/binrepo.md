@@ -2,13 +2,12 @@
 `binrepos.conf` plus implicit `PORTAGE_BINHOST` entries for `--getbinpkg` resolution.
 
 ## struct BinRepo
-- Narrowed to what a `--pretend` resolution needs: no fetch/resume commands, no signature-verification config.
 - `name`: Portage's shipped `cnf/binrepos.conf` sets `[DEFAULT] verify-signature = true`, so portuale defaults to `true` (it does not parse that global `[DEFAULT]` itself) and lets a section's own `verify-signature = false` override.
 - `sync_uri`: Portage `_normalize_uri` (trailing `/` stripped).
 - `priority`: Portage sorts a `None` priority as `0`.
-- `location`: Portage fills a `<EPREFIX>/var/cache/binhost/<name>` fallback only when `PORTAGE_BINHOST` is unset; portuale mirrors that.
+- `location`: Portage fills a `<EPREFIX>/var/cache/binhost/<name>` fallback only when `PORTAGE_BINHOST` is unset; portuale mirrors that (rooted at `ROOT` for hermetic test roots, backlog #428 / #436b).
 - `frozen`: a frozen binrepo's cached `Packages` index is used as-is, never refreshed (Portage `bintree._populate_remote_repo` raises `UseCachedCopyOfRemoteIndex("frozen")`, backlog #192).
-- One `--getbinpkg` binary-package repository (Portage `portage.binrepo.config.BinRepoConfig`, narrowed to what a `--pretend` resolution needs: no fetch/resume commands, no signature-verification config).
+- `fetchcommand` / `resumecommand`: per-repo command templates from `binrepos.conf` (`BinRepoConfig`, backlog #436a), kept unexpanded at parse time so `${DISTDIR}`/`${FILE}`/`${URI}` expand at download time.
 - field `location`: `location` (Portage `BinRepoConfig.location`): the explicit `binrepos.conf` value, or `None`. Portage fills a `<EPREFIX>/var/cache/binhost/<name>` fallback only when `PORTAGE_BINHOST` is unset; portuale mirrors that. Display-only (surfaced by `emerge --info`'s `Binary Repositories:` block).
 - field `verify_signature`: `verify-signature` (Portage `BinRepoConfig.verify_signature`, a `_bool_opts` member). Portage's shipped `cnf/binrepos.conf` sets `[DEFAULT] verify-signature = true`, so portuale defaults to `true` (it does not parse that global `[DEFAULT]` itself) and lets a section's own `verify-signature = false` override.
 - field `frozen`: `frozen` (Portage `BinRepoConfig.frozen`, a `_bool_opts` member, default `"false"`): a frozen binrepo's cached `Packages` index is used as-is, never refreshed (Portage `bintree._populate_remote_repo` raises `UseCachedCopyOfRemoteIndex("frozen")`, backlog #192).

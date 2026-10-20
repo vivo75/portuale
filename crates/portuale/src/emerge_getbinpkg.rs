@@ -120,7 +120,7 @@ pub fn refresh_binhost_indexes(
             eprint!("{warning}");
         }
         if let Some(note) = outcome.stdout_note {
-            print!("{note}");
+            eprint!("{note}");
         }
     }
 }
@@ -252,6 +252,8 @@ fn edb_cache_packages_file(root: &Path, sync_uri: &str) -> std::path::PathBuf {
         location: None,
         verify_signature: true,
         frozen: false,
+        fetchcommand: None,
+        resumecommand: None,
         getbinpkg_exclude: Vec::new(),
         getbinpkg_include: Vec::new(),
     }
@@ -380,23 +382,24 @@ fn refresh_one_binrepo(
                 };
             }
             // The remote index is served only when strictly newer; an equally-old
-            // or older remote keeps the cache silently, with no rewrite.
-            let stale_remote = match (
-                cached_header
-                    .get("TIMESTAMP")
-                    .and_then(|s| s.parse::<i64>().ok()),
-                remote_header
-                    .get("TIMESTAMP")
-                    .and_then(|s| s.parse::<i64>().ok()),
-            ) {
+            // or older remote keeps the cache, with no rewrite.
+            let local_ts = cached_header
+                .get("TIMESTAMP")
+                .and_then(|s| s.parse::<i64>().ok());
+            let remote_ts = remote_header
+                .get("TIMESTAMP")
+                .and_then(|s| s.parse::<i64>().ok());
+            let stale_remote = match (local_ts, remote_ts) {
                 (Some(local), Some(remote)) => local >= remote,
                 _ => false,
             };
             if stale_remote {
                 ok_entries(cached_entries.clone());
+                let up_to_date =
+                    !uri.starts_with("file://") && local_ts.is_some() && local_ts == remote_ts;
                 return RefreshOutcome {
                     stderr_warning: None,
-                    stdout_note: None,
+                    stdout_note: up_to_date.then(|| use_cached_note(&binrepo.name, "up-to-date")),
                 };
             }
             let now = unix_now() as u64;
@@ -839,7 +842,17 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
                 pkgdir: &binrepo_download_dir(config, binrepo, root, pkgdir),
                 config,
             })?;
-            if let Some(names) = verified_digest_names(&record) {
+            let portage_quiet = merge_options
+                .build_env
+                .iter()
+                .rev()
+                .find(|(k, _)| k == "PORTAGE_QUIET")
+                .is_some_and(|(_, v)| v == "1")
+                || std::env::var("PORTAGE_QUIET").as_deref() == Ok("1");
+            let filter = checksum_filter_from_config(config);
+            if !portage_quiet
+                && let Some(names) = verified_digest_names_filtered(&record, filter.as_deref())
+            {
                 let names: Vec<&str> = names.iter().map(String::as_str).collect();
                 let file = path
                     .file_name()
@@ -1214,22 +1227,73 @@ pub(crate) struct DownloadAndVerifyArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
 }
 
+/// `PORTAGE_CHECKSUM_FILTER`: process env first, then `config.other_vars`.
+pub(crate) fn checksum_filter_from_config(config: &portage_profile::Config) -> Option<String> {
+    std::env::var("PORTAGE_CHECKSUM_FILTER")
+        .ok()
+        .or_else(|| config.other_vars.get("PORTAGE_CHECKSUM_FILTER").cloned())
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// Applies `PORTAGE_CHECKSUM_FILTER` to `hashes`, keeping at least one hash
+/// (`portage.checksum._hash_filter` / `_apply_hash_filter`).
+pub(crate) fn apply_checksum_filter(
+    mut hashes: Vec<String>,
+    filter_str: Option<&str>,
+) -> Vec<String> {
+    let Some(filter_str) = filter_str else {
+        return hashes;
+    };
+    let tokens: Vec<String> = filter_str
+        .split_whitespace()
+        .map(|s| s.to_ascii_uppercase())
+        .collect();
+    if tokens.is_empty() || tokens.last().map(String::as_str) == Some("*") || hashes.len() <= 1 {
+        return hashes;
+    }
+    let accepts = |hash_name: &str| -> bool {
+        for token in tokens.iter().rev() {
+            if token == "*" || token == hash_name {
+                return true;
+            }
+            if let Some(rest) = token.strip_prefix('-')
+                && (rest == "*" || rest == hash_name)
+            {
+                return false;
+            }
+        }
+        false
+    };
+    let mut i = 0;
+    while i < hashes.len() && hashes.len() > 1 {
+        if !accepts(&hashes[i]) {
+            hashes.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    hashes
+}
+
 /// The digest names Portage prints on a binary's verify line: the uppercase
-/// checksum keys present in the index record plus `size`, ASCII-sorted
-/// (`MD5 SHA1 size`). `None` without a parseable `SIZE`: then nothing is
-/// verified and no line prints.
+/// checksum keys present in the index record (filtered by
+/// `PORTAGE_CHECKSUM_FILTER`) plus `size`, ASCII-sorted (`MD5 SHA1 size`).
+/// `None` without a parseable `SIZE`: then nothing is verified and no line
+/// prints.
 // Portage: _emerge/BinpkgVerifier.py (_start, _display_success); bintree.py, _get_digests
-pub(crate) fn verified_digest_names(
+pub(crate) fn verified_digest_names_filtered(
     record: &std::collections::HashMap<String, String>,
+    checksum_filter: Option<&str>,
 ) -> Option<Vec<String>> {
     record.get("SIZE")?.trim().parse::<u64>().ok()?;
-    let mut names: Vec<String> = [
+    let names: Vec<String> = [
         "BLAKE2B", "BLAKE2S", "MD5", "SHA1", "SHA256", "SHA3_256", "SHA3_512", "SHA512",
     ]
     .iter()
     .filter(|k| record.get(**k).is_some_and(|v| !v.is_empty()))
     .map(|k| (*k).to_string())
     .collect();
+    let mut names = apply_checksum_filter(names, checksum_filter);
     names.push("size".to_string());
     names.sort();
     Some(names)
@@ -1266,16 +1330,31 @@ pub(crate) fn download_and_verify(
     let mut partial = final_dest.clone().into_os_string();
     partial.push(".partial");
     let dest = std::path::PathBuf::from(partial);
+    let resume = dest.is_file();
 
     if let Some(local) = uri.strip_prefix("file://") {
         std::fs::copy(local, &dest).map_err(|e| format!("{local}: {e}"))?;
     } else {
-        let commands = crate::fetch::fetch_commands_from_config(config);
+        let mut commands = crate::fetch::fetch_commands_from_config(config);
+        if let Some(binrepo) = config
+            .binrepos
+            .iter()
+            .find(|b| b.sync_uri.trim_end_matches('/') == sync_uri.trim_end_matches('/'))
+        {
+            if let Some(fc) = &binrepo.fetchcommand {
+                commands.fetchcommand_proto.clear();
+                commands.fetchcommand = Some(fc.clone());
+            }
+            if let Some(rc) = &binrepo.resumecommand {
+                commands.resumecommand_proto.clear();
+                commands.resumecommand = Some(rc.clone());
+            }
+        }
         let ssh_opts = crate::fetch::portage_ssh_opts_from_config(config);
         portage_fetch::download_with_commands_stdout(portage_fetch::DownloadWithCommandsArgs {
             uri: &uri,
             dest: &dest,
-            resume: false,
+            resume,
             distdir: dest.parent().unwrap_or(pkgdir),
             vars: portage_fetch::FetchCommandVars {
                 digests: None,
@@ -1299,9 +1378,27 @@ pub(crate) fn download_and_verify(
     }
 
     // The `MD5`/`SHA1` fields are the md5/sha1 of the whole file, and every
-    // digest present is checked; a mismatch removes the file and fails.
-    let want_md5 = record.get("MD5").filter(|s| !s.is_empty()).cloned();
-    let want_sha1 = record.get("SHA1").filter(|s| !s.is_empty()).cloned();
+    // digest surviving `PORTAGE_CHECKSUM_FILTER` is checked; a mismatch
+    // removes the file and fails.
+    let filter = checksum_filter_from_config(config);
+    let mut present_hashes = Vec::new();
+    if record.get("MD5").is_some_and(|s| !s.is_empty()) {
+        present_hashes.push("MD5".to_string());
+    }
+    if record.get("SHA1").is_some_and(|s| !s.is_empty()) {
+        present_hashes.push("SHA1".to_string());
+    }
+    let kept_hashes = apply_checksum_filter(present_hashes, filter.as_deref());
+    let want_md5 = kept_hashes
+        .iter()
+        .any(|k| k == "MD5")
+        .then(|| record.get("MD5").cloned())
+        .flatten();
+    let want_sha1 = kept_hashes
+        .iter()
+        .any(|k| k == "SHA1")
+        .then(|| record.get("SHA1").cloned())
+        .flatten();
     if want_md5.is_some() || want_sha1.is_some() {
         let bytes = std::fs::read(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
         if let Some(expected_md5) = want_md5 {
@@ -2393,7 +2490,7 @@ mod tests {
         let mut config = Config::default();
         config.other_vars.insert(
             "FETCHCOMMAND".to_string(),
-            format!("{} ${{DISTDIR}} ${{FILE}} ${{URI}}", script.display()),
+            format!("sh {} ${{DISTDIR}} ${{FILE}} ${{URI}}", script.display()),
         );
         let record: HashMap<String, String> =
             [("SIZE", "4618"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]
@@ -2431,15 +2528,148 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            verified_digest_names(&rec(&[("SIZE", "1"), ("SHA1", "x"), ("MD5", "y")])),
+            verified_digest_names_filtered(
+                &rec(&[("SIZE", "1"), ("SHA1", "x"), ("MD5", "y")]),
+                None
+            ),
             Some(vec!["MD5".into(), "SHA1".into(), "size".into()])
         );
         assert_eq!(
-            verified_digest_names(&rec(&[("SIZE", "1")])),
+            verified_digest_names_filtered(&rec(&[("SIZE", "1")]), None),
             Some(vec!["size".into()])
         );
         // No parseable SIZE: Portage verifies nothing and prints no line.
-        assert_eq!(verified_digest_names(&rec(&[("MD5", "y")])), None);
+        assert_eq!(
+            verified_digest_names_filtered(&rec(&[("MD5", "y")]), None),
+            None
+        );
+        // Backlog #436 (d): PORTAGE_CHECKSUM_FILTER filters hashes while preserving at least one.
+        assert_eq!(
+            verified_digest_names_filtered(
+                &rec(&[("SIZE", "1"), ("SHA1", "x"), ("MD5", "y")]),
+                Some("-md5")
+            ),
+            Some(vec!["SHA1".into(), "size".into()])
+        );
+        assert_eq!(
+            verified_digest_names_filtered(
+                &rec(&[("SIZE", "1"), ("SHA1", "x"), ("MD5", "y")]),
+                Some("-*")
+            )
+            .map(|v| v.len()),
+            Some(2),
+            "at least one hash plus size must survive -*"
+        );
+    }
+
+    #[test]
+    fn binrepo_fetchcommand_and_resumecommand_override_global_config_and_equal_timestamp_notes_up_to_date()
+     {
+        let tmp = tempdir();
+        let pkgdir = tmp.join("pkgdir");
+        let root = tmp.join("root");
+        let body =
+            std::fs::read(fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
+        let pkg_index = "TIMESTAMP: 42\nVERSION: 0\nPACKAGES: 1\n\nCPV: dev-libs/packagepkg-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: gentoo\n\n";
+        let mut routes = HashMap::new();
+        routes.insert("/Packages".to_string(), pkg_index.as_bytes().to_vec());
+        routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), body.clone());
+        let (base, _h) = serve(routes, 6);
+        let marker = tmp.join("ran");
+        let fc_script = tmp.join("fc.sh");
+        std::fs::write(
+            &fc_script,
+            format!(
+                "#!/bin/sh\necho \"FC $1 $2\" >> {}\nexec wget -q -O \"$1/$2\" \"$3\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let rc_script = tmp.join("rc.sh");
+        std::fs::write(
+            &rc_script,
+            format!(
+                "#!/bin/sh\necho \"RC $1 $2\" >> {}\nexec wget -q -O \"$1/$2\" \"$3\"\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let binrepo = BinRepo {
+            name: "perrepo".to_string(),
+            sync_uri: base.clone(),
+            priority: 1,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+            fetchcommand: Some(format!(
+                "sh {} ${{DISTDIR}} ${{FILE}} ${{URI}}",
+                fc_script.display()
+            )),
+            resumecommand: Some(format!(
+                "sh {} ${{DISTDIR}} ${{FILE}} ${{URI}}",
+                rc_script.display()
+            )),
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
+        };
+        let cached = binrepo.packages_dir(&root).join("Packages");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, pkg_index).unwrap();
+        let outcome = refresh_one_binrepo(
+            &binrepo,
+            &root,
+            false,
+            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+        );
+        assert_eq!(
+            outcome.stdout_note.as_deref(),
+            Some("[perrepo] Local copy of remote index is up-to-date and will be used.\n")
+        );
+
+        let mut config = Config {
+            binrepos: vec![binrepo],
+            ..Default::default()
+        };
+        config
+            .other_vars
+            .insert("FETCHCOMMAND".into(), "/bin/false ${FILE}".into());
+        config
+            .other_vars
+            .insert("RESUMECOMMAND".into(), "/bin/false ${FILE}".into());
+        let record: HashMap<String, String> =
+            [("SIZE", "4618"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        // Pre-seed `.partial` so the first call exercises `resumecommand`, then
+        // remove the downloaded file so the second exercises `fetchcommand`.
+        let partial = pkgdir.join("dev-libs/packagepkg-1.0.tbz2.partial");
+        std::fs::create_dir_all(partial.parent().unwrap()).unwrap();
+        std::fs::write(&partial, b"part").unwrap();
+        let got1 = download_and_verify(DownloadAndVerifyArgs {
+            sync_uri: &base,
+            record: &record,
+            category: "dev-libs",
+            package: "packagepkg",
+            version: "1.0",
+            pkgdir: &pkgdir,
+            config: &config,
+        })
+        .unwrap();
+        std::fs::remove_file(&got1).unwrap();
+        let _got2 = download_and_verify(DownloadAndVerifyArgs {
+            sync_uri: &base,
+            record: &record,
+            category: "dev-libs",
+            package: "packagepkg",
+            version: "1.0",
+            pkgdir: &pkgdir,
+            config: &config,
+        })
+        .unwrap();
+        let log = std::fs::read_to_string(&marker).unwrap();
+        assert!(log.contains("RC ") && log.contains("FC "), "log: {log}");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -2453,6 +2683,8 @@ mod tests {
             location: Some("/loc".into()),
             verify_signature: true,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -2601,6 +2833,8 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -2646,6 +2880,8 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -2685,6 +2921,8 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -2803,6 +3041,8 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -2872,6 +3112,8 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -2929,6 +3171,8 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -2992,6 +3236,8 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -3044,6 +3290,8 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -3091,6 +3339,8 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -3141,6 +3391,8 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -3181,6 +3433,8 @@ mod tests {
             location: None,
             verify_signature: false,
             frozen: true,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -3294,6 +3548,8 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
@@ -3361,6 +3617,8 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         }];
@@ -3488,6 +3746,8 @@ mod tests {
             location: None,
             verify_signature: true,
             frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         }];
@@ -3665,6 +3925,8 @@ mod tests {
                 location: None,
                 verify_signature: false,
                 frozen: false,
+                fetchcommand: None,
+                resumecommand: None,
                 getbinpkg_exclude: Vec::new(),
                 getbinpkg_include: Vec::new(),
             }],

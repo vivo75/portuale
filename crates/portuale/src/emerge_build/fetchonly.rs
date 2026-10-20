@@ -133,7 +133,11 @@ impl RemoteBinaryJob<'_> {
                 let name = path
                     .file_name()
                     .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                if let Some(names) = crate::emerge_getbinpkg::verified_digest_names(&record) {
+                let filter = crate::emerge_getbinpkg::checksum_filter_from_config(self.config);
+                if let Some(names) = crate::emerge_getbinpkg::verified_digest_names_filtered(
+                    &record,
+                    filter.as_deref(),
+                ) {
                     let names: Vec<&str> = names.iter().map(String::as_str).collect();
                     crate::fetch::print_verified_names(&name, &names);
                 }

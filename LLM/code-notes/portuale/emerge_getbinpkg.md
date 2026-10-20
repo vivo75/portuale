@@ -99,8 +99,17 @@
 ## fn local_index_record
 - The `<pkgdir>/Packages` index record vouching for a local binpkg merge (Portage `bintree._get_digests`' own index read, backlog #174): the stanza whose `CPV` is `<category>/<package>-<version>`. With several (multi-instance `BUILD_ID`s), the `BUILD_ID` picks -- else the stanza whose `PATH` basename is the located file's own name, so a moved file still verifies against its own record. `None` when no stanza vouches (the file was synthesized at scan from its own bytes). A record without `SIZE` still returns here -- Portage's "verifies nothing without one" (`BinpkgVerifier._start`'s early OK) lives in `verify_binpkg_against_index`, not in the lookup.
 
+## fn checksum_filter_from_config
+- Reads `PORTAGE_CHECKSUM_FILTER` from the process env first, then `config.other_vars` (backlog #436d).
+
+## fn apply_checksum_filter
+- Ports `portage.checksum._hash_filter` + `_apply_hash_filter`: filters the uppercase hash names against `PORTAGE_CHECKSUM_FILTER`, always preserving at least one hash (backlog #436d).
+
+## fn verified_digest_names_filtered
+- Ports `BinpkgVerifier._start` / `_display_success`: uppercase hash names present in the index record (filtered by `PORTAGE_CHECKSUM_FILTER`) plus `size`, ASCII-sorted (`MD5 SHA1 size`); `None` without a parseable `SIZE` (backlog #428, #436d).
+
 ## fn download_and_verify
-- Portage `bintree.gettbz2` / `_get_digests` + `digestCheck`: the `Packages` record's `MD5`/`SHA1` fields are the md5/sha1 of the whole `.tbz2`, and Portage verifies every digest present. Same here -- each present field is checked; a mismatch removes the file and fails.
+- Portage `bintree.gettbz2` / `_get_digests` + `digestCheck`: uses per-binrepo `fetchcommand`/`resumecommand` when set in `binrepos.conf` (backlog #436a), else `FETCHCOMMAND`/`RESUMECOMMAND` from config (backlog #428); the `Packages` record's `MD5`/`SHA1` fields surviving `PORTAGE_CHECKSUM_FILTER` (backlog #436d) are verified against the downloaded file, and a mismatch removes the file and fails.
 
 ## fn failed_pkg_msg
 - Ports Portage `Scheduler._failed_pkg_msg(pkg, "emerge", "for")` (`Scheduler.py:2366-2381`, backlog #174): each `_status_msg` emits its own leading blank line, then `>>> <msg>`; the log line carries Portage's own leading space (`f" '{log}'"`). Each `_status_msg` writes its own leading blank line first (`writemsg_level("\n")` before `displayMessage`), and the `>>> ` prefix is `JobStatusDisplay._format_msg`; the ` for <root>` suffix appears when `ROOT != "/"` (Portage `pkg.root_config.settings["ROOT"]`).

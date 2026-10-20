@@ -10,6 +10,8 @@ fn binrepo_packages_dir_maps_scheme_to_the_portage_edb_cache_layout() {
         location: None,
         verify_signature: true,
         frozen: false,
+        fetchcommand: None,
+        resumecommand: None,
         getbinpkg_exclude: Vec::new(),
         getbinpkg_include: Vec::new(),
     };
@@ -24,6 +26,8 @@ fn binrepo_packages_dir_maps_scheme_to_the_portage_edb_cache_layout() {
         location: None,
         verify_signature: true,
         frozen: false,
+        fetchcommand: None,
+        resumecommand: None,
         getbinpkg_exclude: Vec::new(),
         getbinpkg_include: Vec::new(),
     };

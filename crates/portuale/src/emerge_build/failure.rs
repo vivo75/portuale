@@ -326,6 +326,7 @@ impl Ledger {
                         &[crate::elog::ElogPackage {
                             cpv,
                             root: root.clone(),
+                            logfile: None,
                             messages,
                         }],
                         &color,
