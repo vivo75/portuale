@@ -249,6 +249,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         argument_sets: argument_sets.clone(),
         solver,
     };
+    let _span = portage_util::profile::span(format!("resolve_once complete={complete}"));
     active_resolver_for(solver).resolve(&req)
 }
 

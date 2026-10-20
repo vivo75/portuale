@@ -114,6 +114,7 @@ pub(crate) fn serialize_merge_order(args: SerializeMergeOrderArgs<'_>) -> (Vec<u
     }
 
     merge_order_bias(&mut g, entries, config, implicit_system_deps);
+    let _span = portage_util::profile::span("serialize_merge_order select_nodes");
     let scheduled: Vec<usize> = select_nodes(&mut g, entries, root, None)
         .into_iter()
         .filter(|&i| i < real_n)

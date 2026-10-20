@@ -48,8 +48,23 @@ pub fn dep_edge_satisfied_by_installed(
 }
 
 /// Every installed package's `cat/pkg-version:slot/sub_slot` candidate string,
-/// grouped by `cat/pkg`.
-pub(crate) fn installed_candidates_by_cp(root: &Path) -> HashMap<(String, String), Vec<String>> {
+/// grouped by `cat/pkg`. Memoised per `root` and VDB generation like
+/// [`all_installed_packages`]: the per-package `SLOT` reads happen once per
+/// generation, not once per caller.
+pub(crate) fn installed_candidates_by_cp(
+    root: &Path,
+) -> std::sync::Arc<HashMap<(String, String), Vec<String>>> {
+    type Candidates = std::sync::Arc<HashMap<(String, String), Vec<String>>>;
+    static CACHE: crate::OnceLock<crate::RwLock<HashMap<std::path::PathBuf, (u64, Candidates)>>> =
+        crate::OnceLock::new();
+    let cache = CACHE.get_or_init(|| crate::RwLock::new(HashMap::new()));
+    let fingerprint = portage_vdb::for_root(root).generation().unwrap_or(0);
+    if let Ok(guard) = cache.read()
+        && let Some((fp, found)) = guard.get(root)
+        && *fp == fingerprint
+    {
+        return std::sync::Arc::clone(found);
+    }
     let mut by_cp: HashMap<(String, String), Vec<String>> = HashMap::new();
     for p in all_installed_packages(root).iter() {
         let (slot, sub_slot) = read_vdb_slot(root, &p.category, &p.package, &p.version);
@@ -60,6 +75,13 @@ pub(crate) fn installed_candidates_by_cp(root: &Path) -> HashMap<(String, String
                 "{}/{}-{}:{slot}/{sub_slot}",
                 p.category, p.package, p.version
             ));
+    }
+    let by_cp = std::sync::Arc::new(by_cp);
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(
+            root.to_path_buf(),
+            (fingerprint, std::sync::Arc::clone(&by_cp)),
+        );
     }
     by_cp
 }

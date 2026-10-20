@@ -1,0 +1,24 @@
+[f1r] Local copy of remote index is up-to-date and will be used.
+[gentoo] Local copy of remote index is up-to-date and will be used.
+
+emerge: there are no ebuilds built with USE flags to satisfy "app-misc/mime-types[nginx]".
+!!! One of the following packages is required to complete your request:
+- app-misc/mime-types-2.1.54::gentoo (Change USE: +nginx)
+(dependency required by "www-servers/nginx-1.31.7::gentoo" [binary])
+(dependency required by "@world" [argument])
+!!! note: app-misc/mime-types-2.1.54 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=app-misc/mime-types-2.1.54 nginx" to package.use
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by net-libs/nodejs-26.12.0::gentoo
+# required by dev-python/jupyterlab-4.6.4::gentoo
+# required by dev-python/notebook-7.6.3::gentoo
+# required by @world (argument)
+>=dev-cpp/simdutf-9.2.1 atomic-base64
+
+ * In order to avoid wasting time, backtracking has terminated early
+ * due to the above autounmask change(s). The --autounmask-backtrack=y
+ * option can be used to force further backtracking, but there is no
+ * guarantee that it will produce a solution.
+Command exited with non-zero status 1
+old 68.66 s

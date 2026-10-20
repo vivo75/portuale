@@ -251,6 +251,7 @@ pub fn run(args: &[String]) -> ExitCode {
     }) {
         return code;
     }
+    let _expand_span = portage_util::profile::span("expand_targets");
     let ExpandTargetsOut {
         expanded_atoms,
         selected_set_args,
@@ -269,6 +270,8 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
 
+    drop(_expand_span);
+    let _plan_span = portage_util::profile::span("plan_resolve");
     let plan = match plan_resolve(PlanResolveArgs {
         opts: &mut opts,
         config: &mut config,
@@ -280,6 +283,8 @@ pub fn run(args: &[String]) -> ExitCode {
         Ok(out) => out,
         Err(code) => return code,
     };
+    drop(_plan_span);
+    let _resolve_span = portage_util::profile::span("run_resolve_phases");
     let result = match run_resolve_phases(RunResolvePhasesArgs {
         plan: &plan,
         opts: &opts,
@@ -295,6 +300,8 @@ pub fn run(args: &[String]) -> ExitCode {
         Ok(out) => out,
         Err(code) => return code,
     };
+    drop(_resolve_span);
+    let _display_span = portage_util::profile::span("display_and_post");
     let entries = &result.entries;
     // An aborted resolve renders the outcome's partial list instead of the full
     // entries (masked/unsat shapes show no list; the cycle shape shows the stuck

@@ -71,6 +71,7 @@ pub(crate) fn run_pass(
     // is borrowed here).
     let config_owned: Option<portage_profile::Config> = bp.backtrack_config.clone();
     let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
+    let _span = portage_util::profile::span(format!("run_pass first={first_pass}"));
     let mut state = PassState::default();
     // Pass-constant: `bp` is never mutated mid-walk (only the overlay).
     let union_constraints = bp.union_constraints();
@@ -164,7 +165,9 @@ pub(crate) fn run_pass(
     // The all-installed-packages blocker collection runs after the graph is
     // complete and before classification; `--nodeps` is its only early exit.
     // Portage: depgraph.py.
+    let blockers_span = portage_util::profile::span("collect_pass_blockers");
     let orphan_blockers = collect_pass_blockers(ctx, config, &union_constraints, &mut state, bp);
+    drop(blockers_span);
 
     assemble_pass_result(ctx, state, orphan_blockers)
 }

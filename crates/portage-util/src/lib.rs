@@ -8,6 +8,7 @@ use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub mod profile;
 mod temp_dir;
 mod varexpand;
 pub use temp_dir::{TEMP_DIR_PREFIX, TempDir};

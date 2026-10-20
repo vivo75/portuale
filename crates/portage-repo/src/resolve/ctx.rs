@@ -130,6 +130,7 @@ impl<'a> ResolveCtx<'a> {
     }
 
     pub(crate) fn new(req: &'a ResolveRequest) -> Result<Self, Error> {
+        let _span = portage_util::profile::span("ResolveCtx::new");
         // Complete mode forces a deep walk only for `--changed-deps-report`;
         // forcing it always made large upgrades take minutes for a merge
         // list identical to the non-deep result.
