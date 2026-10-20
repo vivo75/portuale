@@ -65,8 +65,11 @@ the next slice") and expects the same rhythm every time:
 8. **Run the full verification pass** before a slice is done. Here:
    `cargo fmt --check`, `cargo clippy --release --all-targets` (zero
    warnings), `cargo test --release` (whole workspace). Then in
-   `../pmtest`: `python3 -m pytest pytests-contract-suite -q` (whole
-   suite; it rebuilds this tree's binary itself through its registry).
+   `../pmtest`: `scripts/pytest-parallel.sh` (whole suite on 8 workers,
+   about 90 s; it rebuilds this tree's binary itself through its registry;
+   `JOBS=n` changes the workers, extra arguments go to pytest, and a plain
+   `python3 -m pytest pytests-contract-suite -q` is the serial, ~8 min
+   fallback).
    **Periodically — and always after a big merge from another branch, or
    a change to the resolver / merge-order / ebuild-phase / merge code —
    also run the container differential test bed**
