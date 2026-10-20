@@ -188,7 +188,11 @@ pub(crate) fn select_nodes(
             let mut roots: Vec<usize> = leaves_via(frontier.as_mut(), g, None);
             if !roots.is_empty() {
                 // The heap collects the set; the sequence follows `g.order`.
-                roots.sort_by_key(|&i| g.order.iter().position(|&j| j == i));
+                let mut rank: Vec<Option<usize>> = vec![None; g.alive.len()];
+                for (pos, &j) in g.order.iter().enumerate().rev() {
+                    rank[j] = Some(pos);
+                }
+                roots.sort_by_key(|&i| rank[i]);
                 selected = Some(roots);
             }
         }
