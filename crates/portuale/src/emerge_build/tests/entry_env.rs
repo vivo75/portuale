@@ -336,3 +336,40 @@ fn entry_build_env_rereads_profile_env_changed_after_resolve() {
     assert_eq!(last("SLOT"), Some("0"));
     let _ = fs::remove_dir_all(&eroot);
 }
+
+#[test]
+fn entry_merge_root_needs_the_opt_in_and_a_running_root_entry() {
+    // Process-global env: save and restore, as the other env tests do.
+    let saved_allow = std::env::var_os(ALLOW_RUNNING_ROOT_WRITES);
+    let saved_running = std::env::var_os("PORTAGE_RUNNING_ROOT");
+    let mut entry = live_test_entry();
+    let root = Path::new("/target");
+    unsafe {
+        std::env::set_var("PORTAGE_RUNNING_ROOT", "/running");
+        std::env::remove_var(ALLOW_RUNNING_ROOT_WRITES);
+    }
+    entry.targets_running_root = true;
+    // No opt-in: everything merges into ROOT, whatever the entry targets.
+    assert_eq!(entry_merge_root(&entry, root), PathBuf::from("/target"));
+    unsafe { std::env::set_var(ALLOW_RUNNING_ROOT_WRITES, "1") };
+    assert_eq!(entry_merge_root(&entry, root), PathBuf::from("/running"));
+    // An entry that does not target the running root stays in ROOT.
+    entry.targets_running_root = false;
+    assert_eq!(entry_merge_root(&entry, root), PathBuf::from("/target"));
+    // Same root: nothing to redirect.
+    entry.targets_running_root = true;
+    assert_eq!(
+        entry_merge_root(&entry, Path::new("/running")),
+        PathBuf::from("/running")
+    );
+    unsafe {
+        match saved_allow {
+            Some(v) => std::env::set_var(ALLOW_RUNNING_ROOT_WRITES, v),
+            None => std::env::remove_var(ALLOW_RUNNING_ROOT_WRITES),
+        }
+        match saved_running {
+            Some(v) => std::env::set_var("PORTAGE_RUNNING_ROOT", v),
+            None => std::env::remove_var("PORTAGE_RUNNING_ROOT"),
+        }
+    }
+}

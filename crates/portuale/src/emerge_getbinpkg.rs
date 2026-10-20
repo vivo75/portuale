@@ -686,6 +686,9 @@ pub fn run_merge_plan(args: RunMergePlanArgs<'_>) -> Result<(), String> {
         features: crate::emerge_build::resolved_features(merge_options),
     };
     crate::emerge_build::run_merge_loop(entries, keep_going, &report, |_, entry, entry_progress| {
+        // An `IDEPEND` dep merges into the running root, like Portage.
+        let entry_root = crate::emerge_build::entry_merge_root(entry, root);
+        let root = entry_root.as_path();
         // Derive the entry's `MergeUnit` and dispatch on its kind through the
         // source/binary engines. An entry with nothing to merge stays a silent
         // no-op, exactly the merge functions' own early return.

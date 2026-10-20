@@ -315,3 +315,24 @@ pub(crate) fn entry_build_env(
     );
     env
 }
+
+/// Opt-in for merging a running-root entry (an `IDEPEND` dep) into the running
+/// root instead of `ROOT`: set only by the test bed, where the running root is a
+/// disposable container. Without it every entry merges into `ROOT`, as before,
+/// so a hermetic `ROOT` never writes to the host.
+pub(crate) const ALLOW_RUNNING_ROOT_WRITES: &str = "PORTUALE_ALLOW_RUNNING_ROOT_WRITES";
+
+/// The root `entry` merges into: its running root when it targets one and the
+/// opt-in is set, else `root`.
+// Portage: depgraph.py, _add_pkg_deps (IDEPEND -> `_running_root.root`); EbuildMerge.py
+pub(crate) fn entry_merge_root(entry: &GraphEntry, root: &Path) -> PathBuf {
+    if entry.targets_running_root
+        && std::env::var_os(ALLOW_RUNNING_ROOT_WRITES).is_some_and(|v| v == "1")
+    {
+        let running = portage_repo::running_root_from_env();
+        if running != root {
+            return running;
+        }
+    }
+    root.to_path_buf()
+}

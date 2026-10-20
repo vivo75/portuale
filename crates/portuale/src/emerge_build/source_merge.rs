@@ -91,15 +91,6 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
     // than calling `merge_one_source_entry` directly, so the merge-engine
     // slot carries the production source-merge traffic. The captured-build
     // split stays inline: scheduler machinery, not per-unit execution.
-    let engine = crate::merge_engines::SourceEngine {
-        repos,
-        root,
-        portage_tmpdir,
-        options,
-        buildpkg,
-        buildpkg_exclude,
-        display: &display,
-    };
     let source_paths = |entry: &GraphEntry| source_paths_for(options, entry, portage_tmpdir);
     let report = FailReport {
         root,
@@ -107,6 +98,18 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
         features: resolved_features(options),
     };
     run_merge_loop(entries, keep_going, &report, |_, entry, entry_progress| {
+        // An `IDEPEND` dep merges into the running root, like Portage.
+        let entry_root = entry_merge_root(entry, root);
+        let root = entry_root.as_path();
+        let engine = crate::merge_engines::SourceEngine {
+            repos,
+            root,
+            portage_tmpdir,
+            options,
+            buildpkg,
+            buildpkg_exclude,
+            display: &display,
+        };
         let bp = buildpkg.filter(|opts| {
             entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
         });

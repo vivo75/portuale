@@ -389,7 +389,10 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
                 });
                 let entry = &entries[idx];
                 let registry = registry.clone();
+                // An `IDEPEND` dep builds and merges in the running root.
+                let entry_root = entry_merge_root(entry, root);
                 scope.spawn(move || {
+                    let root = entry_root.as_path();
                     // Registers every subprocess this worker spawns into
                     // `registry` for the closure's own lifetime.
                     let _guard = ebuild_phases::scope_scheduler_registry(registry);
@@ -422,11 +425,12 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
                     display.build_finished();
                     let entry = &entries[idx];
                     let entry_progress = progress[idx];
+                    let entry_root = entry_merge_root(entry, root);
                     let err = merge_one_built_entry(MergeOneBuiltEntryArgs {
                         entry,
                         repos,
                         ebuild_path: &path,
-                        root,
+                        root: &entry_root,
                         portage_tmpdir,
                         options,
                         progress: entry_progress,
