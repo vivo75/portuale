@@ -74,21 +74,75 @@ pub(crate) struct Ledger {
     reported: bool,
 }
 
-/// `textwrap.wrap(text, width)` for plain words.
+/// The chunks `textwrap.wrap` breaks between: whitespace runs, and words split
+/// after a hyphen that follows two letters and precedes `letter[-]letter`
+/// (`TextWrapper.wordsep_re`, `break_on_hyphens=True`).
+fn textwrap_chunks(text: &str) -> Vec<Vec<char>> {
+    let chars: Vec<char> = text.chars().collect();
+    let letter = |c: char| c.is_alphabetic();
+    let mut chunks: Vec<Vec<char>> = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_whitespace() {
+            let start = i;
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
+            }
+            chunks.push(chars[start..i].to_vec());
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && !chars[i].is_whitespace() {
+            let hyphen_break = chars[i] == '-'
+                && i >= start + 2
+                && letter(chars[i - 1])
+                && letter(chars[i - 2])
+                && chars.get(i + 1).is_some_and(|c| letter(*c))
+                && (chars.get(i + 2).is_some_and(|c| letter(*c))
+                    || (chars.get(i + 2) == Some(&'-')
+                        && chars.get(i + 3).is_some_and(|c| letter(*c))));
+            i += 1;
+            if hyphen_break {
+                break;
+            }
+        }
+        chunks.push(chars[start..i].to_vec());
+    }
+    chunks
+}
+
+/// `textwrap.wrap(text, width)`: greedy fill over [`textwrap_chunks`], whitespace
+/// dropped at line ends and starts, over-long words cut at `width`.
 pub(crate) fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut chunks = textwrap_chunks(text.trim());
+    chunks.reverse();
     let mut lines = Vec::new();
-    let mut line = String::new();
-    for word in text.split_whitespace() {
-        if !line.is_empty() && line.len() + 1 + word.len() > width {
-            lines.push(std::mem::take(&mut line));
+    while !chunks.is_empty() {
+        let mut line: Vec<char> = Vec::new();
+        // Leading whitespace of a continuation line is dropped.
+        if !lines.is_empty() && chunks.last().is_some_and(|c| c[0].is_whitespace()) {
+            chunks.pop();
+        }
+        while let Some(chunk) = chunks.last() {
+            if line.len() + chunk.len() <= width {
+                line.extend(chunks.pop().unwrap_or_default());
+            } else {
+                break;
+            }
+        }
+        // A chunk longer than a whole line is cut.
+        if let Some(chunk) = chunks.last_mut()
+            && chunk.len() > width
+        {
+            let room = width.saturating_sub(line.len());
+            line.extend(chunk.drain(..room));
+        }
+        while line.last().is_some_and(|c| c.is_whitespace()) {
+            line.pop();
         }
         if !line.is_empty() {
-            line.push(' ');
+            lines.push(line.into_iter().collect());
         }
-        line.push_str(word);
-    }
-    if !line.is_empty() {
-        lines.push(line);
     }
     lines
 }

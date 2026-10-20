@@ -916,17 +916,58 @@ fn run_merge_loop_keep_going_restarts_the_progress_counter() {
 
 #[test]
 fn wrap_words_breaks_like_textwrap() {
-    assert_eq!(
-        wrap_words(
-            "emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root/ dropped because it requires dev-util/bad",
-            75
+    // Expected lines are Python 3's `textwrap.wrap(text, width)` (which splits
+    // after a hyphen that follows two letters and cuts words longer than a line).
+    let cases: [(&str, usize, &[&str]); 5] = [
+        (
+            "emerge --keep-going: dev-libs/schedbaddep-1.0 for /var/tmp/w0/bt-final1/test_emerge_keep_going_endgame0/root dropped because it requires dev-libs/schedbad",
+            75,
+            &[
+                "emerge --keep-going: dev-libs/schedbaddep-1.0 for /var/tmp/w0/bt-",
+                "final1/test_emerge_keep_going_endgame0/root dropped because it requires",
+                "dev-libs/schedbad",
+            ],
         ),
-        vec![
-            "emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root/ dropped because"
-                .to_string(),
-            "it requires dev-util/bad".to_string(),
-        ]
-    );
+        (
+            "emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root/ dropped because it requires dev-util/bad",
+            75,
+            &[
+                "emerge --keep-going: dev-util/top-1 for /var/tmp/b423/root/ dropped because",
+                "it requires dev-util/bad",
+            ],
+        ),
+        (
+            "The following 2 packages have failed to build, install, or execute postinst:",
+            72,
+            &[
+                "The following 2 packages have failed to build, install, or execute",
+                "postinst:",
+            ],
+        ),
+        (
+            "aaaa-bbbb-cccc dddd-eeee-ffff-gggg-hhhh-iiii-jjjj-kkkk-llll-mmmm-nnnn-oooo-pppp-qqqq-rrrr-ssss-tttt-uuuu-vvvv-wwww-xxxx-yyyy zzzz",
+            40,
+            &[
+                "aaaa-bbbb-cccc dddd-eeee-ffff-gggg-hhhh-",
+                "iiii-jjjj-kkkk-llll-mmmm-nnnn-oooo-pppp-",
+                "qqqq-rrrr-ssss-tttt-uuuu-vvvv-wwww-xxxx-",
+                "yyyy zzzz",
+            ],
+        ),
+        (
+            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx tail",
+            30,
+            &[
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "xxxxxxxxxx tail",
+            ],
+        ),
+    ];
+    for (text, width, expected) in cases {
+        assert_eq!(wrap_words(text, width), expected, "{text}");
+    }
 }
 
 #[test]
