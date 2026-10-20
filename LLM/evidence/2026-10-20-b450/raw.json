@@ -1,0 +1,1386 @@
+{
+ "A": {
+  "test_emerge_pretend_contract.py": [
+   [
+    [
+     "test_emerge_pretend_contract.py::test_autounmask_use_parent_flip_suggestion_is_suppressed_by_autounmask_use_n",
+     "test_emerge_pretend_contract.py:10612",
+     "Both --autounmask-use mechanisms (Part A's plain candidate flip\n    and Part B's opt=-aware parent flip) share the same\n    autounmask_suggest_use gate -- an explicit --autounmask-use=n\n    suppresses both at once. The unflipped dep aborts the resolve (exit\n    1, no merge list since Slice 4)."
+    ],
+    [
+     "test_emerge_pretend_contract.py::test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled",
+     "test_emerge_pretend_contract.py:15520",
+     "Same mechanism as the sibling test above, the other half of\n    \"opt=\"'s own truth table: dev-libs/useeqparentoffpkg's own\n    IUSE=\"eqflag\" (no \"+\") defaults it OFF, so the identical\n    \"[eqflag=]\" use-dep now evaluates to \"[-eqflag]\" (must be disabled)\n    -- which does NOT match dev-libs/useeqchildpkg's own default-on\n    eqflag. With --autounmask-use=n (autounmask-use is on by default and\n    would resolve this via a child-flip -- see\n    test_autounmask_use_resolves_the_opt_conditional_dependency_via_the_child_flip)\n    the dependency is reported unresolvable and aborts the resolve (exit\n    1, no merge list since Slice 4), not silently dropped or\n    incorrectly satisfied."
+    ]
+   ]
+  ],
+  "test_portuale.py": [
+   [
+    [
+     "test_portuale.py::test_direct_ebuild_merge_prints_the_portage_listing",
+     "test_portuale.py:1668",
+     "Backlog #403 (S10): a direct `ebuild <file> merge` prints Portage's\n    per-file listing on stdout -- the collision line, `>>> Merging`,\n    one line per entry, `>>> <cpv> merged.` -- and nothing else new.\n    Expected rows come from the S403 oracle Portage capture\n    `LLM/evidence/2026-10-18-403/l/l01-ebuild-merge-portage.stdout`\n    (argv in `l01-ebuild-merge-portage.argv`: `ebuild …/t348-b-phases-7.ebuild\n    merge` on a fresh ROOT); the entry lines are compared as a\n    root-normalized multiset because Portage's sibling-subtree order is\n    readdir-derived while portuale traverses sorted (matrix.md §\"Order\").\n    `NOCOLOR=yes` pins the plain ` * ` shape (oracle cell l10); the\n    default colored shape is covered by the Rust unit test."
+    ],
+    [
+     "test_portuale.py::test_direct_ebuild_merge_prints_the_portage_listing",
+     "test_portuale.py:6867",
+     "Backlog #403 (S10): a direct `ebuild <file> merge` prints Portage's\n    per-file listing on stdout -- the collision line, `>>> Merging`,\n    one line per entry, `>>> <cpv> merged.` -- and nothing else new.\n    Expected rows come from the S403 oracle Portage capture\n    `LLM/evidence/2026-10-18-403/l/l01-ebuild-merge-portage.stdout`\n    (argv in `l01-ebuild-merge-portage.argv`: `ebuild …/t348-b-phases-7.ebuild\n    merge` on a fresh ROOT); the entry lines are compared as a\n    root-normalized multiset because Portage's sibling-subtree order is\n    readdir-derived while portuale traverses sorted (matrix.md §\"Order\").\n    `NOCOLOR=yes` pins the plain ` * ` shape (oracle cell l10); the\n    default colored shape is covered by the Rust unit test."
+    ]
+   ]
+  ]
+ },
+ "B": [
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_root_deps_pinned_output",
+    3568,
+    [
+     "rc0",
+     "empty",
+     "strong",
+     "rc0",
+     "empty",
+     "strong"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_bdepend_routes_to_the_running_root_for_a_cross_root_build_without_root_deps",
+    3600,
+    [
+     "rc0",
+     "empty",
+     "strong",
+     "rc0",
+     "strong"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s3_bid_accept_keywords_bid2_accepts_only_build_2",
+    6633,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s3_bid_range_atom_ignores_the_build_id",
+    6717,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s5_formats_repo_deps_and_build_id_accepted",
+    7487,
+    [
+     "rcN",
+     "empty",
+     "strong",
+     "strong"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s5_nokey_layout_key_ignored_without_default_eapi_format",
+    7542,
+    [
+     "rcN",
+     "empty",
+     "strong",
+     "strong"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_baseline_merges_without_the_user_profile",
+    7818,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_profile_parent_is_never_walked",
+    8168,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_use_force_enables_the_flag_like_portage",
+    7835,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_package_use_force_enables_the_flag_like_portage",
+    7911,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_package_use_stable_force_enables_the_flag_like_portage",
+    8065,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_make_defaults_use_enables_the_flag_like_portage",
+    7852,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_profile_package_use_enables_the_flag_like_portage",
+    7870,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_profile_wildcards_without_eapi_like_portage",
+    8022,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_package_use_mask_masks_the_flag_like_portage",
+    7888,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_use_mask_masks_the_flag_like_portage",
+    7929,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s1_user_use_stable_mask_masks_the_flag_like_portage",
+    8041,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s2_user_profile_package_keywords_adds_a_stable_keyword_like_portage",
+    8334,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_s2_chain_package_keywords_adds_a_stable_keyword_like_portage",
+    8363,
+    [
+     "rc0",
+     "strong",
+     "empty"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_autounmask_use_parent_flip_suggestion_is_suppressed_by_autounmask_use_n",
+    10612,
+    [
+     "rcN",
+     "strong",
+     "helper"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_use_dep_equal_parent_mismatches_when_parent_flag_is_disabled",
+    15520,
+    [
+     "rcN",
+     "strong",
+     "helper"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_getbinpkg_multi_instance_walks_the_selected_builds_own_deps",
+    12071,
+    [
+     "rc0",
+     "strong"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_getbinpkg_multi_instance_local_build_does_not_shadow_a_newer_remote_build",
+    12097,
+    [
+     "rc0",
+     "strong"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_unreachable_installed_consumer_does_not_block_an_upgrade",
+    19634,
+    [
+     "rc0",
+     "strong"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_reachable_installed_consumer_holdable_pin_does_not_block_an_upgrade",
+    19664,
+    [
+     "rc0",
+     "strong"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_check_news_reports_none_when_all_items_are_read",
+    22284,
+    [
+     "rc0",
+     "strong"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_check_news_skip_file_excludes_items_like_the_read_file",
+    22305,
+    [
+     "rc0",
+     "strong"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_check_news_matches_a_versioned_display_if_installed_atom",
+    22357,
+    [
+     "rc0",
+     "strong"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_oracle_289_world_slot_atom_holds_the_old_instance",
+    24199,
+    [
+     "rcN",
+     "strong",
+     "substr",
+     "strong"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_oracle_296_installed_holder_in_world_holds_the_old_instance",
+    24232,
+    [
+     "rcN",
+     "strong",
+     "substr",
+     "strong"
+    ]
+   ]
+  ],
+  [
+   [
+    "test_emerge_pretend_contract.py",
+    "test_oracle_b0b_satisfied_replacement_p2c_inline_row",
+    26544,
+    [
+     "rc0",
+     "strong"
+    ]
+   ],
+   [
+    "test_emerge_pretend_contract.py",
+    "test_oracle_b0b_satisfied_replacement_p2e_runtime_inline_row",
+    26622,
+    [
+     "rc0",
+     "strong"
+    ]
+   ]
+  ]
+ ],
+ "B_argv_only_groups": 48,
+ "C": [],
+ "D": {
+  "only weak assertions: substr": [
+   "test_emerge_pretend_contract.py:3308 test_debug_resolver_trace_stage3_candidate_list",
+   "test_emerge_pretend_contract.py:3319 test_debug_resolver_trace_stages_2_4_walk",
+   "test_portuale.py:80 test_dispatch_via_symlink_ebuild",
+   "test_portuale.py:111 test_explicit_arg_fallback_dispatch",
+   "test_portuale.py:1939 test_ebuild_accepts_multiple_real_commands",
+   "test_portuale.py:1952 test_ebuild_accepts_a_real_value_option_without_misreading_its_value",
+   "test_portuale.py:1967 test_ebuild_accepts_the_inline_equals_form_of_a_value_option"
+  ],
+  "only weak assertions: rc0,substr": [
+   "test_emerge_pretend_contract.py:3339 test_debug_oldslot_conflict_cons_chain_prints_provider_like_portage",
+   "test_emerge_pretend_contract.py:3399 test_debug_oldslot_conflict_provider_chain_redescends_like_portage",
+   "test_emerge_pretend_contract.py:15024 test_repo_name_section_mismatch_drops_the_repo_with_a_warning",
+   "test_emerge_pretend_contract.py:22094 test_info_atom_wraps_a_forced_flag_and_colours_the_use_line",
+   "test_portuale.py:153 test_unrecognized_applet_fails_clearly",
+   "test_portuale.py:161 test_mrg_dispatch_via_symlink",
+   "test_portuale.py:729 test_mrg_remote_preflight_ok_against_loopback_sshd",
+   "test_portuale.py:1036 test_mrg_remote_pretend_stays_local",
+   "test_portuale.py:1855 test_mrg_deep_consumes_a_space_separated_integer",
+   "test_portuale.py:1886 test_mrg_help_exits_zero",
+   "test_portuale.py:2087 test_ebuild_version_is_recognized_but_not_specially_implemented",
+   "test_portuale.py:4427 test_standalone_ebuild_setup_sees_the_full_resolved_config_env",
+   "test_portuale.py:4690 test_standalone_ebuild_setup_sees_the_per_package_features",
+   "test_portuale.py:8580 test_emerge_elog_mail_smtp_failure_is_a_warning_not_a_failure",
+   "test_portuale.py:9291 test_emerge_info_runs_pkg_info_for_an_ebuild_and_a_binary",
+   "test_portuale.py:10907 test_s6_restrict_test_disables_test_phase"
+  ],
+  "only weak assertions: rcN": [
+   "test_emerge_pretend_contract.py:3554 test_missing_repos_conf_pinned_output",
+   "test_emerge_pretend_contract.py:4465 test_abort_debug_digraph_dump_order_matches",
+   "test_emerge_pretend_contract.py:13360 test_unrelated_masked_by_keywords_package_is_still_hidden",
+   "test_emerge_pretend_contract.py:23057 test_backtracking_good_version_first_aborts_below_the_oracle_minimum"
+  ],
+  "only weak assertions: rcN,substr,truthy": [
+   "test_emerge_pretend_contract.py:4496 test_abort_path_cycle_shows_reduced_list_only",
+   "test_portuale.py:1113 test_mrg_remote_keep_going_merges_rest_and_skips_dependents",
+   "test_portuale.py:1314 test_mrg_remote_require_ledger_match_aborts_on_mismatch",
+   "test_portuale.py:3896 test_emerge_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry",
+   "test_portuale.py:8996 test_emerge_ask_prompts_before_a_real_unmerge"
+  ],
+  "only weak assertions: rcN,substr": [
+   "test_emerge_pretend_contract.py:4576 test_abort_debug_child_line_shows_post_flip_use",
+   "test_emerge_pretend_contract.py:17739 test_prune_halts_on_an_unresolvable_runtime_dep_with_the_nodeps_hint",
+   "test_emerge_pretend_contract.py:18071 test_prune_nodeps_pretend_nothing_outdated",
+   "test_emerge_pretend_contract.py:21430 test_bare_name_ambiguous_across_categories_is_rejected",
+   "test_emerge_pretend_contract.py:21763 test_package_moves_n_disables_profiles_updates",
+   "test_emerge_pretend_contract.py:25101 test_oracle_slotop_required_use",
+   "test_emerge_pretend_contract.py:28178 test_276_explicit_args_abort_on_the_stuck_parents_live_atom",
+   "test_portuale.py:777 test_mrg_remote_unreachable_client_is_exit_1",
+   "test_portuale.py:790 test_mrg_remote_unwritable_root_fails_preflight",
+   "test_portuale.py:1008 test_mrg_remote_without_getbinpkgonly_is_usage_error",
+   "test_portuale.py:1022 test_mrg_remote_with_buildpkgonly_is_usage_error",
+   "test_portuale.py:1460 test_mrg_remote_option_without_hostname_is_usage_error",
+   "test_portuale.py:1820 test_mrg_remote_bundle_missing_file_is_exit_1",
+   "test_portuale.py:1839 test_mrg_bare_deep_keeps_the_atom",
+   "test_portuale.py:1870 test_mrg_rejects_an_unrecognized_short_option",
+   "test_portuale.py:1878 test_mrg_rejects_a_missing_required_value",
+   "test_portuale.py:5602 test_emerge_ask_true_spelling_hits_the_tty_gate_like_portage",
+   "test_portuale.py:5618 test_emerge_ask_read_news_without_eselect_prints_portage_hint"
+  ],
+  "two+ runs, no returncode assertion at all": [
+   "test_emerge_pretend_contract.py:4675 test_abort_path_gate_is_behaviour_neutral",
+   "test_emerge_pretend_contract.py:5907 test_self_referential_bootstrap_branch_merges_before_its_consumers",
+   "test_emerge_pretend_contract.py:10995 test_binary_wins_a_version_tie_against_the_ebuild",
+   "test_emerge_pretend_contract.py:11038 test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild",
+   "test_emerge_pretend_contract.py:11665 test_emerge_default_opts_from_a_sourced_make_conf",
+   "test_emerge_pretend_contract.py:12639 test_pv_decorates_the_cpv_with_slot_and_repo",
+   "test_emerge_pretend_contract.py:16625 test_verbose_use_flags_reflect_package_use_overrides",
+   "test_emerge_pretend_contract.py:18092 test_prune_nodeps_pinned_output",
+   "test_emerge_pretend_contract.py:18132 test_prune_pinned_output",
+   "test_emerge_pretend_contract.py:20200 test_dynamic_deps_chooses_ebuild_vs_vdb_deps_for_an_installed_deep_dep",
+   "test_emerge_pretend_contract.py:20217 test_dynamic_deps_default_appends_the_vdb_built_binding_dropped_by_the_ebuild",
+   "test_emerge_pretend_contract.py:20397 test_complete_graph_does_not_merge_a_missing_deep_dep_of_an_installed_pkg",
+   "test_emerge_pretend_contract.py:20427 test_complete_graph_if_new_ver_auto_enables_on_an_upgrade",
+   "test_emerge_pretend_contract.py:20864 test_exclude_bundles_like_portage",
+   "test_emerge_pretend_contract.py:21591 test_color_map_overrides_the_ansi_codes",
+   "test_emerge_pretend_contract.py:21679 test_quiet_drops_the_mask_column_and_the_use_line",
+   "test_emerge_pretend_contract.py:21745 test_profiles_updates_move_makes_the_renamed_package_already_installed",
+   "test_emerge_pretend_contract.py:23075 test_or_choice_avoids_downgrade_into_the_graphed_update",
+   "test_emerge_pretend_contract.py:23992 test_oracle_slotop_pin_gate_explicit_request_atoms_probe",
+   "test_emerge_pretend_contract.py:24090 test_oracle_285_exact_version_update_keeps_pinned_provider",
+   "test_emerge_pretend_contract.py:24150 test_oracle_slotop_pin_gate_blocker_discard_probes",
+   "test_emerge_pretend_contract.py:24342 test_oracle_slotop_newslot_arm_reports_no_provider_or_block",
+   "test_emerge_pretend_contract.py:24588 test_oracle_prune_rebuilds_restart_adds_passes",
+   "test_emerge_pretend_contract.py:25243 test_oracle_slotop_rebuild_scan_honours_with_bdeps",
+   "test_emerge_pretend_contract.py:25370 test_oracle_slotop_world_upgrade_with_eapi_installed_bindings",
+   "test_emerge_pretend_contract.py:26884 test_oracle_slotop_undo_unnecessary",
+   "test_emerge_pretend_contract.py:27029 test_oracle_slotop_undo_rebind",
+   "test_emerge_pretend_contract.py:28022 test_107_use_dep_dynamic_deps_pair_settles_in_one_silent_pass",
+   "test_emerge_pretend_contract.py:28084 test_256_unsatisfied_probe_seeds_every_hitting_parent_in_one_pass",
+   "test_emerge_pretend_contract.py:28450 test_251a_demoted_branch_keeps_only_the_settled_blockers",
+   "test_emerge_pretend_contract.py:28566 test_250_use_mismatched_installed_instance_does_not_satisfy_a_build_edge",
+   "test_emerge_pretend_contract.py:32319 test_pubgrub_bounded_deep_matches_the_default_solver",
+   "test_portuale.py:177 test_mrg_runs_the_emerge_codepath",
+   "test_portuale.py:213 test_mrg_forwards_rebuild_and_usepkg_exclude",
+   "test_portuale.py:2107 test_ebuild_debug_flag_enables_real_set_x_tracing",
+   "test_portuale.py:2241 test_emerge_buildpkgonly_packages_stanza_matches_portage_slot_and_digest_rules",
+   "test_portuale.py:2349 test_emerge_buildpkgonly_make_conf_binpkg_format_xpak_is_obeyed",
+   "test_portuale.py:2396 test_emerge_buildpkgonly_make_conf_binpkg_chain_is_obeyed",
+   "test_portuale.py:5879 test_getbinpkg_multi_instance_downloads_the_planned_build",
+   "test_output_invariants.py:172 test_repos_conf_section_order_does_not_change_output",
+   "test_atom_contract.py:120 test_parse_modes_match_between_implementations",
+   "test_atom_contract.py:174 test_oracle_battery_matches_between_implementations",
+   "test_atom_contract.py:184 test_parse_valid_atom_matches_between_implementations",
+   "test_atom_contract.py:194 test_parse_invalid_atom_matches_between_implementations",
+   "test_atom_contract.py:342 test_match_matches_between_implementations",
+   "test_atom_contract.py:401 test_affecting_matches_between_implementations",
+   "test_atom_contract.py:409 test_match_of_invalid_atom_is_invalid_in_both",
+   "test_atom_contract.py:422 test_batch_mode_output_matches",
+   "test_required_use_contract.py:114 test_check_matches_between_implementations",
+   "test_required_use_contract.py:124 test_check_error_matches_between_implementations",
+   "test_required_use_contract.py:134 test_reduce_matches_between_implementations",
+   "test_required_use_contract.py:143 test_batch_mode_output_matches",
+   "test_use_reduce_contract.py:60 test_reduce_matches_between_implementations",
+   "test_use_reduce_contract.py:70 test_reduce_error_matches_between_implementations",
+   "test_use_reduce_contract.py:125 test_validate_matches_portage_with_pinned_text",
+   "test_use_reduce_contract.py:139 test_batch_mode_output_matches",
+   "test_versions_contract.py:84 test_vercmp_matches_between_implementations",
+   "test_versions_contract.py:93 test_ververify_valid_matches_between_implementations",
+   "test_versions_contract.py:103 test_ververify_invalid_matches_between_implementations",
+   "test_versions_contract.py:113 test_vercmp_of_invalid_version_is_none_in_both",
+   "test_versions_contract.py:122 test_batch_mode_output_matches",
+   "test_cached_harness.py:86 test_hit_replays_rc_stdout_stderr_without_running",
+   "test_cached_harness.py:96 test_batch_stdin_is_part_of_the_key",
+   "test_cached_harness.py:106 test_changed_harness_sha_misses",
+   "test_cached_harness.py:114 test_changed_portage_pin_misses",
+   "test_cached_harness.py:125 test_dirty_checkout_runs_live_and_records_nothing",
+   "test_cached_harness.py:133 test_cache_off_bypasses_read_and_write",
+   "test_cached_harness.py:141 test_refresh_ignores_hit_and_appends_new_line",
+   "test_cached_harness.py:153 test_nonzero_exit_replays_identically",
+   "test_cached_harness.py:161 test_damaged_line_is_skipped",
+   "test_required_use_contract.py:114 test_check_matches_between_implementations",
+   "test_required_use_contract.py:124 test_check_error_matches_between_implementations",
+   "test_required_use_contract.py:134 test_reduce_matches_between_implementations",
+   "test_required_use_contract.py:143 test_batch_mode_output_matches"
+  ],
+  "only weak assertions: rc0,truthy": [
+   "test_emerge_pretend_contract.py:4902 test_or_group_prefers_a_branch_already_in_the_graph",
+   "test_emerge_pretend_contract.py:11350 test_binrepos_conf_is_read_as_a_directory_of_fragments",
+   "test_emerge_pretend_contract.py:16571 test_verbose_use_order_is_enabled_first_and_alphabetical_flips_it",
+   "test_emerge_pretend_contract.py:16898 test_help_wins_unconditionally_regardless_of_other_flags_or_position",
+   "test_emerge_pretend_contract.py:22117 test_info_atom_prints_the_installed_package_block",
+   "test_emerge_pretend_contract.py:22149 test_info_atom_reads_multiline_vdb_fields_normalised",
+   "test_emerge_pretend_contract.py:28899 test_t348_s5_unmerge_of_unknown_eapi_install_keeps_working",
+   "test_portuale.py:1350 test_mrg_remote_require_ledger_match_passes_when_records_agree",
+   "test_portuale.py:2056 test_ebuild_short_help_alias_is_implemented",
+   "test_portuale.py:2066 test_ebuild_help_wins_unconditionally_regardless_of_position_or_other_args",
+   "test_portuale.py:2598 test_emerge_buildpkg_layout_stays_run_wide_with_per_entry_build_id",
+   "test_portuale.py:3515 test_emerge_regen_prunes_a_stale_cache_entry",
+   "test_portuale.py:4262 test_emerge_debug_flag_enables_set_x_in_the_build_phases",
+   "test_portuale.py:6752 test_emerge_jobs_with_load_average_still_builds_everything",
+   "test_portuale.py:10477 test_s4_ebuild_package_uses_multi_instance_layout_from_resolved_features"
+  ],
+  "compares two runs with no returncode check": [
+   "test_emerge_pretend_contract.py:5907 test_self_referential_bootstrap_branch_merges_before_its_consumers",
+   "test_emerge_pretend_contract.py:10995 test_binary_wins_a_version_tie_against_the_ebuild",
+   "test_emerge_pretend_contract.py:11038 test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild",
+   "test_emerge_pretend_contract.py:11665 test_emerge_default_opts_from_a_sourced_make_conf",
+   "test_emerge_pretend_contract.py:12639 test_pv_decorates_the_cpv_with_slot_and_repo",
+   "test_emerge_pretend_contract.py:16625 test_verbose_use_flags_reflect_package_use_overrides",
+   "test_emerge_pretend_contract.py:20217 test_dynamic_deps_default_appends_the_vdb_built_binding_dropped_by_the_ebuild",
+   "test_emerge_pretend_contract.py:20397 test_complete_graph_does_not_merge_a_missing_deep_dep_of_an_installed_pkg",
+   "test_emerge_pretend_contract.py:20427 test_complete_graph_if_new_ver_auto_enables_on_an_upgrade",
+   "test_emerge_pretend_contract.py:23075 test_or_choice_avoids_downgrade_into_the_graphed_update",
+   "test_emerge_pretend_contract.py:23992 test_oracle_slotop_pin_gate_explicit_request_atoms_probe",
+   "test_emerge_pretend_contract.py:24090 test_oracle_285_exact_version_update_keeps_pinned_provider",
+   "test_emerge_pretend_contract.py:24150 test_oracle_slotop_pin_gate_blocker_discard_probes",
+   "test_emerge_pretend_contract.py:24342 test_oracle_slotop_newslot_arm_reports_no_provider_or_block",
+   "test_emerge_pretend_contract.py:24588 test_oracle_prune_rebuilds_restart_adds_passes",
+   "test_emerge_pretend_contract.py:25243 test_oracle_slotop_rebuild_scan_honours_with_bdeps",
+   "test_emerge_pretend_contract.py:25370 test_oracle_slotop_world_upgrade_with_eapi_installed_bindings",
+   "test_emerge_pretend_contract.py:26884 test_oracle_slotop_undo_unnecessary",
+   "test_emerge_pretend_contract.py:28022 test_107_use_dep_dynamic_deps_pair_settles_in_one_silent_pass",
+   "test_emerge_pretend_contract.py:28084 test_256_unsatisfied_probe_seeds_every_hitting_parent_in_one_pass",
+   "test_emerge_pretend_contract.py:28450 test_251a_demoted_branch_keeps_only_the_settled_blockers",
+   "test_emerge_pretend_contract.py:28566 test_250_use_mismatched_installed_instance_does_not_satisfy_a_build_edge",
+   "test_emerge_pretend_contract.py:32319 test_pubgrub_bounded_deep_matches_the_default_solver",
+   "test_portuale.py:177 test_mrg_runs_the_emerge_codepath",
+   "test_portuale.py:213 test_mrg_forwards_rebuild_and_usepkg_exclude",
+   "test_portuale.py:5879 test_getbinpkg_multi_instance_downloads_the_planned_build",
+   "test_atom_contract.py:120 test_parse_modes_match_between_implementations",
+   "test_atom_contract.py:174 test_oracle_battery_matches_between_implementations",
+   "test_atom_contract.py:184 test_parse_valid_atom_matches_between_implementations",
+   "test_atom_contract.py:194 test_parse_invalid_atom_matches_between_implementations",
+   "test_atom_contract.py:342 test_match_matches_between_implementations",
+   "test_atom_contract.py:401 test_affecting_matches_between_implementations",
+   "test_atom_contract.py:409 test_match_of_invalid_atom_is_invalid_in_both",
+   "test_atom_contract.py:422 test_batch_mode_output_matches",
+   "test_required_use_contract.py:114 test_check_matches_between_implementations",
+   "test_required_use_contract.py:124 test_check_error_matches_between_implementations",
+   "test_required_use_contract.py:134 test_reduce_matches_between_implementations",
+   "test_required_use_contract.py:143 test_batch_mode_output_matches",
+   "test_use_reduce_contract.py:60 test_reduce_matches_between_implementations",
+   "test_use_reduce_contract.py:70 test_reduce_error_matches_between_implementations",
+   "test_use_reduce_contract.py:125 test_validate_matches_portage_with_pinned_text",
+   "test_use_reduce_contract.py:139 test_batch_mode_output_matches",
+   "test_versions_contract.py:84 test_vercmp_matches_between_implementations",
+   "test_versions_contract.py:93 test_ververify_valid_matches_between_implementations",
+   "test_versions_contract.py:103 test_ververify_invalid_matches_between_implementations",
+   "test_versions_contract.py:113 test_vercmp_of_invalid_version_is_none_in_both",
+   "test_versions_contract.py:122 test_batch_mode_output_matches",
+   "test_cached_harness.py:86 test_hit_replays_rc_stdout_stderr_without_running",
+   "test_cached_harness.py:96 test_batch_stdin_is_part_of_the_key",
+   "test_cached_harness.py:153 test_nonzero_exit_replays_identically",
+   "test_required_use_contract.py:114 test_check_matches_between_implementations",
+   "test_required_use_contract.py:124 test_check_error_matches_between_implementations",
+   "test_required_use_contract.py:134 test_reduce_matches_between_implementations",
+   "test_required_use_contract.py:143 test_batch_mode_output_matches"
+  ],
+  "only weak assertions: empty,rcN": [
+   "test_emerge_pretend_contract.py:9718 test_use_dep_enforcement_plain_flag_declared_but_disabled_does_not_match",
+   "test_emerge_pretend_contract.py:9787 test_use_dep_enforcement_undeclared_flag_with_no_default_never_matches"
+  ],
+  "only weak assertions: rc0,rcN,substr": [
+   "test_emerge_pretend_contract.py:11130 test_quickpkg_direct_injects_source_root_packages",
+   "test_portuale.py:9268 test_emerge_config_rejects_multiple_atoms_and_reports_missing"
+  ],
+  "only weak assertions: empty,rc0": [
+   "test_emerge_pretend_contract.py:12285 test_update_does_not_rebuild_a_consumer_whose_ebuild_pins_the_old_slot",
+   "test_emerge_pretend_contract.py:15241 test_newrepo_off_by_default_stays_already_installed",
+   "test_emerge_pretend_contract.py:15275 test_newrepo_does_not_fire_when_the_recorded_repository_matches",
+   "test_emerge_pretend_contract.py:15368 test_rebuilt_binaries_off_by_default_stays_already_installed",
+   "test_emerge_pretend_contract.py:16387 test_multiple_top_level_atoms_all_already_installed",
+   "test_emerge_pretend_contract.py:18794 test_without_newuse_a_use_changed_package_stays_already_installed",
+   "test_emerge_pretend_contract.py:18813 test_newuse_is_a_noop_when_use_has_not_changed",
+   "test_emerge_pretend_contract.py:18825 test_newuse_forced_flags_suppresses_a_spurious_reinstall",
+   "test_emerge_pretend_contract.py:18873 test_changed_use_short_alias_bundled_with_pretend",
+   "test_emerge_pretend_contract.py:18925 test_changed_deps_ignores_a_libc_only_dependency_change",
+   "test_emerge_pretend_contract.py:18962 test_changed_deps_ignores_a_built_slot_operators_resolved_slot",
+   "test_emerge_pretend_contract.py:19026 test_without_changed_deps_a_dependency_change_is_never_detected",
+   "test_emerge_pretend_contract.py:19123 test_without_changed_slot_a_slot_change_is_never_detected",
+   "test_emerge_pretend_contract.py:19280 test_onlydeps_on_an_already_installed_atom_prints_nothing",
+   "test_emerge_pretend_contract.py:19317 test_noreplace_restores_the_portage_avoid_update_shortcut",
+   "test_emerge_pretend_contract.py:19441 test_without_deep_an_already_installed_packages_own_deps_stay_unwalked",
+   "test_emerge_pretend_contract.py:20448 test_deep_equals_zero_matches_not_passing_deep_at_all",
+   "test_emerge_pretend_contract.py:20687 test_deep_is_ignored_when_nodeps_disables_the_dependency_walk_entirely",
+   "test_emerge_pretend_contract.py:20706 test_exclude_leaves_an_already_installed_package_alone_even_with_update",
+   "test_emerge_pretend_contract.py:20723 test_exclude_matches_via_a_wildcard_atom_too",
+   "test_emerge_pretend_contract.py:20736 test_exclude_short_alias_bundled_with_pretend",
+   "test_emerge_pretend_contract.py:20762 test_exclude_prevents_a_not_yet_installed_package_from_being_offered",
+   "test_emerge_pretend_contract.py:20808 test_exclude_repeated_occurrences_and_space_separated_values_both_accumulate"
+  ],
+  "only weak assertions: corpus": [
+   "test_emerge_pretend_contract.py:17405 test_depclean_package_provided_pinned_output",
+   "test_emerge_pretend_contract.py:17516 test_depclean_pinned_output",
+   "test_emerge_pretend_contract.py:17652 test_depclean_lib_check_pinned_output",
+   "test_emerge_pretend_contract.py:17770 test_depclean_unresolved_pinned_output",
+   "test_emerge_pretend_contract.py:17893 test_depclean_removal_order_pinned_output",
+   "test_emerge_pretend_contract.py:18092 test_prune_nodeps_pinned_output",
+   "test_emerge_pretend_contract.py:18132 test_prune_pinned_output",
+   "test_emerge_pretend_contract.py:18152 test_prune_pinned_output_on_the_shared_vdb",
+   "test_emerge_pretend_contract.py:18240 test_unmerge_pretend_vdb_path_pinned_output",
+   "test_emerge_pretend_contract.py:18655 test_deselect_pinned_output",
+   "test_emerge_pretend_contract.py:21308 test_search_pinned_output",
+   "test_emerge_pretend_contract.py:21579 test_clean_and_rage_clean_pretend_pinned_output",
+   "test_emerge_pretend_contract.py:21733 test_profiles_updates_package_moves_pinned_output"
+  ],
+  "only weak assertions: corpus,substr": [
+   "test_emerge_pretend_contract.py:21591 test_color_map_overrides_the_ansi_codes"
+  ],
+  "only weak assertions: corpus,rc0,substr": [
+   "test_emerge_pretend_contract.py:21652 test_quiet_verbosity_level_1_pinned_output"
+  ],
+  "only weak assertions: empty,rcN,substr": [
+   "test_emerge_pretend_contract.py:22048 test_info_atom_that_does_not_exist_errors_with_misspell_suggestions"
+  ],
+  "only weak assertions: empty,rc0,rcN,substr,truthy": [
+   "test_emerge_pretend_contract.py:22252 test_info_usepkg_atom_selects_a_non_installed_binary_and_attempts_pkg_info"
+  ],
+  "only weak assertions: empty,rc0,rcN,truthy": [
+   "test_emerge_pretend_contract.py:29372 test_t348_s3_p3_setup_refuses_violated_required_use"
+  ],
+  "only weak assertions: rc0,substr,truthy": [
+   "test_portuale.py:142 test_help_flag_prints_the_applet_list",
+   "test_portuale.py:1802 test_mrg_remote_merge_installs_over_loopback_ssh"
+  ],
+  "only weak assertions: empty,rc0,truthy": [
+   "test_portuale.py:2040 test_ebuild_help_is_implemented",
+   "test_portuale.py:4672 test_emerge_calling_env_prunes_a_per_package_features_token"
+  ],
+  "only weak assertions: truthy": [
+   "test_portuale.py:2107 test_ebuild_debug_flag_enables_real_set_x_tracing",
+   "test_output_invariants.py:114 test_repeated_runs_are_byte_identical",
+   "test_output_invariants.py:131 test_output_is_identical_under_shuffled_directory_order",
+   "test_output_invariants.py:211 test_checker_flags_a_wiped_required_by",
+   "test_output_invariants.py:220 test_checker_flags_an_owner_that_is_neither_entry_nor_installed",
+   "test_output_invariants.py:226 test_checker_flags_a_duplicate_slot_without_a_conflict",
+   "test_output_invariants.py:236 test_checker_flags_a_dependency_merged_after_its_owner",
+   "test_output_invariants.py:285 test_checker_tolerates_a_cycle",
+   "test_output_invariants.py:305 test_checker_flags_a_flush_left_never_reached_tree_row",
+   "test_output_invariants.py:318 test_checker_flags_a_merge_row_printed_twice_in_tree_mode",
+   "test_registry.py:141 test_yaml_target_path_unchanged_by_default",
+   "test_registry.py:184 test_absent_applet_still_falls_back_to_the_build",
+   "test_fixture_caches.py:74 test_committed_fixture_md5_cache_entries_match_their_ebuilds",
+   "test_harvested_corpus.py:21 test_expanded_corpus_replays"
+  ],
+  "only weak assertions: rc0": [
+   "test_portuale.py:10514 test_s4_ebuild_fetch_uses_make_conf_distdir",
+   "test_musl_smoke.py:46 test_musl_static_binaries_run_in_scratch_container",
+   "test_benchmark_gate.py:23 test_rust_versions_harness_is_faster_than_python"
+  ]
+ },
+ "E_rows": 872,
+ "E_odd": [],
+ "E_same_args": [
+  [
+   [
+    13,
+    122,
+    "already installed",
+    0
+   ],
+   [
+    578,
+    2134,
+    "package.mask: -atom removal leaves candidate unaffected",
+    0
+   ]
+  ],
+  [
+   [
+    14,
+    123,
+    "a New package shows its full USE=\"...\" list at plain -p (verbosity 2)",
+    0
+   ],
+   [
+    567,
+    2091,
+    "profile config: real USE flag gates a dependency",
+    0
+   ],
+   [
+    696,
+    2336,
+    "without --verbose, USE= is never shown even for a package with IUSE",
+    0
+   ]
+  ],
+  [
+   [
+    17,
+    138,
+    "the merge list is in dependency-first order (diamond: leaf, consumers, root)",
+    0
+   ],
+   [
+    279,
+    678,
+    "recursion: diamond dependency dedup",
+    0
+   ]
+  ],
+  [
+   [
+    19,
+    148,
+    "merge order threads through --tree too (roots re-derived from required_by)",
+    0
+   ],
+   [
+    562,
+    2066,
+    "--tree: indents a diamond dependency, shown once",
+    0
+   ]
+  ],
+  [
+   [
+    20,
+    153,
+    "--json entries carry an explicit merge_order index",
+    0
+   ],
+   [
+    195,
+    515,
+    "--json: diamond dependency, required_by lists both owners",
+    0
+   ]
+  ],
+  [
+   [
+    116,
+    436,
+    "-pv: cpv decorated with ::repo",
+    0
+   ],
+   [
+    695,
+    2335,
+    "-v short alias is now implemented, not rejected",
+    0
+   ],
+   [
+    697,
+    2337,
+    "-v on a package with no IUSE at all: no USE= line",
+    0
+   ]
+  ],
+  [
+   [
+    119,
+    439,
+    "-pv: new-slot other-version list, decorated",
+    0
+   ],
+   [
+    808,
+    2830,
+    "new-slot install: -v keeps the S column ahead of the -v-only mask column",
+    0
+   ],
+   [
+    819,
+    2885,
+    "Total: counters line (-v) counts a new-slot install separately",
+    0
+   ]
+  ],
+  [
+   [
+    249,
+    603,
+    "#341 S5: profile EAPI/formats validation earns Portage's rc 1",
+    1
+   ],
+   [
+    250,
+    608,
+    "#341 S6: user-config atom validation earns Portage's rc 1",
+    1
+   ]
+  ],
+  [
+   [
+    262,
+    637,
+    "#341 S9: build-id match cell earns Portage's rc 1",
+    1
+   ],
+   [
+    263,
+    644,
+    "#346 S3: build-id user-config cell earns Portage's rc 1",
+    1
+   ]
+  ],
+  [
+   [
+    402,
+    1281,
+    "recursion: dedup across DEPEND and RDEPEND",
+    0
+   ],
+   [
+    556,
+    2036,
+    "--buildpkgonly: off by default, a New->New dependency chain resolves fine",
+    0
+   ]
+  ],
+  [
+   [
+    455,
+    1515,
+    "--autounmask: no keyword suggestion by default",
+    1
+   ],
+   [
+    689,
+    2329,
+    "--misspell-suggestions: a masked (existing) cp gets no name suggestions",
+    1
+   ]
+  ],
+  [
+   [
+    465,
+    1565,
+    "--autounmask-keep-masks: a package.mask'd top-level target is fatal by default",
+    1
+   ],
+   [
+    576,
+    2132,
+    "package.mask: hidden, no unmask",
+    1
+   ]
+  ],
+  [
+   [
+    568,
+    2092,
+    "USE_EXPAND: VIDEO_CARDS=nvidia expands to video_cards_nvidia, gates a dependency",
+    0
+   ],
+   [
+    571,
+    2107,
+    "-pv groups IUSE by USE_EXPAND variable (VIDEO_CARDS=\"...\")",
+    0
+   ],
+   [
+    818,
+    2880,
+    "Total: counters line (-v) with a dependency",
+    0
+   ]
+  ],
+  [
+   [
+    629,
+    2233,
+    "blocker: -v widens the [blocks b ] bracket by the mask column",
+    0
+   ],
+   [
+    820,
+    2890,
+    "Total: counters line (-v) with a blocker Conflict: line",
+    0
+   ]
+  ]
+ ],
+ "E_flag_order_or_pretend_spelling": [
+  [
+   [
+    7,
+    85,
+    [
+     "--pretend",
+     "dev-libs/needer",
+     "dev-libs/othermod"
+    ],
+    1
+   ],
+   [
+    8,
+    90,
+    [
+     "--pretend",
+     "dev-libs/othermod",
+     "dev-libs/needer"
+    ],
+    1
+   ]
+  ],
+  [
+   [
+    9,
+    95,
+    [
+     "--pretend",
+     "dev-libs/plainuser",
+     "dev-libs/needer"
+    ],
+    0
+   ],
+   [
+    10,
+    100,
+    [
+     "--pretend",
+     "dev-libs/needer",
+     "dev-libs/plainuser"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    48,
+    209,
+    [
+     "--pretend",
+     "--update",
+     "dev-libs/upgradepkg"
+    ],
+    0
+   ],
+   [
+    49,
+    210,
+    [
+     "--pretend",
+     "-u",
+     "dev-libs/upgradepkg"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    51,
+    212,
+    [
+     "--pretend",
+     "--deep",
+     "dev-libs/deeppkg"
+    ],
+    0
+   ],
+   [
+    52,
+    213,
+    [
+     "--pretend",
+     "-D",
+     "dev-libs/deeppkg"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    77,
+    258,
+    [
+     "--pretend",
+     "--emptytree",
+     "dev-libs/deeppkg"
+    ],
+    0
+   ],
+   [
+    78,
+    259,
+    [
+     "--pretend",
+     "-e",
+     "dev-libs/deeppkg"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    116,
+    436,
+    [
+     "--pretend",
+     "-v",
+     "dev-libs/newpkg"
+    ],
+    0
+   ],
+   [
+    694,
+    2334,
+    [
+     "--pretend",
+     "--verbose",
+     "dev-libs/newpkg"
+    ],
+    0
+   ],
+   [
+    695,
+    2335,
+    [
+     "--pretend",
+     "-v",
+     "dev-libs/newpkg"
+    ],
+    0
+   ],
+   [
+    697,
+    2337,
+    [
+     "--pretend",
+     "-v",
+     "dev-libs/newpkg"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    301,
+    780,
+    [
+     "--pretend",
+     "--autounmask-backtrack=y",
+     "dev-libs/aub0c",
+     "dev-libs/aub0b",
+     "dev-libs/aub0a"
+    ],
+    1
+   ],
+   [
+    302,
+    785,
+    [
+     "--pretend",
+     "--autounmask-backtrack=y",
+     "dev-libs/aub0c",
+     "dev-libs/aub0a",
+     "dev-libs/aub0b"
+    ],
+    1
+   ],
+   [
+    303,
+    790,
+    [
+     "--pretend",
+     "--autounmask-backtrack=y",
+     "dev-libs/aub0b",
+     "dev-libs/aub0c",
+     "dev-libs/aub0a"
+    ],
+    1
+   ],
+   [
+    304,
+    795,
+    [
+     "--pretend",
+     "--autounmask-backtrack=y",
+     "dev-libs/aub0b",
+     "dev-libs/aub0a",
+     "dev-libs/aub0c"
+    ],
+    1
+   ],
+   [
+    305,
+    800,
+    [
+     "--pretend",
+     "--autounmask-backtrack=y",
+     "dev-libs/aub0a",
+     "dev-libs/aub0c",
+     "dev-libs/aub0b"
+    ],
+    1
+   ],
+   [
+    306,
+    805,
+    [
+     "--pretend",
+     "--autounmask-backtrack=y",
+     "dev-libs/aub0a",
+     "dev-libs/aub0b",
+     "dev-libs/aub0c"
+    ],
+    1
+   ]
+  ],
+  [
+   [
+    308,
+    815,
+    [
+     "--pretend",
+     "--update",
+     "--deep",
+     "--selective",
+     "dev-libs/bkt1a",
+     "dev-libs/bkt1b"
+    ],
+    0
+   ],
+   [
+    309,
+    820,
+    [
+     "--pretend",
+     "--update",
+     "--deep",
+     "--selective",
+     "dev-libs/bkt1b",
+     "dev-libs/bkt1a"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    310,
+    825,
+    [
+     "--pretend",
+     "--backtrack=1",
+     "dev-libs/bkt3c",
+     "dev-libs/bkt3d"
+    ],
+    0
+   ],
+   [
+    311,
+    830,
+    [
+     "--pretend",
+     "--backtrack=1",
+     "dev-libs/bkt3d",
+     "dev-libs/bkt3c"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    312,
+    835,
+    [
+     "--pretend",
+     "dev-libs/bkt4b",
+     "dev-libs/bkt4a"
+    ],
+    0
+   ],
+   [
+    313,
+    840,
+    [
+     "--pretend",
+     "dev-libs/bkt4a",
+     "dev-libs/bkt4b"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    314,
+    845,
+    [
+     "--pretend",
+     "=dev-libs/bkt5a-1",
+     "dev-libs/bkt5b"
+    ],
+    0
+   ],
+   [
+    315,
+    850,
+    [
+     "--pretend",
+     "dev-libs/bkt5b",
+     "=dev-libs/bkt5a-1"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    616,
+    2172,
+    [
+     "--pretend",
+     "--backtrack=0",
+     "dev-libs/blk0a",
+     "dev-libs/blk0b",
+     "dev-libs/blk0c"
+    ],
+    0
+   ],
+   [
+    617,
+    2177,
+    [
+     "--pretend",
+     "--backtrack=0",
+     "dev-libs/blk0a",
+     "dev-libs/blk0c",
+     "dev-libs/blk0b"
+    ],
+    0
+   ],
+   [
+    618,
+    2182,
+    [
+     "--pretend",
+     "--backtrack=0",
+     "dev-libs/blk0b",
+     "dev-libs/blk0a",
+     "dev-libs/blk0c"
+    ],
+    0
+   ],
+   [
+    619,
+    2187,
+    [
+     "--pretend",
+     "--backtrack=0",
+     "dev-libs/blk0b",
+     "dev-libs/blk0c",
+     "dev-libs/blk0a"
+    ],
+    0
+   ],
+   [
+    620,
+    2192,
+    [
+     "--pretend",
+     "--backtrack=0",
+     "dev-libs/blk0c",
+     "dev-libs/blk0a",
+     "dev-libs/blk0b"
+    ],
+    0
+   ],
+   [
+    621,
+    2197,
+    [
+     "--pretend",
+     "--backtrack=0",
+     "dev-libs/blk0c",
+     "dev-libs/blk0b",
+     "dev-libs/blk0a"
+    ],
+    0
+   ]
+  ],
+  [
+   [
+    685,
+    2325,
+    [
+     "--pretend",
+     "dev-libs/does-not-exist",
+     "dev-libs/newpkg"
+    ],
+    1
+   ],
+   [
+    686,
+    2326,
+    [
+     "--pretend",
+     "dev-libs/newpkg",
+     "dev-libs/does-not-exist"
+    ],
+    1
+   ]
+  ]
+ ],
+ "E_same_desc": [],
+ "E_exact_rows": [],
+ "metamorphic_SUBSET_DESCRIPTIONS": [
+  [
+   "@world expands to the fixture world file's own atoms",
+   true
+  ],
+  [
+   "@world combined with an explicit atom too",
+   true
+  ],
+  [
+   "@system expands to the fixture profile chain's own packages files",
+   true
+  ]
+ ],
+ "metamorphic_SUBSET_DESCRIPTIONS_present_in_CASES": 3,
+ "F_per_test": [],
+ "F_summary": {
+  "total": 1316,
+  "nodeid_fn_pairs": 200,
+  "pid_match_current_rows": 854,
+  "pid_stale": 6,
+  "orphan_functions": {}
+ },
+ "F_stale_examples": [
+  "test_emerge_pretend_contract.py::test_pretend_case_exit_code[--load-average without a value is a parse error-args72-2]",
+  "test_emerge_pretend_contract.py::test_pretend_case_exit_code[-X bundled with other short flags is not supported-args192-2]",
+  "test_emerge_pretend_contract.py::test_pretend_case_exit_code[blocker: upstream test_blocker pg1 A, hard DEPEND !!X aborts under buildpkgonly (rc 1 like Portage \\u2014 #143)-args622-1]",
+  "test_emerge_pretend_contract.py::test_pretend_case_exit_code[blocker: upstream test_blocker pg1 B, hard BDEPEND !!X aborts under buildpkgonly (rc 1 like Portage \\u2014 #143)-args623-1]",
+  "test_emerge_pretend_contract.py::test_pretend_case_exit_code[no atom given-args265-2]"
+ ],
+ "F_expanded": {
+  "total": 4900,
+  "key_is_nodeid": false
+ },
+ "counts": {
+  "test_emerge_pretend_contract.py": 912,
+  "test_portuale.py": 262,
+  "test_metamorphic.py": 1,
+  "test_output_invariants.py": 18,
+  "test_atom_contract.py": 8,
+  "test_required_use_contract.py": 4,
+  "test_use_reduce_contract.py": 4,
+  "test_versions_contract.py": 5,
+  "test_cached_harness.py": 10,
+  "test_registry.py": 19,
+  "test_primitive_regressions.py": 1,
+  "test_fixture_caches.py": 1,
+  "test_translator_floor.py": 8,
+  "test_musl_smoke.py": 1,
+  "test_benchmark_gate.py": 1,
+  "test_harvested_corpus.py": 1
+ },
+ "asserting_no": 0
+}

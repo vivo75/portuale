@@ -1,0 +1,9876 @@
+[
+ {
+  "kind": "rc-implied",
+  "weak": "test_emerge_pretend_contract.py::test_debug_oldslot_conflict_cons_chain_prints_provider_like_portage",
+  "wline": 3339,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ],
+   [
+    "substr",
+    "Child:         (dev-libs/oldslotprov-2.0:0/1::testrepo, ebuild scheduled for merge) USE=\"\"\n",
+    "stdout"
+   ],
+   [
+    "substr",
+    "Parent Dep:    dev-libs/oldslotprov:0= required by (dev-libs/oldslotcons-1.0:0/0::testrepo, ebuild scheduled for merge)\n",
+    "stdout"
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_debug_oldslot_conflict_provider_chain_redescends_like_portage",
+  "sline": 3399,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--debug",
+   "--backtrack=0",
+   "dev-libs/oldslotprov",
+   "dev-libs/oldslotcons"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "test_emerge_pretend_contract.py::test_debug_oldslot_conflict_provider_chain_redescends_like_portage",
+  "wline": 3399,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ],
+   [
+    "substr",
+    "Arg: dev-libs/oldslotprov",
+    "stdout"
+   ],
+   [
+    "substr",
+    "Arg: dev-libs/oldslotcons",
+    "stdout"
+   ],
+   [
+    "substr",
+    "Child:",
+    "stdout"
+   ],
+   [
+    "substr",
+    "Parent Dep:",
+    "stdout"
+   ],
+   [
+    "substr",
+    "oldslotabi",
+    "stdout"
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_debug_oldslot_conflict_cons_chain_prints_provider_like_portage",
+  "sline": 3339,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--debug",
+   "--backtrack=0",
+   "dev-libs/oldslotprov",
+   "dev-libs/oldslotcons"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[0] 'new install'",
+  "wline": 54,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_continue_and_backtrack_are_inert_without_autounmask_changes",
+  "sline": 10166,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[0] 'new install'",
+  "wline": 54,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_solver_portage_matches_the_default_resolution",
+  "sline": 15687,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[0] 'new install'",
+  "wline": 54,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_pv_totals_summary_line",
+  "sline": 16222,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "weak-rc-not-checked-by-stronger",
+  "weak": "test_emerge_pretend_contract.py::test_missing_repos_conf_pinned_output",
+  "wline": 3554,
+  "strong": "test_emerge_pretend_contract.py::test_pv_decorates_the_cpv_with_slot_and_repo",
+  "sline": 12639,
+  "argv": [
+   "--pretend",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[58] \"an installed parent's conditional BDEPEND is evalu\"",
+  "wline": 235,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_root_deps_evaluates_conditional_use_deps_before_the_satisfied_check",
+  "sline": 3727,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "--root-deps",
+   "dev-libs/deeprootdepconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[281] 'recursion: unbreakable build-time cycle is a fatal'",
+  "wline": 680,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unbreakable_build_time_cycle_prints_the_circular_deps_error",
+  "sline": 3966,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/hardcyclea"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[325] 'circular: upstream test_circular_choices pg4 reque'",
+  "wline": 900,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_ccd4b_tree_follows_the_cycle_breaking_branch",
+  "sline": 4027,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--tree",
+   "dev-libs/ccd4b"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[289] 'circular dep: softened build-time ring reports the'",
+  "wline": 720,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_softened_build_time_cycle_reports_the_persisting_ring",
+  "sline": 4054,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/sbrA"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[282] 'circular dep: mixed-priority unserializable cycle '",
+  "wline": 685,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_mixed_priority_cycle_prints_each_edge_portage_label",
+  "sline": 4103,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slopcyca"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[283] 'circular dep: USE-flag suggestion (_find_suggestio'",
+  "wline": 690,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_circular_dep_use_flag_suggestion",
+  "sline": 4154,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/usecyclea"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[286] 'circular dep: grandparent cycle in --tree still ex'",
+  "wline": 705,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_tree_nomerge_ancestor_row_carries_the_package_use_column",
+  "sline": 4254,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--tree",
+   "dev-libs/gpcyclec"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[285] 'invalid: conditional USE-dep on a flag outside the'",
+  "wline": 700,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_invalid_use_conditional_in_depend_masks_the_package",
+  "sline": 4285,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/fucyclec"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[288] 'circular dep: four-ring with a USE-gated edge repo'",
+  "wline": 715,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_circular_dep_four_ring_reports_redisplay_suggestion_and_lot_of_cycles",
+  "sline": 4316,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/cyc4a"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[20] '--json entries carry an explicit merge_order index'",
+  "wline": 153,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_abort_path_json_complete_resolve_carries_null_aborted",
+  "sline": 4647,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[20] '--json entries carry an explicit merge_order index'",
+  "wline": 153,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_entries_are_merge_ordered_with_an_explicit_index",
+  "sline": 4864,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[20] '--json entries carry an explicit merge_order index'",
+  "wline": 153,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_diamond_dependency_lists_both_required_by_owners",
+  "sline": 20914,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[195] '--json: diamond dependency, required_by lists both'",
+  "wline": 515,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_abort_path_json_complete_resolve_carries_null_aborted",
+  "sline": 4647,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[195] '--json: diamond dependency, required_by lists both'",
+  "wline": 515,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_entries_are_merge_ordered_with_an_explicit_index",
+  "sline": 4864,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[195] '--json: diamond dependency, required_by lists both'",
+  "wline": 515,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_diamond_dependency_lists_both_required_by_owners",
+  "sline": 20914,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[412] 'autounmask backward cascade: [flag] on an already-'",
+  "wline": 1299,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf",
+  "sline": 4752,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/aucasctop"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[412] 'autounmask backward cascade: [flag] on an already-'",
+  "wline": 1299,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot",
+  "sline": 9138,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/aucasctop"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[17] 'the merge list is in dependency-first order (diamo'",
+  "wline": 138,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_diamond_dependency_is_deduped_and_ordered",
+  "sline": 4797,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[17] 'the merge list is in dependency-first order (diamo'",
+  "wline": 138,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unrelated_package_reports_no_blockers",
+  "sline": 14776,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[279] 'recursion: diamond dependency dedup'",
+  "wline": 678,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_diamond_dependency_is_deduped_and_ordered",
+  "sline": 4797,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[279] 'recursion: diamond dependency dedup'",
+  "wline": 678,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unrelated_package_reports_no_blockers",
+  "sline": 14776,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[672] 'merge order: a slot-qualified dep does not edge to'",
+  "wline": 2312,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_slot_qualified_dep_does_not_edge_to_a_sibling_slot",
+  "sline": 4816,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slotorderroot"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[18] 'libc merges asap even without an edge forcing it ('",
+  "wline": 143,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_libc_merges_asap_in_merge_order",
+  "sline": 4840,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/toolchainroot"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[379] 'recursion: any-of group prefers the installed alte'",
+  "wline": 1170,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_any_of_group_prefers_the_installed_alternative",
+  "sline": 4882,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/anyof"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[382] 'recursion: || ( foo:1 foo:2 ) ties at the Installe'",
+  "wline": 1185,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_in_bin_ordering_promotes_the_upgrade_over_the_first_listed_alternative",
+  "sline": 4949,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "dev-libs/orupgrade"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[383] 'recursion: || group in-bin ordering promotes an al'",
+  "wline": 1190,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_in_bin_ordering_promotes_in_graph_over_installed_only",
+  "sline": 4982,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "dev-libs/oringraph"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[386] 'recursion: || group in-bin ordering promotes all_i'",
+  "wline": 1205,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_in_bin_ordering_promotes_all_installed_slots_over_any_slot",
+  "sline": 5011,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/oranyslot"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[384] \"recursion: an installed || alternative's [use] dep\"",
+  "wline": 1195,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_installed_alternative_use_dep_matches_its_vdb_use",
+  "sline": 5036,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/altconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[385] 'recursion: both installed slots of one cp are node'",
+  "wline": 1200,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_deep_walk_visits_every_installed_slot_of_a_dependency",
+  "sline": 5062,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "dev-libs/slotdedupconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[387] 'recursion: || group other_installed bin (allow_mas'",
+  "wline": 1210,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_other_installed_bin_beats_plain_other_in_the_allow_masked_pass",
+  "sline": 5086,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/omasked"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[388] 'recursion: || group other_installed_some bin -- a '",
+  "wline": 1215,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_other_installed_some_bin_beats_plain_other",
+  "sline": 5114,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/opartly"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[389] 'recursion: || group other_installed_any_slot bin ('",
+  "wline": 1220,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_other_installed_any_slot_bin_beats_plain_other",
+  "sline": 5154,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/ofuzzy"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[390] 'recursion: || group resolves a USE-unsatisfiable-b'",
+  "wline": 1225,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_resolves_a_use_unsatisfiable_but_unmasked_alternative",
+  "sline": 5190,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/unsatuseor"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[391] 'recursion: || group picks the USE-unsat alternativ'",
+  "wline": 1230,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_use_unsat_alternative_reports_the_dependency_it_enqueued_without_autounmask",
+  "sline": 5233,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask-use=n",
+   "dev-libs/unsatuseor"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[392] \"recursion: --deep walk of an installed pkg's || gr\"",
+  "wline": 1235,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_main_walk",
+  "sline": 5262,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "dev-libs/unsatuseinstconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[394] 'recursion: conditional [flip=] deep miss under --a'",
+  "wline": 1245,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_unsat_conditional_miss_reports_the_parent_flip_row",
+  "sline": 5314,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "--autounmask-use=n",
+   "dev-libs/r135consumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[394] 'recursion: conditional [flip=] deep miss under --a'",
+  "wline": 1245,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_unsat_conditional_miss_qualifies_the_chain_row_with_affecting_use",
+  "sline": 5348,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "--autounmask-use=n",
+   "dev-libs/r135consumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[396] 'recursion: [use]-dep unsat with the flag absent fr'",
+  "wline": 1255,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_unsat_missing_iuse_reports_the_missing_flag",
+  "sline": 5377,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask-use=n",
+   "dev-libs/unsatuseiuse"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[343] 'iuse: upstream test_missing_iuse_and_evaluated_ato'",
+  "wline": 990,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_unsat_conditional_flag_on_iuse_less_target_is_missing_iuse",
+  "sline": 5403,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "=dev-libs/mia0a-1"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[344] 'iuse: upstream test_missing_iuse_and_evaluated_ato'",
+  "wline": 995,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_unsat_conditional_flag_beside_plain_flag_is_missing_iuse",
+  "sline": 5432,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "=dev-libs/mia0a-2"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[397] 'recursion: [use]-dep unsat with two visible versio'",
+  "wline": 1260,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_unsat_lists_only_the_latest_change_use_candidate",
+  "sline": 5459,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask-use=n",
+   "dev-libs/unsatusealtmultidep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[398] \"recursion: || group's unsat_use_installed bin keys\"",
+  "wline": 1265,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_unsat_use_installed_bin_keys_on_the_targeted_slot_not_just_cp",
+  "sline": 5484,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/unsatuseslot"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[399] 'recursion: || ( foo[a] foo[b] ) prefers preferred_'",
+  "wline": 1270,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_preferred_non_installed_outranks_unsat_use_non_installed",
+  "sline": 5513,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/unsatuseorder"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[400] 'recursion: || group demotes a use.mask-violating a'",
+  "wline": 1275,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_use_mask_violation_demotes_to_other_never_selected",
+  "sline": 5537,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/unsatusemasked"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[406] 'recursion: slot-operator dependency atoms are reso'",
+  "wline": 1285,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_slot_operator_dependency_atoms_resolve_both_forms",
+  "sline": 5673,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slotoperatorpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[407] 'recursion: a sub-slot-restricted dependency atom a'",
+  "wline": 1286,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_sub_slot_restricted_dependency_atom_matches_the_real_sub_slot",
+  "sline": 5699,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/subslotconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[408] 'recursion: a sub-slot-restricted dependency atom g'",
+  "wline": 1287,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_sub_slot_restricted_dependency_atom_rejects_a_real_mismatch",
+  "sline": 5721,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/subslotmismatchconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[409] 'invalid: defaulted conditional USE-dep on a flag o'",
+  "wline": 1292,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_invalid_defaulted_use_dep_conditional_masks_the_package",
+  "sline": 6064,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/usedeppkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[247] \"#341 S4: t341-eapi7 earns Portage's rc 1\"",
+  "wline": 597,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s4_eapi7_allows_use_dep_defaults",
+  "sline": 6472,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "app-misc/t341-eapi7"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[249] '#341 S5: profile EAPI/formats validation earns Por'",
+  "wline": 603,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s5_eapi5_node_keeps_modern_atoms_noeapi_drops_them",
+  "sline": 7406,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[249] '#341 S5: profile EAPI/formats validation earns Por'",
+  "wline": 603,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s5_formats_repo_deps_and_build_id_accepted",
+  "sline": 7487,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[249] '#341 S5: profile EAPI/formats validation earns Por'",
+  "wline": 603,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s5_nokey_layout_key_ignored_without_default_eapi_format",
+  "sline": 7542,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[249] '#341 S5: profile EAPI/formats validation earns Por'",
+  "wline": 603,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s5_unsupported_node_eapi_aborts_the_profile",
+  "sline": 7617,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[249] '#341 S5: profile EAPI/formats validation earns Por'",
+  "wline": 603,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s1_chain_mask_without_user_unmask_stays_masked",
+  "sline": 8115,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[249] '#341 S5: profile EAPI/formats validation earns Por'",
+  "wline": 603,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s1_no_make_profile_ignores_the_user_profile",
+  "sline": 8144,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[250] '#341 S6: user-config atom validation earns Portage'",
+  "wline": 608,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s5_eapi5_node_keeps_modern_atoms_noeapi_drops_them",
+  "sline": 7406,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[250] '#341 S6: user-config atom validation earns Portage'",
+  "wline": 608,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s5_formats_repo_deps_and_build_id_accepted",
+  "sline": 7487,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[250] '#341 S6: user-config atom validation earns Portage'",
+  "wline": 608,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s5_nokey_layout_key_ignored_without_default_eapi_format",
+  "sline": 7542,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[250] '#341 S6: user-config atom validation earns Portage'",
+  "wline": 608,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s5_unsupported_node_eapi_aborts_the_profile",
+  "sline": 7617,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[250] '#341 S6: user-config atom validation earns Portage'",
+  "wline": 608,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s1_chain_mask_without_user_unmask_stays_masked",
+  "sline": 8115,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[250] '#341 S6: user-config atom validation earns Portage'",
+  "wline": 608,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s1_no_make_profile_ignores_the_user_profile",
+  "sline": 8144,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[591] 'package.accept_keywords: bare atom implicitly gran'",
+  "wline": 2147,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s1_user_profile_accept_keywords_unmasks_like_portage",
+  "sline": 7952,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/bareacceptkeywordspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[591] 'package.accept_keywords: bare atom implicitly gran'",
+  "wline": 2147,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s2_user_package_keywords_accepts_like_portage",
+  "sline": 8299,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/bareacceptkeywordspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[591] 'package.accept_keywords: bare atom implicitly gran'",
+  "wline": 2147,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s2_user_profile_package_keywords_adds_a_stable_keyword_like_portage",
+  "sline": 8334,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/bareacceptkeywordspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[591] 'package.accept_keywords: bare atom implicitly gran'",
+  "wline": 2147,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s2_chain_package_keywords_adds_a_stable_keyword_like_portage",
+  "sline": 8363,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/bareacceptkeywordspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[591] 'package.accept_keywords: bare atom implicitly gran'",
+  "wline": 2147,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_accept_keywords_bare_atom_implicitly_grants_tilde_arch",
+  "sline": 13163,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/bareacceptkeywordspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[719] \"@system expands to the fixture profile chain's own\"",
+  "wline": 2375,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s1_unstarred_packages_leave_at_system_alone",
+  "sline": 8264,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "@system"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[255] '#341 S7: build-id package arg with no build earns '",
+  "wline": 618,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s7_cmd_build_id_atom_with_no_build_resolves_to_no_ebuilds",
+  "sline": 8607,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "=dev-libs/t341-dep-1-2"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[257] \"#341 S7: two bad --exclude atoms earn Portage's rc\"",
+  "wline": 620,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     2
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s7_exclude_two_bad_atoms_joined_with_comma",
+  "sline": 8712,
+  "strong_rc": [
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--exclude",
+   "dev-libs/t341-dep::t341",
+   "--exclude",
+   ">=dev-libs/t341-dep-1",
+   "dev-libs/t341-dep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[261] \"#341 S8: unknown set earns Portage's rc 1\"",
+  "wline": 630,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_s8_named_set_prints_validation_failed_after_merge_list",
+  "sline": 9011,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "@s341"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[410] 'invalid: USE-conditional group on a flag outside t'",
+  "wline": 1293,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_invalid_use_conditional_group_masks_the_package",
+  "sline": 9081,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-vcs/somercurial"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[411] 'recursion: a genuinely unsatisfied USE-dep depende'",
+  "wline": 1294,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_use_resolves_a_dependency_use_dep_mismatch",
+  "sline": 9104,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/usedeprejectedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[860] '-pv --autounmask-use=y: a flip-revealed || group d'",
+  "wline": 3092,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_flip_revealed_disjunction_defers_to_the_drained_graph",
+  "sline": 9233,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "--autounmask-use=y",
+   "dev-libs/pg398-t"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[417] 'autounmask breakage: default (no --autounmask-back'",
+  "wline": 1324,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways",
+  "sline": 9293,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/aubreaktop"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[423] 'autounmask keyword backward cascade: slot narrowed'",
+  "wline": 1354,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_version",
+  "sline": 9362,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/kwbacktop"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[427] 'autounmask per-level re-scan, --autounmask: two ca'",
+  "wline": 1374,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version",
+  "sline": 9406,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask",
+   "dev-libs/multimaskconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[413] 'autounmask levels: a lower license-masked version '",
+  "wline": 1304,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_levels_prefer_license_over_a_higher_keyword_masked_version",
+  "sline": 9453,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask",
+   "dev-libs/levelconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[342] 'autounmask: upstream test_autounmask_keep_keywords'",
+  "wline": 985,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_keep_keywords_y_falls_back_to_the_older_stable_version",
+  "sline": 9474,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask-keep-keywords=y",
+   "dev-libs/akk0a"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[341] 'autounmask: upstream test_autounmask_keep_keywords'",
+  "wline": 980,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_keep_keywords_n_takes_the_newest_via_unstable_keywords",
+  "sline": 9523,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask-keep-keywords=n",
+   "dev-libs/akk0a"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[307] 'autounmask: upstream test_autounmask_use_backtrack'",
+  "wline": 810,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_use_backtrack_pristine_world_keeps_the_newest",
+  "sline": 9575,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask-backtrack=y",
+   "--backtrack=2",
+   "dev-libs/abk0d"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[307] 'autounmask: upstream test_autounmask_use_backtrack'",
+  "wline": 810,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_use_backtrack_world_bound_falls_back_to_the_older",
+  "sline": 9609,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask-backtrack=y",
+   "--backtrack=2",
+   "dev-libs/abk0d"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[429] 'USE-dep enforcement: plain flag declared and enabl'",
+  "wline": 1384,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_dep_enforcement_plain_flag_declared_and_enabled_matches",
+  "sline": 9669,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/useflagpkg[foo]"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[430] 'USE-dep enforcement: negated flag declared but ena'",
+  "wline": 1389,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_dep_enforcement_negated_flag_declared_but_enabled_does_not_match",
+  "sline": 9687,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask-use=n",
+   "dev-libs/useflagpkg[-foo]"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[431] 'USE-dep enforcement: plain flag declared but disab'",
+  "wline": 1394,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_dep_enforcement_plain_flag_declared_but_disabled_does_not_match",
+  "sline": 9718,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask-use=n",
+   "dev-libs/useflagpkg[missingflag]"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[440] 'USE-dep enforcement: negated flag declared and dis'",
+  "wline": 1439,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_dep_enforcement_negated_flag_declared_and_disabled_matches",
+  "sline": 9770,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/useflagpkg[-missingflag]"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[441] 'USE-dep enforcement: flag not declared in IUSE at '",
+  "wline": 1444,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_dep_enforcement_undeclared_flag_with_no_default_never_matches",
+  "sline": 9787,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/useflagpkg[nonexistentflag]"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[442] 'USE-dep enforcement: (+) default rescues a flag mi'",
+  "wline": 1449,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_dep_enforcement_plus_default_rescues_an_undeclared_flag",
+  "sline": 9805,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/useflagpkg[nonexistentflag(+)]"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[444] 'REQUIRED_USE: genuinely satisfied, resolves normal'",
+  "wline": 1460,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_required_use_satisfied_resolves_normally",
+  "sline": 9824,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/requireduseokpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[446] 'IUSE +/- defaults: satisfy REQUIRED_USE and show c'",
+  "wline": 1470,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_iuse_plus_minus_defaults_apply_when_nothing_else_says_otherwise",
+  "sline": 9840,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/iusedefaultpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[451] 'REQUIRED_USE referencing an implicit (arch.list-on'",
+  "wline": 1495,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_required_use_referencing_an_implicit_arch_flag_resolves_normally",
+  "sline": 9887,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/archiuseimplicitpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[452] 'global use.force/use.mask win over a contradicting'",
+  "wline": 1500,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_global_use_force_and_use_mask_win_over_a_contradicting_package_use_entry",
+  "sline": 9916,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/globalprecedencepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[227] \"a later profile level's global use.mask -flag canc\"",
+  "wline": 563,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_later_level_global_use_mask_cancels_earlier_package_use_stable_mask",
+  "sline": 9952,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/crossmaskcancelpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[453] 'a profile-level -flag genuinely cancels an IUSE +d'",
+  "wline": 1505,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_profile_level_minus_flag_genuinely_cancels_an_iuse_plus_default",
+  "sline": 9986,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/cancelledpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[445] 'REQUIRED_USE: genuinely violated, top-level atom, '",
+  "wline": 1465,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_required_use_violated_top_level_aborts_the_whole_run",
+  "sline": 10010,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/requiredusebadpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[450] 'REQUIRED_USE: violated on a dependency, still abor'",
+  "wline": 1490,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_required_use_violated_dependency_still_aborts_the_whole_run",
+  "sline": 10039,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/requiredusebadparentpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[454] 'REQUIRED_USE: two independent top-level violations'",
+  "wline": 1510,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_required_use_violations_are_collected_across_the_whole_walk_not_just_the_first",
+  "sline": 10072,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/requiredusebadpkg",
+   "dev-libs/requiredusebadpkg2"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[455] '--autounmask: no keyword suggestion by default'",
+  "wline": 1515,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_no_keyword_suggestion_by_default",
+  "sline": 10109,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/autounmaskkeywordpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[689] '--misspell-suggestions: a masked (existing) cp get'",
+  "wline": 2329,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_no_keyword_suggestion_by_default",
+  "sline": 10109,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/autounmaskkeywordpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[456] '--autounmask: keyword-masked target resolves + pri'",
+  "wline": 1520,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_suggests_a_keyword_once_explicitly_enabled",
+  "sline": 10133,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask",
+   "dev-libs/autounmaskkeywordpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[470] '--autounmask-only: the merge list is re-shown plus'",
+  "wline": 1590,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_only_reshows_the_merge_list",
+  "sline": 10202,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask",
+   "--autounmask-only",
+   "dev-libs/autounmaskkeywordpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[457] \"--autounmask: a dependency's own no-visible-candid\"",
+  "wline": 1525,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_dependency_gets_no_keyword_suggestion_by_default",
+  "sline": 10280,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/autounmaskdepconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[458] '--autounmask: a keyword-masked dependency resolves'",
+  "wline": 1530,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_dependency_gets_a_keyword_suggestion_once_enabled",
+  "sline": 10309,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask",
+   "dev-libs/autounmaskdepconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[459] '--autounmask: keyword changes also appear in --jso'",
+  "wline": 1535,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_keyword_changes_appear_in_json",
+  "sline": 10342,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask",
+   "--json",
+   "dev-libs/autounmaskdepconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[465] \"--autounmask-keep-masks: a package.mask'd top-leve\"",
+  "wline": 1565,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_keep_masks_n_unmasks_a_package_mask",
+  "sline": 10454,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/hardmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[465] \"--autounmask-keep-masks: a package.mask'd top-leve\"",
+  "wline": 1565,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_mask_hides_with_no_matching_unmask",
+  "sline": 12865,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/hardmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[576] 'package.mask: hidden, no unmask'",
+  "wline": 2132,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_keep_masks_n_unmasks_a_package_mask",
+  "sline": 10454,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/hardmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[576] 'package.mask: hidden, no unmask'",
+  "wline": 2132,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_mask_hides_with_no_matching_unmask",
+  "sline": 12865,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/hardmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[434] '--autounmask-use: an opt= dep whose child flag is '",
+  "wline": 1409,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_use_parent_flip_fails_like_portage_when_the_child_flag_is_masked",
+  "sline": 10642,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/parentflipeqpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[300] 'autounmask: upstream test_autounmask_parent pg0 =a'",
+  "wline": 775,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_parent_suggests_disabling_foo_and_still_fails",
+  "sline": 10722,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--autounmask",
+   "=dev-libs/aup0b-1"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[436] '--autounmask-use parent flip, default: masked-chil'",
+  "wline": 1419,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_autounmask_use_parent_flip_pfgraph_reports_the_bare_miss_like_portage",
+  "sline": 10823,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/pfgraphparent"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[401] 'recursion: unresolvable dep aborts the resolve (ex'",
+  "wline": 1280,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unresolvable_dependency_is_reported_not_silently_dropped",
+  "sline": 10917,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/missingdep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[486] '--usepkg: a binary-only package resolves once elig'",
+  "wline": 1670,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_usepkg_makes_a_binary_only_package_eligible",
+  "sline": 10936,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--usepkg",
+   "dev-libs/binaryonlypkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[487] '--binpkg-respect-use: a USE-mismatched binary fall'",
+  "wline": 1675,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_binpkg_respect_use_rejects_a_use_mismatched_binary_by_default",
+  "sline": 10953,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--usepkg",
+   "dev-libs/binaryusemismatchpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[535] '--usepkg alone does not pull remote binhost candid'",
+  "wline": 1924,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_getbinpkg_makes_a_remote_binhost_binary_eligible",
+  "sline": 11579,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--usepkg",
+   "dev-libs/remotebinpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[717] \"@world expands to the fixture world file's own ato\"",
+  "wline": 2373,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_profile_set_packages_join_world_and_are_a_target",
+  "sline": 11715,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "@world"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[717] \"@world expands to the fixture world file's own ato\"",
+  "wline": 2373,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_world_missing_file_expands_to_system_not_an_error",
+  "sline": 17132,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "@world"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[531] '--getbinpkg -v: :slot/::repo decoration on a [bina'",
+  "wline": 1904,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_getbinpkg_slot_repo_decoration_on_a_remote_binary_line",
+  "sline": 11754,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "--getbinpkg",
+   "dev-libs/remotebinslotpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[543] '--getbinpkg: _equiv_ebuild_visible rejects a binar'",
+  "wline": 1970,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_getbinpkg_equiv_ebuild_visible_rejects_an_orphaned_binary",
+  "sline": 11776,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--getbinpkg",
+   "dev-libs/eqebvispkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[540] '--getbinpkg: --binpkg-changed-deps (auto) rejects '",
+  "wline": 1954,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_getbinpkg_binpkg_changed_deps_rejects_a_stale_binary",
+  "sline": 11884,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--getbinpkg",
+   "dev-libs/bcdeppkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[542] '--usepkg: slot_operator_mask_built masks a binary '",
+  "wline": 1964,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_usepkg_slot_operator_mask_built_rejects_a_stale_slot_binary",
+  "sline": 11904,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--usepkg",
+   "dev-libs/somaskparent"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[547] '--getbinpkg --binpkg-changed-deps=n: keeps the sta'",
+  "wline": 1990,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_binpkg_changed_deps_explicit_override",
+  "sline": 11927,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--getbinpkg",
+   "--binpkg-changed-deps=n",
+   "dev-libs/bcdeppkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[539] '--getbinpkg: binpkg-multi-instance -- newest BUILD'",
+  "wline": 1949,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_getbinpkg_multi_instance_newest_build_time_wins",
+  "sline": 11985,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--getbinpkg",
+   "dev-libs/multiinst"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[491] 'downgrade: installed version has no visible candid'",
+  "wline": 1696,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_downgrade_is_distinguished_from_upgrade",
+  "sline": 12310,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/downgradepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[492] 'downgrade: a keyword-masked-but-installed TOP-LEVE'",
+  "wline": 1701,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_keyword_masked_but_installed_top_level_atom_still_downgrades",
+  "sline": 12329,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/keywordmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[493] 'avoid_update: a keyword-masked-but-installed DEPEN'",
+  "wline": 1706,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_keyword_masked_but_installed_dependency_is_kept_not_downgraded",
+  "sline": 12345,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/needskeywordmasked"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[494] '--emptytree: a keyword-masked installed DEPENDENCY'",
+  "wline": 1711,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_emptytree_downgrades_a_keyword_masked_installed_dependency",
+  "sline": 12366,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--emptytree",
+   "dev-libs/needskeywordmasked"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[495] 'avoid_update: a keyword-masked-but-installed DEPEN'",
+  "wline": 1716,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_keyword_masked_but_installed_dependency_with_a_use_dep_is_kept",
+  "sline": 12391,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/needskeywordmaskeduse"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[496] 'avoid_update: a DEPENDENCY whose USE-dep flag is o'",
+  "wline": 1721,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_installed_dependency_use_dep_flag_only_in_built_use_is_kept",
+  "sline": 12414,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/needsbuiltusediverge"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[380] 'recursion: any-of group falls back to every altern'",
+  "wline": 1175,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable",
+  "sline": 12462,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/anyofunresolvable"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[14] 'a New package shows its full USE=\"...\" list at pla'",
+  "wline": 123,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_portage_use_flags_from_profile_gate_a_dependency",
+  "sline": 12529,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/useflagpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[567] 'profile config: real USE flag gates a dependency'",
+  "wline": 2091,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_portage_use_flags_from_profile_gate_a_dependency",
+  "sline": 12529,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/useflagpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[696] 'without --verbose, USE= is never shown even for a '",
+  "wline": 2336,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_portage_use_flags_from_profile_gate_a_dependency",
+  "sline": 12529,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/useflagpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[568] 'USE_EXPAND: VIDEO_CARDS=nvidia expands to video_ca'",
+  "wline": 2092,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_expand_variable_drives_a_dependency",
+  "sline": 12546,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/useexpandpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[571] '-pv groups IUSE by USE_EXPAND variable (VIDEO_CARD'",
+  "wline": 2107,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_expand_variable_drives_a_dependency",
+  "sline": 12546,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/useexpandpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[818] 'Total: counters line (-v) with a dependency'",
+  "wline": 2880,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_expand_variable_drives_a_dependency",
+  "sline": 12546,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/useexpandpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[569] 'package.use USE_EXPAND-prefix shorthand: PYTHON_TA'",
+  "wline": 2097,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_use_expand_prefix_shorthand_drives_a_dependency",
+  "sline": 12569,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/packageuseexpandpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[570] 'USE_EXPAND_UNPREFIXED: ARCH=amd64 contributes the '",
+  "wline": 2102,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_expand_unprefixed_variable_drives_a_dependency",
+  "sline": 12592,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/archusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[805] 'USE_EXPAND _* wildcard enables every matching flag'",
+  "wline": 2815,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_expand_star_wildcard_expands_against_the_packages_own_iuse",
+  "sline": 12614,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/wildexpandpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[572] '-pv omits a USE_EXPAND_HIDDEN group (CPU_FLAGS_X86'",
+  "wline": 2112,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_pv_omits_a_use_expand_hidden_group",
+  "sline": 12707,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/hiddenexpandpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[573] '-pv marks installed-vs-new USE changes (*/%) on an'",
+  "wline": 2117,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_pv_marks_use_changes_against_the_installed_version",
+  "sline": 12729,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "--update",
+   "dev-libs/upgradeusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[803] 'USE_EXPAND_IMPLICIT: a foo[elibc_glibc] dep matche'",
+  "wline": 2805,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_expand_implicit_flag_is_valid_iuse_even_when_unlisted",
+  "sline": 12774,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/implicitiusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[574] 'use.stable.force/package.use.stable.mask apply to '",
+  "wline": 2122,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_stable_force_and_package_use_stable_mask_apply_when_stable",
+  "sline": 12816,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/stableusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[575] 'use.stable.force/package.use.stable.mask do not ap'",
+  "wline": 2127,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_stable_force_and_package_use_stable_mask_skip_an_unstable_candidate",
+  "sline": 12841,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/unstableusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[577] 'package.mask + package.unmask: masked then unmaske'",
+  "wline": 2133,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_unmask_cancels_a_matching_package_mask",
+  "sline": 12874,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/maskedandunmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[13] 'already installed'",
+  "wline": 122,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_mask_minus_atom_removal_leaves_candidate_unaffected",
+  "sline": 12882,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/samepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[578] 'package.mask: -atom removal leaves candidate unaff'",
+  "wline": 2134,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_mask_minus_atom_removal_leaves_candidate_unaffected",
+  "sline": 12882,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/samepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[205] 'LICENSE in @EULA group, masked by the real default'",
+  "wline": 533,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_license_eula_style_group_is_masked_by_the_portage_default_accept_license",
+  "sline": 12897,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/eulapkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[206] 'LICENSE || any-of group, visible via the accepted '",
+  "wline": 534,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_license_any_of_group_is_visible_via_the_accepted_alternative",
+  "sline": 12914,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/anyoflicensepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[207] 'package.license unmasks an otherwise EULA-masked p'",
+  "wline": 535,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_license_package_license_unmasks_an_otherwise_eula_masked_package",
+  "sline": 12927,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/packagelicensepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[208] \"an overlay's own profiles/license_groups stacks wi\"",
+  "wline": 536,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_an_overlay_own_license_groups_stacks_with_the_main_repo",
+  "sline": 12940,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/crossrepolicensepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[209] 'USE-conditional LICENSE, visible with the flag off'",
+  "wline": 537,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_license_use_conditional_visible_when_flag_off_masked_when_forced_on",
+  "sline": 12965,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/uselicensepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[211] 'PROPERTIES visible under the real default ACCEPT_P'",
+  "wline": 539,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_properties_default_star_accepts_a_declared_property",
+  "sline": 12992,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/propertiespkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[212] 'package.properties narrows acceptance for one pack'",
+  "wline": 540,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_properties_narrows_acceptance_for_one_package",
+  "sline": 13002,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/interactivepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[213] 'package.accept_restrict narrows acceptance for one'",
+  "wline": 541,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_accept_restrict_narrows_acceptance_for_one_package",
+  "sline": 13016,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/restrictedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[579] 'package.mask: repo-level profiles/package.mask hid'",
+  "wline": 2135,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_repo_level_package_mask_hides_a_package",
+  "sline": 13029,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/repomaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[580] 'package.mask: profile-level package.mask hides a p'",
+  "wline": 2136,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_profile_level_package_mask_hides_a_package",
+  "sline": 13043,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/profilemaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[581] 'package.mask: profile-level package.unmask cancels'",
+  "wline": 2137,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_profile_level_package_unmask_cancels_a_repo_level_mask",
+  "sline": 13057,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/repomaskedthenprofileunmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[582] 'package.mask: user-level -atom removes a repo-leve'",
+  "wline": 2138,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_user_level_minus_atom_removes_a_repo_level_mask_entry",
+  "sline": 13075,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/repomaskedthenuserremovedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[583] 'package.accept_keywords: wildcard extends visibili'",
+  "wline": 2139,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_accept_keywords_wildcard_extends_visibility",
+  "sline": 13093,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/wildcardkeywordpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[585] 'package.accept_keywords: ** accepts no-keywords pa'",
+  "wline": 2141,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_accept_keywords_double_star_accepts_no_keywords_package",
+  "sline": 13104,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/livekeywordpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[586] 'package.accept_keywords: -amd64 revokes a globally'",
+  "wline": 2142,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_accept_keywords_negation_revokes_a_globally_accepted_keyword",
+  "sline": 13115,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/keywordrevokedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[589] 'package.accept_keywords: \"*\" accepts any stable ke'",
+  "wline": 2145,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_accept_keywords_star_accepts_any_stable_keyword",
+  "sline": 13135,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/starkeywordpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[590] 'package.accept_keywords: \"~*\" accepts any testing '",
+  "wline": 2146,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_accept_keywords_tilde_star_accepts_any_testing_keyword",
+  "sline": 13147,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/tildestarkeywordpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[116] '-pv: cpv decorated with ::repo'",
+  "wline": 436,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_pv_bracket_mask_marker",
+  "sline": 13181,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[116] '-pv: cpv decorated with ::repo'",
+  "wline": 436,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_verbose_on_a_package_with_no_iuse_shows_no_use_line",
+  "sline": 16650,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[695] '-v short alias is now implemented, not rejected'",
+  "wline": 2335,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_pv_bracket_mask_marker",
+  "sline": 13181,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[695] '-v short alias is now implemented, not rejected'",
+  "wline": 2335,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_verbose_on_a_package_with_no_iuse_shows_no_use_line",
+  "sline": 16650,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[697] '-v on a package with no IUSE at all: no USE= line'",
+  "wline": 2337,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_pv_bracket_mask_marker",
+  "sline": 13181,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[697] '-v on a package with no IUSE at all: no USE= line'",
+  "wline": 2337,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_verbose_on_a_package_with_no_iuse_shows_no_use_line",
+  "sline": 16650,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[844] '--color=y: a New (system member -> PKG_MERGE_SYSTE'",
+  "wline": 3012,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_color_y_renders_real_ansi_bracket_line",
+  "sline": 13235,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--color=y",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[584] 'package.accept_keywords: profile-level entry exten'",
+  "wline": 2140,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_accept_keywords_profile_level_entry_extends_visibility",
+  "sline": 13341,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/profileacceptkeywordspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[203] 'only ~keyword, not visible'",
+  "wline": 531,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unrelated_masked_by_keywords_package_is_still_hidden",
+  "sline": 13360,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/maskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[595] 'package.use: wildcard entry enables a flag not on '",
+  "wline": 2151,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_use_wildcard_entry_enables_a_flag_and_pulls_in_a_dependency",
+  "sline": 13368,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/packageuseenablepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[595] 'package.use: wildcard entry enables a flag not on '",
+  "wline": 2151,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_env_use_is_the_highest_tier_and_overrides_a_package_use_flag",
+  "sline": 13385,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/packageuseenablepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[601] 'package.env: env-file USE= enables a flag, pulling'",
+  "wline": 2157,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_env_env_file_use_enables_a_flag_and_pulls_in_a_dependency",
+  "sline": 13406,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/penvpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[613] 'profile defaults walk: a leaf make.defaults cancel'",
+  "wline": 2169,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_profile_defaults_walk_is_per_level_not_flat",
+  "sline": 13445,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/interleavepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[614] 'profile USE_EXPAND default is folded per-level, so'",
+  "wline": 2170,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_profile_use_expand_default_is_folded_per_level",
+  "sline": 13466,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/singletargetpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[603] 'repo make.defaults: USE= enables a flag, pulling i'",
+  "wline": 2159,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_repo_make_defaults_use_enables_a_flag_and_pulls_in_a_dependency",
+  "sline": 13495,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/repomakedefaultpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[604] 'env.d: /etc/profile.env USE= enables a flag, pulli'",
+  "wline": 2160,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_envd_use_enables_a_flag_and_pulls_in_a_dependency",
+  "sline": 13515,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/envdusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[604] 'env.d: /etc/profile.env USE= enables a flag, pulli'",
+  "wline": 2160,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_envd_use_read_from_eroot_not_config_root",
+  "sline": 13535,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/envdusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[596] 'package.use: entry disables a flag that is on glob'",
+  "wline": 2152,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_use_entry_disables_a_globally_enabled_flag_for_one_package",
+  "sline": 13606,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/packageusedisablepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[597] 'package.use: repo-level entry enables a flag not o'",
+  "wline": 2153,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_repo_level_package_use_enables_a_flag_and_pulls_in_a_dependency",
+  "sline": 13625,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/repouseenablepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[598] 'package.use: profile-level entry enables a flag no'",
+  "wline": 2154,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_profile_level_package_use_enables_a_flag_and_pulls_in_a_dependency",
+  "sline": 13644,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/profileuseenablepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[599] 'package.use depth: repo-level entry loses to the p'",
+  "wline": 2155,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_repo_level_package_use_loses_to_the_profile_defaults_layer",
+  "sline": 13661,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/repouseweakpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[600] 'package.use depth: profile-level entry loses to ma'",
+  "wline": 2156,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_profile_level_package_use_loses_to_make_conf",
+  "sline": 13683,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/profileuseweakpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[226] 'package.use.mask/package.use.force with atom-speci'",
+  "wline": 558,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_use_mask_and_force_with_atom_specificity_ordering",
+  "sline": 13701,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/pkgusemaskforcepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[615] 'blocker: strong (!!) blocker vs an installed packa'",
+  "wline": 2171,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_strong_blocker_matches_an_installed_package",
+  "sline": 13728,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/blockerpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[290] 'circular dep: slot-pinned || build dep takes -bin '",
+  "wline": 725,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_slcirc_slot_pinned_branch_prefers_bin_over_older_slot",
+  "sline": 14111,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slcirc"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[628] 'blocker: weak (!) merge-vs-merge match is unsolvab'",
+  "wline": 2232,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_weak_blocker_matches_another_new_package_in_the_same_graph",
+  "sline": 14630,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/graphblockerparent"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[630] 'blocker: line prints after every package line, not'",
+  "wline": 2234,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_blocker_lines_print_after_every_package_line_not_inline",
+  "sline": 14653,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/blockerorderpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[629] 'blocker: -v widens the [blocks b ] bracket by the '",
+  "wline": 2233,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_b4_uninstall_row_counters_and_quiet_shape",
+  "sline": 14702,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/blockerpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[820] 'Total: counters line (-v) with a blocker Conflict:'",
+  "wline": 2890,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_b4_uninstall_row_counters_and_quiet_shape",
+  "sline": 14702,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/blockerpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[631] 'blocker: a [use]-dep blocker the blocked package d'",
+  "wline": 2235,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_dep_blocker_that_the_target_does_not_satisfy_is_dropped",
+  "sline": 14784,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/blockusedepconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[645] 'overlay: package exists only in the overlay repo'",
+  "wline": 2285,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_only_package_is_found",
+  "sline": 14805,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlayonlypkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[646] 'overlay: best version wins across repos'",
+  "wline": 2286,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_best_version_wins_regardless_of_which_repo_has_it",
+  "sline": 14815,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlaynewerpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[647] 'overlay: same-version tie broken toward higher pri'",
+  "wline": 2287,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_same_version_tie_across_repos_is_broken_toward_higher_priority",
+  "sline": 14824,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlaytiepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[648] 'overlay: repo-level package.mask scoped to the ove'",
+  "wline": 2288,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_own_package_mask_hides_only_the_overlay_copy",
+  "sline": 14840,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlaymaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[649] 'overlay: explicit ::overlay atom still hits the ov'",
+  "wline": 2289,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_own_package_mask_still_hides_the_explicit_overlay_atom",
+  "sline": 14851,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlaymaskedpkg::overlay"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[650] 'overlay: explicit ::testrepo atom bypasses the ove'",
+  "wline": 2290,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_own_package_mask_does_not_affect_the_explicit_main_repo_atom",
+  "sline": 14867,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlaymaskedpkg::testrepo"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[651] 'overlay: repo-level package.unmask cancels the sam'",
+  "wline": 2291,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_own_package_unmask_cancels_the_same_overlay_own_package_mask",
+  "sline": 14880,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlaymaskedthenunmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[652] \"overlay: implicit masters inherits the main repo's\"",
+  "wline": 2292,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_implicit_masters_inherits_the_main_repos_own_package_mask",
+  "sline": 14896,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/mastermaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[653] 'overlay: package.unmask cancels a masters-inherite'",
+  "wline": 2293,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_package_unmask_cancels_a_masters_inherited_mask",
+  "sline": 14914,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/mastermaskedthenoverlayunmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[654] 'repos.conf explicit masters=: does not inherit the'",
+  "wline": 2294,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_explicit_masters_does_not_inherit_the_main_repos_mask",
+  "sline": 14930,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/independentmastermainonlypkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[655] 'repos.conf explicit masters=: inherits a non-main '",
+  "wline": 2295,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_explicit_masters_inherits_a_non_main_declared_masters_mask",
+  "sline": 14951,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/independentmasteroverlaypkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[656] 'layout.conf masters= middle tier + repo-name= over'",
+  "wline": 2296,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_layout_conf_masters_middle_tier_and_repo_name_override",
+  "sline": 14973,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/layoutmasterpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[498] 'overlay package.use: an overlay-only package.use e'",
+  "wline": 1731,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_own_package_use_gates_a_dependency",
+  "sline": 15133,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlayuseenablepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[499] 'overlay package.use.force: an overlay-only package'",
+  "wline": 1736,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_own_package_use_force_gates_a_dependency",
+  "sline": 15153,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlayuseforcepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[500] 'overlay package.use.mask: an overlay-only package.'",
+  "wline": 1741,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_overlay_own_package_use_mask_blocks_a_dependency",
+  "sline": 15168,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/overlayusemaskpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[501] '--usepkg-exclude: rejects the only binary candidat'",
+  "wline": 1746,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_usepkg_exclude_drops_the_only_binary_candidate",
+  "sline": 15182,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--usepkg",
+   "--usepkg-exclude",
+   "dev-libs/binaryonlypkg",
+   "dev-libs/binaryonlypkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[502] '--usepkg-include: a non-matching include list reje'",
+  "wline": 1751,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_usepkg_include_gates_binary_eligibility_both_ways",
+  "sline": 15204,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--usepkg",
+   "--usepkg-include",
+   "dev-libs/doesnotexist-anywhere",
+   "dev-libs/binaryonlypkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[552] '--newrepo: off by default, stays already-installed'",
+  "wline": 2016,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_newrepo_off_by_default_stays_already_installed",
+  "sline": 15241,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--selective",
+   "dev-libs/newrepopkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[553] '--newrepo: a differing vdb repository triggers a r'",
+  "wline": 2021,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_newrepo_triggers_a_reinstall_for_a_differing_recorded_repository",
+  "sline": 15257,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--selective",
+   "--newrepo",
+   "dev-libs/newrepopkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[554] '--newrepo: a matching vdb repository does not trig'",
+  "wline": 2026,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_newrepo_does_not_fire_when_the_recorded_repository_matches",
+  "sline": 15275,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--selective",
+   "--newrepo",
+   "dev-libs/samerepopkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[555] '--newrepo: a missing vdb repository file falls bac'",
+  "wline": 2031,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_newrepo_fires_via_the_unknown_repo_sentinel_when_unrecorded",
+  "sline": 15290,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--selective",
+   "--newrepo",
+   "dev-libs/samepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[557] '--buildpkgonly: a New package depending on another'",
+  "wline": 2041,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_buildpkgonly_reports_the_merge_list_then_the_portage_error",
+  "sline": 15328,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--buildpkgonly",
+   "dev-libs/dualdep"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[558] '--buildpkgonly: a New package depending on an alre'",
+  "wline": 2046,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_buildpkgonly_does_not_fire_when_the_dependency_is_already_installed",
+  "sline": 15352,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--buildpkgonly",
+   "dev-libs/buildpkgonlysatisfied"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[521] '--rebuilt-binaries: off by default, stays already-'",
+  "wline": 1846,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_rebuilt_binaries_off_by_default_stays_already_installed",
+  "sline": 15368,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--usepkg",
+   "--selective",
+   "dev-libs/rebuiltbinarypkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[522] '--rebuilt-binaries: a differing BUILD_TIME trigger'",
+  "wline": 1851,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_rebuilt_binaries_triggers_a_reinstall_for_a_differing_build_time",
+  "sline": 15386,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--usepkg",
+   "--selective",
+   "--rebuilt-binaries",
+   "dev-libs/rebuiltbinarypkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[523] '--rebuilt-binaries-timestamp: cutoff above the bin'",
+  "wline": 1856,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_rebuilt_binaries_timestamp_gates_the_reinstall",
+  "sline": 15405,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--usepkg",
+   "--selective",
+   "--rebuilt-binaries",
+   "--rebuilt-binaries-timestamp",
+   "3000",
+   "dev-libs/rebuiltbinarypkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[560] 'opt= USE-dep: parent flag ON evaluates to [flag], '",
+  "wline": 2056,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_dep_equal_parent_matches_when_parent_flag_is_enabled",
+  "sline": 15498,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/useeqparentonpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[19] 'merge order threads through --tree too (roots re-d'",
+  "wline": 148,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_tree_indents_a_diamond_dependency_and_shows_it_once",
+  "sline": 15553,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--tree",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[562] '--tree: indents a diamond dependency, shown once'",
+  "wline": 2066,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_tree_indents_a_diamond_dependency_and_shows_it_once",
+  "sline": 15553,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--tree",
+   "dev-libs/diamond"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[564] '--columns: new install right-aligns the version in'",
+  "wline": 2076,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_columns_right_aligns_the_version_into_a_fixed_column",
+  "sline": 15638,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--columns",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[564] '--columns: new install right-aligns the version in'",
+  "wline": 2076,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_columns_columnwidth_falls_back_to_default_on_an_unparsable_value",
+  "sline": 15710,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--columns",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[565] '--columns: upgrade shows both the new and old vers'",
+  "wline": 2081,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_columns_shows_both_new_and_old_version_for_an_upgrade",
+  "sline": 15654,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "--columns",
+   "dev-libs/upgradepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[566] '--tree and --columns together is a usage error'",
+  "wline": 2086,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     2
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_columns_and_tree_together_is_a_usage_error",
+  "sline": 15670,
+  "strong_rc": [
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--tree",
+   "--columns",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[657] 'slot conflict: solvable, reconciled by backtrackin'",
+  "wline": 2297,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_solvable_slot_conflict_is_reconciled_by_backtracking",
+  "sline": 15729,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slotconflictparent"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[658] 'slot conflict: --backtrack=0 reconciles the solvab'",
+  "wline": 2298,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_backtrack_zero_disables_slot_conflict_reconciliation",
+  "sline": 15749,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--backtrack=0",
+   "dev-libs/slotconflictparent"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[661] 'slot conflict: unsolvable, resolved by masking a p'",
+  "wline": 2301,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unsolvable_slot_conflict_resolved_by_masking_a_puller_version",
+  "sline": 15780,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/btparent"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[660] 'slot conflict: unsolvable, survives backtracking a'",
+  "wline": 2300,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unsolvable_slot_conflict_survives_backtracking_and_is_reported",
+  "sline": 15864,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slotconflictunsolvable"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[664] 'slot conflict: pkg_use_display renders non-empty U'",
+  "wline": 2304,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_slot_conflict_notice_renders_pkg_use_display",
+  "sline": 15907,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/scuseparent"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[666] 'slot conflict: three same-reason parents collapse '",
+  "wline": 2306,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_slot_conflict_groups_same_reason_parents_and_offers_verbose_conflicts",
+  "sline": 15937,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slotconfgroup"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[667] 'slot conflict: --color=y colours violated spans, m'",
+  "wline": 2307,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_slot_conflict_color_y_colours_violated_spans_with_aligned_markers",
+  "sline": 15986,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--color=y",
+   "dev-libs/slotconfgroup"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[668] 'slot conflict: USE reason keys, unconditional befo'",
+  "wline": 2308,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_slot_conflict_use_reason_keys_unconditional_before_violated",
+  "sline": 16026,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slotusegroup"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[671] 'slot conflict: different slots of the same package'",
+  "wline": 2311,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_different_slots_of_the_same_package_coexist_without_conflict",
+  "sline": 16080,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/multislotparent"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[811] 'in-slot request (:0, the installed slot) is not a '",
+  "wline": 2845,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_new_slot_install_renders_the_S_bracket_column",
+  "sline": 16127,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/newslotpkg:0"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[812] 'interactive bracket column: unconditional PROPERTI'",
+  "wline": 2850,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_interactive_bracket_column",
+  "sline": 16148,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/interactivemergepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[825] 'fetch-restrict column: RESTRICT=fetch, distfile pr'",
+  "wline": 2915,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_fetch_restrict_bracket_column",
+  "sline": 16181,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/fetchrestrictsatisfiedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[680] 'multi-atom: dependency shared between two targets '",
+  "wline": 2320,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_multiple_top_level_atoms_share_dedup_and_slot_conflict_machinery",
+  "sline": 16287,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/shared-a",
+   "dev-libs/shared-b"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[681] 'multi-atom: solvable slot conflict between two tar'",
+  "wline": 2321,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_multiple_top_level_atoms_reconcile_a_solvable_slot_conflict_between_targets",
+  "sline": 16309,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slotconflictnewconsumer",
+   "dev-libs/slotconflictoldconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[683] 'multi-atom: unsolvable slot conflict between two t'",
+  "wline": 2323,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_multiple_top_level_atoms_report_an_unsolvable_slot_conflict_between_targets",
+  "sline": 16332,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/slotconflictnewpin",
+   "dev-libs/slotconflictoldpin"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[679] 'multi-atom: literal duplicate atom dedupes silentl'",
+  "wline": 2319,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_multiple_top_level_atoms_dedupe_a_literal_duplicate",
+  "sline": 16374,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/newpkg",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[686] 'multi-atom: a later nonexistent atom still aborts '",
+  "wline": 2326,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_bad_top_level_atom_aborts_the_whole_run_in_argv_order",
+  "sline": 16403,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/newpkg",
+   "dev-libs/does-not-exist"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[221] 'blocker top-level atom: not a valid target'",
+  "wline": 549,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_blocker_top_level_atom_is_rejected_not_silently_dropped",
+  "sline": 16445,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "!!dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[16] 'an Upgrade shows only its changed USE flags at pla'",
+  "wline": 133,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_use_line_at_p_is_full_for_a_new_pkg_and_changed_only_for_a_reinstall",
+  "sline": 16487,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "dev-libs/upgradeusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[744] 'reinst_flags: -pv is unaffected -- it already show'",
+  "wline": 2476,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_reinst_flags_force_show_a_dropped_iuse_trigger_flag_at_plain_p",
+  "sline": 16535,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "--newuse",
+   "dev-libs/reinstdropiusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[699] '-v explicit disable via a following \"n\" token'",
+  "wline": 2339,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_verbose_consumes_an_explicit_y_or_n_value",
+  "sline": 16664,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "n",
+   "dev-libs/useflagpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[701] '--verbose=n inline form disables'",
+  "wline": 2341,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_verbose_inline_equals_form_consumes_y_or_n",
+  "sline": 16688,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--verbose=n",
+   "dev-libs/useflagpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[705] 'short-flag bundle -pA: pretend + unimplemented opt'",
+  "wline": 2345,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     2
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_short_flag_bundle_reports_the_first_out_of_scope_character",
+  "sline": 16724,
+  "strong_rc": [
+   [
+    "==",
+    2
+   ],
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "-pA",
+   "dev-libs/useflagpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[707] 'bundled -v never consumes a following token as its'",
+  "wline": 2347,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_bundled_verbose_never_consumes_the_next_token_as_its_value",
+  "sline": 16751,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "-pv",
+   "n"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[708] '--help is now implemented, not rejected'",
+  "wline": 2348,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_help_prints_a_pilot_specific_summary_not_portage_emerges_own",
+  "sline": 16766,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--help"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[721] 'a user-defined set given directly expands to its m'",
+  "wline": 2377,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_custom_set_as_a_top_level_target_expands_to_its_members",
+  "sline": 17004,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "@nestedtestset"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[723] '@selected expands to the world file (not @system, '",
+  "wline": 2379,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_selected_set_expands_the_same_as_world",
+  "sline": 17033,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "@selected"
+  ]
+ },
+ {
+  "kind": "weak-rc-not-checked-by-stronger",
+  "weak": "test_emerge_pretend_contract.py::test_prune_nodeps_pretend_nothing_outdated",
+  "wline": 18071,
+  "strong": "test_emerge_pretend_contract.py::test_prune_nodeps_ignores_the_unresolvable_dep",
+  "sline": 17757,
+  "argv": [
+   "--pretend",
+   "--prune",
+   "--nodeps"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[831] '-pC: a versioned atom, other version omitted'",
+  "wline": 2945,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unmerge_pretend_lists_selected_and_omitted",
+  "sline": 18162,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-C",
+   "=dev-libs/unmergepkg-1.0"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[834] '-pC sys-apps/portage: refused, nothing selected'",
+  "wline": 2960,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unmerge_pretend_refuses_portage_itself",
+  "sline": 18258,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-C",
+   "sys-apps/portage"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[838] \"-pC: the 'is part of your system profile' warning\"",
+  "wline": 2980,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unmerge_pretend_system_profile_warning",
+  "sline": 18288,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-C",
+   "dev-libs/systempkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[839] \"-pC: the 'still listed in package sets' warning\"",
+  "wline": 2985,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unmerge_pretend_still_listed_in_package_sets_warning",
+  "sline": 18305,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-C",
+   "dev-libs/nestedsetpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[840] '-pC lower slot: a higher-slot install covers the s'",
+  "wline": 2990,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unmerge_pretend_set_warning_higher_slot_refinement",
+  "sline": 18323,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-C",
+   "dev-libs/dualslotpkg:1"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[732] 'an unknown @set name is a real error'",
+  "wline": 2420,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unknown_set_name_as_a_top_level_atom_is_a_real_error",
+  "sline": 18734,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "@some-other-set"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[733] '--newuse reinstalls a package whose USE changed si'",
+  "wline": 2421,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_newuse_reinstalls_a_package_whose_use_changed",
+  "sline": 18747,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--newuse",
+   "dev-libs/reinstallpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[734] '--newuse short alias -N, bundled with -p'",
+  "wline": 2426,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_newuse_short_alias_bundled_with_pretend",
+  "sline": 18764,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "-pN",
+   "dev-libs/reinstallpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[736] \"--newuse is a no-op when USE hasn't changed\"",
+  "wline": 2436,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_newuse_is_a_noop_when_use_has_not_changed",
+  "sline": 18813,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--newuse",
+   "dev-libs/samepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[737] '--newuse forced_flags suppresses a spurious reinst'",
+  "wline": 2441,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_newuse_forced_flags_suppresses_a_spurious_reinstall",
+  "sline": 18825,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--newuse",
+   "dev-libs/usemaskreinstallpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[738] '--newuse reinstalls for a newly-added IUSE flag al'",
+  "wline": 2446,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag",
+  "sline": 18843,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--newuse",
+   "dev-libs/changedusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[740] '--changed-use short alias -U, bundled with -p'",
+  "wline": 2456,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_use_short_alias_bundled_with_pretend",
+  "sline": 18873,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "-pU",
+   "dev-libs/changedusepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[741] '--changed-use still catches an enablement change o'",
+  "wline": 2461,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_use_still_catches_an_enablement_change_on_a_shared_flag",
+  "sline": 18882,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-use",
+   "dev-libs/reinstallpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[779] '--changed-deps: reinstalls a package whose vdb-rec'",
+  "wline": 2680,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_deps_reinstalls_and_recurses_into_the_current_ebuilds_own_dependency",
+  "sline": 18900,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-deps",
+   "dev-libs/changeddepspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[782] '--changed-deps: a libc-only dependency change is i'",
+  "wline": 2695,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_deps_ignores_a_libc_only_dependency_change",
+  "sline": 18925,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-deps",
+   "dev-libs/libcnoisepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[783] '--changed-deps: an atom moved between two dep keys'",
+  "wline": 2700,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_deps_detects_an_atom_moved_between_two_dep_keys",
+  "sline": 18944,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-deps",
+   "dev-libs/movedkeydepspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[784] \"--changed-deps: a built := dep's resolved slot is \"",
+  "wline": 2705,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_deps_ignores_a_built_slot_operators_resolved_slot",
+  "sline": 18962,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-deps",
+   "dev-libs/slotopdepspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[787] '--changed-deps: a redundant-bracket difference is '",
+  "wline": 2720,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_deps_structured_comparison",
+  "sline": 18978,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-deps",
+   "dev-libs/redundantbracketdepspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[788] '--changed-deps: --json includes the changed_deps f'",
+  "wline": 2725,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_deps_json_includes_the_changed_deps_field",
+  "sline": 19010,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-deps",
+   "--json",
+   "dev-libs/changeddepspkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[793] '--changed-slot: reinstalls a package whose vdb-rec'",
+  "wline": 2750,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_slot_reinstalls_a_package_whose_vdb_slot_differs_from_the_current_ebuild",
+  "sline": 19041,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-slot",
+   "dev-libs/changedslotpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[797] '--changed-deps and --changed-slot combine in one r'",
+  "wline": 2770,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_deps_and_changed_slot_combine_in_one_reinstall_line",
+  "sline": 19085,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-deps",
+   "--changed-slot",
+   "dev-libs/changedslotpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[796] '--changed-slot: --json includes the changed_slot f'",
+  "wline": 2765,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_changed_slot_json_includes_the_changed_slot_field",
+  "sline": 19107,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--changed-slot",
+   "--json",
+   "dev-libs/changedslotpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[798] 'without --with-test-deps, a test?-gated dep is nev'",
+  "wline": 2780,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_without_with_test_deps_a_test_gated_dependency_is_never_pulled_in",
+  "sline": 19138,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/withtestdeppkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[799] \"--with-test-deps pulls in a top-level atom's own t\"",
+  "wline": 2785,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_with_test_deps_pulls_in_a_top_level_atoms_own_test_gated_dependency",
+  "sline": 19154,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--with-test-deps",
+   "dev-libs/withtestdeppkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[801] '--with-test-deps n explicitly disables it'",
+  "wline": 2795,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_with_test_deps_n_explicitly_disables_it",
+  "sline": 19174,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--with-test-deps",
+   "n",
+   "dev-libs/withtestdeppkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[802] '--with-test-deps does not apply beyond a top-level'",
+  "wline": 2800,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_with_test_deps_does_not_apply_beyond_a_top_level_atom",
+  "sline": 19187,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--with-test-deps",
+   "dev-libs/withtestdepconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[745] '--nodeps disables recursion into DEPEND/RDEPEND en'",
+  "wline": 2481,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_nodeps_disables_recursion_entirely",
+  "sline": 19206,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--nodeps",
+   "dev-libs/withdeps"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[746] '--nodeps short alias -O, bundled with -p'",
+  "wline": 2486,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_nodeps_short_alias_bundled_with_pretend",
+  "sline": 19220,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "-pO",
+   "dev-libs/withdeps"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[747] \"--nodeps still shows the top-level atom's own USE \"",
+  "wline": 2491,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_nodeps_still_shows_the_top_level_atoms_own_use_display",
+  "sline": 19229,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-O",
+   "-v",
+   "dev-libs/useflagpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[750] '--onlydeps on an already-installed top-level atom:'",
+  "wline": 2506,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_onlydeps_on_an_already_installed_atom_prints_nothing",
+  "sline": 19280,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--onlydeps",
+   "dev-libs/samepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[21] 'without --update, a bare top-level atom still offe'",
+  "wline": 158,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_without_update_a_bare_top_level_atom_still_offers_a_newer_version",
+  "sline": 19293,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/upgradepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[22] '--noreplace restores the real avoid_update shortcu'",
+  "wline": 163,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_noreplace_restores_the_portage_avoid_update_shortcut",
+  "sline": 19317,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--noreplace",
+   "dev-libs/upgradepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[45] '--update alone still lets a no-newer-version packa'",
+  "wline": 194,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_selective_n_cancels_selective_even_when_update_would_have_set_it",
+  "sline": 19331,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "dev-libs/samepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[48] '--update: upgrade available'",
+  "wline": 209,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_update_upgrades_to_the_newer_visible_version",
+  "sline": 19361,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "dev-libs/upgradepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[766] '--update without --deep leaves an installed depend'",
+  "wline": 2615,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_update_threads_through_dependency_recursion_not_just_top_level",
+  "sline": 19380,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "dev-libs/withdeps"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[182] 'package.provided: a matching dependency is silentl'",
+  "wline": 502,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_package_provided_drops_the_dep_and_warns_on_a_direct_target",
+  "sline": 19530,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/needsprovided"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[77] '--emptytree: the whole deep tree reinstalls'",
+  "wline": 258,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_emptytree_reinstalls_the_whole_deep_dependency_tree",
+  "sline": 19584,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "!=",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--emptytree",
+   "dev-libs/deeppkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[1] \"an unreachable installed consumer's version bound \"",
+  "wline": 55,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unreachable_installed_consumer_does_not_block_an_upgrade",
+  "sline": 19634,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "dev-libs/revdeptarget"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[1] \"an unreachable installed consumer's version bound \"",
+  "wline": 55,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_reachable_installed_consumer_holdable_pin_does_not_block_an_upgrade",
+  "sline": 19664,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "dev-libs/revdeptarget"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[2] \"an installed consumer's built slot-operator atom d\"",
+  "wline": 60,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_installed_consumers_built_slot_operator_atom_does_not_block_an_upgrade",
+  "sline": 19700,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "dev-libs/revdepslottarget"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[3] \"a package.mask'd dependency is disclosed with its \"",
+  "wline": 65,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_masked_dependency_is_disclosed_with_its_mask_reasons",
+  "sline": 19757,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/maskneedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[4] 'a keyword-masked dependency is disclosed with its '",
+  "wline": 70,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_keyword_masked_dependency_is_disclosed_with_its_mask_reasons",
+  "sline": 19783,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/kwneedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[11] 'an unreachable installed pin does not block a plai'",
+  "wline": 105,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unreachable_installed_pin_does_not_block_a_plain_update",
+  "sline": 19884,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "dev-libs/paired"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[5] 'an unreachable installed pin does not block an exp'",
+  "wline": 75,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unreachable_installed_pin_does_not_block_an_explicit_upgrade",
+  "sline": 19907,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "=dev-libs/paired-2.0"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[6] 'an unreachable installed pin does not block a hard'",
+  "wline": 80,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_unreachable_installed_pin_does_not_block_a_hard_dependency_requirement",
+  "sline": 19923,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/needer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[8] 'the same triangle, argv reversed, reports the same'",
+  "wline": 90,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_needer_othermod_triangle_reports_the_installed_instance_conflict",
+  "sline": 19942,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/othermod",
+   "dev-libs/needer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[10] 'the same solvable collision, argv reversed, stays '",
+  "wline": 100,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_solvable_installed_instance_collision_stays_silent",
+  "sline": 19994,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/needer",
+   "dev-libs/plainuser"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[7] 'the needer/othermod triangle reports the installed'",
+  "wline": 85,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_keeper_reachable_needer_triangle_reports_the_installed_instance_with_both_parents",
+  "sline": 20083,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/needer",
+   "dev-libs/othermod"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[51] '--deep: walks the whole already-installed chain'",
+  "wline": 212,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_reinstall_atoms_forces_one_deep_dependency_to_reinstall",
+  "sline": 20116,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--deep",
+   "dev-libs/deeppkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[89] '--rebuild-if-unbuilt: a build-dep upgrade rebuilds'",
+  "wline": 295,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_rebuild_if_star_rebuilds_an_installed_consumer_of_a_merged_build_dep",
+  "sline": 20156,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-u",
+   "--rebuild-if-unbuilt",
+   "dev-libs/rebuildtrigger"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[53] '--deep walk of an installed pkg evaluates flag?() '",
+  "wline": 214,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_deep_walk_evaluates_flag_deps_against_the_installed_vdb_use",
+  "sline": 20262,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "dev-libs/deepvdbuseconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[54] \"an installed parent's [flag=] dep is evaluated aga\"",
+  "wline": 215,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_deep_walk_evaluates_conditional_use_deps_against_the_installed_vdb_use",
+  "sline": 20286,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "dev-libs/deepusedepconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[55] 'the same shape resolves by rebuilding the child wi'",
+  "wline": 220,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_an_evaluated_conditional_use_dep_reaches_candidate_selection",
+  "sline": 20327,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "dev-libs/deepusedepbconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[56] 'a parent built with the flag on evaluates the same'",
+  "wline": 225,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_an_evaluated_conditional_use_dep_that_is_already_satisfied_moves_nothing",
+  "sline": 20345,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "dev-libs/deepusedepokconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[57] 'an unfixable evaluated dep of an installed parent '",
+  "wline": 230,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_an_unfixable_evaluated_dep_of_an_installed_parent_aborts_the_run",
+  "sline": 20362,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-D",
+   "dev-libs/deepusedepfconsumer"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[61] '--deep=-1 is a real, immediate parse error'",
+  "wline": 242,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     2
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_deep_rejects_a_negative_inline_value",
+  "sline": 20466,
+  "strong_rc": [
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--deep=-1",
+   "dev-libs/deeppkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[76] '--implicit-system-deps=n skips the @system-first m'",
+  "wline": 257,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_implicit_system_deps_n_skips_the_system_first_merge_order_bias",
+  "sline": 20650,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "--implicit-system-deps=n",
+   "@world"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[187] '--exclude: leaves an installed package alone despi'",
+  "wline": 507,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_exclude_leaves_an_already_installed_package_alone_even_with_update",
+  "sline": 20706,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "--exclude",
+   "dev-libs/upgradepkg",
+   "dev-libs/upgradepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[188] '-X short alias for --exclude'",
+  "wline": 508,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_exclude_short_alias_bundled_with_pretend",
+  "sline": 20736,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "-X",
+   "dev-libs/upgradepkg",
+   "dev-libs/upgradepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[190] '--exclude prevents a not-yet-installed package fro'",
+  "wline": 510,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_exclude_prevents_a_not_yet_installed_package_from_being_offered",
+  "sline": 20762,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--exclude",
+   "dev-libs/newpkg",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[189] '--exclude=ATOM inline form'",
+  "wline": 509,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_exclude_inline_equals_form_and_missing_argument",
+  "sline": 20846,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "--exclude=dev-libs/upgradepkg",
+   "dev-libs/upgradepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[193] '--json: new install'",
+  "wline": 513,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_is_not_a_portage_emerge_option",
+  "sline": 20883,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[193] '--json: new install'",
+  "wline": 513,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_provenance_is_all_null_when_nothing_special_was_needed",
+  "sline": 20968,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[196] '--json: upgrade includes from_version'",
+  "wline": 516,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_upgrade_includes_from_version",
+  "sline": 20900,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "--json",
+   "dev-libs/upgradepkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[201] '--json: provenance records a mask cancelled by a m'",
+  "wline": 521,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_provenance_records_mask_and_unmask_entries",
+  "sline": 20928,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/maskedandunmaskedpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[202] '--json: provenance records the package.accept_keyw'",
+  "wline": 526,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_provenance_records_the_keyword_entry_actually_needed",
+  "sline": 20948,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/wildcardkeywordpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[194] '--json: with --verbose, includes use_flags'",
+  "wline": 514,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_verbose_includes_use_flags",
+  "sline": 20998,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "--json",
+   "dev-libs/useflagpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[199] '--json: unsolvable slot conflict reported (#62: rc'",
+  "wline": 519,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_includes_slot_conflicts",
+  "sline": 21080,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/slotconflictunsolvable"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[198] '--json: solvable slot conflict reconciled'",
+  "wline": 518,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_json_solvable_slot_conflict_is_reconciled_to_no_conflict",
+  "sline": 21094,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--json",
+   "dev-libs/slotconflictparent"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[674] 'virtual: resolved directly'",
+  "wline": 2314,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_virtual_is_resolved_directly",
+  "sline": 21108,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "virtual/texteditor"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[675] 'virtual: resolved as a dependency'",
+  "wline": 2315,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_virtual_is_resolved_as_a_dependency",
+  "sline": 21126,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/virtualconsumerpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[266] 'real emerge option, value-taking, not implemented'",
+  "wline": 659,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     2
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_portage_option_not_implemented_message_names_the_option",
+  "sline": 21187,
+  "strong_rc": [
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "--accept-properties",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[268] 'real emerge option, inline =value form, not implem'",
+  "wline": 661,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     2
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_portage_option_inline_equals_form_is_still_recognized",
+  "sline": 21203,
+  "strong_rc": [
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "--accept-properties=*",
+   "--pretend",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[687] '--misspell-suggestions: a near-miss package name g'",
+  "wline": 2327,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_misspell_suggestions_for_a_missing_package_name",
+  "sline": 21334,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/newpgk"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[612] 'bare name + version, ambiguous: still rejected aft'",
+  "wline": 2168,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_bare_command_line_name_with_version_or_slot_is_category_qualified",
+  "sline": 21381,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "ambigpkg-1.0"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[606] 'bare name: ambiguous across two categories is reje'",
+  "wline": 2162,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_bare_name_ambiguous_across_categories_is_rejected",
+  "sline": 21430,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "ambigpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[607] \"bare name: no match reports 'no ebuilds to satisfy\"",
+  "wline": 2163,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_bare_name_with_no_match_reports_no_ebuilds",
+  "sline": 21466,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "nosuchpkgname"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[269] 'genuinely unrecognized option'",
+  "wline": 666,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     2
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_genuinely_unrecognized_option_gets_a_distinct_message",
+  "sline": 22389,
+  "strong_rc": [
+   [
+    "==",
+    2
+   ]
+  ],
+  "argv": [
+   "--totally-fake-option",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[115] '--deep no longer suppresses the auto-enabled pass:'",
+  "wline": 431,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_slotop_undo_cascade",
+  "sline": 27065,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "--deep",
+   "@world"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[287] 'tree: backtrack-abandoned parents display under th'",
+  "wline": 710,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_tree_mg2top_nests_backtrack_parents_under_the_earliest_puller",
+  "sline": 22914,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--tree",
+   "dev-libs/mg2top"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[636] \"blocker: an unwalked installed owner's merge-bound\"",
+  "wline": 2240,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_77_nomerge_owner_removal_row",
+  "sline": 25695,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "=dev-libs/nomtarget-1.5"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[637] 'blocker: installed metadata comes from the vdb-rec'",
+  "wline": 2245,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_86_installed_metadata_comes_from_the_recorded_repo",
+  "sline": 25882,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "=dev-libs/tworepotarget-1.5"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[638] 'blocker: a satisfied replacement waits through the'",
+  "wline": 2250,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_76_wait_follows_the_selected_disjunctive_branch",
+  "sline": 25913,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "=dev-libs/disjtarget-2.0"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[640] 'blocker: a tree-only satisfied row from the stuck '",
+  "wline": 2260,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_81_tree_only_satisfied_row_from_the_stuck_serializer",
+  "sline": 25963,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--tree",
+   "--update",
+   "dev-libs/p2btarget",
+   "dev-libs/p2bowner",
+   "dev-libs/newpkg"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[639] 'blocker: the same wait through an RDEPEND || branc'",
+  "wline": 2255,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_87_rdepend_disjunctive_wait_is_default_bed_covered",
+  "sline": 26084,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "=dev-libs/rdisjtarget-2.0"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[644] 'tree: the same shape flat, for the merge-order com'",
+  "wline": 2280,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_85_unqualified_atom_collapses_onto_the_slot_qualified_target",
+  "sline": 26212,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "dev-libs/treeslotuser"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[12] 'an unreachable runtime-key pin merges with uninsta'",
+  "wline": 110,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_oracle_91_unreachable_runtime_pin_merges_with_uninstall",
+  "sline": 27108,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "--oneshot",
+   "dev-libs/whpuller"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[381] 'use-conditional: a USE-conditional-only || group t'",
+  "wline": 1180,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_group_emptied_by_use_conditionals_fails_at_eapi7",
+  "sline": 27567,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/condanyof"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[319] 'or-pick: in-graph || self branch re-resolves to bo'",
+  "wline": 870,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_pick_in_graph_self_branch_resolves_to_bootstrap",
+  "sline": 27606,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "app-misc/g216top"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[321] 'or-pick: in-graph || self branch --backtrack=0 rep'",
+  "wline": 880,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_pick_backtrack0_reports_the_self_cycle",
+  "sline": 27654,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--backtrack=0",
+   "app-misc/g216top"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[320] 'or-pick: in-graph || self branch re-resolves to bo'",
+  "wline": 875,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_pick_direct_target_resolves_to_bootstrap",
+  "sline": 27694,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-lang/g216comp"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[322] 'or-pick: in-graph || self branch --backtrack=0 rep'",
+  "wline": 885,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_or_pick_direct_target_backtrack0_reports_the_self_cycle",
+  "sline": 27735,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--backtrack=0",
+   "dev-lang/g216comp"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[859] \"#236 B: an ebuild parent's same-cp version range c\"",
+  "wline": 3087,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_236_minimize_children_collapses_an_ebuild_parents_version_range",
+  "sline": 27847,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-libs/libgit2-glib"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[858] \"#249: a virtual's || choice is demoted through its\"",
+  "wline": 3082,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_249_virtual_or_choice_uses_the_pullers_circular_record",
+  "sline": 28369,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ],
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "dev-util/u249make"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[167] '-pvuD: an installed soft-block stays unresolved (p'",
+  "wline": 487,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_pg34_snew_default_pvud_keeps_soft_block_unresolved",
+  "sline": 31306,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "-v",
+   "--update",
+   "--deep",
+   "dev-libs/pg34-snew"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[862] '#375: --update-if-installed skips a package that i'",
+  "wline": 3094,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_update_if_installed_skips_uninstalled_arguments",
+  "sline": 31917,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "-pvD",
+   "--update-if-installed",
+   "dev-libs/pg367-top"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[864] '#396: --usepkgonly=n drops the ebuild database (a '",
+  "wline": 3096,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     1
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_usepkgonly_n_drops_the_ebuild_database",
+  "sline": 31939,
+  "strong_rc": [
+   [
+    "==",
+    1
+   ],
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "-pv",
+   "--usepkgonly=n",
+   "dev-libs/pg367-top"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[868] '#392: a new-slot row diffs USE against the install'",
+  "wline": 3100,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_new_slot_row_has_no_use_string_without_verbose",
+  "sline": 31962,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "dev-libs/unsatuseslotalt"
+  ]
+ },
+ {
+  "kind": "rc-implied",
+  "weak": "CASES[867] '#393: --update --package-moves=n keeps an installe'",
+  "wline": 3099,
+  "weak_claims": [
+   [
+    "rc",
+    [
+     "==",
+     0
+    ]
+   ]
+  ],
+  "strong": "test_emerge_pretend_contract.py::test_update_package_moves_n_keeps_same_version_in_other_slot",
+  "sline": 31981,
+  "strong_rc": [
+   [
+    "==",
+    0
+   ]
+  ],
+  "argv": [
+   "--pretend",
+   "--update",
+   "--package-moves=n",
+   "dev-libs/slotmovepkg"
+  ]
+ }
+]

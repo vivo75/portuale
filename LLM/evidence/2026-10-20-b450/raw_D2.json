@@ -1,0 +1,556 @@
+[
+ {
+  "loc": "test_emerge_pretend_contract.py:3278 test_debug_resolver_trace_stage1_digraph_dump",
+  "rc_check": true,
+  "unpinned_runs": [],
+  "cmp": [
+   "[l for l in rust.stdout.splitlines() if l.startswith('[ebuild')] == plain.stdout.splitline"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:3672 test_root_deps_recursive_build_entry_pinned_output",
+  "rc_check": true,
+  "unpinned_runs": [],
+  "cmp": [
+   "rust_with.stdout == rust_without.stdout"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:4706 test_abort_path_gate_off_restores_legacy_exit_code",
+  "rc_check": true,
+  "unpinned_runs": [
+   "rust_on"
+  ],
+  "cmp": [
+   "rust_on.stderr == rust_off.stderr"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:9233 test_autounmask_flip_revealed_disjunction_defers_to_the_drained_graph",
+  "rc_check": true,
+  "unpinned_runs": [],
+  "cmp": [
+   "rust_ab.stdout.splitlines() == rust.stdout.splitlines()"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:10166 test_autounmask_continue_and_backtrack_are_inert_without_autounmask_changes",
+  "rc_check": true,
+  "unpinned_runs": [
+   "base",
+   "r"
+  ],
+  "cmp": [
+   "warn.stdout == base.stdout",
+   "r.stdout == base.stdout"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:10202 test_autounmask_only_reshows_the_merge_list",
+  "rc_check": true,
+  "unpinned_runs": [
+   "full",
+   "plain",
+   "use_full"
+  ],
+  "cmp": [
+   "full.stdout == rust.stdout",
+   "full.stderr == rust.stderr"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:11038 test_useoldpkg_atoms_prefers_the_old_binary_over_a_newer_ebuild",
+  "rc_check": false,
+  "unpinned_runs": [
+   "inert"
+  ],
+  "cmp": [
+   "inert.stdout == default.stdout"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:11634 test_emerge_default_opts_env_applies_and_argv_wins",
+  "rc_check": true,
+  "unpinned_runs": [
+   "defaulted",
+   "explicit"
+  ],
+  "cmp": [
+   "defaulted.stdout == explicit.stdout",
+   "defaulted.stderr == explicit.stderr"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:11665 test_emerge_default_opts_from_a_sourced_make_conf",
+  "rc_check": true,
+  "unpinned_runs": [
+   "explicit",
+   "sourced"
+  ],
+  "cmp": [
+   "sourced.stdout == explicit.stdout",
+   "sourced.stderr == explicit.stderr"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:15687 test_solver_portage_matches_the_default_resolution",
+  "rc_check": true,
+  "unpinned_runs": [
+   "flagged_rust",
+   "plain_rust"
+  ],
+  "cmp": [
+   "flagged_rust.stdout == plain_rust.stdout",
+   "flagged_rust.stderr == plain_rust.stderr"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:17033 test_selected_set_expands_the_same_as_world",
+  "rc_check": true,
+  "unpinned_runs": [
+   "a",
+   "b"
+  ],
+  "cmp": [
+   "a.stdout == b.stdout"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:20397 test_complete_graph_does_not_merge_a_missing_deep_dep_of_an_installed_pkg",
+  "rc_check": false,
+  "unpinned_runs": [
+   "off"
+  ],
+  "cmp": [
+   "cg.stdout == plain.stdout",
+   "off.stdout == plain.stdout"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:20427 test_complete_graph_if_new_ver_auto_enables_on_an_upgrade",
+  "rc_check": false,
+  "unpinned_runs": [
+   "off"
+  ],
+  "cmp": [
+   "off.stdout == auto.stdout"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:29691 test_pubgrub_abort_prints_the_walks_partial_list",
+  "rc_check": true,
+  "unpinned_runs": [
+   "default",
+   "pubgrub"
+  ],
+  "cmp": [
+   "pubgrub.stdout == default.stdout",
+   "pubgrub.stderr == default.stderr"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:32139 test_pubgrub_aborts_like_the_default_solver",
+  "rc_check": true,
+  "unpinned_runs": [
+   "default",
+   "pubgrub"
+  ],
+  "cmp": [
+   "pubgrub.stderr == default.stderr",
+   "pubgrub.stdout == default.stdout"
+  ]
+ },
+ {
+  "loc": "test_emerge_pretend_contract.py:32319 test_pubgrub_bounded_deep_matches_the_default_solver",
+  "rc_check": true,
+  "unpinned_runs": [
+   "pubgrub"
+  ],
+  "cmp": [
+   "default.stdout == pubgrub.stdout"
+  ]
+ },
+ {
+  "loc": "test_portuale.py:177 test_mrg_runs_the_emerge_codepath",
+  "rc_check": true,
+  "unpinned_runs": [
+   "emerge"
+  ],
+  "cmp": [
+   "mrg.stdout == emerge.stdout"
+  ]
+ },
+ {
+  "loc": "test_portuale.py:213 test_mrg_forwards_rebuild_and_usepkg_exclude",
+  "rc_check": true,
+  "unpinned_runs": [
+   "emerge"
+  ],
+  "cmp": [
+   "mrg.stdout == emerge.stdout"
+  ]
+ },
+ {
+  "loc": "test_portuale.py:248 test_mrg_solver_selects_the_resolution_backend",
+  "rc_check": true,
+  "unpinned_runs": [
+   "bad",
+   "emerge"
+  ],
+  "cmp": [
+   "mrg.stdout == emerge.stdout"
+  ]
+ },
+ {
+  "loc": "test_portuale.py:309 test_solver_backends_report_engine_native_conflicts",
+  "rc_check": true,
+  "unpinned_runs": [
+   "portage"
+  ],
+  "cmp": [
+   "pubgrub.stdout == portage.stdout",
+   "pubgrub.stderr == portage.stderr"
+  ]
+ },
+ {
+  "loc": "test_portuale.py:354 test_solver_backends_report_matched_blockers",
+  "rc_check": true,
+  "unpinned_runs": [
+   "portage_err",
+   "portage_graph"
+  ],
+  "cmp": [
+   "pubgrub_graph.stdout == portage_graph.stdout",
+   "result.stdout == portage_err.stdout"
+  ]
+ },
+ {
+  "loc": "test_portuale.py:454 test_solver_backends_schedule_stale_equals_consumer_reinstalls",
+  "rc_check": true,
+  "unpinned_runs": [
+   "portage",
+   "resolvo"
+  ],
+  "cmp": [
+   "pubgrub.stdout == portage.stdout"
+  ]
+ },
+ {
+  "loc": "test_portuale.py:3047 test_cache_less_repo_metadata_falls_back_to_the_depend_phase",
+  "rc_check": true,
+  "unpinned_runs": [
+   "again"
+  ],
+  "cmp": [
+   "again.stdout == result.stdout"
+  ]
+ },
+ {
+  "loc": "test_portuale.py:3638 test_emerge_regen_jobs_parallel_matches_serial_cache_bytes",
+  "rc_check": true,
+  "unpinned_runs": [
+   "parallel",
+   "zero"
+  ],
+  "cmp": [
+   "parallel.stdout == serial.stdout",
+   "zero.stdout == serial.stdout"
+  ]
+ },
+ {
+  "loc": "test_portuale.py:3725 test_emerge_regen_skips_the_depend_phase_when_the_cache_entry_is_valid",
+  "rc_check": true,
+  "unpinned_runs": [
+   "first",
+   "fourth",
+   "second",
+   "third"
+  ],
+  "cmp": [
+   "second.stdout == first.stdout"
+  ]
+ },
+ {
+  "loc": "test_atom_contract.py:120 test_parse_modes_match_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_result",
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_atom_contract.py:174 test_oracle_battery_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_result",
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_atom_contract.py:184 test_parse_valid_atom_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_atom_contract.py:194 test_parse_invalid_atom_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_atom_contract.py:342 test_match_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_result",
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_atom_contract.py:401 test_affecting_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_result",
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_atom_contract.py:409 test_match_of_invalid_atom_is_invalid_in_both",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_atom_contract.py:422 test_batch_mode_output_matches",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_out",
+   "rust_out"
+  ],
+  "cmp": [
+   "rust_out == python_out"
+  ]
+ },
+ {
+  "loc": "test_required_use_contract.py:114 test_check_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_required_use_contract.py:124 test_check_error_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_required_use_contract.py:134 test_reduce_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_required_use_contract.py:143 test_batch_mode_output_matches",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_out",
+   "rust_out"
+  ],
+  "cmp": [
+   "rust_out == python_out"
+  ]
+ },
+ {
+  "loc": "test_use_reduce_contract.py:60 test_reduce_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_use_reduce_contract.py:70 test_reduce_error_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_use_reduce_contract.py:125 test_validate_matches_portage_with_pinned_text",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_result",
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_use_reduce_contract.py:139 test_batch_mode_output_matches",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_out",
+   "rust_out"
+  ],
+  "cmp": [
+   "rust_out == python_out"
+  ]
+ },
+ {
+  "loc": "test_versions_contract.py:84 test_vercmp_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_result",
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_versions_contract.py:93 test_ververify_valid_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_versions_contract.py:103 test_ververify_invalid_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_versions_contract.py:113 test_vercmp_of_invalid_version_is_none_in_both",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_versions_contract.py:122 test_batch_mode_output_matches",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_out",
+   "rust_out"
+  ],
+  "cmp": [
+   "rust_out == python_out"
+  ]
+ },
+ {
+  "loc": "test_cached_harness.py:86 test_hit_replays_rc_stdout_stderr_without_running",
+  "rc_check": false,
+  "unpinned_runs": [
+   "first",
+   "second"
+  ],
+  "cmp": [
+   "first == second"
+  ]
+ },
+ {
+  "loc": "test_cached_harness.py:153 test_nonzero_exit_replays_identically",
+  "rc_check": false,
+  "unpinned_runs": [
+   "first",
+   "second"
+  ],
+  "cmp": [
+   "first == second"
+  ]
+ },
+ {
+  "loc": "test_required_use_contract.py:114 test_check_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_required_use_contract.py:124 test_check_error_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_required_use_contract.py:134 test_reduce_matches_between_implementations",
+  "rc_check": false,
+  "unpinned_runs": [
+   "rust_result"
+  ],
+  "cmp": [
+   "rust_result == python_result"
+  ]
+ },
+ {
+  "loc": "test_required_use_contract.py:143 test_batch_mode_output_matches",
+  "rc_check": false,
+  "unpinned_runs": [
+   "python_out",
+   "rust_out"
+  ],
+  "cmp": [
+   "rust_out == python_out"
+  ]
+ }
+]
