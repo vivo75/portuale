@@ -218,7 +218,15 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
     let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &mergelist, &opts);
 
-    println!(">>> Resuming merge of {} package(s)...", entries.len());
+    // Portage re-resolves the saved list (`resume_depgraph`) and then
+    // `Scheduler.merge` prints the banner, ahead of the interactive-task
+    // notice below.
+    // Portage: _emerge/actions.py, Scheduler.py (merge, `*** Resuming merge...`)
+    if super::gates::resolution_notice_shown(quiet, emerge_opts.nodeps) {
+        println!("Calculating dependencies ... done!");
+        println!("Dependency resolution took .\n");
+    }
+    println!("{}", color.c("GOOD", "*** Resuming merge..."));
     let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);
     // Real `preinst_mask()`: config-resolved `INSTALL_MASK` + the
     // `no{man,info,doc}` `FEATURES` fold (the env read `from_env` did is
