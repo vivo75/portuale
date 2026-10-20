@@ -232,6 +232,11 @@ pub(crate) fn merge_one_built_entry(args: MergeOneBuiltEntryArgs<'_>) -> Result<
         })?;
     }
     // The `Completed (N of M) cpv::repo` line.
+    if let Some(record) = &per_entry.world_recorder {
+        for line in record(entry) {
+            display.status(&line);
+        }
+    }
     display.status(&completed_line(entry, &version, progress, root, &color));
     Ok(())
 }
@@ -344,6 +349,9 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
         root,
         source_paths: &source_paths,
         features: resolved_features(options),
+        quiet: options.quiet,
+        background: display.mode.background,
+        quiet_fail: options.quiet_fail,
     };
     // One registry for this call only, shared with the worker threads it
     // spawns (never process-wide, so another test thread's subprocess is
@@ -485,7 +493,7 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
     // dropped with a notice.
     // Portage: Scheduler.py, _merge (resume loop), _calc_resume_list
     if keep_going && !skip.is_empty() {
-        ledger.resuming();
+        ledger.resuming(report.quiet);
         let mut dropped: Vec<usize> = skip
             .iter()
             .copied()

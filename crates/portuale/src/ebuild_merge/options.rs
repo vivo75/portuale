@@ -76,6 +76,14 @@ pub struct MergeOptions {
     /// Portage: vartree.py, `dblink._display_merge` (foreground
     /// scheduler vs background task).
     pub direct: bool,
+    /// Records one just-merged package in `world` (prints `>>> Recording ...`
+    /// between `Installing` and `Completed`); `None` outside `emerge` runs.
+    /// Portage: Scheduler.py, `_world_atom` (via `PackageMerge._install_exit`)
+    pub world_recorder: Option<crate::pretend::WorldRecorder>,
+    /// `--quiet`: the resume re-plan prints no `Calculating dependencies` notice.
+    pub quiet: bool,
+    /// `--quiet-fail`: no whole-log dump after a lone background failure.
+    pub quiet_fail: bool,
 }
 
 impl Default for MergeOptions {
@@ -106,6 +114,9 @@ impl Default for MergeOptions {
             features: String::new(),
             process_tmpdir: None,
             direct: false,
+            world_recorder: None,
+            quiet: false,
+            quiet_fail: false,
         }
     }
 }
@@ -173,6 +184,9 @@ impl MergeOptions {
             features: std::env::var("FEATURES").unwrap_or_default(),
             process_tmpdir: std::env::var_os("PORTAGE_TMPDIR").map(PathBuf::from),
             direct: false,
+            world_recorder: None,
+            quiet: false,
+            quiet_fail: false,
         }
     }
 }

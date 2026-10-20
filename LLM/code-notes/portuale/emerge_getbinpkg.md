@@ -99,8 +99,17 @@
 ## fn local_index_record
 - The `<pkgdir>/Packages` index record vouching for a local binpkg merge (Portage `bintree._get_digests`' own index read, backlog #174): the stanza whose `CPV` is `<category>/<package>-<version>`. With several (multi-instance `BUILD_ID`s), the `BUILD_ID` picks -- else the stanza whose `PATH` basename is the located file's own name, so a moved file still verifies against its own record. `None` when no stanza vouches (the file was synthesized at scan from its own bytes). A record without `SIZE` still returns here -- Portage's "verifies nothing without one" (`BinpkgVerifier._start`'s early OK) lives in `verify_binpkg_against_index`, not in the lookup.
 
+## fn checksum_filter_from_config
+- Reads `PORTAGE_CHECKSUM_FILTER` from the process env first, then `config.other_vars` (backlog #436d).
+
+## fn apply_checksum_filter
+- Ports `portage.checksum._hash_filter` + `_apply_hash_filter`: filters the uppercase hash names against `PORTAGE_CHECKSUM_FILTER`, always preserving at least one hash (backlog #436d).
+
+## fn verified_digest_names_filtered
+- Ports `BinpkgVerifier._start` / `_display_success`: uppercase hash names present in the index record (filtered by `PORTAGE_CHECKSUM_FILTER`) plus `size`, ASCII-sorted (`MD5 SHA1 size`); `None` without a parseable `SIZE` (backlog #428, #436d).
+
 ## fn download_and_verify
-- Portage `bintree.gettbz2` / `_get_digests` + `digestCheck`: the `Packages` record's `MD5`/`SHA1` fields are the md5/sha1 of the whole `.tbz2`, and Portage verifies every digest present. Same here -- each present field is checked; a mismatch removes the file and fails.
+- Portage `bintree.gettbz2` / `_get_digests` + `digestCheck`: uses per-binrepo `fetchcommand`/`resumecommand` when set in `binrepos.conf` (backlog #436a), else `FETCHCOMMAND`/`RESUMECOMMAND` from config (backlog #428); the `Packages` record's `MD5`/`SHA1` fields surviving `PORTAGE_CHECKSUM_FILTER` (backlog #436d) are verified against the downloaded file, and a mismatch removes the file and fails.
 
 ## fn failed_pkg_msg
 - Ports Portage `Scheduler._failed_pkg_msg(pkg, "emerge", "for")` (`Scheduler.py:2366-2381`, backlog #174): each `_status_msg` emits its own leading blank line, then `>>> <msg>`; the log line carries Portage's own leading space (`f" '{log}'"`). Each `_status_msg` writes its own leading blank line first (`writemsg_level("\n")` before `displayMessage`), and the `>>> ` prefix is `JobStatusDisplay._format_msg`; the ` for <root>` suffix appears when `ROOT != "/"` (Portage `pkg.root_config.settings["ROOT"]`).
@@ -148,7 +157,7 @@
 - `merge_one_binary_entry_never_refetches_for_a_non_remote_entry`: the `file://` binhost serves a genuine fixture binary, so pre-fix code downloads it into `$PKGDIR` and merges successfully -- post-fix the pkgdir stays empty and the error names the local dir. Never portuale's old `no binpkg file under ...` text; nothing may be downloaded into `$PKGDIR`.
 
 ## fn binrepo_download_dir
-Backlog #428. Portage `BinRepoConfigLoader` gives a `location`-less binrepo `<EPREFIX>/var/cache/binhost/<name>` only when `PORTAGE_BINHOST` is unset (config.py:157-162); this port roots it at `ROOT` (a hermetic test root must not write to the host) -- see #436(b). Both `merge_one_binary_entry` and fetch-only use it, so the two paths agree. `Binpkg._verifier_exit` only renames `.partial` there, and no `Packages` index is written into a `location` other than `$PKGDIR` (b428 captures).
+Backlog #428. Portage `BinRepoConfigLoader` gives a `location`-less binrepo `<EPREFIX>/var/cache/binhost/<name>` only when `PORTAGE_BINHOST` is unset (config.py:157-162); this port does the same, with `EPREFIX` = `PORTAGE_OVERRIDE_EPREFIX` (else empty, so `ROOT` plays no part; tests set the override to their root so they never write to the host) -- #436(b). Both `merge_one_binary_entry` and fetch-only use it, so the two paths agree. `Binpkg._verifier_exit` only renames `.partial` there, and no `Packages` index is written into a `location` other than `$PKGDIR` (b428 captures).
 
 ## fn verified_digest_names
 Backlog #428. `bintree._get_digests` keys checksums uppercase and `size` lowercase; `BinpkgVerifier._display_success` prints `sorted(digests)`, so `MD5 SHA1 size`. Nothing is verified or printed without a parseable `SIZE` (`BinpkgVerifier._start`).

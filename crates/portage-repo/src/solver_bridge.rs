@@ -19,13 +19,17 @@
 //!   line of engine-native text, not a Portage notice. Since S9 the pubgrub
 //!   path replays the walk's abort predicates read-only over the solved plan,
 //!   so `autounmask_use_changes` and the miss disclosures can fill.
+//! - When the solver fails and the default walk fails too, `PubGrubResolver`
+//!   returns the walk's own report (partial merge list, notices, exit), since
+//!   a solver stops at one failing branch where Portage prints all it walked
+//!   (backlog #434).
 //! - Merge order is the walk's own `topological_merge_order`; engine install
 //!   order only seeds positions.
 //! - Unparsable dep-string classes feed empty deps; unparsable versions and
 //!   top-level blocker atoms are skipped.
 //! - Binary candidates (`--usepkg`) are not offered; `--deep=N` bounds kept
 //!   expansion through a pre-solve BFS allowlist (the engine cannot carry
-//!   depth); no `_greedy_slots` blocker lookahead (backlog #368).
+//!   depth).
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1212,7 +1216,7 @@ fn target_slots(
     let (top_slot, top) = (top_slot.to_string(), top.clone());
     let pairs: Vec<(&str, &portage_solver::Version)> = best.iter().map(|(s, v)| (*s, v)).collect();
     // The slot filter is shared with the default solver's greedy expansion.
-    super::greedy_slots_below_best(
+    let mut slots = super::greedy_slots_below_best(
         super::GreedySlotsBelowBestArgs {
             top_slot: &top_slot,
             top: &top,
@@ -1221,7 +1225,56 @@ fn target_slots(
             update,
         },
         |a, b| a < b,
-    )
+    );
+    if slots.len() > 1 {
+        slots = greedy_blocker_lookahead(lazy, cp, versions, &loaded, slots);
+    }
+    slots
+}
+
+/// The second `_greedy_slots` pass: drop an added slot whose best package and
+/// the overall best block each other, then the lower of mutually blocking
+/// added slots. `slots` is the top slot first; the shared default-solver
+/// revision runs over each slot's best loaded candidate.
+// Portage: depgraph.py, _greedy_slots (blocker_lookahead=True)
+fn greedy_blocker_lookahead(
+    lazy: &LazyRepo,
+    cp: &str,
+    versions: &portage_atom_pubgrub::PortageVersionSet,
+    loaded: &[LoadedVersion],
+    slots: Vec<String>,
+) -> Vec<String> {
+    let Some((category, package)) = cp.split_once('/') else {
+        return slots;
+    };
+    let Ok(candidates) = list_candidates(&lazy.repos, category, package) else {
+        return slots;
+    };
+    let visible: HashSet<(&str, &str)> = loaded
+        .iter()
+        .map(|v| (v.slot.as_str(), v.version.as_str()))
+        .collect();
+    let best_in = |slot: &str| -> Option<&Candidate> {
+        candidates
+            .iter()
+            .filter(|c| c.slot == slot && visible.contains(&(c.slot.as_str(), c.version.as_str())))
+            .filter(|c| {
+                portage_solver::Version::parse(&c.version)
+                    .is_ok_and(|version| versions.contains(&version))
+            })
+            .max_by(|a, b| super::vercmp_ordering(&a.version, &b.version))
+    };
+    let Some(top) = best_in(&slots[0]) else {
+        return slots;
+    };
+    let per_slot_best: Vec<(String, &Candidate)> = slots[1..]
+        .iter()
+        .filter_map(|slot| best_in(slot).map(|c| (slot.clone(), c)))
+        .collect();
+    let key = (category.to_string(), package.to_string());
+    let kept =
+        super::greedy_lookahead(&lazy.config, &key, top, slots[1..].to_vec(), &per_slot_best);
+    std::iter::once(slots[0].clone()).chain(kept).collect()
 }
 
 /// Root-target slots for one request atom: a named `:slot` pins one, else S1's
@@ -3400,8 +3453,41 @@ pub struct PubGrubResolver;
 
 impl PortualeResolver for PubGrubResolver {
     fn resolve(&self, req: &ResolveRequest) -> Result<GraphResult, super::Error> {
-        resolve_pubgrub(req).map_err(super::Error::Detail)
+        let result = match resolve_pubgrub(req) {
+            Ok(result) if !reports_failure(&result) => return Ok(result),
+            Ok(result) => result,
+            // The engine found no solution: the walk's report replaces the
+            // engine-native text when the walk fails too.
+            Err(detail) => {
+                return match super::backtracking_resolve(req) {
+                    Ok(walk) if !reports_failure(&walk) => Err(super::Error::Detail(detail)),
+                    walk => walk,
+                };
+            }
+        };
+        // Both solvers fail: Portage prints every package it walked before the
+        // failure, which the solver's single failing branch cannot reproduce, so
+        // the walk's own report (rows, notices, exit) stands in for it. A failure
+        // only the solver reaches keeps the solver's report.
+        // Portage: depgraph.py, _create_graph (partial merge list on failure)
+        match super::backtracking_resolve(req) {
+            Ok(walk) if !reports_failure(&walk) => Ok(result),
+            walk => walk,
+        }
     }
+}
+
+/// Whether the settled result ends the run with a failure report (an abort, a
+/// circular dependency, a disclosed miss, an autounmask gate or a slot conflict).
+fn reports_failure(result: &GraphResult) -> bool {
+    matches!(result.outcome, super::ResolveOutcome::Aborted { .. })
+        || !result.circular_deps.is_empty()
+        || !result.virtual_cycle.is_empty()
+        || !result.masked_deps.is_empty()
+        || !result.use_unsat_deps.is_empty()
+        || !result.plain_miss_deps.is_empty()
+        || !result.autounmask_use_changes.is_empty()
+        || !result.slot_conflicts.is_empty()
 }
 
 /// Facts over a [`LazyRepo`]: answers from memoized per-CPN loads, so the
@@ -4167,9 +4253,10 @@ fn bridge_validate_aborts(
                 }
                 // The parent's own flip (`_apply_parent_use_changes`): with
                 // `--autounmask-backtrack` off the change is recorded and the run
-                // fails on the dependency, no merge rows.
+                // fails on the dependency, no merge rows. `--autounmask-backtrack=y`
+                // does the same: `_apply_parent_use_changes` only turns the failed
+                // dependency's suggestions into changes, it never restarts.
                 if req.autounmask_suggest_use
-                    && !req.config.autounmask_backtrack
                     && let Some(flip) = parent_flip_rescue(ParentFlipRescueArgs {
                         req,
                         lazy,
@@ -9155,6 +9242,27 @@ mod tests {
             "the tied installed slot never rejoins: {slots:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The blocker lookahead drops the installed slot whose best package is
+    /// blocked by the overall best: `gsblk-2` blocks `:1`, so only `:2` is
+    /// selected under `--update` (Portage `_greedy_slots`, second pass).
+    #[test]
+    fn target_slots_drops_a_greedy_slot_the_best_blocks() {
+        let req = fixture_request(&["dev-libs/pg359-gsblk"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let slots = super::target_slots(
+            &lazy,
+            "dev-libs/pg359-gsblk",
+            &portage_atom_pubgrub::PortageVersionSet::any(),
+            &["1".to_string()],
+            true,
+        );
+        assert_eq!(slots, vec!["2".to_string()], "{slots:?}");
     }
 
     /// `target_slots` takes each slot's own maximum: with slot 1 peaking

@@ -256,7 +256,7 @@ struct GreedyBest<'a> {
 
 /// Blocker-lookahead revision over the expanded slots.
 // Portage: _emerge/depgraph.py, _greedy_slots (blocker_lookahead=True)
-fn greedy_lookahead(
+pub(crate) fn greedy_lookahead(
     config: &portage_profile::Config,
     key: &(String, String),
     top: &Candidate,

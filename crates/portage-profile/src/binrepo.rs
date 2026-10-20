@@ -2,10 +2,9 @@
 
 use crate::*;
 
-/// One `--getbinpkg` binary-package repository (only what `--pretend`
-/// resolution needs; no fetch or download-gating config).
+/// One `--getbinpkg` binary-package repository.
 // Portage: binrepo/config.py, BinRepoConfig
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BinRepo {
     /// The `[section]` name, or the `md5(uri)` hex-digest fallback for an
     /// implicit `PORTAGE_BINHOST` entry.
@@ -21,6 +20,10 @@ pub struct BinRepo {
     /// `frozen` (default `false`): cached `Packages` used as-is, never
     /// refreshed.
     pub frozen: bool,
+    /// `fetchcommand`: per-repo override from `binrepos.conf` (`BinRepoConfig`).
+    pub fetchcommand: Option<String>,
+    /// `resumecommand`: per-repo override from `binrepos.conf` (`BinRepoConfig`).
+    pub resumecommand: Option<String>,
     /// `getbinpkg-exclude`: validated remote atoms (bad ones dropped with
     /// Portage's warning at parse time). Folded with the CLI set per
     /// refresh; local `PKGDIR` instances are never filtered.
@@ -195,6 +198,8 @@ pub(crate) fn parse_binrepos(
     let mut location: Option<String> = None;
     let mut verify_signature = true;
     let mut frozen = false;
+    let mut fetchcommand: Option<String> = None;
+    let mut resumecommand: Option<String> = None;
     let mut raw_exclude = String::new();
     let mut raw_include = String::new();
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -204,6 +209,8 @@ pub(crate) fn parse_binrepos(
                  location: &mut Option<String>,
                  verify_signature: &mut bool,
                  frozen: &mut bool,
+                 fetchcommand: &mut Option<String>,
+                 resumecommand: &mut Option<String>,
                  raw_exclude: &mut String,
                  raw_include: &mut String,
                  repos: &mut Vec<BinRepo>,
@@ -227,6 +234,8 @@ pub(crate) fn parse_binrepos(
                 location: location.take(),
                 verify_signature: *verify_signature,
                 frozen: *frozen,
+                fetchcommand: fetchcommand.take(),
+                resumecommand: resumecommand.take(),
                 getbinpkg_exclude,
                 getbinpkg_include,
             });
@@ -235,6 +244,8 @@ pub(crate) fn parse_binrepos(
         *location = None;
         *verify_signature = true;
         *frozen = false;
+        *fetchcommand = None;
+        *resumecommand = None;
         raw_exclude.clear();
         raw_include.clear();
     };
@@ -251,6 +262,8 @@ pub(crate) fn parse_binrepos(
                 &mut location,
                 &mut verify_signature,
                 &mut frozen,
+                &mut fetchcommand,
+                &mut resumecommand,
                 &mut raw_exclude,
                 &mut raw_include,
                 &mut repos,
@@ -266,6 +279,8 @@ pub(crate) fn parse_binrepos(
                 "sync-uri" => sync_uri = Some(substitute(v.trim(), &HashMap::new())),
                 "priority" => priority = v.trim().parse().unwrap_or(0),
                 "location" => location = Some(substitute(v.trim(), &HashMap::new())),
+                "fetchcommand" => fetchcommand = Some(v.trim().to_string()),
+                "resumecommand" => resumecommand = Some(v.trim().to_string()),
                 "verify-signature" => {
                     verify_signature = matches!(
                         v.trim().to_ascii_lowercase().as_str(),
@@ -293,6 +308,8 @@ pub(crate) fn parse_binrepos(
         &mut location,
         &mut verify_signature,
         &mut frozen,
+        &mut fetchcommand,
+        &mut resumecommand,
         &mut raw_exclude,
         &mut raw_include,
         &mut repos,
@@ -319,6 +336,8 @@ pub(crate) fn parse_binrepos(
                 location: None,
                 verify_signature: true,
                 frozen: false,
+                fetchcommand: None,
+                resumecommand: None,
                 // Implicit entries carry no keys (Portage reads them from
                 // the config sections only).
                 getbinpkg_exclude: Vec::new(),

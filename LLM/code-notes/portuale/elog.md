@@ -13,8 +13,11 @@ Elog message collection and dispatch (Portage's `lib/portage/elog/`). Context mo
 ## struct ElogMessage (fields phase, level)
 - `phase`: which `${T}/logging/<phase>` file this came from -- Portage's `collect_ebuild_messages` keys on it, and `_combine_logentries` emits a `<LEVEL>: <phase>` header on every phase/level change. `level`: `LOG` / `INFO` / `WARN` / `ERROR` / `QA` (QA is a distinct level; see `syslog_priority`).
 
-## struct ElogPackage (field key)
-- `key` is `cat/pkg-ver` (Portage's `mod_echo` `key`).
+## struct ElogPackage (fields cpv, root, logfile, messages)
+- `cpv` is `cat/pkg-ver` (Portage's `mod_echo` `key`); `logfile` is `PORTAGE_LOG_FILE` when `PORTAGE_LOGDIR` is set (`mod_echo.process`, backlog #435).
+
+## fn echo_logfile_for
+- Resolves `PORTAGE_LOG_FILE` for `mod_echo.process` (backlog #435): when `PORTAGE_LOGDIR` (or `PORT_LOGDIR`) is set and `${T}/build.log` (or `.gz`) is a symlink whose target lies inside that log directory, returns the target path.
 
 ## fn module_enabled
 - Whether the module is listed in `PORTAGE_ELOG_SYSTEM` -- its token is either the bare name or `name:levels`. `-` is accepted for `_` (Portage's `elog_process`: `s = s.replace("-", "_")`), so `save-summary` == `save_summary`.
@@ -145,6 +148,9 @@ Elog message collection and dispatch (Portage's `lib/portage/elog/`). Context mo
 - Ports `elog_process` over a batch of packages that just merged or unmerged. Each item is `(cpv, t_dir)` where `t_dir` is that package's `${T}` (`${PORTAGE_BUILDDIR}/temp`). `phases` restricts which `${T}/logging/<phase>` files are read (Portage's `_elog_process(phasefilter=...)`): `None` after a merge (every phase), `Some(&["prerm", "postrm"])` for `dblink.unmerge()`. `root_display` is the `ROOT` string for the `echo` header (`/` gives the short form).
 - The `save` / `save_summary` modules run immediately per package (Portage's `mod_save.process`), printing nothing (#427: the old `Elog messages ... written to ...` line existed in no Portage module); `echo` is accumulated for the call and printed by `echo_summary` at its end (Portage accumulates across the whole run and prints once at exit via `mod_echo._finalize`; portuale flushes per package before the post-merge clean, #42, so each merged package gets its own block). `mail` sends immediately per package (Portage's `mod_mail.process`); `mail_summary` accumulates and sends once at process exit (atexit `finalize`, armed on first use). A no-op when no module is enabled or nothing has messages. The caller hands in each package's `${T}/logging/` at Portage's own position -- for a merge that is inside `dblink.merge()` before the post-merge clean (backlog #42), see `ebuild_merge::process_merge_elog` -- rather than threading a message buffer through the (un)merge machinery. `split_elog` is Portage's `settings.features` `split-elog` token: the `emerge` callers pass the resolved list (#37 S3), the standalone unmerge path the raw env fallback.
 - "save_any" gates the one `collect_all`/`save_modules_process` call below, so it needs every module that call also dispatches to -- `syslog`/`custom`/`mail`/`mail_summary` included, not just the `save`/`save_summary` pair its own name still refers to.
+
+## fn format_echo_summary
+- Pure formatter behind `echo_summary` (`mod_echo._finalize`), including the `* Log file: <path>` line when `pkg.logfile` is present (backlog #435).
 
 ## fn echo_summary
 - Ports `mod_echo._finalize`: the `* Messages for package <cpv>:` block for every accumulated package, all message types on stdout, each line `<colour> * </colour><msg>` (`EOutput.e{info,log,warn,error,qawarn}`).

@@ -96,6 +96,9 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
         root,
         source_paths: &source_paths,
         features: resolved_features(options),
+        quiet: options.quiet,
+        background: mode.background,
+        quiet_fail: options.quiet_fail,
     };
     run_merge_loop(entries, keep_going, &report, |_, entry, entry_progress| {
         // An `IDEPEND` dep merges into the running root, like Portage.
@@ -233,7 +236,7 @@ where
         if rest.is_empty() {
             break;
         }
-        ledger.resuming();
+        ledger.resuming(report.quiet);
         let mut survivors = Vec::new();
         for i in rest {
             let e = &entries[i];
@@ -379,6 +382,11 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
         return Err(format!("{cp}-{version}: merge failed ({status})"));
     }
     // The `Completed (N of M) cpv::repo` line.
+    if let Some(record) = &per_entry.world_recorder {
+        for line in record(entry) {
+            display.status(&line);
+        }
+    }
     display.status(&completed_line(entry, &version, progress, root, &color));
     Ok(())
 }

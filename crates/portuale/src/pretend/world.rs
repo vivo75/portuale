@@ -176,6 +176,47 @@ pub(crate) fn world_file_additions(
     added
 }
 
+/// Records one merged entry in `world` right after its install and returns the
+/// `>>> Recording ...` status lines, which the scheduler prints between
+/// `Installing` and `Completed` like any other status message.
+pub type WorldRecorder = std::sync::Arc<dyn Fn(&GraphEntry) -> Vec<String> + Send + Sync>;
+
+/// Builds the per-entry recorder for an `emerge` run; `None` when the run
+/// records nothing (`--oneshot`, `--onlydeps`, `--buildpkgonly`).
+// Portage: Scheduler.py, _world_atom
+pub(crate) fn world_recorder(
+    root: &Path,
+    opts: &EmergeOpts<'_>,
+    system_atoms: &[String],
+    repos: &[portage_repo::RepoConfig],
+) -> Option<WorldRecorder> {
+    if opts.oneshot || opts.onlydeps || opts.buildpkgonly {
+        return None;
+    }
+    let root = root.to_path_buf();
+    let target_atoms: Vec<String> = opts.atom_args.iter().map(|a| a.to_string()).collect();
+    let system_atoms = system_atoms.to_vec();
+    let repos = repos.to_vec();
+    Some(std::sync::Arc::new(move |entry: &GraphEntry| {
+        let targets: Vec<&str> = target_atoms.iter().map(String::as_str).collect();
+        match record_world_atoms(UpdateWorldFileArgs {
+            root: &root,
+            target_atoms: &targets,
+            entries: std::slice::from_ref(entry),
+            system_atoms: &system_atoms,
+            repos: &repos,
+            oneshot: false,
+            onlydeps: false,
+        }) {
+            Ok(added) => added.iter().map(|a| recording_line(a)).collect(),
+            Err(e) => {
+                eprintln!("emerge: {e}");
+                Vec::new()
+            }
+        }
+    }))
+}
+
 /// Arguments of [`update_world_file`].
 pub(crate) struct UpdateWorldFileArgs<'a> {
     pub(crate) root: &'a Path,
@@ -191,6 +232,19 @@ pub(crate) struct UpdateWorldFileArgs<'a> {
 /// run. `--oneshot`/`--onlydeps` suppress it. Prints `>>> Recording ...` per addition.
 /// Portage: depgraph.py, saveNomergeFavorites.
 pub(crate) fn update_world_file(args: UpdateWorldFileArgs<'_>) -> Result<(), String> {
+    for world_atom in record_world_atoms(args)? {
+        println!("{}", recording_line(&world_atom));
+    }
+    Ok(())
+}
+
+/// The `>>> Recording <atom> in "world" favorites file...` status line.
+pub(crate) fn recording_line(world_atom: &str) -> String {
+    format!(">>> Recording {world_atom} in \"world\" favorites file...")
+}
+
+/// Adds the new atoms to the world file and returns them, sorted; prints nothing.
+pub(crate) fn record_world_atoms(args: UpdateWorldFileArgs<'_>) -> Result<Vec<String>, String> {
     let UpdateWorldFileArgs {
         root,
         target_atoms,
@@ -201,16 +255,13 @@ pub(crate) fn update_world_file(args: UpdateWorldFileArgs<'_>) -> Result<(), Str
         onlydeps,
     } = args;
     if oneshot || onlydeps {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let mut current = read_world_atoms(root)?;
     let mut added = world_file_additions(&current, target_atoms, entries, system_atoms, repos);
     // Sorted before printing, like Portage.
     added.sort();
-    for world_atom in &added {
-        println!(">>> Recording {world_atom} in \"world\" favorites file...");
-        current.push(world_atom.clone());
-    }
+    current.extend(added.iter().cloned());
 
     if !added.is_empty() {
         current.sort();
@@ -221,7 +272,7 @@ pub(crate) fn update_world_file(args: UpdateWorldFileArgs<'_>) -> Result<(), Str
             .map_err(|e| e.to_string())?;
         txn.commit().map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(added)
 }
 
 /// The new `@set` lines in argument order, for the same pre-record `--ask`

@@ -341,3 +341,40 @@ fn installed_set_atoms_are_slot_qualified_sorted_and_deduped() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn record_world_atoms_returns_the_recording_lines_one_entry_at_a_time() {
+    // Portage `Scheduler._world_atom` records each package right after its
+    // install, so the scheduler prints one `Recording` line per merged entry.
+    let tmp = TempDir::new("portuale-world-one").keep();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+    let entries = [
+        world_entry("dev-libs", "first", "0"),
+        world_entry("dev-libs", "second", "0"),
+    ];
+    let args = |entry: &GraphEntry| {
+        record_world_atoms(UpdateWorldFileArgs {
+            root: &root,
+            target_atoms: &["dev-libs/first", "dev-libs/second"],
+            entries: std::slice::from_ref(entry),
+            system_atoms: &[],
+            repos: &[],
+            oneshot: false,
+            onlydeps: false,
+        })
+        .unwrap()
+    };
+    let added = args(&entries[1]);
+    assert_eq!(added, vec!["dev-libs/second".to_string()]);
+    assert_eq!(
+        recording_line(&added[0]),
+        ">>> Recording dev-libs/second in \"world\" favorites file..."
+    );
+    assert_eq!(args(&entries[0]), vec!["dev-libs/first".to_string()]);
+    assert!(args(&entries[0]).is_empty(), "already recorded");
+    assert_eq!(
+        std::fs::read_to_string(root.join("var/lib/portage/world")).unwrap(),
+        "dev-libs/first\ndev-libs/second\n"
+    );
+}

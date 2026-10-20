@@ -803,6 +803,9 @@ fn run_merge_loop_without_keep_going_stops_at_the_first_failure() {
         root: &root,
         source_paths: &no_paths,
         features: String::new(),
+        quiet: false,
+        background: false,
+        quiet_fail: false,
     };
     let err = run_merge_loop(&[a, b], false, &report, |_, e, _| {
         seen.push(e.package.clone());
@@ -854,6 +857,9 @@ fn run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents() {
         root: &root,
         source_paths: &no_paths,
         features: String::new(),
+        quiet: false,
+        background: false,
+        quiet_fail: false,
     };
     let err = run_merge_loop(&[dep, mid, top, other], true, &report, |_, e, _| {
         if e.package == "dep" {
@@ -899,6 +905,9 @@ fn run_merge_loop_keep_going_restarts_the_progress_counter() {
         root: &root,
         source_paths: &no_paths,
         features: String::new(),
+        quiet: false,
+        background: false,
+        quiet_fail: false,
     };
     let mut seen: Vec<(String, usize, usize)> = Vec::new();
     let _ = run_merge_loop(&[bad, good, top], true, &report, |_, e, p| {

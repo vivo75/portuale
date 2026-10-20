@@ -150,7 +150,7 @@ Alternate `--solver=` backends: PubGrub and resolvo over the same repo facts.
 
 ## fn target_slots
 - #34 S1: a bare target atom used to become a root target in every slot (`packages_for_cpn`). Portage selects the slot of the best visible match (`depgraph.py` `_select_pkg_highest_available`) and, only under `--update`, adds the installed slots (`_greedy_slots`, `depgraph.py:5385-5427`, `:5896-5930`) whose best match is lower than the overall best; it never adds non-installed sibling slots. `target_slots` computes that set from `LazyRepo::load_versions` (already visibility-filtered) and the atom's version restriction; an empty result falls back to the old fan-out, so an all-masked target keeps its error path.
-- Recorded cut: `_greedy_slots` also drops a slot when a blocker lookahead excludes it (`blocker_lookahead`); not ported. (The default solver ports both passes since #359 S3, `resolve/greedy_slots.rs`; only this bridge still lacks the lookahead, #368.) Tie on the best version between slots picks the lower slot string (Portage picks the first in its own order).
+- `_greedy_slots` also drops a slot when a blocker lookahead excludes it (`blocker_lookahead`): `greedy_blocker_lookahead` runs the default solver's `greedy_lookahead` over each slot's best loaded candidate (#433; the default solver ports both passes since #359 S3, `resolve/greedy_slots.rs`). Tie on the best version between slots picks the lower slot string (Portage picks the first in its own order).
 - Trace: `pg-target <cp> slot=<s1,s2>` now lists the chosen slots, not `*`.
 
 ## struct KeptInstalled

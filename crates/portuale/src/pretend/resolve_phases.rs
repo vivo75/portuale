@@ -368,7 +368,13 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             config,
         });
     let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
-    let result = if want_complete {
+    // A first walk that already aborted (a masked or flip-only dependency) keeps its
+    // report: Portage reaches `_complete_graph` only after `_create_graph()` succeeded.
+    // Portage: depgraph.py, _resolve (select_files)
+    let phase1_aborted = matches!(result.outcome, portage_repo::ResolveOutcome::Aborted { .. });
+    let result = if phase1_aborted {
+        result
+    } else if want_complete {
         match handle(
             run_resolve(true, &locked_merges, true, &complete_reuse)
                 .map_err(crate::error::Error::from),

@@ -122,7 +122,7 @@ pub(crate) fn run_single_phase(args: RunSinglePhaseArgs<'_>) -> Result<i32, Stri
             }
             resolved => resolved,
         };
-        if let PhaseLog::Tee(path) = log_file {
+        if let PhaseLog::Tee(path) | PhaseLog::Capture(path) = log_file {
             extra_env.push(("PORTAGE_LOG_FILE".to_string(), path.display().to_string()));
         }
         // `A`/`AA` come from `apply_eapi_phase_env` (Portage's
