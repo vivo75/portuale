@@ -4167,9 +4167,10 @@ fn bridge_validate_aborts(
                 }
                 // The parent's own flip (`_apply_parent_use_changes`): with
                 // `--autounmask-backtrack` off the change is recorded and the run
-                // fails on the dependency, no merge rows.
+                // fails on the dependency, no merge rows. `--autounmask-backtrack=y`
+                // does the same: `_apply_parent_use_changes` only turns the failed
+                // dependency's suggestions into changes, it never restarts.
                 if req.autounmask_suggest_use
-                    && !req.config.autounmask_backtrack
                     && let Some(flip) = parent_flip_rescue(ParentFlipRescueArgs {
                         req,
                         lazy,
