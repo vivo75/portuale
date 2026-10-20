@@ -839,7 +839,7 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
                 category: &entry.category,
                 package: &entry.package,
                 version: &version,
-                pkgdir: &binrepo_download_dir(config, binrepo, root, pkgdir),
+                pkgdir: &binrepo_download_dir(config, binrepo, &eprefix_from_env(), pkgdir),
                 config,
             })?;
             let portage_quiet = merge_options
@@ -1192,14 +1192,13 @@ pub(crate) fn resolve_local_binpkg(
 }
 
 /// Where a binrepo's packages are downloaded: its `location`, else (only when
-/// `PORTAGE_BINHOST` is unset) `<root>/var/cache/binhost/<name>`, else `$PKGDIR`.
-/// Portage roots the default at `EPREFIX`; under `ROOT` here so hermetic roots
-/// never write to the host.
+/// `PORTAGE_BINHOST` is unset) `<eprefix>/var/cache/binhost/<name>`, else `$PKGDIR`.
+/// `eprefix` is Portage's `EPREFIX` ([`eprefix_from_env`]); `ROOT` plays no part.
 // Portage: lib/portage/binrepo/config.py (BinRepoConfigLoader), bintree.py (get_local_repo_location)
 pub(crate) fn binrepo_download_dir(
     config: &portage_profile::Config,
     binrepo: &portage_profile::BinRepo,
-    root: &Path,
+    eprefix: &str,
     pkgdir: &Path,
 ) -> std::path::PathBuf {
     if let Some(location) = binrepo.location.as_deref() {
@@ -1212,7 +1211,15 @@ pub(crate) fn binrepo_download_dir(
     {
         return pkgdir.to_path_buf();
     }
-    root.join("var/cache/binhost").join(&binrepo.name)
+    Path::new(&format!("{eprefix}/var/cache/binhost")).join(&binrepo.name)
+}
+
+/// Portage's `EPREFIX`: `PORTAGE_OVERRIDE_EPREFIX` without trailing slashes, else empty.
+// Portage: lib/portage/const.py (EPREFIX)
+pub(crate) fn eprefix_from_env() -> String {
+    std::env::var("PORTAGE_OVERRIDE_EPREFIX")
+        .map(|v| v.trim_end_matches('/').to_string())
+        .unwrap_or_default()
 }
 
 /// Arguments of [`download_and_verify`].
@@ -2674,7 +2681,7 @@ mod tests {
 
     #[test]
     fn binrepo_download_dir_follows_location_then_binhost_then_default() {
-        let root = Path::new("/r");
+        let root = "/r";
         let pkgdir = Path::new("/p");
         let mut repo = portage_profile::BinRepo {
             name: "bh".into(),
@@ -2697,6 +2704,10 @@ mod tests {
         assert_eq!(
             binrepo_download_dir(&config, &repo, root, pkgdir),
             Path::new("/r/var/cache/binhost/bh")
+        );
+        assert_eq!(
+            binrepo_download_dir(&config, &repo, "", pkgdir),
+            Path::new("/var/cache/binhost/bh")
         );
         config
             .other_vars
@@ -3614,7 +3625,11 @@ mod tests {
             name: "test".into(),
             sync_uri: base.clone(),
             priority: 1,
-            location: None,
+            location: Some(
+                root.join("var/cache/binhost/test")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             verify_signature: true,
             frozen: false,
             fetchcommand: None,
@@ -3689,7 +3704,7 @@ mod tests {
                 .join(&config.binrepos[0].name)
                 .join("dev-libs/packagepkg-1.0.tbz2")
                 .is_file(),
-            "a binrepo without `location` downloads under <root>/var/cache/binhost/<name>"
+            "a binrepo `location` is the download directory"
         );
         assert!(
             root.join("usr/share/packagepkg/hello.txt").is_file(),
@@ -3743,7 +3758,11 @@ mod tests {
             name: "test".into(),
             sync_uri: base.clone(),
             priority: 1,
-            location: None,
+            location: Some(
+                root.join("var/cache/binhost/test")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
             verify_signature: true,
             frozen: false,
             fetchcommand: None,

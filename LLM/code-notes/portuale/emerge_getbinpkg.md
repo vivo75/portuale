@@ -157,7 +157,7 @@
 - `merge_one_binary_entry_never_refetches_for_a_non_remote_entry`: the `file://` binhost serves a genuine fixture binary, so pre-fix code downloads it into `$PKGDIR` and merges successfully -- post-fix the pkgdir stays empty and the error names the local dir. Never portuale's old `no binpkg file under ...` text; nothing may be downloaded into `$PKGDIR`.
 
 ## fn binrepo_download_dir
-Backlog #428. Portage `BinRepoConfigLoader` gives a `location`-less binrepo `<EPREFIX>/var/cache/binhost/<name>` only when `PORTAGE_BINHOST` is unset (config.py:157-162); this port roots it at `ROOT` (a hermetic test root must not write to the host) -- see #436(b). Both `merge_one_binary_entry` and fetch-only use it, so the two paths agree. `Binpkg._verifier_exit` only renames `.partial` there, and no `Packages` index is written into a `location` other than `$PKGDIR` (b428 captures).
+Backlog #428. Portage `BinRepoConfigLoader` gives a `location`-less binrepo `<EPREFIX>/var/cache/binhost/<name>` only when `PORTAGE_BINHOST` is unset (config.py:157-162); this port does the same, with `EPREFIX` = `PORTAGE_OVERRIDE_EPREFIX` (else empty, so `ROOT` plays no part; tests set the override to their root so they never write to the host) -- #436(b). Both `merge_one_binary_entry` and fetch-only use it, so the two paths agree. `Binpkg._verifier_exit` only renames `.partial` there, and no `Packages` index is written into a `location` other than `$PKGDIR` (b428 captures).
 
 ## fn verified_digest_names
 Backlog #428. `bintree._get_digests` keys checksums uppercase and `size` lowercase; `BinpkgVerifier._display_success` prints `sorted(digests)`, so `MD5 SHA1 size`. Nothing is verified or printed without a parseable `SIZE` (`BinpkgVerifier._start`).

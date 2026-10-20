@@ -94,7 +94,7 @@ impl RemoteBinaryJob<'_> {
         let dir = crate::emerge_getbinpkg::binrepo_download_dir(
             self.config,
             binrepo,
-            self.root,
+            &crate::emerge_getbinpkg::eprefix_from_env(),
             self.pkgdir,
         );
         let dest = dir.join(&rel);
