@@ -1,0 +1,3 @@
+{"version":3,"term":{"cols":120,"rows":40},"timestamp":1792531681,"command":"/var/tmp/b453/bin/emerge --ignore-default-opts --pretend dev-libs/newpkg","env":{"SHELL":"/bin/bash"}}
+[0.017, "o", "[ebuild  N     ] dev-libs/newpkg-1.0 to /var/tmp/b453/stage-cond-portuale/fixtures\r\n"]
+[0.000, "x", "0"]

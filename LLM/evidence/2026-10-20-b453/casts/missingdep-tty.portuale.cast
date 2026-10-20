@@ -1,0 +1,3 @@
+{"version":3,"term":{"cols":120,"rows":40},"timestamp":1792531793,"command":"/var/tmp/b453/bin/emerge --ignore-default-opts --pretend dev-libs/missingdep","env":{"SHELL":"/bin/bash"}}
+[0.018, "o", "These are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n\r\nemerge: there are no ebuilds to satisfy \"dev-libs/doesnotexist-anywhere\".\r\n(dependency required by \"dev-libs/missingdep-1.0::testrepo\" [ebuild])\r\n(dependency required by \"dev-libs/missingdep\" [argument])\r\n"]
+[0.001, "x", "1"]

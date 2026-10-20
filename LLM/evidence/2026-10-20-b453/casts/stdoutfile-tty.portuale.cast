@@ -1,0 +1,2 @@
+{"version":3,"term":{"cols":120,"rows":40},"timestamp":1792531681,"command":"sh -c '/var/tmp/b453/bin/emerge --ignore-default-opts --pretend dev-libs/newpkg >/var/tmp/b453/out.txt'","env":{"SHELL":"/bin/bash"}}
+[0.019, "x", "0"]

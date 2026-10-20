@@ -1,0 +1,29 @@
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/b453/stage-md-portage/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/b453/stage-md-portage/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/b453/stage-md-portage/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/b453/stage-md-portage/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/b453/stage-md-portage/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/b453/stage-md-portage/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/b453/stage-md-portage/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/b453/stage-md-portage/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	/var/tmp/b453/stage-md-portage/fixtures/overlay/profiles/repo_name
+	/var/tmp/b453/stage-md-portage/fixtures/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+emerge: there are no ebuilds to satisfy "dev-libs/doesnotexist-anywhere" for /var/tmp/b453/stage-md-portage/fixtures/.
+(dependency required by "dev-libs/missingdep-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/missingdep" [argument])

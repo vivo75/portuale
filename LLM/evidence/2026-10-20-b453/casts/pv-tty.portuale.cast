@@ -1,0 +1,3 @@
+{"version":3,"term":{"cols":120,"rows":40},"timestamp":1792531540,"command":"/var/tmp/b453/bin/emerge --ignore-default-opts --pretend --verbose dev-libs/newpkg","env":{"SHELL":"/bin/bash"}}
+[0.016, "o", "[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to /var/tmp/b453/stage-core-portuale/fixtures\r\n\r\nTotal: 1 package (1 new), Size of downloads: 0 KiB\r\n"]
+[0.000, "x", "0"]

@@ -1,0 +1,3 @@
+{"version":3,"term":{"cols":120,"rows":40},"timestamp":1792531726,"command":"/var/tmp/b453/bin/emerge --ignore-default-opts --pretend dev-libs/maskedpkg","env":{"SHELL":"/bin/bash"}}
+[0.010, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n\r\n!!! All ebuilds that could satisfy \"dev-libs/maskedpkg\" have been masked.\r\n!!! One of the following masked packages is required to complete your request:\r\n- dev-libs/maskedpkg-1.0::testrepo (masked by: ~amd64 keyword)\r\n\r\nFor more information, see the MASKED PACKAGES section in the emerge\r\nman page or refer to the Gentoo Handbook.\r\n\r\n"]
+[0.000, "x", "1"]
