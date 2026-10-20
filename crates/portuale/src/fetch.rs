@@ -1185,10 +1185,11 @@ mod tests {
             "the RO distdir copy is symlinked, not copied"
         );
         assert_eq!(fs::read(&dest).unwrap(), b"hello world");
-        // A non-existent RO entry is skipped, not an error.
+        // A non-existent RO entry is skipped, not an error. The fallback
+        // fetch goes to a closed loopback port, which refuses at once.
         let err = fetch_src_uri(
             &pkg_dir,
-            "https://192.0.2.1/hello-1.0.tar.gz",
+            "http://127.0.0.1:1/hello-1.0.tar.gz",
             &FetchOptions {
                 distdir: tempdir(),
                 gentoo_mirrors: vec![],
