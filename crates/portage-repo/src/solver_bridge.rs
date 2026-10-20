@@ -33,8 +33,8 @@ use std::fmt;
 use std::io::Write;
 
 use super::{
-    AbortOutcomeArgs, AutounmaskChange, Deep, EffectiveUseFlagsArgs, GraphEntry, GraphResult,
-    InstalledDepStringArgs, InstalledMetaLayer, InstalledRef, InstalledUseState,
+    AbortOutcomeArgs, AutounmaskChange, Candidate, Deep, EffectiveUseFlagsArgs, GraphEntry,
+    GraphResult, InstalledDepStringArgs, InstalledMetaLayer, InstalledRef, InstalledUseState,
     MaskedDepChainArgs, MaskedDepReport, PlainMissDepReport, PretendOutcome,
     ReinstallFlagsForUseChangeArgs, RenderRequiredUseBlockArgs, RepoConfig, ResolveRequest,
     Resolver as PortualeResolver, TopLevel, UseUnsatCandidatesForAtomArgs, UseUnsatDepReport,
@@ -43,8 +43,8 @@ use super::{
     installed_dep_string, installed_pkg_iuse_and_use, is_visible, list_candidates,
     live_metadata_for_installed, masked_candidates_for_atom, masked_dep_chain, pkg_use_display_for,
     read_vdb_flag_set, read_vdb_string, reinstall_flags_for_use_change, render_required_use_block,
-    repo_aux_metadata, required_use_dep_chain, split_slot, suggested_use_flip,
-    use_unsat_candidates_for_atom, valid_iuse,
+    repo_aux_metadata, required_use_dep_chain, split_slot, suggested_parent_use_candidate,
+    suggested_use_flip, use_unsat_candidates_for_atom, valid_iuse,
 };
 
 // --- Lazy fact loading -----------------------------------------------------
@@ -669,6 +669,32 @@ fn graph_result_from_order(
     }
 }
 
+/// `(flag, enabled)` USE flips.
+type UseFlips = Vec<(String, bool)>;
+
+/// An installed cpv a planned parent reinstalls: the changed flags and the
+/// `--autounmask-use` flips it is planned with.
+type ParentUseReinstall = (String, Vec<String>, UseFlips);
+
+/// A dependency a parent flip rescued: `(child cp, owner, atom, suggestion)`.
+type RescuedDep = (
+    (String, String),
+    (String, String),
+    String,
+    super::ParentUseSuggestion,
+);
+
+/// `(flag, enabled)` flips applied to a USE set.
+fn apply_use_flips(use_set: &mut HashSet<String>, flips: &[(String, bool)]) {
+    for (flag, enabled) in flips {
+        if *enabled {
+            use_set.insert(flag.clone());
+        } else {
+            use_set.remove(flag);
+        }
+    }
+}
+
 /// One planned pick against the installed db: `Reinstall` for a rebuild
 /// member, `Upgrade`/`Downgrade` across slots, else `New` or `AlreadyInstalled`.
 fn bridge_outcome_for(
@@ -944,7 +970,10 @@ fn bridge_entry_for(
         }
     });
     let record = record?;
-    let use_set = repo.use_of(&record);
+    let mut use_set = repo.use_of(&record);
+    if let Some(flips) = kept.and_then(|k| k.autounmask_use.get(&format!("{cp}-{version}"))) {
+        apply_use_flips(&mut use_set, flips);
+    }
     let (outcome, oldbest, new_slot) = bridge_outcome_for(cp, &record, version, installed, kept);
     let (use_flags_display, use_expand_display, use_expand_display_p) =
         bridge_use_columns(req, cp, &record, version, &use_set, &outcome);
@@ -1602,6 +1631,10 @@ struct KeptInstalled {
     /// Changed USE flags per rebuilt cpv (`--newuse`/`--changed-use` drift),
     /// carried into the `R` row's `Reinstall.changed_flags`.
     use_drift: HashMap<String, Vec<String>>,
+    /// `--autounmask-use` flips a rebuilt cpv is planned with (`(flag, enabled)`):
+    /// Portage shows the package with the flipped USE and expands its deps
+    /// with it, while the change itself stays a suggestion (#429).
+    autounmask_use: HashMap<String, Vec<(String, bool)>>,
     /// Deep expansion requested (`--deep` or `--emptytree`): no leaf rule.
     deep: bool,
     /// `--deep=N` expansion allowlist: installed cpvs whose min dep depth
@@ -1777,6 +1810,7 @@ impl KeptInstalled {
             installed: all,
             rebuild,
             use_drift,
+            autounmask_use: HashMap::new(),
             deep,
             deep_allowed,
             downgrade,
@@ -1808,8 +1842,17 @@ impl KeptInstalled {
         if req.nodeps {
             return;
         }
-        for (cpv, flags) in parent_use_reinstalls(req, lazy, installed, self, plan) {
+        for (cpv, flags, flips) in parent_use_reinstalls(req, lazy, installed, self, plan) {
             self.rebuild.insert(cpv.clone());
+            if !flips.is_empty() {
+                let applied = self.autounmask_use.entry(cpv.clone()).or_default();
+                for flip in flips {
+                    if !applied.contains(&flip) {
+                        applied.push(flip);
+                    }
+                }
+                applied.sort();
+            }
             let entry = self.use_drift.entry(cpv).or_default();
             for flag in flags {
                 if !entry.contains(&flag) {
@@ -1961,7 +2004,7 @@ fn parent_use_reinstalls(
     installed: &[super::InstalledPackage],
     kept: &KeptInstalled,
     plan: &SolvedPlan,
-) -> Vec<(String, Vec<String>)> {
+) -> Vec<ParentUseReinstall> {
     // Under emptytree every installed cpv already rebuilds; with nothing
     // installed there is no child to reinstall.
     if req.empty || installed.is_empty() {
@@ -2130,7 +2173,7 @@ fn parent_use_reinstalls(
         }
     }
     // One load per target cp; union the changed flags across parents.
-    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    let mut out: HashMap<String, (Vec<String>, UseFlips)> = HashMap::new();
     for (cp, atoms) in &wanted {
         let Some(cands) = by_cp.get(cp) else {
             continue;
@@ -2172,24 +2215,115 @@ fn parent_use_reinstalls(
                 else {
                     continue;
                 };
-                let effective = lazy.use_of(record);
+                let mut effective = lazy.use_of(record);
                 let repo_iuse: HashSet<String> = parse_iuse(&record.iuse).into_iter().collect();
+                // `--autounmask-use` (#429): when the config USE misses the
+                // atom, the same flip Portage suggests (`need_config_change`)
+                // plans the rebuild with the flipped flags; the validator
+                // still checks the unflipped config USE, so the change is
+                // reported too.
+                let mut flips: Vec<(String, bool)> = Vec::new();
                 if !use_deps_satisfied(uds, parent_use, &repo_iuse, &effective) {
-                    continue;
+                    if !req.autounmask_suggest_use {
+                        continue;
+                    }
+                    let plain = evaluated_plain_use_deps(uds, parent_use);
+                    let Some(flip) = list_candidates(&lazy.repos, &inst.category, &inst.package)
+                        .ok()
+                        .and_then(|candidates| {
+                            candidates
+                                .iter()
+                                .find(|c| c.version == inst.version)
+                                .and_then(|c| {
+                                    suggested_use_flip(
+                                        c,
+                                        &inst.category,
+                                        &inst.package,
+                                        &plain,
+                                        &req.config,
+                                    )
+                                })
+                        })
+                    else {
+                        continue;
+                    };
+                    for (flag, enabled) in &flip {
+                        if *enabled {
+                            effective.insert(flag.clone());
+                        } else {
+                            effective.remove(flag);
+                        }
+                    }
+                    if !use_deps_satisfied(uds, parent_use, &repo_iuse, &effective) {
+                        continue;
+                    }
+                    flips = flip;
                 }
                 let flags = changed_use_dep_flags(uds, parent_use, &vdb_use, &effective);
                 let entry = out.entry(child_cpv).or_default();
                 for flag in flags {
-                    if !entry.contains(&flag) {
-                        entry.push(flag);
+                    if !entry.0.contains(&flag) {
+                        entry.0.push(flag);
+                    }
+                }
+                for flip in flips {
+                    if !entry.1.contains(&flip) {
+                        entry.1.push(flip);
                     }
                 }
             }
         }
     }
-    let mut out: Vec<(String, Vec<String>)> = out.into_iter().collect();
-    for (_, flags) in &mut out {
+    let mut out: Vec<ParentUseReinstall> = out
+        .into_iter()
+        .map(|(cpv, (flags, flips))| (cpv, flags, flips))
+        .collect();
+    for (_, flags, flips) in &mut out {
         flags.sort();
+        flips.sort();
+    }
+    out
+}
+
+/// `uds` with the parent-relative forms (`flag?`, `flag=`, ...) evaluated
+/// against `parent_use`, as plain `flag` / `-flag` requirements: the shape
+/// `suggested_use_flip` consults. A form that asks nothing is dropped.
+fn evaluated_plain_use_deps(
+    uds: &[portage_atom::UseDep],
+    parent_use: &HashSet<String>,
+) -> Vec<portage_dep::UseDep> {
+    use portage_atom::UseDepKind;
+    let mut out = Vec::new();
+    for ud in uds {
+        let parent_on = parent_use.contains(ud.flag.as_str());
+        let want = match ud.kind {
+            UseDepKind::Enabled => Some(true),
+            UseDepKind::Disabled => Some(false),
+            UseDepKind::Conditional => parent_on.then_some(true),
+            UseDepKind::ConditionalInverse => (!parent_on).then_some(false),
+            UseDepKind::Equal => Some(parent_on),
+            UseDepKind::EqualInverse => Some(!parent_on),
+        };
+        let Some(enabled) = want else {
+            continue;
+        };
+        out.push(portage_dep::UseDep {
+            flag: ud.flag.to_string(),
+            op: if enabled {
+                portage_dep::UseDepOp::Enabled
+            } else {
+                portage_dep::UseDepOp::Disabled
+            },
+            default: match ud.default {
+                Some(portage_atom::UseDefault::Enabled) => {
+                    Some(portage_dep::UseDepDefault::Enabled)
+                }
+                Some(portage_atom::UseDefault::Disabled) => {
+                    Some(portage_dep::UseDepDefault::Disabled)
+                }
+                None => None,
+            },
+        });
     }
     out
 }
@@ -3467,7 +3601,10 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
             return UseConfig::new();
         };
         let mut use_config = UseConfig::new();
-        let use_set = self.lazy.use_of(&record);
+        let mut use_set = self.lazy.use_of(&record);
+        if let Some(flips) = self.kept.autounmask_use.get(&cpv_str) {
+            apply_use_flips(&mut use_set, flips);
+        }
         for flag in &use_set {
             use_config.enable(interned(flag));
         }
@@ -3671,6 +3808,20 @@ struct BridgeAbortValidation {
     plain_miss_deps: Vec<PlainMissDepReport>,
     nvc_entries: Vec<GraphEntry>,
     nvc_dep_atoms: HashMap<(String, String), String>,
+    /// Parent USE flips Portage records instead of a miss (#429): the parent's
+    /// flipped USE columns, applied to its entry post-validation.
+    parent_flips: Vec<BridgeParentFlip>,
+    /// The `package.use` flips of the recorded changes, per `cat/pkg`: Portage
+    /// shows the package with the flipped USE (`USE="-eqflag"`).
+    use_flips: HashMap<String, HashMap<String, bool>>,
+}
+
+/// One recorded parent flip: the parent whose own USE Portage suggests changing
+/// so a conditional USE-dep of its dependency holds.
+struct BridgeParentFlip {
+    parent: (String, String),
+    candidate: Candidate,
+    new_use: HashSet<String>,
 }
 
 /// S9 (#363/#364/#365): replay the default path's three abort predicates
@@ -3864,6 +4015,9 @@ fn bridge_validate_aborts(
         owners: Vec<(String, String)>,
     }
     let mut misses: Vec<Miss> = Vec::new();
+    // Dependencies a parent flip rescued: `(child cp, owner, atom, suggestion)`.
+    let mut rescued: Vec<RescuedDep> = Vec::new();
+    let mut parent_flips: Vec<BridgeParentFlip> = Vec::new();
     for member in &members {
         // A kept install's own deps never expand under the engine's leaf
         // rule, so only merge-bound members contribute edges (they still
@@ -3879,10 +4033,9 @@ fn bridge_validate_aborts(
             if dep.disjunctive {
                 continue;
             }
-            // Build-time keys only travel when the walk expands them.
-            if (dep.key == 3 || dep.key == 4) && !req.with_bdeps {
-                continue;
-            }
+            // Build-time keys travel for every merge-bound ebuild: the default
+            // walk drops them only for a *binary* candidate without
+            // `--with-bdeps` (`enqueue_deps.rs`), and the bridge offers none.
             let Some(parsed) = portage_dep::parse_atom(&dep.evaluated) else {
                 continue;
             };
@@ -3999,6 +4152,31 @@ fn bridge_validate_aborts(
                         .extend(flip);
                     continue;
                 }
+                // The parent's own flip (`_apply_parent_use_changes`): with
+                // `--autounmask-backtrack` off the change is recorded and the run
+                // fails on the dependency, no merge rows.
+                if req.autounmask_suggest_use
+                    && !req.config.autounmask_backtrack
+                    && let Some(flip) = parent_flip_rescue(ParentFlipRescueArgs {
+                        req,
+                        lazy,
+                        entries,
+                        owner: &owner,
+                        unevaluated: &dep.atom,
+                        child_iuse: &iuse_declared,
+                        child_use: &child_use,
+                    })
+                {
+                    changes.push(flip.change);
+                    rescued.push((
+                        (parsed.category.clone(), parsed.package.clone()),
+                        owner.clone(),
+                        dep.atom.clone(),
+                        flip.suggestion,
+                    ));
+                    parent_flips.push(flip.parent_flip);
+                    continue;
+                }
             }
             match misses
                 .iter_mut()
@@ -4019,7 +4197,7 @@ fn bridge_validate_aborts(
             }
         }
     }
-    if changes.is_empty() && misses.is_empty() {
+    if changes.is_empty() && misses.is_empty() && rescued.is_empty() {
         return Ok(None);
     }
     // (b) miss disclosure, one report per `cat/pkg` exactly like
@@ -4031,7 +4209,44 @@ fn bridge_validate_aborts(
         plain_miss_deps: Vec::new(),
         nvc_entries: Vec::new(),
         nvc_dep_atoms: HashMap::new(),
+        parent_flips,
+        use_flips: flips,
     };
+    for ((category, package), owner, atom, suggestion) in rescued {
+        let mut entry = GraphEntry {
+            discovery: 0,
+            category: category.clone(),
+            package: package.clone(),
+            outcome: PretendOutcome::NoVisibleCandidate,
+            blockers: Vec::new(),
+            slot: None,
+            sub_slot: None,
+            repo_name: None,
+            oldbest: Vec::new(),
+            use_flags_display: Vec::new(),
+            use_expand_display: Vec::new(),
+            use_expand_display_p: Vec::new(),
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![owner],
+            source: super::CandidateSource::Ebuild,
+            provenance: super::VisibilityProvenance::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            deps: Vec::new(),
+        };
+        entry.parent_use_suggestion = Some(suggestion);
+        validation.nvc_entries.push(entry);
+        validation.nvc_dep_atoms.insert((category, package), atom);
+    }
     for miss in &misses {
         if let Some(masked) = masked_candidates_for_atom(&lazy.repos, &miss.display, &req.config) {
             validation.masked_deps.push(MaskedDepReport {
@@ -4107,6 +4322,110 @@ fn bridge_validate_aborts(
     Ok(Some(validation))
 }
 
+/// What [`parent_flip_rescue`] reads.
+struct ParentFlipRescueArgs<'a> {
+    req: &'a ResolveRequest,
+    lazy: &'a LazyRepo,
+    entries: &'a [GraphEntry],
+    /// The requiring parent `(category, package)`.
+    owner: &'a (String, String),
+    /// The dependency token as written (conditionals unevaluated).
+    unevaluated: &'a str,
+    /// The unsatisfied dependency's IUSE and effective USE.
+    child_iuse: &'a HashSet<String>,
+    child_use: &'a HashSet<String>,
+}
+
+/// A parent flip that makes the dependency hold.
+struct ParentFlipRescue {
+    change: AutounmaskChange,
+    suggestion: super::ParentUseSuggestion,
+    parent_flip: BridgeParentFlip,
+}
+
+/// The parent-side USE change Portage records when a USE-dep holds only after the
+/// *parent's* own flag moves (`aup0b`: `aup0d[foo(-)?]` with a child that has no
+/// `foo`): the same `suggested_parent_use_candidate` the default walk uses, kept
+/// only when the re-evaluated dependency is satisfied by the planned child.
+// Portage: depgraph.py, _apply_parent_use_changes
+fn parent_flip_rescue(args: ParentFlipRescueArgs<'_>) -> Option<ParentFlipRescue> {
+    let ParentFlipRescueArgs {
+        req,
+        lazy,
+        entries,
+        owner,
+        unevaluated,
+        child_iuse,
+        child_use,
+    } = args;
+    let suggestion =
+        suggested_parent_use_candidate(&lazy.repos, entries, unevaluated, owner, &req.config)?;
+    let (pc, pp, _pv, target_use) = suggestion.clone();
+    let (parent_cand, _iuse, parent_use, _required_use) =
+        super::parent_use_state(&lazy.repos, entries, owner, &req.config)?;
+    let mut new_use = parent_use.as_ref().clone();
+    for (flag, want) in &target_use {
+        if *want {
+            new_use.insert(flag.clone());
+        } else {
+            new_use.remove(flag);
+        }
+    }
+    let re_atom = portage_dep::evaluate_atom_conditionals(unevaluated, &new_use)?;
+    let re_parsed = portage_dep::parse_atom(&re_atom)?;
+    let re_use_deps = re_parsed.use_deps.clone().unwrap_or_default();
+    if !portage_dep::use_deps_satisfied(
+        &re_use_deps,
+        &valid_iuse(child_iuse, &req.config),
+        child_use,
+    ) {
+        return None;
+    }
+    let parent_all = list_candidates(&lazy.repos, &pc, &pp)
+        .map(|arc| arc.as_ref().clone())
+        .unwrap_or_default();
+    let token = target_use
+        .iter()
+        .map(|(flag, enabled)| {
+            if *enabled {
+                flag.clone()
+            } else {
+                format!("-{flag}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    // A top-level parent's chain is pre-filled (Portage never prints the start node).
+    let top_level = TopLevel {
+        atoms: req.atoms.iter().map(String::as_str).collect(),
+        sets: &req.argument_sets,
+    };
+    let dep_chain = req
+        .atoms
+        .iter()
+        .find(|atom| {
+            portage_dep::parse_atom(atom).is_some_and(|a| {
+                a.category == pc && a.package == pp && a.blocker == portage_dep::Blocker::None
+            })
+        })
+        .map(|atom| vec![format!("required by {} (argument)", top_level.label(atom))])
+        .unwrap_or_default();
+    Some(ParentFlipRescue {
+        change: AutounmaskChange {
+            atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, &req.config),
+            token,
+            trigger: None,
+            dep_chain,
+        },
+        suggestion,
+        parent_flip: BridgeParentFlip {
+            parent: (pc, pp),
+            candidate: parent_cand,
+            new_use,
+        },
+    })
+}
+
 /// S9 (#363/#364/#365): file a [`BridgeAbortValidation`] into a
 /// `graph_result_from_order` result: NVC entries join the graph, report
 /// and change chains walk out of the final entries, and the outcome
@@ -4117,7 +4436,68 @@ fn bridge_apply_validation(
     result: &mut GraphResult,
     validation: BridgeAbortValidation,
 ) {
+    // A dependency that cannot be satisfied is a single unresolved node, not
+    // the solved member the engine also picked for it.
+    let nvc_keys: HashSet<(String, String)> = validation
+        .nvc_entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    result
+        .entries
+        .retain(|e| !nvc_keys.contains(&(e.category.clone(), e.package.clone())));
     result.entries.extend(validation.nvc_entries);
+    // Each package a recorded change flips is shown with the flipped USE.
+    for (cp, applied) in &validation.use_flips {
+        let Some(entry) = result
+            .entries
+            .iter_mut()
+            .find(|e| format!("{}/{}", e.category, e.package) == *cp)
+        else {
+            continue;
+        };
+        let version = match &entry.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                version.clone()
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+            _ => continue,
+        };
+        let Some(record) = lazy.record(cp, &version) else {
+            continue;
+        };
+        let mut use_set = lazy.use_of(&record);
+        let flipped: Vec<(String, bool)> = applied.iter().map(|(f, on)| (f.clone(), *on)).collect();
+        apply_use_flips(&mut use_set, &flipped);
+        let (disp, pv_disp, p_disp) =
+            bridge_use_columns(req, cp, &record, &version, &use_set, &entry.outcome);
+        entry.use_flags_display = disp;
+        entry.use_expand_display = pv_disp;
+        entry.use_expand_display_p = p_disp;
+    }
+    // The parent keeps the flipped USE the recorded change shows.
+    for flip in &validation.parent_flips {
+        let (disp, pv_disp, p_disp) = super::flipped_parent_display(
+            &flip.candidate,
+            &flip.parent.0,
+            &flip.parent.1,
+            &flip.new_use,
+            &req.config,
+        );
+        if let Some(parent) = result
+            .entries
+            .iter_mut()
+            .find(|e| e.category == flip.parent.0 && e.package == flip.parent.1)
+        {
+            parent.use_flags_display = disp;
+            parent.use_expand_display = pv_disp;
+            parent.use_expand_display_p = p_disp;
+        }
+    }
+    if !validation.parent_flips.is_empty() {
+        // A parent-flip rescue pre-empts the `_success_without_autounmask` tail.
+        result.autounmask_no_clean_tail = true;
+    }
     result.masked_deps = validation.masked_deps;
     result.use_unsat_deps = validation.use_unsat_deps;
     result.plain_miss_deps = validation.plain_miss_deps;
@@ -7410,6 +7790,7 @@ mod tests {
             rebuild: rebuild.iter().map(|cpv| cpv.to_string()).collect(),
             downgrade: std::collections::HashSet::new(),
             use_drift: std::collections::HashMap::new(),
+            autounmask_use: std::collections::HashMap::new(),
             deep,
             deep_allowed: None,
             with_bdeps: false,

@@ -47,7 +47,7 @@ pub(crate) fn parent_use_flip(
     let (Some(owner_key), Some(unevaluated)) = (owner.as_ref(), unevaluated_atom.as_deref()) else {
         return Ok(ControlFlow::Continue((current_atom, atom)));
     };
-    let Some((pc, pp, pv, target_use)) =
+    let Some((pc, pp, _pv, target_use)) =
         suggested_parent_use_candidate(&ctx.repos, &state.entries, unevaluated, owner_key, config)
     else {
         return Ok(ControlFlow::Continue((current_atom, atom)));
@@ -96,7 +96,6 @@ pub(crate) fn parent_use_flip(
         // no merge rows, just the change block and the "terminated early"
         // notice. The rescued dep's key latches so its miss is suppressed.
         // Portage: depgraph.py, _apply_parent_use_changes
-        let parent_cpv = format!("{pc}/{pp}-{pv}");
         let parent_all = list_candidates(&ctx.repos, &pc, &pp).unwrap_or_default();
         let token = target_use
             .iter()
@@ -130,44 +129,8 @@ pub(crate) fn parent_use_flip(
         state
             .parent_flip_recorded
             .insert((key.0.clone(), key.1.clone()));
-        let mut disp_seen: HashSet<String> = HashSet::new();
-        let mut disp: Vec<(String, bool)> = parent_cand
-            .iuse
-            .split_whitespace()
-            .map(|t| t.trim_start_matches(['+', '-']).to_string())
-            .filter(|f| disp_seen.insert(f.clone()))
-            .map(|f| {
-                let on = new_parent_use.contains(&f);
-                (f, on)
-            })
-            .collect();
-        disp.sort_by_key(|p| alnum_sort_key(&p.0));
-        let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
-            iuse: &parent_cand.iuse,
-            keywords: &parent_cand.keywords,
-            candidate_str: &parent_cpv,
-            build_id: parent_cand.build_id.as_deref(),
-            category: &pc,
-            package: &pp,
-            config,
-        });
-        let no_reinst = HashSet::new();
-        let pv_disp = build_use_expand_display(BuildUseExpandDisplayArgs {
-            use_flags_display: &disp,
-            config,
-            installed: None,
-            forced: &forced,
-            all_flags: true,
-            reinst_flags: &no_reinst,
-        });
-        let p_disp = build_use_expand_display(BuildUseExpandDisplayArgs {
-            use_flags_display: &disp,
-            config,
-            installed: None,
-            forced: &forced,
-            all_flags: false,
-            reinst_flags: &no_reinst,
-        });
+        let (disp, pv_disp, p_disp) =
+            flipped_parent_display(&parent_cand, &pc, &pp, &new_parent_use, config);
         if let Some(pe) = state
             .entries
             .iter_mut()
@@ -243,4 +206,64 @@ pub(crate) fn parent_use_flip(
         state.autounmask_grew = true;
         Ok(ControlFlow::Break(()))
     }
+}
+
+/// The flag list and the `-pv` / `-p` `USE_EXPAND` renderings.
+pub(crate) type FlippedParentDisplay = (
+    Vec<(String, bool)>,
+    Vec<(String, String)>,
+    Vec<(String, String)>,
+);
+
+/// The parent's USE columns once the recorded flip is applied (`new_parent_use`),
+/// for the record-and-fail display: the flag list, then the two `USE_EXPAND`
+/// renderings.
+// Portage: depgraph.py, _apply_parent_use_changes
+pub(crate) fn flipped_parent_display(
+    parent_cand: &Candidate,
+    pc: &str,
+    pp: &str,
+    new_parent_use: &std::collections::HashSet<String>,
+    config: &Config,
+) -> FlippedParentDisplay {
+    let parent_cpv = format!("{pc}/{pp}-{}", parent_cand.version);
+    let mut disp_seen: HashSet<String> = HashSet::new();
+    let mut disp: Vec<(String, bool)> = parent_cand
+        .iuse
+        .split_whitespace()
+        .map(|t| t.trim_start_matches(['+', '-']).to_string())
+        .filter(|f| disp_seen.insert(f.clone()))
+        .map(|f| {
+            let on = new_parent_use.contains(&f);
+            (f, on)
+        })
+        .collect();
+    disp.sort_by_key(|p| alnum_sort_key(&p.0));
+    let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+        iuse: &parent_cand.iuse,
+        keywords: &parent_cand.keywords,
+        candidate_str: &parent_cpv,
+        build_id: parent_cand.build_id.as_deref(),
+        category: pc,
+        package: pp,
+        config,
+    });
+    let no_reinst = HashSet::new();
+    let pv_disp = build_use_expand_display(BuildUseExpandDisplayArgs {
+        use_flags_display: &disp,
+        config,
+        installed: None,
+        forced: &forced,
+        all_flags: true,
+        reinst_flags: &no_reinst,
+    });
+    let p_disp = build_use_expand_display(BuildUseExpandDisplayArgs {
+        use_flags_display: &disp,
+        config,
+        installed: None,
+        forced: &forced,
+        all_flags: false,
+        reinst_flags: &no_reinst,
+    });
+    (disp, pv_disp, p_disp)
 }

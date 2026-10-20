@@ -212,3 +212,9 @@ Alternate `--solver=` backends: PubGrub and resolvo over the same repo facts.
 
 ## fn refs_under_use
 - #432 (S-11(c), 2026-10-19): referenced-CPN traversal of parsed dep entries under a USE set for `deep_bounded_depths`: `UseConditional` branches the flags switch off are pruned (the engine evaluates the same way), every choice-group branch is followed, blocker atoms are skipped. Unlike `referenced_cpns` (USE-unevaluated, both branches) it takes the flags, so e.g. an installed package built without `wantdep` does not pull its `wantdep? ( ... )` child into the bounded reach.
+
+## fn parent_flip_rescue
+Backlog #429(b). The default walk's record-and-fail arm (`resolve/pass/parent_use_flip.rs`, `--autounmask-backtrack` off) over the solved plan: `suggested_parent_use_candidate` finds the parent flip, kept only when the re-evaluated dependency holds for the planned child. The change is recorded, the parent entry gets the flipped USE columns (`flipped_parent_display`, shared with the walk), the dependency becomes an unresolved node with `parent_use_suggestion` (not a miss report) and `autounmask_no_clean_tail` is set. Portage: depgraph.py, `_apply_parent_use_changes`. The `--autounmask-backtrack=y` re-solve arm is #438.
+
+## fn parent_use_reinstalls (autounmask flips)
+Backlog #429(a). When the config USE of the same-version repo ebuild misses the parent's USE-dep, `suggested_use_flip` supplies the flip Portage would suggest; the installed child becomes a rebuild member planned with those flags (`KeptInstalled.autounmask_use`, applied by `desired_use` and the entry builder) while `bridge_validate_aborts` keeps checking the unflipped config USE so the `AutounmaskChange` still fires.

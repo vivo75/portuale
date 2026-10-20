@@ -953,3 +953,42 @@ fn pg34_napp_pubgrub_records_the_use_change_gate() {
         default.autounmask_backtrack_disabled(false)
     );
 }
+
+#[test]
+fn aup0b_pubgrub_records_the_parent_flip_and_fails_like_the_default_solver() {
+    // #429(b): `aup0b` DEPENDs `aup0d[foo(-)?,bar(-)?]` and the child declares no
+    // `foo`: only a flip of the parent's own `foo` helps. Portage records `-foo`
+    // on the parent and fails (no merge rows); `--solver=pubgrub` used to accept
+    // the plan with `foo` on. Expected values: the default solver's, which
+    // `autounmask_use_parent_flip_records_minus_foo_and_fails_for_aup0b` pins
+    // against Portage 3.0.82.2.
+    let default = graph_result_autounmask("=dev-libs/aup0b-1");
+    let pubgrub = graph_result_autounmask_pubgrub("=dev-libs/aup0b-1");
+    assert!(
+        matches!(pubgrub.outcome, ResolveOutcome::Aborted { .. }),
+        "unexpected outcome: {:?}",
+        pubgrub.outcome
+    );
+    assert_eq!(
+        pubgrub.autounmask_use_changes,
+        default.autounmask_use_changes
+    );
+    assert_eq!(
+        pubgrub.autounmask_no_clean_tail,
+        default.autounmask_no_clean_tail
+    );
+    assert_eq!(
+        pubgrub.autounmask_backtrack_disabled(false),
+        default.autounmask_backtrack_disabled(false)
+    );
+    let child = pubgrub
+        .entries
+        .iter()
+        .find(|e| e.package == "aup0d")
+        .expect("child entry");
+    assert!(
+        matches!(child.outcome, PretendOutcome::NoVisibleCandidate),
+        "{child:?}"
+    );
+    assert!(child.parent_use_suggestion.is_some());
+}
