@@ -5,6 +5,76 @@ use portage_profile::Config;
 use portage_repo::GraphResult;
 use portage_repo::RepoConfig;
 
+/// Colourise one line of a resolver-built abort report the way Portage's
+/// `_show_unsatisfied_dep` does: `BAD`/`INFORM` for the all-masked and
+/// REQUIRED_USE headers, `green` for the missed atom, `INFORM` for
+/// `(dependency required by ...)` nodes. Any other line prints plain.
+// Portage: _emerge/depgraph.py, _show_unsatisfied_dep
+fn colorize_abort_line(line: &str, color: &Colorizer) -> String {
+    // One leading blank is the report's own, not a span edge.
+    let (lead, body) = line.strip_prefix('\n').map_or(("", line), |b| ("\n", b));
+    let coloured = if let Some(xinfo) = body
+        .strip_prefix("!!! All ebuilds that could satisfy ")
+        .and_then(|b| b.strip_suffix(" have been masked."))
+    {
+        Some(format!(
+            "!!! {}{}{}",
+            color.c("BAD", "All ebuilds that could satisfy "),
+            color.c("INFORM", xinfo),
+            color.c("BAD", " have been masked.")
+        ))
+    } else if let Some(xinfo) = body
+        .strip_prefix("!!! The ebuild selected to satisfy ")
+        .and_then(|b| b.strip_suffix(" has unmet requirements."))
+    {
+        Some(format!(
+            "!!! {}{}{}",
+            color.c("BAD", "The ebuild selected to satisfy "),
+            color.c("INFORM", xinfo),
+            color.c("BAD", " has unmet requirements.")
+        ))
+    } else if let Some((prefix, xinfo)) = [
+        "there are no ebuilds to satisfy ",
+        "there are no binary packages to satisfy ",
+        "there are no ebuilds built with USE flags to satisfy ",
+    ]
+    .iter()
+    .find_map(|prefix| {
+        body.strip_prefix(prefix)
+            .and_then(|b| b.strip_suffix('.'))
+            .map(|xinfo| (*prefix, xinfo))
+    }) {
+        Some(format!("{prefix}{}.", color.c("green", xinfo)))
+    } else if let Some(rest) = body.strip_prefix("(dependency required by \"")
+        && let Some((node, tail)) = rest.split_once("\" [")
+    {
+        Some(format!(
+            "(dependency required by \"{}\" [{tail}",
+            color.c("INFORM", node)
+        ))
+    } else {
+        None
+    };
+    match coloured {
+        Some(out) => format!("{lead}{out}"),
+        None => line.to_string(),
+    }
+}
+
+/// Colourise a resolver-built abort report line by line (see
+/// [`colorize_abort_line`]); the resolver library itself stays ANSI-free.
+pub(crate) fn colorize_abort_report(msg: &str, color: &Colorizer) -> String {
+    if !color.enabled {
+        return msg.to_string();
+    }
+    msg.split_inclusive('\n')
+        .map(|line| {
+            let (body, nl) = line.strip_suffix('\n').map_or((line, ""), |b| (b, "\n"));
+            format!("{}{nl}", colorize_abort_line(body, color))
+        })
+        .collect()
+}
+
 /// The values [`run_resolve_phases`] reads from its caller.
 pub(crate) struct RunResolvePhasesArgs<'a> {
     pub(crate) plan: &'a ResolvePlan,
@@ -241,11 +311,14 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             // what `show_resolution_header` prints on the other abort arms.
             // Portage: _emerge/depgraph.py, _start_resolution_display
             if top_level_abort_notice_shown(&msg) {
-                show_resolution_header_with_counts(opts, 0, opts.backtrack_max, pretend);
+                show_resolution_header_with_counts(opts, 0, opts.backtrack_max, pretend, color);
             }
             // Portage never prefixes a `!!!`-headed report with `emerge: `;
-            // it is emitted verbatim.
+            // it is emitted verbatim. The resolver library builds these
+            // strings plain; Portage's `_show_unsatisfied_dep` spans are
+            // coloured here, at the print site.
             // Portage: _emerge/depgraph.py, _show_unsatisfied_dep
+            let msg = colorize_abort_report(&msg, color);
             if msg.trim_start().starts_with("!!!") {
                 eprint!("{msg}");
             } else {

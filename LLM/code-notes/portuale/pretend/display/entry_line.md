@@ -50,6 +50,7 @@ One merge-list row. Context moved out of the code comments (#336 Phase 7); the c
 
 ## fn print_no_visible_candidate
 - `NoVisibleCandidate` arm: the USE-unsatisfied disclosure is Portage's `_show_unsatisfied_dep` "no ebuilds built with USE flags to satisfy" block.
+- Backlog #453 A: the disclosure spans carry Portage's colours (`green` for either missed atom, `BAD`/`INFORM` for the masked header, `INFORM` for `(dependency required by ...)` nodes; `depgraph.py:6932-6936,6993-6999,7040-7043,7074`).
 - Keyword suggestion: previously only a top-level atom's own fatal NoVisibleCandidate got this note (as part of the `Err` message that aborts the whole call); now extended to a dependency's own NoVisibleCandidate.
 - Parent flip: when that flip resolves the dep, `resolve_pretend_graph` applies it and the entry is no longer NoVisibleCandidate, so this arm is a fallback hint for the (currently unreachable) case where the suggestion exists but wasn't applied.
 

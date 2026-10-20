@@ -180,11 +180,17 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // Portage: _emerge/actions.py (`action_build`), Scheduler.py (fetchonly)
     if emerge_opts.fetchonly {
         if pretend {
-            println!("\nThese are the packages that would be fetched, in order:\n");
+            println!(
+                "\n{}\n",
+                color.c(
+                    "darkgreen",
+                    "These are the packages that would be fetched, in order:"
+                )
+            );
         }
         if super::gates::resolution_notice_shown(quiet, emerge_opts.nodeps) {
             println!("Calculating dependencies ... done!");
-            println!("Dependency resolution took .\n");
+            print!("{}", super::timing_line(&color, None));
         }
         println!("*** Resuming merge...");
         return ExitCode::from(super::run_fetchonly_action(super::FetchonlyActionArgs {
@@ -226,7 +232,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // Portage: _emerge/actions.py, Scheduler.py (merge, `*** Resuming merge...`)
     if super::gates::resolution_notice_shown(quiet, emerge_opts.nodeps) {
         println!("Calculating dependencies ... done!");
-        println!("Dependency resolution took .\n");
+        print!("{}", super::timing_line(&color, None));
     }
     println!("{}", color.c("GOOD", "*** Resuming merge..."));
     let mut merge_options = ebuild_merge::MergeOptions::from_env(shell, debug);

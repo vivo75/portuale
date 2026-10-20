@@ -80,7 +80,12 @@ pub(crate) fn show_missing_args_and_aborts(
 }
 
 /// Updates skipped for missing dependencies.
-pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &GraphResult) {
+pub(crate) fn show_skipped_missing_deps(
+    quiet: bool,
+    debug: bool,
+    result: &GraphResult,
+    color: &Colorizer,
+) {
     // The abbreviated tail: slots whose higher masked version lost to an
     // unsatisfied dependency under backtracking. Same `--quiet`-unless-`--debug`
     // gate as the `WARNING` block; no `--columns` gate.
@@ -115,9 +120,13 @@ pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &Graph
             match &f.dep {
                 portage_repo::SkippedDepDisclosure::Masked(report) => {
                     println!(
-                        "!!! All ebuilds that could satisfy {:?}{} have been masked.",
-                        report.atom,
-                        portage_repo::display_root_suffix()
+                        "!!! {}{}{}",
+                        color.c("BAD", "All ebuilds that could satisfy "),
+                        color.c(
+                            "INFORM",
+                            &format!("{:?}{}", report.atom, portage_repo::display_root_suffix())
+                        ),
+                        color.c("BAD", " have been masked.")
                     );
                     println!(
                         "!!! One of the following masked packages is required to complete your request:"
@@ -134,7 +143,10 @@ pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &Graph
                     }
                     println!();
                     for (node, ty) in &report.chain {
-                        println!("(dependency required by \"{node}\" [{ty}])");
+                        println!(
+                            "(dependency required by \"{}\" [{ty}])",
+                            color.c("INFORM", node)
+                        );
                     }
                     println!("For more information, see the MASKED PACKAGES section in the emerge");
                     println!("man page or refer to the Gentoo Handbook.");
@@ -142,17 +154,22 @@ pub(crate) fn show_skipped_missing_deps(quiet: bool, debug: bool, result: &Graph
                 }
                 portage_repo::SkippedDepDisclosure::Plain(report) => {
                     println!(
-                        "emerge: there are no {} to satisfy {:?}{}.",
+                        "emerge: there are no {} to satisfy {}.",
                         if report.binary_only {
                             "binary packages"
                         } else {
                             "ebuilds"
                         },
-                        report.atom,
-                        portage_repo::display_root_suffix()
+                        color.c(
+                            "green",
+                            &format!("{:?}{}", report.atom, portage_repo::display_root_suffix())
+                        )
                     );
                     for (node, ty) in &report.chain {
-                        println!("(dependency required by \"{node}\" [{ty}])");
+                        println!(
+                            "(dependency required by \"{}\" [{ty}])",
+                            color.c("INFORM", node)
+                        );
                     }
                     println!();
                 }

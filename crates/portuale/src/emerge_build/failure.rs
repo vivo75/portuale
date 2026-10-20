@@ -274,7 +274,7 @@ impl Ledger {
             return;
         }
         println!("Calculating dependencies ... done!");
-        println!("Dependency resolution took .\n");
+        print!("{}", crate::pretend::timing_line(&color, None));
     }
 
     /// A package the resumed pass can no longer build: the `dropped because` notice

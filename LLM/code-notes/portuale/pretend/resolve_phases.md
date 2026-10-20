@@ -28,3 +28,6 @@ gnome-shell dropped `dev-lang/rust-bin:1.96.1` next to `:1.94.1` (Total off by
 one). Cps with more than one phase-1 entry are now removed from the reuse map
 and re-resolve as before the #394 change. Verified on the bed: the four probes
 are byte-identical to the pre-#394 baseline.
+
+## fn colorize_abort_report
+- Backlog #453 A: the resolver library builds abort reports plain, so Portage's `_show_unsatisfied_dep` spans (`BAD`/`INFORM` masked and REQUIRED_USE headers, `green` missed atom, `INFORM` chain nodes; `depgraph.py:6932-6936,6993-6999,7040-7043,7074`) are coloured at the print site in `run_resolve_phases::handle`, line by line. Disabled colour is the identity, so uncoloured pins are untouched.

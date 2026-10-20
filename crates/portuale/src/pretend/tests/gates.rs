@@ -276,6 +276,37 @@ fn top_level_all_masked_abort_prints_the_notice_on_and_off_pretend() {
     ));
 }
 
+/// Backlog #453 D: the mid-resolve abort preamble opens with Portage's
+/// leading blank line (`_start_resolution_display` writes `"\n" + banner`).
+/// Oracle: Portage 3.0.82.2 non-tty capture of `--pretend
+/// dev-libs/missingdep` (staged fixtures).
+#[test]
+fn abort_preamble_opens_with_the_banner_blank_line() {
+    let plain = Colorizer::new(false);
+    assert_eq!(
+        abort_preamble(false, 0, 20, &plain),
+        "\nThese are the packages that would be merged, in order:\n\n\
+         Calculating dependencies ... done!\n\
+         Dependency resolution took (backtrack: 0/20).\n\n"
+    );
+    assert_eq!(
+        abort_preamble(true, 0, 20, &plain),
+        "\nThese are the packages that would be merged, in order:\n\n\
+         Calculating dependencies ... done!\n"
+    );
+    // Backlog #453 A: with colour on, the banner is `darkgreen` and the cut
+    // seconds keep Portage's empty escape pair (determinism: the seconds
+    // themselves are still omitted). Oracle: the `--color=y` pipe capture
+    // of `--pretend dev-libs/maskedpkg`.
+    let colour = Colorizer::new(true);
+    assert_eq!(
+        abort_preamble(false, 0, 20, &colour),
+        "\n\x1b[32mThese are the packages that would be merged, in order:\x1b[39;49;00m\n\n\
+         Calculating dependencies ... done!\n\
+         Dependency resolution took \x1b[32m\x1b[39;49;00m s (backtrack: 0/20).\n\n"
+    );
+}
+
 /// `--pretend --fetchonly` prints URIs instead of the merge list, whatever else is asked;
 /// a real fetch with `--ask`/`--verbose` still shows it. Portage: actions.py:541-543.
 #[test]

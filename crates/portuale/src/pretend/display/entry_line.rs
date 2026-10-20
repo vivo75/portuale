@@ -291,7 +291,7 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
             });
         }
         PretendOutcome::NoVisibleCandidate => {
-            print_no_visible_candidate(use_unsat_deps, entry, masked_deps, plain_miss_deps);
+            print_no_visible_candidate(use_unsat_deps, entry, masked_deps, plain_miss_deps, color);
         }
     }
 }
@@ -406,6 +406,7 @@ pub(crate) fn print_no_visible_candidate(
     entry: &GraphEntry,
     masked_deps: &[MaskedDepReport],
     plain_miss_deps: &[PlainMissDepReport],
+    color: &Colorizer,
 ) {
     // The USE-unsatisfied block renders before the masked block when
     // both apply, so the lookup is ordered the same way.
@@ -415,25 +416,34 @@ pub(crate) fn print_no_visible_candidate(
         .find(|r| r.category == entry.category && r.package == entry.package)
     {
         eprintln!(
-            "\nemerge: there are no ebuilds built with USE flags to satisfy {:?}{}.",
-            report.atom,
-            portage_repo::display_root_suffix()
+            "\nemerge: there are no ebuilds built with USE flags to satisfy {}.",
+            color.c(
+                "green",
+                &format!("{:?}{}", report.atom, portage_repo::display_root_suffix())
+            )
         );
         eprintln!("!!! One of the following packages is required to complete your request:");
         for (cpv, reasons) in &report.rows {
             eprintln!("- {cpv} ({})", reasons.join(", "));
         }
         for (node, ty) in &report.chain {
-            eprintln!("(dependency required by \"{node}\" [{ty}])");
+            eprintln!(
+                "(dependency required by \"{}\" [{ty}])",
+                color.c("INFORM", node)
+            );
         }
     } else if let Some(report) = masked_deps
         .iter()
         .find(|r| r.category == entry.category && r.package == entry.package)
     {
         eprintln!(
-            "\n!!! All ebuilds that could satisfy {:?}{} have been masked.",
-            report.atom,
-            portage_repo::display_root_suffix()
+            "\n!!! {}{}{}",
+            color.c("BAD", "All ebuilds that could satisfy "),
+            color.c(
+                "INFORM",
+                &format!("{:?}{}", report.atom, portage_repo::display_root_suffix())
+            ),
+            color.c("BAD", " have been masked.")
         );
         eprintln!("!!! One of the following masked packages is required to complete your request:");
         for (cpv, reasons) in &report.masked {
@@ -448,7 +458,10 @@ pub(crate) fn print_no_visible_candidate(
         }
         eprintln!();
         for (node, ty) in &report.chain {
-            eprintln!("(dependency required by \"{node}\" [{ty}])");
+            eprintln!(
+                "(dependency required by \"{}\" [{ty}])",
+                color.c("INFORM", node)
+            );
         }
         eprintln!("For more information, see the MASKED PACKAGES section in the emerge");
         eprintln!("man page or refer to the Gentoo Handbook.");
@@ -459,17 +472,22 @@ pub(crate) fn print_no_visible_candidate(
         // The plain-miss block: the unevaluated atom as queued plus the
         // `_get_dep_chain` rows, in place of the bare line.
         eprintln!(
-            "\nemerge: there are no {} to satisfy {:?}{}.",
+            "\nemerge: there are no {} to satisfy {}.",
             if report.binary_only {
                 "binary packages"
             } else {
                 "ebuilds"
             },
-            report.atom,
-            portage_repo::display_root_suffix()
+            color.c(
+                "green",
+                &format!("{:?}{}", report.atom, portage_repo::display_root_suffix())
+            )
         );
         for (node, ty) in &report.chain {
-            eprintln!("(dependency required by \"{node}\" [{ty}])");
+            eprintln!(
+                "(dependency required by \"{}\" [{ty}])",
+                color.c("INFORM", node)
+            );
         }
     } else {
         eprintln!(

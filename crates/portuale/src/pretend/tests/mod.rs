@@ -635,6 +635,7 @@ fn entry_with_use(outcome: PretendOutcome, pv_use: &str, p_use: &str) -> GraphEn
 // the `PLACED_CONFIG_ENV_LOCK` (`remote.rs`) style.
 static INFO_SCALAR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+mod abort_color;
 mod atoms;
 mod attrs;
 mod autoclean;

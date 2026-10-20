@@ -1227,6 +1227,12 @@ fn parse_output_opts<'a>(
         opts.quiet = false;
         *idx += 1;
         Ok(true)
+    } else if arg == "--nospinner" {
+        // Recognized no-op: portuale never animates, so the STATIC notice
+        // is the only shape.
+        // Portage: _emerge/main.py, actions
+        *idx += 1;
+        Ok(true)
     } else if arg == "--deselect" || arg == "-W" {
         // Same optional-value shape as `--verbose`, but a bare flag turns
         // this into the standalone deselect action (see `run_deselect`).

@@ -370,6 +370,49 @@ pub(crate) fn render_merge_rows(args: RenderMergeRowsArgs<'_>) {
     }
 }
 
+/// `Dependency resolution took ... (backtrack: B/M).`: only the wall-clock
+/// seconds are coloured in Portage, and portuale cuts them (determinism),
+/// keeping the empty escape pair when colour is on so the structure matches.
+/// `None` is the resume shape: `resume_depgraph` passes no backtrack counts,
+/// so Portage prints no suffix there.
+// Portage: _emerge/depgraph.py, _show_resolution_report
+pub(crate) fn timing_line(color: &Colorizer, backtrack: Option<(u64, u32)>) -> String {
+    if !color.enabled {
+        // The two cut shapes, kept byte-stable: `took .` on the resume
+        // paths, the bare `backtrack: B/M` signal everywhere else.
+        return match backtrack {
+            Some((restarts, max)) => {
+                format!("Dependency resolution took (backtrack: {restarts}/{max}).\n\n")
+            }
+            None => "Dependency resolution took .\n\n".to_string(),
+        };
+    }
+    let suffix = backtrack.map_or_else(String::new, |(restarts, max)| {
+        format!(" (backtrack: {restarts}/{max})")
+    });
+    let (open, close) = color.wrap_codes("darkgreen");
+    format!("Dependency resolution took {open}{close} s{suffix}.\n\n")
+}
+
+/// The merge-list preamble and timing report printed on stdout before an
+/// aborted resolve's disclosure block: the banner (with Portage's leading
+/// blank line), `Calculating dependencies ... done!`, and the timing line
+/// (the wall-clock seconds are cut per the determinism convention; only
+/// `backtrack: N/M` is kept; suppressed under `--quiet`).
+// Portage: _emerge/depgraph.py, _start_resolution_display + _show_resolution_report
+pub(crate) fn abort_preamble(quiet: bool, restarts: u64, max: u32, color: &Colorizer) -> String {
+    let mut out = String::from("\n");
+    out.push_str(&color.c(
+        "darkgreen",
+        "These are the packages that would be merged, in order:",
+    ));
+    out.push_str("\n\nCalculating dependencies ... done!\n");
+    if !quiet {
+        out.push_str(&timing_line(color, Some((restarts, max))));
+    }
+    out
+}
+
 /// The values [`show_abort_disclosures`] reads from its caller.
 pub(crate) struct ShowAbortDisclosuresArgs<'a> {
     pub(crate) result: &'a GraphResult,
@@ -433,21 +476,15 @@ pub(crate) fn show_abort_disclosures(args: ShowAbortDisclosuresArgs<'_>) {
         if pretend {
             // The merge-list preamble and timing line print before the abort
             // block on stderr; the partial list itself is empty for these arms.
-            // The wall-clock seconds are cut (determinism); only `backtrack:
-            // N/M` is kept. Portage: _emerge/depgraph.py, _show_merge_list
-            println!(
-                "These are the packages that would be merged, in order:
-"
+            print!(
+                "{}",
+                abort_preamble(
+                    quiet,
+                    result.backtrack_restarts,
+                    result.backtrack_max,
+                    color
+                )
             );
-            println!("Calculating dependencies ... done!");
-            // The timing line is suppressed under `--quiet`.
-            if !quiet {
-                println!(
-                    "Dependency resolution took (backtrack: {}/{}).
-",
-                    result.backtrack_restarts, result.backtrack_max,
-                );
-            }
         }
         let mut thrown_away: Vec<String> = Vec::new();
         for (i, entry) in result.entries.iter().enumerate() {
@@ -760,12 +797,17 @@ pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
 }
 
 /// The header printed before the merge list of a non-pretend run.
-pub(crate) fn show_resolution_header(opts: &EmergeOpts<'_>, result: &GraphResult) {
+pub(crate) fn show_resolution_header(
+    opts: &EmergeOpts<'_>,
+    result: &GraphResult,
+    color: &Colorizer,
+) {
     show_resolution_header_with_counts(
         opts,
         result.backtrack_restarts,
         result.backtrack_max,
         false,
+        color,
     );
 }
 
@@ -780,6 +822,7 @@ pub(crate) fn show_resolution_header_with_counts(
     backtrack_restarts: u64,
     backtrack_max: u32,
     pretend_abort: bool,
+    color: &Colorizer,
 ) {
     let &EmergeOpts {
         pretend,
@@ -820,15 +863,16 @@ pub(crate) fn show_resolution_header_with_counts(
                 "merged"
             };
             // `--tree` does not apply to fetching (depgraph.py:_start_resolution_display).
-            if tree && !fetchonly {
+            let banner = if tree && !fetchonly {
                 if unordered_display {
-                    println!("These are the packages that would be {action}:");
+                    format!("These are the packages that would be {action}:")
                 } else {
-                    println!("These are the packages that would be {action}, in reverse order:");
+                    format!("These are the packages that would be {action}, in reverse order:")
                 }
             } else {
-                println!("These are the packages that would be {action}, in order:");
-            }
+                format!("These are the packages that would be {action}, in order:")
+            };
+            println!("{}", color.c("darkgreen", &banner));
             println!();
         }
         if resolution_notice_shown(quiet, nodeps) {
@@ -836,8 +880,9 @@ pub(crate) fn show_resolution_header_with_counts(
             println!("Calculating dependencies ... done!");
             // The wall-clock seconds are cut (determinism); only the
             // `backtrack: B/M` signal is kept, plus a trailing blank line.
-            println!(
-                "Dependency resolution took (backtrack: {backtrack_restarts}/{backtrack_max}).\n",
+            print!(
+                "{}",
+                timing_line(color, Some((backtrack_restarts, backtrack_max)))
             );
         }
     }

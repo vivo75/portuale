@@ -46,7 +46,6 @@ pub const BOOLEAN_OPTIONS: &[(&str, Option<&str>)] = &[
     ("--noconfmem", None),
     ("--newrepo", None),
     ("--nobindeps", None),
-    ("--nospinner", None),
     ("--quiet-repo-display", None),
     ("--quiet-unmerge-warn", None),
     ("--resume", Some("-r")),
@@ -338,6 +337,13 @@ mod tests {
         // Implemented: handled by the caller. No short alias; `=n` strips before lookup.
         assert!(lookup("--ignore-world").is_none());
         assert!(lookup("--ignore-world=n").is_none());
+    }
+
+    #[test]
+    fn does_not_recognize_nospinner_itself() {
+        // Implemented as a no-op (portuale never animates): handled by the
+        // caller, no short alias. Portage: _emerge/main.py
+        assert!(lookup("--nospinner").is_none());
     }
 
     #[test]

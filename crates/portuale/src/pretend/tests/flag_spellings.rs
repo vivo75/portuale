@@ -95,3 +95,14 @@ fn autounmask_keep_masks_true_spelling_behaves_like_the_bare_flag() {
         1,
     );
 }
+
+#[test]
+fn nospinner_is_accepted_and_changes_nothing() {
+    // Backlog #453 B: Portage accepts `--nospinner` (`_emerge/main.py:37`);
+    // portuale never animates, so it parses as a no-op.
+    let args = ["--pretend", "--nospinner", "dev-libs/newpkg"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    assert!(parse_emerge_args(&args).is_ok());
+}

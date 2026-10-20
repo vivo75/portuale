@@ -221,6 +221,12 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(code) => return code,
     };
 
+    // Portage sets the terminal title around the whole run
+    // (`_emerge/actions.py:3694`, reset in `main.py:1377`'s `finally:`);
+    // the guard restores it on every return below.
+    // Portage: lib/portage/output.py, xtermTitle
+    let _title = crate::title::TitleGuard::set(&config_features_list(&config));
+
     apply_process_globals(&opts);
 
     if let Some(code) = validate_and_early_actions(&mut opts) {
@@ -334,7 +340,7 @@ pub fn run(args: &[String]) -> ExitCode {
             autounmask_only: opts.autounmask_only,
             has_changes: has_autounmask_changes,
         });
-    show_resolution_header(&opts, &result);
+    show_resolution_header(&opts, &result, &color);
 
     show_pprovided_notice(&result, &color);
 
@@ -459,7 +465,7 @@ pub(crate) fn finish_run(args: FinishRunArgs<'_>) -> ExitCode {
     } = args;
     show_skipped_updates(plan, opts, result, root, repos);
 
-    show_skipped_missing_deps(opts.quiet, opts.debug, result);
+    show_skipped_missing_deps(opts.quiet, opts.debug, result, &color);
 
     show_missing_args_and_aborts(result, root, &color, repos, config);
 

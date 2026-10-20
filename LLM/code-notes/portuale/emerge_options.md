@@ -98,5 +98,8 @@ Recognition tables for Portage's full `emerge` CLI option surface; every impleme
 ## flag --oneshot
 - Implemented (`--oneshot`/`-1`): suppresses the world-file write on a merge, and the world colour at `--pretend`.
 
+## flag --nospinner
+- Implemented as a no-op: portuale never animates, so the STATIC notice is the only shape. Excluded from `BOOLEAN_OPTIONS` like every implemented flag; the caller parses it directly. Portage `_emerge/main.py:37` (option table), `actions.py:3936-3941` (STATIC downgrade).
+
 ## tests
 - Each `does_not_recognize_*` test pins that an implemented flag is excluded from the recognition tables (handled directly by the caller). The `--ignore-world` case (implemented: Portage `create_depgraph_params.py:128-129` + `depgraph.py:357-360`) additionally pins that the `=n` spelling doesn't match (lookup strips the value first) and that it has no short alias.
