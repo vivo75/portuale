@@ -213,7 +213,7 @@ pub(crate) fn quickpkg_direct_root() -> Option<PathBuf> {
 /// mirror what `binary_candidates_from_index` / `read_binary_metadata` read.
 pub(crate) fn quickpkg_direct_index_entries(source_root: &Path) -> Vec<HashMap<String, String>> {
     let mut out = Vec::new();
-    for pkg in all_installed_packages(source_root) {
+    for pkg in all_installed_packages(source_root).iter() {
         let (cat, name, ver) = (
             pkg.category.as_str(),
             pkg.package.as_str(),

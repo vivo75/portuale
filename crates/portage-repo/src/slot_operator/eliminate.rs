@@ -543,7 +543,7 @@ pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEnt
     }
 
     let mut out: Vec<GraphEntry> = Vec::new();
-    for pkg in all_installed_packages(root) {
+    for pkg in all_installed_packages(root).iter() {
         let cp = (pkg.category.clone(), pkg.package.clone());
         // Portage `_rebuild_config.add` records a rebuild edge only for a
         // parent already in the graph (an installed node with a buildtime

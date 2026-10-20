@@ -451,7 +451,7 @@ fn closure_seeds(req: &ResolveRequest) -> Result<(Vec<String>, Vec<String>), Str
         }
     }
     let mut shallow = Vec::new();
-    for inst in all_installed_packages(&req.root) {
+    for inst in all_installed_packages(&req.root).iter() {
         shallow.push(format!("{}/{}", inst.category, inst.package));
     }
     seeds.sort();
@@ -543,7 +543,7 @@ impl InstalledView {
     fn of(req: &ResolveRequest) -> Self {
         let mut by_slot: HashMap<(String, String, String), Vec<String>> = HashMap::new();
         let mut occupied = HashSet::new();
-        for inst in all_installed_packages(&req.root) {
+        for inst in all_installed_packages(&req.root).iter() {
             by_slot
                 .entry((
                     inst.category.clone(),
@@ -552,7 +552,7 @@ impl InstalledView {
                 ))
                 .or_default()
                 .push(inst.version.clone());
-            occupied.insert((inst.category, inst.package));
+            occupied.insert((inst.category.clone(), inst.package.clone()));
         }
         Self { by_slot, occupied }
     }
@@ -4874,7 +4874,7 @@ fn resolve_resolvo(req: &ResolveRequest) -> Result<GraphResult, String> {
         }
     }
     let mut installed = InstalledSet::new();
-    for inst in all_installed_packages(&req.root) {
+    for inst in all_installed_packages(&req.root).iter() {
         let Ok(cpv) = portage_solver::Cpv::parse(&format!(
             "{}/{}-{}",
             inst.category, inst.package, inst.version
@@ -5088,7 +5088,7 @@ mod tests {
             std::env::set_var("PORTUALE_PG_TRACE", "1");
         }
         let mut buf = Vec::new();
-        for inst in &installed {
+        for inst in installed.iter() {
             super::pg_trace(
                 &mut buf,
                 format_args!(
@@ -5107,7 +5107,7 @@ mod tests {
         );
         // Silent without the env var.
         let mut buf = Vec::new();
-        for inst in &installed {
+        for inst in installed.iter() {
             super::pg_trace(
                 &mut buf,
                 format_args!(
@@ -5538,7 +5538,7 @@ mod tests {
     ) -> (
         super::super::ResolveRequest,
         super::LazyRepo,
-        Vec<super::super::InstalledPackage>,
+        std::sync::Arc<Vec<super::super::InstalledPackage>>,
     ) {
         use super::super::{SolverKind, find_repos};
         let mut req = fixture_request(atoms);
@@ -5852,7 +5852,7 @@ mod tests {
         let bridge = super::BridgeRepo {
             lazy,
             kept,
-            installed: installed.clone(),
+            installed: installed.to_vec(),
             or_overrides: super::OrChoiceOverrides::new(),
         };
         let cpv = portage_solver::Cpv::parse("dev-libs/pg34-ulib-1").expect("cpv parses");
@@ -5882,7 +5882,7 @@ mod tests {
         let bridge = super::BridgeRepo {
             lazy,
             kept,
-            installed: installed.clone(),
+            installed: installed.to_vec(),
             or_overrides: super::OrChoiceOverrides::new(),
         };
         let cpv = portage_solver::Cpv::parse("dev-libs/pg34-ulib-1").expect("cpv parses");
@@ -5910,7 +5910,7 @@ mod tests {
         let bridge = super::BridgeRepo {
             lazy,
             kept,
-            installed: installed.clone(),
+            installed: installed.to_vec(),
             or_overrides: super::OrChoiceOverrides::new(),
         };
         let cpn = portage_solver::Cpn::parse("dev-libs/pg34-gone").expect("cpn parses");
@@ -8095,7 +8095,7 @@ mod tests {
         let bridge = super::BridgeRepo {
             lazy,
             kept,
-            installed: installed.clone(),
+            installed: installed.to_vec(),
             or_overrides: super::OrChoiceOverrides::new(),
         };
         let cpn = portage_solver::Cpn::parse("dev-libs/pg34-arg").expect("cpn parses");

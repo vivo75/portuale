@@ -51,7 +51,7 @@ pub fn dep_edge_satisfied_by_installed(
 /// grouped by `cat/pkg`.
 pub(crate) fn installed_candidates_by_cp(root: &Path) -> HashMap<(String, String), Vec<String>> {
     let mut by_cp: HashMap<(String, String), Vec<String>> = HashMap::new();
-    for p in all_installed_packages(root) {
+    for p in all_installed_packages(root).iter() {
         let (slot, sub_slot) = read_vdb_slot(root, &p.category, &p.package, &p.version);
         by_cp
             .entry((p.category.clone(), p.package.clone()))

@@ -75,6 +75,7 @@ Installed packages read from the VDB.
 ## fn all_installed_packages
 - Every package recorded under `<root>/var/db/pkg` (Portage `vartree.dbapi.cpv_all()`), each with its own main slot. Directory names are split into `package`/`version` by finding the last `-`-separated boundary whose right half `ververify`s.
 - Directory-name split generalises `strip_version_prefix`'s "a version always starts like a version, a package-name word may not" disambiguation to names whose package isn't known ahead of time. A deep `emerge -pu` reads the whole installed set (~2000 `SLOT` files) at ~10 resolver call sites, several inside loops, and the vdb never changes mid-resolve; Portage's `vardbapi` invalidates its own `cp_all` cache on category-dir mtime the same way. The fingerprint is `FilesDb::generation` (feat#157 S1.2; was `vdb_fingerprint` here).
+- Backlog #454: the cache already stored an `Arc<Vec<..>>` and the function returned a deep clone on every call (even on a hit); it now returns the shared `Arc` (`Arc::clone`), so callers borrow (`.iter()`) and clone only where an owned `Vec` is truly needed.
 
 ## fn all_installed_packages_uncached
 - The category/package directory walk used to live here (feat#157 S1.3); `resolve_vdb_entry` resolves the scanned entry back from `(category, name, version)`. Entries surface under post-move identity the way global-updates rewrites the vdb on sync (portuale never writes -- see `resolve_vdb_entry`).

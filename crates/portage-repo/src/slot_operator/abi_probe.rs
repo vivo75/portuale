@@ -52,7 +52,7 @@ pub(crate) fn collect_probe_parents(
         }
     }
     let mut parents: HashMap<(String, String), Vec<ProbeParent>> = HashMap::new();
-    for pkg in all_installed_packages(root) {
+    for pkg in all_installed_packages(root).iter() {
         let qcp = (pkg.category.clone(), pkg.package.clone());
         if !reachable.contains(&qcp) && !walked.contains(&qcp) {
             continue;

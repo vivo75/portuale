@@ -424,7 +424,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
         // `args` mode: every installed package the args *don't* match is a
         // protected root (Portage `protected_set`); no edge is recorded for
         // the seed itself, since `show_parents` filters that parent out.
-        for p in &installed {
+        for p in installed.iter() {
             if !matched_by_args(p) && reachable.insert(key(p)) {
                 queue.push(p.clone());
             }
@@ -553,7 +553,7 @@ pub fn prune_cleanlist(
 
     // Highest installed version per cp (Portage `pkgs_for_cp[-1]`).
     let mut highest: HashMap<(String, String), String> = HashMap::new();
-    for p in &installed {
+    for p in installed.iter() {
         let cp = (p.category.clone(), p.package.clone());
         match highest.get(&cp) {
             Some(v) if vercmp_ordering(&p.version, v) != Ordering::Greater => {}
@@ -572,7 +572,7 @@ pub fn prune_cleanlist(
     // (Portage actions).
     let multi_version: HashSet<(String, String)> = {
         let mut counts: HashMap<(String, String), usize> = HashMap::new();
-        for p in &installed {
+        for p in installed.iter() {
             *counts
                 .entry((p.category.clone(), p.package.clone()))
                 .or_default() += 1;
@@ -628,7 +628,7 @@ pub fn prune_cleanlist(
     // Portage `_parent_atoms`: only dep-walk edges here (the prune seeds come
     // from the internal protected-set roots, which `show_parents` filters out).
     let mut parent_atoms: HashMap<(String, String, String), Vec<(String, String)>> = HashMap::new();
-    for p in &installed {
+    for p in installed.iter() {
         if !is_candidate(p) && reachable.insert(key(p)) {
             queue.push(p.clone());
         }

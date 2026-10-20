@@ -50,7 +50,7 @@ pub(crate) fn expand_selected(root: &Path, config_root: &Path) -> Result<Vec<Str
 /// Portage: dbapi.py, EverythingSet.
 pub(crate) fn installed_set_atoms(root: &Path) -> Vec<String> {
     let mut atoms: Vec<String> = portage_repo::all_installed_packages(root)
-        .into_iter()
+        .iter()
         .map(|p| format!("{}/{}:{}", p.category, p.package, p.slot))
         .collect();
     atoms.sort();

@@ -227,9 +227,9 @@ pub(crate) fn highest_installed_version(
     package: &str,
 ) -> Option<String> {
     crate::all_installed_packages(root)
-        .into_iter()
+        .iter()
         .filter(|p| p.category == category && p.package == package)
-        .map(|p| p.version)
+        .map(|p| p.version.clone())
         .max_by(|a, b| crate::vercmp_ordering(a, b))
 }
 

@@ -391,7 +391,7 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
         .iter()
         .map(|e| (e.category.as_str(), e.package.as_str()))
         .collect();
-    for pkg in all_installed_packages(root) {
+    for pkg in all_installed_packages(root).iter() {
         // Already walked (any outcome): the walk's own blockers are
         // pending, and the cp-keyed owner lookup in `resolve_blockers`
         // ties them to the right entry.
@@ -935,7 +935,7 @@ fn hold_seeds<'a>(
             .map(|e| (e.category.clone(), e.package.clone()))
             .collect();
         let mut atoms: Vec<String> = set_seed_atoms.to_vec();
-        for pkg in all_installed_packages(root) {
+        for pkg in all_installed_packages(root).iter() {
             let cp = (pkg.category.clone(), pkg.package.clone());
             if !blocker_retry_closure.contains(&cp) || merge_bound.contains(&cp) {
                 continue;

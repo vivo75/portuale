@@ -1,6 +1,9 @@
 # crates/portage-repo/src/tests/installed.rs
 Installed-db (vdb) read, snapshot, memo, and candidate-cache tests.
 
+## fn all_installed_packages_cache_hit_shares_the_allocation
+- Backlog #454: two consecutive scans of an unchanged vdb return `Arc::ptr_eq` pointers -- the cache hit clones the pointer, never the entries. Verified load-bearing by temporarily cloning into a fresh `Arc` and watching the test fail.
+
 ## fn all_installed_packages_skips_a_stale_merging_entry
 - Backlog #183: a stale `-MERGING-<pf>` entry left by a killed merge is invisible to installed-package enumeration -- Portage's `vardbapi._excluded_dirs` (`vartree.py`), which `cp_list` consults before `_pkg_str` ever sees the name (without the skip, `split_pf` mis-splits `-MERGING-realpkg-2.0` into a bogus `-MERGING-realpkg`/`2.0` row).
 - Ground truth: the `l32` C4 control cell (`findings/l5.md` Group 4) leaves exactly `-MERGING-slow-a-1.0` after the SIGKILL, and the resumed merge treats `slow-a` as not installed.

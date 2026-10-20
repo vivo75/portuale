@@ -216,7 +216,7 @@ pub(crate) fn misspell_suggestion_block(
         return None;
     }
     let mut all_cp: std::collections::BTreeSet<String> = portage_repo::all_installed_packages(root)
-        .into_iter()
+        .iter()
         .map(|p| format!("{}/{}", p.category, p.package))
         .collect();
     if dbs.ebuild {

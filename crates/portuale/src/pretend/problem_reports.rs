@@ -443,8 +443,8 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
         let mut need_rebuild: Vec<(String, String)> = Vec::new();
         let installed_pkgs: std::collections::HashSet<(String, String, String)> =
             all_installed_packages(root)
-                .into_iter()
-                .map(|p| (p.category, p.package, p.version))
+                .iter()
+                .map(|p| (p.category.clone(), p.package.clone(), p.version.clone()))
                 .collect();
         println!();
         println!("!!! Multiple package instances within a single package slot have been pulled");

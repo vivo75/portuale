@@ -183,7 +183,7 @@ pub fn installed_reverse_dependents(
         return found;
     }
     let mut out = std::collections::BTreeSet::new();
-    for pkg in all_installed_packages(root) {
+    for pkg in all_installed_packages(root).iter() {
         if pkg.category == consumer_category
             && pkg.package == consumer_package
             && pkg.version == consumer_version
@@ -708,8 +708,9 @@ impl InstalledPackage {
 /// Every package recorded under `<root>/var/db/pkg`, each with its main slot. Directory names
 /// split into `package`/`version` at the last `-` boundary whose right half verifies as a version.
 /// Memoised per `root`, keyed by the vdb generation so a same-process merge/unmerge is picked up.
+/// The `Arc` is shared: every cache hit clones the pointer, never the entries, so do not mutate.
 // Portage: vartree.dbapi.cpv_all
-pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
+pub fn all_installed_packages(root: &Path) -> std::sync::Arc<Vec<InstalledPackage>> {
     // root -> (vdb fingerprint at scan time, scanned set)
     type InstalledCache = HashMap<PathBuf, (u64, std::sync::Arc<Vec<InstalledPackage>>)>;
     static CACHE: OnceLock<RwLock<InstalledCache>> = OnceLock::new();
@@ -720,7 +721,7 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
         && let Some((fp, packages)) = guard.get(root)
         && *fp == fingerprint
     {
-        return packages.as_ref().clone();
+        return std::sync::Arc::clone(packages);
     }
     let packages = std::sync::Arc::new(all_installed_packages_uncached(root));
     if let Ok(mut guard) = cache.write() {
@@ -729,7 +730,7 @@ pub fn all_installed_packages(root: &Path) -> Vec<InstalledPackage> {
             (fingerprint, std::sync::Arc::clone(&packages)),
         );
     }
-    packages.as_ref().clone()
+    packages
 }
 
 pub(crate) fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPackage> {

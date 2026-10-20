@@ -22,6 +22,16 @@ fn all_installed_packages_skips_a_stale_merging_entry() {
     );
 }
 
+/// A cache hit shares the allocation: two consecutive scans of an
+/// unchanged vdb return `Arc::ptr_eq` pointers, not two cloned vecs.
+#[test]
+fn all_installed_packages_cache_hit_shares_the_allocation() {
+    let root = tmp_vdb("dev-libs", "realpkg-1.0", &[]);
+    let first = all_installed_packages(&root);
+    let second = all_installed_packages(&root);
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+}
+
 /// `read_vdb_string` collapses multi-line values to one space-separated line
 /// (Portage's `_aux_get` normalisation).
 #[test]

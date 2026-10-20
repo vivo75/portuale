@@ -408,9 +408,9 @@ pub(crate) fn reverse_dependency_constraints(
     let mut seen: HashSet<SeenPin> = HashSet::new();
     // Per-pass `Effective`-layer cache (one overlay per instance).
     let mut meta_memo: HashMap<(String, String, String, String), String> = HashMap::new();
-    'consumer: for consumer in all_installed_packages(root) {
+    'consumer: for consumer in all_installed_packages(root).iter() {
         if constraints_from_consumer(ConstraintsFromConsumerArgs {
-            consumer: &consumer,
+            consumer,
             being_replaced: &being_replaced,
             being_removed: &being_removed,
             reachable,

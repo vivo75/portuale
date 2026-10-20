@@ -102,7 +102,7 @@ pub(crate) fn slot_operator_rebuild_scan(
     let installed = all_installed_packages(root);
     // cp -> every installed (version, main slot).
     let mut installed_by_cp: HashMap<(String, String), Vec<(String, String)>> = HashMap::new();
-    for p in &installed {
+    for p in installed.iter() {
         installed_by_cp
             .entry((p.category.clone(), p.package.clone()))
             .or_default()
@@ -145,7 +145,7 @@ pub(crate) fn slot_operator_rebuild_scan(
     // the vdb loop as before.
     let want_probe = update || !top_level_cps.is_empty();
     if !new_slot.is_empty() || !new_slot_fresh.is_empty() || want_probe {
-        for pkg in &installed {
+        for pkg in installed.iter() {
             let cp = (pkg.category.clone(), pkg.package.clone());
             if undone.contains(&cp) || (in_graph.contains(&cp) && !already.contains(&cp)) {
                 continue;
