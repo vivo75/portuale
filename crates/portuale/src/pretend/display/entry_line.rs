@@ -48,6 +48,30 @@ pub(crate) struct PrintEntryLineArgs<'a> {
     pub(crate) circular: &'a HashMap<(bool, String, String), Vec<portage_repo::CircularDepChild>>,
 }
 
+thread_local! {
+    /// Distfiles an earlier row of this merge list already counted
+    /// (Portage's `myfetchlist`).
+    static LISTED_FETCH_FILES: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Bytes `entry` still adds to the download total: files an earlier row
+/// listed are skipped. `restart` forgets the earlier rows (first row).
+fn fetch_bytes_not_yet_listed(entry: &GraphEntry, restart: bool) -> u64 {
+    LISTED_FETCH_FILES.with(|listed| {
+        let mut listed = listed.borrow_mut();
+        if restart {
+            listed.clear();
+        }
+        entry
+            .download_files
+            .iter()
+            .filter(|(name, _)| listed.insert(name.clone()))
+            .map(|(_, size)| size)
+            .sum()
+    })
+}
+
 /// One `GraphEntry`'s display line, shared by flat and `--tree` modes so they
 /// cannot drift apart. A directly-requested top-level atom's own line is
 /// hidden under `--onlydeps`, whatever its outcome. `columns` switches the
@@ -161,6 +185,7 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
     // Portage: output.py, _set_no_columns
     let ctx = EntryLineCtx {
         entry,
+        first_row: index == 0,
         system_atoms,
         world_atoms,
         is_favorite,
@@ -557,6 +582,7 @@ pub(crate) fn print_no_visible_candidate(
 /// The values the line-printing helpers of [`print_entry_line`] borrow from it.
 pub(crate) struct EntryLineCtx<'a> {
     entry: &'a GraphEntry,
+    first_row: bool,
     system_atoms: &'a [String],
     world_atoms: &'a [String],
     is_favorite: bool,
@@ -684,6 +710,7 @@ impl EntryLineCtx<'_> {
     fn emit(&self, f: &str, version: &str) {
         let &EntryLineCtx {
             entry,
+            first_row: index_is_first,
             quiet,
             color,
             v3,
@@ -712,11 +739,17 @@ impl EntryLineCtx<'_> {
             alphabetical,
             color,
         });
-        // The fetch size renders only for a `--getbinpkg` remote binary or
-        // under `force_sizes` (the circular re-display runs forced-verbose).
+        // Under `-v` every merge row ends with the bytes still to fetch (`0 KiB`
+        // when nothing is), a distfile shared with an earlier row counted once.
         // Portage: output.py, verbose_size
-        let size_suffix = if v3 && (entry.remote_binary || force_sizes) {
-            let bytes: u64 = entry.download_files.iter().map(|(_, s)| s).sum();
+        let is_merge = !matches!(
+            entry.outcome,
+            portage_repo::PretendOutcome::AlreadyInstalled { .. }
+                | portage_repo::PretendOutcome::Uninstall { .. }
+                | portage_repo::PretendOutcome::NoVisibleCandidate
+        );
+        let size_suffix = if v3 && is_merge || force_sizes {
+            let bytes = fetch_bytes_not_yet_listed(entry, index_is_first);
             let size = localized_size(bytes);
             // The USE string already ends with a space, so the size carries
             // its own leading space only without one.
