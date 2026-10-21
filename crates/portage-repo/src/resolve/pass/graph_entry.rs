@@ -100,6 +100,7 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
             token: kw.to_string(),
             dep_chain: Vec::new(),
             trigger: None,
+            mask_entry: None,
         });
     }
     // Record the missing licenses for a candidate accepted over unaccepted
@@ -121,6 +122,7 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
                 token: missing.join(" "),
                 dep_chain: Vec::new(),
                 trigger: None,
+                mask_entry: None,
             });
         }
     }
@@ -135,6 +137,7 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
             token: String::new(),
             dep_chain: Vec::new(),
             trigger: None,
+            mask_entry: provenance.mask_entry.clone(),
         });
     }
     // A `New` entry whose cat/pkg is installed in some other slot (the

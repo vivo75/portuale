@@ -83,12 +83,14 @@ fn collect_feedback_folds_the_use_overlay_without_duplicating() {
             token: "+flag".to_string(),
             dep_chain: Vec::new(),
             trigger: None,
+            mask_entry: None,
         },
         AutounmaskChange {
             atom: "=dev-libs/overpkg-1.0".to_string(),
             token: "-other".to_string(),
             dep_chain: Vec::new(),
             trigger: None,
+            mask_entry: None,
         },
     ];
     let params = BacktrackParams::default();
@@ -98,6 +100,7 @@ fn collect_feedback_folds_the_use_overlay_without_duplicating() {
         token: "-other".to_string(),
         dep_chain: Vec::new(),
         trigger: None,
+        mask_entry: None,
     });
     let decision = collect_feedback(&ctx, &grown, &mut pass, &config);
     let PassDecision::Settle { params: out } = decision else {
@@ -461,6 +464,7 @@ fn stale_trigger_falls_back_to_the_first_requirer() {
         token: "x y".to_string(),
         dep_chain: Vec::new(),
         trigger: Some(("dev-libs".to_string(), "abk0d".to_string())),
+        mask_entry: None,
     }];
     fill_use_change_chains(
         &entries,
@@ -491,6 +495,7 @@ fn use_change_on_an_argument_package_yields_only_the_argument_row() {
         token: "-foo".to_string(),
         dep_chain: Vec::new(),
         trigger: None,
+        mask_entry: None,
     }];
     fill_use_change_chains(
         &entries,
@@ -516,6 +521,7 @@ fn keyword_change_on_an_argument_package_yields_only_the_argument_row() {
         token: "~amd64".to_string(),
         dep_chain: Vec::new(),
         trigger: None,
+        mask_entry: None,
     }];
     fill_non_use_change_chains(
         &entries,

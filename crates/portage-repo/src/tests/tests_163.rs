@@ -2691,6 +2691,7 @@ fn change_163(atom: &str, token: &str, chain: &[&str]) -> AutounmaskChange {
         token: token.to_string(),
         dep_chain: chain.iter().map(|s| s.to_string()).collect(),
         trigger: None,
+        mask_entry: None,
     }
 }
 

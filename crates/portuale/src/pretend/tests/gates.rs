@@ -307,6 +307,26 @@ fn abort_preamble_opens_with_the_banner_blank_line() {
     );
 }
 
+/// Backlog #462: a `--pretend` run whose resolve completed with autounmask
+/// changes prints the resolution header before the rows (Portage's
+/// `_show_merge_list` before the change blocks). `--json` keeps stdout
+/// machine-readable; an aborted resolve keeps its own preamble arms; a
+/// non-pretend run goes through the existing `!pretend` arm.
+#[test]
+fn pretend_changes_show_header_only_for_completed_pretend_text_runs() {
+    let args = |pretend, json, has_changes, complete| PretendChangesShowHeaderArgs {
+        pretend,
+        json,
+        has_changes,
+        complete,
+    };
+    assert!(pretend_changes_show_header(args(true, false, true, true)));
+    assert!(!pretend_changes_show_header(args(true, true, true, true)));
+    assert!(!pretend_changes_show_header(args(true, false, false, true)));
+    assert!(!pretend_changes_show_header(args(true, false, true, false)));
+    assert!(!pretend_changes_show_header(args(false, false, true, true)));
+}
+
 /// `--pretend --fetchonly` prints URIs instead of the merge list, whatever else is asked;
 /// a real fetch with `--ask`/`--verbose` still shows it. Portage: actions.py:541-543.
 #[test]

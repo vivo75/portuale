@@ -6,9 +6,12 @@ use super::*;
 /// `PORTAGE_CONFIGROOT`/`ROOT` at the staged fixtures,
 /// `PYTHONHASHSEED=0`): rc 1, one `[ebuild N #]` row per package, the
 /// `package.unmask` changes block with the `# required by` chain, and the
-/// `--autounmask-keep-masks` NOTE. The merge-list header stays absent (the
-/// standing autounmask-changes display shape, shared with the
-/// `--autounmask-keep-masks=n` pin below -- not re-grounded here).
+/// `--autounmask-keep-masks` NOTE. Backlog #462: the header
+/// (`These are the packages…` / `Calculating…` / `Dependency resolution
+/// took…`, wall-clock seconds cut per the determinism convention) prints
+/// before the rows, and the unmask block carries Portage's
+/// `getmaskingreason` lines (`# <file>:` + the file's comment block).
+/// Oracle: `LLM/evidence/2026-10-21-f462/portage.txt` cell c1.
 #[test]
 fn autounmask_proposes_unmask_for_masked_dep() {
     let portuale_bin = built_portuale_bin();
@@ -39,22 +42,42 @@ fn autounmask_proposes_unmask_for_masked_dep() {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         format!(
-            "[ebuild  N    #] dev-libs/maskeddep-1.0 to {}\n\
+            "\n\
+             These are the packages that would be merged, in order:\n\
+             \n\
+             Calculating dependencies ... done!\n\
+             Dependency resolution took (backtrack: 0/20).\n\
+             \n\
+             [ebuild  N    #] dev-libs/maskeddep-1.0 to {}\n\
              [ebuild  N     ] dev-libs/maskneedpkg-1.0 to {}\n",
             root.display(),
             root.display(),
         ),
     );
+    let mask_file = fixtures_root().join("etc/portage/package.mask");
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "\nThe following mask changes are necessary to proceed:\n\
-         \u{0020}(see \"package.unmask\" in the portage(5) man page for more details)\n\
-         # required by dev-libs/maskneedpkg-1.0::testrepo\n\
-         # required by dev-libs/maskneedpkg (argument)\n\
-         =dev-libs/maskeddep-1.0\n\
-         \n\
-         NOTE: The --autounmask-keep-masks option will prevent emerge\n\
-         \u{0020}\u{0020}\u{0020}\u{0020}\u{0020}\u{0020}from creating package.unmask or ** keyword changes.\n",
+        format!(
+            "\nThe following mask changes are necessary to proceed:\n\
+             \u{0020}(see \"package.unmask\" in the portage(5) man page for more details)\n\
+             # required by dev-libs/maskneedpkg-1.0::testrepo\n\
+             # required by dev-libs/maskneedpkg (argument)\n\
+             # {mask}:\n\
+             # fixture package.mask: two atoms stay masked, one is added then removed\n\
+             # again via \"-atom\" to exercise removal within this same source, and a\n\
+             # fourth \"-atom\" line removes an entry the repo-level\n\
+             # repo/profiles/package.mask added, not this file -- proving -atom\n\
+             # removal now applies across all three real sources (repo, profile\n\
+             # chain, user), not just within the user-level file alone.\n\
+             # fixture package.mask for the masked-dependency disclosure slice:\n\
+             # dev-libs/maskeddep stays masked so a dependency on it reports the\n\
+             # \"All ebuilds ... have been masked\" block (never unmasked anywhere).\n\
+             =dev-libs/maskeddep-1.0\n\
+             \n\
+             NOTE: The --autounmask-keep-masks option will prevent emerge\n\
+             \u{0020}\u{0020}\u{0020}\u{0020}\u{0020}\u{0020}from creating package.unmask or ** keyword changes.\n",
+            mask = mask_file.display(),
+        ),
     );
 }
 

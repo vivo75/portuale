@@ -796,19 +796,34 @@ pub(crate) fn show_pprovided_notice(result: &GraphResult, color: &Colorizer) {
     }
 }
 
-/// The header printed before the merge list of a non-pretend run.
+/// The header printed before the merge list of a non-pretend run, and of a
+/// `--pretend` run whose resolve completed with autounmask changes (backlog
+/// #462: Portage's `_show_merge_list` runs `display()` before the change
+/// blocks, even though the run then fails).
 pub(crate) fn show_resolution_header(
     opts: &EmergeOpts<'_>,
     result: &GraphResult,
     color: &Colorizer,
+    pretend_changes: bool,
 ) {
-    show_resolution_header_with_counts(
+    show_resolution_header_with_counts(ShowResolutionHeaderWithCountsArgs {
         opts,
-        result.backtrack_restarts,
-        result.backtrack_max,
-        false,
+        backtrack_restarts: result.backtrack_restarts,
+        backtrack_max: result.backtrack_max,
+        pretend_abort: false,
+        pretend_changes,
         color,
-    );
+    });
+}
+
+/// The values [`show_resolution_header_with_counts`] reads from its caller.
+pub(crate) struct ShowResolutionHeaderWithCountsArgs<'a> {
+    pub(crate) opts: &'a EmergeOpts<'a>,
+    pub(crate) backtrack_restarts: u64,
+    pub(crate) backtrack_max: u32,
+    pub(crate) pretend_abort: bool,
+    pub(crate) pretend_changes: bool,
+    pub(crate) color: &'a Colorizer,
 }
 
 /// The same notice with explicit backtrack counts: a non-`--pretend` run
@@ -816,14 +831,19 @@ pub(crate) fn show_resolution_header(
 /// arm) prints it with zero restarts -- the argument dies on first
 /// dequeue, before any backtrack -- over the run's backtrack max.
 /// `pretend_abort` prints the header of a `--pretend` run that aborts
-/// there (Portage prints it with `-p` too, backlog #406).
-pub(crate) fn show_resolution_header_with_counts(
-    opts: &EmergeOpts<'_>,
-    backtrack_restarts: u64,
-    backtrack_max: u32,
-    pretend_abort: bool,
-    color: &Colorizer,
-) {
+/// there (Portage prints it with `-p` too, backlog #406); `pretend_changes`
+/// prints the header of a `--pretend` run whose resolve completed with
+/// autounmask changes (Portage's `_show_merge_list` before the change
+/// blocks, backlog #462).
+pub(crate) fn show_resolution_header_with_counts(args: ShowResolutionHeaderWithCountsArgs<'_>) {
+    let ShowResolutionHeaderWithCountsArgs {
+        opts,
+        backtrack_restarts,
+        backtrack_max,
+        pretend_abort,
+        pretend_changes,
+        color,
+    } = args;
     let &EmergeOpts {
         pretend,
         quiet,
@@ -842,7 +862,7 @@ pub(crate) fn show_resolution_header_with_counts(
     // or not the list itself is shown and whether or not resolution succeeds.
     // See `resolution_header_shown`/`resolution_notice_shown` for the gates.
     // Portage: _emerge/depgraph.py, _start_resolution_display
-    if (!pretend || fetchonly || pretend_abort) && !quiet {
+    if (!pretend || fetchonly || pretend_abort || pretend_changes) && !quiet {
         if resolution_header_shown(ResolutionHeaderShownArgs {
             ask,
             tree,
@@ -850,6 +870,7 @@ pub(crate) fn show_resolution_header_with_counts(
             quiet,
         }) || (pretend && fetchonly)
             || pretend_abort
+            || pretend_changes
         {
             // `These are the packages that would be ...`: `in reverse order` for
             // `--tree` (a plain `:` under `--unordered-display`), `built` under

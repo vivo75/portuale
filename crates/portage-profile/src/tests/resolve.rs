@@ -678,6 +678,99 @@ fn package_mask_atom_removal_applies_across_repo_profile_and_user_sources() {
 }
 
 #[test]
+fn package_mask_files_track_the_contributing_fragment_for_getmaskingreason() {
+    // Backlog #462: the unmask block's `# <file>:` line and comment lines
+    // replay Portage's `getmaskingreason` (fragment file + the `#` block
+    // above the matching atom). The fold records each stacked entry's
+    // origin fragment; `masking_file_comment` replays the comment walk.
+    // Oracle: the staged-fixture c1 cell (host Portage 3.0.82.2,
+    // `LLM/evidence/2026-10-21-f462/portage.txt`).
+    let root = TempDir::new("portage-profile-test-mask-sources").keep();
+    let repo = root.join("repo");
+    let repo_profiles = repo.join("profiles");
+    let portage_dir = root.join("etc/portage");
+    fs::create_dir_all(&repo_profiles).unwrap();
+    fs::create_dir_all(&portage_dir).unwrap();
+    // Repo-level mask (gets `::testrepo`-scoped): `maskeddep` has a
+    // comment block directly above it; `lonely` sits past a blank line,
+    // so its comment is empty (Portage resets on blanks only).
+    fs::write(
+        repo_profiles.join("package.mask"),
+        "# repo mask for the target\ndev-libs/maskeddep\n\ndev-libs/lonely\n",
+    )
+    .unwrap();
+    // User-level mask: a file-top comment, an unrelated atom, then the
+    // slice comment and the target (no blank line anywhere, so Portage
+    // accumulates both blocks -- the exact fixture shape).
+    fs::write(
+        portage_dir.join("package.mask"),
+        "# file-top note\ndev-libs/other\n# slice note line one\n# slice note line two\ndev-libs/usermasked\n",
+    )
+    .unwrap();
+
+    let config = resolve_config(ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &repo,
+        overlay_repos: &[],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("config must resolve");
+    assert_eq!(
+        config.package_mask,
+        vec![
+            "dev-libs/maskeddep::testrepo".to_string(),
+            "dev-libs/lonely::testrepo".to_string(),
+            "dev-libs/other".to_string(),
+            "dev-libs/usermasked".to_string(),
+        ]
+    );
+    let repo_file = repo_profiles.join("package.mask");
+    let user_file = portage_dir.join("package.mask");
+    assert_eq!(
+        config.package_mask_files,
+        vec![
+            (
+                "dev-libs/maskeddep::testrepo".to_string(),
+                repo_file.clone()
+            ),
+            ("dev-libs/lonely::testrepo".to_string(), repo_file.clone()),
+            ("dev-libs/other".to_string(), user_file.clone()),
+            ("dev-libs/usermasked".to_string(), user_file.clone()),
+        ]
+    );
+    // Repo-scoped entry: the block directly above the atom.
+    assert_eq!(
+        masking_file_comment(&config, "dev-libs/maskeddep::testrepo"),
+        Some((
+            repo_file.clone(),
+            vec!["# repo mask for the target".to_string()],
+        ))
+    );
+    // In-file atom past a blank line: file only, no comment lines.
+    assert_eq!(
+        masking_file_comment(&config, "dev-libs/lonely::testrepo"),
+        Some((repo_file.clone(), vec![]))
+    );
+    // User entry: both comment blocks (no blank line resets the first).
+    assert_eq!(
+        masking_file_comment(&config, "dev-libs/usermasked"),
+        Some((
+            user_file.clone(),
+            vec![
+                "# file-top note".to_string(),
+                "# slice note line one".to_string(),
+                "# slice note line two".to_string(),
+            ],
+        ))
+    );
+    // Unknown entry: no file lines.
+    assert_eq!(masking_file_comment(&config, "dev-libs/absent"), None);
+}
+
+#[test]
 fn overlay_package_mask_is_scoped_to_its_own_repo_only() {
     // The overlay's bare atom must auto-scope to "::overlay", never masking
     // a same-named main-repo package.

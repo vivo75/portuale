@@ -92,6 +92,7 @@ pub(crate) fn entry_use_flags(args: EntryUseFlagsArgs<'_>) -> HashSet<String> {
                 dep_chain: Vec::new(),
                 // This dep's owner forced the flip.
                 trigger: owner.clone(),
+                mask_entry: None,
             });
         }
     }

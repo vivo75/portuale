@@ -125,6 +125,11 @@ pub struct Config {
     /// Raw atom or bounded-wildcard-atom strings from `package.mask`, with
     /// `-atom` removal already applied within this source.
     pub package_mask: Vec<String>,
+    /// The stacked `package.mask` entry paired with the fragment file that
+    /// contributed it, same order and length as [`Config::package_mask`]:
+    /// answers Portage's `getmaskingreason` (`# <file>:` + comment lines in
+    /// the unmask block, backlog #462) without re-reading the fold.
+    pub package_mask_files: Vec<(String, PathBuf)>,
     /// Raw atom or bounded-wildcard-atom strings from `package.unmask`.
     pub package_unmask: Vec<String>,
     /// `(atom-or-wildcard, extra accepted keyword tokens)` pairs from

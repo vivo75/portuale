@@ -38,7 +38,7 @@ pub(crate) fn show_autounmask(args: ShowAutounmaskArgs<'_>) -> Option<ExitCode> 
     // `package.accept_keywords` change is reported after the merge list.
     // Portage: depgraph.py, _display_autounmask
     let print_autounmask_block =
-        |reason: &str, file: &str, changes: &[portage_repo::AutounmaskChange]| {
+        |reason: &str, file: &str, changes: &[portage_repo::AutounmaskChange], is_mask: bool| {
             if changes.is_empty() {
                 return;
             }
@@ -50,6 +50,20 @@ pub(crate) fn show_autounmask(args: ShowAutounmaskArgs<'_>) -> Option<ExitCode> 
             for change in changes {
                 for line in &change.dep_chain {
                     eprintln!("# {line}");
+                }
+                // Only the mask block carries the masking file and its
+                // comment lines (`getmaskingreason`); keyword/USE/license
+                // blocks print the dep chain + atom line only.
+                // Portage: depgraph.py, _display_autounmask
+                if is_mask
+                    && let Some(entry) = change.mask_entry.as_deref()
+                    && let Some((path, comment)) =
+                        portage_profile::masking_file_comment(config, entry)
+                {
+                    eprintln!("# {}:", path.display());
+                    for line in &comment {
+                        eprintln!("{line}");
+                    }
                 }
                 let line = if change.token.is_empty() {
                     change.atom.clone()
@@ -64,17 +78,25 @@ pub(crate) fn show_autounmask(args: ShowAutounmaskArgs<'_>) -> Option<ExitCode> 
         "keyword changes",
         "package.accept_keywords",
         &result.autounmask_keyword_changes,
+        false,
     );
     print_autounmask_block(
         "mask changes",
         "package.unmask",
         &result.autounmask_mask_changes,
+        true,
     );
-    print_autounmask_block("USE changes", "package.use", &result.autounmask_use_changes);
+    print_autounmask_block(
+        "USE changes",
+        "package.use",
+        &result.autounmask_use_changes,
+        false,
+    );
     print_autounmask_block(
         "license changes",
         "package.license",
         &result.autounmask_license_changes,
+        false,
     );
 
     // Portage prints this after every change block once a `package.unmask`

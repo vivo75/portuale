@@ -15,6 +15,11 @@ pub(crate) struct FoldPackageMasksAndKeywordsArgs<'a> {
     pub(crate) warnings: &'a mut Vec<ProfileWarning>,
 }
 
+/// The plain entry strings of with-source lines (the plain-fold shape).
+fn sourced_line_text(lines: &[(String, PathBuf)]) -> Vec<String> {
+    lines.iter().map(|(line, _)| line.clone()).collect()
+}
+
 /// `package.mask`/`package.unmask` and `package.accept_keywords`.
 pub(crate) fn fold_package_masks_and_keywords(
     args: FoldPackageMasksAndKeywordsArgs<'_>,
@@ -45,7 +50,7 @@ pub(crate) fn fold_package_masks_and_keywords(
     // wildcards; user-level files with `eapi=None`, wildcards, repo and
     // build-ids on.
     let main_rules = repo_file_rules(&repo_rules, main_repo_name);
-    let main_repo_mask_lines = filter_atom_lines(
+    let main_repo_mask_pairs = filter_atom_lines_with_sources(
         &read_config_lines_with_sources(&main_repo_location.join("profiles/package.mask"))?,
         &main_rules,
         AtomLineKind::File {
@@ -54,6 +59,7 @@ pub(crate) fn fold_package_masks_and_keywords(
         WARN_RANK_MASK,
         warnings,
     );
+    let main_repo_mask_lines = sourced_line_text(&main_repo_mask_pairs);
     let main_repo_unmask_lines = filter_atom_lines(
         &read_config_lines_with_sources(&main_repo_location.join("profiles/package.unmask"))?,
         &main_rules,
@@ -65,6 +71,11 @@ pub(crate) fn fold_package_masks_and_keywords(
     );
     let mut mask_sources: Vec<Vec<String>> =
         vec![scope_repo_mask_lines(&main_repo_mask_lines, main_repo_name)];
+    let mut mask_pair_sources: Vec<Vec<(String, PathBuf)>> =
+        vec![scope_repo_mask_lines_with_sources(
+            &main_repo_mask_pairs,
+            main_repo_name,
+        )];
     let mut unmask_sources: Vec<Vec<String>> = vec![scope_repo_mask_lines(
         &main_repo_unmask_lines,
         main_repo_name,
@@ -78,7 +89,8 @@ pub(crate) fn fold_package_masks_and_keywords(
             .cloned()
             .unwrap_or_else(|| vec![main_repo_location.to_path_buf()]);
         let overlay_rules = repo_file_rules(&repo_rules, repo_name);
-        let mut mastered_lines_stack: Vec<Vec<String>> = Vec::with_capacity(masters.len() + 1);
+        let mut mastered_pair_stack: Vec<Vec<(String, PathBuf)>> =
+            Vec::with_capacity(masters.len() + 1);
         for master_location in &masters {
             // Masters validate under their own rules, like Portage's
             // per-repo `grab_pmask` cache.
@@ -97,7 +109,7 @@ pub(crate) fn fold_package_masks_and_keywords(
             } else {
                 repo_file_rules(&repo_rules, &master_name)
             };
-            mastered_lines_stack.push(filter_atom_lines(
+            mastered_pair_stack.push(filter_atom_lines_with_sources(
                 &read_config_lines_with_sources(&master_location.join("profiles/package.mask"))?,
                 &master_rules,
                 AtomLineKind::File {
@@ -107,7 +119,7 @@ pub(crate) fn fold_package_masks_and_keywords(
                 warnings,
             ));
         }
-        mastered_lines_stack.push(filter_atom_lines(
+        mastered_pair_stack.push(filter_atom_lines_with_sources(
             &read_config_lines_with_sources(&repo_location.join("profiles/package.mask"))?,
             &overlay_rules,
             AtomLineKind::File {
@@ -116,8 +128,16 @@ pub(crate) fn fold_package_masks_and_keywords(
             WARN_RANK_MASK,
             warnings,
         ));
+        let mastered_lines_stack: Vec<Vec<String>> = mastered_pair_stack
+            .iter()
+            .map(|pairs| sourced_line_text(pairs))
+            .collect();
         let mastered_mask_lines = stack_mask_lines(&mastered_lines_stack);
         mask_sources.push(scope_repo_mask_lines(&mastered_mask_lines, repo_name));
+        mask_pair_sources.push(scope_repo_mask_lines_with_sources(
+            &stack_mask_lines_with_sources(&mastered_pair_stack),
+            repo_name,
+        ));
         // package.unmask gets no masters treatment: Portage stacks only each
         // repo's own lines there. Portage: MaskManager.py package.unmask loop
         unmask_sources.push(scope_repo_mask_lines(
@@ -135,7 +155,7 @@ pub(crate) fn fold_package_masks_and_keywords(
     }
     for level in chain {
         let rules = rules_for_node(level, &all_repos, &repo_rules)?;
-        mask_sources.push(filter_atom_lines(
+        let level_mask_pairs = filter_atom_lines_with_sources(
             &read_config_lines_with_sources(&level.join("package.mask"))?,
             &rules,
             AtomLineKind::File {
@@ -143,7 +163,9 @@ pub(crate) fn fold_package_masks_and_keywords(
             },
             WARN_RANK_MASK,
             warnings,
-        ));
+        );
+        mask_sources.push(sourced_line_text(&level_mask_pairs));
+        mask_pair_sources.push(level_mask_pairs);
         unmask_sources.push(filter_atom_lines(
             &read_config_lines_with_sources(&level.join("package.unmask"))?,
             &rules,
@@ -163,7 +185,7 @@ pub(crate) fn fold_package_masks_and_keywords(
     // node; `portage1_directories` is true there too)
     if let Some(user) = user_node {
         let user_profile_rules = user_node_rules(user.eapi.as_deref(), UserNodeFile::Mask);
-        mask_sources.push(filter_atom_lines(
+        let user_mask_pairs = filter_atom_lines_with_sources(
             &read_config_lines_with_sources(&user.path.join("package.mask"))?,
             &user_profile_rules,
             AtomLineKind::File {
@@ -171,7 +193,9 @@ pub(crate) fn fold_package_masks_and_keywords(
             },
             WARN_RANK_MASK,
             warnings,
-        ));
+        );
+        mask_sources.push(sourced_line_text(&user_mask_pairs));
+        mask_pair_sources.push(user_mask_pairs);
         unmask_sources.push(filter_atom_lines(
             &read_config_lines_with_sources(&user.path.join("package.unmask"))?,
             &user_profile_rules,
@@ -186,7 +210,7 @@ pub(crate) fn fold_package_masks_and_keywords(
     // `eapi=None`, wildcards and repo on, build-ids on.
     // Portage: MaskManager.py:214-232
     let user_mask_rules = user_atom_rules(true, true);
-    mask_sources.push(filter_atom_lines(
+    let user_file_mask_pairs = filter_atom_lines_with_sources(
         &read_config_lines_with_sources(&config_root.join("etc/portage/package.mask"))?,
         &user_mask_rules,
         AtomLineKind::File {
@@ -194,7 +218,9 @@ pub(crate) fn fold_package_masks_and_keywords(
         },
         WARN_RANK_MASK,
         warnings,
-    ));
+    );
+    mask_sources.push(sourced_line_text(&user_file_mask_pairs));
+    mask_pair_sources.push(user_file_mask_pairs);
     unmask_sources.push(filter_atom_lines(
         &read_config_lines_with_sources(&config_root.join("etc/portage/package.unmask"))?,
         &user_mask_rules,
@@ -206,6 +232,12 @@ pub(crate) fn fold_package_masks_and_keywords(
     ));
 
     config.package_mask = stack_mask_lines(&mask_sources);
+    config.package_mask_files = stack_mask_lines_with_sources(&mask_pair_sources);
+    debug_assert_eq!(
+        config.package_mask,
+        sourced_line_text(&config.package_mask_files),
+        "the with-source mask stack must stay the plain stack",
+    );
     config.package_unmask = stack_mask_lines(&unmask_sources);
 
     // package.accept_keywords: profile-chain, then the user profile node,
@@ -326,4 +358,51 @@ pub(crate) fn fold_package_masks_and_keywords(
         }
     }
     Ok(())
+}
+
+/// The `# <file>:` line and comment lines Portage prints in the unmask
+/// block for a stacked `package.mask` entry: the fragment file that
+/// contributed the entry (user-most source first, like Portage's reversed
+/// `locations`) plus the `#` comment block directly above the matching
+/// atom in that file (accumulated since the last blank line, kept only
+/// when the atom line immediately follows the comments). `None` when the
+/// entry is unknown, the file is unreadable, or the file no longer holds
+/// the atom -- the renderer then prints the bare block, as before.
+// Portage: package/ebuild/getmaskingreason.py (comment, filename)
+pub fn masking_file_comment(config: &Config, mask_entry: &str) -> Option<(PathBuf, Vec<String>)> {
+    let (_, file) = config
+        .package_mask_files
+        .iter()
+        .rev()
+        .find(|(entry, _)| entry == mask_entry)?;
+    let text = fs::read_to_string(file).ok()?;
+    let target = mask_entry
+        .split_once("::")
+        .map_or(mask_entry, |(atom, _)| atom);
+    let opts = portage_dep::AtomOptions {
+        allow_wildcard: true,
+        ..Default::default()
+    };
+    let mut comment: Vec<String> = Vec::new();
+    let mut comment_valid: i64 = -1;
+    for (i, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() {
+            comment.clear();
+            comment_valid = -1;
+        } else if line.starts_with('#') {
+            comment.push(line.to_string());
+            comment_valid = i as i64 + 1;
+        } else if line.split_once("::").map_or(line, |(atom, _)| atom) == target
+            && portage_dep::parse_atom_with(line, &opts, "").is_ok()
+        {
+            if comment_valid != i as i64 {
+                comment.clear();
+            }
+            return Some((file.clone(), comment));
+        } else if comment_valid != -1 {
+            comment_valid += 1;
+        }
+    }
+    None
 }

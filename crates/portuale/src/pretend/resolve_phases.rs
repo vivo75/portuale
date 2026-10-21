@@ -312,7 +312,14 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             // what `show_resolution_header` prints on the other abort arms.
             // Portage: _emerge/depgraph.py, _start_resolution_display
             if top_level_abort_notice_shown(&msg) {
-                show_resolution_header_with_counts(opts, 0, opts.backtrack_max, pretend, color);
+                show_resolution_header_with_counts(ShowResolutionHeaderWithCountsArgs {
+                    opts,
+                    backtrack_restarts: 0,
+                    backtrack_max: opts.backtrack_max,
+                    pretend_abort: pretend,
+                    pretend_changes: false,
+                    color,
+                });
             }
             // Portage never prefixes a `!!!`-headed report with `emerge: `;
             // it is emitted verbatim. The resolver library builds these

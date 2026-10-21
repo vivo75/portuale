@@ -147,3 +147,6 @@ The resolver's result and how a run aborts.
 
 ## field GraphResult::rebuild_if_reinstalls
 - Backlog #394: `(cat, pkg)` of the installed parents the `--rebuild-if-*` restart force-reinstalled (seeded parents that settled as merges). Sorted, deduped. Only the red `r` column reads it (consumer-only -- the merged dep stays untagged); unlike `abi_rebuilds` there is no "causing rebuilds" block. Portage: `_gen_reinstall_sets`; `output.py`, `PkgAttrDisplay.force_reinstall`.
+
+## field AutounmaskChange::mask_entry
+- Backlog #462: the stacked `package.mask` entry that forced this change (`None` for keyword/license/USE changes). Recorded at resolve time because only the resolve pass knows which stacked entry matched the candidate; the renderer resolves it to Portage's `# <file>:` line and comment lines via `portage_profile::masking_file_comment`. Portage: `depgraph.py`, `_display_autounmask` (`p_mask_change_msg`).

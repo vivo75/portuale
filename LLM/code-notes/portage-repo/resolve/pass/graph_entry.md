@@ -16,3 +16,4 @@ Adds the chosen candidate to the graph, with its autounmask suggestions.
 - Portage `output.py:633`'s `not pkg.built and … "fetch" in pkg.restrict`. Filled in below, once `metadata`/`use_flags` (for `SRC_URI` flattening) are read -- a binary candidate (`pkg.built`) is never fetch-restricted, so it stays `false` here regardless.
 - Track X Slice B (#242): the node carries its resolving root -- Portage `Package.root_config` / `pkg.root`.
 - #346 S2: the `--autounmask-keep-keywords` gate reads the effective KEYWORDS (`effective_keywords`); the recorded suggestion token itself still comes from the raw metadata (`suggested_keyword`), as no capture covers that shape.
+- Backlog #462: the mask-change record carries `mask_entry: provenance.mask_entry.clone()` (the stacked entry that matched) so the renderer can print Portage's `# <file>:` + comment lines. Only mask changes set it; keyword/license/USE sites record `None`.
