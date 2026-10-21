@@ -72,6 +72,11 @@ pub(crate) fn run_pass(
     let config_owned: Option<portage_profile::Config> = bp.backtrack_config.clone();
     let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
     let _span = portage_util::profile::span(format!("run_pass first={first_pass}"));
+    // Only the resolve's own config is fixed across passes; an autounmask
+    // `backtrack_config` is a fresh clone, so those passes bypass the memo.
+    let _pool_scope = bp.backtrack_config.is_none().then(|| {
+        crate::resolve::pool_memo::enter(&ctx.pool_memo, ctx.config, &ctx.repos, &ctx.local_binpkg)
+    });
     let mut state = PassState::default();
     // Pass-constant: `bp` is never mutated mid-walk (only the overlay).
     let union_constraints = bp.union_constraints();

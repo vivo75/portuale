@@ -728,7 +728,7 @@ pub fn resolve_pretend(
         // `retain`ed below). One clone per resolved atom, cheap next to the walk.
         list_candidates(repos, &atom.category, &atom.package)?.to_vec()
     };
-    collect_binary_candidates(CollectBinaryCandidatesArgs {
+    crate::resolve::pool_memo::collect_memoized(CollectBinaryCandidatesArgs {
         usepkg,
         usepkgonly,
         local_binpkg,

@@ -150,6 +150,7 @@
 - [crates/portage-repo/src/resolve/pass/unresolved_dep.rs](portage-repo/resolve/pass/unresolved_dep.md) — Handles a dependency with no version to merge: backtracking feedback and its unsatisfied entry.
 - [crates/portage-repo/src/resolve/pass_helpers.rs](portage-repo/resolve/pass_helpers.md) — Small helpers of the resolver pass.
 - [crates/portage-repo/src/resolve/pass_state.rs](portage-repo/resolve/pass_state.md) — The state and result of one resolver pass.
+- [crates/portage-repo/src/resolve/pool_memo.rs](portage-repo/resolve/pool_memo.md) — Binary-candidate pool memo for the passes of one resolve (backlog #441 S1 / #457).
 - [crates/portage-repo/src/resolve/pretend.rs](portage-repo/resolve/pretend.md) — Selecting one atom's candidate (`resolve_pretend`).
 - [crates/portage-repo/src/resolve/queue.rs](portage-repo/resolve/queue.md) — The walk queue.
 - [crates/portage-repo/src/resolve/replay.rs](portage-repo/resolve/replay.md) — Fail-fast replay of the best pass.
@@ -245,6 +246,7 @@
 - [crates/portage-vdb/src/error.rs](portage-vdb/error.md) — Hand-written error type for the VDB crate (no dependencies, no `thiserror`).
 - [crates/portage-vdb/src/files.rs](portage-vdb/files.md) — `FilesDb`: the historic `var/db/pkg` directory tree.
 - [crates/portage-vdb/src/files_write.rs](portage-vdb/files_write.md) — `FilesDb`'s write side: the merge's pending entry, counter, registry and config memory.
+- [crates/portage-vdb/src/frozen.rs](portage-vdb/frozen.md) — Per-thread "the VDB does not change now" scope (backlog #441 S1 / #457).
 - [crates/portage-vdb/src/lib.rs](portage-vdb/lib.md) — The installed-package database ("VDB") behind one interface.
 - [crates/portage-vdb/src/redb_db.rs](portage-vdb/redb_db.md) — The redb backend: tables, open, reads, and the generation-validated cache.
 - [crates/portage-vdb/src/redb_db/write.rs](portage-vdb/redb_db/write.md) — `RedbDb`'s write side: `RedbTxn` and the derived multimaps.

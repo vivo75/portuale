@@ -193,7 +193,7 @@ fn greedy_pool(
             .map(|c| c.to_vec())
             .unwrap_or_default()
     };
-    collect_binary_candidates(CollectBinaryCandidatesArgs {
+    crate::resolve::pool_memo::collect_memoized(CollectBinaryCandidatesArgs {
         usepkg: ctx.usepkg,
         usepkgonly: ctx.usepkgonly,
         local_binpkg: &ctx.local_binpkg,

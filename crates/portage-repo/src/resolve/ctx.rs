@@ -165,6 +165,8 @@ pub(crate) struct ResolveCtx<'a> {
     pub(crate) local_binpkg: std::sync::Arc<BinaryIndex>,
     /// Tree-mode blocker verdicts already computed this walk.
     pub(crate) tree_sim_memo: TreeSimMemo,
+    /// Binary-candidate answers shared by the passes of this walk.
+    pub(crate) pool_memo: std::rc::Rc<crate::resolve::pool_memo::PoolMemo>,
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -290,6 +292,7 @@ impl<'a> ResolveCtx<'a> {
                 .collect(),
             local_binpkg: build_local_binpkg_index(&req.config),
             tree_sim_memo: TreeSimMemo::default(),
+            pool_memo: std::rc::Rc::default(),
         })
     }
 }

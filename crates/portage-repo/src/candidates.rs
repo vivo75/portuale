@@ -11,7 +11,7 @@ pub enum CandidateSource {
     Binary,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub version: String,
     pub keywords: Vec<String>,

@@ -1405,10 +1405,16 @@ pub fn evaluate_atom_conditionals(atom_str: &str, parent_use: &HashSet<String>) 
 
 /// One parsed candidate against one parsed atom: cp, version (plus the
 /// `=`-only build-id rule), slot, repo.
-fn candidate_hits(atom: &Atom, atom_cp: &str, candidate: &Candidate) -> bool {
-    let cp = format!("{}/{}", candidate.category, candidate.package);
+fn candidate_hits(atom: &Atom, candidate: &Candidate) -> bool {
     // Portage dep:2934-2943: exact cp or `extended_cp_match`.
-    if cp != atom_cp && !(atom.extended && extended_cp_match(atom_cp, &cp)) {
+    let exact = atom.category == candidate.category && atom.package == candidate.package;
+    if !exact
+        && !(atom.extended
+            && extended_cp_match(
+                &format!("{}/{}", atom.category, atom.package),
+                &format!("{}/{}", candidate.category, candidate.package),
+            ))
+    {
         return false;
     }
     matches_version(atom, candidate)
@@ -1444,8 +1450,7 @@ pub fn match_atom_matches_candidate(
     if let Some(id) = build_id {
         candidate.build_id = Some(id.to_string());
     }
-    let atom_cp = format!("{}/{}", atom.category, atom.package);
-    candidate_hits(atom, &atom_cp, &candidate)
+    candidate_hits(atom, &candidate)
 }
 
 /// Returns the candidates (input order) matching `atom_str`; `None` if the

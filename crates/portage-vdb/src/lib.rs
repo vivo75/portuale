@@ -29,6 +29,7 @@ mod dep_cp;
 mod error;
 mod files;
 mod files_write;
+mod frozen;
 #[cfg(any(feature = "vdb-sqlite", feature = "vdb-redb"))]
 mod loaded;
 #[cfg(feature = "vdb-redb")]
@@ -46,6 +47,7 @@ pub use convert::{CopyReport, VerifyReport, copy_all, verify};
 pub use error::{Error, Result};
 pub use files::FilesDb;
 pub use files_write::{format_preserved_libs, parse_preserved_libs};
+pub use frozen::{FrozenScope, freeze};
 #[cfg(feature = "vdb-redb")]
 pub use redb_db::{RedbDb, SCHEMA_VERSION as REDB_SCHEMA_VERSION};
 pub use registry::{for_root, register, reset};

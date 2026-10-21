@@ -175,6 +175,7 @@ pub(crate) struct FilesTxn<'a> {
 
 impl<'a> FilesTxn<'a> {
     pub(crate) fn new(db: &'a FilesDb) -> Self {
+        crate::frozen::invalidate();
         FilesTxn {
             db,
             portage_dir_made: false,
@@ -654,6 +655,7 @@ impl WriteTxn for FilesTxn<'_> {
 
     /// Nothing to do: every call above was applied when it was made.
     fn commit(self: Box<Self>) -> Result<()> {
+        crate::frozen::invalidate();
         Ok(())
     }
 }

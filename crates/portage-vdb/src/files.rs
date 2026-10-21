@@ -96,6 +96,44 @@ fn dir_mtime_nanos(p: &Path) -> u64 {
         .map_or(0, |d| d.as_nanos() as u64)
 }
 
+/// Memo key: vdb dir, category, pf.
+type CacheKey = (PathBuf, String, String);
+/// dir `st_mtime_ns`, epoch last validated in, fields.
+type AuxCache = HashMap<CacheKey, (i128, u64, Rc<HashMap<String, String>>)>;
+thread_local! {
+    static AUX_CACHE: RefCell<AuxCache> = RefCell::new(HashMap::new());
+}
+
+/// `field` out of a validated memo entry (resolved lazily when absent),
+/// the entry stamped with `epoch`.
+fn aux_from_cached(
+    cache_key: &CacheKey,
+    dir: &Path,
+    field: &str,
+    epoch: u64,
+    map: Rc<HashMap<String, String>>,
+) -> String {
+    let value = if let Some(v) = map.get(field) {
+        translate_aux_slot(field, v.clone())
+    } else {
+        // Drop the shared handle so `Rc::make_mut` can reuse it.
+        drop(map);
+        let value = translate_aux_slot(field, read_vdb_file(&dir.join(field)));
+        AUX_CACHE.with(|c| {
+            if let Some((_, _, m)) = c.borrow_mut().get_mut(cache_key) {
+                Rc::make_mut(m).insert(field.to_string(), value.clone());
+            }
+        });
+        value
+    };
+    AUX_CACHE.with(|c| {
+        if let Some(e) = c.borrow_mut().get_mut(cache_key) {
+            e.1 = epoch;
+        }
+    });
+    value
+}
+
 /// A read error that means "no such entry or file".
 pub(crate) fn is_absent(e: &io::Error) -> bool {
     matches!(
@@ -223,6 +261,30 @@ impl FilesDb {
         acc ^ count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
     }
 
+    /// `compute()`, memoised for the current freeze epoch (never outside one).
+    fn epoch_memo(&self, category: Option<&str>, compute: impl FnOnce() -> u64) -> u64 {
+        type Key = (PathBuf, Option<String>);
+        thread_local! {
+            static GEN_MEMO: RefCell<HashMap<Key, (u64, u64)>> = RefCell::new(HashMap::new());
+        }
+        let epoch = crate::frozen::epoch();
+        if epoch == 0 {
+            return compute();
+        }
+        let key = (self.vdb.clone(), category.map(str::to_string));
+        if let Some(v) = GEN_MEMO.with(|m| {
+            m.borrow()
+                .get(&key)
+                .filter(|(ep, _)| *ep == epoch)
+                .map(|(_, v)| *v)
+        }) {
+            return v;
+        }
+        let v = compute();
+        GEN_MEMO.with(|m| m.borrow_mut().insert(key, (epoch, v)));
+        v
+    }
+
     /// Portage's `_aux_get` for one in-set key: `stat` the package dir
     /// once, try the consolidated `metadata` snapshot (a validated one is
     /// *complete*, so a missing field is `""` with no `open()`), otherwise
@@ -231,9 +293,26 @@ impl FilesDb {
     /// [`translate_aux_slot`]; the `EAPI == "" -> "0"` one does not.
     // Portage: lib/portage/vartree.py, _aux_get
     pub(crate) fn aux_get_field(&self, key: &EntryKey, field: &str) -> Option<String> {
+        let dir = self.entry_dir(key);
+        let cache_key = (self.vdb.clone(), key.category.clone(), key.pf.clone());
+        let epoch = crate::frozen::epoch();
+
+        // Inside a freeze scope an entry validated in this epoch is served
+        // with no `statx` at all.
+        if epoch != 0 {
+            let fresh = AUX_CACHE.with(|c| {
+                c.borrow()
+                    .get(&cache_key)
+                    .filter(|(_, ep, _)| *ep == epoch)
+                    .map(|(_, _, map)| Rc::clone(map))
+            });
+            if let Some(map) = fresh {
+                return Some(aux_from_cached(&cache_key, &dir, field, epoch, map));
+            }
+        }
+
         // One `statx` for both the existence test and the `st_mtime_ns`
         // validity check below.
-        let dir = self.entry_dir(key);
         let st = fs::metadata(&dir).ok().filter(|st| st.is_dir())?;
         let dir_mtime_ns = st.mtime() as i128 * 1_000_000_000 + st.mtime_nsec() as i128;
 
@@ -242,35 +321,14 @@ impl FilesDb {
         // key. An in-place field rewrite leaves the dir mtime alone, so a
         // value read once is served until the dir changes. Thread-local,
         // so the lookup stays lock-free.
-        type CacheKey = (PathBuf, String, String);
-        type AuxCache = HashMap<CacheKey, (i128, Rc<HashMap<String, String>>)>;
-        thread_local! {
-            static AUX_CACHE: RefCell<AuxCache> = RefCell::new(HashMap::new());
-        }
-        let cache_key = (self.vdb.clone(), key.category.clone(), key.pf.clone());
-
-        // The `stat` above is the validity signal, paid on every call; the
-        // memo removes the snapshot read and the per-key `open`.
         let cached = AUX_CACHE.with(|c| {
             c.borrow()
                 .get(&cache_key)
-                .filter(|(mtime, _)| *mtime == dir_mtime_ns)
-                .map(|(_, map)| Rc::clone(map))
+                .filter(|(mtime, _, _)| *mtime == dir_mtime_ns)
+                .map(|(_, _, map)| Rc::clone(map))
         });
         if let Some(map) = cached {
-            if let Some(v) = map.get(field) {
-                return Some(translate_aux_slot(field, v.clone()));
-            }
-            // This key is not resolved yet; drop the shared handle before
-            // mutating so `Rc::make_mut` can reuse it.
-            drop(map);
-            let value = translate_aux_slot(field, read_vdb_file(&dir.join(field)));
-            AUX_CACHE.with(|c| {
-                if let Some((_, map)) = c.borrow_mut().get_mut(&cache_key) {
-                    Rc::make_mut(map).insert(field.to_string(), value.clone());
-                }
-            });
-            return Some(value);
+            return Some(aux_from_cached(&cache_key, &dir, field, epoch, map));
         }
 
         // Miss or dir-mtime change: read and validate the snapshot once.
@@ -295,7 +353,7 @@ impl FilesDb {
         map.insert(field.to_string(), value.clone());
         AUX_CACHE.with(|c| {
             c.borrow_mut()
-                .insert(cache_key, (dir_mtime_ns, Rc::new(map)));
+                .insert(cache_key, (dir_mtime_ns, epoch, Rc::new(map)));
         });
         Some(value)
     }
@@ -360,11 +418,11 @@ impl InstalledDb for FilesDb {
     }
 
     fn generation(&self) -> Result<u64> {
-        Ok(self.fingerprint())
+        Ok(self.epoch_memo(None, || self.fingerprint()))
     }
 
     fn category_generation(&self, category: &str) -> Result<u64> {
-        Ok(dir_mtime_nanos(&self.vdb.join(category)))
+        Ok(self.epoch_memo(Some(category), || dir_mtime_nanos(&self.vdb.join(category))))
     }
 
     fn entries(&self) -> Result<Vec<EntryKey>> {
@@ -821,6 +879,40 @@ mod tests {
         );
         assert!(db.has_entry(&EntryKey::new("dev-libs", "a-1.0")).unwrap());
         assert!(!db.has_entry(&EntryKey::new("dev-libs", "stray")).unwrap());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn freeze_scope_validates_each_entry_once_per_epoch() {
+        let root = scratch("frozen");
+        let dir = root.join("var/db/pkg/dev-libs/a-1.0");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("RDEPEND"), b"old").unwrap();
+        let db = FilesDb::new(&root);
+        let k = EntryKey::new("dev-libs", "a-1.0");
+        let rewrite = |text: &[u8]| {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            fs::remove_file(dir.join("RDEPEND")).unwrap();
+            fs::write(dir.join("RDEPEND"), text).unwrap();
+        };
+        let gen0;
+        {
+            let _scope = crate::freeze();
+            gen0 = db.category_generation("dev-libs").unwrap();
+            assert_eq!(db.aux_get(&k, "RDEPEND").unwrap().as_deref(), Some("old"));
+            rewrite(b"new");
+            fs::create_dir(dir.with_file_name("b-1.0")).unwrap();
+            // Same epoch: served from the memo, the directory is not re-read.
+            assert_eq!(db.aux_get(&k, "RDEPEND").unwrap().as_deref(), Some("old"));
+            assert_eq!(db.category_generation("dev-libs").unwrap(), gen0);
+            // A write transaction starts a new epoch.
+            drop(db.begin_write().unwrap());
+            assert_eq!(db.aux_get(&k, "RDEPEND").unwrap().as_deref(), Some("new"));
+        }
+        rewrite(b"newer");
+        // Outside a scope every read revalidates.
+        assert_eq!(db.aux_get(&k, "RDEPEND").unwrap().as_deref(), Some("newer"));
+        assert_ne!(db.category_generation("dev-libs").unwrap(), gen0);
         let _ = fs::remove_dir_all(&root);
     }
 

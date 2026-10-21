@@ -6,6 +6,8 @@ use portage_profile::Config;
 pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
     // Portage `_backtrack_depgraph`: pop a node, run one pass, settle or
     // feed back; `--backtrack=0` explores no feedback (the root pass settles).
+    // A resolve never writes the VDB: validate VDB memos once, not per read.
+    let _vdb_frozen = portage_vdb::freeze();
     let ctx = ResolveCtx::new(req)?;
     let initial = BacktrackParams::initial(req);
     let mut bt = Backtracker::new(

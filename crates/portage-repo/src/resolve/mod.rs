@@ -22,6 +22,7 @@ mod outcome;
 mod pass;
 mod pass_helpers;
 mod pass_state;
+mod pool_memo;
 mod pretend;
 mod queue;
 mod replay;
