@@ -37,6 +37,10 @@ pub(crate) struct HookCtx<'a> {
     pub(crate) portage_tmpdir: &'a Path,
     pub(crate) options: &'a MergeOptions,
     pub(crate) replacing_versions: &'a String,
+    /// The binary merge's repo for the hook env (`PORTAGE_REPO_NAME`),
+    /// `None` when the binpkg carries no usable repo record.
+    /// Portage: doebuild.py, `doebuild_environment`.
+    pub(crate) repo_name: Option<&'a str>,
 }
 
 impl HookCtx<'_> {
@@ -60,6 +64,7 @@ impl HookCtx<'_> {
             portage_tmpdir,
             options,
             replacing_versions,
+            repo_name,
             ..
         } = self;
         match &extracted_ebuild {
@@ -82,6 +87,7 @@ impl HookCtx<'_> {
                         replacing_versions: Some(replacing_versions.as_str()),
                         merge_type: Some("binary"),
                         replaced_by_version: None,
+                        repo_name,
                     },
                 )
             }
@@ -100,7 +106,7 @@ pub fn merge_binpkg(
     root: &Path,
     portage_tmpdir: &Path,
     options: &MergeOptions,
-) -> Result<i32, String> {
+) -> Result<MergeOutcome, String> {
     // Once `${T}/environment` exists, the calling environment is narrowed
     // to the whitelist, so harness-only vars never reach the regenerated
     // vdb env. Per-phase keys are added separately by
@@ -154,8 +160,9 @@ pub fn merge_binpkg(
     // only wants the main slot.
     let full_slot = meta_get("SLOT").unwrap_or_else(|| "0".to_string());
     let main_slot = full_slot.split('/').next().unwrap_or("0").to_string();
-    let repository = meta_get("repository")
-        .or_else(|| meta_get("REPO"))
+    let repo_name = meta_get("repository").or_else(|| meta_get("REPO"));
+    let repository = repo_name
+        .clone()
         .unwrap_or_else(|| "__unknown__".to_string());
 
     // `${PORTAGE_BUILDDIR}` = `${PORTAGE_TMPDIR}/portage/<cat>/<pf>`,
@@ -225,6 +232,10 @@ pub fn merge_binpkg(
         portage_tmpdir,
         options,
         replacing_versions: &replacing_versions,
+        // The saved env alone never carries the repo (real re-derives it
+        // from the binary record); without a usable record the hooks keep
+        // today's behavior. Portage: doebuild.py, doebuild_environment
+        repo_name: repo_name.as_deref(),
     };
 
     // `pkg_pretend` runs for every package in the merge list, binary
@@ -234,13 +245,19 @@ pub fn merge_binpkg(
     // Portage: Scheduler._run_pkg_pretend
     let pretend_status = hooks.run_hook("pretend")?;
     if pretend_status != 0 {
-        return Ok(pretend_status);
+        return Ok(MergeOutcome {
+            status: pretend_status,
+            postinst_failed: false,
+        });
     }
 
     // `pkg_setup` runs right after extraction, before the merge.
     let setup_status = hooks.run_hook("setup")?;
     if setup_status != 0 {
-        return Ok(setup_status);
+        return Ok(MergeOutcome {
+            status: setup_status,
+            postinst_failed: false,
+        });
     }
 
     // The `instprep` phase runs first on the extracted image, from the
@@ -261,10 +278,14 @@ pub fn merge_binpkg(
             config_root: &options.config_root,
             shell: options.shell,
             log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
+            repo_name: hooks.repo_name,
         })?;
         if instprep_status != 0 {
             eprintln!("!!! instprep failed");
-            return Ok(1);
+            return Ok(MergeOutcome {
+                status: 1,
+                postinst_failed: false,
+            });
         }
     }
 
@@ -280,7 +301,10 @@ pub fn merge_binpkg(
         let lines = refusal_lines(&format!("{category}/{pf}"), &line_ending_paths);
         if options.direct {
             MergeListing::new(true).eerror(&lines);
-            return Ok(1);
+            return Ok(MergeOutcome {
+                status: 1,
+                postinst_failed: false,
+            });
         }
         return Err(lines.join("\n"));
     }
@@ -337,7 +361,10 @@ pub fn merge_binpkg(
     create_vdb_tmp(root, &category, &pf)?;
     let preinst_status = hooks.run_hook("preinst")?;
     if preinst_status != 0 {
-        return Ok(preinst_status);
+        return Ok(MergeOutcome {
+            status: preinst_status,
+            postinst_failed: false,
+        });
     }
     populate_vdb_tmp(PopulateVdbTmpArgs {
         root,
@@ -471,7 +498,7 @@ pub(crate) struct MergeBinpkgFinishArgs<'a> {
 }
 
 /// Preserve, replace, publish, postinst and elog of a binary-package merge.
-pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<i32, String> {
+pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<MergeOutcome, String> {
     let MergeBinpkgFinishArgs {
         root,
         category,
@@ -578,12 +605,32 @@ pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<i32
     if postinst_status == 0 {
         listing.merged(&format!("{category}/{pf}"));
     }
-    absorb_update_env(root, category, pf, &update_env)?;
+    // A failed `pkg_postinst` still merges (the `_postinst_failure`
+    // rule): elog it so the saved elog, the `Messages` summary and the
+    // build log all carry the `FAILED postinst` line Portage prints
+    // after the die block. Shared with the source merge. The log path is
+    // the merge's own when it captures, else the build log Portage's
+    // `Binpkg` always writes (a foreground run's hooks inherit the
+    // terminal, so nothing has created it yet).
+    // Portage: vartree.py, dblink.treewalk
     if postinst_status != 0 {
-        eprintln!(
-            "{category}/{pf}: FAILED postinst ({postinst_status}) -- merge kept (real _postinst_failure)"
-        );
+        let foreground_log;
+        let log_file = if let Some(path) = options.log_file.as_deref() {
+            Some(path)
+        } else {
+            let version = pf.strip_prefix(&format!("{package}-")).unwrap_or(pf);
+            foreground_log = crate::emerge_build::build_log_path(
+                portage_tmpdir,
+                category,
+                package,
+                version,
+                &crate::emerge_build::resolved_features(options),
+            );
+            Some(foreground_log.as_path())
+        };
+        record_postinst_failure(&builddir.join("temp"), log_file, postinst_status)?;
     }
+    absorb_update_env(root, category, pf, &update_env)?;
 
     if !contents.is_empty() || !replaced_same_slot.is_empty() {
         env_update::run_env_update(root)?;
@@ -602,16 +649,30 @@ pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<i32
 
     // `_elog_process` before the builddir removal below: the hooks'
     // output lives in this builddir's `${T}/logging`, which the removal
-    // would take with it. Empty for a binpkg with no saved env.
-    crate::elog::process_batch(crate::elog::ProcessBatchArgs {
-        logdir: &crate::elog::logdir(root),
-        root_display: &root.display().to_string(),
-        items: &[(format!("{category}/{pf}"), builddir.join("temp"))],
-        phases: None,
-        color: &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
-        split_elog: feature_enabled(options, "split-elog"),
-    });
+    // would take with it. Empty for a binpkg with no saved env. Skipped
+    // after a postinst failure: like the source merge, the end-of-run
+    // `Messages` flush prints it once, after the `Failed to install`
+    // block and the die-log replay (a mid-merge flush would print it
+    // twice, and before the failure block).
+    // Portage: vartree.py, dblink.treewalk (`_elog_process`)
+    if postinst_status == 0 {
+        crate::elog::process_batch(crate::elog::ProcessBatchArgs {
+            logdir: &crate::elog::logdir(root),
+            root_display: &root.display().to_string(),
+            items: &[(format!("{category}/{pf}"), builddir.join("temp"))],
+            phases: None,
+            color: &crate::color::Colorizer::new(crate::color::resolve_havecolor(None)),
+            split_elog: feature_enabled(options, "split-elog"),
+        });
+    }
 
-    let _ = std::fs::remove_dir_all(builddir);
-    Ok(postinst_status)
+    // A postinst failure keeps the builddir (bug #704866), like the
+    // source merge; the post-merge clean never runs for it either.
+    if postinst_status == 0 {
+        let _ = std::fs::remove_dir_all(builddir);
+    }
+    Ok(MergeOutcome {
+        status: postinst_status,
+        postinst_failed: postinst_status != 0,
+    })
 }

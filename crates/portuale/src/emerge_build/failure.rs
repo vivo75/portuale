@@ -93,15 +93,15 @@ pub(crate) struct FailReport<'a> {
     pub(crate) quiet_fail: bool,
 }
 
-/// The `${T}/build.log` and `${T}` of `entry` under `portage_tmpdir`.
+/// The `${T}/build.log` and `${T}` of `entry` under `portage_tmpdir`,
+/// for a source or a binary entry (both merge under
+/// `portage/<cat>/<pf>`; a binary entry's log is the captured hook
+/// output the merge writes there).
 pub(crate) fn source_paths_for(
     options: &ebuild_merge::MergeOptions,
     entry: &GraphEntry,
     portage_tmpdir: &Path,
 ) -> Option<SourcePaths> {
-    if entry.source == CandidateSource::Binary {
-        return None;
-    }
     let version = entry_version(&entry.outcome)?;
     let tmp = entry_portage_tmpdir(options, entry, version, portage_tmpdir).ok()?;
     let log = build_log_path(
@@ -212,14 +212,33 @@ pub(crate) fn wrap_words(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// ` (cpv:slot/sub::repo, ebuild scheduled for merge to 'root')`, one failed package.
+/// ` (cpv:slot/sub::repo, ebuild scheduled for merge to 'root')`, one
+/// failed package (`binary scheduled for merge` for a `Binary` entry).
 // Portage: Scheduler.py (`_failed_pkgs_all` summary), Package.__str__
 pub(crate) fn failed_pkg_label(entry: &GraphEntry, cpv_slot: &str, root: &Path) -> String {
+    let kind = if entry.source == CandidateSource::Binary {
+        "binary"
+    } else {
+        "ebuild"
+    };
     format!(
-        " ({cpv_slot}::{}, ebuild scheduled for merge to '{}')",
+        " ({cpv_slot}::{}, {kind} scheduled for merge to '{}')",
         entry_repo(entry),
         root.display()
     )
+}
+
+/// The `cat/pkg-ver:slot/sub` identity for a failure label: a `Binary`
+/// entry whose index carried `BUILD_ID` shows `<cpv>-<build_id>`, like
+/// the merge-list rows do.
+// Portage: _emerge/Package.py (`_pkg_str`)
+fn label_cpv_slot(entry: &GraphEntry, version: &str) -> String {
+    match (&entry.source, &entry.build_id) {
+        (CandidateSource::Binary, Some(bid)) if !bid.is_empty() => {
+            entry_cpv_slot(entry, &format!("{version}-{bid}"))
+        }
+        _ => entry_cpv_slot(entry, version),
+    }
 }
 
 /// The end-of-run `The following package(s) have failed to build, install, or execute
@@ -278,7 +297,7 @@ impl Ledger {
             return false;
         };
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);
-        let cpv_slot = entry_cpv_slot(entry, version);
+        let cpv_slot = label_cpv_slot(entry, version);
         let color = progress_color();
         let paths = (report.source_paths)(entry);
         let mut label = failed_pkg_label(entry, &cpv_slot, report.root);
@@ -321,8 +340,14 @@ impl Ledger {
             return true;
         }
         if let Some(paths) = &paths
+            && entry.source != CandidateSource::Binary
             && is_phase_failure(err)
         {
+            // Source entries only: a binary entry's non-postinst merge
+            // error (`binpkg merge failed`, digest/missing sentinels) keeps
+            // its own tail below -- the `Failed to emerge` block and its
+            // unconditional `, Log file:` suffix are the source
+            // build-phase shape, un-oracled for binary merges.
             let msg = crate::emerge_getbinpkg::failed_pkg_msg(&cpv, report.root, Some(&paths.log));
             // `_status_msg` writes a leading blank line only in the foreground.
             print!(
@@ -397,7 +422,7 @@ impl Ledger {
         for line in &lines {
             println!("{star}{line}");
         }
-        let cpv_slot = entry_cpv_slot(entry, version);
+        let cpv_slot = label_cpv_slot(entry, version);
         self.rows
             .push(failed_pkg_label(entry, &cpv_slot, report.root));
         self.elog.push(ElogItem::Dropped { cpv, text: lines });
@@ -513,4 +538,70 @@ pub(crate) fn atoms_requiring(dependent: &GraphEntry, cp: &(String, String)) -> 
     atoms.sort();
     atoms.dedup();
     atoms
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn label_entry(source: CandidateSource, build_id: Option<&str>) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: "dev-util".into(),
+            package: "f459-postinstfail".into(),
+            outcome: PretendOutcome::New {
+                version: "1".into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![],
+            source,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: build_id.map(str::to_string),
+            deps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn label_cpv_slot_appends_the_build_id_for_binaries() {
+        // Portage `Package.__str__` shows `<cpv>-<build_id>` for a binary
+        // whose index carried `BUILD_ID` (the oracle's `f459-postinstfail`
+        // was built with one); an ebuild entry never does.
+        let binary = label_entry(CandidateSource::Binary, Some("1"));
+        assert_eq!(
+            label_cpv_slot(&binary, "1"),
+            "dev-util/f459-postinstfail-1-1:0/0"
+        );
+        let plain = label_entry(CandidateSource::Binary, None);
+        assert_eq!(
+            label_cpv_slot(&plain, "1"),
+            "dev-util/f459-postinstfail-1:0/0"
+        );
+        let source = label_entry(CandidateSource::Ebuild, None);
+        assert_eq!(
+            label_cpv_slot(&source, "1"),
+            "dev-util/f459-postinstfail-1:0/0"
+        );
+        assert_eq!(
+            failed_pkg_label(&binary, &label_cpv_slot(&binary, "1"), Path::new("/")),
+            " (dev-util/f459-postinstfail-1-1:0/0::testrepo, binary scheduled for merge to '/')"
+        );
+    }
 }

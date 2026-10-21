@@ -985,9 +985,45 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
     } else {
         merge_options
     };
-    let status = ebuild_merge::merge_binpkg(&binpkg_path, root, portage_tmpdir, merge_options)?;
-    if status != 0 {
-        return Err(format!("{cp}-{version}: binpkg merge failed ({status})"));
+    // The hooks' output is captured to this entry's build log in
+    // background mode (like the scheduler's merge half): the `Failed to
+    // install` tail and the end-of-run `Messages` flush read it back. In
+    // the foreground the hooks inherit the terminal, like the source
+    // serial path (the failure tail's log path is derived at record
+    // time instead).
+    // Portage: _emerge/Binpkg (PORTAGE_LOG_FILE)
+    let mut per_entry = merge_options.clone();
+    if display.mode.background {
+        per_entry.log_file = Some(crate::emerge_build::build_log_path(
+            portage_tmpdir,
+            &entry.category,
+            &entry.package,
+            &version,
+            &crate::emerge_build::resolved_features(merge_options),
+        ));
+    }
+    let outcome = ebuild_merge::merge_binpkg(&binpkg_path, root, portage_tmpdir, &per_entry)?;
+    if outcome.postinst_failed {
+        // The merge landed (files and vdb entry are live): `>>> Completed`
+        // prints like `PackageMerge._install_exit`, and the world record
+        // below is skipped for this entry. The clean never runs after a
+        // postinst failure (the `_postinst_failure` builddir rule); the
+        // error carries the endgame wording.
+        // Portage: _emerge/PackageMerge.py, _install_exit; vartree.py
+        display.status(&crate::emerge_build::completed_line(
+            entry, &version, progress, root, &color,
+        ));
+        return Err(crate::emerge_build::postinst_failed_error(
+            &cp,
+            &version,
+            outcome.status,
+        ));
+    }
+    if outcome.status != 0 {
+        return Err(format!(
+            "{cp}-{version}: binpkg merge failed ({})",
+            outcome.status
+        ));
     }
     if let Some(record) = &merge_options.world_recorder {
         for line in record(entry) {
@@ -1551,9 +1587,18 @@ mod tests {
     }
 
     fn graph_entry(package: &str, source: CandidateSource, version: &str) -> GraphEntry {
+        graph_entry_cat("dev-libs", package, source, version)
+    }
+
+    fn graph_entry_cat(
+        category: &str,
+        package: &str,
+        source: CandidateSource,
+        version: &str,
+    ) -> GraphEntry {
         GraphEntry {
             discovery: 0,
-            category: "dev-libs".into(),
+            category: category.into(),
             package: package.into(),
             outcome: PretendOutcome::New {
                 version: version.into(),
@@ -1976,14 +2021,14 @@ mod tests {
             ..MergeOptions::default()
         };
 
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &fixtures_root().join("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar"),
             &root,
             &tmp.join("portage_tmpdir"),
             &options,
         )
         .expect("signed gpkg merge succeeds");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
 
         let vdb = root.join("var/db/pkg/dev-libs/gpgsignedpkg-1.0");
         assert!(vdb.join("CONTENTS").is_file());
@@ -2058,14 +2103,14 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let binpkg = fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2");
 
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &binpkg,
             &root,
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
         )
         .expect("merge succeeds");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
 
         // The image file landed under ROOT.
         let hello = root.join("usr/share/packagepkg/hello.txt");
@@ -2136,14 +2181,14 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let binpkg = fixtures_root().join("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar");
 
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &binpkg,
             &root,
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
         )
         .expect("gpkg merge succeeds");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
 
         let vdb = root.join("var/db/pkg/dev-libs/gpkgreadpkg-1.0");
         let contents = std::fs::read_to_string(vdb.join("CONTENTS")).unwrap();
@@ -2236,14 +2281,14 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let binpkg = fixtures_root().join("pkgdir/dev-libs/binpkgphasepkg-1.0.tbz2");
 
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &binpkg,
             &root,
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
         )
         .expect("merge succeeds");
-        assert_eq!(status, 0, "both hooks exited 0");
+        assert_eq!(outcome.status, 0, "both hooks exited 0");
 
         // The image landed, vdb entry written.
         assert!(root.join("usr/share/binpkgphasepkg/payload.txt").is_file());
@@ -2264,19 +2309,76 @@ mod tests {
     }
 
     #[test]
+    fn merge_one_binary_entry_postinst_failure_matches_the_portage_endgame() {
+        // Backlog #459 (Portage `vartree.py::dblink.merge`
+        // `_postinst_failure`, `_emerge/EbuildMerge.py::_merge_exit`,
+        // `_emerge/PackageMerge.py::_install_exit`,
+        // `Scheduler.py::_do_merge_exit`; oracle
+        // `LLM/evidence/2026-10-21-f459/`): a binary merge whose
+        // `pkg_postinst` dies still lands (files and vdb entry) but the
+        // entry reports the postinst marker, so the loop prints
+        // `>>> Completed`, skips the world record and keeps the builddir.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let entry = graph_entry_cat(
+            "dev-util",
+            "f459-postinstfail",
+            CandidateSource::Binary,
+            "1",
+        );
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &fixtures_root().join("pkgdir"),
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
+        .unwrap_err();
+        assert!(
+            crate::emerge_build::is_postinst_failure(&err),
+            "the postinst marker, not a plain merge failure: {err}"
+        );
+        // The merge landed: the vdb entry is live ...
+        assert!(
+            root.join("var/db/pkg/dev-util/f459-postinstfail-1/CONTENTS")
+                .is_file()
+        );
+        // ... but the builddir is kept (bug #704866), and the elog the
+        // end-of-run `Messages` flush reads carries `FAILED postinst`.
+        assert!(
+            tmp.join("portage_tmpdir/portage/dev-util/f459-postinstfail-1")
+                .is_dir(),
+            "the builddir must be kept"
+        );
+        let logging = std::fs::read_to_string(
+            tmp.join("portage_tmpdir/portage/dev-util/f459-postinstfail-1/temp/logging/postinst"),
+        )
+        .unwrap();
+        assert!(
+            logging.starts_with("ERROR FAILED postinst:"),
+            "the elog heads the phase file: {logging:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn merge_binpkg_runs_pkg_setup_then_preinst_then_postinst() {
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
 
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &fixtures_root().join("pkgdir/dev-libs/binpkgrmpkg-1.0.tbz2"),
             &root,
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
         )
         .expect("merge succeeds");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
 
         assert!(root.join("usr/share/binpkgrmpkg/payload-1.0.txt").is_file());
         // Each hook appends its own `<phase>-<PVR>` line, in call order.
@@ -2295,14 +2397,14 @@ mod tests {
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
 
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"),
             &root,
             &tmp.join("portage_tmpdir"),
             &MergeOptions::default(),
         )
         .expect("merge succeeds");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
 
         assert!(
             root.join("usr/share/binpkgpretendpkg/payload.txt")
@@ -2327,14 +2429,14 @@ mod tests {
             features: "mergetimefeat splitdebug".to_string(),
             ..MergeOptions::default()
         };
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"),
             &root,
             &tmp.join("portage_tmpdir"),
             &opts,
         )
         .expect("merge succeeds");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
 
         let env_bz2 = root.join("var/db/pkg/dev-libs/binpkgpretendpkg-1.0/environment.bz2");
         let out = std::process::Command::new("bzip2")
@@ -2390,14 +2492,14 @@ mod tests {
             ],
             ..MergeOptions::default()
         };
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"),
             &root,
             &tmp.join("portage_tmpdir"),
             &opts,
         )
         .expect("merge succeeds");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
 
         let env_bz2 = root.join("var/db/pkg/dev-libs/binpkgpretendpkg-1.0/environment.bz2");
         let out = std::process::Command::new("bzip2")
@@ -2432,14 +2534,14 @@ mod tests {
             &MergeOptions::default(),
         )
         .expect("1.0 merges");
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &fixtures_root().join("pkgdir/dev-libs/binpkgrmpkg-2.0.tbz2"),
             &root,
             &portage_tmpdir,
             &MergeOptions::default(),
         )
         .expect("2.0 merges");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
 
         // 2.0 replaced 1.0 in the vdb; 1.0's own file is unmerged.
         assert!(
@@ -2487,14 +2589,14 @@ mod tests {
         )
         .unwrap();
 
-        let status = ebuild_merge::merge_binpkg(
+        let outcome = ebuild_merge::merge_binpkg(
             &fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
             &root,
             &tmp.join("pt"),
             &MergeOptions::default(),
         )
         .expect("replace merge succeeds");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
 
         // The new version is in the vdb; the old one is gone.
         assert!(

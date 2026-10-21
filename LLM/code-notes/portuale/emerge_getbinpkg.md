@@ -163,3 +163,6 @@ Backlog #428. Portage `BinRepoConfigLoader` gives a `location`-less binrepo `<EP
 
 ## fn verified_digest_names
 Backlog #428. `bintree._get_digests` keys checksums uppercase and `size` lowercase; `BinpkgVerifier._display_success` prints `sorted(digests)`, so `MD5 SHA1 size`. Nothing is verified or printed without a parseable `SIZE` (`BinpkgVerifier._start`).
+
+## fn merge_one_binary_entry (#459)
+- A postinst-failed binary merge prints `>>> Completed` and returns the shared `postinst_failed_error` marker (like `merge_one_source_entry`), so the loop skips the world record, keeps the resume entry, and merges dependents in a resumed pass. `per_entry.log_file` is set only in background mode (hooks capture to the build log); in the foreground they inherit the terminal like the source serial path. Ground truth: `LLM/evidence/2026-10-21-f459/`.

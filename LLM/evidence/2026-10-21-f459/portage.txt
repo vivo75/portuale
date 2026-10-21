@@ -1,0 +1,261 @@
+=== lone-postinstfail
+>>> Emerging binary (1 of 1) dev-util/f459-postinstfail-1::fetchrepo for /var/tmp/f459/oracle/root/
+>>> Installing (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Completed (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Failed to install dev-util/f459-postinstfail-1 to /var/tmp/f459/oracle/root/, Log file:
+>>>  '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+>>> Extracting info
+[32m * [39;49;00mPackage:    dev-util/f459-postinstfail-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+>>> Extracting dev-util/f459-postinstfail-1
+ [31;01m*[0m ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line 186:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/f459-postinstfail-1 merged to /var/tmp/f459/oracle/root/:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line 186:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ * S: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- resume:
+{"binpkgs": [{"BUILD_ID": 1, "BUILD_TIME": 1792580180, "CPV": "dev-util/f459-postinstfail-1", "EROOT": "/var/tmp/f459/oracle/root/", "MTIME": 1792580180, "SIZE": 4270}], "favorites": ["dev-util/f459-postinstfail"], "mergelist": [["binary", "/var/tmp/f459/oracle/root/", "dev-util/f459-postinstfail-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y", "--usepkg": true, "--usepkgonly": true}}
+--- builddir:
+/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1
+--- vdb:
+f459-postinstfail-1
+--- pkgdir:
+f459-good
+f459-postinstfail
+f459-top
+=== postinstfail-plus-good
+>>> Emerging binary (1 of 2) dev-util/f459-postinstfail-1::fetchrepo for /var/tmp/f459/oracle/root/
+>>> Installing (1 of 2) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Completed (1 of 2) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Failed to install dev-util/f459-postinstfail-1 to /var/tmp/f459/oracle/root/, Log file:
+>>>  '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+>>> Extracting info
+[32m * [39;49;00mPackage:    dev-util/f459-postinstfail-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+>>> Extracting dev-util/f459-postinstfail-1
+ [31;01m*[0m ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line 186:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/f459-postinstfail-1 merged to /var/tmp/f459/oracle/root/:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line 186:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ * S: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- resume:
+{"binpkgs": [{"BUILD_ID": 1, "BUILD_TIME": 1792580180, "CPV": "dev-util/f459-postinstfail-1", "EROOT": "/var/tmp/f459/oracle/root/", "MTIME": 1792580180, "SIZE": 4270}, {"BUILD_ID": 1, "BUILD_TIME": 1792580181, "CPV": "dev-util/f459-good-1", "EROOT": "/var/tmp/f459/oracle/root/", "MTIME": 1792580181, "SIZE": 4151}], "favorites": ["dev-util/f459-good", "dev-util/f459-postinstfail"], "mergelist": [["binary", "/var/tmp/f459/oracle/root/", "dev-util/f459-postinstfail-1", "merge"], ["binary", "/var/tmp/f459/oracle/root/", "dev-util/f459-good-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y", "--usepkg": true, "--usepkgonly": true}}
+--- builddir:
+/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1
+--- vdb:
+f459-postinstfail-1
+--- pkgdir:
+f459-good
+f459-postinstfail
+f459-top
+=== keep-going
+>>> Emerging binary (1 of 3) dev-util/f459-postinstfail-1::fetchrepo for /var/tmp/f459/oracle/root/
+>>> Installing (1 of 3) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Completed (1 of 3) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Failed to install dev-util/f459-postinstfail-1 to /var/tmp/f459/oracle/root/, Log file:
+>>>  '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+>>> Emerging binary (1 of 2) dev-util/f459-good-1::fetchrepo for /var/tmp/f459/oracle/root/
+*** Resuming merge...
+>>> Installing (1 of 2) dev-util/f459-good-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Recording dev-util/f459-good in "world" favorites file...
+>>> Completed (1 of 2) dev-util/f459-good-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Emerging binary (2 of 2) dev-util/f459-top-1::fetchrepo for /var/tmp/f459/oracle/root/
+>>> Installing (2 of 2) dev-util/f459-top-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Recording dev-util/f459-top in "world" favorites file...
+>>> Completed (2 of 2) dev-util/f459-top-1::fetchrepo to /var/tmp/f459/oracle/root/
+>>> Extracting info
+[32m * [39;49;00mPackage:    dev-util/f459-postinstfail-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+>>> Extracting dev-util/f459-postinstfail-1
+ [31;01m*[0m ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line 186:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/f459-postinstfail-1 merged to /var/tmp/f459/oracle/root/:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line 186:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ * S: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+rc=1
+--- stderr
+ * 
+ * The following package has failed to build, install, or execute postinst:
+ * 
+ *  (dev-util/f459-postinstfail-1-1:0/0::fetchrepo, binary scheduled for merge to '/var/tmp/f459/oracle/root/'), Log file:
+ *   '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+ * 
+--- world:
+dev-util/f459-good
+dev-util/f459-top
+--- resume:
+null
+--- builddir:
+/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1
+--- vdb:
+f459-good-1
+f459-postinstfail-1
+f459-top-1
+--- pkgdir:
+f459-good
+f459-postinstfail
+f459-top
+=== foreground-postinstfail
+Calculating dependencies ... done!
+Dependency resolution took 1.71 s (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-util/f459-postinstfail-1::fetchrepo for /var/tmp/f459/oracle/root/
+ * f459-postinstfail-1-1.xpak MD5 SHA1 size ;-) ...                      [ ok ]
+>>> Extracting info
+>>> Extracting dev-util/f459-postinstfail-1
+
+>>> Installing (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/f459/oracle/root/
+ [31;01m*[0m ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line 186:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+>>> Completed (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/f459/oracle/root/
+
+>>> Failed to install dev-util/f459-postinstfail-1 to /var/tmp/f459/oracle/root/, Log file:
+
+>>>  '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+
+ * Messages for package dev-util/f459-postinstfail-1 merged to /var/tmp/f459/oracle/root/:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line 186:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ * S: '/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+
+ * GNU info directory index is up-to-date.
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- resume:
+{"binpkgs": [{"BUILD_ID": 1, "BUILD_TIME": 1792580180, "CPV": "dev-util/f459-postinstfail-1", "EROOT": "/var/tmp/f459/oracle/root/", "MTIME": 1792580180, "SIZE": 4270}], "favorites": ["dev-util/f459-postinstfail"], "mergelist": [["binary", "/var/tmp/f459/oracle/root/", "dev-util/f459-postinstfail-1", "merge"]], "myopts": {"--package-moves": "n", "--regex-search-auto": "y", "--usepkg": true, "--usepkgonly": true}}
+--- builddir:
+/var/tmp/f459/oracle/tmp/portage/dev-util/f459-postinstfail-1
+--- vdb:
+f459-postinstfail-1
+--- pkgdir:
+f459-good
+f459-postinstfail
+f459-top

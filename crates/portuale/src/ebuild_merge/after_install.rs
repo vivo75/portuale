@@ -22,6 +22,9 @@ pub(crate) fn merge_after_install(
         config_root: &options.config_root,
         shell: options.shell,
         log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
+        // The source `build_env` already carries `PORTAGE_REPO_NAME`
+        // (`entry_identity_env`); the saved-env-only push below is a no-op.
+        repo_name: None,
     })?;
     if instprep_status != 0 {
         eprintln!("!!! instprep failed");
@@ -368,7 +371,7 @@ pub(crate) fn merge_after_install_finish(
     // the `FAILED postinst` line Portage prints after the die block.
     // Portage: vartree.py, dblink.treewalk
     if postinst_status != 0 {
-        record_postinst_failure(env, options, postinst_status)?;
+        record_postinst_failure(&env.t(), options.log_file.as_deref(), postinst_status)?;
     }
     absorb_update_env(root, &env.category, &env.split.pf, &update_env)?;
 
@@ -404,7 +407,7 @@ pub(crate) fn merge_after_install_finish(
     })
 }
 
-/// The `FAILED postinst` elog of [`merge_after_install_finish`]: appends
+/// The `FAILED postinst` elog of the merge finish: appends
 /// `ERROR FAILED postinst: <status>` to `${T}/logging/postinst` (the saved
 /// elog the end-of-run `Messages` summary reads) and to the build log, and
 /// prints it on the terminal when the phase ran in the foreground (a
@@ -412,14 +415,14 @@ pub(crate) fn merge_after_install_finish(
 /// dump replays it).
 // Portage: vartree.py, dblink.treewalk (`_postinst_failure`); Scheduler.py,
 /// `SchedulerInterface.output` (terminal in the foreground, log always)
-fn record_postinst_failure(
-    env: &ebuild_phases::Environment,
-    options: &MergeOptions,
+pub(crate) fn record_postinst_failure(
+    t_dir: &Path,
+    log_file: Option<&Path>,
     postinst_status: i32,
 ) -> Result<(), String> {
     use std::io::Write;
     let line = format!("FAILED postinst: {postinst_status}");
-    let logging = env.t().join("logging");
+    let logging = t_dir.join("logging");
     std::fs::create_dir_all(&logging).map_err(|e| format!("{}: {e}", logging.display()))?;
     // The line heads the phase file: Portage merges the python-side elog
     // (this line) before the shell-side one (the die block), so the
@@ -443,7 +446,7 @@ fn record_postinst_failure(
         "{} {line}",
         crate::color::Colorizer::new(true).c("ERR", " * ")
     );
-    if let Some(path) = options.log_file.as_deref() {
+    if let Some(path) = log_file {
         let mut log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -825,6 +828,7 @@ pub(crate) fn run_vdb_saved_env_phase(args: RunVdbSavedEnvPhaseArgs<'_>) -> Resu
         None,
         // No `MERGE_TYPE`/`EMERGE_FROM` on an unmerge hook either: both
         // stay unset and `ebuild.sh` re-creates them readonly-empty.
-        merge_type: None, replaced_by_version },
+        // `PORTAGE_REPO_NAME` likewise keeps today's behavior (no oracle).
+        merge_type: None, replaced_by_version, repo_name: None },
     )
 }

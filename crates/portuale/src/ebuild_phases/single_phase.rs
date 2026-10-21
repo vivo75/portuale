@@ -230,6 +230,9 @@ pub(crate) struct RunInstprepArgs<'a> {
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
     pub(crate) log_file: PhaseLog<'a>,
+    /// The binary merge's repo for the hook env (`PORTAGE_REPO_NAME`),
+    /// like [`RunPhaseFromSavedEnvArgs::repo_name`].
+    pub(crate) repo_name: Option<&'a str>,
 }
 
 /// The `instprep` internal phase on every merge, before `INSTALL_MASK`,
@@ -248,6 +251,7 @@ pub(crate) fn run_instprep(args: RunInstprepArgs<'_>) -> Result<i32, String> {
         config_root,
         shell,
         log_file,
+        repo_name,
     } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(async {
@@ -259,6 +263,12 @@ pub(crate) fn run_instprep(args: RunInstprepArgs<'_>) -> Result<i32, String> {
                 seed_saved_environment(&env, saved)?;
             }
             extra_env.extend(binary_merge_env());
+            // Same repo as the other binary hooks (see
+            // `run_phase_from_saved_env`); the saved env alone never
+            // carries it.
+            if let Some(repo) = repo_name {
+                extra_env.push(("PORTAGE_REPO_NAME".to_string(), repo.to_string()));
+            }
         }
         run_misc_functions(RunMiscFunctionsArgs {
             env: &env,
@@ -309,6 +319,12 @@ pub(crate) struct RunPhaseFromSavedEnvArgs<'a> {
     /// unmerge and for binary-merge hooks.
     /// Portage: vartree.py, `dblink.treewalk` (`REPLACED_BY_VERSION`).
     pub(crate) replaced_by_version: Option<&'a str>,
+    /// The binary merge's repo for the hook env (`PORTAGE_REPO_NAME`,
+    /// feeding the `die` `::repo` suffix); `None` for unmerge hooks,
+    /// which keep today's behavior.
+    /// Portage: doebuild.py, `doebuild_environment`
+    /// (`configdict["pkg"]["PORTAGE_REPO_NAME"] = repo.name`).
+    pub(crate) repo_name: Option<&'a str>,
 }
 
 /// Like `run_single_phase`, but seeds `${T}/environment` from a binary
@@ -332,6 +348,7 @@ pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Re
         replacing_versions,
         merge_type,
         replaced_by_version,
+        repo_name,
     } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(async {
@@ -349,6 +366,12 @@ pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Re
         let mut extra_env = Vec::new();
         if merge_type.is_some() {
             extra_env.extend(binary_merge_env());
+        }
+        // The binary merge's repo, like `doebuild_environment`'s
+        // `configdict["pkg"]` assignment; unmerge hooks keep it unset.
+        // Portage: doebuild.py, doebuild_environment
+        if let Some(repo) = repo_name {
+            extra_env.push(("PORTAGE_REPO_NAME".to_string(), repo.to_string()));
         }
         if let Some(version) = replacing_versions {
             extra_env.push(("REPLACING_VERSIONS".to_string(), version.to_string()));

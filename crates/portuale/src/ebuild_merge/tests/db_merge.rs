@@ -160,14 +160,14 @@ fn binpkg_merge_matches_files(kind: portage_vdb::BackendKind) {
     let key = EntryKey::new("dev-libs", "binpkgrmpkg-1.0");
     let merge = || {
         std::fs::create_dir_all(&root).unwrap();
-        let status = merge_binpkg(
+        let outcome = merge_binpkg(
             &binpkg("binpkgrmpkg-1.0.tbz2"),
             &root,
             &ptmp,
             &MergeOptions::default(),
         )
         .expect("merge succeeds");
-        assert_eq!(status, 0);
+        assert_eq!(outcome.status, 0);
     };
 
     merge();
@@ -267,7 +267,7 @@ fn a_same_slot_upgrade_on_sqlite_replaces_in_the_publishing_commit() {
             ));
         });
     }
-    let status = merge_binpkg(
+    let outcome = merge_binpkg(
         &binpkg("binpkgrmpkg-2.0.tbz2"),
         &root,
         &ptmp,
@@ -275,7 +275,7 @@ fn a_same_slot_upgrade_on_sqlite_replaces_in_the_publishing_commit() {
     )
     .expect("2.0 merges");
     clear_hook();
-    assert_eq!(status, 0);
+    assert_eq!(outcome.status, 0);
 
     let (old_live, new_live, pending, generation) =
         seen.borrow().clone().expect("the publish hook ran");
@@ -422,14 +422,14 @@ fn a_crash_before_the_publishing_commit_leaves_the_old_instance_and_a_sweepable_
     assert_eq!(entry_files(fresh.as_ref(), &old), old_files);
 
     // The upgrade can now be redone.
-    let status = merge_binpkg(
+    let outcome = merge_binpkg(
         &binpkg("binpkgrmpkg-2.0.tbz2"),
         &root,
         &ptmp,
         &MergeOptions::default(),
     )
     .expect("2.0 merges after the sweep");
-    assert_eq!(status, 0);
+    assert_eq!(outcome.status, 0);
     assert!(fresh.has_entry(&new).unwrap());
     assert!(!fresh.has_entry(&old).unwrap());
     let counter_file = fresh.read_file(&new, "COUNTER").unwrap().unwrap();
@@ -847,10 +847,15 @@ fn sequence_equivalence(kind: portage_vdb::BackendKind) {
     let steps = || {
         let opts = MergeOptions::default();
         let binpkg_1 = binpkg("binpkgrmpkg-1.0.tbz2");
-        assert_eq!(merge_binpkg(&binpkg_1, &root, &ptmp, &opts).unwrap(), 0);
+        assert_eq!(
+            merge_binpkg(&binpkg_1, &root, &ptmp, &opts).unwrap().status,
+            0
+        );
         assert_eq!(run_merge(&ebuild, &root, &ptmp, &opts, None).unwrap(), 0);
         assert_eq!(
-            merge_binpkg(&binpkg("binpkgrmpkg-2.0.tbz2"), &root, &ptmp, &opts).unwrap(),
+            merge_binpkg(&binpkg("binpkgrmpkg-2.0.tbz2"), &root, &ptmp, &opts)
+                .unwrap()
+                .status,
             0
         );
         for (pn, version) in [

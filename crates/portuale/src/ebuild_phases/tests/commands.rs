@@ -296,6 +296,8 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
             config_root: no_root,
             shell: ShellBackend::Bash,
             log_file: PhaseLog::Inherit,
+            // No saved env here, so no repo push either.
+            repo_name: None,
         })
         .expect("run_instprep should not itself error")
     };
