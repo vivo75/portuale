@@ -200,3 +200,52 @@ fn up_front_save_covers_exactly_the_failure_path_tail_when_nothing_merged() {
     assert_eq!(entries_not_merged(&root, &entries), up_front);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn resume_display_marks_an_installed_cpv_as_reinstall() {
+    // Portage re-resolves the saved mergelist (`resume_depgraph`), so
+    // `--resume --pretend` renders an already-installed entry `[ebuild R]`
+    // (a failed `pkg_postinst` lands the vdb entry) and an uninstalled one
+    // `[ebuild N]`. The saved list pins `=cpv`, so one `CONTENTS` check is
+    // the whole re-resolution.
+    let root = TempDir::new("pretend-test-resume_display_reinstall").keep();
+    let _ = std::fs::remove_dir_all(&root);
+    let landed = root.join("var/db/pkg/dev-libs/landed-1.0");
+    std::fs::create_dir_all(&landed).unwrap();
+    std::fs::write(landed.join("CONTENTS"), "").unwrap();
+    std::fs::create_dir_all(&root).unwrap();
+    let entries = vec![
+        emerge_build::resume_entry(emerge_build::ResumeEntryArgs {
+            category: "dev-libs",
+            package: "landed",
+            version: "1.0",
+            source: portage_repo::CandidateSource::Ebuild,
+            repos: &[],
+            binary_repo: None,
+        }),
+        emerge_build::resume_entry(emerge_build::ResumeEntryArgs {
+            category: "dev-libs",
+            package: "missing",
+            version: "1.0",
+            source: portage_repo::CandidateSource::Ebuild,
+            repos: &[],
+            binary_repo: None,
+        }),
+    ];
+    let display = resume_display_entries(&root, &entries);
+    assert!(
+        matches!(
+            &display[0].outcome,
+            portage_repo::PretendOutcome::Reinstall { version, .. } if version == "1.0"
+        ),
+        "{:?}",
+        display[0].outcome
+    );
+    assert_eq!(display[1].outcome, entries[1].outcome);
+    // The merge entries themselves are untouched: the retry rebuilds.
+    assert!(matches!(
+        &entries[0].outcome,
+        portage_repo::PretendOutcome::New { .. }
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+}

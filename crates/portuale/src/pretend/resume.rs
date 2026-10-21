@@ -232,12 +232,14 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     }
 
     // `emerge --resume --pretend`: show the saved list and stop, merging
-    // nothing and touching neither the resume list nor `world`. Every line
-    // prints as `[ebuild N ...]`, since the saved list records no markers.
+    // nothing and touching neither the resume list nor `world`. An entry
+    // whose cpv is already installed renders `[ebuild R]` (Portage's
+    // re-resolution); the rest render `[ebuild N ...]`.
     // Portage: _emerge/actions.py
+    let display_entries = resume_display_entries(root, &entries);
     if let Some(code) = resume_pretend(ResumePretendArgs {
         pretend,
-        entries: &entries,
+        entries: &display_entries,
         root,
         opts,
         color,
@@ -343,6 +345,44 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     display_news_notice_if_any(&repos, root, config, &color);
 
     ExitCode::SUCCESS
+}
+
+/// The `--resume --pretend` display entries: Portage re-resolves the saved
+/// mergelist (`resume_depgraph`), so an entry whose exact cpv is already
+/// installed (a failed `pkg_postinst` lands the vdb entry) renders
+/// `[ebuild R]`, not `[ebuild N]`. The saved list pins `=cpv`, so a vdb
+/// `CONTENTS` check for that cpv is the whole re-resolution. The merge
+/// entries themselves are never flipped: the retry must rebuild regardless.
+// Portage: _emerge/actions.py (resume path), depgraph.py, _loadResumeCommand
+pub(crate) fn resume_display_entries(
+    root: &Path,
+    entries: &[portage_repo::GraphEntry],
+) -> Vec<portage_repo::GraphEntry> {
+    entries
+        .iter()
+        .map(|e| {
+            let mut display = e.clone();
+            if let portage_repo::PretendOutcome::New { version } = &e.outcome
+                && crate::ebuild_merge::entry_file_is_regular(
+                    root,
+                    &e.category,
+                    &format!("{}-{version}", e.package),
+                    "CONTENTS",
+                )
+            {
+                display.outcome = portage_repo::PretendOutcome::Reinstall {
+                    version: version.clone(),
+                    changed_flags: Vec::new(),
+                    deps_changed: false,
+                    slot_changed: false,
+                    rebuilt_binary: false,
+                    new_repo: false,
+                    slot_operator_rebuild: false,
+                };
+            }
+            display
+        })
+        .collect()
 }
 
 /// The values [`resume_pretend`] reads from its caller.

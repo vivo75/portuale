@@ -1,0 +1,414 @@
+=== A1 lone-postinstfail
+>>> Verifying ebuild manifests
+>>> Emerging (1 of 1) dev-util/postinstfail-1::fetchrepo for /var/tmp/f460/probe/root/
+>>> Installing (1 of 1) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Completed (1 of 1) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Failed to install dev-util/postinstfail-1 to /var/tmp/f460/probe/root/, Log file:
+>>>  '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'
+[32m * [39;49;00mPackage:    dev-util/postinstfail-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  0 KiB
+ [31;01m*[0m ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line 185:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/postinstfail-1 merged to /var/tmp/f460/probe/root/:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line 185:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ * S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+postinstfail-1
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/postinstfail"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/postinstfail-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y"}}
+=== A2 resume-after-lone-postinstfail
+*** Resuming merge...
+>>> Verifying ebuild manifests
+>>> Emerging (1 of 1) dev-util/postinstfail-1::fetchrepo for /var/tmp/f460/probe/root/
+>>> Installing (1 of 1) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Completed (1 of 1) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Failed to install dev-util/postinstfail-1 to /var/tmp/f460/probe/root/, Log file:
+>>>  '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'
+[32m * [39;49;00mPackage:    dev-util/postinstfail-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  0 KiB
+ [31;01m*[0m ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line 185:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/postinstfail-1 merged to /var/tmp/f460/probe/root/:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line 185:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ * S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+
+ * GNU info directory index is up-to-date.
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+postinstfail-1
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/postinstfail"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/postinstfail-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y", "--resume": true}}
+=== A3 resume-pretend-after-lone-postinstfail
+[ebuild   R   ] dev-util/postinstfail-1 to /var/tmp/f460/probe/root/
+rc=0
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+postinstfail-1
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/postinstfail"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/postinstfail-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y", "--resume": true}}
+=== B1 lone-compilefail
+>>> Verifying ebuild manifests
+>>> Emerging (1 of 1) dev-util/bad-1::fetchrepo for /var/tmp/f460/probe/root/
+>>> Failed to emerge dev-util/bad-1 for /var/tmp/f460/probe/root/, Log file:
+>>>  '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/build.log'
+[32m * [39;49;00mPackage:    dev-util/bad-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+ [31;01m*[0m ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
+ [31;01m*[0m   compile exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m   environment, line 219:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "compile exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/work/bad-1'
+ [31;01m*[0m S: '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/work/bad-1'
+
+ * Messages for package dev-util/bad-1 merged to /var/tmp/f460/probe/root/:
+
+ * ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
+ *   compile exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called src_compile
+ *   environment, line 219:  Called die
+ * The specific snippet of code:
+ *       die "compile exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/environment'.
+ * Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/work/bad-1'
+ * S: '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/work/bad-1'
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+(no vdb)
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/bad"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/bad-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y"}}
+=== B2 resume-after-compilefail
+*** Resuming merge...
+>>> Verifying ebuild manifests
+>>> Emerging (1 of 1) dev-util/bad-1::fetchrepo for /var/tmp/f460/probe/root/
+>>> Failed to emerge dev-util/bad-1 for /var/tmp/f460/probe/root/, Log file:
+>>>  '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/build.log'
+[32m * [39;49;00mPackage:    dev-util/bad-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+ [31;01m*[0m ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
+ [31;01m*[0m   compile exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called src_compile
+ [31;01m*[0m   environment, line 219:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "compile exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/work/bad-1'
+ [31;01m*[0m S: '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/work/bad-1'
+
+ * Messages for package dev-util/bad-1 merged to /var/tmp/f460/probe/root/:
+
+ * ERROR: dev-util/bad-1::fetchrepo failed (compile phase):
+ *   compile exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called src_compile
+ *   environment, line 219:  Called die
+ * The specific snippet of code:
+ *       die "compile exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/bad-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/bad-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/temp/environment'.
+ * Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/work/bad-1'
+ * S: '/var/tmp/f460/probe/tmp/portage/dev-util/bad-1/work/bad-1'
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+(no vdb)
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/bad"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/bad-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y", "--resume": true}}
+=== B3 resume-pretend-after-compilefail
+[ebuild  N    ] dev-util/bad-1 to /var/tmp/f460/probe/root/
+rc=0
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+(no vdb)
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/bad"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/bad-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y", "--resume": true}}
+=== C1 postinstfail-plus-good
+>>> Verifying ebuild manifests
+>>> Emerging (1 of 2) dev-util/postinstfail-1::fetchrepo for /var/tmp/f460/probe/root/
+>>> Installing (1 of 2) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Completed (1 of 2) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Failed to install dev-util/postinstfail-1 to /var/tmp/f460/probe/root/, Log file:
+>>>  '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'
+[32m * [39;49;00mPackage:    dev-util/postinstfail-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  0 KiB
+ [31;01m*[0m ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line 185:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/postinstfail-1 merged to /var/tmp/f460/probe/root/:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line 185:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ * S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+postinstfail-1
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/good", "dev-util/postinstfail"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/postinstfail-1", "merge"], ["ebuild", "/var/tmp/f460/probe/root/", "dev-util/good-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y"}}
+=== C2 resume-after-partial
+*** Resuming merge...
+>>> Verifying ebuild manifests
+>>> Emerging (1 of 2) dev-util/postinstfail-1::fetchrepo for /var/tmp/f460/probe/root/
+>>> Installing (1 of 2) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Completed (1 of 2) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Failed to install dev-util/postinstfail-1 to /var/tmp/f460/probe/root/, Log file:
+>>>  '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'
+[32m * [39;49;00mPackage:    dev-util/postinstfail-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  0 KiB
+ [31;01m*[0m ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line 185:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/postinstfail-1 merged to /var/tmp/f460/probe/root/:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line 185:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ * S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+
+ * GNU info directory index is up-to-date.
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+postinstfail-1
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/good", "dev-util/postinstfail"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/postinstfail-1", "merge"], ["ebuild", "/var/tmp/f460/probe/root/", "dev-util/good-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y", "--resume": true}}
+=== C3 resume-pretend-after-partial
+[ebuild   R   ] dev-util/postinstfail-1 to /var/tmp/f460/probe/root/
+[ebuild  N    ] dev-util/good-1 to /var/tmp/f460/probe/root/
+rc=0
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+postinstfail-1
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/good", "dev-util/postinstfail"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/postinstfail-1", "merge"], ["ebuild", "/var/tmp/f460/probe/root/", "dev-util/good-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y", "--resume": true}}
+=== D0 lone-postinstfail-for-skipfirst
+>>> Verifying ebuild manifests
+>>> Emerging (1 of 1) dev-util/postinstfail-1::fetchrepo for /var/tmp/f460/probe/root/
+>>> Installing (1 of 1) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Completed (1 of 1) dev-util/postinstfail-1::fetchrepo to /var/tmp/f460/probe/root/
+>>> Failed to install dev-util/postinstfail-1 to /var/tmp/f460/probe/root/, Log file:
+>>>  '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'
+[32m * [39;49;00mPackage:    dev-util/postinstfail-1:0
+[32m * [39;49;00mRepository: fetchrepo
+[32m * [39;49;00mUSE:        
+[32m * [39;49;00mFEATURES:   preserve-libs
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  0 KiB
+ [31;01m*[0m ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line 185:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/postinstfail-1 merged to /var/tmp/f460/probe/root/:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line 185:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/empty'
+ * S: '/var/tmp/f460/probe/tmp/portage/dev-util/postinstfail-1/work/postinstfail-1'
+rc=1
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+postinstfail-1
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/postinstfail"], "mergelist": [["ebuild", "/var/tmp/f460/probe/root/", "dev-util/postinstfail-1", "merge"]], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y"}}
+=== D1 resume-skipfirst-after-lone-postinstfail
+*** Resuming merge...
+rc=0
+--- stderr
+--- world:
+(no world file)
+--- vdb:
+postinstfail-1
+--- resume:
+{"binpkgs": [], "favorites": ["dev-util/postinstfail"], "mergelist": [], "myopts": {"--package-moves": "n", "--quiet": true, "--regex-search-auto": "y", "--resume": true, "--skipfirst": true}}
