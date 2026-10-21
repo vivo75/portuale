@@ -245,6 +245,7 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
     // refresh is non-fatal: warn and resolve against the local pool.
     // Portage: _emerge/actions.py, bintree.py
     if getbinpkg {
+        let _refresh_span = portage_util::profile::span("refresh_binhost_indexes");
         emerge_getbinpkg::refresh_binhost_indexes(
             &config.binrepos,
             root,

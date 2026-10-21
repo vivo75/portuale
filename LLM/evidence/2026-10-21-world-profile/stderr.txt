@@ -1,0 +1,75 @@
+[profile] expand_targets: 0.151
+[f1r] Local copy of remote index is up-to-date and will be used.
+[gentoo] Local copy of remote index is up-to-date and will be used.
+[profile] refresh_binhost_indexes: 9.770
+[profile] plan_resolve: 9.802
+[profile] ResolveCtx::new: 0.084
+[profile] collect_pass_blockers: 0.217
+[profile] run_pass first=true: 2.663
+[profile] collect_pass_blockers: 0.190
+[profile] run_pass first=false: 1.218
+[profile] collect_pass_blockers: 0.192
+[profile] run_pass first=false: 1.209
+[profile] collect_pass_blockers: 0.192
+[profile] run_pass first=false: 1.207
+[profile] collect_pass_blockers: 0.194
+[profile] run_pass first=false: 1.221
+[profile] collect_pass_blockers: 0.196
+[profile] run_pass first=false: 1.227
+[profile] collect_pass_blockers: 0.196
+[profile] run_pass first=false: 1.224
+[profile] collect_pass_blockers: 0.189
+[profile] run_pass first=false: 1.219
+[profile] collect_pass_blockers: 0.191
+[profile] run_pass first=false: 1.219
+[profile] collect_pass_blockers: 0.191
+[profile] run_pass first=false: 1.225
+[profile] collect_pass_blockers: 0.189
+[profile] run_pass first=false: 1.222
+[profile] collect_pass_blockers: 0.190
+[profile] run_pass first=false: 1.226
+[profile] collect_pass_blockers: 0.190
+[profile] run_pass first=false: 1.216
+[profile] collect_pass_blockers: 0.191
+[profile] run_pass first=false: 1.222
+[profile] collect_pass_blockers: 0.193
+[profile] run_pass first=false: 1.221
+[profile] collect_pass_blockers: 0.192
+[profile] run_pass first=false: 1.217
+[profile] collect_pass_blockers: 0.193
+[profile] run_pass first=false: 1.229
+[profile] collect_pass_blockers: 0.194
+[profile] run_pass first=false: 1.235
+[profile] collect_pass_blockers: 0.191
+[profile] run_pass first=false: 1.239
+[profile] collect_pass_blockers: 0.188
+[profile] run_pass first=false: 1.209
+[profile] collect_pass_blockers: 0.193
+[profile] run_pass first=false: 1.219
+[profile] ResolveCtx::new: 0.051
+[profile] collect_pass_blockers: 0.191
+[profile] run_pass first=false: 1.244
+[profile] serialize_merge_order select_nodes: 0.021
+[profile] resolve_once complete=false: 30.365
+[profile] run_resolve_phases: 30.367
+
+emerge: there are no ebuilds built with USE flags to satisfy "app-misc/mime-types[nginx]".
+!!! One of the following packages is required to complete your request:
+- app-misc/mime-types-2.1.54::gentoo (Change USE: +nginx)
+(dependency required by "www-servers/nginx-1.31.7::gentoo" [binary])
+(dependency required by "@world" [argument])
+!!! note: app-misc/mime-types-2.1.54 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=app-misc/mime-types-2.1.54 nginx" to package.use
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by net-libs/nodejs-26.12.0::gentoo
+# required by dev-python/jupyterlab-4.6.4::gentoo
+# required by dev-python/notebook-7.6.3::gentoo
+# required by @world (argument)
+>=dev-cpp/simdutf-9.2.1 atomic-base64
+
+ * In order to avoid wasting time, backtracking has terminated early
+ * due to the above autounmask change(s). The --autounmask-backtrack=y
+ * option can be used to force further backtracking, but there is no
+ * guarantee that it will produce a solution.
+[profile] display_and_post: 0.004
