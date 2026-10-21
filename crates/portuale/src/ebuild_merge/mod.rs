@@ -128,6 +128,7 @@ pub fn run_merge(
         buildpkg,
         before_merge: None,
     })
+    .map(|outcome| outcome.status)
 }
 
 /// Arguments of [`run_merge_with_hook`].
@@ -140,12 +141,24 @@ pub struct RunMergeWithHookArgs<'a> {
     pub before_merge: Option<&'a dyn Fn()>,
 }
 
+/// What a merge run finished with: the phase-chain exit status, plus
+/// whether `pkg_postinst` failed while everything else succeeded. A
+/// postinst failure still merges (files and vdb entry land, like Portage's
+/// `_postinst_failure`), so the caller prints `>>> Completed` anyway and
+/// reports the `Failed to install` endgame instead of `Failed to emerge`.
+// Portage: vartree.py, dblink.merge (`RETURNCODE_POSTINST_FAILURE`)
+#[derive(Debug)]
+pub struct MergeOutcome {
+    pub status: i32,
+    pub postinst_failed: bool,
+}
+
 /// [`run_merge`], with a hook fired between the two halves: after the
 /// build phases (and packaging) succeed, before the vdb merge begins.
 /// A failed build never reaches the hook. `None` runs the fused
 /// build+merge exactly like [`run_merge`].
 // Portage: Scheduler.py, PackageMerge
-pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String> {
+pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<MergeOutcome, String> {
     let RunMergeWithHookArgs {
         ebuild_path,
         root,
@@ -182,7 +195,10 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
         skip_noop_src_phases: true,
     })?;
     if status != 0 {
-        return Ok(status);
+        return Ok(MergeOutcome {
+            status,
+            postinst_failed: false,
+        });
     }
     if let Some(package_options) = buildpkg {
         // The binpkg's own `Packages` index `USE` field: the resolved
@@ -215,7 +231,10 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
             },
         )?;
         if status != 0 {
-            return Ok(status);
+            return Ok(MergeOutcome {
+                status,
+                postinst_failed: false,
+            });
         }
     }
     // The hook point: the build halves succeeded, the vdb merge has
@@ -223,12 +242,12 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
     if let Some(hook) = before_merge {
         hook();
     }
-    let merge_status = merge_after_install(ebuild_path, root, portage_tmpdir, &env, options)?;
+    let outcome = merge_after_install(ebuild_path, root, portage_tmpdir, &env, options)?;
     // After the success hooks and `env_update`, the `clean` phase
     // removes the builddir unless `FEATURES=noclean` (and never after
     // a postinst failure). The phase itself honors `keeptemp`/`keepwork`.
     // Portage: vartree.py, dblink.merge
-    if merge_status == 0 && !feature_enabled(options, "noclean") {
+    if outcome.status == 0 && !feature_enabled(options, "noclean") {
         ebuild_phases::run_clean(ebuild_phases::RunCleanArgs {
             ebuild_path,
             root,
@@ -240,7 +259,7 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
             log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
         })?;
     }
-    Ok(merge_status)
+    Ok(outcome)
 }
 
 /// `qmerge`: skips the `install` phase entirely, assuming a prior
@@ -258,7 +277,7 @@ pub fn run_qmerge(
     root: &Path,
     portage_tmpdir: &Path,
     options: &MergeOptions,
-) -> Result<i32, String> {
+) -> Result<MergeOutcome, String> {
     let env = ebuild_phases::compute_environment(ebuild_path, portage_tmpdir)?;
     if !env.installed_marker().exists() {
         return Err("mydo=qmerge, but the install phase has not been run".to_string());

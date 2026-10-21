@@ -24,14 +24,21 @@ impl FailedMerge {
 }
 
 /// The entries of `entries` that landed before a failure: those whose
-/// resume item is no longer left over.
+/// resume item is no longer left over. Entries whose `pkg_postinst` failed
+/// are excluded: their merge landed, but Portage records no world entry
+/// for them (`world_atom` is skipped on the postinst-failure path).
+// Portage: _emerge/EbuildMerge.py, _merge_exit
 fn merged_entries(
     entries: &[GraphEntry],
     unmerged: &[crate::mtimedb::ResumeCpv],
+    postinst_failed: &[(String, String)],
 ) -> Vec<GraphEntry> {
     entries
         .iter()
-        .filter(|e| emerge_build::resume_cpv(e).is_some_and(|c| !unmerged.contains(&c)))
+        .filter(|e| {
+            emerge_build::resume_cpv(e).is_some_and(|c| !unmerged.contains(&c))
+                && !postinst_failed.contains(&(e.category.clone(), e.package.clone()))
+        })
         .cloned()
         .collect()
 }
@@ -84,7 +91,7 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         .collect();
     let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
     let _ = crate::mtimedb::write_resume_list(root, atom_args, &resume_mergelist, &resume_opts);
-    if let Err(e) = emerge_build::run_source_merge(emerge_build::RunSourceMergeArgs {
+    let merge_outcome = emerge_build::run_source_merge(emerge_build::RunSourceMergeArgs {
         entries,
         repos,
         root,
@@ -99,11 +106,12 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         // Portage: Scheduler.py, _background_mode
         capture_log: quiet_build.unwrap_or(false) || quiet,
         mode: status_mode,
-    }) {
+    });
+    if let Err(e) = merge_outcome {
         // On failure, record every still-unmerged package for `emerge --resume`;
         // a failure with nothing unmerged leaves the per-merge tail alone.
         // Portage: Scheduler.py, _save_resume_list
-        let unmerged = entries_not_merged(root, entries);
+        let unmerged = unmerged_for_resume_save(root, entries, &e.report);
         let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
         if !unmerged.is_empty()
             && let Err(w) =
@@ -114,12 +122,12 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         // A failure already shown (the `Failed to emerge` block, the elog
         // summary and the failed-package list) adds no `emerge:` line.
         // Portage: Scheduler.py, merge
-        if !emerge_build::is_reported_failure(&e) {
-            eprintln!("emerge: {e}");
+        if !emerge_build::is_reported_failure(&e.message) {
+            eprintln!("emerge: {}", e.message);
         }
         return Some(FailedMerge {
             code: ExitCode::from(1),
-            merged: merged_entries(entries, &unmerged),
+            merged: merged_entries(entries, &unmerged, &e.report.postinst_failed),
         });
     }
     None
@@ -232,8 +240,8 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         // Portage's full tail and needs no `emerge:` line; the up-front save
         // already leaves the tail for `--resume`.
         // Portage: Scheduler.py, _failed_pkg_msg
-        if crate::emerge_getbinpkg::is_binpkg_digest_failure(&e)
-            || crate::emerge_getbinpkg::is_binpkg_missing_failure(&e)
+        if crate::emerge_getbinpkg::is_binpkg_digest_failure(&e.message)
+            || crate::emerge_getbinpkg::is_binpkg_missing_failure(&e.message)
         {
             return FailedMerge::plain(ExitCode::from(1));
         }
@@ -241,7 +249,7 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         // for `emerge --resume`; a failure with nothing unmerged leaves the
         // per-merge shrink's tail alone.
         // Portage: Scheduler.py, _save_resume_list
-        let unmerged = entries_not_merged(root, entries);
+        let unmerged = unmerged_for_resume_save(root, entries, &e.report);
         let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
         if !unmerged.is_empty()
             && let Err(w) =
@@ -249,12 +257,12 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         {
             eprintln!("emerge: warning: could not save the resume list: {w}");
         }
-        if !emerge_build::is_reported_failure(&e) {
-            eprintln!("emerge: {e}");
+        if !emerge_build::is_reported_failure(&e.message) {
+            eprintln!("emerge: {}", e.message);
         }
         return Some(FailedMerge {
             code: ExitCode::from(1),
-            merged: merged_entries(entries, &unmerged),
+            merged: merged_entries(entries, &unmerged, &e.report.postinst_failed),
         });
     }
     None

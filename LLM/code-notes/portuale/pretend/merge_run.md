@@ -3,6 +3,7 @@ Build and merge the plan from source, after saving it as the resume list.
 
 ## fn run_source_merge_plan
 - The up-front resume save is Portage `Scheduler.merge() -> _save_resume_list()` (backlog #168), same as the `--getbinpkg` arm above; the failure-path re-save is `_save_resume_list` on failure. `write_resume_list` itself is unconditional now (Portage always assigns -- an all-noop plan records the empty list, backlog #179).
+- Backlog #444: the failure-path save is `unmerged_for_resume_save` (still-unmerged entries plus any postinst-failed one, whose merge landed but which Portage never removes from the saved list except through a resume pass), and `merged_entries` excludes postinst-failed entries (Portage's `EbuildMerge._merge_exit` skips `world_atom` on the postinst-failure path), so a dying `pkg_postinst` records no world entry.
 - Backlog #196 fix round 1: the failure-path GLEP 42 notice is Portage `post_emerge.py:155` regardless of retval, gated on the vdb having changed (`:112-117`).
 - Portage `Scheduler._save_resume_list`: on a merge failure, record every still-unmerged package so `emerge --resume` can pick up where this left off.
 

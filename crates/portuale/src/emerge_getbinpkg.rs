@@ -640,7 +640,9 @@ pub struct RunMergePlanArgs<'a> {
 /// a `Binary` entry is downloaded (if remote) and merged; anything else is
 /// built+merged from source; `AlreadyInstalled` is a silent no-op.
 /// `--getbinpkgonly` (binary-only resolve) never yields a non-`Binary` entry.
-pub fn run_merge_plan(args: RunMergePlanArgs<'_>) -> Result<(), String> {
+pub fn run_merge_plan(
+    args: RunMergePlanArgs<'_>,
+) -> Result<crate::emerge_build::MergePassReport, crate::emerge_build::MergePassError> {
     let RunMergePlanArgs {
         entries,
         config,
@@ -1016,6 +1018,26 @@ pub(crate) fn failed_pkg_msg(cpv: &str, root: &Path, log_path: Option<&Path>) ->
             log.display()
         ),
         None => format!("\n>>> Failed to emerge {cpv}{for_root}\n"),
+    }
+}
+
+/// `>>> Failed to install <cpv>[ to <root>][, Log file:]` plus, when
+/// `log_path` is `Some`, the `>>>  '<log>'` tail: the merge-phase half of
+/// [`failed_pkg_msg`] (a postinst failure still merges, so the run reports
+/// `install`/`to`, never `emerge`/`for`).
+// Portage: lib/_emerge/Scheduler.py, _failed_pkg_msg
+pub(crate) fn failed_install_pkg_msg(cpv: &str, root: &Path, log_path: Option<&Path>) -> String {
+    let for_root = if root == Path::new("/") {
+        String::new()
+    } else {
+        format!(" to {}", root.display())
+    };
+    match log_path {
+        Some(log) => format!(
+            "\n>>> Failed to install {cpv}{for_root}, Log file:\n\n>>>  '{}'\n",
+            log.display()
+        ),
+        None => format!("\n>>> Failed to install {cpv}{for_root}\n"),
     }
 }
 
@@ -1882,6 +1904,29 @@ mod tests {
         assert!(!is_binpkg_digest_failure(
             "2 package(s) failed to merge (--keep-going):\n  dev-libs/a-1.0: binpkg digest verification failed"
         ));
+    }
+
+    #[test]
+    fn failed_install_pkg_msg_matches_portage_failed_pkg_msg_bytes() {
+        // The merge-phase half of `failed_pkg_msg`: `install`/`to`, never
+        // `emerge`/`for` (backlog #444: a postinst failure still merges).
+        // Ground truth: `LLM/evidence/2026-10-21-b444/portage.txt`
+        // (`>>> Failed to install ... to ..., Log file:` rows).
+        assert_eq!(
+            failed_install_pkg_msg(
+                "dev-util/postinstfail-1",
+                Path::new("/var/tmp/b444/root"),
+                Some(Path::new(
+                    "/var/tmp/b444/tmp/portage/dev-util/postinstfail-1/temp/build.log"
+                ))
+            ),
+            "\n>>> Failed to install dev-util/postinstfail-1 to /var/tmp/b444/root, Log file:\n\
+             \n>>>  '/var/tmp/b444/tmp/portage/dev-util/postinstfail-1/temp/build.log'\n"
+        );
+        assert_eq!(
+            failed_install_pkg_msg("dev-util/postinstfail-1", Path::new("/"), None),
+            "\n>>> Failed to install dev-util/postinstfail-1\n"
+        );
     }
 
     /// A writable copy of the committed GnuPG test keyring (see `binpkg.rs`).

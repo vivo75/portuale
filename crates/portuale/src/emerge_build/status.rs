@@ -293,6 +293,19 @@ impl StatusDisplay {
         }
     }
 
+    /// A resumed `--keep-going` pass restarts the counters over what is
+    /// left, like Portage resetting `_pkg_count`/`_status_display` in its
+    /// resume loop. The live display (once a `>>> Jobs:` line printed)
+    /// stays live.
+    // Portage: Scheduler.py, _merge (resume loop)
+    pub(crate) fn reset_for_resume(&self, maxval: usize) {
+        let mut state = self.state.lock().unwrap();
+        state.maxval = maxval;
+        state.curval = 0;
+        state.running = 0;
+        state.failed = 0;
+    }
+
     /// Failure: record it for the display.
     pub(crate) fn job_failed(&self) {
         self.state.lock().unwrap().failed += 1;

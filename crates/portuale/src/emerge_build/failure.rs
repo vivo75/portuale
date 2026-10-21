@@ -20,6 +20,57 @@ pub(crate) fn is_phase_failure(err: &str) -> bool {
     err.contains(" failed (") && !err.contains('\n')
 }
 
+/// Whether `err` is a failed `pkg_postinst` whose merge otherwise landed
+/// (see [`postinst_failed_error`]). Checked before [`is_phase_failure`]:
+/// the text also contains `" failed ("`.
+pub(crate) fn is_postinst_failure(err: &str) -> bool {
+    err.contains(": postinst failed (") && !err.contains('\n')
+}
+
+/// The error of one entry whose `pkg_postinst` exited `status` after an
+/// otherwise successful merge: files and the vdb entry are live (the
+/// `_postinst_failure` rule), so the loops print `>>> Completed`, skip the
+/// world record and the post-merge clean, and report `Failed to install`.
+// Portage: vartree.py, dblink.merge (`RETURNCODE_POSTINST_FAILURE`)
+pub(crate) fn postinst_failed_error(cp: &str, version: &str, status: i32) -> String {
+    format!("{cp}-{version}: postinst failed ({status})")
+}
+
+/// What one merge pass finished with: postinst-failed entries merged (their
+/// vdb entry is live) but must neither be world-recorded nor retried by a
+/// resume pass. The loops return it on success too (usually empty).
+#[derive(Debug, Default)]
+pub(crate) struct MergePassReport {
+    pub(crate) postinst_failed: Vec<(String, String)>,
+    /// A `--keep-going` resume pass re-saved the resume list: the failure
+    /// tail must not resurrect entries the passes already resolved.
+    pub(crate) resumed: bool,
+}
+
+/// A merge-pass failure: the display string for the `emerge:` line (or
+/// [`REPORTED_FAILURE`]) plus the pass report.
+#[derive(Debug)]
+pub(crate) struct MergePassError {
+    pub(crate) message: String,
+    pub(crate) report: MergePassReport,
+}
+
+impl From<String> for MergePassError {
+    /// An internal error carries no pass report (no entry merged).
+    fn from(message: String) -> Self {
+        MergePassError {
+            message,
+            report: MergePassReport::default(),
+        }
+    }
+}
+
+impl std::fmt::Display for MergePassError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(f)
+    }
+}
+
 /// Where a source entry's build left its log and its `${T}`.
 pub(crate) struct SourcePaths {
     pub(crate) log: PathBuf,
@@ -213,8 +264,10 @@ pub(crate) fn print_failed_pkgs_summary(
 
 impl Ledger {
     /// One failed `entry`: prints the `Failed to emerge` block when it is a source
-    /// phase failure, keeps its summary row and its elog for the end of the run.
-    /// Returns whether the failure is fully reported (no `emerge:` line wanted).
+    /// phase failure (or the `Failed to install` block for a postinst failure
+    /// whose merge landed), keeps its summary row and its elog for the end of
+    /// the run. Returns whether the failure is fully reported (no `emerge:`
+    /// line wanted).
     pub(crate) fn failed(
         &mut self,
         report: &FailReport<'_>,
@@ -230,6 +283,43 @@ impl Ledger {
         let paths = (report.source_paths)(entry);
         let mut label = failed_pkg_label(entry, &cpv_slot, report.root);
         let mut reported = false;
+        if let Some(paths) = &paths
+            && is_postinst_failure(err)
+        {
+            // The merge landed (`>>> Completed` already printed by the
+            // caller, like `PackageMerge._install_exit`): report the
+            // install-phase failure, never the build-phase one. The summary
+            // row carries no `(postinst failed)` suffix on this path (that
+            // suffix is the returncode-OK binary-merge arm, which never
+            // reaches here).
+            // Portage: Scheduler.py, _failed_pkg_msg / _do_merge_exit
+            let msg = crate::emerge_getbinpkg::failed_install_pkg_msg(
+                &cpv,
+                report.root,
+                Some(&paths.log),
+            );
+            print!(
+                "{}",
+                if report.background {
+                    msg.trim_start_matches('\n').replace("\n\n", "\n")
+                } else {
+                    msg
+                }
+            );
+            label.push_str(&format!(
+                ", Log file:\n{}  '{}'",
+                color.c("BAD", " * "),
+                paths.log.display()
+            ));
+            self.elog.push(ElogItem::Failed {
+                cpv,
+                t_dir: paths.t_dir.clone(),
+                log: paths.log.clone(),
+            });
+            self.reported = true;
+            self.rows.push(label);
+            return true;
+        }
         if let Some(paths) = &paths
             && is_phase_failure(err)
         {

@@ -54,7 +54,7 @@ fn run_build_scheduler_single_failure_counts_failed_exactly_once() {
     })
     .expect_err("schedbad's own failure must fail the run");
     // The `Failed to emerge` block is printed; the error only says so.
-    assert!(is_reported_failure(&err), "{err}");
+    assert!(is_reported_failure(&err.message), "{err}");
     assert_eq!(
         display.jobs_line(),
         ">>> Jobs: 0 of 1 complete, 1 failed                                     "

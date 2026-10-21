@@ -216,9 +216,18 @@ pub(crate) fn merge_one_built_entry(args: MergeOneBuiltEntryArgs<'_>) -> Result<
     // vdb merge.
     let color = progress_color();
     display.status(&installing_line(entry, &version, progress, root, &color));
-    let status = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
-    if status != 0 {
-        return Err(format!("{cp}-{version}: merge failed ({status})"));
+    let outcome = ebuild_merge::run_qmerge(ebuild_path, root, portage_tmpdir, &per_entry)?;
+    if outcome.postinst_failed {
+        // The merge landed: `>>> Completed` prints like
+        // `PackageMerge._install_exit`, and the world record and the
+        // post-merge clean below are both skipped for this entry (the
+        // `_postinst_failure` builddir rule).
+        // Portage: _emerge/PackageMerge.py, _install_exit; vartree.py
+        display.status(&completed_line(entry, &version, progress, root, &color));
+        return Err(postinst_failed_error(&cp, &version, outcome.status));
+    }
+    if outcome.status != 0 {
+        return Err(format!("{cp}-{version}: merge failed ({})", outcome.status));
     }
     // The `clean` phase runs after a successful merge unless
     // `FEATURES=noclean`. `run_qmerge` itself deliberately does not clean
@@ -305,7 +314,9 @@ pub(crate) struct RunBuildSchedulerArgs<'a> {
 /// Known cuts: each build's phase output goes to its own `${T}/build.log`
 /// (captured), and a non-`--keep-going` failure stops scheduling new work
 /// and kills still-running builds.
-pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(), String> {
+pub(crate) fn run_build_scheduler(
+    args: RunBuildSchedulerArgs<'_>,
+) -> Result<MergePassReport, MergePassError> {
     let RunBuildSchedulerArgs {
         entries,
         repos,
@@ -344,11 +355,13 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
     let mut merged: HashSet<usize> = (0..n)
         .filter(|&i| !scheduler_needs_build(&entries[i]))
         .collect();
+    let needs_work = |i: usize| -> bool { scheduler_needs_build(&entries[i]) };
     let mut started: HashSet<usize> = HashSet::new();
     let mut skip: HashSet<usize> = HashSet::new();
     let mut ledger = Ledger::default();
     let mut unreported: Vec<String> = Vec::new();
     let mut gone: HashSet<usize> = HashSet::new();
+    let mut pass_report = MergePassReport::default();
     let source_paths = |entry: &GraphEntry| source_paths_for(options, entry, portage_tmpdir);
     let report = FailReport {
         root,
@@ -363,132 +376,202 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
     // unreachable from here).
     let registry = ebuild_phases::new_scheduler_registry();
     // Every build/merge half below prints its entry's own snapshot.
-    let progress = merge_progress_map(entries);
+    let mut progress = merge_progress_map(entries);
+    // A fatal failure (`--keep-going`) ends the pass like Portage's
+    // `_keep_scheduling` gate: what never ran re-plans in a resumed pass
+    // with restarted counters. Only postinst failures halt this way (a
+    // build failure leaves already-running work to land in the same pass,
+    // matching the pinned `-j` keep-going shape).
+    let mut resumed = false;
 
     let loop_result = std::thread::scope(|scope| -> Result<(), String> {
         let (tx, rx) = mpsc::channel::<(usize, Result<PathBuf, String>)>();
-        let mut in_flight = 0usize;
         loop {
-            // `max_jobs` caps concurrency, then `should_start` gates one more
-            // build on the live load average. The first build is never
-            // gated, so the DAG cannot deadlock.
-            while in_flight < policy.max_jobs() {
-                if !policy.should_start(in_flight, system_loadavg_1min()) {
-                    break;
-                }
-                let next = (0..n).find(|&i| {
-                    scheduler_needs_build(&entries[i])
-                        && !started.contains(&i)
-                        && !skip.contains(&i)
-                        && !merged.contains(&i)
-                        && deps[i].iter().all(|d| merged.contains(d))
-                });
-                let Some(idx) = next else { break };
-                started.insert(idx);
-                in_flight += 1;
-                // The `>>> Jobs:` line prints at dispatch, before the
-                // worker's `>>> Emerging` line.
-                display.job_started();
-                // The worker closure is `move` and cannot borrow the map.
-                let entry_progress = progress[idx];
-                let tx = tx.clone();
-                let bp = buildpkg.filter(|opts| {
-                    entry_buildpkg_wanted(
-                        &entries[idx],
-                        repos,
-                        buildpkg_exclude,
-                        opts.buildpkg_live,
-                    )
-                });
-                let entry = &entries[idx];
-                let registry = registry.clone();
-                // An `IDEPEND` dep builds and merges in the running root.
-                let entry_root = entry_merge_root(entry, root);
-                scope.spawn(move || {
-                    let root = entry_root.as_path();
-                    // Registers every subprocess this worker spawns into
-                    // `registry` for the closure's own lifetime.
-                    let _guard = ebuild_phases::scope_scheduler_registry(registry);
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        build_one_source_entry(
-                            BuildOneSourceEntryArgs { entry, repos, root, portage_tmpdir, options, buildpkg: bp, capture_log: // Each build's output goes to its own
+            let mut halted = false;
+            let mut in_flight = 0usize;
+            let mut dispatched_this_pass = false;
+            loop {
+                // `max_jobs` caps concurrency, then `should_start` gates one more
+                // build on the live load average. The first build is never
+                // gated, so the DAG cannot deadlock.
+                while !halted && in_flight < policy.max_jobs() {
+                    if !policy.should_start(in_flight, system_loadavg_1min()) {
+                        break;
+                    }
+                    let next = (0..n).find(|&i| {
+                        needs_work(i)
+                            && !started.contains(&i)
+                            && !skip.contains(&i)
+                            && !merged.contains(&i)
+                            && deps[i].iter().all(|d| merged.contains(d))
+                    });
+                    let Some(idx) = next else { break };
+                    started.insert(idx);
+                    dispatched_this_pass = true;
+                    in_flight += 1;
+                    // The `>>> Jobs:` line prints at dispatch, before the
+                    // worker's `>>> Emerging` line.
+                    display.job_started();
+                    // The worker closure is `move` and cannot borrow the map.
+                    let entry_progress = progress[idx];
+                    let tx = tx.clone();
+                    let bp = buildpkg.filter(|opts| {
+                        entry_buildpkg_wanted(
+                            &entries[idx],
+                            repos,
+                            buildpkg_exclude,
+                            opts.buildpkg_live,
+                        )
+                    });
+                    let entry = &entries[idx];
+                    let registry = registry.clone();
+                    // An `IDEPEND` dep builds and merges in the running root.
+                    let entry_root = entry_merge_root(entry, root);
+                    scope.spawn(move || {
+                        let root = entry_root.as_path();
+                        // Registers every subprocess this worker spawns into
+                        // `registry` for the closure's own lifetime.
+                        let _guard = ebuild_phases::scope_scheduler_registry(registry);
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            build_one_source_entry(
+                                BuildOneSourceEntryArgs { entry, repos, root, portage_tmpdir, options, buildpkg: bp, capture_log: // Each build's output goes to its own
                         // `${T}/build.log` so parallel builds don't
                         // interleave on the terminal.
                         true, progress: entry_progress, display },
-                        )
-                    }))
-                    .unwrap_or_else(|payload| Err(worker_panic_message(entry, payload)));
-                    let _ = tx.send((idx, r));
-                });
-            }
+                            )
+                        }))
+                        .unwrap_or_else(|payload| Err(worker_panic_message(entry, payload)));
+                        let _ = tx.send((idx, r));
+                    });
+                }
 
-            if in_flight == 0 {
+                if in_flight == 0 {
+                    break;
+                }
+
+                let (idx, build_result) = rx
+                    .recv()
+                    .map_err(|e| format!("scheduler channel closed unexpectedly: {e}"))?;
+                in_flight -= 1;
+
+                let failure: Option<(String, bool)> = match build_result {
+                    Ok(path) => {
+                        // The build slot is free before the serialized merge
+                        // starts.
+                        display.build_finished();
+                        let entry = &entries[idx];
+                        let entry_progress = progress[idx];
+                        let entry_root = entry_merge_root(entry, root);
+                        let err = merge_one_built_entry(MergeOneBuiltEntryArgs {
+                            entry,
+                            repos,
+                            ebuild_path: &path,
+                            root: &entry_root,
+                            portage_tmpdir,
+                            options,
+                            progress: entry_progress,
+                            display,
+                        })
+                        .err();
+                        if err.is_some() {
+                            // The build slot is already free, so only the
+                            // `failed` event fires here.
+                            display.job_failed();
+                        }
+                        err.map(|e| {
+                            let postinst = is_postinst_failure(&e);
+                            (e, postinst)
+                        })
+                    }
+                    Err(e) => {
+                        display.job_failed();
+                        display.build_finished();
+                        Some((e, false))
+                    }
+                };
+
+                match failure {
+                    None => {
+                        merged.insert(idx);
+                        // Each successful merge leaves the saved resume list
+                        // (removal by value, so completion order is fine).
+                        if let Some(cpv) = resume_cpv(&entries[idx]) {
+                            crate::mtimedb::remove_merged_entry(root, &cpv);
+                        }
+                        display.merge_finished();
+                    }
+                    Some((e, postinst)) => {
+                        if postinst {
+                            // The merge landed: dependents stay dispatchable
+                            // (like `Scheduler._task_complete`), but the saved
+                            // resume list keeps the entry (like `vartree`,
+                            // which removes it only on a clean return).
+                            // Portage: Scheduler.py, _do_merge_exit
+                            merged.insert(idx);
+                            // No dependents are dropped (their requirement is
+                            // satisfied), but no new work is scheduled in this
+                            // pass either.
+                            // Portage: Scheduler.py, _keep_scheduling,
+                            // _calc_resume_list
+                            pass_report.postinst_failed.push((
+                                entries[idx].category.clone(),
+                                entries[idx].package.clone(),
+                            ));
+                            halted = true;
+                        }
+                        if !ledger.failed(&report, &entries[idx], &e) {
+                            unreported.push(e);
+                        }
+                        if !keep_going {
+                            // Without `--keep-going` no new work is scheduled and
+                            // still-running builds are killed, not waited out.
+                            ebuild_phases::kill_registered_children(&registry);
+                            return Ok(());
+                        }
+                        if !postinst {
+                            gone.insert(idx);
+                            let mut skipped = Vec::new();
+                            scheduler_skip_dependents(
+                                idx,
+                                entries,
+                                &cp_to_idx,
+                                &mut skip,
+                                &mut skipped,
+                            );
+                        }
+                    }
+                }
+            }
+            // What never ran (a halted pass's leftovers, never a skipped or
+            // failed entry) re-plans in a resumed pass with restarted counters.
+            let remaining: Vec<usize> = (0..n)
+                .filter(|&i| {
+                    needs_work(i)
+                        && !started.contains(&i)
+                        && !skip.contains(&i)
+                        && !gone.contains(&i)
+                })
+                .collect();
+            if remaining.is_empty() {
                 break;
             }
-
-            let (idx, build_result) = rx
-                .recv()
-                .map_err(|e| format!("scheduler channel closed unexpectedly: {e}"))?;
-            in_flight -= 1;
-
-            let failure = match build_result {
-                Ok(path) => {
-                    // The build slot is free before the serialized merge
-                    // starts.
-                    display.build_finished();
-                    let entry = &entries[idx];
-                    let entry_progress = progress[idx];
-                    let entry_root = entry_merge_root(entry, root);
-                    let err = merge_one_built_entry(MergeOneBuiltEntryArgs {
-                        entry,
-                        repos,
-                        ebuild_path: &path,
-                        root: &entry_root,
-                        portage_tmpdir,
-                        options,
-                        progress: entry_progress,
-                        display,
-                    })
-                    .err();
-                    if err.is_some() {
-                        // The build slot is already free, so only the
-                        // `failed` event fires here.
-                        display.job_failed();
-                    }
-                    err
-                }
-                Err(e) => {
-                    display.job_failed();
-                    display.build_finished();
-                    Some(e)
-                }
-            };
-
-            match failure {
-                None => {
-                    merged.insert(idx);
-                    // Each successful merge leaves the saved resume list
-                    // (removal by value, so completion order is fine).
-                    if let Some(cpv) = resume_cpv(&entries[idx]) {
-                        crate::mtimedb::remove_merged_entry(root, &cpv);
-                    }
-                    display.merge_finished();
-                }
-                Some(e) => {
-                    if !ledger.failed(&report, &entries[idx], &e) {
-                        unreported.push(e);
-                    }
-                    if !keep_going {
-                        // Without `--keep-going` no new work is scheduled and
-                        // still-running builds are killed, not waited out.
-                        ebuild_phases::kill_registered_children(&registry);
-                        return Ok(());
-                    }
-                    gone.insert(idx);
-                    let mut skipped = Vec::new();
-                    scheduler_skip_dependents(idx, entries, &cp_to_idx, &mut skip, &mut skipped);
-                }
+            if !keep_going || !dispatched_this_pass {
+                // Without `--keep-going` every failure returns early, so this arm
+                // is unreachable; without a single dispatch all pass the leftovers
+                // wait on a skipped or failed entry and join the dropped epilogue
+                // below.
+                break;
             }
+            // Portage: Scheduler.py, _merge (resume loop), _calc_resume_list
+            ledger.resuming(report.quiet);
+            resumed = true;
+            pass_report.resumed = true;
+            display.reset_for_resume(remaining.len());
+            let rerun: Vec<GraphEntry> = remaining.iter().map(|&i| entries[i].clone()).collect();
+            for (k, m) in merge_progress_map(&rerun).into_iter().enumerate() {
+                progress[remaining[k]] = m;
+            }
+            resave_resume_list(root, &remaining, entries);
         }
         Ok(())
     });
@@ -498,7 +581,9 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
     // dropped with a notice.
     // Portage: Scheduler.py, _merge (resume loop), _calc_resume_list
     if keep_going && !skip.is_empty() {
-        ledger.resuming(report.quiet);
+        if !resumed {
+            ledger.resuming(report.quiet);
+        }
         let mut dropped: Vec<usize> = skip
             .iter()
             .copied()
@@ -522,7 +607,13 @@ pub(crate) fn run_build_scheduler(args: RunBuildSchedulerArgs<'_>) -> Result<(),
         }
     }
     let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
-    ledger.finish(&report, keep_going, first)
+    match ledger.finish(&report, keep_going, first) {
+        Ok(()) => Ok(pass_report),
+        Err(message) => Err(MergePassError {
+            message,
+            report: pass_report,
+        }),
+    }
 }
 
 /// The failure a worker thread that panicked reports in place of its result.

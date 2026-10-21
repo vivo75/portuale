@@ -407,6 +407,7 @@ pub(crate) fn run_real_commands(
             ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options, None)
         } else if ebuild_merge::is_qmerge_command(cmd) {
             ebuild_merge::run_qmerge(ebuild_path, &root, &portage_tmpdir, &merge_options)
+                .map(|outcome| outcome.status)
         } else if ebuild_unmerge::is_unmerge_command(cmd) {
             ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, &unmerge_options)
         } else if ebuild_package::is_package_command(cmd) {

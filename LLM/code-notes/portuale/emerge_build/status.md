@@ -32,6 +32,7 @@ Progress and status lines of the build scheduler: counters, background mode, `>>
 - `build_finished` ports Portage's `_build_exit` tail (`running = self._jobs` after the token release).
 - `merge_finished` ports Portage's `_merge_exit` `curval += 1`.
 - `job_failed` ports Portage's `_build_exit`/`_do_merge_exit` `failed = len(self._failed_pkgs)`.
+- `reset_for_resume` (#444) restarts the counters over a resumed `--keep-going` pass (Portage resets `_pkg_count` and the status display in its resume loop); the live display stays live.
 
 ## fn jobs_line
 - Backlog #197: ports Portage's `JobStatusDisplay._display_status` on a non-tty (`JobStatusDisplay.py`): `>>> Jobs: {cur} of {max} complete` plus the `, {r} running` / `, {f} failed` / `, {w} merge wait` arms only when nonzero, padded with spaces to the 68-column jobs field (Portage's `max_display_width - 32`). `self._jobs_column_width = width - 32` at the non-tty `width = max_display_width = 100`; the tty term-width half is cut (portuale always uses the non-tty rule). Portage appends `Load avg: {triple}` after the padding; portuale cuts it exactly like #185 cut the resolution seconds (repeated-run determinism is a jointly-owned gate; nondeterministic values ride `--json` only; coordinator ruling B14, batch-2026-09-27). The counters wear `INFORM`, like Portage's `number_style`; the padding is measured on the plain text, like Portage's `plain_output` gauge.
