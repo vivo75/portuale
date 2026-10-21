@@ -289,6 +289,8 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     let display_entries = resume_display_entries(root, &entries);
     if let Some(code) = resume_pretend(ResumePretendArgs {
         pretend,
+        quiet,
+        nodeps: emerge_opts.nodeps,
         entries: &display_entries,
         root,
         opts,
@@ -440,6 +442,8 @@ pub(crate) fn resume_display_entries(
 /// The values [`resume_pretend`] reads from its caller.
 pub(crate) struct ResumePretendArgs<'a> {
     pub(crate) pretend: bool,
+    pub(crate) quiet: bool,
+    pub(crate) nodeps: bool,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) root: &'a Path,
     pub(crate) opts: ResumeOpts,
@@ -452,6 +456,8 @@ pub(crate) struct ResumePretendArgs<'a> {
 pub(crate) fn resume_pretend(args: ResumePretendArgs<'_>) -> Option<ExitCode> {
     let ResumePretendArgs {
         pretend,
+        quiet,
+        nodeps,
         entries,
         root,
         opts,
@@ -460,6 +466,22 @@ pub(crate) fn resume_pretend(args: ResumePretendArgs<'_>) -> Option<ExitCode> {
         config,
     } = args;
     if pretend {
+        // The banner and calculation notice precede the rows like any
+        // completed `--pretend` resolve.
+        // Portage: _emerge/actions.py, action_build; depgraph.py, display
+        if !quiet {
+            println!(
+                "\n{}\n",
+                color.c(
+                    "darkgreen",
+                    "These are the packages that would be merged, in order:"
+                )
+            );
+            if super::gates::resolution_notice_shown(quiet, nodeps) {
+                println!("Calculating dependencies ... done!");
+                print!("{}", super::timing_line(&color, None));
+            }
+        }
         let mut blocker_lines: Vec<String> = Vec::new();
         for (i, _entry) in entries.iter().enumerate() {
             print_entry_line(PrintEntryLineArgs {

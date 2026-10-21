@@ -53,14 +53,16 @@ pub(crate) fn autounmask_only_reshows_merge_list(args: AutounmaskOnlyReshowsMerg
 pub(crate) struct PretendChangesShowHeaderArgs {
     pub(crate) pretend: bool,
     pub(crate) json: bool,
-    pub(crate) has_changes: bool,
     pub(crate) complete: bool,
+    /// The merge list is displayed at all (`--autounmask-only` without
+    /// changes prints nothing, header included).
+    pub(crate) list_shown: bool,
 }
 
-/// Whether a `--pretend` run whose resolve completed with autounmask
-/// changes prints the resolution header before the rows: Portage's
-/// `_show_merge_list` runs `display()` (header + rows) before the change
-/// blocks, even though the run then fails. `--json` keeps stdout
+/// Whether a `--pretend` run whose resolve completed prints the
+/// resolution header before the rows: Portage's `display()` (header +
+/// rows) runs for every completed `--pretend` resolve, with or without
+/// autounmask changes (backlog #462, #466). `--json` keeps stdout
 /// machine-readable (no header); an aborted resolve keeps its own preamble
 /// arms (backlog #406, the abort-preamble shape).
 // Portage: _emerge/depgraph.py, _display_autounmask (_show_merge_list)
@@ -68,10 +70,10 @@ pub(crate) fn pretend_changes_show_header(args: PretendChangesShowHeaderArgs) ->
     let PretendChangesShowHeaderArgs {
         pretend,
         json,
-        has_changes,
         complete,
+        list_shown,
     } = args;
-    pretend && !json && has_changes && complete
+    pretend && !json && complete && list_shown
 }
 
 /// Whether a non-`--pretend` run with display flags and an empty plan prints

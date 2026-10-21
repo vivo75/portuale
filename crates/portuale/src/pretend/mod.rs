@@ -354,8 +354,8 @@ pub fn run(args: &[String]) -> ExitCode {
         pretend_changes_show_header(PretendChangesShowHeaderArgs {
             pretend: opts.pretend,
             json: opts.json,
-            has_changes: has_autounmask_changes,
             complete: matches!(result.outcome, portage_repo::ResolveOutcome::Complete),
+            list_shown: show_merge_list,
         }),
     );
 

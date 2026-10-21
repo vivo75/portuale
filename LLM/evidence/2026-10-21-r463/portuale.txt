@@ -1,0 +1,176 @@
+=== 463 buildpkgonly
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging (1 of 1) dev-libs/schedparent-1.0::qbuild for /var/tmp/r463e/root
+
+>>> Install dev-libs/schedparent-1.0 into /var/tmp/r463e/tmp/portage/dev-libs/schedparent-1.0/image
+>>> Completed installing dev-libs/schedparent-1.0 into /var/tmp/r463e/tmp/portage/dev-libs/schedparent-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+>>> Creating binpkg
+>>> Done.
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 464 --resume
+emerge: It seems we have nothing to resume...
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 464 -p --resume
+emerge: It seems we have nothing to resume...
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 464 --resume --skipfirst
+Calculating dependencies ... done!
+Dependency resolution took .
+
+*** Resuming merge...
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+[]
+=== 464 -p --resume --skipfirst
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took .
+
+emerge: It seems we have nothing to resume...
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+['dev-libs/schedparent-1.0']
+=== 464 -pq --resume --skipfirst
+emerge: It seems we have nothing to resume...
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+['dev-libs/schedparent-1.0']
+=== 464 --tree --resume --skipfirst
+
+These are the packages that would be merged, in reverse order:
+
+Calculating dependencies ... done!
+Dependency resolution took .
+
+emerge: It seems we have nothing to resume...
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+['dev-libs/schedparent-1.0']
+=== 464 -q --resume --skipfirst
+*** Resuming merge...
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+[]
+=== 465 resume saved --quiet
+*** Resuming merge...
+>>> Emerging (1 of 1) dev-libs/schedleaf-a-1.0::qbuild for /var/tmp/r463e/root
+>>> Installing (1 of 1) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/r463e/root
+>>> Completed (1 of 1) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/r463e/root
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 465 resume plain
+Calculating dependencies ... done!
+Dependency resolution took .
+
+*** Resuming merge...
+
+>>> Emerging (1 of 1) dev-libs/schedleaf-a-1.0::qbuild for /var/tmp/r463e/root
+
+>>> Install dev-libs/schedleaf-a-1.0 into /var/tmp/r463e/tmp/portage/dev-libs/schedleaf-a-1.0/image
+>>> Completed installing dev-libs/schedleaf-a-1.0 into /var/tmp/r463e/tmp/portage/dev-libs/schedleaf-a-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (1 of 1) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/r463e/root
+
+>>> Completed (1 of 1) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/r463e/root
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 466 -p dev-libs/schedparent
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/schedleaf-a-1.0 to /var/tmp/r463e/root
+[ebuild  N     ] dev-libs/schedleaf-b-1.0 to /var/tmp/r463e/root
+[ebuild  N     ] dev-libs/schedparent-1.0 to /var/tmp/r463e/root
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 466 -pq dev-libs/schedparent
+[ebuild  N    ] dev-libs/schedleaf-a-1.0 to /var/tmp/r463e/root
+[ebuild  N    ] dev-libs/schedleaf-b-1.0 to /var/tmp/r463e/root
+[ebuild  N    ] dev-libs/schedparent-1.0 to /var/tmp/r463e/root
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 466 -pt dev-libs/schedparent
+
+These are the packages that would be merged, in reverse order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/schedparent-1.0 to /var/tmp/r463e/root
+[ebuild  N     ]  dev-libs/schedleaf-b-1.0 to /var/tmp/r463e/root
+[ebuild  N     ]  dev-libs/schedleaf-a-1.0 to /var/tmp/r463e/root
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 466 -p --nodeps dev-libs/schedparent
+
+These are the packages that would be merged, in order:
+
+[ebuild  N     ] dev-libs/schedparent-1.0 to /var/tmp/r463e/root
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 466 -p --buildpkgonly dev-libs/schedparent
+
+These are the packages that would be built, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/schedparent-1.0 to /var/tmp/r463e/root
+rc=0
+--- stderr
+--- mtimedb resume mergelist:
+(no resume key)
+=== 467 tmp2 present
+>>>  '/var/tmp/r467/tmp2/portage/dev-util/f459-postinstfail-1/temp/build.log'
+run tmpdir:   none
+entry tmpdir: /var/tmp/r467/tmp2/portage/dev-util/f459-postinstfail-1
+=== 467 tmp2 missing
+>>>  '/var/tmp/r467/tmp2/portage/dev-util/f459-postinstfail-1/temp/build.log'
+run tmpdir:   none
+entry tmpdir: /var/tmp/r467/tmp2/portage/dev-util/f459-postinstfail-1

@@ -314,11 +314,11 @@ fn abort_preamble_opens_with_the_banner_blank_line() {
 /// non-pretend run goes through the existing `!pretend` arm.
 #[test]
 fn pretend_changes_show_header_only_for_completed_pretend_text_runs() {
-    let args = |pretend, json, has_changes, complete| PretendChangesShowHeaderArgs {
+    let args = |pretend, json, complete, list_shown| PretendChangesShowHeaderArgs {
         pretend,
         json,
-        has_changes,
         complete,
+        list_shown,
     };
     assert!(pretend_changes_show_header(args(true, false, true, true)));
     assert!(!pretend_changes_show_header(args(true, true, true, true)));
