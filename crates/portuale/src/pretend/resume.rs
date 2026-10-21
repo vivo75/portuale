@@ -136,13 +136,28 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     }) {
         return ExitCode::from(130);
     }
-    let Some((favorites, mut mergelist, opts)) = crate::mtimedb::read_resume_list(root) else {
+    let Some((favorites, mut mergelist, saved_opts)) = crate::mtimedb::read_resume_list(root)
+    else {
         // Portage reaches `post_emerge` even on this path: with nothing
         // merged only a `--pretend` run prints there.
         pretend_end_news_notice(pretend, &repos, root, config, &color);
         eprintln!("emerge: could not find a valid resume list");
         return ExitCode::from(1);
     };
+    // The saved `myopts` seed the run and the current command line
+    // overrides them (`resume_opts.update(myopts)`), so a `-q` run's
+    // resume stays quiet and the re-save keeps what either side set.
+    // Portage: _emerge/actions.py, action_build
+    let opts = ResumeOpts {
+        quiet: saved_opts.quiet || quiet,
+        quiet_build: emerge_opts.quiet_build.or(saved_opts.quiet_build),
+        ..saved_opts
+    };
+    // The info-dir check reads the command line's own `--quiet` only:
+    // Portage's `adjust_config` for a resume never reaches the settings
+    // that check uses (oracle probe, #465).
+    let cmdline_quiet = quiet;
+    let quiet = opts.quiet;
     if skipfirst && !mergelist.is_empty() {
         mergelist.remove(0);
     }
@@ -291,7 +306,8 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // resumed binary entry goes through `run_merge_plan` instead (the
     // resume mergelist can mix both). The saved `myopts` carries no
     // `--quiet`/`--verbose`, so the display is serial unless `-j` > 1.
-    let resume_mode = emerge_build::scheduler_status_mode(jobs, false, None, entries.len(), false);
+    let resume_mode =
+        emerge_build::scheduler_status_mode(jobs, quiet, opts.quiet_build, entries.len(), false);
     let (resume_mode, jobs) =
         emerge_build::apply_interactive_tasks(resume_mode, jobs, &entries, root, &color);
     if let Some(code) = resume_merge(ResumeMergeArgs {
@@ -300,6 +316,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         root,
         portage_tmpdir,
         merge_options: &merge_options,
+        capture_log: opts.quiet_build.unwrap_or(false) || quiet,
         jobs,
         load_average,
         resume_mode,
@@ -334,7 +351,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // before the preserved-libs advisory.
     // Portage: post_emerge.py, post_emerge
     let noinfo = config_features_list(config).iter().any(|t| t == "noinfo");
-    if let Err(e) = crate::info_files::post_merge_info_update(root, &color, quiet, noinfo) {
+    if let Err(e) = crate::info_files::post_merge_info_update(root, &color, cmdline_quiet, noinfo) {
         eprintln!("emerge: {e}");
         return ExitCode::from(1);
     }
@@ -456,6 +473,7 @@ pub(crate) struct ResumeMergeArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) portage_tmpdir: &'a Path,
     pub(crate) merge_options: &'a MergeOptions,
+    pub(crate) capture_log: bool,
     pub(crate) jobs: usize,
     pub(crate) load_average: Option<f64>,
     pub(crate) resume_mode: StatusMode,
@@ -475,6 +493,7 @@ pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
         root,
         portage_tmpdir,
         merge_options,
+        capture_log,
         jobs,
         load_average,
         resume_mode,
@@ -500,7 +519,7 @@ pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
             buildpkg_exclude: &[],
             jobs,
             load_average,
-            capture_log: false,
+            capture_log,
             mode: resume_mode,
         })
     } else {

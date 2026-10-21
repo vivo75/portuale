@@ -89,7 +89,12 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         .iter()
         .filter_map(emerge_build::resume_cpv)
         .collect();
-    let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
+    let resume_opts = crate::mtimedb::ResumeOpts {
+        oneshot,
+        onlydeps,
+        quiet,
+        quiet_build,
+    };
     let _ = crate::mtimedb::write_resume_list(root, atom_args, &resume_mergelist, &resume_opts);
     let merge_outcome = emerge_build::run_source_merge(emerge_build::RunSourceMergeArgs {
         entries,
@@ -112,7 +117,12 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         // a failure with nothing unmerged leaves the per-merge tail alone.
         // Portage: Scheduler.py, _save_resume_list
         let unmerged = unmerged_for_resume_save(root, entries, &e.report);
-        let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
+        let resume_opts = crate::mtimedb::ResumeOpts {
+            oneshot,
+            onlydeps,
+            quiet,
+            quiet_build,
+        };
         if !unmerged.is_empty()
             && let Err(w) =
                 crate::mtimedb::write_resume_list(root, atom_args, &unmerged, &resume_opts)
@@ -167,6 +177,8 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         onlydeps,
         ref atom_args,
         ref buildpkg_exclude,
+        quiet,
+        quiet_build,
         ..
     } = opts;
     // Remote execution (`mrg --remote-hostname` + `--getbinpkgonly`): the same
@@ -219,7 +231,12 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         .iter()
         .filter_map(emerge_build::resume_cpv)
         .collect();
-    let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
+    let resume_opts = crate::mtimedb::ResumeOpts {
+        oneshot,
+        onlydeps,
+        quiet,
+        quiet_build,
+    };
     let _ = crate::mtimedb::write_resume_list(root, atom_args, &resume_mergelist, &resume_opts);
     // Merge every resolved entry, per-entry `Binary` vs `Source`.
     // See `emerge_getbinpkg::run_merge_plan`.
@@ -250,7 +267,12 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         // per-merge shrink's tail alone.
         // Portage: Scheduler.py, _save_resume_list
         let unmerged = unmerged_for_resume_save(root, entries, &e.report);
-        let resume_opts = crate::mtimedb::ResumeOpts { oneshot, onlydeps };
+        let resume_opts = crate::mtimedb::ResumeOpts {
+            oneshot,
+            onlydeps,
+            quiet,
+            quiet_build,
+        };
         if !unmerged.is_empty()
             && let Err(w) =
                 crate::mtimedb::write_resume_list(root, atom_args, &unmerged, &resume_opts)

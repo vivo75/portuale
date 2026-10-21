@@ -32,11 +32,14 @@ pub type ResumeCpv = (ResumeEntryKind, String, String, String);
 
 /// The subset of `mtimedb["resume"]["myopts"]` that changes how `--resume`
 /// replays the mergelist: `--oneshot` and `--onlydeps` govern
-/// world-recording.
+/// world-recording; `--quiet` and `--quiet-build` govern the display.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResumeOpts {
     pub oneshot: bool,
     pub onlydeps: bool,
+    pub quiet: bool,
+    /// `--quiet-build`: `Some(true)` bare/`=y`, `Some(false)` `=n`.
+    pub quiet_build: Option<bool>,
 }
 
 /// `(favorites, mergelist, myopts)` from `mtimedb["resume"]`.
@@ -94,13 +97,21 @@ fn format_section_body(root: &Path, section: &Section) -> String {
             )
         })
         .collect();
-    // `myopts` keys alphabetical (`--onlydeps` < `--oneshot`), value `true`.
+    // `myopts` keys in `json.dumps(sort_keys=True)` order.
     let mut opt_pairs: Vec<String> = Vec::new();
+    if section.opts.oneshot {
+        opt_pairs.push(format!("\t\t\t{}: true", json_str("--oneshot")));
+    }
     if section.opts.onlydeps {
         opt_pairs.push(format!("\t\t\t{}: true", json_str("--onlydeps")));
     }
-    if section.opts.oneshot {
-        opt_pairs.push(format!("\t\t\t{}: true", json_str("--oneshot")));
+    if section.opts.quiet {
+        opt_pairs.push(format!("\t\t\t{}: true", json_str("--quiet")));
+    }
+    match section.opts.quiet_build {
+        Some(true) => opt_pairs.push(format!("\t\t\t{}: \"y\"", json_str("--quiet-build"))),
+        Some(false) => opt_pairs.push(format!("\t\t\t{}: \"n\"", json_str("--quiet-build"))),
+        None => {}
     }
     let myopts = if opt_pairs.is_empty() {
         "{}".to_string()
@@ -245,6 +256,8 @@ fn parse_section(object: &str) -> Option<Section> {
     let opts = ResumeOpts {
         oneshot: myopts_block.contains("\"--oneshot\""),
         onlydeps: myopts_block.contains("\"--onlydeps\""),
+        quiet: myopts_block.contains("\"--quiet\""),
+        quiet_build: parse_quiet_build(myopts_block),
     };
 
     Some(Section {
@@ -252,6 +265,18 @@ fn parse_section(object: &str) -> Option<Section> {
         mergelist,
         opts,
     })
+}
+
+/// `--quiet-build` from a `myopts` block: Portage stores bare/`y` as
+/// `true`/`"y"` and `n` as `false`/`"n"`.
+fn parse_quiet_build(myopts_block: &str) -> Option<bool> {
+    let after = myopts_block.split("\"--quiet-build\"").nth(1)?;
+    let value = after.trim_start().strip_prefix(':')?.trim_start();
+    let token: String = value
+        .chars()
+        .take_while(|c| !matches!(c, ',' | '}' | '\n'))
+        .collect();
+    Some(!matches!(token.trim(), "false" | "\"n\""))
 }
 
 /// Reads one top-level section (`"resume"` or `"resume_backup"`) from
@@ -504,6 +529,7 @@ mod tests {
             &ResumeOpts {
                 oneshot: true,
                 onlydeps: false,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -531,7 +557,8 @@ mod tests {
             opts,
             ResumeOpts {
                 oneshot: true,
-                onlydeps: false
+                onlydeps: false,
+                ..Default::default()
             }
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -583,6 +610,7 @@ mod tests {
             &ResumeOpts {
                 oneshot: false,
                 onlydeps: true,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -590,9 +618,36 @@ mod tests {
             read_resume_list(&root).unwrap().2,
             ResumeOpts {
                 oneshot: false,
-                onlydeps: true
+                onlydeps: true,
+                ..Default::default()
             }
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn quiet_options_round_trip_and_keys_sort_like_python() {
+        let root = tmproot();
+        let cpv = &[(
+            ResumeEntryKind::Ebuild,
+            "dev-libs".to_string(),
+            "a".to_string(),
+            "1".to_string(),
+        )][..];
+        for quiet_build in [Some(true), Some(false), None] {
+            let opts = ResumeOpts {
+                oneshot: true,
+                onlydeps: true,
+                quiet: true,
+                quiet_build,
+            };
+            write_resume_list(&root, &[], cpv, &opts).unwrap();
+            assert_eq!(read_resume_list(&root).unwrap().2, opts);
+        }
+        // `json.dumps(sort_keys=True)`: `--oneshot` < `--onlydeps` < `--quiet`.
+        let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        let at = |k: &str| text.find(k).unwrap();
+        assert!(at("--oneshot") < at("--onlydeps") && at("--onlydeps") < at("--quiet\""));
         let _ = std::fs::remove_dir_all(&root);
     }
 
