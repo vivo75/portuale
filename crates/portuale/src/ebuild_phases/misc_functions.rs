@@ -270,8 +270,8 @@ pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, St
         let mut extra_env = extra_env.to_vec();
         let log_file = if foreground {
             let (logdir, sep) = crate::emerge_build::foreground_log_env();
-            let path = crate::emerge_build::foreground_log_path(
-                crate::emerge_build::ForegroundLogArgs {
+            let path =
+                crate::emerge_build::foreground_log_path(crate::emerge_build::ForegroundLogArgs {
                     t_dir: &env.t(),
                     builddir: env.portage_builddir(),
                     category: &env.category,
@@ -279,8 +279,7 @@ pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, St
                     features: &features_string(&extra_env),
                     logdir: logdir.as_deref(),
                     sep: &sep,
-                },
-            );
+                });
             extra_env.push(("PORTAGE_LOG_FILE".to_string(), path.display().to_string()));
             foreground_path = Some(path);
             PhaseLog::Tee(foreground_path.as_deref().unwrap())
