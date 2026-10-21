@@ -182,6 +182,21 @@ pub fn merge_binpkg(
         &XattrPolicy::from_options(options),
     )?;
 
+    // `Binpkg` logs `>>> Extracting info`, the setup phase's `Package:`
+    // header and `>>> Extracting <cpv>` to the build log whether or not
+    // they reach the terminal (the failure replay shows them under `-q`).
+    // Portage: _emerge/Binpkg.py, _unpack_metadata / _setup_exit
+    write_extract_log(
+        &binary_build_log_path(options, portage_tmpdir, &category, &package, &pf),
+        &ExtractLogFacts {
+            cpv: &format!("{category}/{pf}"),
+            slot: &full_slot,
+            repository: repo_name.as_deref(),
+            built_use: meta_get("USE").as_deref().unwrap_or_default(),
+            features: &crate::emerge_build::resolved_features(options),
+        },
+    )?;
+
     // "Store the md5sum in the vdb": the whole-file digest, so a later
     // `emerge -k` / index rebuild can tell a current instance from a
     // rebuilt one. Written into build-info so `populate_vdb_tmp` copies
@@ -614,23 +629,10 @@ pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<Mer
     // terminal, so nothing has created it yet).
     // Portage: vartree.py, dblink.treewalk
     if postinst_status != 0 {
-        let foreground_log;
-        let log_file = if let Some(path) = options.log_file.as_deref() {
-            Some(path)
-        } else {
-            let version = pf.strip_prefix(&format!("{package}-")).unwrap_or(pf);
-            foreground_log = crate::emerge_build::build_log_path(
-                portage_tmpdir,
-                category,
-                package,
-                version,
-                &crate::emerge_build::resolved_features(options),
-            );
-            Some(foreground_log.as_path())
-        };
+        let log_file = binary_build_log_path(options, portage_tmpdir, category, package, pf);
         record_postinst_failure(
             &builddir.join("temp"),
-            log_file,
+            Some(log_file.as_path()),
             postinst_status,
             options.log_file.is_none(),
         )?;
@@ -690,5 +692,115 @@ fn binary_hook_log(options: &MergeOptions) -> ebuild_phases::PhaseLog<'_> {
     match options.log_file.as_deref() {
         Some(path) => ebuild_phases::PhaseLog::Capture(path),
         None => ebuild_phases::PhaseLog::Foreground,
+    }
+}
+
+/// The entry's build log: the merge's own when it captures, else the
+/// `PORTAGE_LOG_FILE` Portage's `Binpkg` always writes.
+// Portage: _emerge/Binpkg.py
+fn binary_build_log_path(
+    options: &MergeOptions,
+    portage_tmpdir: &Path,
+    category: &str,
+    package: &str,
+    pf: &str,
+) -> PathBuf {
+    if let Some(path) = options.log_file.as_deref() {
+        return path.to_path_buf();
+    }
+    let version = pf.strip_prefix(&format!("{package}-")).unwrap_or(pf);
+    crate::emerge_build::build_log_path(
+        portage_tmpdir,
+        category,
+        package,
+        version,
+        &crate::emerge_build::resolved_features(options),
+    )
+}
+
+/// The `FEATURES` the setup phase's header lists, in Portage's order.
+// Portage: _emerge/EbuildPhase.py, _features_display
+const FEATURES_DISPLAY: [&str; 21] = [
+    "ccache",
+    "compressdebug",
+    "dedupdebug",
+    "distcc",
+    "fakeroot",
+    "installsources",
+    "keeptemp",
+    "keepwork",
+    "network-sandbox",
+    "network-sandbox-proxy",
+    "nostrip",
+    "packdebug",
+    "preserve-libs",
+    "sandbox",
+    "selinux",
+    "sesandbox",
+    "splitdebug",
+    "suidctl",
+    "test",
+    "userpriv",
+    "usersandbox",
+];
+
+/// What the binary merge's log preamble reports.
+pub(crate) struct ExtractLogFacts<'a> {
+    pub(crate) cpv: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) repository: Option<&'a str>,
+    pub(crate) built_use: &'a str,
+    pub(crate) features: &'a str,
+}
+
+/// The log text of the extract steps: `>>> Extracting info`, the setup
+/// phase's `einfo` header (always colored: phase output renders with
+/// `havecolor` set) and `>>> Extracting <cpv>`.
+// Portage: _emerge/Binpkg.py, _unpack_metadata; _emerge/EbuildPhase.py, _async_start
+pub(crate) fn extract_log_text(facts: &ExtractLogFacts<'_>) -> String {
+    let bullet = crate::color::Colorizer::new(true).c("INFORM", " * ");
+    let mut lines = vec![format!("Package:    {}:{}", facts.cpv, facts.slot)];
+    if let Some(repo) = facts.repository {
+        lines.push(format!("Repository: {repo}"));
+    }
+    lines.push(format!("USE:        {}", facts.built_use));
+    let enabled: Vec<&str> = facts.features.split_whitespace().collect();
+    let relevant: Vec<&str> = FEATURES_DISPLAY
+        .iter()
+        .copied()
+        .filter(|f| enabled.contains(f))
+        .collect();
+    if !relevant.is_empty() {
+        lines.push(format!("FEATURES:   {}", relevant.join(" ")));
+    }
+    let mut text = String::from(">>> Extracting info\n");
+    for line in lines {
+        text.push_str(&format!("{bullet}{line}\n"));
+    }
+    text.push_str(&format!(">>> Extracting {}\n", facts.cpv));
+    text
+}
+
+/// Appends [`extract_log_text`] to the build log; a `.gz` log gets its own
+/// gzip member, like every other phase's output.
+fn write_extract_log(log: &Path, facts: &ExtractLogFacts<'_>) -> Result<(), String> {
+    use std::io::Write;
+    if let Some(parent) = log.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .map_err(|e| format!("{}: {e}", log.display()))?;
+    let text = extract_log_text(facts);
+    let err = |e: std::io::Error| format!("{}: {e}", log.display());
+    if log.extension().is_some_and(|ext| ext == "gz") {
+        let mut enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        enc.write_all(text.as_bytes()).map_err(err)?;
+        enc.finish().map(drop).map_err(err)
+    } else {
+        let mut file = file;
+        file.write_all(text.as_bytes()).map_err(err)
     }
 }

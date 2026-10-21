@@ -173,6 +173,7 @@ mod db_merge;
 
 mod after_install;
 mod collisions;
+mod from_binpkg;
 mod installed_instance;
 mod line_endings;
 mod listing;

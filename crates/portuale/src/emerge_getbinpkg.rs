@@ -935,16 +935,20 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
     // against the remote record, so only a purely local binpkg is re-checked
     // here. The returned error is a silent sentinel the CLI boundary drops
     // (exit 1, no resume notice, no `emerge:` line).
-    if !entry.remote_binary
-        && let Some(record) = local_index_record(LocalIndexRecordArgs {
-            pkgdir,
-            category: &entry.category,
-            package: &entry.package,
-            version: &version,
-            build_id: entry.build_id.as_deref(),
-            binpkg_path: &binpkg_path,
+    let local_record = (!entry.remote_binary)
+        .then(|| {
+            local_index_record(LocalIndexRecordArgs {
+                pkgdir,
+                category: &entry.category,
+                package: &entry.package,
+                version: &version,
+                build_id: entry.build_id.as_deref(),
+                binpkg_path: &binpkg_path,
+            })
         })
-        && let Err(mismatch) = crate::binpkg::verify_binpkg_against_index(&binpkg_path, &record)
+        .flatten();
+    if let Some(record) = &local_record
+        && let Err(mismatch) = crate::binpkg::verify_binpkg_against_index(&binpkg_path, record)
     {
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);
         let renamed = crate::binpkg::checksum_failure_rename(&binpkg_path)
@@ -974,6 +978,24 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
         return Err(binpkg_digest_failure(&cpv));
     }
 
+    // A vouched local binpkg's verifier line, then the extract steps: all
+    // of them terminal output only in the foreground (the build log gets
+    // the extract steps in `merge_binpkg`).
+    // Portage: _emerge/BinpkgVerifier.py, _display_success; _emerge/Binpkg.py
+    if !display.mode.background {
+        if let Some(names) = local_record.as_ref().and_then(|record| {
+            let filter = checksum_filter_from_config(config);
+            verified_digest_names_filtered(record, filter.as_deref())
+        }) {
+            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            let file = binpkg_path
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            crate::fetch::print_verified_names(&file, &names);
+        }
+        println!(">>> Extracting info");
+        println!(">>> Extracting {cp}-{version}");
+    }
     // The per-package line between locating/fetching above and the vdb merge
     // below.
     display.status(&crate::emerge_build::installing_line(

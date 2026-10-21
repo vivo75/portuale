@@ -206,7 +206,9 @@ pub(crate) struct FinishFailedMergeArgs<'a> {
 /// After a failed merge run: what did land (a `--keep-going` run, or a failure
 /// after earlier packages) is recorded in `world`, then the info index and the
 /// GLEP 42 notice run when the vdb changed, like the end of a good run. A
-/// failure that merged nothing is silent.
+/// failure that merged nothing is silent; one whose only landed package failed
+/// its `pkg_postinst` skips the world record but still runs the info index and
+/// the notice.
 // Portage: Scheduler.py (world update per merged package), post_emerge.py
 pub(crate) fn finish_failed_merge(args: FinishFailedMergeArgs<'_>) -> ExitCode {
     let FinishFailedMergeArgs {
@@ -220,18 +222,20 @@ pub(crate) fn finish_failed_merge(args: FinishFailedMergeArgs<'_>) -> ExitCode {
         selected_set_args,
         color,
     } = args;
-    if failed.merged.is_empty() {
+    if failed.merged.is_empty() && !failed.postinst_landed {
         return failed.code;
     }
-    if let Some(code) = record_world_after_merge(RecordWorldAfterMergeArgs {
-        opts,
-        root,
-        entries: &failed.merged,
-        system_atoms,
-        repos,
-        config_root,
-        selected_set_args,
-    }) {
+    if !failed.merged.is_empty()
+        && let Some(code) = record_world_after_merge(RecordWorldAfterMergeArgs {
+            opts,
+            root,
+            entries: &failed.merged,
+            system_atoms,
+            repos,
+            config_root,
+            selected_set_args,
+        })
+    {
         return code;
     }
     if !opts.buildpkgonly {

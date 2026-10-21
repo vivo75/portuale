@@ -12,6 +12,9 @@ use portage_repo::RepoConfig;
 pub(crate) struct FailedMerge {
     pub(crate) code: ExitCode,
     pub(crate) merged: Vec<GraphEntry>,
+    /// A `pkg_postinst` failure still merged its files, so the post-merge
+    /// steps run for it although it has no world entry.
+    pub(crate) postinst_landed: bool,
 }
 
 impl FailedMerge {
@@ -19,6 +22,7 @@ impl FailedMerge {
         Some(Self {
             code,
             merged: Vec::new(),
+            postinst_landed: false,
         })
     }
 }
@@ -138,6 +142,7 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         return Some(FailedMerge {
             code: ExitCode::from(1),
             merged: merged_entries(entries, &unmerged, &e.report.postinst_failed),
+            postinst_landed: !e.report.postinst_failed.is_empty(),
         });
     }
     None
@@ -285,6 +290,7 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         return Some(FailedMerge {
             code: ExitCode::from(1),
             merged: merged_entries(entries, &unmerged, &e.report.postinst_failed),
+            postinst_landed: !e.report.postinst_failed.is_empty(),
         });
     }
     None
