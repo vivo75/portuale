@@ -8,7 +8,7 @@ pub(crate) fn merge_after_install(
     portage_tmpdir: &Path,
     env: &ebuild_phases::Environment,
     options: &MergeOptions,
-) -> Result<i32, String> {
+) -> Result<MergeOutcome, String> {
     // `treewalk()` starts with the `instprep` phase.
     // Portage: vartree.py, dblink.treewalk
     let instprep_status = ebuild_phases::run_instprep(ebuild_phases::RunInstprepArgs {
@@ -25,7 +25,10 @@ pub(crate) fn merge_after_install(
     })?;
     if instprep_status != 0 {
         eprintln!("!!! instprep failed");
-        return Ok(1);
+        return Ok(MergeOutcome {
+            status: 1,
+            postinst_failed: false,
+        });
     }
 
     // The evaluated slot comes from `build-info/SLOT` (written by
@@ -49,7 +52,10 @@ pub(crate) fn merge_after_install(
     let full_slot = if info_root_slot.is_empty() {
         if settings_slot.is_empty() {
             eprintln!("!!! SLOT is undefined");
-            return Ok(1);
+            return Ok(MergeOutcome {
+                status: 1,
+                postinst_failed: false,
+            });
         }
         let _ = std::fs::write(env.build_info().join("SLOT"), format!("{settings_slot}\n"));
         settings_slot
@@ -98,7 +104,10 @@ pub(crate) fn merge_after_install(
         let lines = refusal_lines(&cpv, &line_ending_paths);
         if options.direct {
             MergeListing::new(true).eerror(&lines);
-            return Ok(1);
+            return Ok(MergeOutcome {
+                status: 1,
+                postinst_failed: false,
+            });
         }
         return Err(lines.join("\n"));
     }
@@ -172,7 +181,10 @@ pub(crate) fn merge_after_install(
         log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
     })?;
     if preinst_status != 0 {
-        return Ok(preinst_status);
+        return Ok(MergeOutcome {
+            status: preinst_status,
+            postinst_failed: false,
+        });
     }
     populate_vdb_tmp(PopulateVdbTmpArgs {
         root,
@@ -277,7 +289,7 @@ pub(crate) fn merge_after_install(
     // is the live entry's own file, or a scratch copy on a database
     // backend stored back after the phase.
     // Portage: vartree.py, treewalk; doebuild.py, doebuild_environment
-    let finish_status = merge_after_install_finish(MergeAfterInstallFinishArgs {
+    let outcome = merge_after_install_finish(MergeAfterInstallFinishArgs {
         root,
         options,
         ebuild_path,
@@ -288,7 +300,7 @@ pub(crate) fn merge_after_install(
         replacing_versions,
         listing: &mut listing,
     })?;
-    Ok(finish_status)
+    Ok(outcome)
 }
 
 /// The values [`merge_after_install_finish`] reads from its caller.
@@ -306,7 +318,7 @@ pub(crate) struct MergeAfterInstallFinishArgs<'a> {
 
 pub(crate) fn merge_after_install_finish(
     args: MergeAfterInstallFinishArgs<'_>,
-) -> Result<i32, String> {
+) -> Result<MergeOutcome, String> {
     let MergeAfterInstallFinishArgs {
         root,
         options,
@@ -350,6 +362,14 @@ pub(crate) fn merge_after_install_finish(
     if postinst_status == 0 {
         listing.merged(&format!("{}/{}", env.category, env.split.pf));
     }
+    // A failed `postinst` still merges (the `_postinst_failure` rule):
+    // elog it like `vartree._elog("eerror", "postinst", ...)` so the
+    // saved elog, the `Messages` summary and the build log all carry
+    // the `FAILED postinst` line Portage prints after the die block.
+    // Portage: vartree.py, dblink.treewalk
+    if postinst_status != 0 {
+        record_postinst_failure(env, options, postinst_status)?;
+    }
     absorb_update_env(root, &env.category, &env.split.pf, &update_env)?;
 
     if !contents.is_empty() || !replaced.is_empty() {
@@ -369,10 +389,71 @@ pub(crate) fn merge_after_install_finish(
 
     // `elog_process` runs here, after the merge body and before the
     // clean removes `${T}`; it must not be deferred to a batch after
-    // the whole `emerge` returns.
-    process_merge_elog(env, root, options);
+    // the whole `emerge` returns. Skipped after a postinst failure:
+    // the end-of-run `Messages` flush prints it once, after the
+    // `Failed to install` block and the die-log replay (a mid-merge
+    // flush would print it twice, and before the failure block).
+    // Portage: vartree.py, dblink.treewalk (`_elog_process`)
+    if postinst_status == 0 {
+        process_merge_elog(env, root, options);
+    }
 
-    Ok(postinst_status)
+    Ok(MergeOutcome {
+        status: postinst_status,
+        postinst_failed: postinst_status != 0,
+    })
+}
+
+/// The `FAILED postinst` elog of [`merge_after_install_finish`]: appends
+/// `ERROR FAILED postinst: <status>` to `${T}/logging/postinst` (the saved
+/// elog the end-of-run `Messages` summary reads) and to the build log, and
+/// prints it on the terminal when the phase ran in the foreground (a
+/// background run's output lives in the log only, until the lone-failure
+/// dump replays it).
+// Portage: vartree.py, dblink.treewalk (`_postinst_failure`); Scheduler.py,
+/// `SchedulerInterface.output` (terminal in the foreground, log always)
+fn record_postinst_failure(
+    env: &ebuild_phases::Environment,
+    options: &MergeOptions,
+    postinst_status: i32,
+) -> Result<(), String> {
+    use std::io::Write;
+    let line = format!("FAILED postinst: {postinst_status}");
+    let logging = env.t().join("logging");
+    std::fs::create_dir_all(&logging).map_err(|e| format!("{}: {e}", logging.display()))?;
+    // The line heads the phase file: Portage merges the python-side elog
+    // (this line) before the shell-side one (the die block), so the
+    // end-of-run `Messages` summary shows `FAILED postinst` first.
+    // (The build log instead appends it after the die block, below.)
+    // Portage: elog/__init__.py, elog_process (`_merge_logentries`)
+    let path = logging.join("postinst");
+    let prior = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    write!(f, "ERROR {line}\n{prior}").map_err(|e| format!("logging/postinst: {e}"))?;
+    // The terminal rendering is `EOutput.eerror`'s: a red ` * ` prefix.
+    // Forced on (like the shell's own die rendering) because Portage
+    // renders phase output with `havecolor` set, pipe or not.
+    // Portage: output.py, EOutput.eerror; _emerge/EbuildPhase.py, _elog
+    let rendered = format!(
+        "{} {line}",
+        crate::color::Colorizer::new(true).c("ERR", " * ")
+    );
+    if let Some(path) = options.log_file.as_deref() {
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        writeln!(log, "{rendered}").map_err(|e| format!("{}: {e}", path.display()))?;
+    } else {
+        println!("{rendered}");
+    }
+    Ok(())
 }
 
 /// Arguments of [`unmerge_replaced_same_slot`].

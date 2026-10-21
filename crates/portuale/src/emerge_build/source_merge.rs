@@ -32,7 +32,7 @@ pub struct RunSourceMergeArgs<'a> {
 ///
 /// A `Binary` entry is a hard error here (the mixed dispatcher routes those
 /// to `merge_binpkg`). Failure handling is `run_merge_loop`'s.
-pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
+pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<MergePassReport, MergePassError> {
     let RunSourceMergeArgs {
         entries,
         repos,
@@ -169,13 +169,16 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<(), String> {
 /// Portage's resume pass (the entries that (transitively) require the failed
 /// one are dropped with a notice, the progress counter restarts over what is
 /// left) and merges the rest. Every failure is reported through `report`.
+/// A postinst failure needs no re-plan: its merge landed, so dependents
+/// stay satisfiable and simply continue (still under a restarted counter,
+/// like Portage's resumed pass).
 // Portage: Scheduler.py, _merge (resume loop), _calc_resume_list
 pub(crate) fn run_merge_loop<F>(
     entries: &[GraphEntry],
     keep_going: bool,
     report: &FailReport<'_>,
     mut merge_one: F,
-) -> Result<(), String>
+) -> Result<MergePassReport, MergePassError>
 where
     F: FnMut(usize, &GraphEntry, mrg_director::MergeProgress) -> Result<(), String>,
 {
@@ -195,6 +198,7 @@ where
 
     let mut ledger = Ledger::default();
     let mut unreported: Vec<String> = Vec::new();
+    let mut pass_report = MergePassReport::default();
     // cps that failed or were dropped, and the dropped ones already announced.
     let mut gone: HashSet<(String, String)> = HashSet::new();
     let mut pending: Vec<usize> = (0..entries.len()).collect();
@@ -213,22 +217,33 @@ where
             pos += 1;
             continue;
         };
+        let postinst = is_postinst_failure(&e);
+        if postinst {
+            // The merge landed (Portage removes it from the in-memory
+            // mergelist but drops no dependents: their requirement is
+            // satisfied by the live vdb entry).
+            // Portage: Scheduler.py, _do_merge_exit / _calc_resume_list
+            pass_report.postinst_failed.push(cp_of(entry));
+        }
         if !ledger.failed(report, entry, &e) {
             unreported.push(e);
         }
         if !keep_going {
             break;
         }
-        // Every (transitive) dependent of the failed package can no longer be
-        // merged.
+        // Every (transitive) dependent of a failed package can no longer be
+        // merged -- except after a postinst failure, whose merge landed, so
+        // the dependents stay satisfiable and simply continue.
         let mut dropped_cps: HashSet<(String, String)> = HashSet::new();
-        let mut queue = vec![cp_of(entry)];
-        gone.insert(cp_of(entry));
-        while let Some(x) = queue.pop() {
-            for p in dependents.get(&x).into_iter().flatten() {
-                if gone.insert(p.clone()) {
-                    dropped_cps.insert(p.clone());
-                    queue.push(p.clone());
+        if !postinst {
+            let mut queue = vec![cp_of(entry)];
+            gone.insert(cp_of(entry));
+            while let Some(x) = queue.pop() {
+                for p in dependents.get(&x).into_iter().flatten() {
+                    if gone.insert(p.clone()) {
+                        dropped_cps.insert(p.clone());
+                        queue.push(p.clone());
+                    }
                 }
             }
         }
@@ -237,6 +252,7 @@ where
             break;
         }
         ledger.resuming(report.quiet);
+        pass_report.resumed = true;
         let mut survivors = Vec::new();
         for i in rest {
             let e = &entries[i];
@@ -258,11 +274,38 @@ where
         for (k, m) in merge_progress_map(&remaining).into_iter().enumerate() {
             progress[survivors[k]] = m;
         }
+        resave_resume_list(report.root, &survivors, entries);
         pending = survivors;
         pos = 0;
     }
     let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
-    ledger.finish(report, keep_going, first)
+    match ledger.finish(report, keep_going, first) {
+        Ok(()) => Ok(pass_report),
+        Err(message) => Err(MergePassError {
+            message,
+            report: pass_report,
+        }),
+    }
+}
+
+/// Re-save the resume list for a resumed `--keep-going` pass: the failed
+/// entry is gone (attempted), the survivors stay replayable. Reads the
+/// up-front save's favorites and options back so only the mergelist is
+/// replaced. A pass with nothing left keeps the per-merge shrink's tail.
+// Portage: Scheduler.py, _merge (resume loop), _save_resume_list
+pub(crate) fn resave_resume_list(root: &Path, survivors: &[usize], entries: &[GraphEntry]) {
+    if survivors.is_empty() {
+        return;
+    }
+    let Some((favorites, _, opts)) = crate::mtimedb::read_resume_list(root) else {
+        return;
+    };
+    let mergelist: Vec<crate::mtimedb::ResumeCpv> = survivors
+        .iter()
+        .filter_map(|&i| resume_cpv(&entries[i]))
+        .collect();
+    let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
+    let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &mergelist, &opts);
 }
 
 /// Arguments of [`merge_one_source_entry`].
@@ -370,7 +413,7 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
     // the hook, so no `Installing` prints for it.
     let installing = installing_line(entry, &version, progress, root, &color);
     let print_installing = || display.status(&installing);
-    let status = ebuild_merge::run_merge_with_hook(ebuild_merge::RunMergeWithHookArgs {
+    let outcome = ebuild_merge::run_merge_with_hook(ebuild_merge::RunMergeWithHookArgs {
         ebuild_path: &path,
         root,
         portage_tmpdir,
@@ -378,8 +421,18 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
         buildpkg,
         before_merge: Some(&print_installing as &dyn Fn()),
     })?;
-    if status != 0 {
-        return Err(format!("{cp}-{version}: merge failed ({status})"));
+    if outcome.postinst_failed {
+        // The merge landed (files and vdb entry are live): `>>> Completed`
+        // prints like `PackageMerge._install_exit`, and the world record
+        // below is skipped for this entry. The clean above was already
+        // skipped by the merge itself (the `_postinst_failure` builddir
+        // rule); the error carries the endgame wording.
+        // Portage: _emerge/PackageMerge.py, _install_exit; vartree.py
+        display.status(&completed_line(entry, &version, progress, root, &color));
+        return Err(postinst_failed_error(&cp, &version, outcome.status));
+    }
+    if outcome.status != 0 {
+        return Err(format!("{cp}-{version}: merge failed ({})", outcome.status));
     }
     // The `Completed (N of M) cpv::repo` line.
     if let Some(record) = &per_entry.world_recorder {

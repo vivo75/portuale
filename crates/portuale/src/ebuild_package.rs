@@ -706,6 +706,9 @@ pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
         // Portage: doebuild.py, _spawn_phase
         log_file: ebuild_phases::PhaseLog::Foreground,
         build_env,
+        // `doebuild()` runs every phase; the no-op src-phase skip is
+        // merge-path only (backlog #456).
+        skip_noop_src_phases: false,
     })?;
     if status != 0 {
         return Ok(status);
@@ -2540,6 +2543,7 @@ mod tests {
             config_root: &options.config_root,
             shell: options.shell,
             log_file: ebuild_phases::PhaseLog::Inherit,
+            skip_noop_src_phases: false,
             build_env: &[],
         })
         .expect("install succeeds");
@@ -2593,6 +2597,7 @@ mod tests {
             config_root: &options.config_root,
             shell: options.shell,
             log_file: ebuild_phases::PhaseLog::Inherit,
+            skip_noop_src_phases: false,
             build_env: &[],
         })
         .expect("install succeeds");

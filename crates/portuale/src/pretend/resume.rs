@@ -32,6 +32,34 @@ pub(crate) fn entries_not_merged(
     out
 }
 
+/// The resume list a failed run re-saves: the still-unmerged entries (no
+/// vdb `CONTENTS`), plus any postinst-failed entry, whose merge landed.
+/// Portage never removes a failed entry from the saved list except through
+/// a `--keep-going` resume pass, which already re-saved without it (see
+/// `MergePassReport::resumed`).
+// Portage: Scheduler.py, _do_merge_exit / merge (`_save_resume_list`)
+pub(crate) fn unmerged_for_resume_save(
+    root: &Path,
+    entries: &[portage_repo::GraphEntry],
+    report: &emerge_build::MergePassReport,
+) -> Vec<crate::mtimedb::ResumeCpv> {
+    let unmerged = entries_not_merged(root, entries);
+    if report.resumed {
+        return unmerged;
+    }
+    let mut out = Vec::new();
+    for e in entries {
+        let cp = (e.category.clone(), e.package.clone());
+        let Some(cpv) = emerge_build::resume_cpv(e) else {
+            continue;
+        };
+        if unmerged.contains(&cpv) || report.postinst_failed.contains(&cp) {
+            out.push(cpv);
+        }
+    }
+    out
+}
+
 /// Arguments of [`run_resume`].
 pub(crate) struct RunResumeArgs<'a> {
     pub(crate) root: &'a Path,
@@ -457,7 +485,7 @@ pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
         })
     };
     if let Err(e) = merge_result {
-        let still = entries_not_merged(root, entries);
+        let still = unmerged_for_resume_save(root, entries, &e.report);
         let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
         // A failure with nothing unmerged leaves the per-merge shrink's
         // own tail alone.
@@ -467,10 +495,10 @@ pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
         // A merge-time binpkg digest/missing-file failure already printed
         // its own tail: no `emerge:` line. The silent resume re-save above
         // stays; Portage keeps the list resumable too.
-        if !crate::emerge_getbinpkg::is_binpkg_digest_failure(&e)
-            && !crate::emerge_getbinpkg::is_binpkg_missing_failure(&e)
+        if !crate::emerge_getbinpkg::is_binpkg_digest_failure(&e.message)
+            && !crate::emerge_getbinpkg::is_binpkg_missing_failure(&e.message)
         {
-            eprintln!("emerge: {e}");
+            eprintln!("emerge: {}", e.message);
         }
         // The notice prints when the vdb changed (at least one resumed
         // entry landed); see `merge_failure_news_notice`.

@@ -4,6 +4,9 @@
 ## fn entries_not_merged
 - The per-entry mapping itself is `emerge_build::resume_cpv` (the same mapping the up-front save uses), narrowed here to entries whose merge never landed. One `stat` of the entry's `CONTENTS` through the root's backend.
 
+## fn unmerged_for_resume_save (#444)
+- The failure-path resume list: the vdb-unmerged entries plus any postinst-failed entry (whose merge landed -- Portage keeps a failed entry in the saved list; only a `--keep-going` resume pass, which already re-saved without it, drops it). Entry order follows the plan (Portage's up-front order).
+
 ## struct RunResumeArgs
 - `quiet`: Portage's `--quiet` (`noiselimit < 0`, `actions.py:3907-3908`).
 - `ask` / `read_news`: Backlog #231 (a/c): Portage's `run_action` prints the pre-resolution news notice (and offers the `--read-news` prompt) before `action_build` -- which is where the resume handling lives -- so resumed builds print both notices too.

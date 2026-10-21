@@ -47,6 +47,66 @@ pub(crate) struct RunCommandsAsyncArgs<'a> {
     /// overrides them. The build path passes the resolved `USE` flags here;
     /// `&[]` for a standalone `ebuild <file> <phase>` run.
     pub(crate) build_env: &'a [(String, String)],
+    /// Portage's merge-path `EbuildExecuter`: skip the no-op default
+    /// `unpack`/`prepare`/`configure`/`compile`/`test` bodies for a
+    /// sourceless package (see [`can_skip_source_phases`]). The direct
+    /// `ebuild` and `package` paths run every phase like `doebuild()`.
+    pub(crate) skip_noop_src_phases: bool,
+}
+
+/// Portage's `EbuildExecuter._skippable_src_phases`: the phases whose
+/// default bodies are no-ops for a package with no source to act on.
+/// `src_install` always runs: it creates `${D}` and drives the
+/// install-time QA checks.
+// Portage: _emerge/EbuildExecuter.py
+const SKIPPABLE_SRC_PHASES: &[&str] = &["unpack", "prepare", "configure", "compile", "test"];
+
+/// Whether the merge path runs `unpack` and the `src_*` phases at all:
+/// Portage's `EbuildExecuter._can_skip_source_phases`, evaluated after
+/// `pkg_setup` (which records `.src_patches` when `PATCHES` is set).
+/// Skipped phases never spawn, never log and never stamp.
+// Portage: _emerge/EbuildExecuter.py
+pub(crate) fn can_skip_source_phases(
+    features: &str,
+    use_flags: &str,
+    env: &Environment,
+    a_is_empty: bool,
+) -> bool {
+    // The `ebuild` command's manual mode relies on running each phase.
+    if feature_token_present(features, "noauto") {
+        return false;
+    }
+    // Live ebuilds fetch their source in `src_unpack` regardless of `SRC_URI`.
+    let use_set: std::collections::HashSet<String> =
+        use_flags.split_whitespace().map(String::from).collect();
+    let (_, properties) = restrict_and_properties(env, &use_set);
+    if properties.split_whitespace().any(|w| w == "live") {
+        return false;
+    }
+    // Nothing to unpack, and `A` is what the fetch above resolved.
+    if !a_is_empty {
+        return false;
+    }
+    // An ebuild-defined `src_*` phase may do real work. `DEFINED_PHASES`
+    // covers the eclass stack too; without metadata the phases cannot be
+    // proven no-ops, so they run.
+    let Some(defined) = repo_root_for(&env.pkg_dir)
+        .and_then(|repo_root| {
+            portage_repo::repo_aux_metadata(&repo_root, &env.category, &env.split.pf).ok()
+        })
+        .and_then(|m| m.get("DEFINED_PHASES").cloned())
+    else {
+        return false;
+    };
+    if defined
+        .split_whitespace()
+        .any(|p| SKIPPABLE_SRC_PHASES.contains(&p))
+    {
+        return false;
+    }
+    // `pkg_setup` records `.src_patches` when `PATCHES` is set; the
+    // default `src_prepare` applies it, so the skip must not fire.
+    !env.portage_builddir().join(".src_patches").exists()
 }
 
 /// Drives `commands` against `ebuild_path`: environment once, then each
@@ -67,6 +127,7 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
         shell,
         log_file,
         build_env,
+        skip_noop_src_phases,
     } = args;
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
 
@@ -162,6 +223,11 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
         } else {
             None
         };
+        // `A`-emptiness for the no-op src-phase skip below: the fetched
+        // list when the chain unpacks (a chain holding a skippable phase
+        // always does, so `None` only means "not computed" and runs the
+        // phases).
+        let a_is_empty = a.as_ref().is_some_and(|a| a.is_empty());
         if (command != "setup" && !features.split_whitespace().any(|f| f == "noauto"))
             || chain_here.iter().any(|&p| p == "install" || p == "unpack")
         {
@@ -172,7 +238,20 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
             prepare_fake_distdir(&env, distdir, &alist)?;
         }
 
+        // Portage's merge-path `EbuildExecuter` gate, decided once at the
+        // first skippable phase (after `pkg_setup`, which records
+        // `.src_patches`): a sourceless package defining no `src_*`
+        // phase skips the no-op defaults outright.
+        let mut skip_src: Option<bool> = None;
         for phase in chain_here {
+            if skip_noop_src_phases
+                && SKIPPABLE_SRC_PHASES.contains(&phase)
+                && *skip_src.get_or_insert_with(|| {
+                    can_skip_source_phases(&features, &use_flags, &env, a_is_empty)
+                })
+            {
+                continue;
+            }
             // Portage: doebuild.py, spawnebuild — a stamped phase prints the
             // skip pair and never spawns (`install` re-runs under `noauto`).
             if is_stamped(env.portage_builddir(), phase, &features) {
@@ -266,6 +345,11 @@ pub struct RunCommandsArgs<'a> {
     pub shell: ShellBackend,
     pub log_file: PhaseLog<'a>,
     pub build_env: &'a [(String, String)],
+    /// Portage's merge-path `EbuildExecuter`: skip the no-op default
+    /// `unpack`/`prepare`/`configure`/`compile`/`test` bodies for a
+    /// sourceless package. The direct `ebuild` and `package` paths run
+    /// every phase like `doebuild()`.
+    pub skip_noop_src_phases: bool,
 }
 
 /// Synchronous entry point for `ebuild.rs`: spins up a multi-threaded tokio
@@ -285,6 +369,7 @@ pub fn run_commands(args: RunCommandsArgs<'_>) -> Result<i32, String> {
         shell,
         log_file,
         build_env,
+        skip_noop_src_phases,
     } = args;
     run_commands_logged(RunCommandsLoggedArgs {
         ebuild_path,
@@ -297,6 +382,7 @@ pub fn run_commands(args: RunCommandsArgs<'_>) -> Result<i32, String> {
         shell,
         log_file,
         build_env,
+        skip_noop_src_phases,
     })
 }
 
@@ -311,6 +397,11 @@ pub struct RunCommandsLoggedArgs<'a> {
     pub shell: ShellBackend,
     pub log_file: PhaseLog<'a>,
     pub build_env: &'a [(String, String)],
+    /// Portage's merge-path `EbuildExecuter`: skip the no-op default
+    /// `unpack`/`prepare`/`configure`/`compile`/`test` bodies for a
+    /// sourceless package. The direct `ebuild` and `package` paths run
+    /// every phase like `doebuild()`.
+    pub skip_noop_src_phases: bool,
 }
 
 /// Like `run_commands`, but every phase appends stdout+stderr to `log_file`
@@ -328,6 +419,7 @@ pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, Strin
         shell,
         log_file,
         build_env,
+        skip_noop_src_phases,
     } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(run_commands_async(RunCommandsAsyncArgs {
@@ -341,6 +433,7 @@ pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, Strin
         shell,
         log_file,
         build_env,
+        skip_noop_src_phases,
     }))
 }
 

@@ -407,6 +407,7 @@ pub(crate) fn run_real_commands(
             ebuild_merge::run_merge(ebuild_path, &root, &portage_tmpdir, &merge_options, None)
         } else if ebuild_merge::is_qmerge_command(cmd) {
             ebuild_merge::run_qmerge(ebuild_path, &root, &portage_tmpdir, &merge_options)
+                .map(|outcome| outcome.status)
         } else if ebuild_unmerge::is_unmerge_command(cmd) {
             ebuild_unmerge::run_unmerge(ebuild_path, &root, &portage_tmpdir, &unmerge_options)
         } else if ebuild_package::is_package_command(cmd) {
@@ -442,6 +443,10 @@ pub(crate) fn run_real_commands(
                 shell,
                 log_file: ebuild_phases::PhaseLog::Foreground,
                 build_env: &direct_build_env,
+                // A direct `ebuild` run executes every phase like
+                // `doebuild()`; the no-op src-phase skip is merge-path
+                // only (backlog #456).
+                skip_noop_src_phases: false,
             })
         };
         match result {

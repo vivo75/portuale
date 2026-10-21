@@ -80,6 +80,8 @@
 - `Scheduler._pkg_count` for this run (backlog #177).
 - Backlog #197: Portage `Scheduler` owns one `JobStatusDisplay` per merge run.
 - The director seam executes every unit through the source/binary engines (Portage `MergeListItem._start`'s own `type_name` routing).
+- `failed_install_pkg_msg` (#444): the merge-phase half of `failed_pkg_msg` -- `>>> Failed to install <cpv>[ to <root>][, Log file:]` plus the `>>>  '<log>'` tail (Portage `Scheduler._failed_pkg_msg` with `install`/`to`, the postinst-failure wording).
+- `run_merge_plan` returns the merge-pass report (#444) so a source entry's postinst failure (reachable through the mixed plan) skips the world record downstream.
 
 ## fn merge_one_binary_entry
 - The per-package line ports `MergeListItem._start`'s binary-entry line (backlog #177): this is the `>>> Merging binary package ...` line's shape.

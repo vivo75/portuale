@@ -667,7 +667,7 @@ fn run_build_scheduler_keep_going_skips_a_failed_builds_dependents() {
         mode: StatusMode::for_tests(),
     })
     .expect_err("a failed build must make the whole run fail under --keep-going");
-    assert!(is_reported_failure(&err), "{err}");
+    assert!(is_reported_failure(&err.message), "{err}");
 
     assert!(
         root.join("var/db/pkg/dev-libs/schedok-1.0/CONTENTS")
@@ -728,7 +728,7 @@ fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
         mode: StatusMode::for_tests(),
     })
     .expect_err("schedbad's own failure must fail the whole run");
-    assert!(is_reported_failure(&err), "{err}");
+    assert!(is_reported_failure(&err.message), "{err}");
     // Generously bounded for loaded machines: well under schedslow's 120s
     // sleep, proving the scheduler didn't just wait it out.
     assert!(
@@ -777,7 +777,7 @@ fn run_source_merge_rejects_a_binary_entry() {
         mode: StatusMode::for_tests(),
     })
     .unwrap_err();
-    assert!(err.contains("binary package"), "{err}");
+    assert!(err.message.contains("binary package"), "{err}");
 }
 
 #[test]
@@ -812,7 +812,7 @@ fn run_merge_loop_without_keep_going_stops_at_the_first_failure() {
         Err(format!("{} boom", e.package))
     })
     .unwrap_err();
-    assert_eq!(err, "aaa boom");
+    assert_eq!(err.message, "aaa boom");
     assert_eq!(seen, vec!["aaa".to_string()]);
 }
 
@@ -873,7 +873,7 @@ fn run_merge_loop_keep_going_skips_the_failed_packages_transitive_dependents() {
     assert_eq!(merged, vec!["other".to_string()]);
     // The failure is not a phase failure, so it is returned for the `emerge:`
     // line; the dropped dependents are announced, not folded into the message.
-    assert_eq!(err, "dep boom");
+    assert_eq!(err.message, "dep boom");
 }
 
 #[test]
@@ -1050,4 +1050,168 @@ fn run_source_merge_upgrade_replaces_the_installed_version() {
     );
     let _ = fs::remove_dir_all(&root);
     let _ = fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// A `pkg_postinst` that dies after an otherwise successful merge: the vdb
+/// entry and files land, the builddir is kept, and the error carries the
+/// `Failed to install` endgame instead of `Failed to emerge`. Expected
+/// value: `LLM/evidence/2026-10-21-b444` (host `emerge` 3.0.82.2, the
+/// lone-postinstfail cell).
+fn postinstfail_entry() -> GraphEntry {
+    let mut entry = source_entry(
+        "postinstfail",
+        PretendOutcome::New {
+            version: "1".into(),
+        },
+    );
+    entry.category = "dev-util".into();
+    entry
+}
+
+#[test]
+fn run_source_merge_postinst_failure_matches_the_portage_endgame() {
+    // The fused serial loop (`capture_log: false`), the captured serial
+    // split (`capture_log: true`) and the parallel scheduler (`jobs: 2`)
+    // share the endgame through `failure.rs`.
+    for (jobs, capture_log) in [(1usize, false), (1, true), (2, false)] {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let err = run_source_merge(RunSourceMergeArgs {
+            entries: &[postinstfail_entry()],
+            repos: &repos,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            jobs,
+            load_average: None,
+            capture_log,
+            mode: StatusMode::for_tests(),
+        })
+        .expect_err("a dying pkg_postinst must fail the run");
+        assert!(
+            is_reported_failure(&err.message),
+            "jobs={jobs} capture_log={capture_log}: {}",
+            err.message
+        );
+        assert_eq!(
+            err.report.postinst_failed,
+            vec![("dev-util".to_string(), "postinstfail".to_string())],
+            "jobs={jobs} capture_log={capture_log}: the pass report names the postinst failure"
+        );
+
+        // The merge landed: vdb entry and files, like Portage's
+        // `_postinst_failure` (which only skips the world record, the
+        // clean, and the `>>> <cpv> merged.` line).
+        assert!(
+            root.join("var/db/pkg/dev-util/postinstfail-1/CONTENTS")
+                .is_file(),
+            "jobs={jobs} capture_log={capture_log}: the vdb entry must land"
+        );
+        assert!(
+            root.join("opt/postinstfail").exists(),
+            "jobs={jobs} capture_log={capture_log}: the files must land"
+        );
+        // The builddir is kept (Portage bug #704866 rule), never cleaned.
+        assert!(
+            portage_tmpdir
+                .join("portage/dev-util/postinstfail-1")
+                .is_dir(),
+            "jobs={jobs} capture_log={capture_log}: the builddir must be kept"
+        );
+        // The elog heads the phase file (Portage merges the python-side
+        // elog before the shell-side die block), so the `Messages` summary
+        // shows `FAILED postinst` first.
+        let logging = fs::read_to_string(
+            portage_tmpdir.join("portage/dev-util/postinstfail-1/temp/logging/postinst"),
+        )
+        .expect("logging/postinst is written");
+        assert!(
+            logging.starts_with("ERROR FAILED postinst:"),
+            "jobs={jobs} capture_log={capture_log}: unexpected logging/postinst:\n{logging}"
+        );
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
+}
+
+#[test]
+fn run_source_merge_postinst_failure_keep_going_merges_dependents() {
+    // `postinstfail` <- `postinsttop`, `postinstgood` independent: under
+    // `--keep-going` every package still merges (a postinst failure
+    // satisfies dependents through the live vdb entry) and only the failed
+    // package is reported. Expected value: `LLM/evidence/2026-10-21-b444`
+    // (host `emerge` 3.0.82.2, the keep-going cells).
+    for jobs in [1usize, 2] {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let mut failed = postinstfail_entry();
+        failed.required_by = vec![("dev-util".into(), "postinsttop".into())];
+        let mut good = source_entry(
+            "postinstgood",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        good.category = "dev-util".into();
+        let mut top = source_entry(
+            "postinsttop",
+            PretendOutcome::New {
+                version: "1".into(),
+            },
+        );
+        top.category = "dev-util".into();
+        let entries = vec![failed, good, top];
+
+        let err = run_source_merge(RunSourceMergeArgs {
+            entries: &entries,
+            repos: &repos,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            keep_going: true,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            jobs,
+            load_average: None,
+            capture_log: false,
+            mode: StatusMode::for_tests(),
+        })
+        .expect_err("jobs={jobs}: a dying pkg_postinst must fail the run");
+        assert!(
+            is_reported_failure(&err.message),
+            "jobs={jobs}: {}",
+            err.message
+        );
+        assert_eq!(
+            err.report.postinst_failed,
+            vec![("dev-util".to_string(), "postinstfail".to_string())],
+            "jobs={jobs}: the pass report names the postinst failure"
+        );
+        for pkg in ["postinstfail-1", "postinstgood-1", "postinsttop-1"] {
+            assert!(
+                root.join(format!("var/db/pkg/dev-util/{pkg}/CONTENTS"))
+                    .is_file(),
+                "jobs={jobs}: {pkg} must merge"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&portage_tmpdir);
+    }
 }
