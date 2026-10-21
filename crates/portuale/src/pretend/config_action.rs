@@ -194,7 +194,12 @@ pub(crate) fn misspell_suggestion_block(
     let rest = first
         .strip_prefix("there are no ebuilds to satisfy \"")
         .or_else(|| first.strip_prefix("there are no binary packages to satisfy \""))?;
-    let atom_str = rest.strip_suffix("\".")?;
+    // The line may carry ` for <root>/` after the quoted atom (a `ROOT`
+    // other than the running root), so cut at the closing quote.
+    let atom_str = rest.split_once('"')?.0;
+    if !atom_str.contains('/') && !atom_str.is_empty() {
+        return bare_name_suggestion_block(atom_str, repos, root, dbs);
+    }
     let atom = parse_atom(atom_str)?;
     let binary = dbs.pkgdir.map(|pkgdir| {
         let mut cps = portage_repo::BinaryIndex::from_pkgdir(pkgdir).all_cp();
@@ -226,6 +231,51 @@ pub(crate) fn misspell_suggestion_block(
     all_cp.remove(&target);
     let all_cp: Vec<String> = all_cp.into_iter().collect();
     let matches = difflib::get_close_matches(&target, &all_cp, 3, 0.6);
+    let tail = match matches.len() {
+        0 => " nothing similar found.".to_string(),
+        1 => format!("\nemerge: Maybe you meant {}?", matches[0]),
+        _ => format!(
+            "\nemerge: Maybe you meant any of these: {}?",
+            matches.join(", ")
+        ),
+    };
+    Some(format!("\n\nemerge: searching for similar names...{tail}"))
+}
+
+/// The bare-name branch of `similar_name_search` (`cat == "null"`): the
+/// close matches are package names, each expanded to every `cat/pkg` that
+/// carries it. Names equal to the typed one are dropped.
+// Portage: dbapi/_similar_name_search.py
+fn bare_name_suggestion_block(
+    name: &str,
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    dbs: SimilarNameDbs<'_>,
+) -> Option<String> {
+    let mut all_cp: std::collections::BTreeSet<String> = portage_repo::all_installed_packages(root)
+        .iter()
+        .map(|p| format!("{}/{}", p.category, p.package))
+        .collect();
+    if dbs.ebuild {
+        all_cp.extend(portage_repo::all_cp(repos));
+    }
+    let pkg = name.to_lowercase();
+    let mut pkg_to_cp: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for cp in &all_cp {
+        let other = cp
+            .split_once('/')
+            .map_or(cp.as_str(), |(_, p)| p)
+            .to_lowercase();
+        if other == pkg {
+            continue;
+        }
+        pkg_to_cp.entry(other).or_default().push(cp.clone());
+    }
+    let names: Vec<String> = pkg_to_cp.keys().cloned().collect();
+    let matches: Vec<String> = difflib::get_close_matches(&pkg, &names, 3, 0.6)
+        .iter()
+        .flat_map(|m| pkg_to_cp[m].clone())
+        .collect();
     let tail = match matches.len() {
         0 => " nothing similar found.".to_string(),
         1 => format!("\nemerge: Maybe you meant {}?", matches[0]),

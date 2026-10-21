@@ -141,5 +141,13 @@ pub(crate) fn resolution_notice_shown(quiet: bool, nodeps: bool) -> bool {
 /// shape stays silent (out of scope).
 // Portage: _emerge/depgraph.py, _start_resolution_display
 pub(crate) fn top_level_abort_notice_shown(msg: &str) -> bool {
-    portage_repo::is_all_masked_abort_report(msg)
+    portage_repo::is_all_masked_abort_report(msg) || is_plain_miss_report(msg)
+}
+
+/// A resolve error whose first line is Portage's `there are no ebuilds (or
+/// binary packages) to satisfy "<atom>"`: it prints the resolution notice
+/// first too, and a blank line ahead of the `emerge:` line (backlog #470).
+pub(crate) fn is_plain_miss_report(msg: &str) -> bool {
+    msg.starts_with("there are no ebuilds to satisfy \"")
+        || msg.starts_with("there are no binary packages to satisfy \"")
 }

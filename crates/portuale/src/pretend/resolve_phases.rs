@@ -330,6 +330,9 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             if msg.trim_start().starts_with("!!!") {
                 eprint!("{msg}");
             } else {
+                if is_plain_miss_report(&msg) {
+                    eprintln!();
+                }
                 eprint!("emerge: {msg}");
             }
             let pkgdir = std::path::PathBuf::from(&config.pkgdir);

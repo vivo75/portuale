@@ -267,8 +267,9 @@ fn top_level_all_masked_abort_prints_the_notice_on_and_off_pretend() {
         For more information, see the MASKED PACKAGES section in the emerge\n\
         man page or refer to the Gentoo Handbook.\n";
     assert!(top_level_abort_notice_shown(masked));
-    // The neighbouring top-level abort shapes keep today's silence.
-    assert!(!top_level_abort_notice_shown(
+    // A plain miss prints the notice too (backlog #470); the USE-flag
+    // variant keeps today's silence.
+    assert!(top_level_abort_notice_shown(
         "there are no ebuilds to satisfy \"dev-libs/foo\"."
     ));
     assert!(!top_level_abort_notice_shown(

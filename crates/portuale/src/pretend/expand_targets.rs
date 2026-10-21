@@ -235,8 +235,37 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
                     }
                     return Err(ExitCode::from(1));
                 }
+                // A bare name no repo carries is reported like any other missing
+                // package: resolution notice, ` for <root>`, similar names.
+                // Portage: depgraph.py, _show_unsatisfied_dep
                 DepExpand::NoMatch => {
-                    eprintln!("emerge: there are no ebuilds to satisfy {atom:?}.");
+                    show_resolution_header_with_counts(ShowResolutionHeaderWithCountsArgs {
+                        opts,
+                        backtrack_restarts: 0,
+                        backtrack_max: opts.backtrack_max,
+                        pretend_abort: opts.pretend,
+                        pretend_changes: false,
+                        color,
+                    });
+                    let msg = format!(
+                        "there are no ebuilds to satisfy {atom:?}{}.",
+                        portage_repo::display_root_suffix()
+                    );
+                    eprintln!("\nemerge: {msg}");
+                    if let Some(extra) = misspell_suggestion_block(
+                        &msg,
+                        repos,
+                        root,
+                        opts.misspell_suggestions,
+                        SimilarNameDbs {
+                            ebuild: true,
+                            pkgdir: None,
+                            binrepos: &[],
+                        },
+                    ) {
+                        eprint!("{extra}");
+                    }
+                    eprintln!();
                     return Err(ExitCode::from(1));
                 }
             }
