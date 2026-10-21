@@ -53,7 +53,7 @@ fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_portage() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("nothing to do"), "{stdout}");
+    assert!(stdout.contains("*** Resuming merge..."), "{stdout}");
     assert_eq!(
         stdout.matches("news items need reading").count(),
         1,

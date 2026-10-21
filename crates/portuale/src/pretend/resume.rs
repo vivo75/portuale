@@ -138,11 +138,16 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     }
     let Some((favorites, mut mergelist, saved_opts)) = crate::mtimedb::read_resume_list(root)
     else {
-        // Portage reaches `post_emerge` even on this path: with nothing
-        // merged only a `--pretend` run prints there.
+        // No usable resume list: Portage's `action_build` prints this on
+        // stdout and exits 0, ahead of `post_emerge` (which, with nothing
+        // merged, prints only on a `--pretend` run).
+        // Portage: _emerge/actions.py, action_build
+        println!(
+            "{}",
+            color.c("darkgreen", "emerge: It seems we have nothing to resume...")
+        );
         pretend_end_news_notice(pretend, &repos, root, config, &color);
-        eprintln!("emerge: could not find a valid resume list");
-        return ExitCode::from(1);
+        return ExitCode::SUCCESS;
     };
     // The saved `myopts` seed the run and the current command line
     // overrides them (`resume_opts.update(myopts)`), so a `-q` run's
@@ -162,11 +167,41 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         mergelist.remove(0);
     }
     if mergelist.is_empty() {
-        crate::mtimedb::clear_resume_list(root);
-        // Same `post_emerge` arm as above: only a `--pretend` run
-        // prints here.
-        pretend_end_news_notice(pretend, &repos, root, config, &color);
-        println!("emerge: the resume list is empty; nothing to do.");
+        // `--skipfirst` dropped the only entry. Portage still re-resolves the
+        // empty list: a display run (`--pretend`, `--tree`, `--verbose`)
+        // prints the banner and then says there is nothing to resume, while
+        // a merge run prints `*** Resuming merge...`, merges nothing and
+        // re-saves the empty list.
+        // Portage: _emerge/actions.py, action_build; Scheduler.py, _calc_resume_list
+        let display = pretend || emerge_opts.tree || (emerge_opts.verbose && !quiet);
+        let notice = super::gates::resolution_notice_shown(quiet, emerge_opts.nodeps);
+        if display {
+            if !quiet {
+                let banner = if emerge_opts.tree {
+                    "These are the packages that would be merged, in reverse order:"
+                } else {
+                    "These are the packages that would be merged, in order:"
+                };
+                println!("\n{}\n", color.c("darkgreen", banner));
+                if notice {
+                    println!("Calculating dependencies ... done!");
+                    print!("{}", super::timing_line(&color, None));
+                }
+            }
+            println!(
+                "{}",
+                color.c("darkgreen", "emerge: It seems we have nothing to resume...")
+            );
+            pretend_end_news_notice(pretend, &repos, root, config, &color);
+            return ExitCode::SUCCESS;
+        }
+        let fav_refs: Vec<&str> = favorites.iter().map(String::as_str).collect();
+        let _ = crate::mtimedb::write_resume_list(root, &fav_refs, &mergelist, &opts);
+        if notice {
+            println!("Calculating dependencies ... done!");
+            print!("{}", super::timing_line(&color, None));
+        }
+        println!("{}", color.c("GOOD", "*** Resuming merge..."));
         return ExitCode::SUCCESS;
     }
     // The local binary pool for resumed `Binary` entries, so a resumed
