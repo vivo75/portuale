@@ -25,6 +25,7 @@ fn install_lands_a_real_file_under_a_real_d() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -77,6 +78,7 @@ fn a_brush_phase_does_not_leak_its_umask_into_the_host_process() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -118,6 +120,7 @@ fn install_dies_like_portage_when_s_is_missing() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::default(),
         log_file: PhaseLog::Capture(&log_file),
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands_logged should not itself error");
@@ -155,6 +158,7 @@ fn install_writes_the_real_build_time_file() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -204,6 +208,7 @@ fn install_qa_check_docompress_compresses_docs_and_repairs_symlinks() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Bash,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &extra_env,
     })
     .expect("run_commands should not itself error");
@@ -267,6 +272,7 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
         config_root: no_root,
         shell: ShellBackend::Bash,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &env_with("-binpkg-docompress"),
     })
     .expect("run_commands should not itself error");
@@ -355,6 +361,7 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -396,6 +403,7 @@ fn install_lands_a_real_file_under_a_real_d_via_real_bash() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Bash,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -446,6 +454,7 @@ fn install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -518,6 +527,7 @@ fn features_xattr_routes_phase_installs_through_the_xattr_wrapper() {
             config_root: Path::new("/dev/null/no-config-root"),
             shell: ShellBackend::Brush,
             log_file: PhaseLog::Inherit,
+            skip_noop_src_phases: false,
             build_env: &[("FEATURES".to_string(), features.to_string())],
         })
         .expect("run_commands should not itself error");
@@ -558,6 +568,7 @@ fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -597,6 +608,7 @@ fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
             config_root: Path::new("/dev/null/no-config-root"),
             shell,
             log_file: PhaseLog::Inherit,
+            skip_noop_src_phases: false,
             build_env: &[],
         })
         .expect("run_commands should not itself error");
@@ -665,6 +677,7 @@ fn brush_phase_env_is_filtered_of_bash_special_variables() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Capture(&log),
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands_logged should not itself error");
@@ -748,6 +761,7 @@ fn expanded_name_export_assigns_in_both_backends() {
             config_root: Path::new("/dev/null/no-config-root"),
             shell,
             log_file: PhaseLog::Inherit,
+            skip_noop_src_phases: false,
             build_env: &[],
         })
         .expect("run_commands should not itself error");
@@ -842,6 +856,7 @@ fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_re
         config_root: &tmp,
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -880,6 +895,7 @@ fn debug_flag_exports_portage_debug() {
             config_root: Path::new("/dev/null/no-config-root"),
             shell: ShellBackend::Brush,
             log_file: PhaseLog::Inherit,
+            skip_noop_src_phases: false,
             build_env: &[],
         })
         .expect("run_commands should not itself error");
@@ -919,6 +935,7 @@ fn phases_export_portage_actual_distdir_so_doins_keeps_absolute_symlinks() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -967,6 +984,7 @@ fn phases_see_the_per_package_fake_distdir() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -1019,6 +1037,7 @@ fn fake_distdir_is_prepared_only_when_portage_prepares_it() {
             config_root: Path::new("/dev/null/no-config-root"),
             shell: ShellBackend::Brush,
             log_file: PhaseLog::Inherit,
+            skip_noop_src_phases: false,
             build_env: &build_env,
         })
         .expect("run_commands should not itself error");
@@ -1056,6 +1075,7 @@ fn pretend_alone_succeeds_with_no_explicit_phase_functions() {
         config_root: Path::new("/dev/null/no-config-root"),
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -1291,4 +1311,71 @@ fn foreground_unpack_tees_portages_markers_to_stdout_and_build_log() {
         std::fs::read_to_string(builddir.join("temp/build.log")).expect("build.log written");
     assert_eq!(logged, stdout, "the log carries the terminal stream");
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The merge-path no-op src-phase skip (backlog #456,
+/// `EbuildExecuter._can_skip_source_phases`): `dev-libs/schedleaf-a`
+/// ships no `SRC_URI` and defines only `src_install`
+/// (`DEFINED_PHASES=install` in its md5-cache entry), so a merge run
+/// must skip `unpack`/`prepare`/`configure`/`compile`/`test` outright.
+#[test]
+fn skip_fires_for_sourceless_install_only_ebuild() {
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/schedleaf-a/schedleaf-a-1.0.ebuild");
+    let portage_tmpdir = TempDir::new("skip-sourceless");
+    let env = compute_environment(&ebuild_path, &portage_tmpdir).expect("env computes");
+    assert!(
+        can_skip_source_phases("", "", &env, true),
+        "empty A, no skippable DEFINED_PHASES, no live PROPERTIES, no noauto: skip"
+    );
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// The skip stays off when any gate fails: a fetched file, a defined
+/// `src_compile` (`dev-libs/unsetcflagspkg`), `FEATURES=noauto`, or a
+/// `live` property (`dev-libs/propertiespkg`).
+#[test]
+fn skip_stays_off_when_any_gate_fails() {
+    let fixture = |pkg: &str| {
+        let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../fixtures/repo/dev-libs/{pkg}/{pkg}-1.0.ebuild"
+        ));
+        let portage_tmpdir = TempDir::new(&format!("skip-gate-{pkg}"));
+        let env = compute_environment(&ebuild_path, &portage_tmpdir).expect("env computes");
+        (env, portage_tmpdir)
+    };
+    // A non-empty `A` means something to unpack.
+    let (env, tmp) = fixture("schedleaf-a");
+    assert!(!can_skip_source_phases("", "", &env, false));
+    let _ = std::fs::remove_dir_all(&tmp);
+    // `src_compile` is defined (`DEFINED_PHASES` carries `compile`).
+    let (env, tmp) = fixture("unsetcflagspkg");
+    assert!(!can_skip_source_phases("", "", &env, true));
+    let _ = std::fs::remove_dir_all(&tmp);
+    // Manual `ebuild` mode relies on running each phase.
+    let (env, tmp) = fixture("schedleaf-a");
+    assert!(!can_skip_source_phases("noauto", "", &env, true));
+    let _ = std::fs::remove_dir_all(&tmp);
+    // Live ebuilds fetch their source in `src_unpack`.
+    let (env, tmp) = fixture("propertiespkg");
+    assert!(!can_skip_source_phases("", "", &env, true));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `pkg_setup` records `.src_patches` when `PATCHES` is set; the default
+/// `src_prepare` applies it, so the skip must not fire afterwards.
+#[test]
+fn skip_stays_off_once_setup_records_src_patches() {
+    let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/repo/dev-libs/schedleaf-a/schedleaf-a-1.0.ebuild");
+    let portage_tmpdir = TempDir::new("skip-patches");
+    let env = compute_environment(&ebuild_path, &portage_tmpdir).expect("env computes");
+    assert!(can_skip_source_phases("", "", &env, true));
+    std::fs::create_dir_all(env.portage_builddir()).unwrap();
+    std::fs::write(env.portage_builddir().join(".src_patches"), "").unwrap();
+    assert!(
+        !can_skip_source_phases("", "", &env, true),
+        "a recorded PATCHES set keeps src_prepare"
+    );
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }

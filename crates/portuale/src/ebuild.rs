@@ -442,6 +442,10 @@ pub(crate) fn run_real_commands(
                 shell,
                 log_file: ebuild_phases::PhaseLog::Foreground,
                 build_env: &direct_build_env,
+                // A direct `ebuild` run executes every phase like
+                // `doebuild()`; the no-op src-phase skip is merge-path
+                // only (backlog #456).
+                skip_noop_src_phases: false,
             })
         };
         match result {

@@ -1,0 +1,323 @@
+=== default
+Calculating dependencies ... done!
+Dependency resolution took 1.72 s (backtrack: 0/20).
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 3) dev-libs/schedleaf-a-1.0::qbuild for /var/tmp/b456/root/
+ * Fetching files in the background.
+ * To view fetch progress, run in another terminal:
+ * tail -f /var/log/emerge-fetch.log
+
+>>> Install dev-libs/schedleaf-a-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-a-1.0/image
+>>> Completed installing dev-libs/schedleaf-a-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-a-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Completed (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Emerging (2 of 3) dev-libs/schedleaf-b-1.0::qbuild for /var/tmp/b456/root/
+
+>>> Install dev-libs/schedleaf-b-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-b-1.0/image
+>>> Completed installing dev-libs/schedleaf-b-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-b-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Completed (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Emerging (3 of 3) dev-libs/schedparent-1.0::qbuild for /var/tmp/b456/root/
+
+>>> Install dev-libs/schedparent-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedparent-1.0/image
+>>> Completed installing dev-libs/schedparent-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedparent-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Recording dev-libs/schedparent in "world" favorites file...
+
+>>> Completed (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+=== quiet-build-n
+Calculating dependencies ... done!
+Dependency resolution took 1.65 s (backtrack: 0/20).
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 3) dev-libs/schedleaf-a-1.0::qbuild for /var/tmp/b456/root/
+ * Fetching files in the background.
+ * To view fetch progress, run in another terminal:
+ * tail -f /var/log/emerge-fetch.log
+
+>>> Install dev-libs/schedleaf-a-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-a-1.0/image
+>>> Completed installing dev-libs/schedleaf-a-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-a-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Completed (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Emerging (2 of 3) dev-libs/schedleaf-b-1.0::qbuild for /var/tmp/b456/root/
+
+>>> Install dev-libs/schedleaf-b-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-b-1.0/image
+>>> Completed installing dev-libs/schedleaf-b-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-b-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Completed (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Emerging (3 of 3) dev-libs/schedparent-1.0::qbuild for /var/tmp/b456/root/
+
+>>> Install dev-libs/schedparent-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedparent-1.0/image
+>>> Completed installing dev-libs/schedparent-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedparent-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Recording dev-libs/schedparent in "world" favorites file...
+
+>>> Completed (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+=== quiet-build-y
+Calculating dependencies ... done!
+Dependency resolution took 1.65 s (backtrack: 0/20).
+
+>>> Verifying ebuild manifests
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 0.83, 2.40, 2.79
+>>> Emerging (1 of 3) dev-libs/schedleaf-a-1.0::qbuild for /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 0.83, 2.40, 2.79
+>>> Jobs: 0 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+>>> Installing (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete, 1 merge wait                                 Load avg: 0.84, 2.38, 2.78
+>>> Completed (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+>>> Jobs: 1 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+>>> Jobs: 1 of 3 complete, 1 running                                    Load avg: 0.84, 2.38, 2.78
+>>> Emerging (2 of 3) dev-libs/schedleaf-b-1.0::qbuild for /var/tmp/b456/root/
+>>> Jobs: 1 of 3 complete, 1 running                                    Load avg: 0.84, 2.38, 2.78
+>>> Jobs: 1 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+>>> Installing (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 1 of 3 complete, 1 merge wait                                 Load avg: 0.84, 2.38, 2.78
+>>> Completed (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 1 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+>>> Jobs: 2 of 3 complete, 1 running                                    Load avg: 0.84, 2.38, 2.78
+>>> Emerging (3 of 3) dev-libs/schedparent-1.0::qbuild for /var/tmp/b456/root/
+>>> Jobs: 2 of 3 complete, 1 running                                    Load avg: 0.84, 2.38, 2.78
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+>>> Installing (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 2 of 3 complete, 1 merge wait                                 Load avg: 0.84, 2.38, 2.78
+>>> Recording dev-libs/schedparent in "world" favorites file...
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+>>> Completed (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+>>> Jobs: 3 of 3 complete                                               Load avg: 0.84, 2.38, 2.78
+
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+=== jobs2
+Calculating dependencies ... done!
+Dependency resolution took 1.64 s (backtrack: 0/20).
+
+>>> Verifying ebuild manifests
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 0.86, 2.36, 2.77
+>>> Emerging (1 of 3) dev-libs/schedleaf-a-1.0::qbuild for /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 0.86, 2.36, 2.77
+>>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 0.86, 2.36, 2.77
+>>> Emerging (2 of 3) dev-libs/schedleaf-b-1.0::qbuild for /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 0.86, 2.36, 2.77
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 0.86, 2.36, 2.77
+>>> Jobs: 0 of 3 complete, 1 merge wait                                 Load avg: 0.86, 2.36, 2.77
+>>> Installing (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete, 2 merge wait                                 Load avg: 0.86, 2.36, 2.77
+>>> Completed (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete                                               Load avg: 0.86, 2.36, 2.77
+>>> Installing (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete                                               Load avg: 0.86, 2.36, 2.77
+>>> Jobs: 1 of 3 complete                                               Load avg: 0.86, 2.36, 2.77
+>>> Completed (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 1 of 3 complete                                               Load avg: 0.86, 2.36, 2.77
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.86, 2.36, 2.77
+>>> Jobs: 2 of 3 complete, 1 running                                    Load avg: 0.86, 2.36, 2.77
+>>> Emerging (3 of 3) dev-libs/schedparent-1.0::qbuild for /var/tmp/b456/root/
+>>> Jobs: 2 of 3 complete, 1 running                                    Load avg: 0.86, 2.36, 2.77
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.86, 2.36, 2.77
+>>> Installing (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 2 of 3 complete, 1 merge wait                                 Load avg: 0.86, 2.36, 2.77
+>>> Recording dev-libs/schedparent in "world" favorites file...
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.87, 2.33, 2.76
+>>> Completed (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.87, 2.33, 2.76
+>>> Jobs: 3 of 3 complete                                               Load avg: 0.87, 2.33, 2.76
+
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+=== quiet-build-n-jobs2
+Calculating dependencies ... done!
+Dependency resolution took 1.66 s (backtrack: 0/20).
+
+>>> Verifying ebuild manifests
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 0.87, 2.33, 2.76
+>>> Emerging (1 of 3) dev-libs/schedleaf-a-1.0::qbuild for /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 0.87, 2.33, 2.76
+>>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 0.87, 2.33, 2.76
+>>> Emerging (2 of 3) dev-libs/schedleaf-b-1.0::qbuild for /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete, 2 running                                    Load avg: 0.87, 2.33, 2.76
+>>> Jobs: 0 of 3 complete, 1 running                                    Load avg: 0.87, 2.33, 2.76
+>>> Jobs: 0 of 3 complete, 1 merge wait                                 Load avg: 0.87, 2.33, 2.76
+>>> Installing (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete, 2 merge wait                                 Load avg: 0.87, 2.33, 2.76
+>>> Completed (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete                                               Load avg: 0.87, 2.33, 2.76
+>>> Installing (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 0 of 3 complete                                               Load avg: 0.87, 2.33, 2.76
+>>> Jobs: 1 of 3 complete                                               Load avg: 0.87, 2.33, 2.76
+>>> Completed (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 1 of 3 complete                                               Load avg: 0.88, 2.31, 2.75
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.88, 2.31, 2.75
+>>> Jobs: 2 of 3 complete, 1 running                                    Load avg: 0.88, 2.31, 2.75
+>>> Emerging (3 of 3) dev-libs/schedparent-1.0::qbuild for /var/tmp/b456/root/
+>>> Jobs: 2 of 3 complete, 1 running                                    Load avg: 0.88, 2.31, 2.75
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.88, 2.31, 2.75
+>>> Installing (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 2 of 3 complete, 1 merge wait                                 Load avg: 0.88, 2.31, 2.75
+>>> Recording dev-libs/schedparent in "world" favorites file...
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.88, 2.31, 2.75
+>>> Completed (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+>>> Jobs: 2 of 3 complete                                               Load avg: 0.88, 2.31, 2.75
+>>> Jobs: 3 of 3 complete                                               Load avg: 0.88, 2.31, 2.75
+
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+=== verbose
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.65 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/ 0 KiB
+[ebuild  N     ] dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/ 0 KiB
+[ebuild  N     ] dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/ 0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+
+>>> Verifying ebuild manifests
+
+>>> Emerging (1 of 3) dev-libs/schedleaf-a-1.0::qbuild for /var/tmp/b456/root/
+ * Fetching files in the background.
+ * To view fetch progress, run in another terminal:
+ * tail -f /var/log/emerge-fetch.log
+
+>>> Install dev-libs/schedleaf-a-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-a-1.0/image
+>>> Completed installing dev-libs/schedleaf-a-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-a-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging dev-libs/schedleaf-a-1.0 to /var/tmp/b456/root/
+>>> /var/tmp/b456/root/usr/
+>>> /var/tmp/b456/root/usr/share/
+>>> /var/tmp/b456/root/usr/share/schedleaf-a/
+>>> /var/tmp/b456/root/usr/share/schedleaf-a/f
+>>> dev-libs/schedleaf-a-1.0 merged.
+
+>>> Completed (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Emerging (2 of 3) dev-libs/schedleaf-b-1.0::qbuild for /var/tmp/b456/root/
+
+>>> Install dev-libs/schedleaf-b-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-b-1.0/image
+>>> Completed installing dev-libs/schedleaf-b-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedleaf-b-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging dev-libs/schedleaf-b-1.0 to /var/tmp/b456/root/
+--- /var/tmp/b456/root/usr/
+--- /var/tmp/b456/root/usr/share/
+>>> /var/tmp/b456/root/usr/share/schedleaf-b/
+>>> /var/tmp/b456/root/usr/share/schedleaf-b/f
+>>> dev-libs/schedleaf-b-1.0 merged.
+
+>>> Completed (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+
+>>> Emerging (3 of 3) dev-libs/schedparent-1.0::qbuild for /var/tmp/b456/root/
+
+>>> Install dev-libs/schedparent-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedparent-1.0/image
+>>> Completed installing dev-libs/schedparent-1.0 into /var/tmp/b456/tmp/portage/dev-libs/schedparent-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+
+
+>>> Installing (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+ [32;01m*[39;49;00m checking 1 files for package collisions
+>>> Merging dev-libs/schedparent-1.0 to /var/tmp/b456/root/
+--- /var/tmp/b456/root/usr/
+--- /var/tmp/b456/root/usr/share/
+>>> /var/tmp/b456/root/usr/share/schedparent/
+>>> /var/tmp/b456/root/usr/share/schedparent/f
+>>> dev-libs/schedparent-1.0 merged.
+
+>>> Recording dev-libs/schedparent in "world" favorites file...
+
+>>> Completed (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- stderr
+=== quiet
+>>> Verifying ebuild manifests
+>>> Emerging (1 of 3) dev-libs/schedleaf-a-1.0::qbuild for /var/tmp/b456/root/
+>>> Installing (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+>>> Completed (1 of 3) dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/b456/root/
+>>> Emerging (2 of 3) dev-libs/schedleaf-b-1.0::qbuild for /var/tmp/b456/root/
+>>> Installing (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+>>> Completed (2 of 3) dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/b456/root/
+>>> Emerging (3 of 3) dev-libs/schedparent-1.0::qbuild for /var/tmp/b456/root/
+>>> Installing (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+>>> Recording dev-libs/schedparent in "world" favorites file...
+>>> Completed (3 of 3) dev-libs/schedparent-1.0::qbuild to /var/tmp/b456/root/
+rc=0
+--- stderr

@@ -175,6 +175,11 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<i32, String
         shell: options.shell,
         log_file: ebuild_phases::PhaseLog::Foreground,
         build_env: &options.build_env,
+        // Portage's merge-path `EbuildExecuter`: a sourceless package
+        // defining no `src_*` phase runs `setup` then straight to
+        // `src_install` (backlog #456).
+        // Portage: _emerge/EbuildExecuter.py, _can_skip_source_phases
+        skip_noop_src_phases: true,
     })?;
     if status != 0 {
         return Ok(status);

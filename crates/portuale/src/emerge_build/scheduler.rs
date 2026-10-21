@@ -99,6 +99,11 @@ pub(crate) fn build_one_source_entry(args: BuildOneSourceEntryArgs<'_>) -> Resul
         shell,
         log_file: ebuild_phases::PhaseLog::capture(log_path.as_deref()),
         build_env: &build_env,
+        // Same merge-path `EbuildExecuter` skip as the serial merge
+        // above (backlog #456); the background capture only decides
+        // where the phases that do run are logged.
+        // Portage: _emerge/EbuildExecuter.py, _can_skip_source_phases
+        skip_noop_src_phases: true,
     })?;
     if status != 0 {
         return Err(format!("{cp}-{version}: build failed ({status})"));
