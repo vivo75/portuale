@@ -239,6 +239,9 @@ pub(crate) struct RunMiscFunctionArgs<'a> {
     pub(crate) debug: bool,
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
+    /// Tee both streams to our stdout and the build log, like Portage's
+    /// `_spawn_phase` logging pipe; `false` inherits our stdio.
+    pub(crate) foreground: bool,
 }
 
 /// Sync entry point for `ebuild_package`'s `__dyn_package` call; mirrors
@@ -254,21 +257,46 @@ pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, St
         debug,
         config_root,
         shell,
+        foreground,
     } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(async {
         let env = compute_environment(ebuild_path, portage_tmpdir)?;
         create_directories(&env)?;
+        // Portage: _emerge/EbuildBinpkg.py -- the misc-functions child's
+        // stdout and stderr share the phase logging pipe, so `__vecho`'s
+        // stderr lines reach stdout.
+        let foreground_path: Option<PathBuf>;
+        let mut extra_env = extra_env.to_vec();
+        let log_file = if foreground {
+            let (logdir, sep) = crate::emerge_build::foreground_log_env();
+            let path = crate::emerge_build::foreground_log_path(
+                crate::emerge_build::ForegroundLogArgs {
+                    t_dir: &env.t(),
+                    builddir: env.portage_builddir(),
+                    category: &env.category,
+                    pf: &env.split.pf,
+                    features: &features_string(&extra_env),
+                    logdir: logdir.as_deref(),
+                    sep: &sep,
+                },
+            );
+            extra_env.push(("PORTAGE_LOG_FILE".to_string(), path.display().to_string()));
+            foreground_path = Some(path);
+            PhaseLog::Tee(foreground_path.as_deref().unwrap())
+        } else {
+            PhaseLog::Inherit
+        };
         run_misc_functions(RunMiscFunctionsArgs {
             env: &env,
             root,
             ebuild_phase_value,
             dyn_command,
-            extra_env,
+            extra_env: &extra_env,
             debug,
             config_root,
             shell,
-            log_file: PhaseLog::Inherit,
+            log_file,
         })
         .await
     })

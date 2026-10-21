@@ -831,6 +831,7 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
         // The `BUILD_ID` export follows the entry's own token, while the
         // allocation above stays run-wide.
         build_id: build_id.filter(|_| per_entry_binpkg_multi_instance),
+        foreground: true,
     })?;
     if package_status != 0 {
         let _ = std::fs::remove_file(&tmp_path);
@@ -1062,6 +1063,8 @@ struct InvokeDynPackageArgs<'a> {
     options: &'a PackageOptions,
     binpkg_path: &'a Path,
     build_id: Option<u64>,
+    /// Tee `__dyn_package` through the build log (stdout) like a merge-path run.
+    foreground: bool,
 }
 
 /// Runs `bin/misc-functions.sh __dyn_package` against `ebuild_path` with the
@@ -1081,6 +1084,7 @@ fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
         options,
         binpkg_path,
         build_id,
+        foreground,
     } = args;
     let binpkg_format = options.binpkg_format.as_str();
     let mut extra_env = vec![
@@ -1181,6 +1185,7 @@ fn invoke_dyn_package(args: InvokeDynPackageArgs<'_>) -> Result<i32, String> {
         debug: options.debug,
         config_root: &options.config_root,
         shell: options.shell,
+        foreground,
     })
 }
 
@@ -1339,6 +1344,7 @@ pub(crate) fn quickpkg_from_vdb(args: QuickpkgFromVdbArgs<'_>) -> Result<Option<
         options,
         binpkg_path: &tmp_path,
         build_id: None,
+        foreground: false,
     })?;
     if status != 0 {
         let _ = std::fs::remove_file(&tmp_path);
