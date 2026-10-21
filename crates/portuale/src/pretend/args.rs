@@ -350,7 +350,8 @@ impl<'a> Default for EmergeOpts<'a> {
             // --autounmask-license: REQUIRED value. OFF unless `--autounmask` is
             // explicit or `=y` is given.
             autounmask_license: None,
-            // --autounmask-keep-masks: masks are KEPT by default; only `=n` unmasks.
+            // --autounmask-keep-masks: masks are KEPT by default; an explicit
+            // `--autounmask` clears the default, only `=n`/`=y` overrides.
             autounmask_keep_masks: None,
             // --autounmask-only: resolve the graph, show the problems, return 0 --
             // skipping the whole merge list. Nothing is ever built.

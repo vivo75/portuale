@@ -127,15 +127,17 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
         update || newuse || changed_use || changed_deps || changed_slot || noreplace || newrepo,
     );
 
-    // --autounmask defaults, simplified for the v1 scope
-    // (`--autounmask-keep-masks` still isn't read). `autounmask` itself
-    // defaults on; only `--autounmask=n` turns the whole feature off.
-    // `autounmask_keep_keywords` ("suppress keyword suggestions") defaults
-    // to suppressed unless `--autounmask` itself was explicitly given (any
-    // value), in which case suggestions are generated. `autounmask_use`
-    // has no such asymmetry: on whenever `--autounmask-use` isn't
-    // explicitly "n". An explicit `--autounmask-keep-keywords=y`/`=n` or
-    // `--autounmask-use=y`/`=n` always wins outright.
+    // --autounmask defaults follow Portage's key-presence implications
+    // (`create_depgraph_params.py`): the `keep` flags default to kept,
+    // but an explicit `--autounmask` (any value but `n`) clears the
+    // keep-keywords/keep-masks defaults, so masks are proposed without
+    // an explicit `--autounmask-keep-masks=n`. An explicit
+    // `--autounmask-keep-keywords=y`/`=n`, `--autounmask-use=y`/`=n`, or
+    // `--autounmask-keep-masks=y`/`=n` always wins outright. `autounmask`
+    // itself defaults on; only `--autounmask=n` turns the whole feature
+    // off. `autounmask_license`
+    // is off by default (unlike USE) and only an explicit `--autounmask`
+    // or `--autounmask-license=y` enables it.
     // Portage: create_depgraph_params.py
     //
     // Known gap: Portage also forces `autounmask_use` to `"n"` on an
@@ -153,9 +155,14 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
     // Portage: create_depgraph_params.py
     let autounmask_suggest_license =
         autounmask_enabled && autounmask_license.unwrap_or(autounmask == Some(true));
-    // Masks stay masked unless `--autounmask-keep-masks=n` is explicit.
+    // Like keywords above: kept by default, cleared by an explicit
+    // `--autounmask`, always overridden by an explicit `=y`/`=n`.
     // Portage: create_depgraph_params.py
-    let autounmask_suggest_masks = autounmask_enabled && autounmask_keep_masks == Some(false);
+    let autounmask_suggest_masks = autounmask_enabled
+        && match autounmask_keep_masks {
+            Some(keep) => !keep,
+            None => autounmask.is_some(),
+        };
     // Backtracking keeps going after autounmask changes only with
     // `--autounmask-backtrack=y`, or `--autounmask-continue` (which
     // implies it) unless `--autounmask-backtrack=n` is explicit. Off by

@@ -77,6 +77,29 @@ pub(crate) fn show_autounmask(args: ShowAutounmaskArgs<'_>) -> Option<ExitCode> 
         &result.autounmask_license_changes,
     );
 
+    // Portage prints this after every change block once a `package.unmask`
+    // change was proposed (`p_mask_change_msg` non-empty; portuale never
+    // suggests `**` keywords, so the `masked_by_missing_keywords` half of
+    // Portage's condition can't fire). Suppressed under `--quiet`.
+    // Portage: depgraph.py, _display_autounmask
+    if !opts.quiet && !result.autounmask_mask_changes.is_empty() {
+        eprintln!();
+        eprintln!(
+            "{}",
+            color.c(
+                "INFORM",
+                "NOTE: The --autounmask-keep-masks option will prevent emerge"
+            )
+        );
+        eprintln!(
+            "{}",
+            color.c(
+                "INFORM",
+                "      from creating package.unmask or ** keyword changes."
+            )
+        );
+    }
+
     // `--autounmask-only` returns 0 right after the problem display;
     // nothing below runs, but the end notice still prints.
     // Portage: actions.py, action_build

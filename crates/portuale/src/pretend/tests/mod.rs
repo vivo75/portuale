@@ -639,6 +639,7 @@ mod abort_color;
 mod atoms;
 mod attrs;
 mod autoclean;
+mod autounmask;
 mod bdeps_presence;
 mod blockers;
 mod circular;

@@ -174,6 +174,36 @@ fn autounmask_keep_masks_n_unmasks_a_package_mask() {
 }
 
 #[test]
+fn autounmask_proposes_unmask_for_masked_dep() {
+    // Backlog #445: a package.mask'd *dependency* resolves once masks are
+    // accepted, with the `=<cpv>` change recorded. Expected value from
+    // Portage 3.0.82.2 (host staged-fixture probe, `emerge --pretend
+    // --autounmask dev-libs/maskneedpkg`): `=dev-libs/maskeddep-1.0`
+    // under the `package.unmask` changes plus the keep-masks NOTE, with
+    // merge rows for both packages.
+    let result = graph_result_autounmask("dev-libs/maskneedpkg");
+    assert_eq!(result.outcome, ResolveOutcome::Complete);
+    let dep = result
+        .entries
+        .iter()
+        .find(|e| e.package == "maskeddep")
+        .expect("the package.mask'd dependency is a real graph entry now");
+    assert!(matches!(dep.outcome, PretendOutcome::New { .. }));
+    assert_eq!(result.autounmask_mask_changes.len(), 1);
+    let change = &result.autounmask_mask_changes[0];
+    assert_eq!(change.atom, "=dev-libs/maskeddep-1.0");
+    assert_eq!(change.token, "");
+    assert_eq!(change.trigger, None);
+    assert_eq!(
+        change.dep_chain,
+        vec![
+            "required by dev-libs/maskneedpkg-1.0::testrepo".to_string(),
+            "required by dev-libs/maskneedpkg (argument)".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn abort_outcome_membership_and_order() {
     // Expected value from Portage (live captures in fixtures/abort-captures/):
     // the outcome is produced on the settled graph while `entries` stays the
