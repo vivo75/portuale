@@ -1,0 +1,194 @@
+===  f459-good
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-util/f459-good-1::fetchrepo for /var/tmp/r472f/root
+ * f459-good-1-1.gpkg.tar MD5 SHA1 size ;-) ...                          [ ok ]
+>>> Extracting info
+>>> Extracting dev-util/f459-good-1
+
+>>> Installing (1 of 1) dev-util/f459-good-1::fetchrepo to /var/tmp/r472f/root
+
+>>> Recording dev-util/f459-good in "world" favorites file...
+
+>>> Completed (1 of 1) dev-util/f459-good-1::fetchrepo to /var/tmp/r472f/root
+
+ * GNU info directory index is up-to-date.
+rc=0
+===  f459-postinstfail
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-util/f459-postinstfail-1::fetchrepo for /var/tmp/r472f/root
+ * f459-postinstfail-1-1.gpkg.tar MD5 SHA1 size ;-) ...                  [ ok ]
+>>> Extracting info
+>>> Extracting dev-util/f459-postinstfail-1
+
+>>> Installing (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r472f/root
+ E[31;01m*E[0m ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ E[31;01m*E[0m   postinst exploded
+ E[31;01m*E[0m 
+ E[31;01m*E[0m Call stack:
+ E[31;01m*E[0m     ebuild.sh, line 143:  Called pkg_postinst
+ E[31;01m*E[0m   environment, line N:  Called die
+ E[31;01m*E[0m The specific snippet of code:
+ E[31;01m*E[0m       die "postinst exploded"
+ E[31;01m*E[0m 
+ E[31;01m*E[0m If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ E[31;01m*E[0m the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ E[31;01m*E[0m The complete build log is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ E[31;01m*E[0m The ebuild environment file is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ E[31;01m*E[0m Working directory: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ E[31;01m*E[0m S: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+E[31;01m * E[39;49;00mFAILED postinst: 1
+
+>>> Completed (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r472f/root
+
+>>> Failed to install dev-util/f459-postinstfail-1 to /var/tmp/r472f/root, Log file:
+
+>>>  '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+
+ * Messages for package dev-util/f459-postinstfail-1 merged to /var/tmp/r472f/root:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line N:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ * S: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+
+ * GNU info directory index is up-to-date.
+rc=1
+=== -q f459-good
+>>> Emerging binary (1 of 1) dev-util/f459-good-1::fetchrepo for /var/tmp/r472f/root
+>>> Installing (1 of 1) dev-util/f459-good-1::fetchrepo to /var/tmp/r472f/root
+>>> Recording dev-util/f459-good in "world" favorites file...
+>>> Completed (1 of 1) dev-util/f459-good-1::fetchrepo to /var/tmp/r472f/root
+rc=0
+=== -q f459-postinstfail
+>>> Emerging binary (1 of 1) dev-util/f459-postinstfail-1::fetchrepo for /var/tmp/r472f/root
+>>> Installing (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r472f/root
+>>> Completed (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r472f/root
+>>> Failed to install dev-util/f459-postinstfail-1 to /var/tmp/r472f/root, Log file:
+>>>  '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+>>> Extracting info
+E[32m * E[39;49;00mPackage:    dev-util/f459-postinstfail-1:0
+E[32m * E[39;49;00mRepository: fetchrepo
+E[32m * E[39;49;00mUSE:        
+E[32m * E[39;49;00mFEATURES:   preserve-libs
+>>> Extracting dev-util/f459-postinstfail-1
+ E[31;01m*E[0m ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ E[31;01m*E[0m   postinst exploded
+ E[31;01m*E[0m 
+ E[31;01m*E[0m Call stack:
+ E[31;01m*E[0m     ebuild.sh, line 143:  Called pkg_postinst
+ E[31;01m*E[0m   environment, line N:  Called die
+ E[31;01m*E[0m The specific snippet of code:
+ E[31;01m*E[0m       die "postinst exploded"
+ E[31;01m*E[0m 
+ E[31;01m*E[0m If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ E[31;01m*E[0m the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ E[31;01m*E[0m The complete build log is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ E[31;01m*E[0m The ebuild environment file is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ E[31;01m*E[0m Working directory: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ E[31;01m*E[0m S: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+E[31;01m * E[39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/f459-postinstfail-1 merged to /var/tmp/r472f/root:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line N:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ * S: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+rc=1
+=== --jobs=2 f459-good
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-util/f459-good-1::fetchrepo for /var/tmp/r472f/root
+ * f459-good-1-1.gpkg.tar MD5 SHA1 size ;-) ...                          [ ok ]
+>>> Extracting info
+>>> Extracting dev-util/f459-good-1
+
+>>> Installing (1 of 1) dev-util/f459-good-1::fetchrepo to /var/tmp/r472f/root
+
+>>> Recording dev-util/f459-good in "world" favorites file...
+
+>>> Completed (1 of 1) dev-util/f459-good-1::fetchrepo to /var/tmp/r472f/root
+
+ * GNU info directory index is up-to-date.
+rc=0
+=== --jobs=2 f459-postinstfail
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-util/f459-postinstfail-1::fetchrepo for /var/tmp/r472f/root
+ * f459-postinstfail-1-1.gpkg.tar MD5 SHA1 size ;-) ...                  [ ok ]
+>>> Extracting info
+>>> Extracting dev-util/f459-postinstfail-1
+
+>>> Installing (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r472f/root
+ E[31;01m*E[0m ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ E[31;01m*E[0m   postinst exploded
+ E[31;01m*E[0m 
+ E[31;01m*E[0m Call stack:
+ E[31;01m*E[0m     ebuild.sh, line 143:  Called pkg_postinst
+ E[31;01m*E[0m   environment, line N:  Called die
+ E[31;01m*E[0m The specific snippet of code:
+ E[31;01m*E[0m       die "postinst exploded"
+ E[31;01m*E[0m 
+ E[31;01m*E[0m If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ E[31;01m*E[0m the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ E[31;01m*E[0m The complete build log is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ E[31;01m*E[0m The ebuild environment file is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ E[31;01m*E[0m Working directory: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ E[31;01m*E[0m S: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+E[31;01m * E[39;49;00mFAILED postinst: 1
+
+>>> Completed (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r472f/root
+
+>>> Failed to install dev-util/f459-postinstfail-1 to /var/tmp/r472f/root, Log file:
+
+>>>  '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+
+ * Messages for package dev-util/f459-postinstfail-1 merged to /var/tmp/r472f/root:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line N:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ * S: '/var/tmp/r472f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+
+ * GNU info directory index is up-to-date.
+rc=1

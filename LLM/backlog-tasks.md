@@ -226,7 +226,7 @@ they shipped, not a rule for new work.
 
 471. **DONE 2026-10-21 (portuale `34ee9ab0`; filed from #466, premise corrected) — `-pq --resume` rows used the wide flag column.** Portage's narrow `[ebuild  N    ]` column was already right on the normal path; only the `--resume --pretend` printer ignored `--quiet`. [A]
 
-472. **OPEN (filed 2026-10-21 from #468) — binary merges omit three Portage lines.** Portage prints ` * <file> MD5 SHA1 size ;-) ... [ ok ]` (foreground), `>>> Extracting info` plus, under `-q`, the `Package:`/`Repository:`/`USE:`/`FEATURES:` block, and `>>> Extracting <cpv>` before the install, and ends a foreground merge with a blank line and ` * GNU info directory index is up-to-date.`; portuale prints none of them on the binary path. `LLM/evidence/2026-10-21-r468/` cell `468`. [A]
+472. **DONE 2026-10-21 (portuale `3d5a0f51`, pmtest `be6f051`; filed from #468) — binary merges omitted three Portage lines.** A foreground `--usepkgonly` merge now prints the verifier line (` * <file> MD5 SHA1 size ;-) ... [ ok ]`, for a local binary the `Packages` index vouches for), `>>> Extracting info` and `>>> Extracting <cpv>` before `Installing`; the build log always holds the extract steps plus the setup phase's `Package:`/`Repository:`/`USE:`/`FEATURES:` header, so a failing `-q` merge replays them after `Failed to install`; and a merge whose `pkg_postinst` died runs the end-of-run info-index check (blank line plus ` * GNU info directory index is up-to-date.`) and news notice, with no world entry. Six cells (good and failing binary, plain, `-q`, `--jobs=2`) are byte-identical to Portage 3.0.82.2: `LLM/evidence/2026-10-21-r472/`. Glibc+bash merge gate: 0 hard findings on all three runs. [A]
 
 ## Tier 2 — larger / needs design first
 
