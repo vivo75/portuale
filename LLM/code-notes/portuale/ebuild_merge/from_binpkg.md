@@ -32,6 +32,12 @@ Merging a binary package.
 
 ## struct HookCtx
 - #339 M7: the former closures `run_hook`, `run_hook_ex` and `phase_defined` of `merge_binpkg`, now methods; `seeded` is shared so the first hook that runs seeds `${T}/environment` and later hooks reuse it.
+- (#459 follow-up) `repo_name` threads the xpak `repository`/`REPO` record into every binary hook's env as `PORTAGE_REPO_NAME`, like `doebuild_environment`'s `configdict["pkg"]` assignment (`doebuild.py:483`): the saved `environment.bz2` alone never carries it, so the `die` handler (`isolated-functions.sh:135`) printed an empty `::`. `None` (the `__unknown__` fallback) keeps today's behavior; unmerge hooks pass `None` (no oracle).
 
 ## fn merge_binpkg (REPLACING always, #348 S2 E3)
 - `REPLACING_VERSIONS` is always threaded into the saved-env hooks (empty on fresh installs, like `_emerge/Binpkg` sets it unconditionally); `merge_type: Some("binary")` keeps the already-correct `MERGE_TYPE=binary` path untouched.
+
+## fn merge_binpkg, fn merge_binpkg_finish (#459)
+- Both now return `MergeOutcome` (like `run_merge`/`run_qmerge`): a dying `pkg_postinst` surfaces as `postinst_failed` instead of a bare nonzero status. The non-postinst early exits (`pretend`/`setup`/`preinst`, `instprep`, line-endings refusal) carry `postinst_failed: false`.
+- The postinst-failure endgame mirrors `merge_after_install_finish`: `listing.merged` stays silent, the shared `record_postinst_failure` stages `ERROR FAILED postinst:` at the head of `${T}/logging/postinst` and appends it to the build log, the mid-merge `process_batch` elog flush is skipped (the end-of-run `Messages` flush prints it once, after the `Failed to install` block), and the builddir is kept (bug #704866). Ground truth: `LLM/evidence/2026-10-21-f459/` (host `emerge` 3.0.82.2 `--usepkgonly`).
+- The record call passes `options.log_file` when the merge captures, else the build log Portage's `Binpkg` always writes (`build_log_path` under the run tmpdir): a foreground run's hooks inherit the terminal, so nothing has created it yet. Portage: vartree.py, `dblink.treewalk` (`_postinst_failure`); `_emerge/Binpkg` (`PORTAGE_LOG_FILE`).

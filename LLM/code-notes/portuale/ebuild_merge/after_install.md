@@ -63,3 +63,6 @@ The post-install merge driver and same-slot unmerge.
   prints in `merge_after_install_finish` right after a successful
   `postinst`, before `env_update`. All gated on `MergeOptions.direct`.
   Portage: vartree.py, `treewalk`.
+
+## fn record_postinst_failure (#459)
+- Now `pub(crate)` and shared with the binary merge: takes `${T}` and the build-log path instead of `(env, options)`. The source caller passes `env.t()` + `options.log_file`; the binary caller passes its builddir temp + the merge's log (or the derived `Binpkg` log path in the foreground). Behaviour unchanged.
