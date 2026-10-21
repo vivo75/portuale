@@ -494,7 +494,7 @@ pub(crate) fn resume_pretend(args: ResumePretendArgs<'_>) -> Option<ExitCode> {
                 onlydeps: false,
                 oneshot: opts.oneshot,
                 verbose: false,
-                quiet: false,
+                quiet,
                 alphabetical: false,
                 columns: false,
                 columnwidth: 0,
