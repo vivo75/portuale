@@ -77,6 +77,80 @@ pub(crate) struct BinaryDepsChangedArgs<'a> {
 /// (`Candidate::binary_use`).
 /// Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp.
 pub(crate) fn binary_deps_changed(args: BinaryDepsChangedArgs<'_>) -> bool {
+    // Pure in its inputs, and asked again for the same binary on every pass
+    // and every atom that lists it; the key carries every input by value
+    // (the libc providers are read from the VDB, so they ride in the key).
+    type Memo = std::sync::Mutex<HashMap<BinaryDepsKey, bool>>;
+    static MEMO: OnceLock<Memo> = OnceLock::new();
+    let key = BinaryDepsKey::of(&args);
+    let memo = MEMO.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    if let Ok(guard) = memo.lock()
+        && let Some(&hit) = guard.get(&key)
+    {
+        return hit;
+    }
+    let changed = binary_deps_changed_uncached(args);
+    if let Ok(mut guard) = memo.lock() {
+        guard.insert(key, changed);
+    }
+    changed
+}
+
+/// Everything [`binary_deps_changed`] reads, by value.
+#[derive(PartialEq, Eq, Hash)]
+struct BinaryDepsKey {
+    root: PathBuf,
+    libc_providers: Vec<(String, String)>,
+    repos: Vec<(PathBuf, i32)>,
+    category: String,
+    package: String,
+    version: String,
+    with_bdeps: bool,
+    built_use: Vec<String>,
+    binary_deps: Vec<String>,
+}
+
+impl BinaryDepsKey {
+    fn of(args: &BinaryDepsChangedArgs<'_>) -> Self {
+        let mut built_use: Vec<String> = args
+            .candidate
+            .binary_use
+            .iter()
+            .flatten()
+            .cloned()
+            .collect();
+        built_use.sort();
+        let mut libc_providers: Vec<(String, String)> =
+            libc_provider_cps(args.root).into_iter().collect();
+        libc_providers.sort();
+        Self {
+            root: args.root.to_path_buf(),
+            libc_providers,
+            repos: args
+                .repos
+                .iter()
+                .map(|r| (r.location.clone(), r.priority))
+                .collect(),
+            category: args.category.to_string(),
+            package: args.package.to_string(),
+            version: args.candidate.version.clone(),
+            with_bdeps: args.with_bdeps,
+            built_use,
+            binary_deps: ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+                .iter()
+                .map(|k| {
+                    args.candidate
+                        .binary_deps
+                        .get(*k)
+                        .cloned()
+                        .unwrap_or_default()
+                })
+                .collect(),
+        }
+    }
+}
+
+fn binary_deps_changed_uncached(args: BinaryDepsChangedArgs<'_>) -> bool {
     let BinaryDepsChangedArgs {
         root,
         repos,

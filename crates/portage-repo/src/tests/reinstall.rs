@@ -736,3 +736,48 @@ fn respect_use_dependency_reports_the_masked_block() {
         ]
     );
 }
+
+#[test]
+fn binary_deps_changed_answers_per_recorded_deps_even_when_asked_repeatedly() {
+    // `dev-libs/schedok-1.0` has no dependencies in its ebuild. The answer is
+    // memoised, so each recorded-deps variant must key separately and repeat
+    // calls must agree.
+    let repos = find_repos(&fixtures_root()).expect("fixture repos.conf resolves");
+    let root = fixtures_root();
+    let binary = |rdepend: &str| Candidate {
+        version: "1.0".to_string(),
+        keywords: vec!["amd64".to_string()],
+        slot: "0".to_string(),
+        sub_slot: "0".to_string(),
+        repo_location: PathBuf::new(),
+        repo_priority: i32::MIN,
+        repo_name: "gentoo".to_string(),
+        license: String::new(),
+        iuse: String::new(),
+        properties: String::new(),
+        restrict: String::new(),
+        source: CandidateSource::Binary,
+        binary_use: Some(HashSet::new()),
+        remote: false,
+        build_id: Some("1".to_string()),
+        build_time: Some(1),
+        eapi: "8".to_string(),
+        binary_deps: HashMap::from([("RDEPEND".to_string(), rdepend.to_string())]),
+    };
+    let ask = |c: &Candidate| {
+        binary_deps_changed(BinaryDepsChangedArgs {
+            root: &root,
+            repos: &repos,
+            candidate: c,
+            category: "dev-libs",
+            package: "schedok",
+            with_bdeps: false,
+        })
+    };
+    let same = binary("");
+    let stale = binary("dev-libs/not-in-the-ebuild");
+    for _ in 0..3 {
+        assert!(!ask(&same));
+        assert!(ask(&stale));
+    }
+}
