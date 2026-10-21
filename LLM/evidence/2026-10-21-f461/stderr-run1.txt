@@ -1,0 +1,15 @@
+[profile] expand_targets: 0.004
+[profile] refresh_binhost_indexes: 0.004
+[profile] plan_resolve: 0.004
+[profile] ResolveCtx::new: 0.042
+[profile] collect_pass_blockers: 0.156
+[profile] run_pass first=true: 0.646
+[profile] serialize_merge_order select_nodes: 0.001
+[profile] resolve_once complete=false: 0.812
+[profile] ResolveCtx::new: 0.014
+[profile] collect_pass_blockers: 0.111
+[profile] run_pass first=true: 0.285
+[profile] serialize_merge_order select_nodes: 0.001
+[profile] resolve_once complete=false: 0.414
+[profile] run_resolve_phases: 1.230
+[profile] display_and_post: 0.123
