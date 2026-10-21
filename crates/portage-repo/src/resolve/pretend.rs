@@ -248,15 +248,47 @@ pub(crate) fn installed_matches_argument(args: InstalledArgumentMatchArgs<'_>) -
         repo_name,
     } = args;
     let probe = format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}");
-    arg_atoms.iter().any(|arg| {
-        let (cat, pkg) = match portage_dep::parse_atom(arg) {
-            Some(parsed) => (parsed.category, parsed.package),
-            None => return false,
-        };
-        if cat != category || pkg != package {
-            return false;
+    with_arg_cp_index(arg_atoms, |index| {
+        index
+            .get(category)
+            .and_then(|by_pkg| by_pkg.get(package))
+            .is_some_and(|args| {
+                args.iter().any(|&i| {
+                    portage_dep::match_from_list(&arg_atoms[i], &[probe.as_str()])
+                        .is_some_and(|r| !r.is_empty())
+                })
+            })
+    })
+}
+
+type ArgCpIndex = HashMap<String, HashMap<String, Vec<usize>>>;
+
+/// Runs `f` on the `category -> package -> arg indices` index of `arg_atoms`.
+/// The last index built is kept and reused while the atoms compare equal, so
+/// a walk's thousands of calls over its fixed argument list do not re-hash
+/// every argument each time.
+fn with_arg_cp_index<R>(arg_atoms: &[String], f: impl FnOnce(&ArgCpIndex) -> R) -> R {
+    thread_local! {
+        static LAST: std::cell::RefCell<Option<(Vec<String>, ArgCpIndex)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        if last.as_ref().is_none_or(|(atoms, _)| atoms != arg_atoms) {
+            let mut index = ArgCpIndex::new();
+            for (i, arg) in arg_atoms.iter().enumerate() {
+                if let Some(a) = portage_dep::parse_atom(arg) {
+                    index
+                        .entry(a.category)
+                        .or_default()
+                        .entry(a.package)
+                        .or_default()
+                        .push(i);
+                }
+            }
+            *last = Some((arg_atoms.to_vec(), index));
         }
-        portage_dep::match_from_list(arg, &[probe.as_str()]).is_some_and(|r| !r.is_empty())
+        f(&last.as_ref().expect("just set").1)
     })
 }
 

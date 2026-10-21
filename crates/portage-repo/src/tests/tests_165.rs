@@ -1926,3 +1926,35 @@ fn enqueue_dependencies_queues_plains_before_disjunction_choices() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// `TreeSimMemo` runs the simulation once per distinct (entries, circular
+/// map) input and recomputes when either changes.
+#[test]
+fn tree_sim_memo_computes_once_per_distinct_input() {
+    use std::cell::Cell;
+    let memo = TreeSimMemo::default();
+    let calls = Cell::new(0);
+    let run = |entries: &[GraphEntry], circ: &HashMap<RootCp, Vec<CircularDepChild>>| {
+        memo.get_or_compute(entries, circ, || {
+            calls.set(calls.get() + 1);
+            vec![(entries.len(), calls.get())]
+        })
+    };
+    let none = HashMap::new();
+    let a = vec![new_165("dev-libs", "a", "1")];
+    let first = run(&a, &none);
+    assert_eq!(run(&a.clone(), &none), first, "equal input hits");
+    assert_eq!(calls.get(), 1);
+    let b = vec![new_165("dev-libs", "b", "1")];
+    assert_ne!(run(&b, &none), first, "changed entries recompute");
+    assert_eq!(calls.get(), 2);
+    let mut circ = HashMap::new();
+    circ.insert(
+        (false, "x".to_string(), "y".to_string()),
+        vec![CircularDepChild::default()],
+    );
+    run(&a, &circ);
+    assert_eq!(calls.get(), 3, "changed circular map recomputes");
+    assert_eq!(run(&a, &none), first, "older input still memoised");
+    assert_eq!(calls.get(), 3);
+}

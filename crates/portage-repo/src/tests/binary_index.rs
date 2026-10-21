@@ -458,3 +458,35 @@ fn getbinpkg_record_filter_matches_like_wildcard_package_set() {
     // never filtered either — the filter only runs on remote records).
     assert!(!getbinpkg_record_excluded(&record, &[], &[]));
 }
+
+/// The per-index candidate memo returns what a fresh index builds, and a
+/// cloned index does not share it.
+#[test]
+fn binary_candidates_memo_equals_a_fresh_build() {
+    let entry = |cpv: &str, build_id: &str| {
+        HashMap::from([
+            ("CPV".to_string(), cpv.to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("BUILD_ID".to_string(), build_id.to_string()),
+        ])
+    };
+    let entries = vec![
+        entry("dev-libs/memo-1.0", "1"),
+        entry("dev-libs/memo-1.0", "2"),
+    ];
+    let index = BinaryIndex::from_entries(entries.clone());
+    let first = list_binary_candidates(&index, "dev-libs", "memo");
+    let again = list_binary_candidates(&index, "dev-libs", "memo");
+    let fresh = list_binary_candidates(&BinaryIndex::from_entries(entries), "dev-libs", "memo");
+    assert_eq!(first.len(), 2);
+    assert_eq!(format!("{first:?}"), format!("{again:?}"));
+    assert_eq!(format!("{first:?}"), format!("{fresh:?}"));
+    // `remote` is part of the key.
+    assert!(
+        binary_candidates_from_index(&index, "dev-libs", "memo", true)
+            .iter()
+            .all(|c| c.remote)
+    );
+    assert!(first.iter().all(|c| !c.remote));
+    assert!(list_binary_candidates(&index.clone(), "dev-libs", "absent").is_empty());
+}

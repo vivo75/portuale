@@ -483,3 +483,25 @@ fn update_without_deep_keeps_an_installed_only_build_time_dependency() {
         }
     );
 }
+
+/// The cached argument index follows the argument list: a changed list is
+/// re-indexed, not answered from the previous one.
+#[test]
+fn installed_matches_argument_index_tracks_changed_arguments() {
+    let hit = |args: &[String], package: &str| {
+        installed_matches_argument(InstalledArgumentMatchArgs {
+            arg_atoms: args,
+            category: "dev-libs",
+            package,
+            version: "1",
+            slot: "0",
+            sub_slot: "0",
+            repo_name: "testrepo",
+        })
+    };
+    let a = ["dev-libs/aaa".to_string(), "bad atom".to_string()];
+    let b = ["dev-libs/bbb".to_string()];
+    assert!(hit(&a, "aaa") && !hit(&a, "bbb"));
+    assert!(hit(&b, "bbb") && !hit(&b, "aaa"));
+    assert!(hit(&a, "aaa") && !hit(&[], "aaa"));
+}

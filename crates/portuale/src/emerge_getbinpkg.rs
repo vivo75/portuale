@@ -100,8 +100,10 @@ pub(crate) fn binhost_unsupported_version_warning(
 /// without the option is unpoisoned). Local `PKGDIR` instances are never
 /// filtered.
 ///
-/// Deliberate narrowings: no conditional-GET (an unchanged index re-downloads;
-/// resolution is identical, only one stdout line differs across runs); a
+/// A cached `TIMESTAMP` turns the fetch into a conditional GET
+/// (`If-Modified-Since: TIMESTAMP + 5 s`; 304 keeps the cache). Deliberate
+/// narrowings: Portage's "did not respect If-Modified-Since" warning is not
+/// modelled; a
 /// fetched index with no/unparseable `TIMESTAMP` or an unsupported `VERSION`
 /// is dropped with Portage's own warning, discarding even a stale cache; no
 /// `--verbose` detail, `ssh://`, pool filtering, or trust-helper gating.
@@ -320,10 +322,15 @@ fn refresh_one_binrepo(
         };
     }
 
+    // A conditional GET against the cached `TIMESTAMP`, like Portage's `_urlopen`.
+    let if_modified_since = cached_header
+        .get("TIMESTAMP")
+        .and_then(|s| s.parse::<i64>().ok())
+        .filter(|_| cached_text.is_some());
     // The fetch runs BEFORE any cache-dir write and lands in temp files, never
     // straight into the cache: a stale cache must survive a failed or older
     // remote index.
-    match fetch_remote_index_text(uri) {
+    match fetch_remote_index_text(uri, if_modified_since) {
         Err(failures) => {
             let warning = Some(binhost_fetch_warning(
                 &binrepo.name,
@@ -350,7 +357,15 @@ fn refresh_one_binrepo(
                 }
             }
         }
-        Ok(remote_text) => {
+        Ok(None) => {
+            // 304: Portage's `UseCachedCopyOfRemoteIndex("up-to-date")`, no rewrite.
+            ok_entries(cached_entries.clone());
+            RefreshOutcome {
+                stderr_warning: None,
+                stdout_note: Some(use_cached_note(&binrepo.name, "up-to-date")),
+            }
+        }
+        Ok(Some(remote_text)) => {
             let (remote_header, remote_entries) = portage_repo::parse_packages_index(&remote_text);
             // Drop a fetched index with no (or unparseable) `TIMESTAMP` with the
             // warning.
@@ -489,7 +504,10 @@ fn stamp_download_timestamp(text: &str, now_secs: u64) -> String {
 /// (`Packages.gz`, then the `Packages.zst` superset, then plain `Packages`).
 /// Every attempt runs quiet: the transcript is captured for message shaping.
 // Portage: lib/portage/dbapi/bintree.py, _populate_remote
-fn fetch_remote_index_text(uri: &str) -> Result<String, Vec<portage_fetch::QuietFetchError>> {
+fn fetch_remote_index_text(
+    uri: &str,
+    if_modified_since: Option<i64>,
+) -> Result<Option<String>, Vec<portage_fetch::QuietFetchError>> {
     if let Some(rest) = uri.strip_prefix("file://") {
         let dir = Path::new(rest);
         let gz = dir.join("Packages.gz");
@@ -500,7 +518,7 @@ fn fetch_remote_index_text(uri: &str) -> Result<String, Vec<portage_fetch::Quiet
                 .output();
             return match out {
                 Ok(out) if out.status.success() => {
-                    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+                    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
                 }
                 Ok(out) => Err(vec![portage_fetch::QuietFetchError {
                     summary: "gzip -dc Packages.gz failed".to_string(),
@@ -513,7 +531,7 @@ fn fetch_remote_index_text(uri: &str) -> Result<String, Vec<portage_fetch::Quiet
             };
         }
         let plain = dir.join("Packages");
-        return std::fs::read_to_string(&plain).map_err(|e| {
+        return std::fs::read_to_string(&plain).map(Some).map_err(|e| {
             vec![portage_fetch::QuietFetchError {
                 summary: format!("{}: {e}", plain.display()),
                 stderr: String::new(),
@@ -541,10 +559,21 @@ fn fetch_remote_index_text(uri: &str) -> Result<String, Vec<portage_fetch::Quiet
     // plain-`Packages` attempt: Portage's `gzip.BadGzipFile` subclasses
     // `OSError` (verified against the stdlib), so it escapes the fetch loop
     // straight to the outer handler.
+    let extra_args: Vec<String> = if_modified_since
+        .map(|ts| vec![format!("--header=If-Modified-Since: {}", http_date(ts + 5))])
+        .unwrap_or_default();
     let mut failures: Vec<portage_fetch::QuietFetchError> = Vec::new();
     for (ext, tool) in [("gz", "gzip"), ("zst", "zstd")] {
         let compressed = tmp(&mut tmps, ext);
-        match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages.{ext}"), &compressed) {
+        match crate::fetch::wget_fetch_quiet(
+            &format!("{uri}/Packages.{ext}"),
+            &compressed,
+            &extra_args,
+        ) {
+            Err(e) if is_not_modified(&e.stderr) => {
+                cleanup(&tmps);
+                return Ok(None);
+            }
             Err(e) => failures.push(e),
             Ok(()) => {
                 let plain_tmp = tmp(&mut tmps, "plain");
@@ -567,7 +596,7 @@ fn fetch_remote_index_text(uri: &str) -> Result<String, Vec<portage_fetch::Quiet
                 match std::fs::read_to_string(&plain_tmp) {
                     Ok(text) if decompressed => {
                         cleanup(&tmps);
-                        return Ok(text);
+                        return Ok(Some(text));
                     }
                     _ => {
                         cleanup(&tmps);
@@ -582,9 +611,9 @@ fn fetch_remote_index_text(uri: &str) -> Result<String, Vec<portage_fetch::Quiet
         }
     }
     let plain_tmp = tmp(&mut tmps, "plain");
-    match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages"), &plain_tmp) {
+    match crate::fetch::wget_fetch_quiet(&format!("{uri}/Packages"), &plain_tmp, &extra_args) {
         Ok(()) => {
-            let result = std::fs::read_to_string(&plain_tmp).map_err(|e| {
+            let result = std::fs::read_to_string(&plain_tmp).map(Some).map_err(|e| {
                 vec![portage_fetch::QuietFetchError {
                     summary: format!("{}: {e}", plain_tmp.display()),
                     stderr: String::new(),
@@ -593,12 +622,53 @@ fn fetch_remote_index_text(uri: &str) -> Result<String, Vec<portage_fetch::Quiet
             cleanup(&tmps);
             result
         }
+        Err(e) if is_not_modified(&e.stderr) => {
+            cleanup(&tmps);
+            Ok(None)
+        }
         Err(e) => {
             failures.push(e);
             cleanup(&tmps);
             Err(failures)
         }
     }
+}
+
+/// The wget transcript of a conditional GET the server answered with 304.
+// Portage: lib/portage/dbapi/bintree.py, _populate_remote (`err.code == 304`)
+fn is_not_modified(stderr: &str) -> bool {
+    stderr
+        .lines()
+        .any(|l| l.contains("awaiting response... 304"))
+}
+
+/// RFC 1123 GMT date of a Unix timestamp, as Python's `formatdate(usegmt=True)`.
+// Portage: lib/portage/util/_urlopen.py, timestamp_to_http
+fn http_date(ts: i64) -> String {
+    const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let days = ts.div_euclid(86_400);
+    let secs = ts.rem_euclid(86_400);
+    // Civil-from-days (Howard Hinnant).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{}, {day:02} {} {year} {:02}:{:02}:{:02} GMT",
+        DAYS[days.rem_euclid(7) as usize],
+        MONTHS[(month - 1) as usize],
+        secs / 3600,
+        secs % 3600 / 60,
+        secs % 60
+    )
 }
 
 /// Prefer a server status line (`HTTP Error 500: ...`, from the first attempt
@@ -3259,6 +3329,67 @@ mod tests {
              'http://127.0.0.1:18765'\n\
              !!! [l32-500] HTTP Error 500: Internal Server Error\n\n"
         );
+    }
+
+    #[test]
+    fn http_date_matches_pythons_formatdate() {
+        // Python: formatdate(timeval=ts, localtime=False, usegmt=True).
+        assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
+        assert_eq!(http_date(1_792_496_587), "Tue, 20 Oct 2026 11:43:07 GMT");
+        assert_eq!(http_date(951_782_400), "Tue, 29 Feb 2000 00:00:00 GMT");
+    }
+
+    #[test]
+    fn refresh_binhost_indexes_sends_if_modified_since_and_keeps_cache_on_304() {
+        // Portage `_urlopen(if_modified_since=TIMESTAMP)` adds TIMESTAMP + 5 s;
+        // the 304 keeps the cache (no rewrite). Without the header the server
+        // would hand out a newer index, so an unchanged cache proves the 304.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let _h = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let ims = req
+                .lines()
+                .find_map(|l| l.strip_prefix("If-Modified-Since: "))
+                .map(str::to_string);
+            let _ = tx.send(req.lines().next().unwrap_or("").to_string());
+            let _ = tx.send(ims.clone().unwrap_or_default());
+            let resp = if ims.is_some() {
+                "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n".to_string()
+            } else {
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+            };
+            let _ = stream.write_all(resp.as_bytes());
+        });
+        let binrepo = BinRepo {
+            name: "ims".to_string(),
+            sync_uri: base,
+            priority: 1,
+            location: None,
+            verify_signature: false,
+            frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
+        };
+        let cache = binrepo.packages_dir(&root).join("Packages");
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        let cached = "TIMESTAMP: 100\nVERSION: 0\nPACKAGES: 1\nDOWNLOAD_TIMESTAMP: 1\n\nCPV: dev-libs/foo-1.0\n\n";
+        std::fs::write(&cache, cached).unwrap();
+        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false, &[], &[]);
+        assert_eq!(rx.recv().unwrap(), "GET /Packages.gz HTTP/1.1");
+        assert_eq!(rx.recv().unwrap(), "Thu, 01 Jan 1970 00:01:45 GMT");
+        assert_eq!(std::fs::read_to_string(&cache).unwrap(), cached);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

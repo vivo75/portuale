@@ -40,6 +40,50 @@ pub(crate) fn argument_label<'b>(sets: &'b HashMap<String, String>, atom: &'b st
     sets.get(atom).map_or(atom, String::as_str)
 }
 
+/// Per-walk memo of [`merge_order::tree_solved_replacements`] verdicts.
+///
+/// Everything but the pass entries and the circular-dependency map is fixed
+/// for one `ResolveCtx`, so those two are the whole key. Compared by value
+/// (`==`), newest last, bounded.
+#[derive(Default)]
+pub(crate) struct TreeSimMemo {
+    rows: std::cell::RefCell<Vec<TreeSimRow>>,
+}
+
+type TreeSimRow = (
+    Vec<GraphEntry>,
+    HashMap<RootCp, Vec<CircularDepChild>>,
+    Vec<(usize, usize)>,
+);
+
+impl TreeSimMemo {
+    const CAP: usize = 64;
+
+    /// The memoised verdicts for this exact input, else `compute()`'s.
+    pub(crate) fn get_or_compute(
+        &self,
+        entries: &[GraphEntry],
+        circular: &HashMap<RootCp, Vec<CircularDepChild>>,
+        compute: impl FnOnce() -> Vec<(usize, usize)>,
+    ) -> Vec<(usize, usize)> {
+        if let Some(hit) = self
+            .rows
+            .borrow()
+            .iter()
+            .find(|(e, c, _)| e.as_slice() == entries && c == circular)
+        {
+            return hit.2.clone();
+        }
+        let out = compute();
+        let mut rows = self.rows.borrow_mut();
+        if rows.len() >= Self::CAP {
+            rows.remove(0);
+        }
+        rows.push((entries.to_vec(), circular.clone(), out.clone()));
+        out
+    }
+}
+
 /// Breadth-first walk over `atoms` and their dependencies. One `GraphEntry`
 /// per distinct category/package/slot, in discovery order; different slots
 /// of one package are independent entries, never conflicts by themselves.
@@ -119,6 +163,8 @@ pub(crate) struct ResolveCtx<'a> {
     pub(crate) top_level_cps: HashSet<(String, String)>,
     /// The local `$PKGDIR` binary index, built once for the whole walk.
     pub(crate) local_binpkg: std::sync::Arc<BinaryIndex>,
+    /// Tree-mode blocker verdicts already computed this walk.
+    pub(crate) tree_sim_memo: TreeSimMemo,
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -243,6 +289,7 @@ impl<'a> ResolveCtx<'a> {
                 .map(|a| (a.category, a.package))
                 .collect(),
             local_binpkg: build_local_binpkg_index(&req.config),
+            tree_sim_memo: TreeSimMemo::default(),
         })
     }
 }

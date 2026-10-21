@@ -725,6 +725,9 @@ pub struct DownloadWithCommandsQuietArgs<'a> {
     pub distdir: &'a Path,
     pub vars: FetchCommandVars<'a>,
     pub commands: &'a FetchCommands,
+    /// Extra arguments appended to the expanded command (e.g. a conditional
+    /// `--header=If-Modified-Since: ...`).
+    pub extra_args: &'a [String],
 }
 
 /// The capturing sibling of [`download_with_commands`]: the same command
@@ -742,6 +745,7 @@ pub fn download_with_commands_quiet(
         distdir,
         vars,
         commands,
+        extra_args,
     } = args;
     let planned = plan_fetch_command(PlanFetchCommandArgs {
         uri,
@@ -757,6 +761,7 @@ pub fn download_with_commands_quiet(
     })?;
     let output = std::process::Command::new(&planned.prog)
         .args(&planned.args)
+        .args(extra_args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .output()
@@ -803,6 +808,16 @@ pub fn download_via_wget(uri: &str, dest: &Path, resume: bool) -> Result<(), Str
 /// refresh prints Portage's `!!! [repo] ...` lines, never wget's raw
 /// transcript).
 pub fn download_via_wget_quiet(uri: &str, dest: &Path) -> Result<(), QuietFetchError> {
+    download_via_wget_quiet_with(uri, dest, &[])
+}
+
+/// [`download_via_wget_quiet`] with `extra_args` appended to the wget command
+/// line (a binhost index refresh passes `--header=If-Modified-Since: ...`).
+pub fn download_via_wget_quiet_with(
+    uri: &str,
+    dest: &Path,
+    extra_args: &[String],
+) -> Result<(), QuietFetchError> {
     let distdir = dest.parent().unwrap_or_else(|| Path::new("."));
     download_with_commands_quiet(DownloadWithCommandsQuietArgs {
         uri,
@@ -811,6 +826,7 @@ pub fn download_via_wget_quiet(uri: &str, dest: &Path) -> Result<(), QuietFetchE
         distdir,
         vars: FetchCommandVars::default(),
         commands: &FetchCommands::default(),
+        extra_args,
     })
 }
 

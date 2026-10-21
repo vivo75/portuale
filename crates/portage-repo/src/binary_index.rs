@@ -51,6 +51,19 @@ pub struct BinaryIndex {
     /// `(category, package)` -> indices into `entries`, built once: a remote
     /// index has ~18 000 entries, so a linear scan per lookup was quadratic.
     pub(crate) by_cp: HashMap<(String, String), Vec<usize>>,
+    /// [`binary_candidates_from_index`] results per `(category, package,
+    /// remote)`. Sound because `entries` never change after construction.
+    candidates_memo: CandidatesMemo,
+}
+
+/// Candidate-list memo of one [`BinaryIndex`]; a clone starts empty.
+#[derive(Debug, Default)]
+struct CandidatesMemo(std::sync::Mutex<HashMap<(String, String, bool), Vec<Candidate>>>);
+
+impl Clone for CandidatesMemo {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }
 
 impl PartialEq for BinaryIndex {
@@ -76,7 +89,11 @@ impl BinaryIndex {
                 by_cp.entry((cat, pkg)).or_default().push(i);
             }
         }
-        Self { entries, by_cp }
+        Self {
+            entries,
+            by_cp,
+            candidates_memo: CandidatesMemo::default(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -271,6 +288,22 @@ pub fn list_binary_candidates(
 /// Shared body of `list_binary_candidates` and `list_remote_binary_candidates`.
 /// `repo_name` is the entry's `REPO`, else `"__unknown__"`.
 pub(crate) fn binary_candidates_from_index(
+    index: &BinaryIndex,
+    category: &str,
+    package: &str,
+    remote: bool,
+) -> Vec<Candidate> {
+    let key = (category.to_string(), package.to_string(), remote);
+    let memo = &index.candidates_memo.0;
+    if let Some(hit) = memo.lock().unwrap().get(&key) {
+        return hit.clone();
+    }
+    let built = build_binary_candidates(index, category, package, remote);
+    memo.lock().unwrap().insert(key, built.clone());
+    built
+}
+
+fn build_binary_candidates(
     index: &BinaryIndex,
     category: &str,
     package: &str,

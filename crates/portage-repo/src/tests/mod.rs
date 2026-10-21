@@ -1663,6 +1663,7 @@ fn ctx_161<'a>(
         // derives from the config's scanned binpkgs (empty here
         // unless a leg stages some).
         local_binpkg: build_local_binpkg_index(config),
+        tree_sim_memo: Default::default(),
     }
 }
 

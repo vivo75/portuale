@@ -2682,6 +2682,7 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         top_level: TopLevel::from_iter([]),
         top_level_cps: HashSet::new(),
         local_binpkg: build_local_binpkg_index(config),
+        tree_sim_memo: Default::default(),
     }
 }
 

@@ -111,11 +111,13 @@ pub(crate) fn wget_fetch(uri: &str, dest: &Path) -> Result<(), String> {
 
 /// Output-captured sibling of [`wget_fetch`] for the binhost index refresh,
 /// whose failure message is shaped from the transcript, never inherited.
+/// `extra_args` are appended to the wget command line.
 pub(crate) fn wget_fetch_quiet(
     uri: &str,
     dest: &Path,
+    extra_args: &[String],
 ) -> Result<(), portage_fetch::QuietFetchError> {
-    portage_fetch::download_via_wget_quiet(uri, dest)
+    portage_fetch::download_via_wget_quiet_with(uri, dest, extra_args)
 }
 
 /// The resolved `PORTAGE_SSH_OPTS` scalar, else `None` (absent expands to
