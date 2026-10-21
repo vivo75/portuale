@@ -46,7 +46,8 @@ fn cell_195d(args: Cell195dArgs<'_>) {
     };
     let want: Vec<String> = if hit { vec!["foo".to_string()] } else { vec![] };
     assert_eq!(
-        violated_parent_flags(&atom, &parent_use, &child_use, &child_valid),
+        violated_parent_flags(&atom, &parent_use, &child_use, &|f: &str| child_valid
+            .contains(f)),
         want,
         "token={token} valid={valid} P={p} C={c}"
     );
@@ -310,7 +311,7 @@ fn gate_195d(args: Gate195dArgs<'_>) {
     let parent_use = set_195d(&["foo"]);
     let want: Vec<String> = if hit { vec!["foo".to_string()] } else { vec![] };
     assert_eq!(
-        violated_parent_flags(&atom, &parent_use, &child_use, &valid),
+        violated_parent_flags(&atom, &parent_use, &child_use, &|f: &str| valid.contains(f)),
         want,
         "cond={cond_tok} uncond={uncond_tok} bar_valid={bar_valid} bar_use={bar_use}"
     );

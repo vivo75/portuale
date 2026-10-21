@@ -95,7 +95,12 @@ pub(crate) fn atom_currently_satisfiable(
         else {
             return false;
         };
-        portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+        portage_dep::use_deps_satisfied_union(
+            use_deps,
+            &iuse,
+            &[&config.iuse_effective],
+            &use_flags,
+        )
     })
 }
 
@@ -132,7 +137,6 @@ pub(crate) fn atom_all_use_unmasked(
         // Nothing to evaluate once the whole choice is `Unsatisfiable`.
         return true;
     };
-    let valid_iuse = valid_iuse(&iuse, config);
     let eff_keywords = effective_keywords(
         config,
         &candidate_str,
@@ -171,7 +175,12 @@ pub(crate) fn atom_all_use_unmasked(
     let mut violated_disabled = Vec::new();
     for ud in use_deps {
         // "Would *this* flag have to change" per-dep classification.
-        if !portage_dep::use_deps_satisfied(std::slice::from_ref(ud), &valid_iuse, &enabled) {
+        if !portage_dep::use_deps_satisfied_union(
+            std::slice::from_ref(ud),
+            &iuse,
+            &[&config.iuse_effective],
+            &enabled,
+        ) {
             match ud.op {
                 portage_dep::UseDepOp::Enabled => violated_enabled.push(ud.flag.clone()),
                 portage_dep::UseDepOp::Disabled => violated_disabled.push(ud.flag.clone()),

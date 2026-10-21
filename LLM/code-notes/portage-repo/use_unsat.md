@@ -16,3 +16,6 @@ Reports for dependencies whose USE requirements no candidate meets.
 - `enabled`/`disabled`: Portage `atom.use.enabled` / `.disabled` -- the evaluated atom's own unconditional deps.
 - Rows: Portage `unmasked_use_reasons` / `unmasked_iuse_reasons` (masked instances never reach them); `pkg.iuse.get_missing_iuse(required_flags)`; `need_enable`/`need_disable` (`:6729-6730`); the untouchable-child gate (`:6732-6736`, also staying out of `missing_use_adjustable`); "Only show the latest version" (`:6877-6887`).
 - #346 S2: the `is_stable` input is the effective KEYWORDS (`effective_keywords`), matching Portage `isStable` over `getKeywords`.
+
+## missing-flag filter (union-free check, backlog #441 S1 / #457)
+- The `missing`/`need_enable`/`need_disable` filters test `declared ∪ IUSE_EFFECTIVE` membership inline (`is_valid` closure) instead of building the union set per candidate.

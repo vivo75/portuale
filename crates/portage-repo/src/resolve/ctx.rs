@@ -167,6 +167,15 @@ pub(crate) struct ResolveCtx<'a> {
     pub(crate) tree_sim_memo: TreeSimMemo,
     /// Binary-candidate answers shared by the passes of this walk.
     pub(crate) pool_memo: std::rc::Rc<crate::resolve::pool_memo::PoolMemo>,
+    /// `installed_dep_string`'s `Effective` layer, keyed `(category,
+    /// package, version, key)`: Portage applies the overlay once per
+    /// installed instance and keeps it for every pass
+    /// (FakeVartree `dynamic_deps_applied`); every reader derives the
+    /// layer from `dynamic_deps`, which is fixed for one ctx, so one map
+    /// serves all passes. VDB reads are frozen for the walk and repo
+    /// metadata never changes mid-walk, so nothing here can go stale.
+    pub(crate) installed_meta_memo:
+        std::cell::RefCell<HashMap<(String, String, String, String), String>>,
 }
 
 impl<'a> ResolveCtx<'a> {
@@ -293,6 +302,7 @@ impl<'a> ResolveCtx<'a> {
             local_binpkg: build_local_binpkg_index(&req.config),
             tree_sim_memo: TreeSimMemo::default(),
             pool_memo: std::rc::Rc::default(),
+            installed_meta_memo: std::cell::RefCell::default(),
         })
     }
 }

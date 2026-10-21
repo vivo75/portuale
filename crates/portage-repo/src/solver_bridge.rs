@@ -48,7 +48,7 @@ use super::{
     live_metadata_for_installed, masked_candidates_for_atom, masked_dep_chain, pkg_use_display_for,
     read_vdb_flag_set, read_vdb_string, reinstall_flags_for_use_change, render_required_use_block,
     repo_aux_metadata, required_use_dep_chain, split_slot, suggested_parent_use_candidate,
-    suggested_use_flip, use_unsat_candidates_for_atom, valid_iuse,
+    suggested_use_flip, use_unsat_candidates_for_atom,
 };
 
 // --- Lazy fact loading -----------------------------------------------------
@@ -4188,9 +4188,10 @@ fn bridge_validate_aborts(
                     .split_whitespace()
                     .map(|token| token.trim_start_matches(['+', '-']).to_string())
                     .collect();
-                if portage_dep::use_deps_satisfied(
+                if portage_dep::use_deps_satisfied_union(
                     &use_deps,
-                    &valid_iuse(&iuse_declared, &req.config),
+                    &iuse_declared,
+                    &[&req.config.iuse_effective],
                     &child_use,
                 ) {
                     continue;
@@ -4475,9 +4476,10 @@ fn parent_flip_rescue(args: ParentFlipRescueArgs<'_>) -> Option<ParentFlipRescue
     let re_atom = portage_dep::evaluate_atom_conditionals(unevaluated, &new_use)?;
     let re_parsed = portage_dep::parse_atom(&re_atom)?;
     let re_use_deps = re_parsed.use_deps.clone().unwrap_or_default();
-    if !portage_dep::use_deps_satisfied(
+    if !portage_dep::use_deps_satisfied_union(
         &re_use_deps,
-        &valid_iuse(child_iuse, &req.config),
+        child_iuse,
+        &[&req.config.iuse_effective],
         child_use,
     ) {
         return None;

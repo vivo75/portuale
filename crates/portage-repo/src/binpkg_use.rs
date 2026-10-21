@@ -314,7 +314,7 @@ pub fn read_binary_metadata_instance(
     build_id: Option<&str>,
 ) -> Option<HashMap<String, String>> {
     let want = format!("{category}/{package}-{version}");
-    pick_binary_instance(index.entries(), &want, build_id).cloned()
+    pick_binary_instance(index.entries_for_cp(category, package), &want, build_id).cloned()
 }
 
 /// Arguments of [`read_binary_metadata_any`].

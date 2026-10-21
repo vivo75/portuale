@@ -186,32 +186,35 @@ fn greedy_pool(
     atom_str: &str,
     extra: &[String],
 ) -> Vec<GreedyEntry> {
-    let mut candidates = if ctx.usepkgonly || crate::globals::ebuild_db_dropped() {
-        Vec::new()
-    } else {
-        list_candidates(&ctx.repos, &atom.category, &atom.package)
-            .map(|c| c.to_vec())
-            .unwrap_or_default()
-    };
-    crate::resolve::pool_memo::collect_memoized(CollectBinaryCandidatesArgs {
-        usepkg: ctx.usepkg,
-        usepkgonly: ctx.usepkgonly,
-        local_binpkg: &ctx.local_binpkg,
-        atom,
-        getbinpkg: ctx.getbinpkg,
-        config,
-        root: ctx.root,
-        binpkg_respect_use: ctx.binpkg_respect_use,
-        newuse: ctx.newuse,
-        changed_use: ctx.changed_use,
-        candidates: &mut candidates,
-        repos: &ctx.repos,
-        with_bdeps: ctx.with_bdeps,
-        atom_str,
-        extra_constraints: extra,
-        usepkg_exclude: ctx.usepkg_exclude,
-        usepkg_include: ctx.usepkg_include,
-    });
+    let ebuilds_shared: Option<std::sync::Arc<Vec<Candidate>>> =
+        if ctx.usepkgonly || crate::globals::ebuild_db_dropped() {
+            None
+        } else {
+            list_candidates(&ctx.repos, &atom.category, &atom.package).ok()
+        };
+    let mut candidates = ebuilds_shared.as_deref().cloned().unwrap_or_default();
+    crate::resolve::pool_memo::collect_memoized(
+        CollectBinaryCandidatesArgs {
+            usepkg: ctx.usepkg,
+            usepkgonly: ctx.usepkgonly,
+            local_binpkg: &ctx.local_binpkg,
+            atom,
+            getbinpkg: ctx.getbinpkg,
+            config,
+            root: ctx.root,
+            binpkg_respect_use: ctx.binpkg_respect_use,
+            newuse: ctx.newuse,
+            changed_use: ctx.changed_use,
+            candidates: &mut candidates,
+            repos: &ctx.repos,
+            with_bdeps: ctx.with_bdeps,
+            atom_str,
+            extra_constraints: extra,
+            usepkg_exclude: ctx.usepkg_exclude,
+            usepkg_include: ctx.usepkg_include,
+        },
+        ebuilds_shared.as_ref(),
+    );
     candidates
         .into_iter()
         .filter(|c| is_visible(c, &atom.category, &atom.package, config))

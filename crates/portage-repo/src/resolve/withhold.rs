@@ -99,9 +99,10 @@ pub(crate) fn constraint_withheld_updates(
                                 .split_whitespace()
                                 .map(|t| t.trim_start_matches(['+', '-']).to_string())
                                 .collect();
-                            use_ok = portage_dep::use_deps_satisfied(
+                            use_ok = portage_dep::use_deps_satisfied_union(
                                 &use_deps,
-                                &valid_iuse(&declared, config),
+                                &declared,
+                                &[&config.iuse_effective],
                                 &enabled,
                             );
                         }

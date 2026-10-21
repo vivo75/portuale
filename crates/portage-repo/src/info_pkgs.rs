@@ -176,15 +176,18 @@ pub fn resolve_info_candidate(
         .iter()
         .filter_map(|m| by_str.get(m))
         .filter(|c| match &atom.use_deps {
-            Some(use_deps) if !use_deps.is_empty() => candidate_iuse_and_use(
-                c,
-                &atom.category,
-                &atom.package,
-                config,
-            )
-            .is_some_and(|(iuse, use_flags)| {
-                portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
-            }),
+            Some(use_deps) if !use_deps.is_empty() => {
+                candidate_iuse_and_use(c, &atom.category, &atom.package, config).is_some_and(
+                    |(iuse, use_flags)| {
+                        portage_dep::use_deps_satisfied_union(
+                            use_deps,
+                            &iuse,
+                            &[&config.iuse_effective],
+                            &use_flags,
+                        )
+                    },
+                )
+            }
             _ => true,
         })
         .collect();

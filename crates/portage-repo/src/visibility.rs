@@ -836,7 +836,7 @@ pub(crate) fn use_masked_only(
     else {
         return false;
     };
-    !portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
+    !portage_dep::use_deps_satisfied_union(use_deps, &iuse, &[&config.iuse_effective], &use_flags)
 }
 
 pub(crate) struct KeywordsAcceptedArgs<'a> {

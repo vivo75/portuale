@@ -70,9 +70,12 @@ pub(crate) fn entry_use_flags(args: EntryUseFlagsArgs<'_>) -> HashSet<String> {
             .split_whitespace()
             .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
             .collect();
-        let iuse_set = valid_iuse(&iuse_declared, config);
-        if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &use_flags)
-            && let Some(flip) = suggested_use_flip(resolved, &key.0, &key.1, use_deps, config)
+        if !portage_dep::use_deps_satisfied_union(
+            use_deps,
+            &iuse_declared,
+            &[&config.iuse_effective],
+            &use_flags,
+        ) && let Some(flip) = suggested_use_flip(resolved, &key.0, &key.1, use_deps, config)
         {
             for (flag, enabled) in &flip {
                 if *enabled {

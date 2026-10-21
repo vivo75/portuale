@@ -96,36 +96,48 @@ pub(crate) fn binary_deps_changed(args: BinaryDepsChangedArgs<'_>) -> bool {
     changed
 }
 
-/// Everything [`binary_deps_changed`] reads, by value.
+/// Everything [`binary_deps_changed`] reads, by value. Large or derived
+/// inputs ride as fingerprints, never clones: the key is built per binary
+/// per pass, so a VDB scan or five dep-string clones per call would cost
+/// as much as the memo saves. `vdb_generation` stands in for the libc
+/// provider set (a pure function of the VDB state); the use and dep
+/// fingerprints follow `fingerprints.rs`' order-independent shape.
 #[derive(PartialEq, Eq, Hash)]
 struct BinaryDepsKey {
     root: PathBuf,
-    libc_providers: Vec<(String, String)>,
+    vdb_generation: u64,
     repos: Vec<(PathBuf, i32)>,
     category: String,
     package: String,
     version: String,
     with_bdeps: bool,
-    built_use: Vec<String>,
-    binary_deps: Vec<String>,
+    built_use_fp: (usize, u64),
+    binary_deps_fp: u64,
 }
 
 impl BinaryDepsKey {
     fn of(args: &BinaryDepsChangedArgs<'_>) -> Self {
-        let mut built_use: Vec<String> = args
-            .candidate
-            .binary_use
-            .iter()
-            .flatten()
-            .cloned()
-            .collect();
-        built_use.sort();
-        let mut libc_providers: Vec<(String, String)> =
-            libc_provider_cps(args.root).into_iter().collect();
-        libc_providers.sort();
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut len = 0;
+        let mut acc: u64 = 0;
+        for flag in args.candidate.binary_use.iter().flatten() {
+            len += 1;
+            let mut e = std::collections::hash_map::DefaultHasher::new();
+            flag.hash(&mut e);
+            acc ^= e.finish();
+        }
+        for key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
+            args.candidate
+                .binary_deps
+                .get(key)
+                .map(String::as_str)
+                .unwrap_or_default()
+                .hash(&mut hasher);
+        }
         Self {
             root: args.root.to_path_buf(),
-            libc_providers,
+            vdb_generation: portage_vdb::for_root(args.root).generation().unwrap_or(0),
             repos: args
                 .repos
                 .iter()
@@ -135,17 +147,8 @@ impl BinaryDepsKey {
             package: args.package.to_string(),
             version: args.candidate.version.clone(),
             with_bdeps: args.with_bdeps,
-            built_use,
-            binary_deps: ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
-                .iter()
-                .map(|k| {
-                    args.candidate
-                        .binary_deps
-                        .get(*k)
-                        .cloned()
-                        .unwrap_or_default()
-                })
-                .collect(),
+            built_use_fp: (len, acc),
+            binary_deps_fp: hasher.finish(),
         }
     }
 }

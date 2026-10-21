@@ -174,9 +174,12 @@ pub(crate) fn minimize_children(
                 Some(deps) if p.1 => {
                     let vdb_iuse = read_vdb_flag_set(root, &key.0, &key.1, &p.0, "IUSE");
                     let vdb_use = read_vdb_flag_set(root, &key.0, &key.1, &p.0, "USE");
-                    let mut valid = valid_iuse(&vdb_iuse, config);
-                    valid.extend(vdb_use.iter().cloned());
-                    portage_dep::use_deps_satisfied(deps, &valid, &vdb_use)
+                    portage_dep::use_deps_satisfied_union(
+                        deps,
+                        &vdb_iuse,
+                        &[&config.iuse_effective, &vdb_use],
+                        &vdb_use,
+                    )
                 }
                 // A not-yet-built package: the ebuild candidate's own effective USE
                 // (a version with no ebuild candidate keeps the own-selection-only match).
@@ -184,9 +187,10 @@ pub(crate) fn minimize_children(
                     .get(p.0.as_str())
                     .and_then(|c| candidate_iuse_and_use(c, &key.0, &key.1, config))
                     .is_some_and(|(iuse, use_flags)| {
-                        portage_dep::use_deps_satisfied(
+                        portage_dep::use_deps_satisfied_union(
                             deps,
-                            &valid_iuse(&iuse, config),
+                            &iuse,
+                            &[&config.iuse_effective],
                             &use_flags,
                         )
                     }),
@@ -363,9 +367,12 @@ pub(crate) fn arg_pinned_installed_reuse(args: ArgPinnedInstalledReuseArgs<'_>) 
         {
             let vdb_iuse = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "IUSE");
             let vdb_use = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "USE");
-            let mut valid = valid_iuse(&vdb_iuse, config);
-            valid.extend(vdb_use.iter().cloned());
-            if !portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use) {
+            if !portage_dep::use_deps_satisfied_union(
+                use_deps,
+                &vdb_iuse,
+                &[&config.iuse_effective, &vdb_use],
+                &vdb_use,
+            ) {
                 continue;
             }
         }

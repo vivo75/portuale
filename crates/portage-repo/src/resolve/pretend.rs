@@ -75,9 +75,12 @@ pub(crate) fn dependency_avoid_update_candidate<'a>(
                 // recorded `USE` (a built package's own `USE` is authoritative,
                 // e.g. an ebuild that has since dropped a flag from `IUSE`). Portuale
                 // recomputes rather than reading a persisted `IUSE_EFFECTIVE` file.
-                let mut valid = valid_iuse(&vdb_iuse, config);
-                valid.extend(vdb_use.iter().cloned());
-                portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
+                portage_dep::use_deps_satisfied_union(
+                    use_deps,
+                    &vdb_iuse,
+                    &[&config.iuse_effective, &vdb_use],
+                    &vdb_use,
+                )
             }
             _ => true,
         })
@@ -721,32 +724,40 @@ pub fn resolve_pretend(
     // drop a binary from the pool before it is ever considered, like Portage's
     // break-out-of-the-loop rejection.
     // Portage: depgraph.py dbs construction; list_binary_candidates
-    let mut candidates = if usepkgonly || crate::globals::ebuild_db_dropped() {
-        Vec::new()
-    } else {
-        // Owned copy: the resolver's mutable pool (binaries are `extend`ed in and
-        // `retain`ed below). One clone per resolved atom, cheap next to the walk.
-        list_candidates(repos, &atom.category, &atom.package)?.to_vec()
-    };
-    crate::resolve::pool_memo::collect_memoized(CollectBinaryCandidatesArgs {
-        usepkg,
-        usepkgonly,
-        local_binpkg,
-        atom: &atom,
-        getbinpkg,
-        config,
-        root,
-        binpkg_respect_use,
-        newuse,
-        changed_use,
-        candidates: &mut candidates,
-        repos,
-        with_bdeps,
-        atom_str,
-        extra_constraints,
-        usepkg_exclude,
-        usepkg_include,
-    });
+    // The memo below compares the starting pool by `Arc` identity instead of
+    // deep equality: `list_candidates` is process-memoised per repo set and
+    // cp, so the same atom re-asked on a later pass hands over the same
+    // allocation. The owned copy stays: binaries are `extend`ed in and
+    // `retain`ed below.
+    let ebuilds_shared: Option<std::sync::Arc<Vec<Candidate>>> =
+        if usepkgonly || crate::globals::ebuild_db_dropped() {
+            None
+        } else {
+            Some(list_candidates(repos, &atom.category, &atom.package)?)
+        };
+    let mut candidates = ebuilds_shared.as_deref().cloned().unwrap_or_default();
+    crate::resolve::pool_memo::collect_memoized(
+        CollectBinaryCandidatesArgs {
+            usepkg,
+            usepkgonly,
+            local_binpkg,
+            atom: &atom,
+            getbinpkg,
+            config,
+            root,
+            binpkg_respect_use,
+            newuse,
+            changed_use,
+            candidates: &mut candidates,
+            repos,
+            with_bdeps,
+            atom_str,
+            extra_constraints,
+            usepkg_exclude,
+            usepkg_include,
+        },
+        ebuilds_shared.as_ref(),
+    );
 
     // Portage's `avoid_update` early return for a dependency atom happens before it
     // ever looks for a "best available" candidate, so it is checked here too, before
@@ -1057,8 +1068,12 @@ pub(crate) fn narrow_matched_candidates<'a, 'b>(
                 else {
                     return false;
                 };
-                if portage_dep::use_deps_satisfied(use_deps, &valid_iuse(&iuse, config), &use_flags)
-                {
+                if portage_dep::use_deps_satisfied_union(
+                    use_deps,
+                    &iuse,
+                    &[&config.iuse_effective],
+                    &use_flags,
+                ) {
                     return true;
                 }
                 // Portage `--autounmask-use`: a mismatch a `package.use` flip would fix
@@ -1621,9 +1636,12 @@ pub(crate) fn classify_best_against_installed(
                     read_vdb_flag_set(root, &atom.category, &atom.package, &best.version, "IUSE");
                 let vdb_use =
                     read_vdb_flag_set(root, &atom.category, &atom.package, &best.version, "USE");
-                let mut valid = valid_iuse(&vdb_iuse, config);
-                valid.extend(vdb_use.iter().cloned());
-                !portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
+                !portage_dep::use_deps_satisfied_union(
+                    use_deps,
+                    &vdb_iuse,
+                    &[&config.iuse_effective, &vdb_use],
+                    &vdb_use,
+                )
             });
         let deps_changed_flag = changed_deps
             && deps_changed(DepsChangedArgs {

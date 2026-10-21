@@ -11,15 +11,20 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 /// One answered question: the by-value inputs and the binaries it added.
+///
+/// The starting ebuild pool is compared by `Arc` identity: the only producer
+/// hands over `list_candidates`' process-memoised allocation (or `None` for
+/// the by-construction empty pool), so the same question on a later pass
+/// carries the same pointer. The bucket key already pins `(cp, atom_str)`,
+/// and the only producer parses with `parse_atom`, so no parsed-atom or
+/// atom-string comparison is needed.
 struct PoolRow {
-    atom: portage_dep::Atom,
-    atom_str: String,
     flags: [bool; 7],
     root: PathBuf,
     extra_constraints: Vec<String>,
     usepkg_exclude: Vec<String>,
     usepkg_include: Vec<String>,
-    ebuilds: Vec<Candidate>,
+    ebuilds_shared: Option<Arc<Vec<Candidate>>>,
     added: Vec<Candidate>,
 }
 
@@ -85,7 +90,12 @@ fn memo_for(args: &CollectBinaryCandidatesArgs<'_>) -> Option<Rc<PoolMemo>> {
 
 /// [`collect_binary_candidates`](crate::resolve::pretend::collect_binary_candidates),
 /// answered from the memo when this exact question was asked before.
-pub(crate) fn collect_memoized(args: CollectBinaryCandidatesArgs<'_>) {
+/// `ebuilds_shared` is the starting pool's shared allocation (`None` for the
+/// by-construction empty pool); identity implies identical input.
+pub(crate) fn collect_memoized(
+    args: CollectBinaryCandidatesArgs<'_>,
+    ebuilds_shared: Option<&Arc<Vec<Candidate>>>,
+) {
     let Some(memo) = memo_for(&args) else {
         return crate::resolve::pretend::collect_binary_candidates(args);
     };
@@ -107,13 +117,15 @@ pub(crate) fn collect_memoized(args: CollectBinaryCandidatesArgs<'_>) {
         rows.iter()
             .find(|r| {
                 r.flags == flags
-                    && r.atom == *args.atom
-                    && r.atom_str == args.atom_str
                     && r.root == args.root
                     && r.extra_constraints == args.extra_constraints
                     && r.usepkg_exclude == args.usepkg_exclude
                     && r.usepkg_include == args.usepkg_include
-                    && r.ebuilds == *args.candidates
+                    && match (&r.ebuilds_shared, ebuilds_shared) {
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        (None, None) => true,
+                        _ => false,
+                    }
             })
             .map(|r| r.added.clone())
     });
@@ -121,8 +133,8 @@ pub(crate) fn collect_memoized(args: CollectBinaryCandidatesArgs<'_>) {
         args.candidates.extend(added);
         return;
     }
-    let ebuilds = args.candidates.clone();
-    let mut work = ebuilds.clone();
+    let start = args.candidates.len();
+    let mut work = args.candidates.clone();
     crate::resolve::pretend::collect_binary_candidates(CollectBinaryCandidatesArgs {
         candidates: &mut work,
         usepkg: args.usepkg,
@@ -142,30 +154,20 @@ pub(crate) fn collect_memoized(args: CollectBinaryCandidatesArgs<'_>) {
         usepkg_exclude: args.usepkg_exclude,
         usepkg_include: args.usepkg_include,
     });
-    let added = work[ebuilds.len()..].to_vec();
+    let added = work[start..].to_vec();
     args.candidates.extend(added.iter().cloned());
-    let row_inputs = (
-        args.atom.clone(),
-        args.root.to_path_buf(),
-        args.extra_constraints.to_vec(),
-        args.usepkg_exclude.to_vec(),
-        args.usepkg_include.to_vec(),
-    );
-    let (atom, root, extra_constraints, usepkg_exclude, usepkg_include) = row_inputs;
     let mut rows = memo.rows.borrow_mut();
     let slot = rows.entry(key).or_default();
     if slot.len() >= PoolMemo::CAP_PER_KEY {
         slot.remove(0);
     }
     slot.push(PoolRow {
-        atom,
-        atom_str: args.atom_str.to_string(),
         flags,
-        root,
-        extra_constraints,
-        usepkg_exclude,
-        usepkg_include,
-        ebuilds,
+        root: args.root.to_path_buf(),
+        extra_constraints: args.extra_constraints.to_vec(),
+        usepkg_exclude: args.usepkg_exclude.to_vec(),
+        usepkg_include: args.usepkg_include.to_vec(),
+        ebuilds_shared: ebuilds_shared.cloned(),
         added,
     });
 }
@@ -213,22 +215,22 @@ mod tests {
         let mut out = Vec::new();
 
         // No scope: nothing recorded.
-        collect_memoized(args(&config, &local, &atom, &mut out, &[]));
+        collect_memoized(args(&config, &local, &atom, &mut out, &[]), None);
         assert_eq!(rows(), 0);
         {
             let _scope = enter(&memo, &config, &[], &local);
-            collect_memoized(args(&config, &local, &atom, &mut out, &[]));
-            collect_memoized(args(&config, &local, &atom, &mut out, &[]));
+            collect_memoized(args(&config, &local, &atom, &mut out, &[]), None);
+            collect_memoized(args(&config, &local, &atom, &mut out, &[]), None);
             assert_eq!(rows(), 1, "same question, one row");
             // A different input is a different row.
             let extra = ["<dev-libs/a-2".to_string()];
-            collect_memoized(args(&config, &local, &atom, &mut out, &extra));
+            collect_memoized(args(&config, &local, &atom, &mut out, &extra), None);
             assert_eq!(rows(), 2);
             // A config that is not the scope's own never touches the memo.
-            collect_memoized(args(&other, &local, &atom, &mut out, &[]));
+            collect_memoized(args(&other, &local, &atom, &mut out, &[]), None);
             assert_eq!(rows(), 2);
         }
-        collect_memoized(args(&config, &local, &atom, &mut out, &[]));
+        collect_memoized(args(&config, &local, &atom, &mut out, &[]), None);
         assert_eq!(rows(), 2, "the scope ended with its guard");
         assert!(out.is_empty());
     }

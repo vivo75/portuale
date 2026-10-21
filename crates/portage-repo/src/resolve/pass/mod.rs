@@ -78,6 +78,18 @@ pub(crate) fn run_pass(
         crate::resolve::pool_memo::enter(&ctx.pool_memo, ctx.config, &ctx.repos, &ctx.local_binpkg)
     });
     let mut state = PassState::default();
+    // Walk-long installed-metadata overlay: the ctx map moves into the pass
+    // state and back at every exit (normal and `?`), so all passes share one
+    // memo with no signature churn. Restoring on `?` matters: a failed pass
+    // retries on the same ctx.
+    {
+        let mut guard = ctx.installed_meta_memo.borrow_mut();
+        std::mem::swap(&mut state.installed_meta_memo, &mut guard);
+    }
+    let restore_memo = |ctx: &ResolveCtx<'_>, state: &mut PassState| {
+        let mut guard = ctx.installed_meta_memo.borrow_mut();
+        std::mem::swap(&mut state.installed_meta_memo, &mut guard);
+    };
     // Pass-constant: `bp` is never mutated mid-walk (only the overlay).
     let union_constraints = bp.union_constraints();
     if resolver_debug() && first_pass {
@@ -131,7 +143,7 @@ pub(crate) fn run_pass(
             }
             continue;
         };
-        if step_queue_item(StepQueueItemArgs {
+        match step_queue_item(StepQueueItemArgs {
             current_atom,
             owner: &owner,
             unevaluated_atom: &unevaluated_atom,
@@ -147,10 +159,16 @@ pub(crate) fn run_pass(
             union_constraints: &union_constraints,
             pprovided_refs: &pprovided_refs,
             state: &mut state,
-        })?
-        .is_break()
-        {
-            continue;
+        }) {
+            Ok(cf) => {
+                if cf.is_break() {
+                    continue;
+                }
+            }
+            Err(e) => {
+                restore_memo(ctx, &mut state);
+                return Err(e);
+            }
         }
     }
 
@@ -174,5 +192,6 @@ pub(crate) fn run_pass(
     let orphan_blockers = collect_pass_blockers(ctx, config, &union_constraints, &mut state, bp);
     drop(blockers_span);
 
+    restore_memo(ctx, &mut state);
     assemble_pass_result(ctx, state, orphan_blockers)
 }

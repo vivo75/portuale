@@ -392,9 +392,12 @@ pub(crate) fn running_root_satisfies_atom(
             read_vdb_flag_set(running_root, &atom.category, &atom.package, version, "IUSE");
         let vdb_use =
             read_vdb_flag_set(running_root, &atom.category, &atom.package, version, "USE");
-        let mut valid = valid_iuse(&vdb_iuse, config);
-        valid.extend(vdb_use.iter().cloned());
-        portage_dep::use_deps_satisfied(use_deps, &valid, &vdb_use)
+        portage_dep::use_deps_satisfied_union(
+            use_deps,
+            &vdb_iuse,
+            &[&config.iuse_effective, &vdb_use],
+            &vdb_use,
+        )
     })
 }
 
@@ -671,6 +674,28 @@ pub(crate) fn flat_dep_atoms(depstr: &str, use_flags: &HashSet<String>) -> Optio
 /// level only. Used by `deps_changed` to strip libc noise, and by `inject_libc_dep` for providers.
 // Portage: portage.dep.libc.find_libc_deps, strip_libc_deps, doebuild._inject_libc_dep
 pub fn libc_provider_cps(root: &Path) -> HashSet<(String, String)> {
+    // Memoised per (root, VDB generation) like [`all_installed_packages`]:
+    // the provider set is re-derived from the VDB on every binary-pool
+    // build otherwise. A stale VDB read can't outlive the generation that
+    // produced it, and under a freeze scope the generation itself is free.
+    type Cache = HashMap<PathBuf, (u64, HashSet<(String, String)>)>;
+    static CACHE: OnceLock<RwLock<Cache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    let generation = portage_vdb::for_root(root).generation().unwrap_or(0);
+    if let Ok(guard) = cache.read()
+        && let Some((fp, providers)) = guard.get(root)
+        && *fp == generation
+    {
+        return providers.clone();
+    }
+    let result = libc_provider_cps_uncached(root);
+    if let Ok(mut guard) = cache.write() {
+        guard.insert(root.to_path_buf(), (generation, result.clone()));
+    }
+    result
+}
+
+fn libc_provider_cps_uncached(root: &Path) -> HashSet<(String, String)> {
     let mut result = HashSet::new();
     for version in installed_versions(root, "virtual", "libc") {
         let use_flags = read_vdb_flag_set(root, "virtual", "libc", &version, "USE");

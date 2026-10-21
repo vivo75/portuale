@@ -218,7 +218,7 @@ pub(crate) fn atom_matches_graph(
             .map(|(f, _)| f.clone())
             .collect();
         let iuse: HashSet<String> = e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
-        portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
+        portage_dep::use_deps_satisfied_union(&use_deps, &iuse, &[&config.iuse_effective], &enabled)
     })
 }
 
@@ -259,7 +259,7 @@ pub(crate) fn atom_cp_present_in_graph(
             .map(|(f, _)| f.clone())
             .collect();
         let iuse: HashSet<String> = e.use_flags_display.iter().map(|(f, _)| f.clone()).collect();
-        portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&iuse, config), &enabled)
+        portage_dep::use_deps_satisfied_union(&use_deps, &iuse, &[&config.iuse_effective], &enabled)
     })
 }
 

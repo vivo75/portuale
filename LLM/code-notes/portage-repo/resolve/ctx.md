@@ -61,3 +61,6 @@ The per-run resolver context: BFS request fields plus the derived required-set c
 
 ## field ResolveCtx::complete_reuse
 - Backlog #394: `ResolveRequest::complete_reuse` carried into the walk context, read by `resolve_initial_outcome`'s locked-merge reuse.
+
+## field ResolveCtx::installed_meta_memo
+- Backlog #441 S1 / #457 (third step): `installed_dep_string`'s `Effective` layer, walked-long instead of per-pass. Portage applies the overlay once per installed instance and keeps it for every pass (`FakeVartree.dynamic_deps_applied`); `run_pass` swaps the ctx map into the pass state at pass start and back at every exit (normal and `?`, since a failed pass retries on the same ctx), so all passes share one memo with no signature churn. Sound: no reader takes config (only VDB content under the freeze scope, live repo metadata fixed per walk, CLI-constant flags), and every reader derives the layer from `dynamic_deps`, which is fixed for one ctx.

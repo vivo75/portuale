@@ -106,9 +106,9 @@ pub(crate) struct PassState {
     /// resolutions): a package can need building into *both* ROOT and the running
     /// root at once, which must never collide into one shared key.
     pub(crate) root_deps_build_seen: HashSet<(String, String)>,
-    /// Per-pass cache for `installed_dep_string`'s `Effective` layer, keyed
-    /// `(category, package, version, key)`: the counterpart to Portage applying the
-    /// overlay once per installed instance and keeping it for every pass.
+    /// Swap slot for the walk-long [`ResolveCtx::installed_meta_memo`]:
+    /// `run_pass` moves the ctx map in here at pass start and back at every
+    /// exit, so the per-pass readers below share one memo across passes.
     // Portage: FakeVartree._apply_dynamic_deps dynamic_deps_applied
     pub(crate) installed_meta_memo: HashMap<(String, String, String, String), String>,
     /// Backtracking: every atom text (bare or constrained) that targeted a given

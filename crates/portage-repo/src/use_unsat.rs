@@ -206,11 +206,12 @@ pub(crate) fn use_unsat_candidates_for_atom(
         else {
             continue;
         };
-        let valid = valid_iuse(&declared, config);
-        // Portage's `pkg.iuse.get_missing_iuse(required_flags)`.
+        // Portage's `pkg.iuse.get_missing_iuse(required_flags)`: the declared
+        // set plus profile `IUSE_EFFECTIVE`, without building the union.
+        let is_valid = |f: &str| declared.contains(f) || config.iuse_effective.contains(f);
         let missing: Vec<String> = required
             .iter()
-            .filter(|f| !valid.contains(*f))
+            .filter(|f| !declared.contains(*f) && !config.iuse_effective.contains(*f))
             .cloned()
             .collect();
         let output_cpv = format!(
@@ -228,12 +229,12 @@ pub(crate) fn use_unsat_candidates_for_atom(
         // this candidate's own IUSE declares.
         let mut need_enable: Vec<String> = enabled
             .iter()
-            .filter(|f| !use_flags.contains(*f) && valid.contains(*f))
+            .filter(|f| !use_flags.contains(*f) && is_valid(f))
             .cloned()
             .collect();
         let mut need_disable: Vec<String> = disabled
             .iter()
-            .filter(|f| use_flags.contains(*f) && valid.contains(*f))
+            .filter(|f| use_flags.contains(*f) && is_valid(f))
             .cloned()
             .collect();
         need_enable.sort();

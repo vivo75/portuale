@@ -50,3 +50,6 @@ Greedy installed-slot arguments for the default solver (backlog #359 S3).
   (rc 1); with the lookahead the output is byte-identical to Portage
   (`NS` + uninstall + `blocks b`, `Conflict: 1 block (all satisfied)`).
   The plan's conditional residue for a missing lookahead is therefore not filed (its number #394 was reused on 2026-10-16 for the unrelated `--rebuild-if-*` re-walk gap).
+
+## fn greedy_pool (shared ebuild pool, backlog #441 S1 / #457)
+- Same `Arc`-identity handoff to the pool memo as `resolve_pretend` (was `.map(|c| c.to_vec())`, now `.ok()` on the shared allocation plus a local clone for mutation).

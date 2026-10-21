@@ -47,11 +47,20 @@ mod tests_grammar;
 // resolver re-parses the same few atoms/candidates millions of times.
 // Thread-local to stay lock-free; never invalidated.
 type AtomOptsCache = HashMap<AtomOptions, HashMap<String, Result<Atom, AtomError>>>;
+/// Key of the per-pair match verdicts: atom string, candidate string, build-id.
+type MatchPairKey = (String, String, Option<String>);
 thread_local! {
     static ATOM_CACHE: RefCell<HashMap<String, Option<Atom>>> = RefCell::new(HashMap::new());
     static CANDIDATE_CACHE: RefCell<HashMap<String, Option<Candidate>>> =
         RefCell::new(HashMap::new());
     static ATOM_OPTS_CACHE: RefCell<AtomOptsCache> = RefCell::new(HashMap::new());
+    // Per-pair match verdicts: matching is a pure function of the two
+    // strings (match-mode parse) plus the binary build-id, and the resolver
+    // re-asks the same pairs every pass. The flat owned key costs three
+    // small allocations per lookup and skips an `Atom` clone, a `Candidate`
+    // clone and a `vercmp` on every hit.
+    static MATCH_CACHE: RefCell<HashMap<MatchPairKey, Option<bool>>> =
+        RefCell::new(HashMap::new());
 }
 
 const CAT: &str = r"[A-Za-z0-9_][A-Za-z0-9+_.-]*";
@@ -1139,26 +1148,33 @@ fn matches_repo(atom: &Atom, candidate: &Candidate) -> bool {
 ///   missing from `iuse`.
 ///
 /// Portage: lib/portage/dep/__init__.py, match_from_list (`unevaluated_atom.use` block)
-pub fn use_deps_satisfied(
+/// `use_deps_satisfied` against a split validity domain: a flag is valid
+/// when `declared` or any of `unions` names it. Lets callers skip building
+/// the `declared ∪ iuse_effective (∪ …)` union per check — the union exists
+/// only for these `contains` calls, and the effective set is large and
+/// resolve-constant while the declared set is small and per-candidate.
+pub fn use_deps_satisfied_union(
     use_deps: &[UseDep],
-    iuse: &HashSet<String>,
+    declared: &HashSet<String>,
+    unions: &[&HashSet<String>],
     enabled: &HashSet<String>,
 ) -> bool {
+    let valid = |flag: &str| declared.contains(flag) || unions.iter().any(|u| u.contains(flag));
     if use_deps
         .iter()
-        .any(|ud| ud.default.is_none() && !iuse.contains(&ud.flag))
+        .any(|ud| ud.default.is_none() && !valid(&ud.flag))
     {
         return false;
     }
 
     let missing_enabled: HashSet<&str> = use_deps
         .iter()
-        .filter(|ud| ud.default == Some(UseDepDefault::Enabled) && !iuse.contains(&ud.flag))
+        .filter(|ud| ud.default == Some(UseDepDefault::Enabled) && !valid(&ud.flag))
         .map(|ud| ud.flag.as_str())
         .collect();
     let missing_disabled: HashSet<&str> = use_deps
         .iter()
-        .filter(|ud| ud.default == Some(UseDepDefault::Disabled) && !iuse.contains(&ud.flag))
+        .filter(|ud| ud.default == Some(UseDepDefault::Disabled) && !valid(&ud.flag))
         .map(|ud| ud.flag.as_str())
         .collect();
 
@@ -1209,6 +1225,16 @@ pub fn use_deps_satisfied(
     }
 
     true
+}
+
+/// Convenience for a prebuilt validity domain (see `valid_iuse`): exactly
+/// `use_deps_satisfied_union` with no extra union sets.
+pub fn use_deps_satisfied(
+    use_deps: &[UseDep],
+    iuse: &HashSet<String>,
+    enabled: &HashSet<String>,
+) -> bool {
+    use_deps_satisfied_union(use_deps, iuse, &[], enabled)
 }
 
 /// The `("use", flag)` reason keys one parent atom's `use_deps` contribute
@@ -1453,21 +1479,44 @@ pub fn match_atom_matches_candidate(
     candidate_hits(atom, &candidate)
 }
 
+/// One match-mode pair plus an optional binary build-id: `None` when the
+/// atom doesn't parse (cached too, so a bad atom parses once). Every
+/// caller parses match-mode (`parse_match_atom`), so the three strings
+/// are the whole key.
+// Portage: lib/portage/dep/__init__.py, match_from_list
+fn match_pair(atom_str: &str, candidate: &str, build_id: Option<&str>) -> Option<bool> {
+    let key = (
+        atom_str.to_string(),
+        candidate.to_string(),
+        build_id.map(str::to_string),
+    );
+    if let Some(hit) = MATCH_CACHE.with(|m| m.borrow().get(&key).copied()) {
+        return hit;
+    }
+    let verdict = parse_match_atom(atom_str)
+        .map(|atom| match_atom_matches_candidate(&atom, candidate, build_id));
+    MATCH_CACHE.with(|m| {
+        m.borrow_mut().insert(key, verdict);
+    });
+    verdict
+}
+
 /// Returns the candidates (input order) matching `atom_str`; `None` if the
 /// atom doesn't parse. Unparseable candidates are skipped.
 /// Portage: lib/portage/dep/__init__.py, match_from_list
 pub fn match_from_list<'a>(atom_str: &str, candidates: &[&'a str]) -> Option<Vec<&'a str>> {
-    // The default `parse_atom` keeps rejecting extended atoms. Leading
-    // blockers are stripped before the re-parse, so a blocker atom matches
-    // like its bare form. `matches_repo` is unchanged.
-    let atom = parse_match_atom(atom_str)?;
-    Some(
-        candidates
-            .iter()
-            .copied()
-            .filter(|c| match_atom_matches_candidate(&atom, c, None))
-            .collect(),
-    )
+    // The empty-list verdict still depends on the parse: an unparseable atom
+    // is `None` even with no candidates (callers branch on `None` vs `Some`).
+    if candidates.is_empty() {
+        return parse_match_atom(atom_str).map(|_| Vec::new());
+    }
+    let mut out = Vec::with_capacity(candidates.len());
+    for &c in candidates {
+        if match_pair(atom_str, c, None)? {
+            out.push(c);
+        }
+    }
+    Some(out)
 }
 
 /// [`match_from_list`] where each candidate may carry a binary build-id
@@ -1480,15 +1529,16 @@ pub fn match_from_list_with_build_id<'a>(
     atom_str: &str,
     candidates: &[(&'a str, Option<&str>)],
 ) -> Option<Vec<&'a str>> {
-    let atom = parse_match_atom(atom_str)?;
-    Some(
-        candidates
-            .iter()
-            .copied()
-            .filter(|(c, build_id)| match_atom_matches_candidate(&atom, c, *build_id))
-            .map(|(c, _)| c)
-            .collect(),
-    )
+    if candidates.is_empty() {
+        return parse_match_atom(atom_str).map(|_| Vec::new());
+    }
+    let mut out = Vec::with_capacity(candidates.len());
+    for &(c, build_id) in candidates {
+        if match_pair(atom_str, c, build_id)? {
+            out.push(c);
+        }
+    }
+    Some(out)
 }
 
 /// A deliberately narrow check, as in Portage's `Atom.intersects`: cp,
@@ -1552,6 +1602,42 @@ mod parse_cache_tests {
             assert_eq!(parse_candidate(s), want, "first cached call for {s:?}");
             assert_eq!(parse_candidate(s), want, "second cached call for {s:?}");
         }
+    }
+
+    #[test]
+    fn cached_match_from_list_matches_fresh_parse_and_is_stable_across_calls() {
+        let pairs: &[(&str, &str)] = &[
+            (">=dev-libs/foo-1.2.3", "dev-libs/foo-1.2.3-r1:2/3::gentoo"),
+            ("=dev-libs/foo-1*", "dev-libs/foo-1.2.3-r1:2/3::gentoo"),
+            ("!dev-libs/foo", "dev-libs/foo-1.2.3-r1:2/3::gentoo"),
+            ("dev-libs/foo:2", "dev-libs/foo-1.2.3-r1:2/3::gentoo"),
+            ("dev-libs/foo:9", "dev-libs/foo-1.2.3-r1:2/3::gentoo"),
+            ("this is not an atom", "dev-libs/foo-1.2.3-r1:2/3::gentoo"),
+            ("dev-libs/foo", "not a candidate"),
+        ];
+        for &(a, c) in pairs {
+            let atom = parse_match_atom(a);
+            let want = atom
+                .as_ref()
+                .map(|atom| match_atom_matches_candidate(atom, c, None));
+            // `match_from_list` on one candidate is the memoised pair verdict.
+            let single = match_from_list(a, &[c]);
+            assert_eq!(
+                single,
+                want.map(|hit| if hit { vec![c] } else { Vec::new() }),
+                "pair {a:?} vs {c:?}"
+            );
+            assert_eq!(match_from_list(a, &[c]), single, "repeat for {a:?}");
+            assert_eq!(match_pair(a, c, None), want, "direct pair for {a:?}");
+            assert_eq!(
+                match_from_list_with_build_id(a, &[(c, None)]),
+                single,
+                "build-id path with no id for {a:?}"
+            );
+        }
+        // The empty-list verdict still tracks the parse.
+        assert_eq!(match_from_list("dev-libs/foo", &[]), Some(Vec::new()));
+        assert_eq!(match_from_list("this is not an atom", &[]), None);
     }
 }
 

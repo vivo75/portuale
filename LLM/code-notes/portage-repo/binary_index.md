@@ -71,3 +71,6 @@ The binary package index (`Packages`) and binary candidates.
 
 ## fn find_remote_binpkg_instance
 - `find_remote_binpkg` for one specific build (backlog #301): with `Some(build_id)` the binrepos are scanned in order for the record carrying exactly that `BUILD_ID`; if no binrepo has it (or `None` was given) the newest build of the version from the first binrepo that lists the version is returned.
+
+## fn pick_binary_instance (by_cp iteration, backlog #441 S1 / #457)
+- Takes an entry iterator instead of the whole slice; callers pass `entries_for_cp`. Same matching set (an entry equal to the wanted CPV is necessarily indexed under its cp), same relative order, so `find`/`max_by_key` tie-breaks are unchanged; O(matches) instead of O(18 000) per lookup.

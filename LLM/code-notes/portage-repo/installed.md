@@ -102,3 +102,6 @@ Installed packages read from the VDB.
 ## fn all_cp
 - The category/package directory walk used to live here (`FilesDb::entries`, feat#157 S1.3), `-MERGING-` entries already skipped.
 - Every `category/package` present in any of `repos` -- Portage `portdbapi.cp_all()` (`porttree.py`), used by `emerge --search`.
+
+## fn libc_provider_cps (memo, backlog #441 S1 / #457)
+- Memoised per (root, VDB generation) like `all_installed_packages`: the provider set was re-derived from the VDB on every binary-pool build and every merge-order closure. A stale read can't outlive the generation that produced it; under a freeze scope the generation itself is a memo lookup.

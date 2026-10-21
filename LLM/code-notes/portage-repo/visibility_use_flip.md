@@ -59,3 +59,6 @@ USE-flip suggestions for autounmask.
 ## fn implicit_iuse_set (S3 promotion)
 - #348 S3 P3 promotes it from `pub(crate)` to `pub` (re-exported through the existing `pub use visibility_use_flip::*`): the standalone `ebuild` REQUIRED_USE gate (`ebuild_phases::required_use_refusal`) checks against exactly this set, the same one the resolve pass uses -- never re-derived per caller.
 - #346 S2: the `is_stable` input is the effective KEYWORDS (`effective_keywords`), matching Portage `isStable` over `getKeywords`.
+
+## fn violated_parent_flags (split validity domain, backlog #441 S1 / #457)
+- `child_valid: &HashSet` became `&dyn Fn(&str) -> bool`: every use is a `contains` check, and the call site no longer builds the `declared ∪ IUSE_EFFECTIVE` union. Production passes a closure over the declared set plus `config.iuse_effective`; tests wrap their sets the same way.

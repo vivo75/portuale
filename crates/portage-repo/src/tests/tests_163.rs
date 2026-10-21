@@ -2684,6 +2684,7 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         local_binpkg: build_local_binpkg_index(config),
         tree_sim_memo: Default::default(),
         pool_memo: Default::default(),
+        installed_meta_memo: Default::default(),
     }
 }
 

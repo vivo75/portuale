@@ -210,3 +210,10 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 
 ## tests: extract_affecting_use_tests
 - `matches_portages_test_corpus`: the 23 passing cases from lib/portage/tests/dep/test_extract_affecting_use.py, verbatim; `malformed_syntax_returns_none`: the 15 cases from its `test_cases_xfail` (Portage raises `InvalidDependString`; portuale returns `None`).
+
+## fn match_from_list (result memo, backlog #441 S1 / #457)
+- Per-pair verdicts cached thread-locally, keyed `(atom_str, candidate_str, build_id)`: matching is pure in those three strings (every caller parses match-mode via `parse_match_atom`; the two direct `match_atom_matches_candidate` callers do too). `match_from_list_with_build_id` rides the same table instead of re-parsing per pair. The empty-list verdict still tracks the parse (`None` for a bad atom even with no candidates), preserving the old `?`-first shape.
+- Pinned by `cached_match_from_list_matches_fresh_parse_and_is_stable_across_calls` (fresh `parse_match_atom` + `match_atom_matches_candidate` as the oracle, plus the empty-list arms).
+
+## fn use_deps_satisfied_union (union-free check, backlog #441 S1 / #457)
+- `use_deps_satisfied` against a split validity domain: `declared ∪ unions` membership tested inline instead of building the union `HashSet` per call. `use_deps_satisfied` delegates with no unions, so old callers are unchanged. Lets ~15 portage-repo call sites drop their per-check `valid_iuse` union (the effective set is resolve-constant and large, the declared set per-candidate and small); `violated_parent_flags` takes the same split as a `&dyn Fn(&str) -> bool`.

@@ -108,10 +108,6 @@ impl BinaryIndex {
             .collect()
     }
 
-    pub(crate) fn entries(&self) -> &[HashMap<String, String>] {
-        &self.entries
-    }
-
     /// The index records for `category/package` -- O(matches), not a scan.
     pub(crate) fn entries_for_cp(
         &self,
@@ -581,13 +577,15 @@ pub fn list_remote_binary_candidates(
 /// `None` the newest build -- highest `(BUILD_TIME, BUILD_ID)`, Portage
 /// `dbapi._cmp_cpv` order.
 pub(crate) fn pick_binary_instance<'a>(
-    entries: &'a [HashMap<String, String>],
+    entries: impl Iterator<Item = &'a HashMap<String, String>>,
     want_cpv: &str,
     build_id: Option<&str>,
 ) -> Option<&'a HashMap<String, String>> {
-    let matching = entries
-        .iter()
-        .filter(|e| e.get("CPV").map(String::as_str) == Some(want_cpv));
+    // The caller pre-narrows to the cp (usually via `entries_for_cp`):
+    // a remote index has ~18 000 entries, so the full scan was quadratic.
+    // Order among same-cp entries is insertion order either way, so `find`
+    // and `max_by_key` tie-breaks are unchanged.
+    let matching = entries.filter(|e| e.get("CPV").map(String::as_str) == Some(want_cpv));
     match build_id {
         Some(id) => matching
             .into_iter()
@@ -657,14 +655,18 @@ pub fn find_remote_binpkg_instance<'a>(
     if build_id.is_some() {
         for binrepo in binrepos {
             let index = cached_binary_index(&binrepo.packages_dir(root));
-            if let Some(entry) = pick_binary_instance(index.entries(), &want_cpv, build_id) {
+            if let Some(entry) =
+                pick_binary_instance(index.entries_for_cp(category, package), &want_cpv, build_id)
+            {
                 return Some((binrepo, entry.clone()));
             }
         }
     }
     for binrepo in binrepos {
         let index = cached_binary_index(&binrepo.packages_dir(root));
-        if let Some(entry) = pick_binary_instance(index.entries(), &want_cpv, None) {
+        if let Some(entry) =
+            pick_binary_instance(index.entries_for_cp(category, package), &want_cpv, None)
+        {
             return Some((binrepo, entry.clone()));
         }
     }

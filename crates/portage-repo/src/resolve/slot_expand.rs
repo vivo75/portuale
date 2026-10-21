@@ -185,7 +185,6 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
             .split_whitespace()
             .map(|t| t.trim_start_matches(['+', '-']).to_string())
             .collect();
-        let iuse_set = valid_iuse(&declared, config);
         let existing_cand_str = format!(
             "{}/{}-{existing_version2}:{}/{}::{}",
             key2.0, key2.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
@@ -199,7 +198,12 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
             category: &key2.0,
             package: &key2.1,
         });
-        if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use) {
+        if !portage_dep::use_deps_satisfied_union(
+            use_deps,
+            &declared,
+            &[&config.iuse_effective],
+            &existing_use,
+        ) {
             return false;
         }
     }

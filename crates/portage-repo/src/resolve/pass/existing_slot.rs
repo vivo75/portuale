@@ -306,7 +306,6 @@ pub(crate) fn existing_slot_version_mismatch(args: ExistingSlotVersionMismatchAr
                 .split_whitespace()
                 .map(|t| t.trim_start_matches(['+', '-']).to_string())
                 .collect();
-            let iuse_set = valid_iuse(&declared, config);
             let existing_cand_str = format!(
                 "{}/{}-{existing_version}:{}/{}::{}",
                 key.0, key.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
@@ -320,7 +319,12 @@ pub(crate) fn existing_slot_version_mismatch(args: ExistingSlotVersionMismatchAr
                 category: &key.0,
                 package: &key.1,
             });
-            if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use) {
+            if !portage_dep::use_deps_satisfied_union(
+                use_deps,
+                &declared,
+                &[&config.iuse_effective],
+                &existing_use,
+            ) {
                 record_slot_conflict(
                     &mut state.slot_conflicts,
                     build_slot_conflict(BuildSlotConflictArgs {
@@ -383,7 +387,6 @@ pub(crate) fn existing_slot_use_flip_suggestion(args: ExistingSlotUseFlipSuggest
                 .split_whitespace()
                 .map(|t| t.trim_start_matches(['+', '-']).to_string())
                 .collect();
-            let iuse_set = valid_iuse(&declared, config);
             let existing_cand_str = format!(
                 "{}/{}-{existing_version}:{}/{}::{}",
                 key.0, key.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
@@ -397,9 +400,13 @@ pub(crate) fn existing_slot_use_flip_suggestion(args: ExistingSlotUseFlipSuggest
                 category: &key.0,
                 package: &key.1,
             });
-            if !portage_dep::use_deps_satisfied(use_deps, &iuse_set, &existing_use)
-                && let Some(flip) =
-                    suggested_use_flip(existing_cand, &key.0, &key.1, use_deps, config)
+            if !portage_dep::use_deps_satisfied_union(
+                use_deps,
+                &declared,
+                &[&config.iuse_effective],
+                &existing_use,
+            ) && let Some(flip) =
+                suggested_use_flip(existing_cand, &key.0, &key.1, use_deps, config)
             {
                 // The match reads the effective (overlay-then-`bp`) value;
                 // non-conflicting flags insert, conflicting ones break.

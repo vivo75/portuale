@@ -286,7 +286,7 @@ pub(crate) fn violated_parent_flags(
     unevaluated: &portage_dep::Atom,
     parent_use: &HashSet<String>,
     child_use: &HashSet<String>,
-    child_valid: &HashSet<String>,
+    child_valid: &dyn Fn(&str) -> bool,
 ) -> Vec<String> {
     use portage_dep::{UseDepDefault, UseDepOp};
     let is_conditional = |op: &UseDepOp| {
@@ -310,7 +310,7 @@ pub(crate) fn violated_parent_flags(
     // `missing_iuse` early skip).
     if conds
         .iter()
-        .any(|ud| !child_valid.contains(&ud.flag) && ud.default.is_none())
+        .any(|ud| !child_valid(&ud.flag) && ud.default.is_none())
     {
         return Vec::new();
     }
@@ -319,7 +319,7 @@ pub(crate) fn violated_parent_flags(
     let required_missing = use_deps.iter().any(|ud| {
         ud.default.is_none()
             && matches!(ud.op, UseDepOp::Enabled | UseDepOp::Disabled)
-            && !child_valid.contains(&ud.flag)
+            && !child_valid(&ud.flag)
     });
     if required_missing {
         return Vec::new();
@@ -330,11 +330,11 @@ pub(crate) fn violated_parent_flags(
     let concrete_violated = use_deps.iter().any(|ud| match ud.op {
         UseDepOp::Enabled => {
             !child_use.contains(&ud.flag)
-                && (child_valid.contains(&ud.flag) || ud.default == Some(UseDepDefault::Disabled))
+                && (child_valid(&ud.flag) || ud.default == Some(UseDepDefault::Disabled))
         }
         UseDepOp::Disabled => {
             child_use.contains(&ud.flag)
-                || (!child_valid.contains(&ud.flag) && ud.default == Some(UseDepDefault::Enabled))
+                || (!child_valid(&ud.flag) && ud.default == Some(UseDepDefault::Enabled))
         }
         _ => false,
     });
@@ -346,7 +346,7 @@ pub(crate) fn violated_parent_flags(
         .filter(|ud| {
             let p = parent_use.contains(&ud.flag);
             let c = child_use.contains(&ud.flag);
-            let valid = child_valid.contains(&ud.flag);
+            let valid = child_valid(&ud.flag);
             let missing_en = ud.default == Some(UseDepDefault::Enabled);
             let missing_dis = ud.default == Some(UseDepDefault::Disabled);
             match ud.op {
@@ -455,11 +455,12 @@ pub(crate) fn viable_parent_flip_targets(
         else {
             continue;
         };
-        let valid = valid_iuse(&declared, config);
-        // The child's effective USE, filtered to valid IUSE.
+        // The child's effective USE, filtered to valid IUSE (the declared
+        // set plus profile `IUSE_EFFECTIVE`, without building the union).
+        let is_valid = |f: &str| declared.contains(f) || config.iuse_effective.contains(f);
         let child_use: HashSet<String> = use_flags
             .iter()
-            .filter(|f| valid.contains(*f))
+            .filter(|f| declared.contains(*f) || config.iuse_effective.contains(*f))
             .cloned()
             .collect();
         // The evaluated atom's concrete needs, for the pin check below.
@@ -468,7 +469,7 @@ pub(crate) fn viable_parent_flip_targets(
             .filter(|ud| {
                 ud.op == portage_dep::UseDepOp::Enabled
                     && !child_use.contains(&ud.flag)
-                    && valid.contains(&ud.flag)
+                    && is_valid(&ud.flag)
             })
             .map(|ud| &ud.flag)
             .collect();
@@ -477,7 +478,7 @@ pub(crate) fn viable_parent_flip_targets(
             .filter(|ud| {
                 ud.op == portage_dep::UseDepOp::Disabled
                     && child_use.contains(&ud.flag)
-                    && valid.contains(&ud.flag)
+                    && is_valid(&ud.flag)
             })
             .map(|ud| &ud.flag)
             .collect();
@@ -529,7 +530,7 @@ pub(crate) fn viable_parent_flip_targets(
         {
             continue;
         }
-        let involved = violated_parent_flags(unevaluated, parent_use, &child_use, &valid);
+        let involved = violated_parent_flags(unevaluated, parent_use, &child_use, &is_valid);
         if involved.is_empty() {
             continue;
         }

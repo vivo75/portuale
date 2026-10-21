@@ -95,7 +95,12 @@ pub(crate) fn direct_solve_atom_matches(
         return true;
     }
     let (enabled, declared) = direct_solve_instance_use(input, &c.category, &c.package, inst);
-    portage_dep::use_deps_satisfied(&use_deps, &valid_iuse(&declared, input.config), &enabled)
+    portage_dep::use_deps_satisfied_union(
+        &use_deps,
+        &declared,
+        &[&input.config.iuse_effective],
+        &enabled,
+    )
 }
 
 /// Resolved USE (enabled) plus declared IUSE for a conflict instance: merge

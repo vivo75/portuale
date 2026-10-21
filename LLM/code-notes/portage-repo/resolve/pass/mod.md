@@ -7,3 +7,6 @@ One resolver pass (BFS walk) over the dependency graph.
 - `union_constraints` is pass-constant (`bp` is never mutated mid-walk, only the overlay): C1 readers see positives + rendered negatives as one bucket.
 - First-pass `--debug` prints each argument as `Arg:` / `Atom:` lines via `resolver_trace::tr!`.
 
+
+## fn run_pass (walk-long installed-metadata memo, backlog #441 S1 / #457)
+- Swaps `ctx.installed_meta_memo` into the fresh `PassState` at pass start and back at every exit (the `?` arm restores too: a failed pass retries on the same ctx). The `?`-to-`match` rewrite is only the restore; verdicts are unchanged.
