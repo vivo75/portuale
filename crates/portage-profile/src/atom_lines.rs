@@ -399,6 +399,24 @@ pub(crate) fn filter_atom_lines(
     rank: u8,
     warn: &mut Vec<ProfileWarning>,
 ) -> Vec<String> {
+    filter_atom_lines_with_sources(sources, rules, kind, rank, warn)
+        .into_iter()
+        .map(|(line, _)| line)
+        .collect()
+}
+
+/// [`filter_atom_lines`] keeping each kept line's source file: the
+/// `package.mask` fold needs the origin fragment to answer Portage's
+/// `getmaskingreason` (`# <file>:` + comment lines in the unmask block,
+/// backlog #462). Same validation, warnings and order; only the shape differs.
+// Portage: util/__init__.py:481-607
+pub(crate) fn filter_atom_lines_with_sources(
+    sources: &[(PathBuf, String)],
+    rules: &NodeAtomRules,
+    kind: AtomLineKind,
+    rank: u8,
+    warn: &mut Vec<ProfileWarning>,
+) -> Vec<(String, PathBuf)> {
     // A supported-but-unparseable EAPI (`3_pre1`, padded) makes Portage
     // raise; here it falls back to the permissive set (see S1's cut).
     let eapi = AtomEapi::parse(rules.eapi.as_deref()).unwrap_or(AtomEapi::Unsupported);
@@ -417,7 +435,7 @@ pub(crate) fn filter_atom_lines(
                 let mut text = line.as_str();
                 if text.starts_with('-') {
                     if packages_file && text == "-*" {
-                        kept.push(line.clone());
+                        kept.push((line.clone(), source.clone()));
                         continue;
                     }
                     text = &text[1..];
@@ -426,7 +444,7 @@ pub(crate) fn filter_atom_lines(
                     text = &text[1..];
                 }
                 match portage_dep::parse_atom_with(text, &opts, eapi_str) {
-                    Ok(_) => kept.push(line.clone()),
+                    Ok(_) => kept.push((line.clone(), source.clone())),
                     Err(e) => warn.push(ProfileWarning {
                         rank,
                         text: format!("--- Invalid atom in {file}: {}", e.message),
@@ -448,7 +466,7 @@ pub(crate) fn filter_atom_lines(
                             ),
                         });
                     }
-                    Ok(_) => kept.push(line.clone()),
+                    Ok(_) => kept.push((line.clone(), source.clone())),
                 }
             }
         }

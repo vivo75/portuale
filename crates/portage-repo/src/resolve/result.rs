@@ -447,4 +447,12 @@ pub struct AutounmaskChange {
     /// backtrack passes (it names the flip site, which the re-resolve reproduces).
     // Portage: _get_dep_chain unsatisfied_dependency first parent
     pub trigger: Option<(String, String)>,
+    /// The stacked `package.mask` entry that forced this change (`None`
+    /// for keyword/license/USE changes). The renderer resolves it to
+    /// Portage's `# <file>:` line and comment lines via
+    /// [`portage_profile::masking_file_comment`]; recorded here (rather
+    /// than at render time) because only the resolve pass knows which
+    /// stacked entry matched the candidate.
+    // Portage: depgraph.py, _display_autounmask (p_mask_change_msg)
+    pub mask_entry: Option<String>,
 }

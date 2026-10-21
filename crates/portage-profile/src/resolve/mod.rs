@@ -14,6 +14,7 @@ mod use_levels;
 mod use_masks;
 pub(crate) use licenses::*;
 pub(crate) use package_env::*;
+pub use package_masks::masking_file_comment;
 pub(crate) use package_masks::*;
 pub(crate) use package_sets::*;
 pub(crate) use package_use::*;

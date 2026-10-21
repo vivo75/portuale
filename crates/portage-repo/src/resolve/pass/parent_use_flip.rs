@@ -109,6 +109,7 @@ pub(crate) fn parent_use_flip(
         token,
         // No single forcing parent: legacy fill.
         trigger: None,
+        mask_entry: None,
         // Pre-fill the chain for a top-level parent (Portage never prints
         // the start node); other parents keep the generic fill.
         // Portage: depgraph.py, _get_dep_chain

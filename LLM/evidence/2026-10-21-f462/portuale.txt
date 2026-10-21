@@ -1,0 +1,182 @@
+=== c1-maskneedpkg [portuale emerge --pretend --autounmask dev-libs/maskneedpkg] rc=1
+--- stdout:
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N    #] dev-libs/maskeddep-1.0 to /var/tmp/f462/stage/fixtures
+[ebuild  N     ] dev-libs/maskneedpkg-1.0 to /var/tmp/f462/stage/fixtures
+--- stderr:
+
+The following mask changes are necessary to proceed:
+ (see "package.unmask" in the portage(5) man page for more details)
+# required by dev-libs/maskneedpkg-1.0::testrepo
+# required by dev-libs/maskneedpkg (argument)
+# /var/tmp/f462/stage/fixtures/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+# fixture package.mask for the masked-dependency disclosure slice:
+# dev-libs/maskeddep stays masked so a dependency on it reports the
+# "All ebuilds ... have been masked" block (never unmasked anywhere).
+=dev-libs/maskeddep-1.0
+
+NOTE: The --autounmask-keep-masks option will prevent emerge
+      from creating package.unmask or ** keyword changes.
+=== c2-keepmasks-n [portuale emerge --pretend --autounmask-keep-masks=n dev-libs/maskmaskedconsumer] rc=1
+--- stdout:
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N    #] dev-libs/hardmaskedpkg-1.0 to /var/tmp/f462/stage/fixtures
+[ebuild  N     ] dev-libs/maskmaskedconsumer-1.0 to /var/tmp/f462/stage/fixtures
+--- stderr:
+
+The following mask changes are necessary to proceed:
+ (see "package.unmask" in the portage(5) man page for more details)
+# required by dev-libs/maskmaskedconsumer-1.0::testrepo
+# required by dev-libs/maskmaskedconsumer (argument)
+# /var/tmp/f462/stage/fixtures/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+=dev-libs/hardmaskedpkg-1.0
+
+NOTE: The --autounmask-keep-masks option will prevent emerge
+      from creating package.unmask or ** keyword changes.
+=== c3-hardmasked [portuale emerge --pretend --autounmask dev-libs/hardmaskedpkg] rc=1
+--- stdout:
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N    #] dev-libs/hardmaskedpkg-1.0 to /var/tmp/f462/stage/fixtures
+--- stderr:
+
+The following mask changes are necessary to proceed:
+ (see "package.unmask" in the portage(5) man page for more details)
+# required by dev-libs/hardmaskedpkg (argument)
+# /var/tmp/f462/stage/fixtures/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+=dev-libs/hardmaskedpkg-1.0
+
+NOTE: The --autounmask-keep-masks option will prevent emerge
+      from creating package.unmask or ** keyword changes.
+=== c4-keyword [portuale emerge --pretend --autounmask dev-libs/autounmaskkeywordpkg] rc=1
+--- stdout:
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N    ~] dev-libs/autounmaskkeywordpkg-1.0 to /var/tmp/f462/stage/fixtures
+--- stderr:
+
+The following keyword changes are necessary to proceed:
+ (see "package.accept_keywords" in the portage(5) man page for more details)
+# required by dev-libs/autounmaskkeywordpkg (argument)
+=dev-libs/autounmaskkeywordpkg-1.0 ~amd64
+=== c5-use [portuale emerge --pretend dev-libs/usedeprejectedpkg] rc=1
+--- stdout:
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/useflagpkg-1.0 to /var/tmp/f462/stage/fixtures USE="-foo -missingflag" 
+[ebuild  N     ] dev-libs/usedeprejectedpkg-1.0 to /var/tmp/f462/stage/fixtures
+--- stderr:
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/usedeprejectedpkg-1.0::testrepo
+# required by dev-libs/usedeprejectedpkg (argument)
+>=dev-libs/useflagpkg-1.0 -foo
+=== c6-license [portuale emerge --pretend --autounmask dev-libs/licensemaskedconsumer] rc=1
+--- stdout:
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/licensemaskedpkg-1.0 to /var/tmp/f462/stage/fixtures
+[ebuild  N     ] dev-libs/licensemaskedconsumer-1.0 to /var/tmp/f462/stage/fixtures
+--- stderr:
+
+The following license changes are necessary to proceed:
+ (see "package.license" in the portage(5) man page for more details)
+# required by dev-libs/licensemaskedconsumer-1.0::testrepo
+# required by dev-libs/licensemaskedconsumer (argument)
+>=dev-libs/licensemaskedpkg-1.0 SomeEula
+=== c7-quiet [portuale emerge --quiet --pretend --autounmask dev-libs/maskneedpkg] rc=1
+--- stdout:
+[ebuild  N    ] dev-libs/maskeddep-1.0 to /var/tmp/f462/stage/fixtures
+[ebuild  N    ] dev-libs/maskneedpkg-1.0 to /var/tmp/f462/stage/fixtures
+--- stderr:
+
+The following mask changes are necessary to proceed:
+ (see "package.unmask" in the portage(5) man page for more details)
+# required by dev-libs/maskneedpkg-1.0::testrepo
+# required by dev-libs/maskneedpkg (argument)
+# /var/tmp/f462/stage/fixtures/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+# fixture package.mask for the masked-dependency disclosure slice:
+# dev-libs/maskeddep stays masked so a dependency on it reports the
+# "All ebuilds ... have been masked" block (never unmasked anywhere).
+=dev-libs/maskeddep-1.0
+=== c8-only [portuale emerge --pretend --autounmask --autounmask-only dev-libs/maskneedpkg] rc=0
+--- stdout:
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N    #] dev-libs/maskeddep-1.0 to /var/tmp/f462/stage/fixtures
+[ebuild  N     ] dev-libs/maskneedpkg-1.0 to /var/tmp/f462/stage/fixtures
+--- stderr:
+
+The following mask changes are necessary to proceed:
+ (see "package.unmask" in the portage(5) man page for more details)
+# required by dev-libs/maskneedpkg-1.0::testrepo
+# required by dev-libs/maskneedpkg (argument)
+# /var/tmp/f462/stage/fixtures/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+# fixture package.mask for the masked-dependency disclosure slice:
+# dev-libs/maskeddep stays masked so a dependency on it reports the
+# "All ebuilds ... have been masked" block (never unmasked anywhere).
+=dev-libs/maskeddep-1.0
+
+NOTE: The --autounmask-keep-masks option will prevent emerge
+      from creating package.unmask or ** keyword changes.

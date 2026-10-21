@@ -347,7 +347,17 @@ pub fn run(args: &[String]) -> ExitCode {
             autounmask_only: opts.autounmask_only,
             has_changes: has_autounmask_changes,
         });
-    show_resolution_header(&opts, &result, &color);
+    show_resolution_header(
+        &opts,
+        &result,
+        &color,
+        pretend_changes_show_header(PretendChangesShowHeaderArgs {
+            pretend: opts.pretend,
+            json: opts.json,
+            has_changes: has_autounmask_changes,
+            complete: matches!(result.outcome, portage_repo::ResolveOutcome::Complete),
+        }),
+    );
 
     show_pprovided_notice(&result, &color);
 

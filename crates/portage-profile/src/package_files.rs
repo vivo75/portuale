@@ -70,6 +70,29 @@ pub(crate) fn scope_repo_mask_lines(lines: &[String], repo_name: &str) -> Vec<St
         .collect()
 }
 
+/// [`scope_repo_mask_lines`] keeping each line's source file (see
+/// [`crate::atom_lines::filter_atom_lines_with_sources`]).
+// Portage: lib/portage/util/__init__.py, append_repo
+pub(crate) fn scope_repo_mask_lines_with_sources(
+    lines: &[(String, PathBuf)],
+    repo_name: &str,
+) -> Vec<(String, PathBuf)> {
+    lines
+        .iter()
+        .map(|(line, source)| {
+            let (prefix, atom) = match line.strip_prefix('-') {
+                Some(rest) => ("-", rest),
+                None => ("", line.as_str()),
+            };
+            if atom.contains("::") {
+                (line.clone(), source.clone())
+            } else {
+                (format!("{prefix}{atom}::{repo_name}"), source.clone())
+            }
+        })
+        .collect()
+}
+
 /// Same `::repo`-scoping rule as [`scope_repo_mask_lines`], applied to
 /// the `<atom> <flag> ...` line shape: only the leading atom token gets
 /// scoped. These files have no `-atom` whole-entry removal syntax.
@@ -114,6 +137,33 @@ pub(crate) fn stack_mask_lines(sources: &[Vec<String>]) -> Vec<String> {
                     });
                 }
                 None => list.push(line.clone()),
+            }
+        }
+    }
+    list
+}
+
+/// [`stack_mask_lines`] keeping each surviving entry's source file (see
+/// [`crate::atom_lines::filter_atom_lines_with_sources`]): a surviving
+/// entry keeps the fragment that contributed it; a `-` line removes and is
+/// itself dropped, exactly like the plain fold.
+// Portage: MaskManager.py, stack_lists(incremental=1) with ignore_repo=True
+pub(crate) fn stack_mask_lines_with_sources(
+    sources: &[Vec<(String, PathBuf)>],
+) -> Vec<(String, PathBuf)> {
+    let mut list: Vec<(String, PathBuf)> = Vec::new();
+    for lines in sources {
+        for (line, source) in lines {
+            match line.strip_prefix('-') {
+                Some(removed) if removed.contains("::") => {
+                    list.retain(|(x, _)| x != removed);
+                }
+                Some(removed) => {
+                    list.retain(|(x, _)| {
+                        x.split_once("::").map_or(x.as_str(), |(atom, _)| atom) != removed
+                    });
+                }
+                None => list.push((line.clone(), source.clone())),
             }
         }
     }

@@ -4244,6 +4244,7 @@ fn bridge_validate_aborts(
                         token,
                         dep_chain: Vec::new(),
                         trigger: Some(owner.clone()),
+                        mask_entry: None,
                     });
                     flips
                         .entry(format!("{}/{}", parsed.category, parsed.package))
@@ -4515,6 +4516,7 @@ fn parent_flip_rescue(args: ParentFlipRescueArgs<'_>) -> Option<ParentFlipRescue
             atom: autounmask_use_atom_form(&parent_cand, &parent_all, &pc, &pp, &req.config),
             token,
             trigger: None,
+            mask_entry: None,
             dep_chain,
         },
         suggestion,

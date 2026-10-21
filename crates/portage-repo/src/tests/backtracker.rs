@@ -312,6 +312,7 @@ fn backtrack_params_equal_compares_every_accumulator() {
         token: "flag".to_string(),
         dep_chain: Vec::new(),
         trigger: None,
+        mask_entry: None,
     });
     assert!(differs(p), "autounmask_use_change_records");
     let mut p = base.clone();

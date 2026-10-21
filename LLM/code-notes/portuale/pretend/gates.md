@@ -36,3 +36,6 @@ Pure predicates for what a run shows: merge-list gating, the empty-plan arms, an
 
 ## fn top_level_abort_notice_shown
 - Backlog #351 S7: the top-level all-masked abort prints the resolution notice on its way out only for a non-`--pretend` run (`!pretend && is_all_masked_abort_report(msg)`); the `--pretend` arm stays silent per the plan's Q6 ruling, and every other resolve error shape (plain miss, USE miss, REQUIRED_USE) keeps today's silence as out of scope. The resulting incoherence is Portage-faithful on each arm taken alone: Portage prints the preamble on `--pretend` aborts too (S0 a02/a03), while portuale's `--pretend` success path never prints it (pinned convention) — unifying the two is a decision of its own (plan Q6 default: leave it).
+
+## fn pretend_changes_show_header
+- Backlog #462: a `--pretend` run whose resolve completed with autounmask changes prints the resolution header before the rows (Portage's `_display_autounmask` runs `_show_merge_list` per change, `depgraph.py:10726` etc.). `--json` keeps stdout machine-readable (Portage has no `--json` pretend path; portuale's JSON early-returns before any display); an aborted resolve keeps its own preamble arms; the non-pretend path goes through the existing `!pretend` arm.

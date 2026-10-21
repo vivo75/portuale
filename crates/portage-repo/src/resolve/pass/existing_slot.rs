@@ -452,6 +452,7 @@ pub(crate) fn existing_slot_use_flip_suggestion(args: ExistingSlotUseFlipSuggest
                             // This dep's owner IS the forcing parent (Portage's
                             // `_get_dep_chain` starts at the requester).
                             trigger: owner.clone(),
+                            mask_entry: None,
                         });
                     }
                     // The driver re-drives, not here; only with

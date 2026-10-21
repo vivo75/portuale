@@ -448,6 +448,7 @@ pub(crate) fn apply_replay_flips(
                     token,
                     dep_chain: Vec::new(),
                     trigger: origin_cp.get(cp).cloned(),
+                    mask_entry: None,
                 });
             }
         }

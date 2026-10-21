@@ -1,0 +1,143 @@
+CorpusDrift: expanded: --pretend --emptytree dev-libs/abort-au-plain: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/aubreaktop: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/aubreakwant: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/aucasclate: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/aucasctop: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/flipinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/unsatusealtmultidep: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/unsatuseinst: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/unsatuseinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/unsatusemasked: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/unsatuseor: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/unsatuseslot: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/usedeprejectedpkg: stdout changed
+CorpusDrift: expanded: --pretend --emptytree dev-libs/useeqparentoffpkg: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/abort-au-plain: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/aubreaktop: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/aubreakwant: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/aucasclate: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/aucasctop: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/flipinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/unsatusealtmultidep: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/unsatuseinst: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/unsatusemasked: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/unsatuseor: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/unsatuseslot: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/usedeprejectedpkg: stdout changed
+CorpusDrift: expanded: --pretend --tree dev-libs/useeqparentoffpkg: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/abort-au-plain: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/aubreaktop: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/aubreakwant: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/aucasclate: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/aucasctop: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/flipinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/unsatusealtmultidep: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/unsatuseinst: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/unsatuseinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/unsatusemasked: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/unsatuseor: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/unsatuseslot: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/usedeprejectedpkg: stdout changed
+CorpusDrift: expanded: --pretend --update --deep --newuse dev-libs/useeqparentoffpkg: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/abort-au-plain: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/aubreaktop: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/aubreakwant: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/aucasclate: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/aucasctop: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/flipinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/unsatusealtmultidep: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/unsatuseinst: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/unsatuseinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/unsatusemasked: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/unsatuseor: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/unsatuseslot: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/usedeprejectedpkg: stdout changed
+CorpusDrift: expanded: --pretend --update --deep dev-libs/useeqparentoffpkg: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/abort-au-plain: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/aubreaktop: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/aubreakwant: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/aucasclate: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/aucasctop: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/flipinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/unsatusealtmultidep: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/unsatusemasked: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/unsatuseor: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/unsatuseslot: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/usedeprejectedpkg: stdout changed
+CorpusDrift: expanded: --pretend --update dev-libs/useeqparentoffpkg: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/abort-au-plain: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/aubreaktop: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/aubreakwant: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/aucasclate: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/aucasctop: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/flipinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/unsatusealtmultidep: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/unsatuseinst: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/unsatusemasked: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/unsatuseor: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/unsatuseslot: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/usedeprejectedpkg: stdout changed
+CorpusDrift: expanded: --pretend --verbose dev-libs/useeqparentoffpkg: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/abort-au-plain: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/aubreaktop: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/aubreakwant: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/aucasclate: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/aucasctop: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/flipinstconsumer: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/unsatusealtmultidep: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/unsatuseinst: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/unsatusemasked: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/unsatuseor: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/unsatuseslot: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/usedeprejectedpkg: stdout changed
+CorpusDrift: expanded: --pretend dev-libs/useeqparentoffpkg: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-keep-masks=n on a package.mask'd dependency]#0: stdout, stderr changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-keep-masks=n resolves a package.mask'd target + prints the mask block]#0: stdout, stderr changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-license: --autounmask resolves it + prints the license block]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-license=y alone enables the license block]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-only: the merge list is re-shown plus the changes block]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-use: a (+)-defaulted missing flag alongside a flippable one does not block the flip]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-use: a top-level [-flag] mismatch resolves + prints the USE changes block]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-use: a top-level [flag] mismatch (flag in IUSE) resolves too]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask: a keyword-masked dependency resolves + prints the changes block once enabled]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask: keyword-masked target resolves + prints the changes block once enabled]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[-pv --autounmask-use=y: a flip-revealed || group defers to the drained graph (pg398-t, #398)]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[-v form of the installed-dep-missing-flag reinstall]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[a `[flag]` dep on an already-installed package that lacks the flag reinstalls it + autounmasks (L0 nginx/systemd/curl root cause)]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[an installed parent's [flag=] dep is evaluated against its vdb USE and cannot be satisfied (#132 A)]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask backward cascade, --autounmask-backtrack=n is the default]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask backward cascade, --autounmask-backtrack=y: aucascleaf appears]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask backward cascade, -v: the flipped-in dep and the counters line]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask backward cascade: [flag] on an already-resolved slot re-resolves the whole graph]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask breakage, -v]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask breakage: default (no --autounmask-backtrack) collects the change]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask keyword backward cascade, --autounmask: the slot re-resolves to 2.0]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask keyword backward cascade, -pv --autounmask]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask levels: a lower license-masked version beats a higher ~arch one]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask per-level re-scan, --autounmask: two categories on the same version]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask per-level re-scan, -pv --autounmask]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask: upstream test_autounmask_keep_keywords pg0 keep=n fails like Portage (rc 1; newest A-2 via unstable B-1)]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask: upstream test_autounmask_use_backtrack pg0 dev-libs/abk0d fails like Portage (rc 1; USE changes necessary, bug 632598; pristine-world cell matches Portage's A-3+x, the world=B fall to A-2 is pinned separately)]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask: upstream test_autounmask_use_slot_conflict pg0 L+M fails like Portage (rc 1; K wanted with foo and -foo at once, bug 615824)]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[opt= USE-dep: parent flag OFF evaluates to [-flag], mismatches the child's default-on flag]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: --deep walk of an installed pkg's || group hits the same unsat_use_* dispatch as the main walk]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: a genuinely unsatisfied USE-dep dependency atom is rejected]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: || group demotes a use.mask-violating alternative to other (never selected), the unsat_use alternative wins instead]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: || group resolves a USE-unsatisfiable-but-unmasked alternative (unsat_use_non_installed bin) and autounmask flips the flag]#0: stdout changed
+CorpusDrift: pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: || group's unsat_use_installed bin keys on the SLOT the alternative targets, not just cp-installed (F4 all_installed_slots)]#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_abort_path_gate_is_behaviour_neutral[dev-libs/abort-au-plain]#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_abort_path_gate_is_behaviour_neutral[dev-libs/abort-au-plain]#1: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_abort_path_gate_is_behaviour_neutral[dev-libs/aucasctop]#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_abort_path_gate_is_behaviour_neutral[dev-libs/aucasctop]#1: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot#1: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_autounmask_cascade_flip_before_dep_walk_pulls_the_gated_leaf#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_version#1: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_autounmask_levels_prefer_license_over_a_higher_keyword_masked_version#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_autounmask_only_resolve_prints_no_terminated_early_notice#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_deep_walk_dispatches_or_group_through_the_same_unsat_use_bins_as_the_main_walk#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_or_group_resolves_a_use_unsatisfiable_but_unmasked_alternative#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_or_group_unsat_use_installed_bin_keys_on_the_targeted_slot_not_just_cp#0: stdout changed
+CorpusDrift: tests/test_emerge_pretend_contract.py::test_or_group_use_mask_violation_demotes_to_other_never_selected#0: stdout changed
