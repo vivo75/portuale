@@ -371,7 +371,12 @@ pub(crate) fn merge_after_install_finish(
     // the `FAILED postinst` line Portage prints after the die block.
     // Portage: vartree.py, dblink.treewalk
     if postinst_status != 0 {
-        record_postinst_failure(&env.t(), options.log_file.as_deref(), postinst_status)?;
+        record_postinst_failure(
+            &env.t(),
+            options.log_file.as_deref(),
+            postinst_status,
+            false,
+        )?;
     }
     absorb_update_env(root, &env.category, &env.split.pf, &update_env)?;
 
@@ -419,6 +424,7 @@ pub(crate) fn record_postinst_failure(
     t_dir: &Path,
     log_file: Option<&Path>,
     postinst_status: i32,
+    echo: bool,
 ) -> Result<(), String> {
     use std::io::Write;
     let line = format!("FAILED postinst: {postinst_status}");
@@ -443,7 +449,7 @@ pub(crate) fn record_postinst_failure(
     // renders phase output with `havecolor` set, pipe or not.
     // Portage: output.py, EOutput.eerror; _emerge/EbuildPhase.py, _elog
     let rendered = format!(
-        "{} {line}",
+        "{}{line}",
         crate::color::Colorizer::new(true).c("ERR", " * ")
     );
     if let Some(path) = log_file {
@@ -453,7 +459,10 @@ pub(crate) fn record_postinst_failure(
             .open(path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         writeln!(log, "{rendered}").map_err(|e| format!("{}: {e}", path.display()))?;
-    } else {
+    }
+    // `echo`: a foreground run whose log is written here (the hooks teed
+    // theirs) still shows the line on the terminal.
+    if log_file.is_none() || echo {
         println!("{rendered}");
     }
     Ok(())

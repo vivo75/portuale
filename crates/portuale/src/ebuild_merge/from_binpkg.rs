@@ -81,7 +81,7 @@ impl HookCtx<'_> {
                         debug: options.debug,
                         config_root: &options.config_root,
                         shell: options.shell,
-                        log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
+                        log_file: binary_hook_log(options),
                         update_env,
                         refresh_features: update_env.map(|_| options.features.as_str()),
                         replacing_versions: Some(replacing_versions.as_str()),
@@ -277,7 +277,7 @@ pub fn merge_binpkg(
             debug: options.debug,
             config_root: &options.config_root,
             shell: options.shell,
-            log_file: ebuild_phases::PhaseLog::capture(options.log_file.as_deref()),
+            log_file: binary_hook_log(options),
             repo_name: hooks.repo_name,
         })?;
         if instprep_status != 0 {
@@ -628,7 +628,12 @@ pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<Mer
             );
             Some(foreground_log.as_path())
         };
-        record_postinst_failure(&builddir.join("temp"), log_file, postinst_status)?;
+        record_postinst_failure(
+            &builddir.join("temp"),
+            log_file,
+            postinst_status,
+            options.log_file.is_none(),
+        )?;
     }
     absorb_update_env(root, category, pf, &update_env)?;
 
@@ -675,4 +680,15 @@ pub(crate) fn merge_binpkg_finish(args: MergeBinpkgFinishArgs<'_>) -> Result<Mer
         status: postinst_status,
         postinst_failed: postinst_status != 0,
     })
+}
+
+/// A binary merge's hook log: captured to the entry's build log in
+/// background mode, teed through it in the foreground (Portage's phase
+/// logging pipe in both).
+// Portage: _emerge/Binpkg.py
+fn binary_hook_log(options: &MergeOptions) -> ebuild_phases::PhaseLog<'_> {
+    match options.log_file.as_deref() {
+        Some(path) => ebuild_phases::PhaseLog::Capture(path),
+        None => ebuild_phases::PhaseLog::Foreground,
+    }
 }

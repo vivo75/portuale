@@ -386,6 +386,32 @@ pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Re
                 extra_env.push(("PORTAGE_FEATURES".to_string(), features.to_string()));
             }
         }
+        // Like a source phase: a foreground hook tees through `${T}/build.log`
+        // and `PORTAGE_LOG_FILE` rides the env, so `die` prints its
+        // `The complete build log is located at` line.
+        // Portage: _emerge/Binpkg.py (PORTAGE_LOG_FILE); doebuild.py, _spawn_phase
+        let foreground_path: Option<PathBuf>;
+        let log_file = match log_file {
+            PhaseLog::Foreground => {
+                let (logdir, sep) = crate::emerge_build::foreground_log_env();
+                foreground_path = Some(crate::emerge_build::foreground_log_path(
+                    crate::emerge_build::ForegroundLogArgs {
+                        t_dir: &env.t(),
+                        builddir: env.portage_builddir(),
+                        category: &env.category,
+                        pf: &env.split.pf,
+                        features: &features_string(&extra_env),
+                        logdir: logdir.as_deref(),
+                        sep: &sep,
+                    },
+                ));
+                PhaseLog::Tee(foreground_path.as_deref().unwrap())
+            }
+            resolved => resolved,
+        };
+        if let PhaseLog::Tee(path) | PhaseLog::Capture(path) = log_file {
+            extra_env.push(("PORTAGE_LOG_FILE".to_string(), path.display().to_string()));
+        }
         run_one_phase(RunOnePhaseArgs {
             env: &env,
             root,
