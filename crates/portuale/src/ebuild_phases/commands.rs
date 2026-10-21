@@ -50,7 +50,9 @@ pub(crate) struct RunCommandsAsyncArgs<'a> {
     /// Portage's merge-path `EbuildExecuter`: skip the no-op default
     /// `unpack`/`prepare`/`configure`/`compile`/`test` bodies for a
     /// sourceless package (see [`can_skip_source_phases`]). The direct
-    /// `ebuild` and `package` paths run every phase like `doebuild()`.
+    /// `ebuild` paths (and a direct `ebuild <file> package`) run every
+    /// phase like `doebuild()`; the scheduler-driven `--buildpkgonly`
+    /// build goes through `EbuildExecuter` and skips (backlog #458).
     pub(crate) skip_noop_src_phases: bool,
 }
 

@@ -144,6 +144,11 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
                 options: &per_entry_options,
                 build_env: &build_env,
                 use_flags,
+                // Scheduler-driven `--buildpkgonly` (`EbuildBuild`) goes
+                // through `EbuildExecuter`, so the no-op source-phase skip
+                // fires exactly like on the merge path (backlog #458).
+                // Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
+                skip_noop_src_phases: true,
             }) {
                 Ok(0) => clean_failure("post"),
                 Ok(_) => Some(format!(

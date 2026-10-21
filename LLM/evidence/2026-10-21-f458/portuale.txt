@@ -1,0 +1,32 @@
+=== buildpkgonly
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging (1 of 1) dev-libs/schedparent-1.0::qbuild for /var/tmp/f458/root
+
+>>> Install dev-libs/schedparent-1.0 into /var/tmp/f458/tmp/portage/dev-libs/schedparent-1.0/image
+>>> Completed installing dev-libs/schedparent-1.0 into /var/tmp/f458/tmp/portage/dev-libs/schedparent-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+rc=0
+--- stderr
+>>> Creating binpkg
+>>> Done.
+=== buildpkgonly-quiet-build-n
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging (1 of 1) dev-libs/schedparent-1.0::qbuild for /var/tmp/f458/root
+
+>>> Install dev-libs/schedparent-1.0 into /var/tmp/f458/tmp/portage/dev-libs/schedparent-1.0/image
+>>> Completed installing dev-libs/schedparent-1.0 into /var/tmp/f458/tmp/portage/dev-libs/schedparent-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  4 KiB
+rc=0
+--- stderr
+>>> Creating binpkg
+>>> Done.

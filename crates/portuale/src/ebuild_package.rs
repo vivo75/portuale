@@ -674,6 +674,12 @@ pub struct RunPackageArgs<'a> {
     pub options: &'a PackageOptions,
     pub build_env: &'a [(String, String)],
     pub use_flags: &'a str,
+    /// Portage's scheduler-driven `--buildpkgonly` (`EbuildBuild`) goes
+    /// through `EbuildExecuter`, so it skips the no-op source phases like a
+    /// merge; a direct `ebuild <file> package` is manual `doebuild()` mode
+    /// and runs every phase (backlog #458).
+    /// Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
+    pub skip_noop_src_phases: bool,
 }
 
 /// Runs the `install` chain, then the packaging tail.
@@ -690,6 +696,7 @@ pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
         options,
         build_env,
         use_flags,
+        skip_noop_src_phases,
     } = args;
     require_signing_config(options)?;
     let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
@@ -706,9 +713,10 @@ pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
         // Portage: doebuild.py, _spawn_phase
         log_file: ebuild_phases::PhaseLog::Foreground,
         build_env,
-        // `doebuild()` runs every phase; the no-op src-phase skip is
-        // merge-path only (backlog #456).
-        skip_noop_src_phases: false,
+        // Scheduler-driven `--buildpkgonly` skips the no-op source phases
+        // like a merge (backlog #458); a direct `ebuild <file> package`
+        // runs every phase like `doebuild()`.
+        skip_noop_src_phases,
     })?;
     if status != 0 {
         return Ok(status);
@@ -2457,6 +2465,7 @@ mod tests {
             options: &options,
             build_env: &[],
             use_flags: "",
+            skip_noop_src_phases: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -2733,6 +2742,7 @@ mod tests {
             options: &options,
             build_env: &[],
             use_flags: "",
+            skip_noop_src_phases: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -2812,6 +2822,7 @@ mod tests {
             options: &options,
             build_env: &[],
             use_flags: "",
+            skip_noop_src_phases: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -2822,6 +2833,7 @@ mod tests {
             options: &options,
             build_env: &[],
             use_flags: "",
+            skip_noop_src_phases: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -2922,6 +2934,7 @@ mod tests {
                 options: &options,
                 build_env: &[],
                 use_flags: "",
+                skip_noop_src_phases: false,
             })
             .expect("run_package succeeds");
             assert_eq!(status, 0);
@@ -2974,6 +2987,7 @@ mod tests {
             options: &options,
             build_env: &[],
             use_flags: "",
+            skip_noop_src_phases: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -3054,6 +3068,7 @@ mod tests {
             options: &options,
             build_env: &[],
             use_flags: "",
+            skip_noop_src_phases: false,
         })
         .expect("run_package returns Ok(status)");
         assert_ne!(
@@ -3074,5 +3089,112 @@ mod tests {
             .filter(|n| n.contains(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "leftover temp files: {leftovers:?}");
+    }
+
+    #[test]
+    fn run_package_with_src_phase_skip_runs_setup_then_install_only() {
+        // Backlog #458: the scheduler-driven `--buildpkgonly` path sets
+        // `skip_noop_src_phases`, so a sourceless ebuild (`DEFINED_PHASES`
+        // misses every skippable phase) runs `pkg_pretend`/`pkg_setup`
+        // then straight to `src_install` -- the same gate the merge path
+        // pins in #456. Skipped phases never spawn, so they leave no
+        // stamps; the packaging tail still runs.
+        // Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/schedleaf-a/schedleaf-a-1.0.ebuild");
+
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+            skip_noop_src_phases: true,
+        })
+        .expect("run_package succeeds");
+        assert_eq!(status, 0);
+
+        let builddir = portage_tmpdir.join("portage/dev-libs/schedleaf-a-1.0");
+        for stamp in [".pretended", ".setuped", ".installed"] {
+            assert!(
+                builddir.join(stamp).is_file(),
+                "{stamp} must exist: the phase ran"
+            );
+        }
+        for stamp in [
+            ".unpacked",
+            ".prepared",
+            ".configured",
+            ".compiled",
+            ".tested",
+        ] {
+            assert!(
+                !builddir.join(stamp).exists(),
+                "{stamp} must not exist: the phase was skipped"
+            );
+        }
+        assert!(
+            options
+                .pkgdir
+                .join("dev-libs/schedleaf-a-1.0.gpkg.tar")
+                .is_file(),
+            "the packaging tail still runs"
+        );
+    }
+
+    #[test]
+    fn run_package_with_src_phase_skip_still_runs_a_defined_src_phase() {
+        // Backlog #458 guard: the flag threads the same gate, so a package
+        // defining a skippable phase (`dev-libs/unsetcflagspkg` defines
+        // `src_compile`) still runs the full chain.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let portage_tmpdir = tmp.join("tmp");
+        let options = PackageOptions {
+            debug: false,
+            pkgdir: tmp.join("pkgdir"),
+            distdir: tmp.join("distdir"),
+            shell: ebuild_phases::ShellBackend::default(),
+            binpkg_compress: "bzip2".to_string(),
+            ..PackageOptions::default()
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&portage_tmpdir).unwrap();
+
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
+        let ebuild = repo_root.join("dev-libs/unsetcflagspkg/unsetcflagspkg-1.0.ebuild");
+
+        let status = run_package(RunPackageArgs {
+            ebuild_path: &ebuild,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+            build_env: &[],
+            use_flags: "",
+            skip_noop_src_phases: true,
+        })
+        .expect("run_package succeeds");
+        assert_eq!(status, 0);
+
+        let builddir = portage_tmpdir.join("portage/dev-libs/unsetcflagspkg-1.0");
+        assert!(
+            builddir.join(".compiled").is_file(),
+            "the defined src_compile must still run"
+        );
     }
 }
