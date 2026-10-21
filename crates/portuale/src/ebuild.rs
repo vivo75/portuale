@@ -418,6 +418,9 @@ pub(crate) fn run_real_commands(
                 options: &package_options,
                 build_env: &[],
                 use_flags: "",
+                // Manual mode runs every phase like `doebuild()`; the
+                // skip is scheduler-path only (backlog #458).
+                skip_noop_src_phases: false,
             })
         } else if ebuild_phases::is_standalone_phase_command(cmd) {
             ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {

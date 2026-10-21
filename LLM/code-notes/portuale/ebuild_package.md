@@ -116,6 +116,7 @@ Binary-package building (`ebuild package`, `--buildpkg`, quickpkg). Context move
 ## fn run_package
 - `build_env`: `--buildpkgonly` passes the full `phase_environ`-derived env plus the entry's own `USE` (#37 S2); standalone passes `&[]` (no graph, no resolved config -- `phase_env_vars`' curated base stands).
 - The per-entry multi-instance token comes from the `--buildpkgonly` per-entry fold when one matched, the run-wide value otherwise; standalone falls back to construction, preserving standalone behavior (Portage's `doebuild` package branch has no per-package `BUILD_ID` logic).
+- `skip_noop_src_phases` (#458): forwarded to `run_commands`; `true` on the scheduler-driven `--buildpkgonly` path (`run_buildpkgonly`, whose `EbuildBuild` goes through `EbuildExecuter`), `false` for direct `ebuild <file> package` (manual `doebuild()` mode). Portage: `_emerge/EbuildBuild.py`, `_emerge/EbuildExecuter.py`.
 
 ## fn package_after_install
 - Backlog #147 S1 ruling (i): layout run-wide (Portage's once-bound bintree allocator), `BUILD_ID` export + index entry per-entry (Portage's `EbuildBinpkg.py:47-48`). Standalone callers pass `false`. Run-wide single + per-entry token writes no `BUILD_ID` anywhere, where Portage writes index `None` and vdb `-1` (S1 D1): a documented `str(None)`-wart divergence, not mirrored.
@@ -241,3 +242,9 @@ Binary-package building (`ebuild package`, `--buildpkg`, quickpkg). Context move
 - A real `.gpkg.tar` -- unmodified `bin/gpkg-helper.py compress` (Portage `portage.gpkg.gpkg().compress()`) built it: an outer tar whose members are the `gpkg-1` version marker, the compressed `metadata.tar.<comp>`, the compressed `image.tar.<comp>`, and a `Manifest`.
 - `write_post_install_metadata` (Portage `_post_src_install_write_metadata`) put the dep strings into `build-info`, and Portage `gpkg._generate_metadata_from_dir` carried them into `metadata.tar`.
 - And the directory scan (Portage `bintree._populate_local`) reads the file directly -- the just-written index entry's own `_mtime_`/`SIZE` still agree with the file (nothing else touched it since), so this hits the mtime-staleness fast path rather than re-parsing the gpkg archive.
+
+## tests: run_package_with_src_phase_skip_runs_setup_then_install_only
+- Backlog #458: `run_package` with `skip_noop_src_phases: true` on `dev-libs/schedleaf-a` (sourceless, `DEFINED_PHASES=install`) -- stamp-level proof the wiring works: `.pretended`/`.setuped`/`.installed` exist (the skip is decided lazily after `setup`, like `EbuildExecuter._setup_exit`), the five skippable stamps (`.unpacked`/`.prepared`/`.configured`/`.compiled`/`.tested`) are absent (skipped phases never spawn, never stamp), and the binpkg still lands (the packaging tail is untouched).
+
+## tests: run_package_with_src_phase_skip_still_runs_a_defined_src_phase
+- Backlog #458 guard: the flag threads the same `can_skip_source_phases` gate, so `dev-libs/unsetcflagspkg` (defines `src_compile`) still runs the full chain -- `.compiled` exists.
