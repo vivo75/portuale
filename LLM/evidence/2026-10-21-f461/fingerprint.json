@@ -1,0 +1,22 @@
+{
+  "generator": 1,
+  "params": {
+    "seed": 461,
+    "chains": 20,
+    "chain_len": 18,
+    "chain_fanout": 10,
+    "diamonds": 100,
+    "diamond_fanout": 6,
+    "leaves": 120,
+    "slots": 40,
+    "blocks": 8,
+    "usepkgs": 60,
+    "alts": 20,
+    "newpkgs": 60,
+    "system": 8,
+    "vdb_extra": 3000
+  },
+  "tree_digest": "3e5c307d35875855b299fbe6470055096e651f0abde0550f17d96abfd4fa4dc6",
+  "file_count": 21707,
+  "total_bytes": 1175824
+}

@@ -1,0 +1,101 @@
+{
+  "pm": "portuale",
+  "pm_version": "f12241b5-dirty",
+  "profile": "release",
+  "dataset": "world-shaped",
+  "argv": [
+    "emerge",
+    "-puDN",
+    "@world"
+  ],
+  "runs": 3,
+  "tree_digest": "3e5c307d35875855b299fbe6470055096e651f0abde0550f17d96abfd4fa4dc6",
+  "generator": 1,
+  "params": {
+    "seed": 461,
+    "chains": 20,
+    "chain_len": 18,
+    "chain_fanout": 10,
+    "diamonds": 100,
+    "diamond_fanout": 6,
+    "leaves": 120,
+    "slots": 40,
+    "blocks": 8,
+    "usepkgs": 60,
+    "alts": 20,
+    "newpkgs": 60,
+    "system": 8,
+    "vdb_extra": 3000
+  },
+  "stdout_sha256": "92971776625d92d6f50f2f163a26cf022457b482ad383925db1ba20f30d7442d",
+  "spans": {
+    "ResolveCtx::new": [
+      0.053000000000000005,
+      0.055999999999999994,
+      0.055999999999999994
+    ],
+    "collect_pass_blockers": [
+      0.267,
+      0.266,
+      0.263
+    ],
+    "display_and_post": [
+      0.125,
+      0.125,
+      0.124
+    ],
+    "expand_targets": [
+      0.004,
+      0.004,
+      0.004
+    ],
+    "plan_resolve": [
+      0.004,
+      0.003,
+      0.003
+    ],
+    "refresh_binhost_indexes": [
+      0.003,
+      0.003,
+      0.003
+    ],
+    "resolve_once complete=false": [
+      1.202,
+      1.193,
+      1.193
+    ],
+    "run_pass first=true": [
+      0.9199999999999999,
+      0.9099999999999999,
+      0.911
+    ],
+    "run_resolve_phases": [
+      1.205,
+      1.196,
+      1.196
+    ],
+    "serialize_merge_order select_nodes": [
+      0.002,
+      0.002,
+      0.002
+    ]
+  },
+  "span_medians": {
+    "ResolveCtx::new": 0.055999999999999994,
+    "collect_pass_blockers": 0.266,
+    "display_and_post": 0.125,
+    "expand_targets": 0.004,
+    "plan_resolve": 0.003,
+    "refresh_binhost_indexes": 0.003,
+    "resolve_once complete=false": 1.193,
+    "run_pass first=true": 0.911,
+    "run_resolve_phases": 1.196,
+    "serialize_merge_order select_nodes": 0.002
+  },
+  "walls": [
+    1.3538694335147738,
+    1.3428634004667401,
+    1.3420986561104655
+  ],
+  "wall_median": 1.3428634004667401
+}
