@@ -1,0 +1,157 @@
+=== 471 -pq --resume
+[ebuild  N    ] dev-libs/schedleaf-a-1.0 to /var/tmp/r468e/root
+[ebuild  N    ] dev-libs/schedleaf-b-1.0 to /var/tmp/r468e/root
+rc=0
+=== 469 -pv (no distfiles)
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took(backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/schedleaf-a-1.0::qbuild to /var/tmp/r468e/root 0 KiB
+[ebuild  N     ] dev-libs/schedleaf-b-1.0::qbuild to /var/tmp/r468e/root 0 KiB
+[ebuild  N     ] dev-libs/schedparent-1.0::qbuild to /var/tmp/r468e/root 0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+rc=0
+=== 470 -p nosuch/pkg
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took(backtrack: 0/20).
+
+
+emerge: there are no ebuilds to satisfy "nosuch/pkg" for /var/tmp/r468e/root.
+
+emerge: searching for similar names... nothing similar found.
+rc=1
+=== 470 -p nosuch
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took(backtrack: 0/20).
+
+
+emerge: there are no ebuilds to satisfy "nosuch" for /var/tmp/r468e/root.
+
+
+emerge: searching for similar names... nothing similar found.
+rc=1
+=== 470 -pq nosuch
+
+emerge: there are no ebuilds to satisfy "nosuch" for /var/tmp/r468e/root.
+
+
+emerge: searching for similar names... nothing similar found.
+rc=1
+=== 470 -p --nodeps nosuch
+
+These are the packages that would be merged, in order:
+
+
+emerge: there are no ebuilds to satisfy "nosuch" for /var/tmp/r468e/root.
+
+
+emerge: searching for similar names... nothing similar found.
+rc=1
+=== 470 nosuch
+Calculating dependencies ... done!
+Dependency resolution took(backtrack: 0/20).
+
+
+emerge: there are no ebuilds to satisfy "nosuch" for /var/tmp/r468e/root.
+
+
+emerge: searching for similar names... nothing similar found.
+rc=1
+=== 468 --usepkgonly 
+Calculating dependencies ... done!
+Dependency resolution took(backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) dev-util/f459-postinstfail-1::fetchrepo for /var/tmp/r468f/root
+
+>>> Installing (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r468f/root
+ [31;01m*[0m ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line N:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+>>> Completed (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r468f/root
+
+>>> Failed to install dev-util/f459-postinstfail-1 to /var/tmp/r468f/root, Log file:
+
+>>>  '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+
+ * Messages for package dev-util/f459-postinstfail-1 merged to /var/tmp/r468f/root:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line N:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ * S: '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+rc=1
+=== 468 --usepkgonly -q
+>>> Emerging binary (1 of 1) dev-util/f459-postinstfail-1::fetchrepo for /var/tmp/r468f/root
+>>> Installing (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r468f/root
+>>> Completed (1 of 1) dev-util/f459-postinstfail-1::fetchrepo to /var/tmp/r468f/root
+>>> Failed to install dev-util/f459-postinstfail-1 to /var/tmp/r468f/root, Log file:
+>>>  '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'
+ [31;01m*[0m ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ [31;01m*[0m   postinst exploded
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line 143:  Called pkg_postinst
+ [31;01m*[0m   environment, line N:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       die "postinst exploded"
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ [31;01m*[0m S: '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+[31;01m * [39;49;00mFAILED postinst: 1
+
+ * Messages for package dev-util/f459-postinstfail-1 merged to /var/tmp/r468f/root:
+
+ * FAILED postinst: 1
+ * ERROR: dev-util/f459-postinstfail-1::fetchrepo failed (postinst phase):
+ *   postinst exploded
+ * Call stack:
+ *     ebuild.sh, line 143:  Called pkg_postinst
+ *   environment, line N:  Called die
+ * The specific snippet of code:
+ *       die "postinst exploded"
+ * If you need support, post the output of `emerge --info '=dev-util/f459-postinstfail-1::fetchrepo'`,
+ * the complete build log and the output of `emerge -pqv '=dev-util/f459-postinstfail-1::fetchrepo'`.
+ * The complete build log is located at '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/build.log'.
+ * The ebuild environment file is located at '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/temp/environment'.
+ * Working directory: '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/empty'
+ * S: '/var/tmp/r468f/tmp/portage/dev-util/f459-postinstfail-1/work/f459-postinstfail-1'
+rc=1
