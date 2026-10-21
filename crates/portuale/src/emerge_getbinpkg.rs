@@ -787,6 +787,17 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
         }
     };
 
+    // The entry's own `PORTAGE_TMPDIR` (`package.env`) holds its build
+    // directory, log and elog, like the source path.
+    // Portage: _emerge/Binpkg.py, _start
+    let entry_tmpdir = crate::emerge_build::binary_entry_portage_tmpdir(
+        merge_options,
+        entry,
+        &version,
+        portage_tmpdir,
+    );
+    let portage_tmpdir = entry_tmpdir.as_path();
+
     // The per-package `Emerging binary (N of M) cpv::repo` line: the `>>> Merging
     // binary package ...` line's shape.
     let color = crate::emerge_build::progress_color();
@@ -2362,6 +2373,55 @@ mod tests {
             logging.starts_with("ERROR FAILED postinst:"),
             "the elog heads the phase file: {logging:?}"
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn merge_one_binary_entry_builds_under_the_entrys_own_portage_tmpdir() {
+        // Backlog #467 (Portage `_emerge/Binpkg.py::_start` reads
+        // `settings["PORTAGE_TMPDIR"]` after `setcpv`, so `package.env`
+        // moves the binary entry's build dir; oracle
+        // `LLM/evidence/2026-10-21-r463/`). The matched directory need not
+        // exist: `Binpkg` runs no `_check_temp_dir`, the merge creates it.
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let entry_tmp = tmp.join("entry-tmp");
+        let entry = graph_entry_cat(
+            "dev-util",
+            "f459-postinstfail",
+            CandidateSource::Binary,
+            "1",
+        );
+        let options = MergeOptions {
+            package_env_vars: vec![(
+                "dev-util/f459-postinstfail".to_string(),
+                vec![(
+                    "PORTAGE_TMPDIR".to_string(),
+                    entry_tmp.to_str().unwrap().to_string(),
+                )],
+            )],
+            ..MergeOptions::default()
+        };
+        let err = merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &Config::default(),
+            root: &root,
+            pkgdir: &fixtures_root().join("pkgdir"),
+            portage_tmpdir: &tmp.join("run-tmp"),
+            merge_options: &options,
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
+        .unwrap_err();
+        assert!(crate::emerge_build::is_postinst_failure(&err), "{err}");
+        assert!(
+            entry_tmp
+                .join("portage/dev-util/f459-postinstfail-1")
+                .is_dir(),
+            "the kept builddir is under the entry's tmpdir"
+        );
+        assert!(!tmp.join("run-tmp/portage").exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

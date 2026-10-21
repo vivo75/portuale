@@ -22,6 +22,31 @@ pub(crate) fn entry_portage_tmpdir(
     )
 }
 
+/// [`entry_portage_tmpdir`] for a binary entry: the matched directory is
+/// used as is, with no existence check. `Binpkg._start` reads
+/// `settings["PORTAGE_TMPDIR"]` after `setcpv` and never calls
+/// `_check_temp_dir` (an `EbuildBuild` step), so a missing directory is
+/// created by the merge instead of aborting the entry.
+// Portage: _emerge/Binpkg.py, _start
+pub(crate) fn binary_entry_portage_tmpdir(
+    options: &ebuild_merge::MergeOptions,
+    entry: &GraphEntry,
+    version: &str,
+    portage_tmpdir: &Path,
+) -> PathBuf {
+    if let Some(process) = options.process_tmpdir.as_deref() {
+        return process.to_path_buf();
+    }
+    let cpv_slot = entry_cpv_slot(entry, version);
+    crate::ebuild_phases::match_package_env_scalar_raw(
+        &options.package_env_vars,
+        &cpv_slot,
+        "PORTAGE_TMPDIR",
+    )
+    .filter(|dir| !dir.is_empty())
+    .map_or_else(|| portage_tmpdir.to_path_buf(), PathBuf::from)
+}
+
 /// This entry's per-package `FEATURES`: the matched env-file value folds
 /// onto the run-wide list in `[run-wide, pkg, calling-env]` order instead
 /// of replacing it. `None` when nothing matched, so the caller keeps the

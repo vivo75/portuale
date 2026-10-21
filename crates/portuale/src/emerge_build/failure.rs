@@ -103,7 +103,11 @@ pub(crate) fn source_paths_for(
     portage_tmpdir: &Path,
 ) -> Option<SourcePaths> {
     let version = entry_version(&entry.outcome)?;
-    let tmp = entry_portage_tmpdir(options, entry, version, portage_tmpdir).ok()?;
+    let tmp = if entry.source == portage_repo::CandidateSource::Binary {
+        binary_entry_portage_tmpdir(options, entry, version, portage_tmpdir)
+    } else {
+        entry_portage_tmpdir(options, entry, version, portage_tmpdir).ok()?
+    };
     let log = build_log_path(
         &tmp,
         &entry.category,
