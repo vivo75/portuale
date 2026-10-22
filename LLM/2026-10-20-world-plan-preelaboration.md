@@ -1,6 +1,6 @@
 # Preelaborazione e cache di stato per `emerge -uDpvN @world`
 
-Status: **design, not implemented**. Data: 2026-10-20.
+Status: **done 2026-10-22** (S0 `67a34067`, S1 `31c66595` `b0f4b950` `682149ab`, S2 measured and deferred `27a76963`, S3 plan cache `081f3710`; branch `backlog/441-s0-s1`). S4-S7 not done: S4 is #473, residues #474, #475. Original design below; the shipped S3 is the conservative variant of the strong review (§2.1), see `LLM/code-notes/portuale/pretend/plan_cache.md`. Data: 2026-10-20.
 Scopo: documento di ripresa per l'evoluzione "piano `@world` in ~1 s".
 Spostato da `helpers/` (gitignored) in `LLM/` il 2026-10-20 (backlog #441); scritto mentre un altro agente lavorava sul
 working tree: non tocca codice tracciato.
