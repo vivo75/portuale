@@ -1,0 +1,100 @@
+diff --git a/crates/portuale/src/pretend/resolve_phases.rs b/crates/portuale/src/pretend/resolve_phases.rs
+index a4449678..caa9db0b 100644
+--- a/crates/portuale/src/pretend/resolve_phases.rs
++++ b/crates/portuale/src/pretend/resolve_phases.rs
+@@ -363,8 +363,11 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
+     // and only extends it, never adding a new merge.
+     // Portage: depgraph.py, _complete_graph
+     let empty_reuse: HashMap<(String, String), portage_repo::PretendOutcome> = HashMap::new();
++    let dw_seedfirst = std::env::var_os("PORTUALE_DREWALK_SEEDFIRST").is_some()
++        && deep != portage_repo::Deep::NotRequested
++        && !complete_graph;
+     let result = match handle(
+-        run_resolve(false, &[], false, &empty_reuse).map_err(crate::error::Error::from),
++        run_resolve(false, &[], dw_seedfirst, &empty_reuse).map_err(crate::error::Error::from),
+     ) {
+         Ok(result) => result,
+         Err(code) => {
+@@ -456,6 +459,26 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
+     // report: Portage reaches `_complete_graph` only after `_create_graph()` succeeded.
+     // Portage: depgraph.py, _resolve (select_files)
+     let phase1_aborted = matches!(result.outcome, portage_repo::ResolveOutcome::Aborted { .. });
++    if dw_seedfirst {
++        if let Some(lp) = std::env::var_os("PORTUALE_DREWALK_CMP") {
++            use std::io::Write;
++            let line = match run_resolve(false, &[], false, &empty_reuse) {
++                Ok(u) => {
++                    let u_abort = matches!(u.outcome, portage_repo::ResolveOutcome::Aborted { .. });
++                    let u_ae = !nodeps && portage_repo::complete_graph_auto_enable(portage_repo::CompleteGraphAutoEnableArgs {
++                        entries: &u.entries, if_new_use: complete_if_new_use, if_new_ver: complete_if_new_ver,
++                        if_new_slot: rebuild_if_new_slot, root, repos, config });
++                    let mut u2 = u.clone();
++                    if phase1_rebuild_if { u2.backtrack_restarts = u2.backtrack_restarts.max(phase1_restarts); }
++                    format!("CMP u_abort={u_abort} s_abort={phase1_aborted} u_ae={u_ae} s_ae={auto_enable} eq={}", u == result)
++                }
++                Err(_) => format!("CMP u_err s_abort={phase1_aborted} s_ae={auto_enable}"),
++            };
++            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&lp) {
++                let _ = writeln!(f, "{line}\t{:?}", std::env::args().collect::<Vec<_>>());
++            }
++        }
++    }
+     let result = if phase1_aborted {
+         result
+     } else if want_complete {
+@@ -480,19 +503,55 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
+         // deterministic input means an identical walk; the only delta is
+         // the slot-operator-rebuild scan now seeing `slot_op_reachable`.
+         // Portage: depgraph.py, _complete_graph
++        // DREWALK-SCRATCH instrumentation (temporary, never committed)
++        let dw_first = result.clone();
++        let dw_skip = std::env::var_os("PORTUALE_DREWALK_SKIP").is_some();
++        if dw_skip {
++            if let Some(p) = std::env::var_os("PORTUALE_DREWALK_LOG") {
++                use std::io::Write;
++                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
++                    let _ = writeln!(f, "SKIP\t{:?}", std::env::args().collect::<Vec<_>>());
++                }
++            }
++            dw_first
++        } else {
+         match handle(run_resolve(false, &[], true, &empty_reuse).map_err(crate::error::Error::from))
+         {
+             Ok(mut result) => {
+                 if phase1_rebuild_if {
+                     result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);
+                 }
++                if let Some(p) = std::env::var_os("PORTUALE_DREWALK_LOG") {
++                    use std::io::Write;
++                    let same = result == dw_first;
++                    let tag = if same { "SAME".to_string() } else {
++                        let mut diff = Vec::new();
++                        if result.entries != dw_first.entries { diff.push("entries"); }
++                        if result.outcome != dw_first.outcome { diff.push("outcome"); }
++                        if result.backtrack_restarts != dw_first.backtrack_restarts { diff.push("backtrack_restarts"); }
++                        let id = std::process::id();
++                        let _ = std::fs::write(format!("{}.{id}.first", p.to_string_lossy()), format!("{dw_first:#?}"));
++                        let _ = std::fs::write(format!("{}.{id}.second", p.to_string_lossy()), format!("{result:#?}"));
++                        format!("DIFF[{}] pid={id}", diff.join(","))
++                    };
++                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
++                        let _ = writeln!(f, "{tag}\t{:?}", std::env::args().collect::<Vec<_>>());
++                    }
++                }
+                 result
+             }
+             Err(code) => {
++                if let Some(p) = std::env::var_os("PORTUALE_DREWALK_LOG") {
++                    use std::io::Write;
++                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
++                        let _ = writeln!(f, "DIFF[second-walk-Err]\t{:?}", std::env::args().collect::<Vec<_>>());
++                    }
++                }
+                 pretend_end_news_notice(pretend, repos, root, config, color);
+                 return Err(code);
+             }
+         }
++    }
+     } else {
+         result
+     };

@@ -1,0 +1,12 @@
+58a59,69
+> kde-frameworks/karchive:6
+> 
+>   (kde-frameworks/karchive-6.31.0:6/6.31::gentoo, ebuild scheduled for merge) USE="crypt zstd -debug -test" ABI_X86="(64)" pulled in by
+>     =kde-frameworks/karchive-6.31*:6 required by (kde-frameworks/ksvg-6.31.0:6/6.31::gentoo, ebuild scheduled for merge) USE="-debug -test" ABI_X86="(64)"
+>     ^                        ^^^^^^^                                                                                                                       
+>     (and 6 more with the same problem)
+> 
+>   (kde-frameworks/karchive-6.30.0:6/6.30::gentoo, installed in '/') USE="crypt zstd -debug -test" ABI_X86="64" pulled in by
+>     =kde-frameworks/karchive-6.30*:6 required by (kde-frameworks/kdoctools-6.30.0:6/6.30::gentoo, installed in '/') USE="nls -debug -test" ABI_X86="64"
+>     ^                        ^^^^^^^                                                                                                                    
+> 
