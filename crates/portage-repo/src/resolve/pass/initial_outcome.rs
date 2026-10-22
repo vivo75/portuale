@@ -166,6 +166,9 @@ pub(crate) fn resolve_initial_outcome(
                         a,
                         config,
                     )
+                    .filter(|v| {
+                        !installed_version_masked(&bp.masked_negatives_for(key), &key.0, &key.1, v)
+                    })
                 {
                     out = PretendOutcome::AlreadyInstalled { version };
                 }

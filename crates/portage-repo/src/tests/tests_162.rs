@@ -650,6 +650,7 @@ fn qatom_162(atom: &str) -> QueueItem {
         atom: atom.to_string(),
         depth: 0,
         owner: None,
+        owner_version: None,
         owner_targets_running_root: false,
         unevaluated: None,
         targets_running_root: false,

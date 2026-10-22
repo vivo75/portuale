@@ -35,6 +35,17 @@ pub(crate) struct MaybeMissingDepBacktrackArgs<'a> {
     pub(crate) owner: &'a Option<(String, String)>,
 }
 
+/// The version a walk entry's outcome names, when it names one.
+fn entry_version(outcome: &PretendOutcome) -> Option<&str> {
+    match outcome {
+        PretendOutcome::New { version }
+        | PretendOutcome::Reinstall { version, .. }
+        | PretendOutcome::AlreadyInstalled { version } => Some(version),
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => Some(to),
+        _ => None,
+    }
+}
+
 /// Remember a missing-dep backtrack trigger for a dependency that matches
 /// nothing: with backtracking live and a merge-bound parent not yet tried,
 /// mask `!=parent-cpv` and retry. The entry still builds so an unfixable dep
@@ -64,19 +75,32 @@ pub(crate) fn maybe_missing_dep_backtrack(args: MaybeMissingDepBacktrackArgs<'_>
         && !atom_currently_satisfiable(&ctx.repos, bare_atom, config, &masked_probe)
         && let Some((pc, pp)) = owner.clone()
     {
-        let parent_cpv = state
-            .entries
-            .iter()
-            .find(|e| e.category == pc && e.package == pp)
-            .and_then(|e| match &e.outcome {
-                PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
-                    Some(version.clone())
-                }
-                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
-                    Some(to.clone())
-                }
-                _ => None,
+        // The failing dependency's own parent: the expanding item's version when
+        // it is known (an installed and a merge-bound entry of one `cat/pkg` can
+        // both be in the walk), else the first entry of that `cat/pkg`.
+        let owner_entry = state
+            .expanding_owner_version
+            .as_deref()
+            .and_then(|ov| {
+                state.entries.iter().find(|e| {
+                    e.category == pc && e.package == pp && entry_version(&e.outcome) == Some(ov)
+                })
+            })
+            .or_else(|| {
+                state
+                    .entries
+                    .iter()
+                    .find(|e| e.category == pc && e.package == pp)
             });
+        let parent_cpv = owner_entry.and_then(|e| match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                Some(version.clone())
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                Some(to.clone())
+            }
+            _ => None,
+        });
         if let Some(pv) = parent_cpv {
             let neg = format!("!={pc}/{pp}-{pv}");
             if !bp.missing_dep_masked.contains(&neg) {
@@ -87,11 +111,16 @@ pub(crate) fn maybe_missing_dep_backtrack(args: MaybeMissingDepBacktrackArgs<'_>
             // instance instead (Portage masks by package object; `[installed]`
             // hides only that instance, so the same-version ebuild stays visible
             // for the next pass).
-            if let Some(iv) = installed_candidates(ctx.root, &pc, &pp)
-                .into_iter()
-                .map(|(v, _, _)| v)
-                .max_by(|a, b| vercmp_ordering(a, b))
-            {
+            let installed_parent = owner_entry.and_then(|e| match &e.outcome {
+                PretendOutcome::AlreadyInstalled { version } => Some(version.clone()),
+                _ => None,
+            });
+            if let Some(iv) = installed_parent.or_else(|| {
+                installed_candidates(ctx.root, &pc, &pp)
+                    .into_iter()
+                    .map(|(v, _, _)| v)
+                    .max_by(|a, b| vercmp_ordering(a, b))
+            }) {
                 let neg = format!("!={pc}/{pp}-{iv}[installed]");
                 if !bp.missing_dep_masked.contains(&neg) {
                     state.missing_dep_trigger = Some(((pc, pp), neg, current_atom.to_string()));

@@ -135,6 +135,9 @@ pub(crate) struct PassState {
     /// and re-runs.
     // Portage: depgraph.py, _feedback_missing_dep
     pub(crate) missing_dep_trigger: Option<((String, String), String, String)>,
+    /// The version of the queue item being expanded (its [`QueueItem::owner_version`]),
+    /// read by the missing-dependency trigger; `None` outside a plain queue pop.
+    pub(crate) expanding_owner_version: Option<String>,
     pub(crate) entries: Vec<GraphEntry>,
     /// REQUIRED_USE violations collected anywhere in the walk: Portage's `_add_pkg`
     /// sets `_required_use_unsatisfied` and returns 0 without aborting the walk, so

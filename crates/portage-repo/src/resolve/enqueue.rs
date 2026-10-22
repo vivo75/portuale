@@ -480,6 +480,7 @@ pub(crate) fn enqueue_plain_tokens(args: EnqueuePlainTokensArgs<'_>) {
             atom: tok,
             depth: child_depth,
             owner: Some(owner_key.clone()),
+            owner_version: Some(owner_version.to_string()),
             // The installed owner's own root flag.
             owner_targets_running_root: entries
                 .iter()

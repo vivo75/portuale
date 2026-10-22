@@ -142,6 +142,14 @@ pub(crate) fn collect_feedback(
         }
     };
     eprintln!("BT try={try_no} kind={kind}");
+    let mut incoming: Vec<&str> = params
+        .runtime_pkg_mask
+        .values()
+        .flatten()
+        .map(|e| e.neg.as_str())
+        .collect();
+    incoming.sort_unstable();
+    eprintln!("BT   masks-in {incoming:?}");
     for ((cat, pkg), entry) in bt_new_masks(params, after) {
         eprintln!(
             "BT   mask {cat}/{pkg} neg={} reason={:?}",

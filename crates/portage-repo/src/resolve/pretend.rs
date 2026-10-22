@@ -1268,7 +1268,9 @@ pub(crate) fn relax_until_usable(
             && !is_top_level
             && (usepkg || usepkgonly || crate::globals::ebuild_db_dropped())
             && let Some(version) =
-                best_installed_for_atom(root, atom_str, &atom.category, &atom.package)
+                best_installed_for_atom(root, atom_str, &atom.category, &atom.package).filter(|v| {
+                    !installed_version_masked(extra_constraints, &atom.category, &atom.package, v)
+                })
         {
             return Some(Ok(PretendOutcome::AlreadyInstalled { version }));
         }

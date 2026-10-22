@@ -120,6 +120,7 @@ pub(crate) fn run_pass(
             atom: current_atom,
             depth,
             owner,
+            owner_version,
             owner_targets_running_root: item_owner_targets_running_root,
             unevaluated: unevaluated_atom,
             targets_running_root: item_targets_running_root,
@@ -132,6 +133,7 @@ pub(crate) fn run_pass(
             // `_dep_disjunctive_stack` only when `_dep_stack` is empty. An
             // empty stack too means the walk is done.
             // Portage: depgraph.py, _create_graph
+            state.expanding_owner_version = None;
             if !pop_disjunction(PopDisjunctionArgs {
                 state: &mut state,
                 ctx,
@@ -143,6 +145,7 @@ pub(crate) fn run_pass(
             }
             continue;
         };
+        state.expanding_owner_version = owner_version;
         match step_queue_item(StepQueueItemArgs {
             current_atom,
             owner: &owner,

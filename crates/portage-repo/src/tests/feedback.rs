@@ -534,3 +534,57 @@ fn keyword_change_on_an_argument_package_yields_only_the_argument_row() {
         vec!["required by dev-libs/autounmaskkeywordpkg (argument)".to_string()]
     );
 }
+
+/// A dependency that fails on an installed parent's walk is filed against that
+/// parent's installed instance. `owner` is only `cat/pkg`, so the first entry of
+/// that name (here the merge-bound upgrade to 6.8.0) used to be blamed, masking
+/// `!=libplasma-6.8.0` instead of `!=libplasma-6.7.5[installed]`.
+/// Portage: depgraph.py _slot_operator_unsatisfied_backtrack / _feedback_missing_dep
+/// masks `dep.parent`, the installed package object (backtracking.py:197).
+#[test]
+fn missing_dep_trigger_names_the_installed_parent_instance() {
+    let dir = slotundo_temp_dir("477-missing-dep-owner");
+    let config = test_config();
+    let opts = CtxOpts161 {
+        backtrack_max: 20,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
+    let mut upgrade = graph_entry("kde-plasma", "libplasma", "6.8.0");
+    upgrade.outcome = PretendOutcome::Upgrade {
+        from: "6.7.5".to_string(),
+        to: "6.8.0".to_string(),
+    };
+    let mut installed = graph_entry("kde-plasma", "libplasma", "6.7.5");
+    installed.outcome = PretendOutcome::AlreadyInstalled {
+        version: "6.7.5".to_string(),
+    };
+    let mut state = PassState {
+        entries: vec![upgrade, installed],
+        expanding_owner_version: Some("6.7.5".to_string()),
+        ..Default::default()
+    };
+    let bp = BacktrackParams::default();
+    let key = ("kde-plasma".to_string(), "plasma-activities".to_string());
+    let owner = Some(("kde-plasma".to_string(), "libplasma".to_string()));
+    let atom = "=kde-plasma/plasma-activities-6.7.5*:6/7=";
+    maybe_missing_dep_backtrack(MaybeMissingDepBacktrackArgs {
+        current_atom: atom,
+        outcome: &PretendOutcome::NoVisibleCandidate,
+        ctx: &ctx,
+        bp: &bp,
+        key: &key,
+        state: &mut state,
+        config: &config,
+        owner: &owner,
+    });
+    assert_eq!(
+        state.missing_dep_trigger,
+        Some((
+            ("kde-plasma".to_string(), "libplasma".to_string()),
+            "!=kde-plasma/libplasma-6.7.5[installed]".to_string(),
+            atom.to_string(),
+        ))
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

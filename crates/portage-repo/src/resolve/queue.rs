@@ -44,6 +44,10 @@ pub(crate) struct QueueItem {
     pub(crate) atom: String,
     pub(crate) depth: u32,
     pub(crate) owner: Option<(String, String)>,
+    /// The version of the expanding entry named by `owner`, when the enqueuer
+    /// knows it. An installed parent and a merge-bound parent of one `cat/pkg`
+    /// both expand, so `owner` alone cannot name which one failed a dependency.
+    pub(crate) owner_version: Option<String>,
     /// The *expanding* entry's own root flag: the owner half of the
     /// root-qualified edge this item records when it resolves. `false` for a
     /// directly-requested top-level atom.
@@ -290,6 +294,7 @@ pub(crate) fn enqueue_flat_deps(args: EnqueueFlatDepsArgs<'_>) {
             atom: tok,
             depth: depth + 1,
             owner: Some(key.clone()),
+            owner_version: Some(version.to_string()),
             owner_targets_running_root,
             unevaluated,
             targets_running_root: targets_running,
