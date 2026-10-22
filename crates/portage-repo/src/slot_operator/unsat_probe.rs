@@ -131,6 +131,10 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
         }) {
             continue;
         }
+        let dep_negs: Vec<String> = masked
+            .get(&dep_cp)
+            .map(|b| b.iter().map(|m| m.neg.clone()).collect())
+            .unwrap_or_default();
         for owner in &e.required_by {
             // Seed only an owner whose own recorded want is the built atom,
             // never the cp-level cross product. The puller triples are
@@ -143,6 +147,9 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
                         && portage_dep::parse_atom(atom_text).is_some_and(|atom| {
                             atom.blocker == portage_dep::Blocker::None
                                 && is_built_slot_op(&atom)
+                                // Portage reports a version-pinned `=cat/pkg-ver*:S/SS=`
+                                // as `:S=` (`slot_operator_built` false): no probe.
+                                && atom.operator != portage_dep::Operator::EqGlob
                                 && atom.category == dep_cp.0
                                 && atom.package == dep_cp.1
                         })
@@ -260,9 +267,15 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
                             }
                             // USE discarded, then visible tree or installed.
                             let stripped = portage_dep::without_use(&token).to_string();
-                            if !visible_tree_matches(repos, &stripped, config, &[]).is_empty()
+                            // Portage: `_select_package` honours `runtime_pkg_mask`,
+                            // for the tree and the installed instance alike.
+                            if !visible_tree_matches(repos, &stripped, config, &dep_negs).is_empty()
                                 || best_installed_for_atom(root, &stripped, &dep_cp.0, &dep_cp.1)
-                                    .is_some()
+                                    .is_some_and(|v| {
+                                        !installed_version_masked(
+                                            &dep_negs, &dep_cp.0, &dep_cp.1, &v,
+                                        )
+                                    })
                             {
                                 hit = true;
                                 break;

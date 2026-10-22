@@ -62,6 +62,7 @@ pub(crate) fn step_built_parent_update_probe(
         entries: &pass.entries,
         with_bdeps: ctx.with_bdeps,
         excluded: ctx.excluded,
+        masked: &grown.runtime_pkg_mask,
     });
     if file_unsat_probe_results(&mut *grown, fresh, masks, ctx.usepkgonly) {
         return Some(PassDecision::Feedback(BacktrackFeedback::Config {

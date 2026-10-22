@@ -368,9 +368,37 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
             masked: &masked_b,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
         }),
         (BTreeSet::new(), BTreeSet::new())
+    );
+    let only = |_unused: Option<&(String, String)>, masked| {
+        slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
+            root: &base,
+            repos: &repos,
+            entries: &entries,
+            slot_want: &slot_want,
+            pullers: &pullers,
+            masked,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config,
+        })
+        .0
+    };
+    assert_eq!(only(None, &masked), BTreeSet::from([par.clone()]));
+    // A replacement child the search has masked is no replacement
+    // (`_select_package` honours `runtime_pkg_mask`).
+    let masked_child: HashMap<(String, String), Vec<MaskEntry>> = HashMap::from([(
+        ("app-misc".to_string(), "unsatprov".to_string()),
+        vec![MaskEntry {
+            neg: "!=app-misc/unsatprov-2".to_string(),
+            reason: MaskReason::SlotConflict { parents: vec![] },
+        }],
+    )]);
+    assert!(
+        only(None, &masked_child).is_empty(),
+        "a masked replacement child leaves the parent alone"
     );
     for dir in [
         &base, &base_x, &base_m, &base_m2, &base_n, &base_s, &base_u, &base_b,

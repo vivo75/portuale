@@ -1774,15 +1774,9 @@ pub(crate) fn classify_best_against_installed(
     // Portage: _get_installed_best myinslotlist = vardb.match(pkg.slot_atom)
     let installed_in_slot: Vec<&String> = installed_pairs
         .iter()
-        // An `[installed]`-marked instance is hidden (see `candidate_is_installed`
-        // above), so it neither anchors an upgrade/downgrade nor blocks a `New`.
-        .filter(|(version, slot, _sub_slot)| {
-            slot == &best.slot
-                && !extra_constraints.iter().any(|ec| {
-                    slot_operator_installed_masked_version(ec, &atom.category, &atom.package)
-                        .is_some_and(|v| &v == version)
-                })
-        })
+        // A runtime-masked installed instance still anchors the upgrade: the
+        // display reads the vardb, not the mask table.
+        .filter(|(_version, slot, _sub_slot)| slot == &best.slot)
         .map(|(version, _slot, _sub_slot)| version)
         .collect();
     match installed_in_slot

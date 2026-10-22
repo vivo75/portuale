@@ -11,6 +11,8 @@ pub(crate) struct BuiltParentUpdateProbeArgs<'a> {
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) with_bdeps: bool,
     pub(crate) excluded: &'a [String],
+    /// The pass's `runtime_pkg_mask`: a masked tree instance is no update.
+    pub(crate) masked: &'a HashMap<(String, String), Vec<MaskEntry>>,
 }
 
 /// [`built_parent_update_probe`]'s result: the installed children joining the
@@ -38,6 +40,7 @@ pub(crate) fn built_parent_update_probe(
         entries,
         with_bdeps,
         excluded,
+        masked,
     } = args;
     const DEP_KEYS: [&str; 5] = ["RDEPEND", "PDEPEND", "IDEPEND", "DEPEND", "BDEPEND"];
     let dep_keys: &[&str] = if with_bdeps {
@@ -129,6 +132,7 @@ pub(crate) fn built_parent_update_probe(
                 child: &child,
                 bound_slot: &bound_slot,
                 excluded,
+                masked,
             }) {
                 hit = Some(child.clone());
                 break;
@@ -155,6 +159,7 @@ struct ChildUpdateArgs<'a> {
     child: &'a (String, String),
     bound_slot: &'a str,
     excluded: &'a [String],
+    masked: &'a HashMap<(String, String), Vec<MaskEntry>>,
 }
 
 /// Whether the installed `child` in `bound_slot` has a tree instance with another
@@ -175,6 +180,7 @@ fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
         child,
         bound_slot,
         excluded,
+        masked,
     } = args;
     let (child_cat, child_pkg) = (child.0.as_str(), child.1.as_str());
     if entries.iter().any(|e| {
@@ -237,7 +243,12 @@ fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
             continue;
         }
         for cand in child_cands.iter() {
+            // Portage: `_select_package` honours `runtime_pkg_mask`.
+            let plain_neg = format!("!={child_cat}/{child_pkg}-{}", cand.version);
             if cand.source != CandidateSource::Ebuild
+                || masked
+                    .get(child)
+                    .is_some_and(|b| b.iter().any(|m| m.neg == plain_neg))
                 || cand.slot != bound_slot
                 || cand.sub_slot == child_sub
                 || vercmp_ordering(&cand.version, &child_ver) == Ordering::Less

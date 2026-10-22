@@ -43,6 +43,7 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         entries: &entries,
         with_bdeps: false,
         excluded: &[],
+        masked: &HashMap::new(),
     });
     assert_eq!(
         replace,
@@ -69,6 +70,7 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         entries: &entries,
         with_bdeps: false,
         excluded: &[],
+        masked: &HashMap::new(),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
@@ -93,6 +95,7 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         entries: &merged,
         with_bdeps: false,
         excluded: &[],
+        masked: &HashMap::new(),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
@@ -109,9 +112,41 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         entries: &entries,
         with_bdeps: false,
         excluded: &excluded,
+        masked: &HashMap::new(),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
         "an excluded child refuses the probe"
+    );
+}
+
+#[test]
+fn built_parent_update_probe_ignores_a_tree_update_the_search_has_masked() {
+    // Portage: `_select_package` honours `runtime_pkg_mask`, so a masked
+    // mbabilib-2.0 is no update and the binary stays.
+    let root = mbabilib_vdb("0/1");
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let local = BinaryIndex::from_pkgdir(&fixtures_root().join("pkgdir"));
+    let entries = [mbabicons_binary()];
+    let masked = HashMap::from([(
+        ("dev-libs".to_string(), "mbabilib".to_string()),
+        vec![MaskEntry {
+            neg: "!=dev-libs/mbabilib-2.0".to_string(),
+            reason: MaskReason::SlotConflict { parents: vec![] },
+        }],
+    )]);
+    let (replace, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
+        root: &root,
+        repos: &repos,
+        config: &test_config(),
+        local_binpkg: &local,
+        entries: &entries,
+        with_bdeps: false,
+        excluded: &[],
+        masked: &masked,
+    });
+    assert!(
+        replace.is_empty() && masks.is_empty(),
+        "a masked tree update does not mask the binary"
     );
 }
