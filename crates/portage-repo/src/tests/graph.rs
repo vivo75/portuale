@@ -3817,6 +3817,7 @@ fn backtracker_feedback_slot_conflict_replaces_the_same_mask() {
             "<dev-libs/maskpkg-2.0".to_string(),
         )],
         similar: vec![],
+        installed: false,
     }];
     let mut bt = Backtracker::new(20, BacktrackParams::default());
     bt.get().expect("root node");
@@ -3836,6 +3837,43 @@ fn backtracker_feedback_slot_conflict_replaces_the_same_mask() {
     );
     assert_eq!(node.mask_steps, 1);
     assert_eq!(node.depth, 1);
+}
+
+/// A slot-conflict choice whose target is an installed instance also masks
+/// that instance (`!=cpv[installed]`), like Portage's per-`Package` runtime
+/// mask group (ebuild + binary + installed share one conflict).
+#[test]
+fn backtracker_feedback_slot_conflict_masks_the_installed_instance_too() {
+    let cp = ("dev-libs".to_string(), "maskpkg".to_string());
+    let choices = vec![MaskChoice {
+        target: (cp.0.clone(), cp.1.clone(), "2.0".to_string()),
+        parents: vec![(
+            (
+                "dev-libs".to_string(),
+                "owner".to_string(),
+                "1.0".to_string(),
+            ),
+            "<dev-libs/maskpkg-2.0".to_string(),
+        )],
+        similar: vec![],
+        installed: true,
+    }];
+    let mut bt = Backtracker::new(20, BacktrackParams::default());
+    bt.get().expect("root node");
+    bt.feedback(BacktrackFeedback::SlotConflict {
+        base: Box::new(BacktrackParams::default()),
+        choices,
+    });
+    let node = bt.get().expect("mask node queued");
+    let negs: Vec<&str> = node.runtime_pkg_mask[&cp]
+        .iter()
+        .map(|m| m.neg.as_str())
+        .collect();
+    assert!(negs.contains(&"!=dev-libs/maskpkg-2.0"), "{negs:?}");
+    assert!(
+        negs.contains(&"!=dev-libs/maskpkg-2.0[installed]"),
+        "{negs:?}"
+    );
 }
 
 /// The missing-dep arm latches the parent and masks it once.

@@ -1,0 +1,118 @@
+vivo@portuale ~/repo/PORTUALE/portuale/helpers $ ../target/release/portuale emerge -uDpvN @world ; exit
+../target/release/portuale emerge -uDpvN @world ; exit
+
+[f1r] Local copy of remote index is up-to-date and will be used.
+[gentoo] Local copy of remote index is up-to-date and will be used.
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took  s (backtrack: 20/20).
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/libbpf:0
+
+  (dev-libs/libbpf-1.8.0:0/1.8::gentoo, ebuild scheduled for merge) USE="static-libs" ABI_X86="(64)" pulled in by
+    >=dev-libs/libbpf-1.1.0:0/1.8= required by (app-emulation/qemu-10.2.3-r2:0/0::gentoo, ebuild scheduled for merge) USE="(X) aio alsa bpf bzip2 curl fdt filecaps gnutls gtk io-uring jpeg ncurses nls opengl oss pam pin-upstream-blobs pipewire plugins png pulseaudio python sdl seccomp slirp smartcard spice ssh udev usb usbredir vhost-net virtfs vnc wayland xattr zstd -accessibility -capstone -debug -doc -fuse -glusterfs -infiniband -iscsi -jack -keyutils -lzo -multipath -nfs -numa -passt -rbd -sasl -sdl-image (-selinux) -snappy -static-user -systemtap -test -valgrind -vde -verify-sig -virgl -vte -xdp -xen" ABI_X86="(64)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" QEMU_SOFTMMU_TARGETS="aarch64 arm x86_64 -alpha -avr -hppa -i386 -loongarch64 -m68k -microblaze -microblazeel -mips -mips64 -mips64el -mipsel -or1k -ppc -ppc64 -riscv32 -riscv64 -rx -s390x -sh4 -sh4eb -sparc -sparc64 -tricore -xtensa -xtensaeb" QEMU_USER_TARGETS="x86_64 -aarch64 -aarch64_be -alpha -arm -armeb -hexagon -hppa -i386 -loongarch64 -m68k -microblaze -microblazeel -mips -mips64 -mips64el -mipsel -mipsn32 -mipsn32el -or1k -ppc -ppc64 -ppc64le -riscv32 -riscv64 -s390x -sh4 -sh4eb -sparc -sparc32plus -sparc64 -xtensa -xtensaeb"
+                                   ^                   ^                   ^                   ^                   ^                   ^                   ^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               
+
+  (dev-libs/libbpf-1.7.0-r1:0/1.7::gentoo, installed in '/') USE="static-libs" ABI_X86="64" pulled in by
+    >=dev-libs/libbpf-0.6:0/1.7= required by (sys-apps/iproute2-7.2.0:0/0::gentoo, ebuild scheduled for merge) USE="bpf elf iptables -atm -berkdb -caps -minimal -nfs (-selinux)" ABI_X86="(64)"
+                                 ^                   ^                   ^                   ^                   ^                   ^                   ^                                                                                                                                                                            
+    (and 1 more with the same problem)
+
+kde-plasma/libplasma:6
+
+  (kde-plasma/libplasma-6.8.0:6/8::gentoo, ebuild scheduled for merge) USE="activities -debug -test" ABI_X86="(64)" pulled in by
+    >=kde-plasma/libplasma-6.8.0:6 required by (kde-plasma/plasma-meta-6.8.0:6/6::gentoo, ebuild scheduled for merge) USE="backup bluetooth browser-integration crash-handler crypt cups display-manager firewall flatpak grub gtk kwallet networkmanager ocr pulseaudio rdp smart systemd thunderbolt wallpapers xwayland -accessibility -discover (-elogind) -oxygen-theme -plymouth -sddm -sdk -unsupported -virtualkeyboard -wacom -webengine" ABI_X86="(64)"
+            ^                   ^                                        ^                   ^                   ^                   ^                   ^                   ^                   ^                                                                                                                                                                                                                                                                                                                                                                                                                                           
+    kde-plasma/libplasma:6/8= required by (app-office/merkuro-26.08.2:6/6::gentoo, ebuild scheduled for merge) USE="plasma -debug -test" ABI_X86="(64)"
+                                ^                   ^                   ^                   ^                   ^                                                                                                                                      
+    (and 17 more with the same problems)
+
+  (kde-plasma/libplasma-6.7.5:6/7::gentoo, installed in '/') USE="activities -debug -gles2-only -test" ABI_X86="64" pulled in by
+    kde-plasma/libplasma:6/7= required by (dev-libs/kirigami-addons-1.15.0:6/6::gentoo, ebuild scheduled for merge) USE="-debug -test" ABI_X86="(64)"
+                                ^                   ^                   ^                   ^                   ^                                                                                                                                    
+
+kde-plasma/plasma-activities:6
+
+  (kde-plasma/plasma-activities-6.8.0:6/7::gentoo, ebuild scheduled for merge) USE="-debug -test" ABI_X86="(64)" pulled in by
+    >=kde-plasma/plasma-activities-6.8.0:6 required by (kde-plasma/plasma-meta-6.8.0:6/6::gentoo, ebuild scheduled for merge) USE="backup bluetooth browser-integration crash-handler crypt cups display-manager firewall flatpak grub gtk kwallet networkmanager ocr pulseaudio rdp smart systemd thunderbolt wallpapers xwayland -accessibility -discover (-elogind) -oxygen-theme -plymouth -sddm -sdk -unsupported -virtualkeyboard -wacom -webengine" ABI_X86="(64)"
+            ^                   ^                                                ^                   ^                   ^                   ^                   ^                   ^                   ^                                                                                                                                                                                                                                                                                                                                                                                                                                           
+    =kde-plasma/plasma-activities-6.8.0*:6/7= required by (kde-plasma/libplasma-6.8.0:6/8::gentoo, ebuild scheduled for merge) USE="activities -debug -test" ABI_X86="(64)"
+            ^                                                ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                                                                                                                                          
+    (and 8 more with the same problems)
+
+  (kde-plasma/plasma-activities-6.7.5:6/7::gentoo, installed in '/') USE="-debug -test" ABI_X86="64" pulled in by
+    =kde-plasma/plasma-activities-6.7.5*:6/7= required by (kde-plasma/libplasma-6.7.5:6/7::gentoo, ebuild scheduled for merge) USE="activities -debug -gles2-only -test" ABI_X86="(64)"
+            ^                                                ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                                                                                                                                                      
+    (and 1 more with the same problem)
+
+dev-libs/tree-sitter:0
+
+  (dev-libs/tree-sitter-0.27.1:0/0.27.1::gentoo, ebuild scheduled for merge) USE="" ABI_X86="(64)" pulled in by
+    dev-libs/tree-sitter:0/0.27.1= required by (llvm-core/lldb-23.1.3:0/23.1::gentoo, ebuild scheduled for merge) USE="libedit ncurses python tree-sitter xml -debug (-debuginfod) -lzma -test -verify-sig" ABI_X86="(64)" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13"
+                                ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+
+  (dev-libs/tree-sitter-0.27.0:0/0.27.0::gentoo, installed in '/') USE="" ABI_X86="64" pulled in by
+    >=dev-libs/tree-sitter-0.19.0:0/0.27.0= required by (dev-util/rizin-0.9.1-r1:0/0.9.1::gentoo, ebuild scheduled for merge) USE="(-test)" ABI_X86="(64)"
+                                         ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                   ^                                                                                                                           
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "app-misc/mime-types[nginx]".
+!!! One of the following packages is required to complete your request:
+- app-misc/mime-types-2.1.54::gentoo (Change USE: +nginx)
+(dependency required by "www-servers/nginx-1.31.7::gentoo" [binary])
+(dependency required by "@world" [argument])
+!!! note: app-misc/mime-types-2.1.54 exists but its USE flags don't satisfy this atom; --autounmask-use suggests adding "=app-misc/mime-types-2.1.54 nginx" to package.use
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+x11-base/xorg-server:0
+
+  (x11-base/xorg-server-21.1.25:0/21.1.25::gentoo, ebuild scheduled for merge) USE="systemd udev xorg -debug (-elogind) -minimal (-selinux) -suid -test -unwind -xcsecurity -xephyr -xnest -xvfb" ABI_X86="(64)" conflicts with
+    >=x11-base/xorg-server-1.20:0/21.1.24=[xorg] required by (x11-drivers/xf86-video-amdgpu-25.0.0-r1:0/0::gentoo, installed in '/') USE="udev" ABI_X86="64"
+                               ^^^^^^^^^^^
+    x11-base/xorg-server:0/21.1.24= required by (x11-drivers/xf86-input-evdev-2.11.0:0/0::gentoo, installed in '/') USE="" ABI_X86="64"
+                        ^^^^^^^^^^^
+    x11-base/xorg-server:0/21.1.24= required by (x11-drivers/xf86-input-libinput-1.5.0:0/0::gentoo, installed in '/') USE="" ABI_X86="64"
+                        ^^^^^^^^^^^
+    x11-base/xorg-server:0/21.1.24= required by (x11-drivers/xf86-input-synaptics-1.10.0:0/0::gentoo, installed in '/') USE="" ABI_X86="64"
+                        ^^^^^^^^^^^
+    x11-base/xorg-server:0/21.1.24= required by (x11-drivers/xf86-input-wacom-1.2.4:0/0::gentoo, installed in '/') USE="-test" ABI_X86="64"
+                        ^^^^^^^^^^^
+    x11-base/xorg-server:0/21.1.24= required by (x11-drivers/xf86-video-ati-22.0.0:0/0::gentoo, installed in '/') USE="udev" ABI_X86="64"
+                        ^^^^^^^^^^^
+    x11-base/xorg-server:0/21.1.24= required by (x11-drivers/xf86-video-nouveau-1.0.18:0/0::gentoo, installed in '/') USE="" ABI_X86="64"
+                        ^^^^^^^^^^^
+    x11-base/xorg-server:0/21.1.24= required by (x11-drivers/xf86-video-qxl-0.1.6:0/0::gentoo, installed in '/') USE="-xspice" ABI_X86="64" PYTHON_SINGLE_TARGET="-python3_12 -python3_13"
+                        ^^^^^^^^^^^
+
+
+ * Error: The above package list contains packages which cannot be
+ * installed at the same time on the same system.
+
+For more information about Blocked Packages, please refer to the following
+section of the Gentoo Linux x86 Handbook (architecture is irrelevant):
+
+https://wiki.gentoo.org/wiki/Handbook:X86/Working/Portage#Blocked_packages
+
+exit
+

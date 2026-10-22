@@ -98,6 +98,7 @@ pub(crate) fn apply_outcome_fallbacks(
             || atom.slot_operator.is_some()
             || !cp_has_tree_or_binary_candidate(&ctx.repos, &ctx.local_binpkg, &key.0, &key.1))
         && let Some(version) = best_installed_matching(atom_root, current_atom, config)
+            .filter(|v| !installed_version_masked(&bp.masked_negatives_for(key), &key.0, &key.1, v))
     {
         outcome = PretendOutcome::AlreadyInstalled { version };
     }
@@ -116,6 +117,7 @@ pub(crate) fn apply_outcome_fallbacks(
         && !ctx.empty
         && !cp_has_tree_or_binary_candidate(&ctx.repos, &ctx.local_binpkg, &key.0, &key.1)
         && let Some(version) = best_installed_matching(atom_root, current_atom, config)
+            .filter(|v| !installed_version_masked(&bp.masked_negatives_for(key), &key.0, &key.1, v))
     {
         outcome = PretendOutcome::AlreadyInstalled { version };
     }
@@ -130,6 +132,7 @@ pub(crate) fn apply_outcome_fallbacks(
         && !ctx.empty
         && item_targets_running_root
         && let Some(version) = best_installed_matching(atom_root, current_atom, config)
+            .filter(|v| !installed_version_masked(&bp.masked_negatives_for(key), &key.0, &key.1, v))
     {
         outcome = PretendOutcome::AlreadyInstalled { version };
     }

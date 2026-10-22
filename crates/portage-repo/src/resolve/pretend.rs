@@ -514,6 +514,19 @@ pub(crate) fn slot_operator_installed_masked_version(
     (c == category && p == package).then_some(v)
 }
 
+// Whether an `[installed]`-marked negative hides the installed `version` of `cat/pkg`.
+// Portage: depgraph.py, `_runtime_pkg_mask` keyed by the installed `Package`
+pub(crate) fn installed_version_masked(
+    extra_constraints: &[String],
+    category: &str,
+    package: &str,
+    version: &str,
+) -> bool {
+    extra_constraints.iter().any(|ec| {
+        slot_operator_installed_masked_version(ec, category, package).is_some_and(|v| v == version)
+    })
+}
+
 // Every per-instance string negative (`[binary]` and `[installed]` marks):
 // tree-candidate readers skip them all; instance pools keep honouring their own mark.
 // Portage keys every such mask by package object.
@@ -788,7 +801,15 @@ pub fn resolve_pretend(
                 installed: &installed,
                 config,
             })
-            .filter(|c| satisfies_extra_constraints(c, &atom, extra_constraints))
+            .filter(|c| {
+                satisfies_extra_constraints(c, &atom, extra_constraints)
+                    && !installed_version_masked(
+                        extra_constraints,
+                        &atom.category,
+                        &atom.package,
+                        &c.version,
+                    )
+            })
         {
             // Portage `_want_update_pkg` (`depgraph.py:7304-7333`): no
             // complete mode, an argument (depth reset to 0) or `--update`,
@@ -827,7 +848,11 @@ pub fn resolve_pretend(
                     best_binary_build_time(&candidates, &installed_best.version),
                 );
             }
-        } else if let Some(inst_version) = best_installed_matching(root, atom_str, config) {
+        } else if let Some(inst_version) =
+            best_installed_matching(root, atom_str, config).filter(|v| {
+                !installed_version_masked(extra_constraints, &atom.category, &atom.package, v)
+            })
+        {
             // No tree candidate sits at an installed version (an installed
             // version with no ebuild, e.g. a removed tree version): Portage
             // still keeps the installed instance when it does not want it
@@ -926,6 +951,11 @@ pub fn resolve_pretend(
             atom: &atom,
             config,
             autounmask_use,
+            atom_str,
+            candidates: &candidates,
+            root,
+            is_top_level,
+            empty,
         }) {
             ControlFlow::Continue(out) => out,
             ControlFlow::Break(outcome) => return outcome,
@@ -1002,6 +1032,11 @@ pub(crate) struct NarrowMatchedCandidatesArgs<'a, 'b> {
     pub(crate) atom: &'a Atom,
     pub(crate) config: &'a Config,
     pub(crate) autounmask_use: bool,
+    pub(crate) atom_str: &'a str,
+    pub(crate) candidates: &'a [Candidate],
+    pub(crate) root: &'a Path,
+    pub(crate) is_top_level: bool,
+    pub(crate) empty: bool,
 }
 
 /// Narrow the matched candidates by extra constraints, USE dependencies and --useoldpkg-atoms.
@@ -1016,6 +1051,11 @@ pub(crate) fn narrow_matched_candidates<'a, 'b>(
         atom,
         config,
         autounmask_use,
+        atom_str,
+        candidates,
+        root,
+        is_top_level,
+        empty,
     } = args;
     // Slot-conflict reconciliation: on a re-resolve the caller passes every *other*
     // parent atom targeting the same `cat/pkg:slot`, and the winner must satisfy all
@@ -1094,6 +1134,21 @@ pub(crate) fn narrow_matched_candidates<'a, 'b>(
 
     // `--binpkg-respect-use` ran as a candidate-level filter above.
     if matched.is_empty() {
+        // Every mergeable candidate failed the atom's `[use]` deps: Portage's
+        // `matched_packages` still holds the installed instance when its own built USE
+        // satisfies them, and selects it for a dependency edge -- unless the tree no
+        // longer knows a required flag (`Missing IUSE`).
+        // Portage: depgraph.py _wrapped_select_pkg_highest_available_imp
+        if !is_top_level
+            && !empty
+            && atom.use_deps.as_ref().is_some_and(|d| !d.is_empty())
+            && tree_knows_use_dep_flags(candidates, atom, config)
+            && let Some(version) = best_installed_matching(root, atom_str, config).filter(|v| {
+                !installed_version_masked(extra_constraints, &atom.category, &atom.package, v)
+            })
+        {
+            return ControlFlow::Break(Ok(PretendOutcome::AlreadyInstalled { version }));
+        }
         return ControlFlow::Break(Ok(PretendOutcome::NoVisibleCandidate));
     }
 
@@ -1471,7 +1526,9 @@ pub(crate) fn select_best_candidate(
     if !is_top_level
         && atom.use_deps.as_ref().is_some_and(|d| !d.is_empty())
         && !atom_currently_satisfiable(repos, atom_str, config, extra_constraints)
-        && let Some(version) = best_installed_matching(root, atom_str, config)
+        && let Some(version) = best_installed_matching(root, atom_str, config).filter(|v| {
+            !installed_version_masked(extra_constraints, &atom.category, &atom.package, v)
+        })
     {
         return ControlFlow::Break(Ok(PretendOutcome::AlreadyInstalled { version }));
     }
@@ -1495,7 +1552,15 @@ pub(crate) fn select_best_candidate(
                 installed: installed_pairs,
                 config,
             })
-            .filter(|c| satisfies_extra_constraints(c, atom, extra_constraints))
+            .filter(|c| {
+                satisfies_extra_constraints(c, atom, extra_constraints)
+                    && !installed_version_masked(
+                        extra_constraints,
+                        &atom.category,
+                        &atom.package,
+                        &c.version,
+                    )
+            })
         } else {
             matched
                 .iter()

@@ -1,0 +1,412 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 20/20).
+
+[binary    gU  ] sys-libs/glibc-2.44-r4-1:2.2::gentoo [2.44-r3:2.2::gentoo] USE="cet multiarch (multilib) ssp (static-libs) systemd -audit -caps (-clang) -compile-locales (-custom-cflags) -doc -gd -hash-sysv-compat -headers-only -multilib-bootstrap -nscd -old-kernel -perl -profile (-selinux) -sframe (-stack-realign) -suid -systemtap -test (-vanilla) -verify-sig" 53170 KiB
+[binary    gU  ] media-libs/vulkan-loader-1.4.363.0-1::gentoo [1.4.357.0::gentoo] USE="X wayland" ABI_X86="32 (64) (-x32)" 3950 KiB
+[binary    gU  ] kde-plasma/kde-cli-tools-common-6.8.0-1::gentoo [6.7.5::gentoo] USE="-handbook" 400 KiB
+[binary    gU  ] dev-util/spirv-tools-1.4.363.0-1::gentoo [1.4.357.0::gentoo] USE="-test" ABI_X86="32 (64) (-x32)" 242870 KiB
+[binary    gU  ] llvm-core/llvm-common-23.1.3-1::gentoo [23.1.2::gentoo] USE="-emacs -verify-sig" 30 KiB
+[binary   Rg   ] app-misc/mime-types-2.1.54-1::gentoo  USE="-nginx*" 30 KiB
+[binary    gU  ] dev-libs/md4c-0.6.0-1::gentoo [0.5.3::gentoo] USE="md2html -test" 250 KiB
+[binary    gU  ] kde-frameworks/ksecretd-services-6.31.0-1:6::gentoo [6.30.0:6::gentoo] USE="systemd" 30 KiB
+[binary    gU  ] sys-libs/libcap-ng-0.9.6-1::gentoo [0.9.5-r1::gentoo] USE="-bpf -deprecated -python -static-libs" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 270 KiB
+[binary    gU  ] dev-libs/libuv-1.53.0-1:0/1::gentoo [1.52.1:0/1::gentoo] USE="-verify-sig" 580 KiB
+[binary    gU  ] dev-libs/blake3-1.8.7-1::gentoo [1.8.5::gentoo] USE="-test" 140 KiB
+[binary    gU  ] kde-apps/kate-common-26.08.2-1::gentoo [26.08.1::gentoo] USE="-handbook" 1760 KiB
+[ebuild     U  ] dev-lang/go-1.27.2:0/1.27.2::gentoo [1.27.1:0/1.27.1::gentoo] CPU_FLAGS_X86="sse2" 0 KiB
+[binary  r gU  ] dev-libs/tree-sitter-0.27.1-1:0/0.27.1::gentoo [0.27.0:0/0.27.0::gentoo] 560 KiB
+[binary    gU  ] dev-libs/jemalloc-5.4.0-r2-1:0/2::gentoo [5.3.0-r3:0/2::gentoo] USE="stats* -debug -lazy-lock -prof -xmalloc" ABI_X86="32 (64) (-x32)" 3670 KiB
+[binary    gU  ] app-arch/7zip-26.04-1::gentoo [26.03::gentoo] USE="symlink -jwasm -rar -uasm" 18180 KiB
+[binary    gU  ] kde-plasma/breeze-grub-6.8.0-1:6::gentoo [6.7.5:6::gentoo] 1890 KiB
+[binary    gU  ] llvm-runtimes/compiler-rt-23.1.3-1:23::gentoo [23.1.2:23::gentoo] USE="atomic-builtins (clang) -debug -test -verify-sig" ABI_X86="32 (64)" 340 KiB
+[binary    gU  ] llvm-runtimes/compiler-rt-sanitizers-23.1.3-1:23::gentoo [23.1.2:23::gentoo] USE="asan cfi (clang) ctx-profile dfsan gwp-asan hwasan libfuzzer lsan memprof msan nsan orc profile rtsan safestack scudo tsan ubsan xray -debug (-shadowcallstack) -test -verify-sig" ABI_X86="32 (64)" 12260 KiB
+[binary    gU  ] dev-libs/simdjson-5.0.5-1:0/34::gentoo [4.6.11:0/33::gentoo] USE="all-impls -nan% -test -tools" 1990 KiB
+[binary    gU  ] kde-plasma/plasma-workspace-wallpapers-6.8.0-1:6::gentoo [6.7.5:6::gentoo] 301200 KiB
+[binary    gU  ] dev-lang/rust-common-1.99.0-1::gentoo [1.98.1::gentoo] USE="-verify-sig" 30 KiB
+[binary    gU  ] mail-client/thunderbird-l10n-158.0-1:0/stable::gentoo [157.0.1:0/stable::gentoo] L10N="it -af -ar -ast -be -bg -br -ca -cak -cs -cy -da -de -dsb -el -en-CA -en-GB -es-AR -es-ES -et -eu -fi -fr -fy -ga -gd -gl -he -hr -hsb -hu -id -is -ja -ka -kab -kk -ko -lt -lv -ms -nb -nl -nn -pa -pl -pt-BR -pt-PT -rm -ro -ru -sk -sl -sq -sr -sv -th -tr -uk -uz -vi -zh-CN -zh-TW" 450 KiB
+[binary  NSg   ] dev-dotnet/dotnet-runtime-nugets-10.0.13-1:10.0.13::gentoo [6.0.36:6.0.36::gentoo, 7.0.20:7.0.20::gentoo, 8.0.30:8.0.30::gentoo, 9.0.19:9.0.19::gentoo, 10.0.11:10.0.11::gentoo] 369970 KiB
+[binary  NSg   ] dev-dotnet/dotnet-runtime-nugets-8.0.32-1:8.0.32::gentoo [6.0.36:6.0.36::gentoo, 7.0.20:7.0.20::gentoo, 8.0.30:8.0.30::gentoo, 9.0.19:9.0.19::gentoo, 10.0.11:10.0.11::gentoo] 386380 KiB
+[binary  NSg   ] dev-dotnet/dotnet-runtime-nugets-9.0.21-1:9.0.21::gentoo [6.0.36:6.0.36::gentoo, 7.0.20:7.0.20::gentoo, 8.0.30:8.0.30::gentoo, 9.0.19:9.0.19::gentoo, 10.0.11:10.0.11::gentoo] 360640 KiB
+[ebuild     U  ] sys-firmware/edk2-bin-202608::gentoo [202408::gentoo] USE="-secureboot" QEMU_SOFTMMU_TARGETS="aarch64%* x86_64%* -loongarch64% -riscv64%" 13082 KiB
+[binary    gU  ] sys-fs/inotify-tools-4.26.270-1::gentoo [4.26.262::gentoo] USE="-debug -doc" 420 KiB
+[binary    gU  ] app-containers/docker-cli-29.9.0-1::gentoo [29.8.1::gentoo] USE="(-selinux)" 18750 KiB
+[binary    gU  ] app-text/pandoc-bin-3.12.1-1::gentoo [3.12::gentoo] USE="pandoc-symlink" 26690 KiB
+[binary    gU  ] dev-util/glslang-1.4.363.0-1:0/16.6::gentoo [1.4.357.0:0/16.4::gentoo] ABI_X86="32 (64) (-x32)" 35420 KiB
+[binary    gU  ] app-editors/vim-core-9.2.1202-1::gentoo [9.2.1152::gentoo] USE="acl nls -minimal" 9500 KiB
+[binary   Rg   ] dev-cpp/simdutf-9.2.1-1:0/36::gentoo  USE="atomic-base64* -doc -test" 8100 KiB
+[binary    gU  ] app-shells/bash-5.3_p20-r1-1::gentoo [5.3_p20::gentoo] USE="net nls pgo (readline) -afs -bashlogger -examples -mem-scramble -plugins -verify-sig" 2670 KiB
+[binary    gU  ] media-libs/shaderc-2026.4-1::gentoo [2026.3::gentoo] USE="-doc" ABI_X86="32 (64) (-x32)" 4500 KiB
+[binary    gU  ] app-containers/containerd-2.4.2-1::gentoo [2.4.1::gentoo] USE="cri seccomp -apparmor -btrfs -device-mapper (-selinux) -test" 55200 KiB
+[binary    gU  ] dev-util/vulkan-tools-1.4.363.0-1::gentoo [1.4.357.0::gentoo] USE="wayland -X -cube -test" ABI_X86="32 (64) (-x32)" 7730 KiB
+[binary    gU  ] media-libs/x265-4.3-1:0/217::gentoo [4.1:0/215::gentoo] USE="10bit 12bit cet%* vmaf -numa -test" ABI_X86="32 (64) (-x32)" 21420 KiB
+[ebuild     U  ] media-libs/libpng-1.6.59-r1:0/16::gentoo [1.6.58:0/16::gentoo] USE="-apng -static-libs -test" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="sse" 0 KiB
+[binary    gU  ] dev-db/sqlite-3.54.1-1:3::gentoo [3.53.4:3::gentoo] USE="icu readline -debug -doc -secure-delete -static-libs -tcl -test -test-full -tools" ABI_X86="32 (64) (-x32)" 12190 KiB
+[binary  N g   ] media-libs/libmysofa-1.3.5-1::gentoo  USE="-test" 1260 KiB
+[binary    gU  ] dev-util/ruff-0.17.1-1::gentoo [0.16.10::gentoo] USE="-debug" 9560 KiB
+[binary    gU  ] dev-util/ty-0.0.85-1::gentoo [0.0.84::gentoo] USE="-debug" 12810 KiB
+[binary    gU  ] dev-libs/nss-3.131-1::gentoo [3.130::gentoo] USE="utils -cacert -test -test-full" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="avx2 sse3" 22430 KiB
+[binary  N g   ] net-wireless/iw-6.17-1::gentoo  500 KiB
+[binary    gU  ] media-libs/libavif-1.4.2-1:0/16.4::gentoo [1.4.1:0/16.4::gentoo] USE="aom -dav1d -examples -extras -gdk-pixbuf -libyuv -rav1e -svt-av1 -test" ABI_X86="32 (64) (-x32)" 1150 KiB
+[binary    gU  ] app-arch/libarchive-3.8.10-1:0/13::gentoo [3.8.9:0/13::gentoo] USE="acl blake2 bzip2 e2fsprogs iconv lz4 lzma xattr zstd -expat -lzo -nettle -static-libs -test -verify-sig" ABI_X86="32 (64) (-x32)" 3730 KiB
+[binary    gU  ] dev-libs/libzip-1.12.1-1:0/5::gentoo [1.11.4-r2:0/5::gentoo] USE="bzip2 ssl zstd -gnutls -lzma -test -tools (-mbedtls%)" 550 KiB
+[binary  r gU  ] dev-libs/boost-1.91.0-r2-1:0/1.91.0::gentoo [1.90.0-r2:0/1.90.0::gentoo] USE="bzip2 context icu nls stacktrace zlib zstd -debug -doc -lzma -mpi -numpy -python -test -test-full -tools" ABI_X86="32 (64) (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 126540 KiB
+[binary    gU  ] dev-python/uv-0.13.1-1::gentoo [0.12.23::gentoo] USE="-debug -test" 18240 KiB
+[binary    gU  ] kde-frameworks/extra-cmake-modules-6.31.0-1::gentoo [6.30.0::gentoo] USE="-doc -test" 210 KiB
+[binary  rRg   ] dev-util/rizin-0.9.1-r1-1:0/0.9.1::gentoo  USE="(-test)" 33420 KiB
+[binary    gU  ] dev-util/claude-code-2.1.301-1::gentoo [2.1.296::buildovl] CPU_FLAGS_X86="avx avx2" 103790 KiB
+[binary    gU  ] net-firewall/ipset-7.24-r1-1::gentoo [7.24::gentoo] USE="strip -dist-kernel -modules -modules-compress -modules-sign" 290 KiB
+[ebuild     U  ] dev-libs/expat-2.9.0::gentoo [2.8.5::gentoo] USE="unicode -examples -static-libs -test" ABI_X86="32 (64) (-x32)" 0 KiB
+[ebuild     U  ] media-libs/freetype-2.15.0:2::gentoo [2.14.3:2::gentoo] USE="X adobe-cff bzip2 cleartype-hinting harfbuzz png svg -brotli -debug -doc -fontforge -static-libs -utils -verify-sig" ABI_X86="32 (64) (-x32)" 0 KiB
+[binary    gU  ] llvm-core/llvm-23.1.3-1:23/23.1::gentoo [23.1.2:23/23.1::gentoo] USE="binutils-plugin libffi xml zstd -debug (-debuginfod) -doc -exegesis -libedit -test -verify-sig -z3" ABI_X86="32 (64) (-x32)" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" 4425940 KiB
+[ebuild     U  ] llvm-core/clang-common-23.1.3::gentoo [23.1.2::gentoo] USE="cet -bootstrap-prefix -default-compiler-rt -default-libcxx -default-lld -emacs -hardened -llvm-libunwind -verify-sig" 0 KiB
+[binary    gU  ] llvm-core/lld-23.1.3-1:23/23.1::gentoo [23.1.2:23/23.1::gentoo] USE="zstd -debug -test -verify-sig" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" 62260 KiB
+[binary    gU  ] dev-build/meson-1.12.1-1::gentoo [1.12.0::gentoo] USE="-test -test-full -verify-sig" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 2500 KiB
+[ebuild     U  ] x11-base/xorg-proto-2026.1::gentoo [2025.1::gentoo] USE="-test" 0 KiB
+[binary  r gU  ] dev-libs/libbpf-1.8.0-1:0/1.8::gentoo [1.7.0-r1:0/1.7::gentoo] USE="static-libs" 2100 KiB
+[binary    gU  ] net-misc/curl-8.23.0-1::gentoo [8.22.0::gentoo] USE="adns alt-svc ftp hsts http2 http3 httpsrr imap ldap openssl pop3 psl quic smtp ssl tftp websockets zstd -brotli -debug (-ech) -gnutls -gopher -idn -kerberos -mbedtls -rustls -sasl-scram -ssh -static-libs -telnet -test -verify-sig" ABI_X86="32 (64) (-x32)" CURL_SSL="openssl -gnutls -mbedtls -rustls" 6960 KiB
+[binary    gU  ] dev-libs/elfutils-0.196-r2-1::gentoo [0.196-r1::gentoo] USE="bzip2 debuginfod libarchive lzma nls stackprof threads%* utils zstd -libpfm -static-libs -test -valgrind -verify-sig" ABI_X86="32 (64) (-x32)" 10070 KiB
+[binary    gU  ] dev-python/platformdirs-4.13.4-1::gentoo [4.12.2::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 130 KiB
+[binary  rRg   ] sys-apps/iproute2-7.2.0-1::gentoo  USE="bpf elf iptables -atm -berkdb -caps -minimal -nfs (-selinux)" 5640 KiB
+[binary    gU  ] dev-python/more-itertools-11.2.1-1::gentoo [11.1.0::gentoo] USE="-doc" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 200 KiB
+[binary    gU  ] sys-block/thin-provisioning-tools-1.3.4-1::gentoo [1.3.1::gentoo] USE="io-uring -debug" LLVM_SLOT="21 -19 -20 -22%" 12160 KiB
+[binary    gU  ] dev-python/numpy-2.5.4-1:0/2::gentoo [2.5.3:0/2::gentoo] USE="cpudetection lapack (-big-endian) -debug (-index64) -test -verify-provenance" CPU_FLAGS_X86="avx2 sse4_2 -avx512_bf16 -avx512_bitalg -avx512_fp16 -avx512_vbmi2 -avx512bw -avx512dq -avx512vl" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 35280 KiB
+[binary  NSg   ] dev-lang/rust-1.99.0-1:1.99.0::gentoo [1.98.1:1.98.1::gentoo] USE="clippy lto rust-analyzer rust-src rustfmt system-llvm (-big-endian) -debug -dist -doc (-llvm-libunwind) -test -verify-sig" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="(23%*) (-22%*)" LLVM_TARGETS="AArch64 AMDGPU BPF SPIRV WebAssembly (X86) -ARC -ARM -AVR -CSKY -DirectX -Hexagon -Lanai -LoongArch -M68k -MSP430 -Mips -NVPTX -PowerPC -RISCV -Sparc -SystemZ -VE -XCore -Xtensa" RUST_SYSROOTS="bpf wasm" 190050 KiB
+[binary    gU  ] dev-python/filelock-4.2.1-1::gentoo [4.0.9::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 430 KiB
+[binary    gU  ] dev-python/truststore-0.10.5-1::gentoo [0.10.4::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 90 KiB
+[binary    gU  ] dev-python/installer-1.1.0-1::gentoo [1.0.1::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 330 KiB
+[binary    gU  ] dev-python/pluggy-1.7.0-1::gentoo [1.6.0::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 110 KiB
+[binary    gU  ] dev-python/tomlkit-0.15.2-1::gentoo [0.15.1::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 200 KiB
+[binary    gU  ] dev-python/rpds-py-2026.9.1-1::gentoo [2026.6.3::gentoo] USE="-debug -test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 380 KiB
+[binary    gU  ] dev-python/pyqt6-sip-13.13.0-1::gentoo [13.12.0::gentoo] USE="-debug" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 320 KiB
+[binary    gU  ] dev-python/pyflakes-4.0.3-1::gentoo [4.0.1::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 220 KiB
+[binary    gU  ] dev-python/distlib-0.4.4-1::gentoo [0.4.3::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 530 KiB
+[binary    gU  ] dev-python/async-lru-2.4.0-1::gentoo [2.3.0::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 70 KiB
+[binary    gU  ] net-libs/nodejs-26.12.0-1:0/26::gentoo [26.10.0-r2:0/26::gentoo] USE="debug icu inspector npm snapshot ssl system-ssl -doc (-lto) -pax-kernel -system-icu -temporal -test" CPU_FLAGS_X86="sse2" 1351600 KiB
+[binary    gU  ] dev-python/zope-interface-8.7-1::gentoo [8.6::gentoo] USE="native-extensions -debug -test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 580 KiB
+[binary    gU  ] dev-python/json5-0.17.3-1::gentoo [0.15.0::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 110 KiB
+[binary    gU  ] dev-python/jsonpointer-3.2.1-1::gentoo [3.1.1::gentoo] USE="-verify-provenance%" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 60 KiB
+[binary    gU  ] dev-python/cssselect-1.6.0-1::gentoo [1.5.0::gentoo] USE="-doc -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 110 KiB
+[ebuild  r  U  ] media-libs/libdisplay-info-0.4.0:0/4::gentoo [0.3.0:0/3::gentoo] USE="-verify-sig" ABI_X86="32 (64) (-x32)" 117 KiB
+[binary    gU  ] dev-python/pypdf-6.21.1-1::gentoo [6.19.0::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 1140 KiB
+[binary    gU  ] dev-python/narwhals-2.27.1-1::gentoo [2.26.0::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 1200 KiB
+[binary    gU  ] dev-python/astroid-4.3.4-1::gentoo [4.3.3::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 730 KiB
+[binary    gU  ] dev-python/pkginfo-1.13.3-1::gentoo [1.12.1.2::gentoo] USE="-doc -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 120 KiB
+[binary    gU  ] dev-python/soupsieve-3.0.3-1::gentoo [2.10::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 170 KiB
+[binary    gU  ] dev-python/fonttools-4.67.0-1::gentoo [4.66.1::gentoo] USE="native-extensions -debug -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 6300 KiB
+[binary    gU  ] dev-python/pytz-2026.5-1::gentoo [2026.4::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 110 KiB
+[binary    gU  ] dev-python/iniconfig-2.3.1-1::gentoo [2.3.0::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 60 KiB
+[binary    gU  ] dev-python/executing-2.3.0-1::gentoo [2.2.1::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 120 KiB
+[binary    gU  ] dev-python/wcwidth-0.9.2-1::gentoo [0.9.1::gentoo] USE="native-extensions -debug -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 850 KiB
+[binary    gU  ] dev-python/nest-asyncio2-1.7.4-1::gentoo [1.7.3::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 60 KiB
+[binary    gU  ] net-analyzer/rrdtool-1.11.0-1:0/8.3.0::gentoo [1.10.3:0/8.3.0::gentoo] USE="-dbi -debug -doc -examples -graph -lua -perl -python -rados -rrdcached -rrdcgi -static-libs -tcl -tcpd -test" LUA_TARGETS="lua5-1 -lua5-3 -lua5-4 -luajit" PERL_FEATURES="ithreads (-debug) -quadmath" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 930 KiB
+[binary   Rg   ] sys-block/nbd-3.27.1-1::gentoo  USE="-debug -gnutls (-netlink%*)" 270 KiB
+[binary    gU  ] www-plugins/chrome-binary-plugins-156.0.8078.12_beta-1:beta::gentoo [156.0.8078.4_beta:beta::gentoo] 16800 KiB
+[binary    gU  ] app-misc/tmux-3.8-1::gentoo [3.7c::gentoo] USE="systemd -debug -jemalloc (-selinux) -sixel -utempter -vim-syntax" 3420 KiB
+[binary    gU  ] dev-python/pycairo-1.29.2-1::gentoo [1.29.1::gentoo] USE="X -debug -doc -examples -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 370 KiB
+[binary    gU  ] dev-python/vcs-versioning-2.6.0-1::gentoo [2.5.0::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 310 KiB
+[binary    gU  ] dev-python/jedi-0.20.1-1::gentoo [0.20.0::gentoo] USE="-doc -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 2830 KiB
+[binary    gU  ] dev-python/pycparser-3.11-1::gentoo [3.0::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 180 KiB
+[binary    gU  ] dev-python/opentelemetry-api-1.45.1-1::gentoo [1.45.0::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 160 KiB
+[binary    gU  ] dev-python/python-discovery-1.6.3-1::gentoo [1.6.1::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 150 KiB
+[binary    gU  ] dev-python/sqlalchemy-2.1.5-1::gentoo [2.1.3::gentoo] USE="sqlite -debug -examples -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 7360 KiB
+[binary    gU  ] net-misc/openssh-10.6_p1-1::gentoo [10.5_p1::gentoo] USE="pam seccomp ssl -audit (-debug) -kerberos -ldns -libedit -livecd -security-key (-selinux) -static -test -verify-sig" 10180 KiB
+[binary    gU  ] dev-python/virtualenv-21.14.10-1::gentoo [21.14.5::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t (-python3_15) (-python3_15t)" 310 KiB
+[binary    gU  ] net-vpn/openvpn-2.7.7-1::gentoo [2.7.6::gentoo] USE="examples iproute2 lz4 lzo openssl pam plugins systemd -dco -down-root -inotify -kernel-ovpn -mbedtls -pkcs11 (-selinux) -test -verify-sig" 2720 KiB
+[binary  N g   ] dev-python/httpx2-2.13.1-1::gentoo  USE="-cli -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 440 KiB
+[binary    gU  ] dev-python/pydantic-2.14.1-1::gentoo [2.13.5::gentoo] USE="-debug -test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 3320 KiB
+[binary    gU  ] dev-dotnet/dotnet-sdk-bin-10.0.113-1:10.0/10.0.13::gentoo [10.0.111:10.0/10.0.11::gentoo] 153010 KiB
+[binary    gU  ] www-servers/nginx-1.31.7-1:0/1.31.7::gentoo [1.31.6:0/1.31.6::gentoo] USE="http modules -aio -debug -libatomic -mail (-selinux) -stream -test" NGINX_MODULES_HTTP="access auth_basic autoindex browser charset empty_gif fastcgi geo grpc gzip limit_conn limit_req map memcached mirror proxy referer rewrite scgi split_clients ssi ssl upstream_hash upstream_ip_hash upstream_keepalive upstream_least_conn upstream_random upstream_zone userid uwsgi v2 -addition -auth_request -dav -degradation -flv -geoip -gunzip -gzip_static -image_filter -mp4 -perl -random_index -realip -secure_link -slice -stub_status -sub -v3 -xslt" NGINX_MODULES_MAIL="imap pop3 smtp ssl" NGINX_MODULES_STREAM="access geo limit_conn map pass return set split_clients ssl upstream_hash upstream_least_conn upstream_random upstream_zone -geoip -realip -ssl_preread" 680 KiB
+[binary    gU  ] media-libs/mesa-26.2.4-1::gentoo [26.2.3::gentoo] USE="X llvm (opengl) proprietary-codecs vaapi vulkan wayland zstd -debug -lm-sensors -opencl -sysprof -test -unwind -valgrind" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="22 -18 -19 -20 -21" VIDEO_CARDS="nouveau radeon radeonsi virgl -asahi -d3d12 (-freedreno) -i915 (-imagination) -intel -lavapipe (-lima) -nvk (-panfrost) -r300 -r600 (-v3d) (-vc4) (-vivante) -vmware -zink" 310490 KiB
+[binary    gU  ] dev-python/dulwich-1.2.17-1::gentoo [1.2.16::gentoo] USE="native-extensions -debug -doc -examples -test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 2600 KiB
+[binary    gU  ] net-misc/rclone-1.75.2-1::gentoo [1.75.1::gentoo] 62260 KiB
+[binary  r gU  ] x11-base/xorg-server-21.1.25-1:0/21.1.25::gentoo [21.1.24:0/21.1.24::gentoo] USE="systemd udev xorg -debug (-elogind) -minimal (-selinux) -suid -test -unwind -xcsecurity -xephyr -xnest -xvfb" 11630 KiB
+[binary    gU  ] dev-python/typer-0.27.3-1::gentoo [0.27.2::gentoo] USE="-cli -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 360 KiB
+[binary    gU  ] dev-python/pbs-installer-2026.10.13-1::gentoo [2026.10.1::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 150 KiB
+[binary    gU  ] dev-python/starlette-1.8.0-1::gentoo [1.7.0::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 270 KiB
+[binary    gU  ] dev-python/selenium-4.51.0-1::gentoo [4.50.0::gentoo] USE="(test-rust) -test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 1550 KiB
+[binary  rRg   ] x11-drivers/xf86-input-evdev-2.11.0-1::gentoo  260 KiB
+[binary  rRg   ] x11-drivers/xf86-input-synaptics-1.10.0-1::gentoo  410 KiB
+[binary  rRg   ] x11-drivers/xf86-input-wacom-1.2.4-1::gentoo  USE="-test" 630 KiB
+[binary  rRg   ] x11-drivers/xf86-video-amdgpu-25.0.0-r1-1::gentoo  USE="udev" 580 KiB
+[binary  rRg   ] x11-drivers/xf86-video-nouveau-1.0.18-1::gentoo  1030 KiB
+[binary  rRg   ] x11-drivers/xf86-video-qxl-0.1.6-1::gentoo  USE="-xspice" PYTHON_SINGLE_TARGET="-python3_12 -python3_13" 760 KiB
+[binary  rRg   ] x11-drivers/xf86-video-ati-22.0.0-1::gentoo  USE="udev" 1720 KiB
+[binary    gU  ] dev-python/fastapi-0.143.3-1::gentoo [0.142.2::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 380 KiB
+[binary    gU  ] sci-ml/huggingface_hub-2.1.1-1::gentoo [1.26.0-r1::gentoo] USE="-test -torch" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 1880 KiB
+[binary    gU  ] sys-apps/man-pages-6.19-1::gentoo [6.17-r2::gentoo] USE="-verify-sig" L10N="it -cs -da -de -el -es -fi -fr -hu -id -ja -ko -mk -nb -nl -pl -pt-BR -ro -ru -sr -sv -tr -uk -vi -zh-CN" 3250 KiB
+[ebuild     U  ] dev-libs/gobject-introspection-1.86.0-r1::gentoo [1.86.0::gentoo] USE="-doctool -gtk-doc -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[binary    gU  ] dev-python/pycryptodome-4.0.1-1::gentoo [3.23.0::gentoo] USE="-debug" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 2840 KiB
+[binary    gU  ] dev-python/paramiko-5.0.1-1::gentoo [5.0.0::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 440 KiB
+[binary  rRg   ] x11-drivers/xf86-input-libinput-1.5.0-1::gentoo  200 KiB
+[binary    gU  ] dev-python/nbconvert-7.17.2-1::gentoo [7.17.1::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 370 KiB
+[binary    gU  ] dev-python/jupyter-lsp-2.3.1-r1-1::gentoo [2.3.1::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 170 KiB
+[binary    gU  ] sys-apps/portage-3.0.83-r1-1::gentoo [3.0.82.2::gentoo] USE="(ipc) native-extensions rsync-verify xattr -apidoc -build -doc -gentoo-dev (-selinux) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 3960 KiB
+[ebuild     U  ] app-containers/docker-29.9.0::gentoo [29.8.1::gentoo] USE="container-init overlay2 seccomp systemd -apparmor -btrfs -cuda (-selinux)" 0 KiB
+[binary    gU  ] app-containers/podman-6.1.4-1::gentoo [6.1.2::gentoo] USE="seccomp systemd -apparmor -btrfs -cron (-selinux) -wrapper" 55800 KiB
+[binary    gU  ] dev-util/github-cli-2.102.0-1::gentoo [2.101.0::gentoo] 25570 KiB
+[binary    gU  ] dev-vcs/pre-commit-4.7.0-1::gentoo [4.5.1::gentoo] USE="-test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 380 KiB
+[binary    gU  ] app-portage/gentoolkit-0.8.2-1::gentoo [0.8.1::gentoo] USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 3420 KiB
+[binary  NSg   ] dev-java/maven-bin-3.10.0-1:3.10::gentoo [3.9.16:3.9::gentoo] USE="-verify-sig" 9520 KiB
+[binary    gU  ] llvm-core/clang-23.1.3-r1-1:23/23.1::gentoo [23.1.2:23/23.1::gentoo] USE="extra (pie) static-analyzer xml -debug -doc (-ieee-long-double) -test -verify-sig" ABI_X86="32 (64) (-x32)" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 4156630 KiB
+[ebuild     U  ] llvm-runtimes/openmp-23.1.3:0/23.1::gentoo [23.1.2:0/23.1::gentoo] USE="clang -cuda -debug -fortran -gdb-plugin -hwloc -level-zero -offload -ompt -rocm -test -verify-sig" ABI_X86="32 (64) (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[binary    gU  ] llvm-core/lldb-23.1.3-1:0/23.1::gentoo [23.1.2:0/23.1::gentoo] USE="libedit ncurses python tree-sitter xml -debug (-debuginfod) -lzma -test -verify-sig" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 558500 KiB
+[binary    gU  ] dev-python/pylint-4.1.3-1::gentoo [4.1.2::gentoo] USE="-examples -test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 1400 KiB
+[binary    gU  ] gnome-base/librsvg-2.62.4-1:2::gentoo [2.62.3:2::gentoo] USE="avif%* introspection vala -debug -gtk-doc -test" ABI_X86="32 (64) (-x32)" 5950 KiB
+[binary    gU  ] dev-python/pillow-13.0.0-1::gentoo [12.3.0::gentoo] USE="avif jpeg jpeg2k lcms tiff truetype webp xcb zlib -debug -examples -imagequant -raqm -test -tk" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 1960 KiB
+[binary    gU  ] dev-python/scipy-1.18.1-1::gentoo [1.17.1::gentoo] USE="fortran (test-rust) -debug -doc (-index64) -test -verify-provenance%" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 141020 KiB
+[binary    gU  ] gui-libs/gtk-4.22.5-r1-1:4::gentoo [4.22.5:4::gentoo] USE="X cups introspection vulkan wayland (-aqua) -broadway -cloudproviders -colord -examples -gstreamer -gtk-doc -sysprof -test" CPU_FLAGS_X86="f16c" 45490 KiB
+[binary    gU  ] app-editors/vscode-1.142.0-1::gentoo [1.140.0::gentoo] USE="egl wayland -webkit" L10N="af am ar bg bn ca cs da de el en-GB es es-419 et fa fi fil fr gu he hi hr hu id it ja kn ko lt lv ml mr ms nb nl pl pt-BR pt-PT ro ru sk sl sr sv sw ta te th tr uk ur vi zh-CN zh-TW" 265990 KiB
+[binary    gU  ] net-im/telegram-desktop-bin-7.3.1-1::gentoo [7.1.5::gentoo] 99510 KiB
+[binary    gU  ] kde-frameworks/breeze-icons-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-test" 5850 KiB
+[binary    gU  ] kde-frameworks/kwidgetsaddons-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -designer -test" 22500 KiB
+[binary    gU  ] kde-frameworks/kdbusaddons-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X -debug -test" 2630 KiB
+[binary    gU  ] kde-frameworks/kcodecs-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 2540 KiB
+[binary    gU  ] kde-frameworks/karchive-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="crypt zstd -debug -test" 3290 KiB
+[binary    gU  ] kde-frameworks/kitemviews-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -designer -test" 3130 KiB
+[binary    gU  ] kde-frameworks/kglobalaccel-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X -debug -test" 2460 KiB
+[binary  r gU  ] kde-frameworks/kidletime-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X wayland -debug -xscreensaver" 2110 KiB
+[binary    gU  ] kde-frameworks/attica-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 10500 KiB
+[binary    gU  ] kde-frameworks/threadweaver-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 2020 KiB
+[binary    gU  ] www-client/google-chrome-155.0.8059.39-1::gentoo [154.0.8037.92::gentoo] USE="qt6 (-selinux)" L10N="af am ar bg bn ca cs da de el en-GB es es-419 et fa fi fil fr gu he hi hr hu id it ja kn ko lt lv ml mr ms nb nl pl pt-BR pt-PT ro ru sk sl sr sv sw ta te th tr uk ur vi zh-CN zh-TW" 175520 KiB
+[binary    gU  ] kde-plasma/ocean-sound-theme-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 2020 KiB
+[binary    gU  ] kde-frameworks/modemmanager-qt-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 12310 KiB
+[binary    gU  ] kde-frameworks/kmime-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 3170 KiB
+[binary    gU  ] kde-plasma/kwayland-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" 7670 KiB
+[binary    gU  ] kde-frameworks/kimageformats-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="avif jpegxl -debug -eps -heif -jpeg2k -openexr -raw -test" 17430 KiB
+[binary    gU  ] kde-apps/libkexiv2-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="xmp -debug" 3680 KiB
+[binary    gU  ] kde-plasma/breeze-gtk-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 220 KiB
+[binary  N g   ] dev-libs/cxx-rust-cssparser-1.1.0-1::gentoo  USE="-debug -test" 2210 KiB
+[binary    gU  ] www-apps/chromedriver-bin-155.0.8059.39-1::gentoo [154.0.8037.92::gentoo] 9670 KiB
+[binary    gU  ] kde-frameworks/kcoreaddons-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="dbus -debug -test" 11460 KiB
+[binary    gU  ] kde-frameworks/ki18n-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 8270 KiB
+[binary    gU  ] kde-frameworks/kconfig-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="dbus qml -debug -test" 11150 KiB
+[binary  r gU  ] kde-frameworks/kwindowsystem-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X wayland -debug -test" 7790 KiB
+[binary    gU  ] kde-frameworks/kirigami-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="openmp -debug -examples -test" 45580 KiB
+[binary    gU  ] kde-frameworks/kguiaddons-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X dbus wayland -debug -test" 7210 KiB
+[binary    gU  ] kde-frameworks/solid-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -ios -test" 16700 KiB
+[binary    gU  ] kde-frameworks/sonnet-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="hunspell qml -aspell -debug -designer -test" 7360 KiB
+[binary    gU  ] kde-frameworks/kitemmodels-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 4330 KiB
+[binary    gU  ] kde-frameworks/syntax-highlighting-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 10370 KiB
+[binary    gU  ] kde-frameworks/kcalendarcore-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 10180 KiB
+[binary    gU  ] kde-plasma/layer-shell-qt-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 2560 KiB
+[binary    gU  ] kde-frameworks/kdnssd-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -minimal -test" 3350 KiB
+[binary    gU  ] kde-frameworks/kholidays-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 3670 KiB
+[binary    gU  ] kde-frameworks/ktexttemplate-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 13580 KiB
+[binary    gU  ] kde-frameworks/kquickcharts-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -examples -test" 7920 KiB
+[binary    gU  ] kde-apps/kmbox-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 820 KiB
+[binary    gU  ] kde-frameworks/bluez-qt-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 22340 KiB
+[binary    gU  ] kde-frameworks/kservice-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="man -debug -test" 5720 KiB
+[binary    gU  ] kde-frameworks/kcrash-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X -debug -test" 890 KiB
+[binary    gU  ] kde-frameworks/kcolorscheme-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug" 1460 KiB
+[binary    gU  ] kde-frameworks/kcompletion-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -designer -test" 2670 KiB
+[binary    gU  ] kde-plasma/plasma-activities-6.8.0-1:6/7::gentoo [6.7.5:6/7::gentoo] USE="-debug -test" 5690 KiB
+[binary    gU  ] kde-frameworks/kpackage-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -man -test" 3070 KiB
+[binary  rRg   ] media-libs/libv4l-1.32.0-r1-1::gentoo  USE="bpf jpeg qt6 utils -doc -dvb -tracer" ABI_X86="32 (64) (-x32)" 13010 KiB
+[binary    gU  ] kde-frameworks/kstatusnotifieritem-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X -debug -test" 4190 KiB
+[binary    gU  ] kde-frameworks/kcontacts-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 9120 KiB
+[binary    gU  ] kde-frameworks/krunner-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 3340 KiB
+[binary    gU  ] kde-plasma/kdecoration-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" 2180 KiB
+[binary    gU  ] kde-plasma/libkscreen-6.8.0-1:6/8::gentoo [6.7.5:6/8::gentoo] USE="-debug -doc -test" 7670 KiB
+[binary    gU  ] kde-frameworks/kpty-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 800 KiB
+[binary    gU  ] kde-frameworks/networkmanager-qt-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -teamd -test" 28950 KiB
+[binary    gU  ] kde-frameworks/kunitconversion-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 4230 KiB
+[binary    gU  ] kde-frameworks/kdav-6.31.0-1:6/6.31::gentoo [6.30.0-r2:6/6.30::gentoo] USE="-debug -test" 6300 KiB
+[binary    gU  ] kde-frameworks/kiconthemes-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -designer -test" 4780 KiB
+[binary    gU  ] kde-frameworks/kconfigwidgets-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -designer -test" 4440 KiB
+[binary    gU  ] kde-frameworks/ktextwidgets-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -designer -speech -test" 2660 KiB
+[binary    gU  ] kde-frameworks/ksvg-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 4330 KiB
+[binary    gU  ] kde-frameworks/kded-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="man -debug" 1090 KiB
+[binary    gU  ] kde-frameworks/kdeclarative-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug" 7050 KiB
+[binary    gU  ] kde-apps/libkdepim-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -designer -test" 2450 KiB
+[binary    gU  ] kde-plasma/plasma-activities-stats-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -doc -test" 3100 KiB
+[binary    gU  ] net-print/hplip-3.26.6-1::gentoo [3.26.4::gentoo] USE="X hpcups hpijs kde scanner snmp -doc -fax -libusb0 -minimal -parport -static-ppds (-policykit%*)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 24970 KiB
+[binary    gU  ] kde-plasma/kde-gtk-config-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 6460 KiB
+[binary    gU  ] kde-frameworks/kdesu-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X -debug -test" 2360 KiB
+[binary    gU  ] kde-frameworks/kpeople-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 7560 KiB
+[binary    gU  ] kde-frameworks/kxmlgui-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -designer -test" 10400 KiB
+[binary    gU  ] kde-frameworks/kbookmarks-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 3110 KiB
+[binary    gU  ] kde-frameworks/qqc2-desktop-style-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 16560 KiB
+[binary    gU  ] kde-apps/libkleo-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 19170 KiB
+[binary    gU  ] kde-plasma/qqc2-breeze-style-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 17410 KiB
+[binary    gU  ] kde-apps/libgravatar-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 1690 KiB
+[binary    gU  ] kde-plasma/kdesu-gui-6.8.0-1::gentoo [6.7.5::gentoo] USE="X -debug" 800 KiB
+[binary    gU  ] net-print/hplip-plugin-3.26.6-1::gentoo [3.26.4::gentoo] USE="-orblite" 1160 KiB
+[binary    gU  ] kde-apps/akonadi-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="xml -debug -designer -test -tools" 140710 KiB
+[binary    gU  ] net-im/signal-desktop-bin-8.30.0-1::gentoo [8.26.0::gentoo] 128730 KiB
+[binary    gU  ] kde-frameworks/knotifications-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug" 4000 KiB
+[binary    gU  ] kde-frameworks/kjobwidgets-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X -debug -test" 4400 KiB
+[binary    gU  ] kde-plasma/kwrited-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 500 KiB
+[binary    gU  ] kde-apps/kcalc-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug -handbook -test" 5390 KiB
+[binary    gU  ] kde-frameworks/kwallet-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -minimal -test" 1520 KiB
+[binary    gU  ] kde-frameworks/kwallet-runtime-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X (keyring) (legacy-kwallet) man -debug -gpg -test" 10490 KiB
+[binary    gU  ] kde-apps/libkgapi-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 38480 KiB
+[binary    gU  ] kde-apps/signon-kwallet-extension-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug" 640 KiB
+[binary    gU  ] kde-plasma/ksshaskpass-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test%" 820 KiB
+[binary    gU  ] kde-plasma/kwallet-pam-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 120 KiB
+[binary    gU  ] kde-frameworks/kio-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="X acl kwallet wayland -debug -designer -handbook -test" 69660 KiB
+[binary    gU  ] kde-frameworks/kcmutils-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 10730 KiB
+[binary  r gU  ] kde-plasma/libplasma-6.8.0-1:6/8::gentoo [6.7.5:6/7::gentoo] USE="activities -debug -test (-gles2-only%)" 37050 KiB
+[binary    gU  ] kde-frameworks/kparts-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 3510 KiB
+[binary    gU  ] kde-plasma/kde-cli-tools-6.8.0-r1-1:6::gentoo [6.7.5:6::gentoo] USE="X -debug (-kdesu%)" 5150 KiB
+[binary    gU  ] kde-apps/akonadi-mime-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 7550 KiB
+[binary    gU  ] kde-plasma/kglobalacceld-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test (-X%*)" 2770 KiB
+[binary    gU  ] kde-apps/kldap-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -handbook -test" 5780 KiB
+[binary    gU  ] kde-plasma/plasma5support-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="activities -debug -doc -geolocation -ksysguard -test (-X%*)" 25530 KiB
+[binary    gU  ] kde-plasma/kactivitymanagerd-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 11380 KiB
+[binary    gU  ] kde-apps/kimap-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 7900 KiB
+[binary    gU  ] kde-apps/libkomparediff2-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug -test" 2840 KiB
+[binary    gU  ] kde-plasma/kmenuedit-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -handbook" 3570 KiB
+[binary    gU  ] kde-plasma/drkonqi-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 33660 KiB
+[binary    gU  ] kde-apps/ksmtp-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 1430 KiB
+[binary    gU  ] media-gfx/kio-ps-thumbnailer-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug" 480 KiB
+[binary    gU  ] kde-apps/kdf-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug -handbook" 4340 KiB
+[binary    gU  ] net-misc/kio-zeroconf-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug" 1130 KiB
+[binary    gU  ] kde-plasma/polkit-kde-agent-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 1570 KiB
+[binary    gU  ] kde-plasma/keditfiletype-6.8.0-1::gentoo [6.7.5::gentoo] USE="-debug -test" 5050 KiB
+[binary    gU  ] kde-frameworks/knewstuff-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -designer -opds" 17060 KiB
+[binary    gU  ] kde-apps/kmailtransport-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 6680 KiB
+[binary    gU  ] kde-plasma/milou-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" 2880 KiB
+[binary    gU  ] kde-plasma/kscreen-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test (-X%*)" 22750 KiB
+[binary    gU  ] kde-apps/kio-extras-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="X activities libproxy man mtp samba sftp -debug -handbook -ios -nfs -openexr -taglib -test" 34490 KiB
+[binary    gU  ] kde-apps/thumbnailers-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="pdf -blender -gettext -mobi -raw -video" 20 KiB
+[binary  N g   ] kde-plasma/kup-6.8.0-1:6::gentoo  USE="-debug -handbook" 15600 KiB
+[binary    gU  ] kde-plasma/bluedevil-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -handbook -test" 15610 KiB
+[binary    gU  ] kde-plasma/plasma-thunderbolt-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" 3570 KiB
+[binary    gU  ] kde-apps/kontactinterface-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug" 1820 KiB
+[binary    gU  ] kde-apps/okular-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="crypt epub markdown pdf postscript tiff -debug -djvu -handbook -mobi -share -speech -test" 60660 KiB
+[binary    gU  ] kde-frameworks/kauth-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="(policykit) -debug -test" 4770 KiB
+[binary    gU  ] kde-plasma/aurorae-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 7100 KiB
+[binary    gU  ] kde-apps/grantleetheme-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 2610 KiB
+[binary    gU  ] kde-frameworks/frameworkintegration-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 1670 KiB
+[binary    gU  ] kde-plasma/libksysguard-6.8.0-1:6/11::gentoo [6.7.5:6/11::gentoo] USE="filecaps -debug -test" 20030 KiB
+[binary    gU  ] kde-plasma/breeze-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 56660 KiB
+[binary    gU  ] kde-plasma/systemsettings-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -handbook" 5270 KiB
+[binary    gU  ] kde-plasma/plasma-firewall-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="ufw -debug -firewalld -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 5410 KiB
+[binary    gU  ] kde-apps/kwalletmanager-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug -handbook" 6480 KiB
+[binary    gU  ] kde-plasma/kinfocenter-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="usb -debug -gles2-only -handbook" 18040 KiB
+[binary    gU  ] kde-plasma/ksystemstats-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="filecaps networkmanager -debug -handbook -test" 12940 KiB
+[binary  N g   ] kde-plasma/union-6.8.0-r1-1:6::gentoo  USE="widgets -debug -doc -examples -test -tools" 48120 KiB
+[binary    gU  ] kde-plasma/plasma-vault-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="networkmanager -debug" 10990 KiB
+[binary    gU  ] kde-plasma/plasma-disks-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -handbook" 5430 KiB
+[binary    gU  ] app-editors/vim-9.2.1202-1::gentoo [9.2.1152::gentoo] USE="X acl crypt nls pango sound wayland -cscope -debug -gpm -images% -lua -minimal -perl -python -racket -ruby (-selinux) -tcl -terminal -vim-pager" LUA_SINGLE_TARGET="lua5-4 -lua5-1 -lua5-3 -luajit" PERL_FEATURES="ithreads (-debug) -quadmath" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 10470 KiB
+[binary    gU  ] app-admin/sudo-1.9.17_p2-r1-1::gentoo [1.9.17_p2::gentoo] USE="ldap nls pam secure-path sendmail ssl -gcrypt -offensive -sasl (-selinux) -skey -sssd -verify-sig" 3950 KiB
+[binary    gU  ] kde-plasma/knighttime-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" 2650 KiB
+[binary    gU  ] kde-plasma/kscreenlocker-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" 10570 KiB
+[binary    gU  ] kde-plasma/plasma-integration-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="X%* -debug" 5180 KiB
+[binary   Rg   ] media-video/ffmpeg-8.1.3-1:0/60.62.62::gentoo  USE="X alsa bzip2 cairo dav1d drm dvd fdk fontconfig gnutls gpl jpegxl lcms libass lzma opengl openh264 opus pulseaudio sdl svg theora truetype v4l vaapi vorbis vpx vulkan webp x264 x265 xml xvid zlib -amf -amr -amrenc (-appkit) -bluray -bs2b -cdio -chromaprint -chromium -codec2 -cuda-clang -doc -flite -frei0r -fribidi -gcrypt -gme -gmp -gsm -iec61883 -ieee1394 -jack -jpeg2k -kvazaar -ladspa -lame -libaom -libaribb24 -libcaca -libilbc -liblc3 -libplacebo -librtmp -libsoxr -lv2 -modplug -nvenc -ocr -openal -opencl -opencolorio -openmpt -openssl -qrcode -qsv -quirc -rabbitmq -rav1e -rist -rubberband -samba -snappy -sndio -soc -sofa% -speex -srt -ssh -svt-av1 -twolame -vdpau -verify-sig -vidstab -vmaf -zeromq -zimg -zvbi" ABI_X86="32 (64) (-x32)" 86820 KiB
+[binary    gU  ] kde-plasma/kpipewire-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" 8780 KiB
+[binary    gU  ] kde-plasma/xdg-desktop-portal-kde-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" 23650 KiB
+[binary  rRg   ] dev-libs/kirigami-addons-1.15.0-1:6::gentoo  USE="-debug -test" 35820 KiB
+[binary    gU  ] kde-frameworks/kfilemetadata-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="exif ffmpeg pdf taglib -debug -epub -mobi -test" 12070 KiB
+[binary    gU  ] kde-frameworks/prison-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="qml -debug -test" 5090 KiB
+[binary    gU  ] kde-frameworks/baloo-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug -test" 24230 KiB
+[binary    gU  ] x11-base/xwayland-24.1.14-1::gentoo [24.1.13::gentoo] USE="libei systemd (-selinux) -test -unwind -xcsecurity" 6820 KiB
+[binary    gU  ] kde-plasma/kwin-6.8.0-1:6::gentoo [6.7.5-r1:6::gentoo] USE="X (filecaps) lock screencast shortcuts systemd -accessibility -debug -gamepad -gles2-only -handbook (-selinux) -test" 219380 KiB
+[binary    gU  ] kde-plasma/plasma-workspace-6.8.0-1:6::gentoo [6.7.5-r1:6::gentoo] USE="X fontconfig ksysguard networkmanager (policykit) screencast semantic-desktop systemd wallpaper-metadata -appstream -debug -flatpak -handbook -telemetry -test" 272620 KiB
+[binary    gU  ] kde-frameworks/knotifyconfig-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="-debug" 1290 KiB
+[binary    gU  ] kde-frameworks/purpose-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="bluetooth -debug -test -webengine" 14500 KiB
+[binary    gU  ] media-libs/libsdl-1.2.78-1::gentoo [1.2.74::gentoo] USE="X alsa joystick opengl sound video -test" ABI_X86="32 (64) (-x32)" 650 KiB
+[binary    gU  ] app-emulation/qemu-10.2.3-r2-1::gentoo [10.2.3-r1::gentoo] USE="(X) aio alsa bpf bzip2 curl fdt filecaps gnutls gtk io-uring jpeg ncurses nls opengl oss pam pin-upstream-blobs pipewire plugins png pulseaudio python sdl seccomp slirp smartcard spice ssh udev usb usbredir vhost-net virtfs vnc wayland xattr zstd -accessibility -capstone -debug -doc -fuse -glusterfs -infiniband -iscsi -jack -keyutils -lzo -multipath -nfs -numa -passt -rbd -sasl -sdl-image (-selinux) -snappy -static-user -systemtap -test -valgrind -vde -verify-sig -virgl -vte -xdp -xen" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" QEMU_SOFTMMU_TARGETS="aarch64 arm x86_64 -alpha -avr -hppa -i386 -loongarch64 -m68k -microblaze -microblazeel -mips -mips64 -mips64el -mipsel -or1k -ppc -ppc64 -riscv32 -riscv64 -rx -s390x -sh4 -sh4eb -sparc -sparc64 -tricore -xtensa -xtensaeb" QEMU_USER_TARGETS="x86_64 -aarch64 -aarch64_be -alpha -arm -armeb -hexagon -hppa -i386 -loongarch64 -m68k -microblaze -microblazeel -mips -mips64 -mips64el -mipsel -mipsn32 -mipsn32el -or1k -ppc -ppc64 -ppc64le -riscv32 -riscv64 -s390x -sh4 -sh4eb -sparc -sparc32plus -sparc64 -xtensa -xtensaeb" 147880 KiB
+[binary    gU  ] kde-apps/mimetreeparser-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 10490 KiB
+[binary    gU  ] kde-plasma/spectacle-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="X%* -debug -handbook -share -test" 23340 KiB
+[binary   Rg   ] media-video/ffmpeg-compat-6.1.6-1:6/58.60.60::gentoo  USE="X alsa bzip2 dav1d drm fontconfig gnutls gpl jpegxl lcms libass opengl postproc pulseaudio sdl svg truetype vaapi vorbis vulkan webp x264 xml xvid zlib -amf -amr -amrenc (-appkit) -bluray -bs2b -cdio -chromaprint -codec2 -cuda-clang -fdk -flite -frei0r -fribidi -gcrypt -gme -gmp -gsm -iec61883 -ieee1394 -jack -jpeg2k -kvazaar -ladspa -lame -libaom -libaribb24 -libcaca -libilbc -libplacebo -librtmp -libsoxr -lv2 -lzma -modplug -nvenc -ocr -openal -opencl -openh264 -openmpt -openssl -opus -qsv -rabbitmq -rav1e -rubberband -samba -shaderc -snappy -sndio -soc -sofa% -speex -srt -ssh -svt-av1 -theora -twolame -v4l -vdpau -verify-sig -vidstab -vpx -x265 -zeromq -zimg -zvbi" ABI_X86="32 (64) (-x32)" 73100 KiB
+[binary    gU  ] kde-plasma/kdeplasma-addons-6.8.0-1:6::gentoo [6.7.5-r1:6::gentoo] USE="alternate-calendar -debug -handbook -led -share -webengine" 70450 KiB
+[binary    gU  ] kde-plasma/plasma-systemmonitor-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -test" 13000 KiB
+[binary    gU  ] kde-plasma/plasma-welcome-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 13630 KiB
+[binary    gU  ] kde-plasma/powerdevil-6.8.0-1:6::gentoo [6.7.5-r3:6::gentoo] USE="filecaps -brightness-control -debug -handbook -test" 33620 KiB
+[binary    gU  ] kde-plasma/print-manager-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="gtk -debug -test" 12760 KiB
+[binary    gU  ] kde-plasma/plasma-nm-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -openconnect -teamd -test" 53520 KiB
+[binary    gU  ] kde-plasma/plasma-pa-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug -handbook -test" 13170 KiB
+[binary  rRg   ] app-office/libreoffice-25.2.7.2-r1-1::gentoo  USE="bluetooth branding cups dbus gtk3 kde ldap mariadb qt6 vulkan -accessibility -base -coinmp -custom-cflags -debug -eds -googledrive -gstreamer -gtk4 -java -odk -pdfimport -postgres -test -valgrind" LIBREOFFICE_EXTENSIONS="-nlpsolver -scripting-beanshell -scripting-javascript -wiki-publisher" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 1880220 KiB
+[binary    gU  ] mail-client/thunderbird-158.0-1:0/stable::gentoo [157.0.1:0/stable::gentoo] USE="X clang (jumbo-build) pulseaudio system-av1 system-harfbuzz system-jpeg system-libevent system-librnp system-libvpx system-webp wayland -debug -eme-free -hardened -hwaccel -jack -libproxy (-pgo) (-selinux) -sndio (-system-icu) -system-pipewire -system-png -wifi" LLVM_SLOT="22 -23%" 103830 KiB
+[binary    gU  ] sci-geosciences/gpxsee-16.17-1::gentoo [16.16::gentoo] 61600 KiB
+[binary    gU  ] app-editors/zed-1.21.0-1::gentoo [1.15.0::gentoo] USE="-debug" LLVM_SLOT="22" 385110 KiB
+[binary    gU  ] kde-apps/ark-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="zip -debug -handbook -test" 21630 KiB
+[binary    gU  ] kde-apps/dolphin-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug -handbook -semantic-desktop -telemetry -test" 43800 KiB
+[binary    gU  ] kde-apps/dragon-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug" 4480 KiB
+[binary    gU  ] kde-apps/gwenview-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="X activities annotate mpris semantic-desktop -debug -fits -handbook -raw -share -test" 36660 KiB
+[binary    gU  ] kde-apps/kfind-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug -handbook" 2480 KiB
+[binary    gU  ] kde-apps/krfb-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="wayland -debug -handbook" 10670 KiB
+[binary    gU  ] kde-misc/kdeconnect-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="X pulseaudio (-bluetooth) -debug (-selinux) -telephony -test" 101570 KiB
+[binary    gU  ] kde-plasma/plasma-login-manager-6.8.0-1::gentoo [6.7.5::gentoo] USE="-debug -test" 20300 KiB
+[binary    gU  ] media-sound/easyeffects-8.3.0-1::gentoo [8.0.5::gentoo] USE="-debug (-webengine%)" 71270 KiB
+[ebuild  rR    ] kde-plasma/kwin-x11-6.7.5-r1:6::gentoo  USE="lock nightlight shortcuts systemd -accessibility -debug -gles2-only -handbook (-selinux) -test" 0 KiB
+[binary    gU  ] kde-apps/akonadi-contacts-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 22560 KiB
+[binary    gU  ] kde-apps/akonadi-search-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 14060 KiB
+[binary    gU  ] kde-apps/kpimtextedit-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 5430 KiB
+[binary    gU  ] media-sound/mpg123-1.33.7-1::gentoo [1.32.3-r100::gentoo] USE="alsa pulseaudio sdl (-coreaudio) -jack -nas -oss -portaudio" ABI_X86="32 (64) (-x32)" 30 KiB
+[binary    gU  ] kde-plasma/plasma-desktop-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="screencast sdl semantic-desktop -debug -handbook -ibus -scim -test -webengine" INPUT_DEVICES="wacom" 109760 KiB
+[binary    gU  ] kde-plasma/plasma-browser-integration-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 5870 KiB
+[binary    gU  ] kde-plasma/flatpak-kcm-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="-debug" 3790 KiB
+[binary    gU  ] app-mobilephone/scrcpy-5.0.1-1::gentoo [4.1::gentoo] USE="X wayland" 1520 KiB
+[binary    gU  ] kde-apps/konsole-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="X ssh -debug -handbook -test" 39150 KiB
+[binary    gU  ] kde-apps/kidentitymanagement-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 6180 KiB
+[binary    gU  ] kde-apps/pimcommon-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="activities -debug -designer -test" 16200 KiB
+[binary    gU  ] net-misc/freerdp-3.32.2-1:3::gentoo [3.32.1:3::gentoo] USE="X alsa client cups ffmpeg fuse icu jpeg kerberos openh264 pulseaudio sdl server systemd usb xinerama xv -aad -camera -debug -gstreamer -smartcard -test -valgrind -verify-sig (-wayland) -winpr-tools" 17810 KiB
+[binary    gU  ] net-im/zoom-7.1.5.4332-1::gentoo [7.0.0.1666-r2::gentoo] USE="pulseaudio wayland zoom-symlink -opencl" 311270 KiB
+[binary    gU  ] kde-apps/kcalutils-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 3330 KiB
+[binary    gU  ] kde-apps/messagelib-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -speech -test" 82560 KiB
+[binary    gU  ] kde-plasma/krdp-6.8.0-1:6::gentoo [6.7.5-r1:6::gentoo] USE="systemd -debug -examples -test" 8510 KiB
+[binary    gU  ] kde-apps/libksieve-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -handbook -speech -test" 29570 KiB
+[binary    gU  ] kde-apps/mailimporter-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 5170 KiB
+[binary    gU  ] kde-apps/kdenlive-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="semantic-desktop -debug -designer -doc -gles2-only -handbook -test" 151440 KiB
+[binary    gU  ] kde-apps/krdc-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="rdp ssh vnc wayland -debug -handbook" 11060 KiB
+[binary    gU  ] kde-frameworks/ktexteditor-6.31.0-1:6/6.31::gentoo [6.30.0:6/6.30::gentoo] USE="editorconfig -debug -test" 45200 KiB
+[binary    gU  ] kde-apps/mailcommon-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="activities -debug -designer -test" 32020 KiB
+[binary  NSg   ] app-emulation/wine-staging-11.20-1:11.20::gentoo [11.18:11.18::gentoo, 11.19:11.19::gentoo] USE="X alsa bluetooth cups dbus ffmpeg fontconfig gecko gstreamer mingw mono nls opengl pulseaudio sdl ssl strip truetype udev usb vaapi vulkan wayland wow64 xinerama (-arm64ec) -crossdev-mingw -custom-cflags -dos -gphoto2 -kerberos -netapi -odbc -opencl -pcap -perl -samba -scanner (-selinux) -smartcard -v4l" ABI_X86="64 -32" 107010 KiB
+[binary    gU  ] kde-apps/libktnef-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 1860 KiB
+[binary    gU  ] kde-apps/akonadi-calendar-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 15480 KiB
+[binary  NSg   ] app-emulation/wine-proton-11.0.2e-1:11.0.2e::gentoo [11.0.2:11.0.2::gentoo] USE="X alsa dbus fontconfig gecko gstreamer (mingw) mono nls pulseaudio sdl ssl strip udev unwind usb wayland wow64 xinerama (-arm64ec) -crossdev-mingw -custom-cflags (-ffmpeg) -llvm-libunwind -perl (-selinux) -v4l" ABI_X86="64 -32" VIDEO_CARDS="amdgpu" 90780 KiB
+[binary    gU  ] kde-plasma/plasma-meta-6.8.0-1:6::gentoo [6.7.5:6::gentoo] USE="backup%* bluetooth browser-integration crash-handler crypt cups display-manager firewall flatpak grub gtk kwallet networkmanager ocr pulseaudio rdp smart systemd thunderbolt wallpapers xwayland -accessibility -discover (-elogind) -oxygen-theme -plymouth -sddm -sdk -unsupported -virtualkeyboard -wacom -webengine (-X%*)" 20 KiB
+[binary    gU  ] net-im/neochat-26.08.2-1::gentoo [26.08.1::gentoo] USE="-debug -handbook -test" 88280 KiB
+[binary    gU  ] kde-apps/kdepim-runtime-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="activities ews -debug -speech -test" 104170 KiB
+[binary    gU  ] kde-apps/kate-lib-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug -telemetry -test" 18810 KiB
+[binary    gU  ] kde-apps/kmail-account-wizard-26.08.2-1:6/26.08::gentoo [26.08.1:6/26.08::gentoo] USE="-debug -test" 4560 KiB
+[binary    gU  ] kde-apps/kompare-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug -handbook" 6320 KiB
+[binary    gU  ] kde-apps/kate-addons-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="filebrowser lspclient projects snippets sql -debug -test" 78340 KiB
+[binary    gU  ] app-office/merkuro-26.08.2-1:6::gentoo [26.08.1-r1:6::gentoo] USE="plasma -debug -test" 45550 KiB
+[binary    gU  ] kde-apps/kmail-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="activities -debug -handbook -speech -telemetry -test" 71020 KiB
+[binary    gU  ] kde-apps/kate-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug" 1490 KiB
+[binary    gU  ] kde-apps/kaccounts-integration-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug -test" 5600 KiB
+[binary    gU  ] kde-apps/kaccounts-providers-26.08.2-1:6::gentoo [26.08.1:6::gentoo] USE="-debug" 2150 KiB
+[blocks B      ] kde-plasma/plasma-login-sessions ("kde-plasma/plasma-login-sessions" is soft blocking kde-plasma/plasma-workspace-6.8.0)
+
+Total: 368 packages (336 upgrades, 6 new, 7 in new slots, 19 reinstalls, 356 binaries), Size of downloads: 21620368 KiB
+Conflict: 1 block (1 unsatisfied)
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/boost:0
+
+  (dev-libs/boost-1.91.0-r2:0/1.91.0::gentoo, ebuild scheduled for merge) USE="bzip2 context icu nls stacktrace zlib zstd -debug -doc -lzma -mpi -numpy -python -test -test-full -tools" ABI_X86="32 (64) (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" pulled in by
+
+kde-frameworks/karchive:6
+
+  (kde-frameworks/karchive-6.31.0:6/6.31::gentoo, ebuild scheduled for merge) USE="crypt zstd -debug -test" ABI_X86="(64)" pulled in by
+    =kde-frameworks/karchive-6.31*:6 required by (kde-frameworks/ksvg-6.31.0:6/6.31::gentoo, ebuild scheduled for merge) USE="-debug -test" ABI_X86="(64)"
+    ^                        ^^^^^^^                                                                                                                       
+    (and 6 more with the same problem)
+
+  (kde-frameworks/karchive-6.30.0:6/6.30::gentoo, installed in '/') USE="crypt zstd -debug -test" ABI_X86="64" pulled in by
+    =kde-frameworks/karchive-6.30*:6 required by (kde-frameworks/kdoctools-6.30.0:6/6.30::gentoo, installed in '/') USE="nls -debug -test" ABI_X86="64"
+    ^                        ^^^^^^^                                                                                                                    
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+

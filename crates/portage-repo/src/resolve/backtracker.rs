@@ -211,6 +211,22 @@ impl Backtracker {
                             }
                         }
                     }
+                    if choice.installed {
+                        let (cat, pkg, ver) = &choice.target;
+                        let neg = format!("!={cat}/{pkg}-{ver}[installed]");
+                        let bucket = params
+                            .runtime_pkg_mask
+                            .entry((cat.clone(), pkg.clone()))
+                            .or_default();
+                        if !bucket.iter().any(|m| m.neg == neg) {
+                            bucket.push(MaskEntry {
+                                neg,
+                                reason: MaskReason::SlotConflict {
+                                    parents: choice.parents.clone(),
+                                },
+                            });
+                        }
+                    }
                     params.mask_steps += 1;
                     params.depth += 1;
                     self.add_node(params, false, true);

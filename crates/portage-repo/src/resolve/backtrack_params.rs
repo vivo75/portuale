@@ -11,6 +11,9 @@ pub(crate) struct MaskChoice {
     pub(crate) target: (String, String, String),
     pub(crate) parents: Vec<((String, String, String), String)>,
     pub(crate) similar: Vec<SimilarMask>,
+    /// The target is an installed instance of the conflict: its mask also hides the
+    /// installed package itself, as Portage's group includes the installed `Package`.
+    pub(crate) installed: bool,
 }
 
 /// One missed-update sibling in a choice's mask group: mask its version
@@ -149,10 +152,12 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
                     }
                 }
             }
+            let installed = sc.instances.iter().any(|i| i.installed && i.version == ver);
             MaskChoice {
                 target: (sc.category.clone(), sc.package.clone(), ver),
                 parents,
                 similar,
+                installed,
             }
         })
         .collect();

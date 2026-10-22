@@ -437,6 +437,39 @@ fn update_skips_an_installed_use_dep_satisfier_unknown_to_the_tree() {
     );
 }
 
+/// An installed dependency whose recorded USE satisfies a `[iflag]` USE-dep
+/// stays when the same version in the tree carries `iflag` in IUSE but off
+/// (the `mime-types[nginx]` shape of `emerge -uDpvN @world`). Oracle: host
+/// Portage 3.0.82.2, container L0 fixture oracle, case
+/// `-pu --deep=1 dev-libs/instusedepconsumer` (rc 0, no `instusedep` row).
+#[test]
+fn update_keeps_an_installed_use_dep_satisfier_the_tree_version_lacks() {
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let outcome = resolve_pretend(
+        &SelectSource {
+            repos: &repos,
+            root: &root,
+            config: &test_config(),
+            local_binpkg: &build_local_binpkg_index(&test_config()),
+        },
+        "dev-libs/instusedep[iflag]",
+        &SelectOptions {
+            update: true,
+            depth: 1,
+            deep: Deep::Bounded(1),
+            ..SelectOptions::default()
+        },
+    )
+    .expect("resolve_pretend(dev-libs/instusedep[iflag]) failed");
+    assert_eq!(
+        outcome,
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string()
+        }
+    );
+}
+
 /// The installed-only fallback keys on the cp having no tree or binary
 /// candidate at all (masked or not): `pg34-gone` is installed-only, while
 /// `pg34-gapp` and the keyword-masked `keywordmaskedpkg` both have ebuilds.
