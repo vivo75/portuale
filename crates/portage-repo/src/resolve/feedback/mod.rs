@@ -103,10 +103,126 @@ pub(crate) fn file_unsat_probe_results(
     false
 }
 
+/// Count of `collect_feedback` calls seen while tracing is on (`PORTUALE_BT_TRACE=1`).
+static BT_TRY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Whether the backtrack trace is active (`PORTUALE_BT_TRACE=1`).
+fn bt_trace_enabled() -> bool {
+    std::env::var("PORTUALE_BT_TRACE").is_ok_and(|value| value == "1")
+}
+
 /// One pass's outcome in `_backtrack_depgraph` terms. The overlay merge runs first
 /// (steps read the merged accumulators, as they always did); each arm then packages
 /// its effect without touching the search state.
 pub(crate) fn collect_feedback(
+    ctx: &ResolveCtx<'_>,
+    params: &BacktrackParams,
+    pass: &mut PassResult,
+    config: &portage_profile::Config,
+) -> PassDecision {
+    if !bt_trace_enabled() {
+        return collect_feedback_inner(ctx, params, pass, config);
+    }
+    let try_no = BT_TRY.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    // Read before the chain: the steps take `pass` mutably.
+    let problems = bt_problem_lines(pass);
+    let decision = collect_feedback_inner(ctx, params, pass, config);
+    let (kind, after) = match &decision {
+        PassDecision::Settle { params } => ("Settle".to_string(), &**params),
+        PassDecision::DeadEnd { params } => ("DeadEnd".to_string(), &**params),
+        PassDecision::Feedback(fb) => {
+            let (name, p) = match fb {
+                BacktrackFeedback::Config { params } => ("Config", &**params),
+                BacktrackFeedback::RevDep { params } => ("RevDep", &**params),
+                BacktrackFeedback::Circular { params } => ("Circular", &**params),
+                BacktrackFeedback::SlotConflict { base, .. } => ("SlotConflict", &**base),
+                BacktrackFeedback::MissingDep { base, .. } => ("MissingDep", &**base),
+            };
+            (format!("Feedback:{name}"), p)
+        }
+    };
+    eprintln!("BT try={try_no} kind={kind}");
+    for ((cat, pkg), entry) in bt_new_masks(params, after) {
+        eprintln!(
+            "BT   mask {cat}/{pkg} neg={} reason={:?}",
+            entry.neg, entry.reason
+        );
+    }
+    // Masks a feedback carries outside its working copy: the slot-conflict choices
+    // and the missing-dep entry are applied by the driver, not yet in `after`.
+    match &decision {
+        PassDecision::Feedback(BacktrackFeedback::SlotConflict { choices, .. }) => {
+            for c in choices {
+                eprintln!("BT   choice {:?}", c.target);
+            }
+        }
+        PassDecision::Feedback(BacktrackFeedback::MissingDep { owner, entry, .. }) => {
+            eprintln!(
+                "BT   mask {}/{} neg={} reason={:?}",
+                owner.0, owner.1, entry.neg, entry.reason
+            );
+        }
+        _ => {}
+    }
+    for line in problems {
+        eprintln!("{line}");
+    }
+    decision
+}
+
+/// Mask entries in `after` that `before` does not already carry, sorted by `cat/pkg`.
+fn bt_new_masks<'a>(
+    before: &BacktrackParams,
+    after: &'a BacktrackParams,
+) -> Vec<(&'a (String, String), &'a MaskEntry)> {
+    let mut out: Vec<_> = after
+        .runtime_pkg_mask
+        .iter()
+        .flat_map(|(cp, entries)| {
+            let seen = before.runtime_pkg_mask.get(cp);
+            entries
+                .iter()
+                .filter(move |e| !seen.is_some_and(|s| s.iter().any(|b| b.neg == e.neg)))
+                .map(move |e| (cp, e))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(b.0).then_with(|| a.1.neg.cmp(&b.1.neg)));
+    out
+}
+
+/// The `conflict`, `pullers` and `missing_dep_trigger` lines of one pass, as
+/// they stand before the decision chain runs.
+fn bt_problem_lines(pass: &PassResult) -> Vec<String> {
+    let mut out = Vec::new();
+    for c in &pass.slot_conflicts {
+        let cp = format!("{}/{}", c.category, c.package);
+        let parents: Vec<(&str, &str, &str)> = c
+            .instances
+            .iter()
+            .flat_map(|i| {
+                i.parents
+                    .iter()
+                    .map(|p| (i.version.as_str(), p.parent_cpv.as_str(), p.atom.as_str()))
+            })
+            .collect();
+        out.push(format!("BT   conflict {cp} parents={parents:?}"));
+        if let Some(pullers) = pass
+            .slot_pullers
+            .get(&(c.category.clone(), c.package.clone()))
+        {
+            out.push(format!("BT   pullers {cp} -> {pullers:?}"));
+        }
+    }
+    if let Some(((oc, op), neg, atom)) = &pass.missing_dep_trigger {
+        out.push(format!(
+            "BT   missing_dep_trigger owner={oc}/{op} neg={neg} atom={atom}"
+        ));
+    }
+    out
+}
+
+/// The decision chain behind `collect_feedback`.
+fn collect_feedback_inner(
     ctx: &ResolveCtx<'_>,
     params: &BacktrackParams,
     pass: &mut PassResult,
