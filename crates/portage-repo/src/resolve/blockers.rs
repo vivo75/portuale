@@ -547,6 +547,7 @@ pub(crate) fn resolve_blockers_with_seeds(
     // installed packages the walk never visited (never from a cp this run
     // merges). One vdb scan, only when a blocker reaches that test.
     let hold_atoms: std::cell::OnceCell<Vec<String>> = std::cell::OnceCell::new();
+    let live_closure_targets: OnceCell<HashSet<(String, String)>> = OnceCell::new();
     for pb in pending {
         // Under `--buildpkgonly` a blocker that is not strong-buildtime never
         // pairs an uninstall.
@@ -613,6 +614,7 @@ pub(crate) fn resolve_blockers_with_seeds(
                 merge_slots: &merge_slots,
                 blocker_retry_closure,
                 hold_atoms: &hold_atoms,
+                live_closure_targets: &live_closure_targets,
                 set_seed_atoms,
             })
             .is_break()
@@ -638,6 +640,7 @@ pub(crate) struct ClassifyBlockerMatchArgs<'a> {
     pub(crate) merge_slots: &'a HashMap<(String, String), HashSet<String>>,
     pub(crate) blocker_retry_closure: &'a HashSet<(String, String)>,
     pub(crate) hold_atoms: &'a OnceCell<Vec<String>>,
+    pub(crate) live_closure_targets: &'a OnceCell<HashSet<(String, String)>>,
     pub(crate) set_seed_atoms: &'a [String],
 }
 
@@ -656,6 +659,7 @@ pub(crate) fn classify_blocker_match(args: ClassifyBlockerMatchArgs<'_>) -> Cont
         merge_slots,
         blocker_retry_closure,
         hold_atoms,
+        live_closure_targets,
         set_seed_atoms,
     } = args;
     let Some((version, slot, sub_slot)) = by_str.get(m).copied() else {
@@ -768,6 +772,7 @@ pub(crate) fn classify_blocker_match(args: ClassifyBlockerMatchArgs<'_>) -> Cont
         entries,
         blocker_retry_closure,
         hold_atoms,
+        live_closure_targets,
         set_seed_atoms,
         root,
         owner_entry,
@@ -818,6 +823,7 @@ pub(crate) struct BlockerUnsolvableArgs<'a> {
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) blocker_retry_closure: &'a HashSet<(String, String)>,
     pub(crate) hold_atoms: &'a OnceCell<Vec<String>>,
+    pub(crate) live_closure_targets: &'a OnceCell<HashSet<(String, String)>>,
     pub(crate) set_seed_atoms: &'a [String],
     pub(crate) root: &'a Path,
     pub(crate) owner_entry: Option<&'a GraphEntry>,
@@ -838,6 +844,7 @@ pub(crate) fn blocker_unsolvable(args: BlockerUnsolvableArgs<'_>) -> bool {
         entries,
         blocker_retry_closure,
         hold_atoms,
+        live_closure_targets,
         set_seed_atoms,
         root,
         owner_entry,
@@ -866,7 +873,13 @@ pub(crate) fn blocker_unsolvable(args: BlockerUnsolvableArgs<'_>) -> bool {
                     exclude: &pb.owner_key,
                     entries,
                     merge_slots,
-                }) || (blocker_retry_closure.contains(target_key) && !cp_moves_slot)
+                }) || (blocker_retry_closure.contains(target_key)
+                    && !cp_moves_slot
+                    && live_closure_targets
+                        .get_or_init(|| {
+                            live_closure_targets_of(root, entries, blocker_retry_closure)
+                        })
+                        .contains(target_key))
                     || set_seed_holds_instance(SetSeedHoldsInstanceArgs {
                         set_seed_atoms: hold_seeds(
                             hold_atoms,
@@ -918,6 +931,24 @@ pub(crate) fn blocker_unsolvable(args: BlockerUnsolvableArgs<'_>) -> bool {
         merge_bound_match
             && (owner_has_parent || owner_set_parent(&pb.owner_key, blocker_retry_closure))
     }
+}
+
+/// The cps some installed package of the required-set closure still depends on after
+/// this run: the closure is built from the installed state, but an installed package
+/// the run replaces leaves the graph, and its dependencies with it.
+// Portage: depgraph.py, _validate_blockers (a blocked installed node with parents)
+fn live_closure_targets_of(
+    root: &Path,
+    entries: &[GraphEntry],
+    closure: &HashSet<(String, String)>,
+) -> HashSet<(String, String)> {
+    let merge_bound: HashSet<(String, String)> = entries
+        .iter()
+        .filter(|e| merge_bound_version(&e.outcome).is_some())
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let live: HashSet<(String, String)> = closure.difference(&merge_bound).cloned().collect();
+    InstalledReachability::new(root).targets_of(&live)
 }
 
 /// The recorded atoms of required-set-reached installed packages the walk never

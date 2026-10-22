@@ -392,6 +392,34 @@ impl InstalledReachability {
         out
     }
 
+    /// Every `cat/pkg` that one of the installed packages in `from` depends on,
+    /// other than itself. Blockers (`!atom`) are not dependencies.
+    pub fn targets_of(&self, from: &HashSet<Cp>) -> HashSet<Cp> {
+        let mut out = HashSet::new();
+        for cp in from {
+            let Some(&i) = self.by_cp.get(cp) else {
+                continue;
+            };
+            let p = &self.installed[i];
+            let root = self.root.as_path();
+            let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+            for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+                let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+                let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                    continue;
+                };
+                out.extend(
+                    atoms
+                        .iter()
+                        .filter(|a| !a.starts_with('!'))
+                        .filter_map(|a| self.matches_cp(a))
+                        .filter(|target| target != cp),
+                );
+            }
+        }
+        out
+    }
+
     /// The closure of `world_selected_atoms` ∪ `system_atoms` over the edges.
     pub fn reachable(
         &self,

@@ -625,8 +625,11 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
         rdepend: "dev-libs/blocked",
         installed_use: "",
     });
-    let closure: HashSet<(String, String)> =
-        [("dev-libs".to_string(), "blocked".to_string())].into();
+    let closure: HashSet<(String, String)> = [
+        ("dev-libs".to_string(), "blocked".to_string()),
+        ("dev-libs".to_string(), "bconsumer".to_string()),
+    ]
+    .into();
     let conflicts = resolve_blockers(
         &dir,
         &[pb("!<dev-libs/blocked-2.0", "bparent")],
@@ -638,6 +641,25 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
     assert!(
         conflicts[0].conflict.unsolvable,
         "a required-set closure member is a graph node with parents"
+    );
+    // #483: the consumer this run replaces leaves the graph with its
+    // dependency, so the installed edge no longer makes a parent.
+    let mut upgraded = graph_entry("dev-libs", "bconsumer", "2.0");
+    upgraded.outcome = PretendOutcome::Upgrade {
+        from: "1.0".into(),
+        to: "2.0".into(),
+    };
+    let conflicts = resolve_blockers(
+        &dir,
+        &[pb("!<dev-libs/blocked-2.0", "bparent")],
+        &[graph_entry("dev-libs", "bparent", "1.0"), upgraded],
+        &closure,
+        false,
+    );
+    assert_eq!(conflicts.len(), 1);
+    assert!(
+        !conflicts[0].conflict.unsolvable,
+        "a replaced consumer is no longer a parent"
     );
     let _ = fs::remove_dir_all(&dir);
 
