@@ -327,7 +327,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // hit path never runs it. Defined after the hit check so the pure
     // derivation's `&mut` borrows never overlap it.
     if let Some((dir, key)) = pending.as_ref()
-        && let Some(cached) = plan_cache::load_and_verify(dir, key)
+        && let Some(cached) = {
+            // Timed even on the miss path: with `PORTUALE_PROFILE=1` the
+            // span lands on live stderr, so the warm plan part is measurable.
+            let _lookup_span = portage_util::profile::span("plan_cache_lookup");
+            plan_cache::load_and_verify(dir, key)
+        }
     {
         if plan_cache::verify_enabled() {
             // VERIFY: recompute fresh under capture and compare byte
@@ -422,16 +427,19 @@ pub fn run(args: &[String]) -> ExitCode {
             }
             Ok(fresh) => {
                 match fresh.posthoc.as_ref() {
-                    Some(fps) => plan_cache::store(
-                        &dir,
-                        &key,
-                        plan_cache::StoredEntry {
-                            code: fresh.code,
-                            stdout: &fresh.stdout,
-                            stderr: &fresh.stderr,
-                            fps,
-                        },
-                    ),
+                    Some(fps) => {
+                        let _store_span = portage_util::profile::span("plan_cache_store");
+                        plan_cache::store(
+                            &dir,
+                            &key,
+                            plan_cache::StoredEntry {
+                                code: fresh.code,
+                                stdout: &fresh.stdout,
+                                stderr: &fresh.stderr,
+                                fps,
+                            },
+                        )
+                    }
                     None => plan_cache::debug_msg(&format!(
                         "skip store (key={key}: no post-hoc fingerprints)"
                     )),

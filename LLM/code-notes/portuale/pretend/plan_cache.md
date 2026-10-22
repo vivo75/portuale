@@ -19,8 +19,12 @@ Conservative on-disk plan cache for `emerge --pretend` (backlog #441 S3).
   L3a replay is unsafe for anything but the plan section.
 - Key (SHA-256, `sha2` is already a dependency; never `DefaultHasher`,
   per the strong review §1): full argv; the whole environment minus
-  `_`, `OLDPWD`, `SHLVL` and the cache controls (a control var in the key
-  would make `VERIFY=1` runs miss); tty facts (`isatty` stdout/stderr,
+  `_`, `OLDPWD`, `SHLVL`, the pytest/xdist harness identity
+  (`PYTEST_CURRENT_TEST`, `PYTEST_XDIST_WORKER{,_COUNT,_TESTRUNUID}` —
+  the worker name and per-run uid vary across workers and invocations
+  without changing the resolve; without this every suite-scale hit was
+  a re-miss, backlog #474) and the cache controls (a control var in the
+  key would make `VERIFY=1` runs miss); tty facts (`isatty` stdout/stderr,
   hostname for the title escapes; `TERM`/colour vars ride the env);
   cwd (the `./path` atom check); the executable content hash (covers the
   embedded `make.globals`, which the host file never overrides --
@@ -53,14 +57,24 @@ Conservative on-disk plan cache for `emerge --pretend` (backlog #441 S3).
   Reads are lock-free; corrupt/short/wrong-version is a silent miss.
   Poisoning: refuse files not owned by the euid or root, or group/world-
   writable; never read through a stale path (fstat, not stat). GC keeps
-  the newest 32 by mtime; entries over 4 MiB are emitted but never stored.
+  the newest `$PORTUALE_CACHE_KEEP` (default 32; empty/`0`/unparseable
+  falls back) by mtime; entries over 4 MiB are emitted but never stored.
+  Schema v2 excludes `PORTUALE_CACHE_KEEP` from the hashed environment (a
+  control var must not fork the key); `PORTUALE_PROFILE` stays in the key,
+  so profiled and unprofiled runs keep separate namespaces.
 - Controls: `--no-cache` (portuale-only, like `--solver=`; deliberately
   absent from `--help`, whose text is corpus-pinned),
-  `PORTUALE_NO_CACHE=1`, `PORTUALE_CACHE_DEBUG=1` (one hit/miss line per
-  eligible run, stderr only), `PORTUALE_CACHE_VERIFY=1` (a hit also
-  recomputes fresh and aborts loudly with exit 99 on any divergence).
-  `PORTUALE_PROFILE=1` disables the cache (profile spans would pollute
-  the captured stderr). Default: on only when the dir is configured and
+  `PORTUALE_NO_CACHE=1`, `PORTUALE_CACHE_KEEP=<n>`,
+  `PORTUALE_CACHE_DEBUG=1` (one hit/miss line per eligible run, stderr only),
+  `PORTUALE_CACHE_VERIFY=1` (a hit also recomputes fresh and aborts loudly
+  with exit 99 on any divergence). `PORTUALE_PROFILE=1` no longer
+  disables the cache (backlog #474): spans raised inside the stderr
+  capture are buffered in `portage_util::profile` and printed when the
+  capture ends, so the stored bytes stay span-free (a timing line in the
+  bytes would replay stale numbers and trip verify on every hit); the
+  lookup and the store have their own live spans (`plan_cache_lookup`,
+  `plan_cache_store`), so the warm plan part is measurable with stdout
+  byte-identical. Default: on only when the dir is configured and
   writable, so contract-suite behaviour does not change.
 - Capture: fd-level (`libc::dup2` over 1/2 into `0600` temp files; stdout
   is flushed before the swap, both streams after the body). Safe because
@@ -77,9 +91,12 @@ Conservative on-disk plan cache for `emerge --pretend` (backlog #441 S3).
   cache-off baseline); `--ask`/real-merge exclusion; news liveness (hit
   + only the count changes); verify accept/reject (exit 99); format
   round-trip and every truncation/corruption/permission/schema fallback;
-  GC keeps 32. The mutation protocol (each test shown to fail with its
-  key line removed; `count` and the explicit root-path lines documented
-  redundant above) was run 2026-10-22, all as expected.
+  GC keeps 32 by default, `parse_keep` matrix + `gc_keep` eviction for
+  the configured cap; the harness vars share the unharnessed key; a
+  `PORTUALE_PROFILE=1` run stores then hits with lookup/store spans and
+  byte-identical stdout. The mutation protocol (each test shown to fail
+  with its key line removed; `count` and the explicit root-path lines
+  documented redundant above) was run 2026-10-22, all as expected.
 
 ## fn ineligible_reason
 - The `--ask` input is the pre-drop request: `validate_and_early_actions`
@@ -104,6 +121,11 @@ Conservative on-disk plan cache for `emerge --pretend` (backlog #441 S3).
 - The ownership/permission gate is the poisoning defence (backlog #441
   S3 §4): dir writability gates the cache on, per-file ownership gates
   every replay.
+
+## fn keep_entries
+- Pure parse (`parse_keep`, pinned without process-env I/O) plus the
+  `gc_keep` test seam: the eviction `store` runs, driven directly. The
+  existing 40-store test pins the 32 default.
 
 ## fn store
 - The `stored` debug line doubles as the cold-miss line (a cold run

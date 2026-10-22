@@ -98,6 +98,25 @@ fn strip_cache_debug(stderr: &[u8]) -> Vec<u8> {
     out.into_bytes()
 }
 
+/// Stderr without `[profile] …` timing lines (values vary run to run).
+fn strip_profile_spans(stderr: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(stderr);
+    let mut out = String::new();
+    for line in text.split_inclusive('\n') {
+        if !line.starts_with("[profile] ") {
+            out.push_str(line);
+        }
+    }
+    out.into_bytes()
+}
+
+/// Whether stderr carries a `[profile] <name>: …` span line.
+fn has_profile_span(stderr: &[u8], name: &str) -> bool {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .any(|l| l.starts_with(&format!("[profile] {name}:")))
+}
+
 /// The 64-hex key out of a `stored`/`hit` debug line, if any.
 fn cache_key(stderr: &[u8]) -> Option<String> {
     cache_debug_lines(stderr).iter().find_map(|l| {
@@ -988,6 +1007,160 @@ fn cache_gc_keeps_the_newest_entries() {
         "the oldest entry is collected: {kept:?}"
     );
     assert!(plan_cache::load(&dir, "k39").is_some());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn cache_gc_cap_parses_and_applies() {
+    // Backlog #474 (1): the GC cap is `$PORTUALE_CACHE_KEEP` when positive,
+    // else the 32 default. The parse is a pure function (no process-env I/O,
+    // so no cross-test flakiness); `gc_keep` is the same eviction `store`
+    // runs, driven directly.
+    for (raw, want) in [
+        (None, 32),
+        (Some(""), 32),
+        (Some("0"), 32),
+        (Some("-5"), 32),
+        (Some("abc"), 32),
+        (Some(" 20"), 32),
+        (Some("1"), 1),
+        (Some("20000"), 20000),
+    ] {
+        assert_eq!(plan_cache::parse_keep(raw), want, "keep of {raw:?}");
+    }
+    let base = TempDir::new("plan_cache_keep").keep();
+    let dir = base.join("cache");
+    std::fs::create_dir_all(dir.join("plans")).unwrap();
+    std::fs::create_dir_all(dir.join("tmp")).unwrap();
+    for i in 0..5 {
+        plan_cache::store(
+            &dir,
+            &format!("c{i}"),
+            plan_cache::StoredEntry {
+                code: 0,
+                stdout: format!("out{i}").as_bytes(),
+                stderr: b"",
+                fps: &[],
+            },
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    plan_cache::gc_keep(&dir, 3);
+    let mut kept: Vec<String> = std::fs::read_dir(dir.join("plans"))
+        .unwrap()
+        .map(|e| {
+            e.unwrap()
+                .path()
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    kept.sort();
+    assert_eq!(
+        kept,
+        vec!["c2", "c3", "c4"],
+        "keep=3 evicts oldest: {kept:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+#[cfg(unix)]
+fn harness_vars_do_not_fork_the_key() {
+    // Backlog #474 (1): the pytest/xdist harness identity must not fork
+    // the key — the worker name and the per-run uid vary across workers
+    // and invocations, which turned every suite-scale hit into a re-miss.
+    // Warm under harness vars, then hit without them (and with a
+    // current-test marker): one key, byte-identical bytes.
+    let (base, root, cache_dir) = cache_test_tree("harness_vars");
+    let pt = base.join("pt");
+    let args = ["-p", "dev-libs/schedleaf-a"];
+    let mut harnessed = cache_child_env(&root, &pt, &cache_dir);
+    harnessed.push(("PYTEST_XDIST_WORKER".to_string(), "gw3".to_string()));
+    harnessed.push(("PYTEST_XDIST_WORKER_COUNT".to_string(), "8".to_string()));
+    harnessed.push((
+        "PYTEST_XDIST_TESTRUNUID".to_string(),
+        "deadbeef".to_string(),
+    ));
+    harnessed.push((
+        "PYTEST_CURRENT_TEST".to_string(),
+        "test_x.py::test_y (setup)".to_string(),
+    ));
+    let env = cache_child_env(&root, &pt, &cache_dir);
+    let _ = cache_run(&harnessed, &args, None);
+    let hit = cache_run(&env, &args, None);
+    let baseline = cache_run(&cache_off_env(&env), &args, None);
+    assert_hit(&hit, &baseline);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+#[cfg(unix)]
+fn profile_run_still_caches_with_lookup_span() {
+    // Backlog #474 (2): `PORTUALE_PROFILE=1` no longer disables the cache.
+    // Spans raised inside the stderr capture are buffered past the stored
+    // bytes (a hit must replay no stale timings), while the lookup and the
+    // store get their own spans on live stderr. Stdout stays identical to
+    // a run with neither profile nor cache.
+    let (base, root, cache_dir) = cache_test_tree("profile_cache");
+    let pt = base.join("pt");
+    let mut env = cache_child_env(&root, &pt, &cache_dir);
+    env.push(("PORTUALE_PROFILE".to_string(), "1".to_string()));
+    let args = ["-p", "dev-libs/schedleaf-a"];
+    let plain: Vec<(String, String)> = env
+        .iter()
+        .filter(|(k, _)| {
+            k != "PORTUALE_CACHE_DIR" && k != "PORTUALE_CACHE_DEBUG" && k != "PORTUALE_PROFILE"
+        })
+        .cloned()
+        .collect();
+    let baseline = cache_run(&plain, &args, None);
+    let miss = cache_run(&env, &args, None);
+    let debug = cache_debug_lines(&miss.stderr);
+    assert_eq!(debug.len(), 1, "one debug line, got: {debug:?}");
+    assert!(
+        debug[0].starts_with("stored (key="),
+        "profiled first run must store, got: {debug:?}"
+    );
+    assert!(
+        has_profile_span(&miss.stderr, "plan_cache_store"),
+        "miss prints its store span: {}",
+        String::from_utf8_lossy(&miss.stderr)
+    );
+    assert_eq!(
+        miss.stdout, baseline.stdout,
+        "store stdout must equal fresh"
+    );
+    assert_eq!(
+        strip_profile_spans(&strip_cache_debug(&miss.stderr)),
+        strip_cache_debug(&baseline.stderr),
+        "no span leaked into the stored bytes"
+    );
+    let hit = cache_run(&env, &args, None);
+    let debug = cache_debug_lines(&hit.stderr);
+    assert_eq!(debug.len(), 1, "one debug line, got: {debug:?}");
+    assert!(
+        debug[0].starts_with("hit (key="),
+        "profiled second run must hit, got: {debug:?}"
+    );
+    assert!(
+        has_profile_span(&hit.stderr, "plan_cache_lookup"),
+        "hit prints its lookup span: {}",
+        String::from_utf8_lossy(&hit.stderr)
+    );
+    assert_eq!(hit.stdout, baseline.stdout, "hit stdout must equal fresh");
+    assert_eq!(
+        hit.status.code(),
+        baseline.status.code(),
+        "hit exit code must equal fresh"
+    );
+    assert_eq!(
+        strip_profile_spans(&strip_cache_debug(&hit.stderr)),
+        strip_cache_debug(&baseline.stderr),
+        "hit stderr must equal fresh apart from spans"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 

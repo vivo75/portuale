@@ -19,11 +19,14 @@ use std::process::ExitCode;
 use std::time::UNIX_EPOCH;
 
 /// Version of the cache file format and the key schema. Bump on any change
-/// to either; old files then miss silently.
-const SCHEMA_VERSION: u32 = 1;
+/// to either; old files then miss silently. v2 excludes
+/// `PORTUALE_CACHE_KEEP` and the pytest/xdist harness vars from the hashed
+/// environment (backlog #474: a control var must not fork the key).
+const SCHEMA_VERSION: u32 = 2;
 /// File magic, 8 bytes.
 const FILE_MAGIC: &[u8; 8] = b"PTPLANC1";
-/// How many plans the GC keeps, newest first.
+/// How many plans the GC keeps, newest first, unless `PORTUALE_CACHE_KEEP`
+/// overrides it.
 const KEEP_ENTRIES: usize = 32;
 /// A single entry bigger than this is emitted but never stored.
 const MAX_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
@@ -32,19 +35,28 @@ pub(crate) const ENV_CACHE_DIR: &str = "PORTUALE_CACHE_DIR";
 const ENV_NO_CACHE: &str = "PORTUALE_NO_CACHE";
 const ENV_DEBUG: &str = "PORTUALE_CACHE_DEBUG";
 const ENV_VERIFY: &str = "PORTUALE_CACHE_VERIFY";
-const ENV_PROFILE: &str = "PORTUALE_PROFILE";
+const ENV_KEEP: &str = "PORTUALE_CACHE_KEEP";
 
-/// Environment keys that never feed the key: shell bookkeeping plus the
-/// cache's own controls (a control var in the key would make `VERIFY=1`
-/// runs miss everything they should verify).
+/// Environment keys that never feed the key: shell bookkeeping, the
+/// pytest/xdist harness identity (the worker name, the per-run uid and the
+/// current-test phase marker vary across workers and invocations without
+/// changing the resolve; `PYTEST_CURRENT_TEST` is likewise ignored by the
+/// corpus identity in pmtest's `corpus.py`) plus the cache's own controls
+/// (a control var in the key would make `VERIFY=1` runs miss everything
+/// they should verify).
 const ENV_VOLATILE: &[&str] = &[
     "_",
     "OLDPWD",
     "SHLVL",
+    "PYTEST_CURRENT_TEST",
+    "PYTEST_XDIST_WORKER",
+    "PYTEST_XDIST_WORKER_COUNT",
+    "PYTEST_XDIST_TESTRUNUID",
     ENV_CACHE_DIR,
     ENV_NO_CACHE,
     ENV_DEBUG,
     ENV_VERIFY,
+    ENV_KEEP,
 ];
 
 /// `PORTUALE_CACHE_DEBUG=1` prints one hit/miss line per eligible run.
@@ -56,6 +68,21 @@ pub(crate) fn debug_enabled() -> bool {
 /// exit 99 on any divergence.
 pub(crate) fn verify_enabled() -> bool {
     wart_is_set(ENV_VERIFY)
+}
+
+/// How many plans [`gc`] keeps, newest first: `$PORTUALE_CACHE_KEEP` when
+/// it parses as a positive integer, else the [`KEEP_ENTRIES`] default.
+/// Invalid values (empty, `0`, negative, non-numeric) fall back instead of
+/// disabling the cache or exploding the directory; the var is volatile
+/// (never in the key), so changing it only re-misses once at most.
+pub(crate) fn keep_entries() -> usize {
+    parse_keep(std::env::var(ENV_KEEP).ok().as_deref())
+}
+
+pub(crate) fn parse_keep(raw: Option<&str>) -> usize {
+    raw.and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(KEEP_ENTRIES)
 }
 
 fn wart_is_set(name: &str) -> bool {
@@ -102,9 +129,6 @@ pub(crate) fn ineligible_reason(
     }
     if std::env::var_os(ENV_NO_CACHE).is_some_and(|v| !v.is_empty() && v != "0") {
         return Some("PORTUALE_NO_CACHE");
-    }
-    if std::env::var_os(ENV_PROFILE).is_some() {
-        return Some("PORTUALE_PROFILE pollutes stderr");
     }
     if opts.deselect || opts.depclean || opts.prune || opts.unmerge {
         return Some("removal action");
@@ -948,8 +972,13 @@ fn tmp_path(dir: &Path) -> PathBuf {
         .join(format!("plan-{}-{n}.tmp", std::process::id()))
 }
 
-/// Keep the newest [`KEEP_ENTRIES`] plans by mtime; best-effort.
+/// Keep the newest [`keep_entries`] plans by mtime; best-effort.
 fn gc(dir: &Path) {
+    gc_keep(dir, keep_entries());
+}
+
+/// Test seam for the cap: evict down to `keep` newest without env I/O.
+pub(crate) fn gc_keep(dir: &Path, keep: usize) {
     let Ok(entries) = std::fs::read_dir(plans_dir(dir)) else {
         return;
     };
@@ -964,11 +993,11 @@ fn gc(dir: &Path) {
             plans.push((mtime, path));
         }
     }
-    if plans.len() <= KEEP_ENTRIES {
+    if plans.len() <= keep {
         return;
     }
     plans.sort_by_key(|a| std::cmp::Reverse(a.0));
-    for (_, path) in plans.into_iter().skip(KEEP_ENTRIES) {
+    for (_, path) in plans.into_iter().skip(keep) {
         let _ = std::fs::remove_file(path);
     }
 }
@@ -1066,6 +1095,10 @@ pub(crate) fn captured_body(
         fn set() -> Self {
             crate::pretend::news::PLAN_CACHE_CAPTURING
                 .store(true, std::sync::atomic::Ordering::Relaxed);
+            // Profile spans print to stderr, which is captured below: buffer
+            // them so they never land in the stored bytes, and drain them
+            // on drop (after the fds are restored) so they still print live.
+            portage_util::profile::set_capturing(true);
             SuppressGuard
         }
     }
@@ -1073,6 +1106,10 @@ pub(crate) fn captured_body(
         fn drop(&mut self) {
             crate::pretend::news::PLAN_CACHE_CAPTURING
                 .store(false, std::sync::atomic::Ordering::Relaxed);
+            portage_util::profile::set_capturing(false);
+            for line in portage_util::profile::take_buffered() {
+                eprintln!("{line}");
+            }
         }
     }
     let _suppress = SuppressGuard::set();
