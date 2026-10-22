@@ -10,7 +10,7 @@ mod no_leaf_restart;
 mod rebuild_if_restart;
 mod reverse_dep_pins;
 mod slot_conflict_abi;
-mod slot_conflict_backtrack;
+pub(super) mod slot_conflict_backtrack;
 mod slot_operator_probe;
 mod solvable_slot_conflicts;
 mod unsatisfied_dead_end;
@@ -70,6 +70,7 @@ pub(crate) fn file_unsat_probe_results(
     fresh: BTreeSet<(String, String)>,
     binary_masks: BTreeSet<(String, String, String)>,
     usepkgonly: bool,
+    root: &Path,
 ) -> bool {
     let mut masks_new = false;
     // `--usepkgonly`: no ebuild replacement (see the trigger site).
@@ -92,6 +93,9 @@ pub(crate) fn file_unsat_probe_results(
             masks_new = true;
         }
     }
+    let mut fresh = fresh;
+    let before = grown.slot_operator_replace_installed.clone();
+    slot_conflict_backtrack::drop_masked_installed(root, grown, &before, &mut fresh);
     if masks_new
         || fresh
             .iter()

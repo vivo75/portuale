@@ -50,6 +50,11 @@ pub(crate) fn assemble_result(
         &params.slot_operator_replace_installed,
         ctx.with_bdeps,
     ));
+    super::feedback::slot_conflict_backtrack::drop_masked_pairs(
+        ctx.root,
+        params,
+        &mut abi_rebuilds,
+    );
     abi_rebuilds.sort();
     abi_rebuilds.dedup();
 

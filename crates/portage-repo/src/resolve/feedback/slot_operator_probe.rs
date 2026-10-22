@@ -30,7 +30,7 @@ pub(crate) fn step_slot_operator_probe(
             });
         // A non-installed built (binary) parent is masked, not seeded; filed
         // through the shared helper with the missing-dep trigger arm.
-        if file_unsat_probe_results(&mut *grown, fresh, binary_masks, ctx.usepkgonly) {
+        if file_unsat_probe_results(&mut *grown, fresh, binary_masks, ctx.usepkgonly, ctx.root) {
             return Some(PassDecision::Feedback(BacktrackFeedback::Config {
                 params: Box::new(std::mem::take(grown)),
             }));
@@ -64,7 +64,7 @@ pub(crate) fn step_built_parent_update_probe(
         excluded: ctx.excluded,
         masked: &grown.runtime_pkg_mask,
     });
-    if !file_unsat_probe_results(&mut *grown, fresh, masks, ctx.usepkgonly) {
+    if !file_unsat_probe_results(&mut *grown, fresh, masks, ctx.usepkgonly, ctx.root) {
         return BuiltParentProbe::Quiet;
     }
     fold_rebuild_scan(pass, ctx, grown, config);

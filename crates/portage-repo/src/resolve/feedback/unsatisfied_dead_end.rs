@@ -55,7 +55,6 @@ pub(crate) fn step_unsatisfied_dead_end(
                 excluded: ctx.excluded,
                 config,
             });
-        pass.abi_rebuilds = Some(abi_rebuilds);
         // The update probe's forcing half, for a child the walk left installed.
         let mut scheduled = scheduled;
         let (force_consumers, forced) =
@@ -73,6 +72,9 @@ pub(crate) fn step_unsatisfied_dead_end(
                 excluded: ctx.excluded,
             });
         scheduled.extend(force_consumers);
+        let before = grown.slot_operator_replace_installed.clone();
+        slot_conflict_backtrack::drop_masked_installed(ctx.root, grown, &before, &mut scheduled);
+        pass.abi_rebuilds = Some(abi_rebuilds);
         let forced_new = !forced.is_subset(&grown.slot_operator_forced_upgrade);
         grown.slot_operator_forced_upgrade.extend(forced);
         // Stale-binary triples as `slot_operator_mask_built` negatives. `neg` carries a

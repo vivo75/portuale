@@ -41,7 +41,13 @@ pub(crate) fn step_missing_dep(
             // Portage: depgraph.py, _add_pkg_dep_string (unsatisfied dep arm)
             let trigger_hit = unsat_trigger_hit(&fresh, &binary_masks, (&pc, &pp));
             if trigger_hit
-                && file_unsat_probe_results(&mut *grown, fresh, binary_masks, ctx.usepkgonly)
+                && file_unsat_probe_results(
+                    &mut *grown,
+                    fresh,
+                    binary_masks,
+                    ctx.usepkgonly,
+                    ctx.root,
+                )
             {
                 return Some(PassDecision::Feedback(BacktrackFeedback::Config {
                     params: Box::new(std::mem::take(grown)),

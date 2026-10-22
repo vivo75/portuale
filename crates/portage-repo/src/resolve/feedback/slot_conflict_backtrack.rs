@@ -109,5 +109,47 @@ pub(crate) fn fold_rebuild_scan(
         });
     scheduled.extend(force_consumers);
     grown.slot_operator_forced_upgrade.extend(forced);
+    let before = grown.slot_operator_replace_installed.clone();
+    drop_masked_installed(ctx.root, grown, &before, &mut scheduled);
     grown.slot_operator_replace_installed = scheduled;
+}
+
+/// Whether an installed instance of `cp` was masked by this search.
+fn installed_instance_masked(root: &Path, grown: &BacktrackParams, cp: &(String, String)) -> bool {
+    let masked = grown.masked_negatives_for(cp);
+    all_installed_packages(root).iter().any(|p| {
+        p.category == cp.0
+            && p.package == cp.1
+            && installed_version_masked(&masked, &p.category, &p.package, &p.version)
+    })
+}
+
+/// Drops the newly joined cps whose installed instance this search masked:
+/// it is no longer in the graph, so it cannot join the replace set (Portage
+/// schedules the live child only).
+pub(crate) fn drop_masked_installed(
+    root: &Path,
+    grown: &BacktrackParams,
+    before: &BTreeSet<(String, String)>,
+    scheduled: &mut BTreeSet<(String, String)>,
+) {
+    scheduled.retain(|cp| before.contains(cp) || !installed_instance_masked(root, grown, cp));
+}
+
+/// Drops the rebuild display pairs naming a cp that is masked-installed and
+/// not in the replace set: Portage marks `r` only for replace-set members.
+pub(crate) fn drop_masked_pairs(
+    root: &Path,
+    params: &BacktrackParams,
+    pairs: &mut Vec<(String, String)>,
+) {
+    let off = |cpv: &str| {
+        let head = cpv.split_once(':').map_or(cpv, |(h, _)| h);
+        crate::split_cpv(head).is_some_and(|(c, p, _)| {
+            let cp = (c, p);
+            !params.slot_operator_replace_installed.contains(&cp)
+                && installed_instance_masked(root, params, &cp)
+        })
+    };
+    pairs.retain(|(provider, consumer)| !off(provider) && !off(consumer));
 }
