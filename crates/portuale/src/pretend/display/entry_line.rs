@@ -357,6 +357,14 @@ pub(crate) fn print_uninstall_row(args: PrintUninstallRowArgs<'_>) {
     if !root_annotation.is_empty() {
         tail.push_str(&color.c("darkgreen", root_annotation));
     }
+    // Portage: output.py, Display.__call__ (`_display_use` also runs for uninstall rows)
+    tail.push_str(&use_suffix(UseSuffixArgs {
+        entry,
+        verbose: ctx.verbose,
+        quiet,
+        alphabetical: ctx.alphabetical,
+        color,
+    }));
     println!(
         "[{}{pad}] {indent}{}{tail}",
         color.c("PKG_UNINSTALL", "uninstall"),

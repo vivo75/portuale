@@ -43,3 +43,13 @@ USE flag display columns for `emerge --pretend -v`.
 
 ## fn build_use_expand_display::render loop
 - Portage `_create_use_string`: `" ".join(enabled + disabled + removed)` in that polarity order, each group already in the incoming bare-name order.
+
+## fn fill_uninstall_displays
+
+Backlog #488. Portage's `Display.__call__` (`resolver/output.py`) runs
+`_display_use` for every package, uninstall rows included. The removed
+instance has no ebuild candidate, so IUSE/USE/KEYWORDS come from its vdb
+entry and no `InstalledUseState` is passed: the instance is its own previous
+package, hence no `*`/`%` markers. Forced/masked flags still get their
+parentheses. Called after `file_blocker_conflicts` in `collect_pass_blockers`
+and in the solver bridge, the only places that create `Uninstall` entries.

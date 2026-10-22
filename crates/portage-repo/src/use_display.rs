@@ -83,6 +83,72 @@ pub(crate) fn refresh_entry_use_display(
     }
 }
 
+/// Fill the USE display of every `Uninstall` entry from the removed
+/// instance's own vdb `IUSE`/`USE`. No change markers: the instance is its
+/// own previous package.
+// Portage: output.py, Display.__call__ (`_display_use` runs for uninstall rows)
+pub(crate) fn fill_uninstall_displays(
+    entries: &mut [GraphEntry],
+    root: &Path,
+    config: &portage_profile::Config,
+) {
+    for e in entries.iter_mut() {
+        let PretendOutcome::Uninstall { version } = &e.outcome else {
+            continue;
+        };
+        let (cat, pkg, version) = (e.category.clone(), e.package.clone(), version.clone());
+        let iuse = vdb_aux_get(root, &cat, &pkg, &version, "IUSE");
+        let enabled = read_vdb_flag_set(root, &cat, &pkg, &version, "USE");
+        let keywords: Vec<String> = vdb_aux_get(root, &cat, &pkg, &version, "KEYWORDS")
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        let candidate_str = format!(
+            "{cat}/{pkg}-{version}:{}/{}::{}",
+            e.slot.as_deref().unwrap_or("0"),
+            e.sub_slot.as_deref().unwrap_or("0"),
+            e.repo_name.as_deref().unwrap_or("")
+        );
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut display: Vec<(String, bool)> = iuse
+            .split_whitespace()
+            .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
+            .filter(|flag| seen.insert(flag.clone()))
+            .map(|flag| {
+                let on = enabled.contains(&flag);
+                (flag, on)
+            })
+            .collect();
+        display.sort_by_key(|p| alnum_sort_key(&p.0));
+        let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+            iuse: &iuse,
+            keywords: &keywords,
+            candidate_str: &candidate_str,
+            build_id: None,
+            category: &cat,
+            package: &pkg,
+            config,
+        });
+        let none = HashSet::new();
+        for (all_flags, slot) in [(true, 0), (false, 1)] {
+            let built = build_use_expand_display(BuildUseExpandDisplayArgs {
+                use_flags_display: &display,
+                config,
+                installed: None,
+                forced: &forced,
+                all_flags,
+                reinst_flags: &none,
+            });
+            if slot == 0 {
+                e.use_expand_display = built;
+            } else {
+                e.use_expand_display_p = built;
+            }
+        }
+        e.use_flags_display = display;
+    }
+}
+
 /// Repaint every running-rooted merge entry's USE displays from the
 /// running root's own profile (cross-root rows use their own root).
 /// A no-op for entries the candidate lookup misses.

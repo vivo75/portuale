@@ -42,6 +42,7 @@ pub(crate) fn collect_pass_blockers(
         conflicts,
         &mut orphan_blockers,
     );
+    fill_uninstall_displays(&mut state.entries, ctx.root, config);
 
     // Tree-mode solved verdicts: only Replacement rows can a scheduled uninstall
     // solve, and the simulation is gated on at least one existing, so the common

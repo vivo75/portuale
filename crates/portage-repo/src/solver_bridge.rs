@@ -1065,6 +1065,7 @@ fn file_bridge_blocker_conflicts(
         // Orphans ride the same field rather than being dropped.
         &mut orphan_blockers,
     );
+    super::fill_uninstall_displays(entries, &req.root, &req.config);
     orphan_blockers
 }
 
