@@ -168,3 +168,11 @@ Parsing `emerge` arguments into `EmergeOpts`. Context moved out of the code comm
 - `--ask-enter-invalid`: Portage boolean flag (no value) -- `UserQuery.query`'s `enter_invalid` gate, reset at `run` entry.
 - `--ignore-default-opts` (Portage `main.py:1352`).
 - `--deselect`/`-W`: unlike `--verbose`, a bare flag turns the invocation into the standalone deselect action (Portage `main.py`'s "if myaction is None and myoptions.deselect is True: myaction = 'deselect'"; see `run_deselect`).
+
+## field EmergeOpts.no_cache
+- Backlog #441 S3: `--no-cache` (portuale-only, like `--solver=`; same
+  `=`/space handling as `--shell`). Bypasses the `--pretend` plan cache
+  for the run. Deliberately absent from `--help` (see `help.rs`): that
+  text is pinned by the contract suite and a new line would churn the
+  corpus for no behavioural reason; the flag is documented here and in
+  the S3 slice notes instead.

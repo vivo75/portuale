@@ -307,6 +307,16 @@ pub(crate) fn offer_news_reading(args: OfferNewsReadingArgs<'_>) -> bool {
     }
 }
 
+/// While the `--pretend` plan cache captures the resolve+display bytes,
+/// the GLEP 42 count notice stays live (it depends on the news read-marker
+/// files, which are not cache inputs): the capturer sets this, and
+/// [`pretend_end_news_notice`] becomes a no-op until it is cleared. The
+/// caller then prints the notice itself, after restoring the streams.
+/// Process-wide like the other pretend globals; only ever touched around
+/// one synchronous capture on this thread.
+pub(crate) static PLAN_CACHE_CAPTURING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// On a `--pretend` run, still print the count notice at the end, even when
 /// resolution failed. `--json` stays machine-readable: no notice there.
 /// Portage: post_emerge.py, post_emerge
@@ -317,6 +327,9 @@ pub(crate) fn pretend_end_news_notice(
     config: &portage_profile::Config,
     color: &Colorizer,
 ) {
+    if PLAN_CACHE_CAPTURING.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     if pretend {
         display_news_notice_if_any(repos, root, config, color);
     }

@@ -92,3 +92,13 @@ GLEP 42 news.
 
 ## fn run_check_news
 - Ports Portage's `emerge --check-news` (`_emerge/actions.py:3844` -> `portage.news.getUnreadItems` / `NewsManager`): print the `IMPORTANT: N news items need reading` block if any repo's `.unread` count is nonzero, else ` * No news items were found.` (unless `--quiet`).
+
+## static PLAN_CACHE_CAPTURING
+- Backlog #441 S3: while the `--pretend` plan cache captures the
+  resolve+display bytes, the GLEP 42 count notice stays live (it depends
+  on the news read-marker files, which are not cache inputs). The
+  capturer sets this flag; `pretend_end_news_notice` becomes a no-op
+  until it is cleared, and the caller prints the notice itself after
+  restoring the streams. Also covers the gate-early-exit paths in
+  `final_gates`/`failure_gates`/`run_resolve_phases`, which call the
+  notice before returning their exit codes.

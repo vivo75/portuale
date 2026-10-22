@@ -137,6 +137,14 @@ const CODE_NAMES: &[&str] = &[
 /// `codes` names. A malformed line is skipped with a warning, never
 /// fatal. Cached once per process.
 // Portage: output.py, _parse_color_map
+/// Force [`color_map_overrides`] to load now, so a malformed
+/// `<config_root>/etc/portage/color.map` warns at a fixed, pre-resolve
+/// position on every run. Without this the warning fires on first colour
+/// use, which the `--pretend` plan cache would otherwise capture on a miss
+/// and replay on a hit; prefetching keeps it live on both paths.
+pub fn prefetch_color_map() {
+    let _ = color_map_overrides();
+}
 fn color_map_overrides() -> &'static HashMap<String, String> {
     use std::sync::OnceLock;
     static MAP: OnceLock<HashMap<String, String>> = OnceLock::new();

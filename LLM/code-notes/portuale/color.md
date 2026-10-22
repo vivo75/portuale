@@ -31,3 +31,10 @@ ANSI colour for `emerge --pretend` output.
 
 ## impl Colorizer::pkgprint
 - Ports Portage's `Display.pkgprint` (`output.py:265-292`), the merge-list case only (`pkg_info.merge` is always true for every bracket entry portuale prints).
+
+## fn prefetch_color_map
+- Backlog #441 S3: forces `color_map_overrides` to load before the
+  resolve, so a malformed `color.map` warns at a fixed pre-resolve
+  position on every run instead of on first colour use (which the
+  `--pretend` plan cache would otherwise capture on a miss and replay on
+  a hit).

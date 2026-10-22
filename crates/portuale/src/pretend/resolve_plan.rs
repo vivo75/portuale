@@ -30,16 +30,6 @@ pub(crate) struct ResolvePlan {
     pub(crate) complete_seed_atoms: Vec<String>,
 }
 
-/// The values [`plan_resolve`] reads from its caller.
-pub(crate) struct PlanResolveArgs<'a, 'o> {
-    pub(crate) opts: &'a mut EmergeOpts<'o>,
-    pub(crate) config: &'a mut Config,
-    pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
-    pub(crate) config_root: &'a Path,
-    pub(crate) color: &'a Colorizer,
-}
-
 /// Whether build-time deps of built packages are traversed: Portage's
 /// `bdeps=auto` as a key-presence test on the post-implication options.
 /// An explicit `--with-bdeps` always wins; otherwise `bdeps` is "auto"
@@ -63,26 +53,171 @@ pub(crate) fn plan_with_bdeps(opts: &EmergeOpts<'_>, features: &[String]) -> boo
         && !(opts.usepkg_given || opts.usepkgonly || getbinpkg || opts.getbinpkgonly)
 }
 
-/// The resolver parameters derived from the options: bdeps, selective, autounmask, binary packages, rebuild and complete-graph switches, seed atoms.
-pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan, ExitCode> {
-    let PlanResolveArgs {
+/// The values [`plan_resolve_live_prefix`] reads from its caller.
+pub(crate) struct PlanResolveLiveArgs<'a, 'o> {
+    pub(crate) opts: &'a EmergeOpts<'o>,
+    pub(crate) config: &'a mut Config,
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+}
+
+/// Everything the old [`plan_resolve`] did with output or global effects, in
+/// original order: the local `$PKGDIR` scan, the quickpkg global, the
+/// running-root config, `DISTDIR`, the `--getbinpkg` refresh and the overlap
+/// warnings, and the non-`--pretend` news notice. The `--pretend` plan cache
+/// runs exactly this prefix live on every run (a hit replays only the
+/// resolve+display bytes); the pure parameter derivation in
+/// [`plan_resolve_pure`] never runs on a hit.
+pub(crate) struct LivePrefix {
+    pub(crate) usepkgonly: bool,
+    pub(crate) usepkg: bool,
+    pub(crate) getbinpkg: bool,
+    pub(crate) root_deps_running_root: Option<PathBuf>,
+    pub(crate) running_config: Option<Config>,
+    pub(crate) distdir: PathBuf,
+}
+
+pub(crate) fn plan_resolve_live_prefix(
+    args: PlanResolveLiveArgs<'_, '_>,
+) -> Result<LivePrefix, ExitCode> {
+    let PlanResolveLiveArgs {
         opts,
         config,
         root,
         repos,
-        config_root,
-        color,
     } = args;
-    // `--with-bdeps` resolves before the destructure below borrows `opts`.
-    let with_bdeps = plan_with_bdeps(opts, &config_features_list(config));
-    let &mut EmergeOpts {
-        with_bdeps: ref mut with_bdeps_out,
+    let &EmergeOpts {
         usepkg,
         usepkgonly,
         getbinpkg,
         ref getbinpkg_exclude,
         ref getbinpkg_include,
         getbinpkgonly,
+        quickpkg_direct,
+        ref quickpkg_direct_root,
+        pretend,
+        root_deps,
+        ask,
+        read_news,
+        ..
+    } = opts;
+
+    // Fold the --getbinpkg family into the --usepkg family (see their
+    // parsing above): `--getbinpkgonly` implies binary-only; either
+    // getbinpkg flag makes binary candidates eligible; `getbinpkg`
+    // additionally turns on *remote* binrepo candidate loading.
+    let usepkgonly = usepkgonly || getbinpkgonly;
+    let usepkg = usepkg || getbinpkg || getbinpkgonly;
+    let getbinpkg = getbinpkg || getbinpkgonly;
+
+    // When `--usepkg`/`--usepkgonly` makes local binary candidates
+    // eligible, walk `$PKGDIR` for binpkg files (see
+    // `binpkg::populate_local_pkgdir`). Runs unconditionally now;
+    // unlike Portage this is never written back to `Packages`.
+    // Portage: bintree.py, _populate_local
+    if usepkg || usepkgonly {
+        let pkgdir_path = Path::new(&config.pkgdir);
+        match crate::binpkg::populate_local_pkgdir(pkgdir_path, pkgdir_index_trusted(config)) {
+            Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("emerge: scanning {}: {e}", config.pkgdir);
+                return Err(ExitCode::from(1));
+            }
+        }
+    }
+
+    // `--quickpkg-direct` is active only with `--usepkg`, an explicit
+    // `--quickpkg-direct=y`, and a target `ROOT` differing from the source
+    // root. Path comparison is `canonicalize`-based.
+    // Portage: _emerge/actions.py
+    let quickpkg_source = if usepkg && quickpkg_direct == Some(true) {
+        let norm = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let src = quickpkg_direct_root
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(portage_repo::running_root_from_env);
+        Some(norm(&src)).filter(|s| *s != norm(root))
+    } else {
+        None
+    };
+    portage_repo::set_quickpkg_direct_root(quickpkg_source);
+
+    // The running root's own profile for per-node USE paint. Loaded once
+    // per run, from the effective running root, never the target config.
+    let running_config = load_running_config(root, &portage_repo::running_root_from_env(), repos);
+
+    // `DISTDIR` is config-rooted (calling env highest) for the `f`/`F`
+    // fetch-restrict bracket column. Portage: config.py; cnf/make.globals:30
+    let distdir = portage_repo::distdir_from_env_or_config(config);
+
+    // A `--getbinpkg` run refreshes each binhost's `Packages` index before
+    // resolution, in `--pretend` exactly like in a merge. A failed
+    // refresh is non-fatal: warn and resolve against the local pool.
+    // Portage: _emerge/actions.py, bintree.py
+    if getbinpkg {
+        let _refresh_span = portage_util::profile::span("refresh_binhost_indexes");
+        emerge_getbinpkg::refresh_binhost_indexes(
+            &config.binrepos,
+            root,
+            pretend,
+            getbinpkg_exclude,
+            getbinpkg_include,
+        );
+    }
+    // Atoms in both CLI lists warn (after the refresh: Portage populates
+    // before adjusting configs, so the per-repo warnings print first).
+    // Portage: _emerge/actions.py, binpkg_selection_config
+    emerge_getbinpkg::warn_getbinpkg_cli_overlap(getbinpkg_exclude, getbinpkg_include);
+
+    // See `resolve_root_deps_running_root`: `BDEPEND`/`IDEPEND` route to
+    // the running root on a cross-root build, plus always under `--root-deps`.
+    let root_deps_running_root =
+        resolve_root_deps_running_root(root_deps, root, portage_repo::running_root_from_env());
+
+    // The GLEP 42 news-count notice prints before resolution on a
+    // non-`--pretend` run, so it fires even when resolution later fails.
+    // Not gated on `--quiet`, `--ask`, or `--nodeps`.
+    // Portage: _emerge/actions.py, run_action
+    if !pretend {
+        let color = Colorizer::new(color::resolve_havecolor(opts.color_opt));
+        let notice_printed = display_news_notice_if_any(repos, root, config, &color);
+        // Offer the `eselect news read` spawn once the notice printed; an
+        // interrupted prompt exits before `action_build`.
+        // Portage: _emerge/actions.py, run_action
+        if offer_news_reading(OfferNewsReadingArgs {
+            ask,
+            read_news,
+            notice_printed,
+            color: &color,
+        }) {
+            return Err(ExitCode::from(130));
+        }
+    }
+    Ok(LivePrefix {
+        usepkgonly,
+        usepkg,
+        getbinpkg,
+        root_deps_running_root,
+        running_config,
+        distdir,
+    })
+}
+
+/// The resolver parameters derived from the options: bdeps, selective,
+/// autounmask, binary packages, rebuild and complete-graph switches, seed
+/// atoms. Pure computation, no output: safe to skip on a plan-cache hit.
+pub(crate) fn plan_resolve_pure(
+    opts: &mut EmergeOpts<'_>,
+    config: &mut Config,
+    root: &Path,
+    config_root: &Path,
+    live: LivePrefix,
+) -> ResolvePlan {
+    // `--with-bdeps` resolves before the destructure below borrows `opts`.
+    let with_bdeps = plan_with_bdeps(opts, &config_features_list(config));
+    let &mut EmergeOpts {
+        with_bdeps: ref mut with_bdeps_out,
         selective_flag,
         update,
         newuse,
@@ -98,13 +233,9 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
         autounmask_keep_masks,
         autounmask_backtrack,
         autounmask_continue,
-        quickpkg_direct,
-        ref quickpkg_direct_root,
         binpkg_respect_use,
         rebuilt_binaries,
         deep,
-        root_deps,
-        pretend,
         rebuild_if_unbuilt,
         rebuild_if_new_rev,
         rebuild_if_new_ver,
@@ -114,8 +245,6 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
         complete_if_new_use,
         complete_if_new_ver,
         ignore_world,
-        ask,
-        read_news,
         ..
     } = opts;
     // `--with-bdeps` already resolved above (`plan_with_bdeps`).
@@ -174,46 +303,11 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
             None => autounmask_continue == Some(true),
         };
 
-    // Fold the --getbinpkg family into the --usepkg family (see their
-    // parsing above): `--getbinpkgonly` implies binary-only; either
-    // getbinpkg flag makes binary candidates eligible; `getbinpkg`
-    // additionally turns on *remote* binrepo candidate loading.
-    let usepkgonly = usepkgonly || getbinpkgonly;
-    let usepkg = usepkg || getbinpkg || getbinpkgonly;
-    let getbinpkg = getbinpkg || getbinpkgonly;
-
-    // When `--usepkg`/`--usepkgonly` makes local binary candidates
-    // eligible, walk `$PKGDIR` for binpkg files (see
-    // `binpkg::populate_local_pkgdir`). Runs unconditionally now;
-    // unlike Portage this is never written back to `Packages`.
-    // Portage: bintree.py, _populate_local
-    if usepkg || usepkgonly {
-        let pkgdir_path = Path::new(&config.pkgdir);
-        match crate::binpkg::populate_local_pkgdir(pkgdir_path, pkgdir_index_trusted(config)) {
-            Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("emerge: scanning {}: {e}", config.pkgdir);
-                return Err(ExitCode::from(1));
-            }
-        }
-    }
-
-    // `--quickpkg-direct` is active only with `--usepkg`, an explicit
-    // `--quickpkg-direct=y`, and a target `ROOT` differing from the source
-    // root. Path comparison is `canonicalize`-based.
-    // Portage: _emerge/actions.py
-    let quickpkg_source = if usepkg && quickpkg_direct == Some(true) {
-        let norm = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-        let src = quickpkg_direct_root
-            .as_deref()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(portage_repo::running_root_from_env);
-        Some(norm(&src)).filter(|s| *s != norm(root))
-    } else {
-        None
-    };
-    portage_repo::set_quickpkg_direct_root(quickpkg_source);
+    // The folded `--usepkg` family comes from the live prefix (it ran the
+    // scan and the refresh off the same values).
+    let usepkgonly = live.usepkgonly;
+    let usepkg = live.usepkg;
+    let getbinpkg = live.getbinpkg;
 
     // --binpkg-respect-use defaults to "auto" (effectively on) whenever
     // `--usepkgonly` is not given, off when it is. An explicit
@@ -227,37 +321,14 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
     let rebuilt_binaries =
         rebuilt_binaries.unwrap_or(usepkgonly && deep == portage_repo::Deep::Unlimited && update);
 
-    // See `resolve_root_deps_running_root`: `BDEPEND`/`IDEPEND` route to
-    // the running root on a cross-root build, plus always under `--root-deps`.
-    let root_deps_running_root =
-        resolve_root_deps_running_root(root_deps, root, portage_repo::running_root_from_env());
-
-    // The running root's own profile for per-node USE paint. Loaded once
-    // per run, from the effective running root, never the target config.
-    let running_config = load_running_config(root, &portage_repo::running_root_from_env(), repos);
-
-    // `DISTDIR` is config-rooted (calling env highest) for the `f`/`F`
-    // fetch-restrict bracket column. Portage: config.py; cnf/make.globals:30
-    let distdir = portage_repo::distdir_from_env_or_config(config);
-
-    // A `--getbinpkg` run refreshes each binhost's `Packages` index before
-    // resolution, in `--pretend` exactly like in a merge. A failed
-    // refresh is non-fatal: warn and resolve against the local pool.
-    // Portage: _emerge/actions.py, bintree.py
-    if getbinpkg {
-        let _refresh_span = portage_util::profile::span("refresh_binhost_indexes");
-        emerge_getbinpkg::refresh_binhost_indexes(
-            &config.binrepos,
-            root,
-            pretend,
-            getbinpkg_exclude,
-            getbinpkg_include,
-        );
-    }
-    // Atoms in both CLI lists warn (after the refresh: Portage populates
-    // before adjusting configs, so the per-repo warnings print first).
-    // Portage: _emerge/actions.py, binpkg_selection_config
-    emerge_getbinpkg::warn_getbinpkg_cli_overlap(getbinpkg_exclude, getbinpkg_include);
+    // The running root's own profile, `DISTDIR` and the root-deps routing
+    // all come from the live prefix (it loaded them before the refresh).
+    let LivePrefix {
+        root_deps_running_root,
+        running_config,
+        distdir,
+        ..
+    } = live;
 
     // `--rebuild-if-unbuilt` (=y) clears `new-rev` + `new-ver`;
     // `--rebuild-if-new-rev` (=y) clears `new-ver`. Unset stays off.
@@ -299,26 +370,10 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
             v
         }
     };
-    // The GLEP 42 news-count notice prints before resolution on a
-    // non-`--pretend` run, so it fires even when resolution later fails.
-    // Not gated on `--quiet`, `--ask`, or `--nodeps`.
-    // Portage: _emerge/actions.py, run_action
-    if !pretend {
-        let notice_printed = display_news_notice_if_any(repos, root, config, color);
-        // Offer the `eselect news read` spawn once the notice printed; an
-        // interrupted prompt exits before `action_build`.
-        // Portage: _emerge/actions.py, run_action
-        if offer_news_reading(OfferNewsReadingArgs {
-            ask,
-            read_news,
-            notice_printed,
-            color,
-        }) {
-            return Err(ExitCode::from(130));
-        }
-    }
+    // The GLEP 42 notice for non-`--pretend` runs lives in the live
+    // prefix (it prints before resolution even when resolution fails).
     *with_bdeps_out = with_bdeps;
-    Ok(ResolvePlan {
+    ResolvePlan {
         selective,
         autounmask_suggest_keywords,
         autounmask_suggest_use,
@@ -340,5 +395,5 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
         complete_if_new_use,
         complete_if_new_ver,
         complete_seed_atoms,
-    })
+    }
 }

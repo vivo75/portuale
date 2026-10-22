@@ -29,3 +29,13 @@ The resolver parameters derived from the options: bdeps, selective, autounmask, 
 
 ## fn plan_resolve (#349 S4: DISTDIR)
 - The `f`/`F` fetch-restrict column's `distdir` follows the resolved config (`distdir_from_env_or_config`, calling env highest). Portage: `config.py`; `cnf/make.globals:30`. The fetch-landing half still has no `--fetchonly` vehicle in portuale (S0 `e07`), so no end-to-end pin covers it; the direct-path `PORTAGE_ACTUAL_DISTDIR` pin and the `distdir_from_*` unit tests do.
+
+## fn plan_resolve_live_prefix / fn plan_resolve_pure
+- Backlog #441 S3: `plan_resolve` split in two. The live prefix holds
+  everything with output or global effects (the `$PKGDIR` scan, the
+  quickpkg global, the running-root config, `DISTDIR`, the `--getbinpkg`
+  refresh and overlap warnings, the non-`--pretend` news notice), in the
+  original order; the pure derivation (selective, autounmask, rebuild and
+  complete-graph switches, seed atoms) prints nothing. The `--pretend`
+  plan cache runs the prefix live on every run and skips the pure half on
+  a hit; the uncached path runs both in the same order as before.
