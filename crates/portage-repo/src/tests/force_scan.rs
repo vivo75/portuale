@@ -513,6 +513,7 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
     for (name, slot, rdepend) in [
         ("forceprov-1.0", "0/1", ""),
         ("forcecons-1.0", "0", ">=dev-libs/forceprov-1.0:0/1="),
+        ("forcecons2-1.0", "0", ">=dev-libs/forceprov-1.0:0/1="),
         ("forceveto-1.0", "0", "<dev-libs/forceprov-2.0:0/1="),
     ] {
         let d = base.join("var/db/pkg/dev-libs").join(name);
@@ -547,6 +548,7 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
     write_pkg("forceprov", "1.0", "0/1", "");
     write_pkg("forceprov", "2.0", "0/2", "");
     write_pkg("forcecons", "1.0", "0", "dev-libs/forceprov:=");
+    write_pkg("forcecons2", "1.0", "0", "dev-libs/forceprov:=");
     write_pkg("forceveto", "1.0", "0", "<dev-libs/forceprov-2.0:=");
     let repos = vec![RepoConfig {
         name: "testrepo".to_string(),
@@ -568,7 +570,11 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
         },
         ..graph_entry("dev-libs", pkg, "1.0")
     };
-    let entries = vec![installed("forcecons"), installed("forceprov")];
+    let entries = vec![
+        installed("forcecons"),
+        installed("forcecons2"),
+        installed("forceprov"),
+    ];
     let empty: BTreeSet<(String, String)> = BTreeSet::new();
     let cons = ("dev-libs".to_string(), "forcecons".to_string());
     let veto = ("dev-libs".to_string(), "forceveto".to_string());
@@ -589,7 +595,16 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
         })
     };
     let (consumers, forced) = scan(&entries, &HashSet::new(), true);
-    assert_eq!(consumers, BTreeSet::from([cons.clone()]));
+    // The forced child joins its consumers in the replace set; a second
+    // consumer of the same child schedules too (Portage probes every parent).
+    assert_eq!(
+        consumers,
+        BTreeSet::from([
+            cons.clone(),
+            ("dev-libs".to_string(), "forcecons2".to_string()),
+            ("dev-libs".to_string(), "forceprov".to_string())
+        ])
+    );
     assert_eq!(
         forced,
         BTreeSet::from([(
@@ -613,6 +628,7 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
     // Already-upgraded child: the walk's own selection owns that case.
     let upgraded = vec![
         installed("forcecons"),
+        installed("forcecons2"),
         GraphEntry {
             outcome: PretendOutcome::Upgrade {
                 from: "1.0".into(),
@@ -626,4 +642,84 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
         (empty, BTreeSet::new())
     );
     let _ = fs::remove_dir_all(&base);
+}
+
+/// The consumer's replacement ebuild refuses a candidate its own atoms exclude
+/// (weston's `<libdisplay-info-0.4.0:=`), so Portage's update probe finds no
+/// new child for it; a candidate inside the range is accepted.
+#[test]
+fn replacement_accepts_follows_the_consumers_tree_atoms() {
+    use md5::Digest as _;
+    let base = TempDir::new("portage-repo-482-accepts").keep();
+    let d = base.join("var/db/pkg/dev-libs/accons-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0\n").unwrap();
+    fs::write(d.join("EAPI"), "8\n").unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+    fs::write(d.join("RDEPEND"), "<dev-libs/accprov-2.0:0/1=\n").unwrap();
+    let repo = base.join("repo");
+    let dir = repo.join("dev-libs/accons");
+    fs::create_dir_all(&dir).unwrap();
+    let rdepend = "<dev-libs/accprov-2.0:=";
+    let body = format!(
+        "EAPI=8\nDESCRIPTION=\"482 accepts\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
+    );
+    fs::write(dir.join("accons-1.0.ebuild"), &body).unwrap();
+    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let cachedir = repo.join("metadata/md5-cache/dev-libs");
+    fs::create_dir_all(&cachedir).unwrap();
+    fs::write(
+        cachedir.join("accons-1.0"),
+        format!(
+            "DEFINED_PHASES=-\nDESCRIPTION=482 accepts\nEAPI=8\nKEYWORDS=amd64\nRDEPEND={rdepend}\nSLOT=0\n_md5_={md5}\n"
+        ),
+    )
+    .unwrap();
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    let pkg = all_installed_packages(&base)
+        .iter()
+        .find(|p| p.package == "accons")
+        .cloned()
+        .expect("accons is installed");
+    let config = test_config();
+    let provider = ("dev-libs".to_string(), "accprov".to_string());
+    let accepts = |cand: &str| {
+        replacement_accepts(ReplacementAcceptsArgs {
+            repos: &repos,
+            root: &base,
+            config: &config,
+            pkg: &pkg,
+            dep_keys: &["RDEPEND"],
+            provider_cp: &provider,
+            cand,
+        })
+    };
+    assert!(!accepts("dev-libs/accprov-2.0:0/2"));
+    assert!(accepts("dev-libs/accprov-1.5:0/2"));
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// An `|| ( ... )` alternative never vetoes a replacement candidate (Portage
+/// `_slot_operator_update_probe` only reads the parent's mandatory atoms).
+#[test]
+fn replacement_accepts_ignores_or_groups() {
+    assert_eq!(
+        without_or_groups(">=a/b-1:= || ( c/d:= <a/b-2 ) e/f || ( ( g/h ) i/j ) k/l"),
+        ">=a/b-1:= e/f k/l"
+    );
+    assert_eq!(without_or_groups("a/b"), "a/b");
 }

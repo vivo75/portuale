@@ -22,11 +22,13 @@ pub(crate) fn assemble_result(
             // Raw request atoms for the scan's top-level gate.
             let top_atoms: HashSet<String> =
                 ctx.top_level.iter().map(|s| (*s).to_string()).collect();
+            let scan_scope = ctx.scan_reachable(&pass.entries);
             slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
                 root: ctx.root,
                 repos: &ctx.repos,
                 entries: &pass.entries,
                 reachable: &ctx.slot_op_reachable,
+                scope: Some(&scan_scope),
                 already: &params.slot_operator_replace_installed,
                 undone: &params.slot_operator_undone,
                 with_bdeps: ctx.with_bdeps,

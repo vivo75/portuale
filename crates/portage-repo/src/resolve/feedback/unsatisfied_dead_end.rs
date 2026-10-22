@@ -38,12 +38,14 @@ pub(crate) fn step_unsatisfied_dead_end(
     } else {
         // Raw request atoms behind `top_level_cps` (explicit slot/version atoms pin nothing).
         let top_atoms: HashSet<String> = ctx.top_level.iter().map(|s| (*s).to_string()).collect();
+        let scan_scope = ctx.scan_reachable(&pass.entries);
         let (scheduled, abi_rebuilds, masked_binaries) =
             slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
                 root: ctx.root,
                 repos: &ctx.repos,
                 entries: &pass.entries,
                 reachable: &ctx.slot_op_reachable,
+                scope: Some(&scan_scope),
                 already: &grown.slot_operator_replace_installed,
                 undone: &grown.slot_operator_undone,
                 with_bdeps: ctx.with_bdeps,

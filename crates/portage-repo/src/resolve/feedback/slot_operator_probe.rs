@@ -48,11 +48,11 @@ pub(crate) fn step_built_parent_update_probe(
     pass: &PassResult,
     grown: &mut BacktrackParams,
     config: &Config,
-) -> Option<PassDecision> {
+) -> BuiltParentProbe {
     // Portage: depgraph.py, _slot_operator_trigger_reinstalls. Backtrack-gated;
     // the mask set only grows, so the restart terminates.
     if ctx.backtrack_max == 0 || ctx.usepkgonly {
-        return None;
+        return BuiltParentProbe::Quiet;
     }
     let (fresh, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
         root: ctx.root,
@@ -64,10 +64,28 @@ pub(crate) fn step_built_parent_update_probe(
         excluded: ctx.excluded,
         masked: &grown.runtime_pkg_mask,
     });
-    if file_unsat_probe_results(&mut *grown, fresh, masks, ctx.usepkgonly) {
-        return Some(PassDecision::Feedback(BacktrackFeedback::Config {
-            params: Box::new(std::mem::take(grown)),
-        }));
+    if !file_unsat_probe_results(&mut *grown, fresh, masks, ctx.usepkgonly) {
+        return BuiltParentProbe::Quiet;
     }
-    None
+    fold_rebuild_scan(pass, ctx, grown, config);
+    // Portage derives the conflict nodes from this very pass on top of the
+    // config change, so a pass with conflicts hands its filed change to the
+    // conflict steps instead of restarting on it alone.
+    if pass.slot_conflicts.is_empty() {
+        BuiltParentProbe::Restart(PassDecision::Feedback(BacktrackFeedback::Config {
+            params: Box::new(std::mem::take(grown)),
+        }))
+    } else {
+        BuiltParentProbe::Filed
+    }
+}
+
+/// What [`step_built_parent_update_probe`] found.
+pub(crate) enum BuiltParentProbe {
+    /// Nothing new was filed.
+    Quiet,
+    /// A change was filed into the working copy; the conflict steps build on it.
+    Filed,
+    /// A change was filed and the pass restarts on it.
+    Restart(PassDecision),
 }

@@ -45,51 +45,7 @@ pub(crate) fn step_slot_conflict_backtrack(
         if added {
             // Portage runs the slot-operator trigger reinstalls in the same pass, so
             // the replace set rides the conflict's node instead of costing a restart.
-            let nvc = pass.suppressed_nvc
-                || pass
-                    .entries
-                    .iter()
-                    .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate));
-            if !nvc
-                && ctx.backtrack_max > 0
-                && !ctx.ignore_built_slot_operator_deps
-                && ctx.rebuild_if_new_slot
-            {
-                let top_atoms: HashSet<String> =
-                    ctx.top_level.iter().map(|s| (*s).to_string()).collect();
-                let (mut scheduled, _abi, _masked) =
-                    slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
-                        root: ctx.root,
-                        repos: &ctx.repos,
-                        entries: &pass.entries,
-                        reachable: &ctx.slot_op_reachable,
-                        already: &grown.slot_operator_replace_installed,
-                        undone: &grown.slot_operator_undone,
-                        with_bdeps: ctx.with_bdeps,
-                        update: ctx.update,
-                        top_level_cps: &ctx.top_level_cps,
-                        top_level_atoms: &top_atoms,
-                        excluded: ctx.excluded,
-                        config,
-                    });
-                let (force_consumers, forced) =
-                    slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
-                        root: ctx.root,
-                        repos: &ctx.repos,
-                        config,
-                        entries: &pass.entries,
-                        reachable: &ctx.slot_op_reachable,
-                        already: &scheduled,
-                        undone: &grown.slot_operator_undone,
-                        with_bdeps: ctx.with_bdeps,
-                        update: ctx.update,
-                        top_level_cps: &ctx.top_level_cps,
-                        excluded: ctx.excluded,
-                    });
-                scheduled.extend(force_consumers);
-                grown.slot_operator_forced_upgrade.extend(forced);
-                grown.slot_operator_replace_installed = scheduled;
-            }
+            fold_rebuild_scan(pass, ctx, grown, config);
             return Some(PassDecision::Feedback(BacktrackFeedback::SlotConflict {
                 base: Box::new(std::mem::take(grown)),
                 choices,
@@ -97,4 +53,61 @@ pub(crate) fn step_slot_conflict_backtrack(
         }
     }
     None
+}
+
+/// Folds the slot-operator rebuild scan and the update-force scan into `grown`:
+/// Portage's probes of one pass all land in one `config` change.
+// Portage: depgraph.py, _slot_operator_trigger_reinstalls
+pub(crate) fn fold_rebuild_scan(
+    pass: &PassResult,
+    ctx: &ResolveCtx<'_>,
+    grown: &mut BacktrackParams,
+    config: &Config,
+) {
+    let nvc = pass.suppressed_nvc
+        || pass
+            .entries
+            .iter()
+            .any(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate));
+    if nvc
+        || ctx.backtrack_max == 0
+        || ctx.ignore_built_slot_operator_deps
+        || !ctx.rebuild_if_new_slot
+    {
+        return;
+    }
+    let top_atoms: HashSet<String> = ctx.top_level.iter().map(|s| (*s).to_string()).collect();
+    let scan_scope = ctx.scan_reachable(&pass.entries);
+    let (mut scheduled, _abi, _masked) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        root: ctx.root,
+        repos: &ctx.repos,
+        entries: &pass.entries,
+        reachable: &ctx.slot_op_reachable,
+        scope: Some(&scan_scope),
+        already: &grown.slot_operator_replace_installed,
+        undone: &grown.slot_operator_undone,
+        with_bdeps: ctx.with_bdeps,
+        update: ctx.update,
+        top_level_cps: &ctx.top_level_cps,
+        top_level_atoms: &top_atoms,
+        excluded: ctx.excluded,
+        config,
+    });
+    let (force_consumers, forced) =
+        slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
+            root: ctx.root,
+            repos: &ctx.repos,
+            config,
+            entries: &pass.entries,
+            reachable: &ctx.slot_op_reachable,
+            already: &scheduled,
+            undone: &grown.slot_operator_undone,
+            with_bdeps: ctx.with_bdeps,
+            update: ctx.update,
+            top_level_cps: &ctx.top_level_cps,
+            excluded: ctx.excluded,
+        });
+    scheduled.extend(force_consumers);
+    grown.slot_operator_forced_upgrade.extend(forced);
+    grown.slot_operator_replace_installed = scheduled;
 }

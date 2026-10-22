@@ -200,6 +200,7 @@ pub(crate) fn slot_operator_rebuild_entries(
             repos,
             entries: &combined,
             reachable,
+            scope: None,
             already: &scheduled,
             undone: &BTreeSet::new(),
             with_bdeps,
@@ -217,6 +218,19 @@ pub(crate) fn slot_operator_rebuild_entries(
         out = installed
             .iter()
             .filter(|pkg| scheduled.contains(&(pkg.category.clone(), pkg.package.clone())))
+            // An upgraded provider that joined the set is already a merge.
+            .filter(|pkg| {
+                !entries.iter().any(|e| {
+                    e.category == pkg.category
+                        && e.package == pkg.package
+                        && !matches!(
+                            e.outcome,
+                            PretendOutcome::AlreadyInstalled { .. }
+                                | PretendOutcome::NoVisibleCandidate
+                                | PretendOutcome::Uninstall { .. }
+                        )
+                })
+            })
             .map(|pkg| {
                 // The rebuild lands at the tree ebuild's SLOT, not the vdb's.
                 let (v_slot, v_sub) =

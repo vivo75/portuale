@@ -40,6 +40,7 @@ fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update()
             repos: &[],
             entries: std::slice::from_ref(&bar_downgrade),
             reachable: &reach,
+            scope: None,
             already: &empty,
             undone: &empty,
             with_bdeps: true,
@@ -53,7 +54,10 @@ fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update()
     };
     assert_eq!(
         scan(true, &HashSet::new()),
-        BTreeSet::from([("dev-libs".to_string(), "holder".to_string())]),
+        BTreeSet::from([
+            ("dev-libs".to_string(), "bar".to_string()),
+            ("dev-libs".to_string(), "holder".to_string())
+        ]),
         "the pin-forced downgrade schedules the stale consumer's rebuild"
     );
     assert!(
@@ -116,6 +120,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         repos: &[],
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -127,7 +132,10 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     });
     assert_eq!(
         scheduled,
-        BTreeSet::from([("dev-libs".to_string(), "stale".to_string())]),
+        BTreeSet::from([
+            ("dev-libs".to_string(), "bar".to_string()),
+            ("dev-libs".to_string(), "stale".to_string())
+        ]),
         "only the stale :2/2= binding is scheduled for a rebuild"
     );
     assert_eq!(
@@ -144,6 +152,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         repos: &[],
         entries: &[],
         reachable: &reach,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -164,6 +173,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         repos: &[],
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -195,12 +205,16 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         sub_slot: Some("0".into()),
         ..graph_entry("dev-libs", "stale", "1.0")
     };
-    let already = BTreeSet::from([("dev-libs".to_string(), "stale".to_string())]);
+    let already = BTreeSet::from([
+        ("dev-libs".to_string(), "bar".to_string()),
+        ("dev-libs".to_string(), "stale".to_string()),
+    ]);
     let (again, again_abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &dir,
         repos: &[],
         entries: &[bar_upgrade.clone(), stale_rebuild],
         reachable: &reach,
+        scope: None,
         already: &already,
         undone: &empty,
         with_bdeps: true,
@@ -325,6 +339,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         repos: &repos,
         entries: &entries,
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -352,6 +367,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         repos: &repos,
         entries: &entries,
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -370,6 +386,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         repos: &repos,
         entries: &entries,
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -388,6 +405,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         repos: &repos,
         entries: &entries,
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -416,6 +434,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         repos: &repos,
         entries: &[older.clone(), consumer.clone()],
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -469,6 +488,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         repos: &old_repos,
         entries: &[older, consumer.clone()],
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -487,6 +507,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         repos: &[],
         entries: &entries,
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -503,6 +524,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         repos: &repos,
         entries: std::slice::from_ref(&fresh),
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -598,6 +620,7 @@ fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
             repos: &repos,
             entries: &entries,
             reachable: &HashSet::new(),
+            scope: None,
             already: &empty,
             undone: &empty,
             with_bdeps: true,
@@ -714,6 +737,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
             repos: &repos,
             entries,
             reachable: &HashSet::new(),
+            scope: None,
             already: &empty,
             undone: &empty,
             with_bdeps: true,
@@ -755,6 +779,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
         repos: &repos,
         entries: &[upgrade.clone(), consumer.clone(), veto_parent.clone()],
         reachable: &reach_massc,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -770,6 +795,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
         repos: &repos,
         entries: &[upgrade, consumer, veto_parent],
         reachable: &reach_massc,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -779,7 +805,10 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
         excluded: &["dev-libs/massv".to_string()],
         config: &test_config(),
     });
-    assert_eq!(same_kept, BTreeSet::from([massc]));
+    assert_eq!(
+        same_kept,
+        BTreeSet::from([massc, ("dev-libs".to_string(), "massb".to_string())])
+    );
     let _ = fs::remove_dir_all(&base);
 }
 
@@ -867,6 +896,7 @@ fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
         repos: &repos,
         entries: &[upgrade, walked_consumer("massn"), walked_consumer("masso")],
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -968,6 +998,7 @@ fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot
         repos: &repos,
         entries: &[upgrade, walked_consumer("pinned"), walked_consumer("open")],
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1024,8 +1055,16 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
     let empty: BTreeSet<(String, String)> = BTreeSet::new();
     let cp = |name: &str| ("dev-libs".to_string(), name.to_string());
 
-    let runtime_only = BTreeSet::from([cp("rdep"), cp("pdep"), cp("idep")]);
-    let all_five = BTreeSet::from([cp("rdep"), cp("dep"), cp("bdep"), cp("pdep"), cp("idep")]);
+    // The upgraded provider joins its consumers in the replace set.
+    let runtime_only = BTreeSet::from([cp("bar"), cp("rdep"), cp("pdep"), cp("idep")]);
+    let all_five = BTreeSet::from([
+        cp("bar"),
+        cp("rdep"),
+        cp("dep"),
+        cp("bdep"),
+        cp("pdep"),
+        cp("idep"),
+    ]);
     // `walked` entries: what the pass actually visited (an
     // `AlreadyInstalled` node per consumer, the @world shape).
     let walked_entry = |name: &str| GraphEntry {
@@ -1042,6 +1081,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         repos: &[],
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: false,
@@ -1067,6 +1107,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         repos: &[],
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1092,6 +1133,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         repos: &[],
         entries: &walked,
         reachable: &reach,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1135,6 +1177,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         repos: &[],
         entries: &walked,
         reachable: &reach,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: false,
@@ -1189,6 +1232,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
         repos: &[],
         entries: std::slice::from_ref(&bar_reinstall),
         reachable: &reach,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1198,7 +1242,10 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
         excluded: &[],
         config: &test_config(),
     });
-    assert_eq!(scheduled, BTreeSet::from([stale.clone()]));
+    assert_eq!(
+        scheduled,
+        BTreeSet::from([stale.clone(), ("dev-libs".to_string(), "bar".to_string())])
+    );
     assert_eq!(
         abi,
         vec![(
@@ -1213,6 +1260,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
         repos: &[],
         entries: std::slice::from_ref(&bar_reinstall),
         reachable: &reach,
+        scope: None,
         already: &empty,
         undone: &undone,
         with_bdeps: true,
@@ -1232,6 +1280,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
         repos: &[],
         entries: std::slice::from_ref(&bar_reinstall),
         reachable: &elsewhere,
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1322,6 +1371,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
         repos: &repos,
         entries: &entries,
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1349,6 +1399,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
         repos: &repos,
         entries: &entries,
         reachable: &HashSet::new(),
+        scope: None,
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1632,4 +1683,25 @@ fn rebuild_if_restart_ignores_a_binary_merge_and_a_merging_parent() {
         "a seeded parent never re-fires"
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--deep` scans only what the pass walked; Portage probes its graph, never
+/// an installed closure the new versions no longer pull in.
+#[test]
+fn deep_scan_scope_is_the_walked_set_narrowed_by_the_closure() {
+    let cp = |n: &str| ("dev-libs".to_string(), n.to_string());
+    let entries = vec![graph_entry("dev-libs", "walked", "1.0")];
+    let closure = HashSet::from([cp("walked"), cp("orphan")]);
+    assert_eq!(
+        crate::resolve::scan_scope(Deep::Unlimited, &closure, &entries),
+        HashSet::from([cp("walked")])
+    );
+    assert_eq!(
+        crate::resolve::scan_scope(Deep::Unlimited, &HashSet::new(), &entries),
+        HashSet::from([cp("walked")])
+    );
+    assert_eq!(
+        crate::resolve::scan_scope(Deep::NotRequested, &closure, &entries),
+        closure
+    );
 }

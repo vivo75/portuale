@@ -17,6 +17,9 @@ pub(crate) struct SlotOperatorRebuildScanArgs<'a> {
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) reachable: &'a HashSet<(String, String)>,
+    /// Narrower consumer scope (`ResolveCtx::scan_reachable`); `None` is `reachable`.
+    /// Veto parents keep the full `reachable` closure.
+    pub(crate) scope: Option<&'a HashSet<(String, String)>>,
     pub(crate) already: &'a BTreeSet<(String, String)>,
     pub(crate) undone: &'a BTreeSet<(String, String)>,
     pub(crate) with_bdeps: bool,
@@ -40,6 +43,7 @@ pub(crate) fn slot_operator_rebuild_scan(
         repos,
         entries,
         reachable,
+        scope,
         already,
         undone,
         with_bdeps,
@@ -151,11 +155,11 @@ pub(crate) fn slot_operator_rebuild_scan(
                 continue;
             }
             // Same-slot arm scope (frozen): complete-mode reachability only.
-            let same_slot_scope = !new_slot.is_empty() && reachable.contains(&cp);
+            let same_slot_scope = !new_slot.is_empty() && scope.unwrap_or(reachable).contains(&cp);
             // New-slot arm scope: reachability or walked this pass.
             // Merge-bound consumers stay skipped by the `in_graph` rule:
             // their live `:=` re-binds through their own walk.
-            let new_slot_scope = reachable.contains(&cp) || walked.contains(&cp);
+            let new_slot_scope = scope.unwrap_or(reachable).contains(&cp) || walked.contains(&cp);
             if !same_slot_scope && !new_slot_scope {
                 continue;
             }
@@ -210,18 +214,37 @@ pub(crate) fn slot_operator_rebuild_scan(
             // `(provider, consumer)` display pairs; the consumer itself is
             // scheduled on both arms alike.
             let mut survived = false;
+            let mut provider_joins: Vec<(String, String)> = Vec::new();
             for (display, provider_cp, cand, same_slot) in edges {
                 if probe_refused(&probe_parents, &scheduled, &provider_cp, &cand, &cp) {
+                    continue;
+                }
+                // The replacement consumer's own atoms must accept the
+                // candidate, or the probe finds no new child for it.
+                // Portage: depgraph.py, _slot_operator_update_probe (replacement_parent atoms)
+                if !replacement_accepts(ReplacementAcceptsArgs {
+                    repos,
+                    root,
+                    config,
+                    pkg,
+                    dep_keys,
+                    provider_cp: &provider_cp,
+                    cand: &cand,
+                }) {
                     continue;
                 }
                 survived = true;
                 if same_slot {
                     abi_rebuilds.push((display, consumer_cpv.clone()));
+                    provider_joins.push(provider_cp);
                 }
             }
             if !survived {
                 continue;
             }
+            // The installed child joins the replace set with its parent.
+            // Portage: depgraph.py, _slot_operator_update_backtrack (`child.installed`)
+            scheduled.extend(provider_joins);
             scheduled.insert(cp);
         }
     }

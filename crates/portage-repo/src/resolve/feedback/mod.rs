@@ -150,6 +150,17 @@ pub(crate) fn collect_feedback(
         .collect();
     incoming.sort_unstable();
     eprintln!("BT   masks-in {incoming:?}");
+    let mut replace_in: Vec<String> = params
+        .slot_operator_replace_installed
+        .iter()
+        .map(|(c, p)| format!("{c}/{p}"))
+        .collect();
+    replace_in.sort_unstable();
+    eprintln!(
+        "BT   replace-in {} prune={} {replace_in:?}",
+        replace_in.len(),
+        params.prune_rebuilds
+    );
     for ((cat, pkg), entry) in bt_new_masks(params, after) {
         eprintln!(
             "BT   mask {cat}/{pkg} neg={} reason={:?}",
@@ -288,9 +299,11 @@ fn collect_feedback_inner(
         }
     }
 
-    if let Some(decision) = step_built_parent_update_probe(ctx, pass, &mut grown, config) {
-        return decision;
-    }
+    let probe_filed = match step_built_parent_update_probe(ctx, pass, &mut grown, config) {
+        BuiltParentProbe::Restart(decision) => return decision,
+        BuiltParentProbe::Filed => true,
+        BuiltParentProbe::Quiet => false,
+    };
 
     if let Some(decision) = step_circular_dead_end(pass, ctx, &mut grown) {
         return decision;
@@ -306,6 +319,13 @@ fn collect_feedback_inner(
 
     if let Some(decision) = step_slot_conflict_backtrack(pass, ctx, &mut grown, config) {
         return decision;
+    }
+
+    // The conflict steps found nothing to mask: the filed change restarts alone.
+    if probe_filed {
+        return PassDecision::Feedback(BacktrackFeedback::Config {
+            params: Box::new(grown),
+        });
     }
 
     if let Some(decision) = step_autounmask(&mut grown, pass, ctx) {

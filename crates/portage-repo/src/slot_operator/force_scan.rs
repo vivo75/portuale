@@ -137,11 +137,9 @@ pub(crate) fn slot_operator_update_force_scan(
             built.sort_by(|a, b| (&a.category, &a.package).cmp(&(&b.category, &b.package)));
             for atom in built {
                 let child_cp = (atom.category.clone(), atom.package.clone());
-                if in_graph.contains(&child_cp)
-                    || forced
-                        .iter()
-                        .any(|(c, p, _)| (c, p) == (&child_cp.0, &child_cp.1))
-                {
+                // A child another consumer already forced still schedules this
+                // consumer: Portage probes every parent on its own.
+                if in_graph.contains(&child_cp) {
                     continue;
                 }
                 if !update && !top_level_cps.contains(&child_cp) {
@@ -220,6 +218,10 @@ pub(crate) fn slot_operator_update_force_scan(
                 }
                 consumers.insert(cp.clone());
                 scheduled.insert(cp.clone());
+                // The installed child joins the replace set with its parent
+                // (`_slot_operator_update_backtrack`, `child.installed`).
+                consumers.insert(child_cp.clone());
+                scheduled.insert(child_cp.clone());
                 forced.insert((child_cp.0.clone(), child_cp.1.clone(), cand.version.clone()));
             }
         }
@@ -404,4 +406,86 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
             }
         }
     }
+}
+
+/// Arguments of [`replacement_accepts`].
+pub(crate) struct ReplacementAcceptsArgs<'a> {
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) pkg: &'a InstalledPackage,
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) provider_cp: &'a (String, String),
+    /// `cat/pkg-ver:slot/sub` of the candidate child.
+    pub(crate) cand: &'a str,
+}
+
+/// Whether the tree ebuild that would replace an installed consumer accepts
+/// the candidate child: every unblocked atom it carries on the provider must
+/// match. A consumer without a visible tree ebuild at its installed version
+/// or without such atoms accepts.
+// Portage: depgraph.py, _slot_operator_update_probe (replacement_parent atoms)
+pub(crate) fn replacement_accepts(args: ReplacementAcceptsArgs<'_>) -> bool {
+    let ReplacementAcceptsArgs {
+        repos,
+        root,
+        config,
+        pkg,
+        dep_keys,
+        provider_cp,
+        cand,
+    } = args;
+    let Some(live) =
+        live_metadata_for_installed(repos, root, &pkg.category, &pkg.package, &pkg.version)
+    else {
+        return true;
+    };
+    if !ebuild_visible_at(repos, &pkg.category, &pkg.package, &pkg.version, config) {
+        return true;
+    }
+    let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+    dep_keys
+        .iter()
+        .filter_map(|key| {
+            flat_dep_atoms(
+                &without_or_groups(live.get(*key).map(String::as_str).unwrap_or_default()),
+                &use_flags,
+            )
+        })
+        .flatten()
+        .filter_map(|t| {
+            let a = portage_dep::parse_atom(&t)?;
+            (a.blocker == portage_dep::Blocker::None
+                && a.category == provider_cp.0
+                && a.package == provider_cp.1)
+                .then(|| portage_dep::without_use(&t).to_string())
+        })
+        .all(|a| portage_dep::match_from_list(&a, &[cand]).is_some_and(|m| !m.is_empty()))
+}
+
+/// `depstr` without its `|| ( ... )` groups: one alternative of a choice does
+/// not bind the replacement, so it cannot veto a candidate.
+pub(crate) fn without_or_groups(depstr: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut tokens = depstr.split_whitespace().peekable();
+    while let Some(tok) = tokens.next() {
+        if tok == "||" && tokens.peek() == Some(&"(") {
+            let mut depth = 0usize;
+            for t in tokens.by_ref() {
+                match t {
+                    "(" => depth += 1,
+                    ")" => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            out.push(tok);
+        }
+    }
+    out.join(" ")
 }

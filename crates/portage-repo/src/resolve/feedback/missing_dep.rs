@@ -35,7 +35,14 @@ pub(crate) fn step_missing_dep(
                     excluded: ctx.excluded,
                     config,
                 });
-            if file_unsat_probe_results(&mut *grown, fresh, binary_masks, ctx.usepkgonly) {
+            // Portage stops the pass at the first unsatisfied dep its probe
+            // cannot heal (`return 0` after recording the missing dependency),
+            // so parents behind a trigger that is no hit are never probed.
+            // Portage: depgraph.py, _add_pkg_dep_string (unsatisfied dep arm)
+            let trigger_hit = unsat_trigger_hit(&fresh, &binary_masks, (&pc, &pp));
+            if trigger_hit
+                && file_unsat_probe_results(&mut *grown, fresh, binary_masks, ctx.usepkgonly)
+            {
                 return Some(PassDecision::Feedback(BacktrackFeedback::Config {
                     params: Box::new(std::mem::take(grown)),
                 }));
@@ -56,4 +63,36 @@ pub(crate) fn step_missing_dep(
         }));
     }
     None
+}
+
+/// Whether the probe heals the trigger's own parent, seeded or masked.
+fn unsat_trigger_hit(
+    fresh: &BTreeSet<(String, String)>,
+    binary_masks: &BTreeSet<(String, String, String)>,
+    owner: (&String, &String),
+) -> bool {
+    fresh.iter().any(|(c, p)| (c, p) == owner)
+        || binary_masks.iter().any(|(c, p, _)| (c, p) == owner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_probe_that_misses_the_trigger_owner_is_no_hit_whoever_else_it_heals() {
+        let s = |a: &str, b: &str| (a.to_string(), b.to_string());
+        let fresh = BTreeSet::from([s("kde-apps", "kmail")]);
+        let masks = BTreeSet::from([(
+            "kde-plasma".to_string(),
+            "kwin".to_string(),
+            "6.8.0".to_string(),
+        )]);
+        let (kc, kp) = s("kde-plasma", "libplasma");
+        assert!(!unsat_trigger_hit(&fresh, &masks, (&kc, &kp)));
+        let (mc, mp) = s("kde-apps", "kmail");
+        assert!(unsat_trigger_hit(&fresh, &masks, (&mc, &mp)));
+        let (wc, wp) = s("kde-plasma", "kwin");
+        assert!(unsat_trigger_hit(&fresh, &masks, (&wc, &wp)));
+    }
 }

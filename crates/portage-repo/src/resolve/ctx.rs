@@ -179,6 +179,21 @@ pub(crate) struct ResolveCtx<'a> {
 }
 
 impl<'a> ResolveCtx<'a> {
+    /// The consumers the slot-operator scans may rebuild. A `--deep` walk of
+    /// a set target (`@world`) reaches every installed dependency itself, so
+    /// only what the pass walked counts (Portage probes the graph, never an
+    /// installed closure the new versions no longer pull in); an atom target
+    /// completes the graph from the world, so the installed closure counts.
+    // Portage: depgraph.py, _slot_operator_trigger_reinstalls
+    pub(crate) fn scan_reachable(&self, entries: &[GraphEntry]) -> HashSet<(String, String)> {
+        let deep = if self.set_args.is_empty() {
+            Deep::NotRequested
+        } else {
+            self.deep
+        };
+        scan_scope(deep, &self.slot_op_reachable, entries)
+    }
+
     /// The running root this walk resolves build-time groups against, if it
     /// differs from the target root.
     pub(crate) fn cross_root(&self) -> Option<&'a Path> {
@@ -305,4 +320,21 @@ impl<'a> ResolveCtx<'a> {
             installed_meta_memo: std::cell::RefCell::default(),
         })
     }
+}
+
+/// [`ResolveCtx::scan_reachable`]'s rule: under `--deep` the walked consumers
+/// (narrowed by the installed closure when one is known), else the closure.
+pub(crate) fn scan_scope(
+    deep: Deep,
+    closure: &HashSet<(String, String)>,
+    entries: &[GraphEntry],
+) -> HashSet<(String, String)> {
+    if deep != Deep::Unlimited {
+        return closure.clone();
+    }
+    entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .filter(|cp| closure.is_empty() || closure.contains(cp))
+        .collect()
 }

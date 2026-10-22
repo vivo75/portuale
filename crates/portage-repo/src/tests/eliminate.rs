@@ -494,6 +494,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         repos: &[],
         entries: &[provider, entry],
         reachable: &reach,
+        scope: None,
         already: &BTreeSet::new(),
         undone: &latched,
         with_bdeps: true,
