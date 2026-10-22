@@ -133,6 +133,7 @@ fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps,
     }
 }

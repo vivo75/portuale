@@ -579,6 +579,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: false,
             build_id: build_id.map(str::to_string),
+            build_time: None,
             deps: Vec::new(),
         }
     }

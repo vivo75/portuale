@@ -474,8 +474,11 @@ fn cache_dir_writable(cache_file: &Path) -> bool {
 // Portage: lib/portage/dbapi/bintree.py, _populate_remote
 fn stamp_download_timestamp(text: &str, now_secs: u64) -> String {
     let marker = format!("DOWNLOAD_TIMESTAMP: {now_secs}");
+    // `rest` keeps the blank separator line; the header lines below each end
+    // with their own newline, so cut at the header's last newline (Portage
+    // reads a second blank line as the end of the index: zero packages).
     let (header, rest) = match text.find("\n\n") {
-        Some(i) => text.split_at(i),
+        Some(i) => text.split_at(i + 1),
         None => (text, ""),
     };
     let mut out = String::new();
@@ -1729,8 +1732,27 @@ mod tests {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         }
+    }
+
+    /// Portage reads a second blank line after the header as the end of the
+    /// index (zero packages), so stamping must keep exactly one blank line.
+    /// Expected shape: Portage's own cache writer (`bintree.py`,
+    /// `_populate_remote_repo`: header, one blank line, entries).
+    #[test]
+    fn stamping_the_download_timestamp_keeps_one_blank_line() {
+        let fresh = "TIMESTAMP: 1\nVERSION: 0\n\nCPV: a/b-1\n\n";
+        assert_eq!(
+            stamp_download_timestamp(fresh, 5),
+            "TIMESTAMP: 1\nVERSION: 0\nDOWNLOAD_TIMESTAMP: 5\n\nCPV: a/b-1\n\n"
+        );
+        let stamped = "TIMESTAMP: 1\nDOWNLOAD_TIMESTAMP: 2\n\nCPV: a/b-1\n\n";
+        assert_eq!(
+            stamp_download_timestamp(stamped, 9),
+            "TIMESTAMP: 1\nDOWNLOAD_TIMESTAMP: 9\n\nCPV: a/b-1\n\n"
+        );
     }
 
     #[test]
@@ -4049,6 +4071,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: true,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         };
 
@@ -4176,6 +4199,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: true,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         };
 

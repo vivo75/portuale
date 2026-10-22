@@ -41,6 +41,7 @@ fn installed_child_row_displays_the_vdb_use_not_an_empty_string() {
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     };
     assert_eq!(child_use_str(&parent, &root), "-flip");

@@ -35,6 +35,7 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         },
         GraphEntry {
@@ -65,6 +66,7 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         },
     ];
@@ -129,6 +131,7 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }];
 
@@ -590,6 +593,7 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }];
 

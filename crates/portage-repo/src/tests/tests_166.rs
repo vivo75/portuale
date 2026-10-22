@@ -468,6 +468,7 @@ fn entry_166(cat: &str, pkg: &str, version: &str, display: Vec<(String, bool)>) 
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }

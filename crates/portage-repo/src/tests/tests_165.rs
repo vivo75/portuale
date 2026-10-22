@@ -313,6 +313,7 @@ fn entry_165(cat: &str, pkg: &str, outcome: PretendOutcome, slot: Option<&str>) 
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }

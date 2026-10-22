@@ -231,14 +231,20 @@ pub(crate) fn show_skipped_updates(
             } else {
                 header.skipped_use.clone()
             };
+            let (missed_kind, missed_build) = match &header.skipped_build_id {
+                Some(id) => ("binary", format!("-{id}")),
+                None => ("ebuild", String::new()),
+            };
             println!(
-                "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge{}) {} conflicts with",
+                "  ({}/{}-{}{}:{}/{}::{}, {} scheduled for merge{}) {} conflicts with",
                 header.category,
                 header.package,
                 header.skipped_version,
+                missed_build,
                 header.slot,
                 header.skipped_sub_slot,
                 header.skipped_repo,
+                missed_kind,
                 missed_suffix,
                 render_pkg_use_display(&missed_use),
             );
@@ -285,10 +291,22 @@ pub(crate) fn show_skipped_updates(
                     } else {
                         s.consumer_use.clone()
                     };
+                    // A binary consumer prints `-<build id>` after its version.
+                    let (consumer_kind, consumer_cpv) = match &s.consumer_build_id {
+                        Some(id) => (
+                            "binary",
+                            match s.consumer_cpv.split_once(':') {
+                                Some((head, tail)) => format!("{head}-{id}:{tail}"),
+                                None => format!("{}-{id}", s.consumer_cpv),
+                            },
+                        ),
+                        None => ("ebuild", s.consumer_cpv.clone()),
+                    };
                     println!(
-                        "    {} required by ({}, ebuild scheduled for merge{}) {}",
+                        "    {} required by ({}, {} scheduled for merge{}) {}",
                         s.atom,
-                        s.consumer_cpv,
+                        consumer_cpv,
+                        consumer_kind,
                         consumer_suffix,
                         render_pkg_use_display(&consumer_use),
                     );

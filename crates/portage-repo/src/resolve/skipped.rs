@@ -15,9 +15,14 @@ pub struct SkippedUpdate {
     pub skipped_sub_slot: String,
     pub skipped_repo: String,
     pub skipped_use: Vec<(String, String)>,
+    /// `Some(build id)` when the skipped instance is a binary package (Portage
+    /// prints `binary scheduled for merge` and the `-<build id>` suffix).
+    pub skipped_build_id: Option<String>,
     pub atom: String,
     pub consumer_cpv: String,
     pub consumer_installed: bool,
+    /// `Some(build id)` when the merge-bound consumer is a binary package.
+    pub consumer_build_id: Option<String>,
     pub consumer_use: Vec<(String, String)>,
     /// Whether the missed instance resolves in the running root.
     pub missed_targets_running_root: bool,

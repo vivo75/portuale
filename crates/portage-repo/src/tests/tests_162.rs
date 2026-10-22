@@ -156,6 +156,7 @@ fn entry_162(
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }

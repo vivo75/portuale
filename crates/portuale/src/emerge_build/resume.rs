@@ -148,6 +148,7 @@ pub(crate) fn resume_entry(args: ResumeEntryArgs<'_>) -> GraphEntry {
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }

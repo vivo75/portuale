@@ -74,6 +74,28 @@ pub(crate) fn apply_outcome_fallbacks(
         outcome = PretendOutcome::AlreadyInstalled { version: kept };
     }
 
+    // An installed node an earlier dep already put in the graph, in the fresh
+    // pick's slot and accepted by this atom, is reused too (any dep, `||`-chosen
+    // included): Portage's `find_existing_node` pass.
+    if let Some(fresh) = match &outcome {
+        PretendOutcome::New { version } => Some(version.clone()),
+        PretendOutcome::Upgrade { to, .. } => Some(to.clone()),
+        PretendOutcome::Downgrade { to, .. } => Some(to.clone()),
+        _ => None,
+    } && let Some(kept) = graph_installed_reuse(GraphInstalledReuseArgs {
+        ctx,
+        config,
+        state: &*state,
+        atom_root,
+        key,
+        current_atom,
+        atom,
+        fresh_version: &fresh,
+        item_targets_running_root,
+    }) {
+        outcome = PretendOutcome::AlreadyInstalled { version: kept };
+    }
+
     // A dependency no ebuild or binary satisfies but an installed instance
     // does settles `AlreadyInstalled`, never a miss (Portage iterates the
     // installed db on every resolve). Slot and slot-operator atoms keep the

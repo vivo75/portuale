@@ -1015,6 +1015,7 @@ fn bridge_entry_for(
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps,
     })
 }
@@ -4343,6 +4344,7 @@ fn bridge_validate_aborts(
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         };
         entry.parent_use_suggestion = Some(suggestion);
@@ -4414,6 +4416,7 @@ fn bridge_validate_aborts(
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         });
         validation.nvc_dep_atoms.insert(
@@ -8353,6 +8356,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps,
         }
     }

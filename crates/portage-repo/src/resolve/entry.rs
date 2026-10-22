@@ -121,6 +121,8 @@ pub struct GraphEntry {
     pub remote_binary: bool,
     /// The binary candidate's `BUILD_ID`, appended to the displayed version. Else `None`.
     pub build_id: Option<String>,
+    /// The binary's `BUILD_TIME`, for built-vs-built ordering. Portage: Package.__gt__.
+    pub build_time: Option<i64>,
     /// This entry's own direct dependencies in discovery order (`RDEPEND`, `IDEPEND`,
     /// `PDEPEND`, `DEPEND`, `BDEPEND`), each with its key-implied `DepPriority`. The
     /// whole input to merge-order serialization (edges plus `.order`). Empty for

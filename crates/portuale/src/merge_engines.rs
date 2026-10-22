@@ -88,6 +88,7 @@ fn rebuild_entry(unit: &MergeUnit, source: CandidateSource) -> Option<GraphEntry
         targets_running_root: false,
         remote_binary: unit.remote_binary,
         build_id: unit.build_id.clone(),
+        build_time: None,
         deps: Vec::new(),
     })
 }
@@ -252,6 +253,7 @@ mod tests {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         }
     }

@@ -219,6 +219,7 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
         targets_running_root: item_targets_running_root,
         remote_binary: candidate_remote,
         build_id: candidate_build_id.clone(),
+        build_time: resolved.build_time,
         deps: Vec::new(),
     });
     PushGraphEntryOut {

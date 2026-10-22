@@ -130,6 +130,36 @@ pub(crate) fn maybe_missing_dep_backtrack(args: MaybeMissingDepBacktrackArgs<'_>
     }
 }
 
+/// A merge-bound instance of the installed node's own version lacks a `[flag]`
+/// the atom asks for, which the installed instance (the one the atom settled
+/// on) has: Portage holds both packages in the slot, so they conflict.
+// Portage: depgraph.py, _add_pkg (built instance vs installed twin)
+fn merge_instance_fails_use_deps(entry: &GraphEntry, atom_text: &str, config: &Config) -> bool {
+    let Some(use_deps) = portage_dep::parse_atom(atom_text)
+        .and_then(|a| a.use_deps)
+        .filter(|d| !d.is_empty())
+    else {
+        return false;
+    };
+    let declared: HashSet<String> = entry
+        .use_flags_display
+        .iter()
+        .map(|(f, _)| f.clone())
+        .collect();
+    let enabled: HashSet<String> = entry
+        .use_flags_display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.clone())
+        .collect();
+    !portage_dep::use_deps_satisfied_union(
+        &use_deps,
+        &declared,
+        &[&config.iuse_effective],
+        &enabled,
+    )
+}
+
 /// The values [`record_installed_slot_collision`] reads from its caller.
 pub(crate) struct RecordInstalledSlotCollisionArgs<'a> {
     pub(crate) outcome: &'a PretendOutcome,
@@ -198,8 +228,14 @@ pub(crate) fn record_installed_slot_collision(
                     key.0, key.1
                 )
             };
-            if portage_dep::match_from_list(current_atom, &[existing_str.as_str()])
+            if (portage_dep::match_from_list(current_atom, &[existing_str.as_str()])
                         .is_none_or(|m| m.is_empty())
+                        || (existing_version == *version
+                            && merge_instance_fails_use_deps(
+                                &state.entries[existing_idx],
+                                current_atom,
+                                config,
+                            )))
                         // Rebuild-trigger forgiveness needs a backtrack budget (the scan
                         // schedules the consumer); at `--backtrack=0` Portage's in-pass
                         // solver sees the conflict and withholds the update.
@@ -746,6 +782,7 @@ pub(crate) fn push_unresolved_entry(args: PushUnresolvedEntryArgs<'_>) {
         targets_running_root: item_targets_running_root,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: already_installed_deps,
     });
 }

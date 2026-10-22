@@ -137,11 +137,13 @@ pub(crate) fn constraint_withheld_updates(
                 skipped_version: wver.clone(),
                 skipped_sub_slot: wsub,
                 skipped_repo: wrepo.clone(),
+                skipped_build_id: None,
                 skipped_use: skipped_update_use_display_for(
                     repos, config, &pin.cp.0, &pin.cp.1, &wver,
                 ),
                 atom: pin.raw_atom.clone(),
                 consumer_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
+                consumer_build_id: None,
                 consumer_installed: true,
                 consumer_use: skipped_update_installed_use_display_for(root, config, cc, cp2, cv),
                 // Target-walk only (same walk's vdb and versions).
@@ -396,11 +398,13 @@ pub(crate) fn backtrack_missed_updates(
                         skipped_version: ver.clone(),
                         skipped_sub_slot: sub.clone(),
                         skipped_repo: repo.clone(),
+                        skipped_build_id: None,
                         skipped_use: skipped_update_use_display_for(
                             repos, config, &cat, &pkg, &ver,
                         ),
                         atom,
                         consumer_cpv,
+                        consumer_build_id: None,
                         consumer_installed,
                         consumer_use,
                         missed_targets_running_root: missed_running,

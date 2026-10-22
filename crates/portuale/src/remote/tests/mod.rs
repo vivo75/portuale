@@ -139,6 +139,7 @@ fn binary_entry(package: &str, binary: bool) -> portage_repo::GraphEntry {
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }

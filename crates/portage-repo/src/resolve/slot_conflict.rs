@@ -469,6 +469,7 @@ pub(crate) fn synthesize_surviving_conflict_entries(
                 targets_running_root: false,
                 remote_binary: false,
                 build_id: None,
+                build_time: None,
                 deps: Vec::new(),
             };
             refresh_entry_use_display(

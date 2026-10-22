@@ -2999,6 +2999,7 @@ mod tests_164 {
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         }
     }
@@ -3648,6 +3649,7 @@ fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }

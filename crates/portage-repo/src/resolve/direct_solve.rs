@@ -531,6 +531,13 @@ pub(crate) fn pair_instance_with_others(args: PairInstanceWithOthersArgs<'_>) {
                 String::new(),
             ));
         }
+        // The installed twin of a removed binary (same cpv, later build) is no
+        // missed update: Portage's `chosen_pkg > pkg` compares `BUILD_TIME`.
+        if kept.is_some_and(|(_, k)| k.installed && k.version == inst.version)
+            && installed_twin_is_newer_build(input, c, &inst.version)
+        {
+            continue;
+        }
         // Missed-update recording: for the removed instance, every parent
         // of every *other* instance whose atom does not accept it.
         for (kk, other) in c.instances.iter().enumerate() {
@@ -604,9 +611,33 @@ pub(crate) fn pair_instance_with_others(args: PairInstanceWithOthersArgs<'_>) {
                     skipped_sub_slot: inst.sub_slot.clone(),
                     skipped_repo: inst.repo_name.clone(),
                     skipped_use,
+                    skipped_build_id: input
+                        .entries
+                        .iter()
+                        .find(|e| {
+                            e.category == c.category
+                                && e.package == c.package
+                                && merge_bound_version(&e.outcome) == Some(&inst.version)
+                                && e.source == CandidateSource::Binary
+                        })
+                        .and_then(|e| e.build_id.clone()),
                     atom: p.atom.clone(),
                     consumer_cpv: parent_cpv_disp,
                     consumer_installed: parent_installed,
+                    consumer_build_id: if parent_installed {
+                        None
+                    } else {
+                        split_cpv(p.parent_cpv.split(':').next().unwrap_or(""))
+                            .and_then(|(cc, cp2, cv)| {
+                                input.entries.iter().find(|e| {
+                                    e.category == cc
+                                        && e.package == cp2
+                                        && merge_bound_version(&e.outcome) == Some(&cv)
+                                        && e.source == CandidateSource::Binary
+                                })
+                            })
+                            .and_then(|e| e.build_id.clone())
+                    },
                     consumer_use,
                     missed_targets_running_root: missed_running,
                     consumer_targets_running_root: consumer_running,
@@ -614,6 +645,32 @@ pub(crate) fn pair_instance_with_others(args: PairInstanceWithOthersArgs<'_>) {
             }
         }
     }
+}
+
+/// Whether the installed instance of `version` was built after the scheduled
+/// binary of the same version (both are built packages, so `Package.__gt__`
+/// falls back to `build_time`).
+// Portage: depgraph.py, _get_missed_updates; Package.py, __gt__
+fn installed_twin_is_newer_build(
+    input: &DirectSolveInput<'_>,
+    c: &SlotConflict,
+    version: &str,
+) -> bool {
+    let Some(entry) = input.entries.iter().find(|e| {
+        e.category == c.category
+            && e.package == c.package
+            && merge_bound_version(&e.outcome).is_some_and(|v| v == version)
+            && e.source == CandidateSource::Binary
+    }) else {
+        return false;
+    };
+    let Some(binary_time) = entry.build_time else {
+        return false;
+    };
+    read_vdb_string(input.root, &c.category, &c.package, version, "BUILD_TIME")
+        .trim()
+        .parse::<i64>()
+        .is_ok_and(|installed_time| installed_time > binary_time)
 }
 
 /// Finds the conflict instance of the given package, version and kind.

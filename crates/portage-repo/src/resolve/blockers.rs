@@ -233,6 +233,7 @@ pub(crate) fn uninstall_entry(
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }

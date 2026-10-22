@@ -234,6 +234,98 @@ pub(crate) fn minimize_children(
         .collect()
 }
 
+/// Arguments of [`graph_installed_reuse`].
+pub(crate) struct GraphInstalledReuseArgs<'a> {
+    pub(crate) ctx: &'a ResolveCtx<'a>,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) state: &'a PassState,
+    pub(crate) atom_root: &'a Path,
+    pub(crate) key: &'a (String, String),
+    pub(crate) current_atom: &'a str,
+    pub(crate) atom: &'a portage_dep::Atom,
+    pub(crate) fresh_version: &'a str,
+    pub(crate) item_targets_running_root: bool,
+}
+
+/// Portage's `find_existing_node` for an installed node already in the graph: its
+/// package tracker lists installed packages that earlier deps added as nodes, so a
+/// later atom that matches such a node reuses it instead of picking the highest
+/// available version (which would only conflict with the earlier parent's atom).
+///
+/// Returns the installed version to reuse when the slot of the fresh pick already
+/// holds an installed node (`PassState::installed_slots`) that the dep atom (and
+/// its `[use]` deps, against the recorded vdb `USE`) accepts.
+// Portage: lib/_emerge/depgraph.py, _wrapped_select_pkg_highest_available_imp;
+// resolver/package_tracker.py, match
+pub(crate) fn graph_installed_reuse(args: GraphInstalledReuseArgs<'_>) -> Option<String> {
+    let GraphInstalledReuseArgs {
+        ctx,
+        config,
+        state,
+        atom_root,
+        key,
+        current_atom,
+        atom,
+        fresh_version,
+        item_targets_running_root,
+    } = args;
+    let fresh_slot = list_candidates(&ctx.repos, &key.0, &key.1)
+        .ok()?
+        .iter()
+        .filter(|c| c.version == fresh_version)
+        .max_by(|a, b| {
+            let src_rank = |c: &Candidate| match c.source {
+                CandidateSource::Binary => 1u8,
+                CandidateSource::Ebuild => 0,
+            };
+            src_rank(a)
+                .cmp(&src_rank(b))
+                .then(a.repo_priority.cmp(&b.repo_priority))
+        })?
+        .slot
+        .clone();
+    let slot_key = (
+        key.0.clone(),
+        key.1.clone(),
+        fresh_slot.clone(),
+        item_targets_running_root,
+    );
+    let version = state.installed_slots.get(&slot_key)?;
+    if version == fresh_version {
+        return None;
+    }
+    let sub = installed_candidates(atom_root, &key.0, &key.1)
+        .into_iter()
+        .find(|(v, _, _)| v == version)
+        .map(|(_, _, sub)| sub)
+        .unwrap_or_default();
+    let installed_str = if sub.is_empty() {
+        format!("{}/{}-{version}:{fresh_slot}", key.0, key.1)
+    } else {
+        format!("{}/{}-{version}:{fresh_slot}/{sub}", key.0, key.1)
+    };
+    if portage_dep::match_from_list(current_atom, &[installed_str.as_str()])
+        .is_none_or(|m| m.is_empty())
+    {
+        return None;
+    }
+    if let Some(use_deps) = atom.use_deps.as_deref()
+        && !use_deps.is_empty()
+    {
+        let vdb_iuse = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "IUSE");
+        let vdb_use = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "USE");
+        if !portage_dep::use_deps_satisfied_union(
+            use_deps,
+            &vdb_iuse,
+            &[&config.iuse_effective, &vdb_use],
+            &vdb_use,
+        ) {
+            return None;
+        }
+    }
+    Some(version.clone())
+}
+
 /// Arguments of [`arg_pinned_installed_reuse`].
 pub(crate) struct ArgPinnedInstalledReuseArgs<'a> {
     pub(crate) ctx: &'a ResolveCtx<'a>,

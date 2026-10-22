@@ -277,6 +277,7 @@ pub(crate) fn resolve_root_deps_build_entries(
         targets_running_root: true,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     };
     // Slot/repo identity plus USE display, diffed against the running vdb.

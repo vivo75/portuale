@@ -47,6 +47,7 @@ fn live_test_entry() -> GraphEntry {
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }
@@ -80,6 +81,7 @@ fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }
@@ -115,6 +117,7 @@ fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntr
         targets_running_root: false,
         remote_binary: false,
         build_id: None,
+        build_time: None,
         deps: Vec::new(),
     }
 }

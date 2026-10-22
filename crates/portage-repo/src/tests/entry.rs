@@ -179,6 +179,7 @@ fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
             targets_running_root: running,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps,
         }
     }

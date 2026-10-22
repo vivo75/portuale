@@ -36,6 +36,10 @@ the next slice") and expects the same rhythm every time:
    `lib/portage/tests/resolver/` case — and says which in the test's
    docstring. Real-execution features
    (merge/unmerge/package/fetch/phases) are checked the same way (L1–L3).
+   **If Portage's behaviour there looks unintended, say so:** add an entry to
+   [`LLM/portage-quirks.md`](LLM/portage-quirks.md) (what it does, source
+   citation, why it looks wrong, whether portuale copies it). Mimic first;
+   knowing where Portage is buggy is still worth a record.
 5. **Add fixtures by hand** under `fixtures/repo/…` (+ `metadata/md5-cache/…`).
    There is one fixture tree and it lives in pmtest: `fixtures/` here is
    a symlink to `../pmtest/fixtures`, so the file you add is pmtest's

@@ -309,6 +309,7 @@ pub(crate) fn slot_operator_rebuild_entries(
                     targets_running_root: false,
                     remote_binary: false,
                     build_id: None,
+                    build_time: None,
                     deps: Vec::new(),
                 }
             })
@@ -729,6 +730,7 @@ pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEnt
             targets_running_root: false,
             remote_binary: false,
             build_id: None,
+            build_time: None,
             deps: Vec::new(),
         });
     }
