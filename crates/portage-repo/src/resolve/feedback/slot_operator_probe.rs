@@ -38,3 +38,35 @@ pub(crate) fn step_slot_operator_probe(
     }
     None
 }
+
+/// Pre-chain trigger: a merge-bound binary parent whose built `:S=` dep names an
+/// installed child with a tree update in the bound slot. Runs before the conflict
+/// steps so the `slot_operator_mask_built` config change is filed first, as
+/// Portage does, and the restart recomputes the conflict under it.
+pub(crate) fn step_built_parent_update_probe(
+    ctx: &ResolveCtx<'_>,
+    pass: &PassResult,
+    grown: &mut BacktrackParams,
+    config: &Config,
+) -> Option<PassDecision> {
+    // Portage: depgraph.py, _slot_operator_trigger_reinstalls. Backtrack-gated;
+    // the mask set only grows, so the restart terminates.
+    if ctx.backtrack_max == 0 || ctx.usepkgonly {
+        return None;
+    }
+    let (fresh, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
+        root: ctx.root,
+        repos: &ctx.repos,
+        config,
+        local_binpkg: &ctx.local_binpkg,
+        entries: &pass.entries,
+        with_bdeps: ctx.with_bdeps,
+        excluded: ctx.excluded,
+    });
+    if file_unsat_probe_results(&mut *grown, fresh, masks, ctx.usepkgonly) {
+        return Some(PassDecision::Feedback(BacktrackFeedback::Config {
+            params: Box::new(std::mem::take(grown)),
+        }));
+    }
+    None
+}

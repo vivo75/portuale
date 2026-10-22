@@ -3672,6 +3672,7 @@ mod binary_index;
 mod bind;
 mod binpkg_use;
 mod blockers;
+mod built_parent_update_probe;
 mod candidates;
 mod complete_graph;
 mod config_match;

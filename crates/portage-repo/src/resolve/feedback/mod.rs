@@ -280,6 +280,10 @@ fn collect_feedback_inner(
         }
     }
 
+    if let Some(decision) = step_built_parent_update_probe(ctx, pass, &mut grown, config) {
+        return decision;
+    }
+
     if let Some(decision) = step_circular_dead_end(pass, ctx, &mut grown) {
         return decision;
     }
