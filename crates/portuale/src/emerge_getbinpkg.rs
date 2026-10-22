@@ -234,12 +234,6 @@ struct RefreshOutcome {
     stdout_note: Option<String>,
 }
 
-/// The plan cache's view of [`edb_cache_packages_file`]: the refreshed
-/// index the resolve actually reads, for the key.
-pub(crate) fn binhost_cached_packages_file(root: &Path, sync_uri: &str) -> std::path::PathBuf {
-    edb_cache_packages_file(root, sync_uri)
-}
-
 /// The cache file `<EROOT>/var/cache/edb/binhost/<host>/<url-path>/Packages`.
 /// For `http(s)`/`ssh` that is [`BinRepo::packages_dir`]; for `file://` the
 /// EROOT-side copy (Portage caches even local indexes).

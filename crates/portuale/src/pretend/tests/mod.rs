@@ -652,7 +652,6 @@ mod help;
 mod info;
 mod json;
 mod news;
-mod plan_cache;
 mod prompt;
 mod remote;
 mod resume;

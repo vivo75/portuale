@@ -74,13 +74,3 @@
 
 ## abi_rebuild_force_reinstall_cps (#394 restart `r`)
 - Backlog #394: the red `r` set is the ABI pair's both sides *plus* the `--rebuild-if-*` restart parents (`GraphResult::rebuild_if_reinstalls`, consumer-only). Portage tags the rebuilt parent `force_reinstall` via the `__auto_rebuild__` set arg (`output.py:815-816`) while the merged dep stays untagged.
-
-## fn run / fn run_plan_body
-- Backlog #441 S3: `run` computes a `pending` (dir, key) for cacheable
-  pretend runs, then either replays a verified hit (plus the live news
-  notice), verifies-then-replays under `PORTUALE_CACHE_VERIFY=1` (exit 99
-  on divergence), captures a miss for the store, or runs the legacy
-  uncached path (pending `None`: ineligible, no dir, or key error -- all
-  debug-logged, all byte-identical to before). `run_plan_body` is the
-  extracted resolve+display+finish tail both paths share; see
-  `plan_cache.md` for the key, the format, and the exclusion rules.

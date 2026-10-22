@@ -59,10 +59,6 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) getbinpkg_exclude: Vec<String>,
     pub(crate) getbinpkg_include: Vec<String>,
     pub(crate) json: bool,
-    /// `--no-cache`: portuale-only (Portage has no such flag): skip the
-    /// `--pretend` plan cache for this run (same as `PORTUALE_NO_CACHE=1`).
-    /// Accepted silently; not listed in `--help` (whose text is pinned).
-    pub(crate) no_cache: bool,
     pub(crate) deselect: bool,
     pub(crate) deselect_n: bool,
     pub(crate) unmerge: bool,
@@ -250,7 +246,6 @@ impl<'a> Default for EmergeOpts<'a> {
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
             json: false,
-            no_cache: false,
             deselect: false,
             // `--deselect=n` (distinct from "not given"): consulted by `--depclean
             // <atoms>` (default keep-behavior on). Never triggers deselect itself.
@@ -1179,11 +1174,6 @@ fn parse_output_opts<'a>(
         // Portuale-only structured-output mode, so not routed through
         // emerge_options.rs's CLI-surface tables; no short alias.
         opts.json = true;
-        *idx += 1;
-        Ok(true)
-    } else if arg == "--no-cache" {
-        // Portuale-only (see the field doc): bypass the plan cache.
-        opts.no_cache = true;
         *idx += 1;
         Ok(true)
     } else if arg == "--verbose" || arg == "-v" {

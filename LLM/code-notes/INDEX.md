@@ -401,7 +401,6 @@
 - [crates/portuale/src/pretend/merge_setup.rs](portuale/pretend/merge_setup.md) — The options every merge path shares: status mode, package and merge options, PORTAGE_TMPDIR.
 - [crates/portuale/src/pretend/mod.rs](portuale/pretend/mod.md) — `emerge --pretend`: resolve and display, never build.
 - [crates/portuale/src/pretend/news.rs](portuale/pretend/news.md) — GLEP 42 news.
-- [crates/portuale/src/pretend/plan_cache.rs](portuale/pretend/plan_cache.md) — Conservative on-disk plan cache for `emerge --pretend` (backlog #441 S3).
 - [crates/portuale/src/pretend/post_merge.rs](portuale/pretend/post_merge.md) — After a merge: the info-dir update, the preserved-libs and news notices, and the world-file record.
 - [crates/portuale/src/pretend/problem_reports.rs](portuale/pretend/problem_reports.md) — Missing arguments, and the abort reports for cycles and unsatisfied dependencies.
 - [crates/portuale/src/pretend/process_globals.rs](portuale/pretend/process_globals.md) — Set the resolver's process-wide options from the parsed command line.

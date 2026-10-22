@@ -42,7 +42,6 @@ mod merge_list;
 mod merge_run;
 mod merge_setup;
 mod news;
-mod plan_cache;
 mod post_merge;
 mod problem_reports;
 mod process_globals;
@@ -118,7 +117,7 @@ use portage_repo::{
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use std::process::ExitCode;
 
@@ -221,10 +220,6 @@ pub fn run(args: &[String]) -> ExitCode {
         Ok(opts) => opts,
         Err(code) => return code,
     };
-    // Pre-drop `--ask`: `validate_and_early_actions` clears it under
-    // `--pretend` (Portage semantics), but the plan cache still refuses a
-    // run that asked (see `plan_cache::ineligible_reason`).
-    let ask_requested = opts.ask;
 
     // Portage sets the terminal title around the whole run
     // (`_emerge/actions.py:3694`, reset in `main.py:1377`'s `finally:`);
@@ -241,9 +236,6 @@ pub fn run(args: &[String]) -> ExitCode {
     // Colour gate, resolved once so every action path shares one `Colorizer`.
     // Portage: _emerge/actions.py, adjust_configs
     let color = Colorizer::new(color::resolve_havecolor(opts.color_opt));
-    // A malformed `color.map` warns here, at a fixed pre-resolve position,
-    // so the `--pretend` plan cache never captures or replays that warning.
-    crate::color::prefetch_color_map();
 
     // Renice / ionice this process so every build subprocess inherits the policy.
     // Portage: _emerge/actions.py, apply_priorities
@@ -280,244 +272,35 @@ pub fn run(args: &[String]) -> ExitCode {
 
     drop(_expand_span);
     let _plan_span = portage_util::profile::span("plan_resolve");
-    let live = match plan_resolve_live_prefix(PlanResolveLiveArgs {
-        opts: &opts,
+    let plan = match plan_resolve(PlanResolveArgs {
+        opts: &mut opts,
         config: &mut config,
         root: &root,
         repos: &repos,
+        config_root: &config_root,
+        color: &color,
     }) {
         Ok(out) => out,
         Err(code) => return code,
     };
     drop(_plan_span);
-
-    // `--pretend` plan cache (backlog #441 S3). The live prefix above runs
-    // on every path; the key covers its outputs. `pending` carries the dir
-    // and key for a cacheable run; without it the legacy uncached run
-    // below is byte-identical to before. The news notice always prints
-    // live after a replay or a capture, never from the cache.
-    let pending: Option<(PathBuf, String)> =
-        match plan_cache::ineligible_reason(&opts, ask_requested) {
-            Some(reason) => {
-                plan_cache::debug_msg(&format!("off ({reason})"));
-                None
-            }
-            None => match plan_cache::resolve_cache_dir() {
-                None => {
-                    plan_cache::debug_msg("off (no writable cache dir)");
-                    None
-                }
-                Some(dir) => match plan_cache::build_key(plan_cache::KeyInputs {
-                    argv: &effective_args,
-                    config: &config,
-                    repos: &repos,
-                    root: &root,
-                    config_root: &config_root,
-                    proc_facts: None,
-                }) {
-                    Ok(key) => Some((dir, key)),
-                    Err(reason) => {
-                        plan_cache::debug_msg(&format!("miss ({reason})"));
-                        None
-                    }
-                },
-            },
-        };
-    // The resolve+display body, shared by the miss and legacy paths; the
-    // hit path never runs it. Defined after the hit check so the pure
-    // derivation's `&mut` borrows never overlap it.
-    if let Some((dir, key)) = pending.as_ref()
-        && let Some(cached) = {
-            // Timed even on the miss path: with `PORTUALE_PROFILE=1` the
-            // span lands on live stderr, so the warm plan part is measurable.
-            let _lookup_span = portage_util::profile::span("plan_cache_lookup");
-            plan_cache::load_and_verify(dir, key)
-        }
-    {
-        if plan_cache::verify_enabled() {
-            // VERIFY: recompute fresh under capture and compare byte
-            // for byte; any divergence aborts loudly with exit 99.
-            let plan = plan_resolve_pure(&mut opts, &mut config, &root, &config_root, live);
-            let fresh = match plan_cache::captured_body(&dir.join("tmp"), || {
-                let out = run_plan_body(RunPlanBodyArgs {
-                    plan: &plan,
-                    opts: &opts,
-                    config: &config,
-                    config_root: &config_root,
-                    root: &root,
-                    expanded_atoms: &expanded_atoms,
-                    set_args: &set_args,
-                    argument_sets: &argument_sets,
-                    repos: &repos,
-                    color,
-                    selected_set_args: &selected_set_args,
-                    set_validation_errors: &set_validation_errors,
-                });
-                (out.code, out.posthoc)
-            }) {
-                Ok(fresh) => fresh,
-                Err(e) => {
-                    plan_cache::debug_msg(&format!("verify fell back ({e})"));
-                    let out = run_plan_body(RunPlanBodyArgs {
-                        plan: &plan,
-                        opts: &opts,
-                        config: &config,
-                        config_root: &config_root,
-                        root: &root,
-                        expanded_atoms: &expanded_atoms,
-                        set_args: &set_args,
-                        argument_sets: &argument_sets,
-                        repos: &repos,
-                        color,
-                        selected_set_args: &selected_set_args,
-                        set_validation_errors: &set_validation_errors,
-                    });
-                    pretend_end_news_notice(opts.pretend, &repos, &root, &config, &color);
-                    return ExitCode::from(out.code);
-                }
-            };
-            if fresh.code != cached.code
-                || fresh.stdout != cached.stdout
-                || fresh.stderr != cached.stderr
-            {
-                return plan_cache::verify_failed(key, &plan_cache::diff_summary(&cached, &fresh));
-            }
-            plan_cache::emit(&cached.stdout, &cached.stderr);
-            pretend_end_news_notice(opts.pretend, &repos, &root, &config, &color);
-            return ExitCode::from(cached.code);
-        }
-        plan_cache::replay(&cached);
-        pretend_end_news_notice(opts.pretend, &repos, &root, &config, &color);
-        return ExitCode::from(cached.code);
-    }
-    // Miss or cache off: one pure plan derivation, then the body live or
-    // captured for the store.
-    let plan = plan_resolve_pure(&mut opts, &mut config, &root, &config_root, live);
-    let run_body = || {
-        run_plan_body(RunPlanBodyArgs {
-            plan: &plan,
-            opts: &opts,
-            config: &config,
-            config_root: &config_root,
-            root: &root,
-            expanded_atoms: &expanded_atoms,
-            set_args: &set_args,
-            argument_sets: &argument_sets,
-            repos: &repos,
-            color,
-            selected_set_args: &selected_set_args,
-            set_validation_errors: &set_validation_errors,
-        })
-    };
-    match pending {
-        None => {
-            let out = run_body();
-            ExitCode::from(out.code)
-        }
-        Some((dir, key)) => match plan_cache::captured_body(&dir.join("tmp"), || {
-            let out = run_body();
-            (out.code, out.posthoc)
-        }) {
-            Err(e) => {
-                // The capture failed (no tmp space, bad fds): run live
-                // instead. Still correct, just uncached.
-                plan_cache::debug_msg(&format!("miss (capture failed: {e})"));
-                let out = run_body();
-                ExitCode::from(out.code)
-            }
-            Ok(fresh) => {
-                match fresh.posthoc.as_ref() {
-                    Some(fps) => {
-                        let _store_span = portage_util::profile::span("plan_cache_store");
-                        plan_cache::store(
-                            &dir,
-                            &key,
-                            plan_cache::StoredEntry {
-                                code: fresh.code,
-                                stdout: &fresh.stdout,
-                                stderr: &fresh.stderr,
-                                fps,
-                            },
-                        )
-                    }
-                    None => plan_cache::debug_msg(&format!(
-                        "skip store (key={key}: no post-hoc fingerprints)"
-                    )),
-                }
-                plan_cache::emit(&fresh.stdout, &fresh.stderr);
-                pretend_end_news_notice(opts.pretend, &repos, &root, &config, &color);
-                ExitCode::from(fresh.code)
-            }
-        },
-    }
-}
-/// The values [`run_plan_body`] reads from its caller: everything the
-/// resolve+display step needs. Extracted from `run` so the `--pretend`
-/// plan cache can run it under capture on a miss (or not at all on a hit).
-pub(crate) struct RunPlanBodyArgs<'a, 'o> {
-    pub(crate) plan: &'a ResolvePlan,
-    pub(crate) opts: &'a EmergeOpts<'o>,
-    pub(crate) config: &'a Config,
-    pub(crate) config_root: &'a Path,
-    pub(crate) root: &'a Path,
-    pub(crate) expanded_atoms: &'a [String],
-    pub(crate) set_args: &'a HashSet<String>,
-    pub(crate) argument_sets: &'a HashMap<String, String>,
-    pub(crate) repos: &'a [RepoConfig],
-    pub(crate) color: Colorizer,
-    pub(crate) selected_set_args: &'a [String],
-    pub(crate) set_validation_errors: &'a [String],
-}
-
-/// The resolve+display step's outcome: the exit code plus the post-hoc
-/// fingerprints, or `None` when the resolve failed and no store is sound.
-pub(crate) struct PlanBodyOut {
-    pub(crate) code: u8,
-    pub(crate) posthoc: Option<Vec<plan_cache::FileFp>>,
-}
-
-/// The resolve+display step: the resolver passes, the merge-list report and
-/// the failure gates. The caller captures this (miss) or replays it (hit);
-/// the GLEP 42 news notice inside is suppressed under capture and printed
-/// live by the caller instead.
-pub(crate) fn run_plan_body(args: RunPlanBodyArgs<'_, '_>) -> PlanBodyOut {
-    let RunPlanBodyArgs {
-        plan,
-        opts,
-        config,
-        config_root,
-        root,
-        expanded_atoms,
-        set_args,
-        argument_sets,
-        repos,
-        color,
-        selected_set_args,
-        set_validation_errors,
-    } = args;
     let _resolve_span = portage_util::profile::span("run_resolve_phases");
     let result = match run_resolve_phases(RunResolvePhasesArgs {
-        plan,
-        opts,
-        config,
-        config_root,
-        root,
-        expanded_atoms,
-        set_args,
-        argument_sets,
-        repos,
+        plan: &plan,
+        opts: &opts,
+        config: &config,
+        config_root: &config_root,
+        root: &root,
+        expanded_atoms: &expanded_atoms,
+        set_args: &set_args,
+        argument_sets: &argument_sets,
+        repos: &repos,
         color: &color,
     }) {
         Ok(out) => out,
-        Err(code) => {
-            return PlanBodyOut {
-                code: plan_cache::exit_code_to_u8(code),
-                posthoc: None,
-            };
-        }
+        Err(code) => return code,
     };
     drop(_resolve_span);
-    let posthoc = plan_cache::collect_posthoc(&result.entries, repos);
     let _display_span = portage_util::profile::span("display_and_post");
     let entries = &result.entries;
     // An aborted resolve renders the outcome's partial list instead of the full
@@ -565,7 +348,7 @@ pub(crate) fn run_plan_body(args: RunPlanBodyArgs<'_, '_>) -> PlanBodyOut {
             has_changes: has_autounmask_changes,
         });
     show_resolution_header(
-        opts,
+        &opts,
         &result,
         &color,
         pretend_changes_show_header(PretendChangesShowHeaderArgs {
@@ -587,25 +370,22 @@ pub(crate) fn run_plan_body(args: RunPlanBodyArgs<'_, '_>) -> PlanBodyOut {
         .collect();
 
     if let Some(code) = print_json_result(PrintJsonResultArgs {
-        plan,
-        opts,
+        plan: &plan,
+        opts: &opts,
         display_entries,
         result: &result,
         top_level_pkgs: &top_level_pkgs,
         has_autounmask_changes,
         gated_abort_partial,
     }) {
-        return PlanBodyOut {
-            code: plan_cache::exit_code_to_u8(code),
-            posthoc,
-        };
+        return code;
     }
 
     // COLUMNWIDTH resolves unconditionally, even without `--columns`.
     let columnwidth = columnwidth_from_env();
     // `Display.pkgprint`'s `@system`/world inputs: `@system` is the profile set;
     // world is `var/lib/portage/world` (missing file is a valid empty world).
-    let world_atoms: Vec<String> = read_world_atoms(root)
+    let world_atoms: Vec<String> = read_world_atoms(&root)
         .unwrap_or_default()
         .iter()
         .map(|a| portage_repo::apply_updates_to_atom(a))
@@ -616,7 +396,7 @@ pub(crate) fn run_plan_body(args: RunPlanBodyArgs<'_, '_>) -> PlanBodyOut {
     // `N` (a pure install that still caused a rebuild); other-slot installs do
     // not count (`NS`, no `r`).
     // Portage: resolver/output.py, PkgAttrDisplay
-    let mut force_reinstall_cps = abi_rebuild_force_reinstall_cps(&result, root);
+    let mut force_reinstall_cps = abi_rebuild_force_reinstall_cps(&result, &root);
     // The `--rebuild-if-*` restart parents: tagged `force_reinstall` by the
     // `__auto_rebuild__` set arg, while the merged dep stays untagged (so
     // unlike the ABI pair above this is consumer-only, and there is no
@@ -626,14 +406,14 @@ pub(crate) fn run_plan_body(args: RunPlanBodyArgs<'_, '_>) -> PlanBodyOut {
     show_resolution_report(ShowResolutionReportArgs {
         gated_abort_partial,
         result: &result,
-        opts,
-        plan,
+        opts: &opts,
+        plan: &plan,
         show_merge_list,
         display_entries,
-        expanded_atoms,
-        config,
-        root,
-        repos,
+        expanded_atoms: &expanded_atoms,
+        config: &config,
+        root: &root,
+        repos: &repos,
         top_level_pkgs: &top_level_pkgs,
         color,
         system_atoms,
@@ -643,27 +423,23 @@ pub(crate) fn run_plan_body(args: RunPlanBodyArgs<'_, '_>) -> PlanBodyOut {
         display_list_suppressed,
     });
 
-    let code = finish_run(FinishRunArgs {
-        plan,
-        opts,
+    finish_run(FinishRunArgs {
+        plan: &plan,
+        opts: &opts,
         result: &result,
-        root,
-        repos,
+        root: &root,
+        repos: &repos,
         color,
-        config,
+        config: &config,
         has_autounmask_changes,
-        set_validation_errors,
+        set_validation_errors: &set_validation_errors,
         show_merge_list,
         entries,
         display_entries,
-        config_root,
-        selected_set_args,
+        config_root: &config_root,
+        selected_set_args: &selected_set_args,
         system_atoms,
-    });
-    PlanBodyOut {
-        code: plan_cache::exit_code_to_u8(code),
-        posthoc,
-    }
+    })
 }
 
 /// The values [`finish_run`] reads from its caller.

@@ -166,8 +166,3 @@ Backlog #428. `bintree._get_digests` keys checksums uppercase and `size` lowerca
 
 ## fn merge_one_binary_entry (#459)
 - A postinst-failed binary merge prints `>>> Completed` and returns the shared `postinst_failed_error` marker (like `merge_one_source_entry`), so the loop skips the world record, keeps the resume entry, and merges dependents in a resumed pass. `per_entry.log_file` is set only in background mode (hooks capture to the build log); in the foreground they inherit the terminal like the source serial path. Ground truth: `LLM/evidence/2026-10-21-f459/`.
-
-## fn binhost_cached_packages_file
-- Backlog #441 S3: the plan cache's view of `edb_cache_packages_file`
-  (the refreshed index the resolve actually reads), hashed into the key
-  after the live refresh completes.
