@@ -40,7 +40,7 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
     if verbose_slot_rebuilds && !result.abi_rebuilds.is_empty() {
         // cpv -> resolved (slot, sub_slot, repo, type) for every merge-bound
         // entry, so both ends render at their resolved slot.
-        let mut by_cpv: HashMap<String, (String, String, String, &str)> = HashMap::new();
+        let mut by_cpv: HashMap<String, (String, String, String, &str, String)> = HashMap::new();
         for e in entries {
             let version = match &e.outcome {
                 portage_repo::PretendOutcome::New { version }
@@ -60,6 +60,12 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
                     e.sub_slot.clone().unwrap_or_else(|| "0".to_string()),
                     e.repo_name.clone().unwrap_or_default(),
                     type_name,
+                    // A binary's build id follows its version.
+                    // Portage: Package.py, __str__
+                    e.build_id
+                        .as_deref()
+                        .map(|id| format!("-{id}"))
+                        .unwrap_or_default(),
                 ),
             );
         }
@@ -70,8 +76,8 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         };
         let render = |cpv: &str| -> String {
             match by_cpv.get(cpv) {
-                Some((slot, sub_slot, repo, type_name)) => format!(
-                    "({cpv}:{slot}/{sub_slot}::{repo}, {type_name} scheduled for merge{root_suffix})"
+                Some((slot, sub_slot, repo, type_name, build)) => format!(
+                    "({cpv}{build}:{slot}/{sub_slot}::{repo}, {type_name} scheduled for merge{root_suffix})"
                 ),
                 None => cpv.to_string(),
             }

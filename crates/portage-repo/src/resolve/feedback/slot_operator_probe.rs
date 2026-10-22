@@ -64,9 +64,13 @@ pub(crate) fn step_built_parent_update_probe(
         excluded: ctx.excluded,
         masked: &grown.runtime_pkg_mask,
     });
+    let probed = fresh.clone();
     if !file_unsat_probe_results(&mut *grown, fresh, masks, ctx.usepkgonly, ctx.root) {
         return BuiltParentProbe::Quiet;
     }
+    // Portage: depgraph.py, _slot_operator_update_backtrack (the replace set that
+    // becomes `__auto_slot_operator_replace_installed__`, rendered as `r`).
+    grown.probe_replaced.extend(probed);
     fold_rebuild_scan(pass, ctx, grown, config);
     // Portage derives the conflict nodes from this very pass on top of the
     // config change, so a pass with conflicts hands its filed change to the

@@ -659,6 +659,7 @@ fn graph_result_from_order(
         abi_rebuilds,
         // No restart runs, so no rebuild-if reinstall is ever recorded.
         rebuild_if_reinstalls: Vec::new(),
+        slot_operator_replaced: Vec::new(),
         circular_deps,
         large_cycle_count,
         cycle_display,

@@ -281,6 +281,7 @@ fn collect_feedback_inner(
     // Collected here for exactly that case, so the ordinary settle path pays for one
     // scan, as it always did, not two.
     if !pass.slot_conflicts.is_empty() {
+        let live_reachable = live_reachable_consumers(ctx, &pass.entries);
         let (_, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
             repos: &ctx.repos,
             root: ctx.root,
@@ -288,7 +289,7 @@ fn collect_feedback_inner(
             with_bdeps: ctx.with_bdeps,
             excluded: ctx.excluded,
             hard_want: &pass.slot_want,
-            reachable: &ctx.slot_op_reachable,
+            reachable: &live_reachable,
             dynamic_deps: ctx.dynamic_deps,
             ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
             top_level_cps: &ctx.top_level_cps,

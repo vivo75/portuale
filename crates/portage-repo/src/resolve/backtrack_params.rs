@@ -306,6 +306,12 @@ pub(crate) struct BacktrackParams {
     /// `cat/pkg`, so `(cat, pkg)` carries the same information here.
     /// Portage: _dynamic_config._slot_operator_replace_installed.
     pub(crate) slot_operator_replace_installed: BTreeSet<(String, String)>,
+    /// The members of the set above that the built-parent update probe filed
+    /// (Portage's `_slot_operator_update_backtrack` results). Only these become the `__auto_slot_operator_replace_installed__`
+    /// force-reinstall argument that renders the red `r`; members the rebuild
+    /// scan scheduled do not, and an undone scan never reaches the display.
+    /// Not compared by `params_equal`.
+    pub(crate) probe_replaced: BTreeSet<(String, String)>,
     /// The `--rebuild-if-unbuilt` / `--rebuild-if-new-rev` /
     /// `--rebuild-if-new-ver` twin of the set above: installed parents the
     /// post-walk scan (`rebuild_if_restart_parents`) found behind a dep this

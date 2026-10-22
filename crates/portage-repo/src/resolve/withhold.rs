@@ -2,6 +2,24 @@
 
 use crate::*;
 
+/// An installed binary's version as Portage prints it: `<ver>-<BUILD_ID>`
+/// when the vdb records a positive build id, else the bare version.
+// Portage: Package.py, __str__ (`cpv + build_id_str`)
+pub(crate) fn installed_version_with_build_id(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> String {
+    match vdb_aux_get(root, category, package, version, "BUILD_ID")
+        .trim()
+        .parse::<u64>()
+    {
+        Ok(id) if id > 0 => format!("{version}-{id}"),
+        _ => version.to_string(),
+    }
+}
+
 /// An enforced holdable pin settling the installed version while a higher
 /// visible candidate exists is a withhold, reported with the removal rows
 /// (no slot conflict forms: the re-resolve picks installed up front).
@@ -142,7 +160,10 @@ pub(crate) fn constraint_withheld_updates(
                     repos, config, &pin.cp.0, &pin.cp.1, &wver,
                 ),
                 atom: pin.raw_atom.clone(),
-                consumer_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
+                consumer_cpv: format!(
+                    "{cc}/{cp2}-{}:{cslot}/{csub}::{crepo}",
+                    installed_version_with_build_id(root, cc, cp2, cv)
+                ),
                 consumer_build_id: None,
                 consumer_installed: true,
                 consumer_use: skipped_update_installed_use_display_for(root, config, cc, cp2, cv),
@@ -373,7 +394,13 @@ pub(crate) fn backtrack_missed_updates(
                         .find(|r| r.version == pv);
                     let (consumer_cpv, consumer_installed, consumer_use) = match &installed_ref {
                         Some(r) => (
-                            format!("{pc}/{pp}-{pv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
+                            format!(
+                                "{pc}/{pp}-{}:{}/{}::{}",
+                                installed_version_with_build_id(root, &pc, &pp, &pv),
+                                r.slot,
+                                r.sub_slot,
+                                r.repo
+                            ),
                             true,
                             skipped_update_installed_use_display_for(root, config, &pc, &pp, &pv),
                         ),

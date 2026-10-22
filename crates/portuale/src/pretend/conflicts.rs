@@ -398,6 +398,7 @@ pub(crate) fn skip_conflict_caret_line(
     pkg_slot: &str,
     pkg_sub_slot: &str,
     highlight_version: bool,
+    pkg_use: &[(String, String)],
 ) -> String {
     // Collect spans first, then render once: spans may abut, so incremental
     // rendering would misplace the later one.
@@ -439,7 +440,35 @@ pub(crate) fn skip_conflict_caret_line(
             }
         }
     }
-    let end = spans.iter().map(|(_, e)| *e).max().unwrap_or(0);
+    // A `[flag]` / `[-flag]` token the missed package does not satisfy.
+    // Portage: resolver/output.py, format_unmatched_atom (`highlight_use`)
+    if let (Some(open), Some(close)) = (atom.find('['), atom.rfind(']'))
+        && open < close
+    {
+        let enabled: HashSet<&str> = pkg_use
+            .iter()
+            .filter(|(name, _)| name == "USE")
+            .flat_map(|(_, flags)| flags.split(' '))
+            .filter(|t| !t.starts_with('-') && !t.starts_with("(-"))
+            .map(|t| t.trim_matches(|c| matches!(c, '(' | ')' | '*' | '%')))
+            .collect();
+        let mut at = open + 1;
+        for token in atom[open + 1..close].split(',') {
+            let bare = token.trim_end_matches(['=', '?']);
+            let (disabled, name) = match bare.strip_prefix('-') {
+                Some(n) => (true, n),
+                None => (false, bare),
+            };
+            let name = name.split('(').next().unwrap_or(name);
+            let plain = !token.starts_with('!') && !token.ends_with(['=', '?']);
+            if plain && enabled.contains(name) == disabled {
+                spans.push((at, at + token.len()));
+            }
+            at += token.len() + 1;
+        }
+    }
+    // The marker has the atom's own length: blanks pad it past the last `^`.
+    let end = atom.len();
     let mut line = String::new();
     for i in 0..end {
         if spans.iter().any(|(s, e)| *s <= i && i < *e) {

@@ -178,6 +178,16 @@ pub(crate) fn show_skipped_missing_deps(
     }
 }
 
+/// The ` in '<root>'` an installed package's description carries, empty at `/`.
+// Portage: Package.py, __str__
+fn installed_in_root(root: &Path) -> String {
+    if root == Path::new("/") {
+        String::new()
+    } else {
+        format!(" in '{}'", root.display())
+    }
+}
+
 /// Updates skipped by slot conflicts or masks.
 pub(crate) fn show_skipped_updates(
     plan: &ResolvePlan,
@@ -265,10 +275,10 @@ pub(crate) fn show_skipped_updates(
                         root
                     };
                     println!(
-                        "    {} required by ({}, installed in '{}') {}",
+                        "    {} required by ({}, installed{}) {}",
                         s.atom,
                         s.consumer_cpv,
-                        installed_root.display(),
+                        installed_in_root(installed_root),
                         render_pkg_use_display(&s.consumer_use),
                     );
                 } else {
@@ -331,7 +341,8 @@ pub(crate) fn show_skipped_updates(
                         &s.atom,
                         &header.slot,
                         &header.skipped_sub_slot,
-                        !version_ok
+                        !version_ok,
+                        &header.skipped_use,
                     )
                 );
             }
@@ -579,14 +590,14 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
     if inst.installed {
         // An installed instance names its position.
         println!(
-            "  ({}/{}-{}:{}/{}::{}, installed in '{}') {} pulled in by",
+            "  ({}/{}-{}:{}/{}::{}, installed{}) {} pulled in by",
             c.category,
             c.package,
             inst.version,
             c.slot,
             inst.sub_slot,
             inst.repo_name,
-            root.display(),
+            installed_in_root(root),
             render_pkg_use_display(&inst.use_display)
         );
     } else {
@@ -870,7 +881,7 @@ pub(crate) fn show_selected_parents(
             continue;
         }
         let parent_pos = if classified_installed[m] {
-            format!("{}, installed in '{}'", p.parent_cpv, root.display())
+            format!("{}, installed{}", p.parent_cpv, installed_in_root(root))
         } else {
             format!("{}, ebuild scheduled for merge", p.parent_cpv)
         };

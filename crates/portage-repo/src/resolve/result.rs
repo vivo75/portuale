@@ -331,6 +331,12 @@ pub struct GraphResult {
     /// "causing rebuilds" block and the merged dep stays untagged.
     // Portage: _gen_reinstall_sets; output.py, PkgAttrDisplay.force_reinstall
     pub rebuild_if_reinstalls: Vec<(String, String)>,
+    /// The settled search's `slot_operator_replace_installed` set: installed
+    /// packages Portage tags `force_reinstall` through its
+    /// `__auto_slot_operator_replace_installed__` set arg, so a merge row for
+    /// one renders the red `r`.
+    // Portage: depgraph.py, _iter_atoms_for_pkg; output.py, PkgAttrDisplay
+    pub slot_operator_replaced: Vec<(String, String)>,
     /// Unbreakable dependency cycles among the merge-bound entries: each inner `Vec`
     /// is one cycle as an ordered `cat/pkg-version` list where every element depends
     /// on the next via an unsatisfied build-time dep with no run-time alternative.

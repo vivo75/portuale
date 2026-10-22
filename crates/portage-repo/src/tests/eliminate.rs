@@ -581,3 +581,31 @@ fn installed_reachability_walks_match_independent_calls() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn reachable_without_does_not_follow_a_replaced_package() {
+    // Portage: depgraph.py, _complete_graph -- only graph nodes pull deps in.
+    let dir = TempDir::new("portage-repo-reach-without").keep();
+    let mk = |name: &str, rdepend: &str| {
+        let d = dir.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+        fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+    };
+    mk("top-1.0", "dev-libs/mid");
+    mk("mid-1.0", "dev-libs/leaf");
+    mk("leaf-1.0", "");
+    let seeds = ["dev-libs/top".to_string()];
+    let graph = InstalledReachability::new(&dir);
+    let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+
+    let all = graph.reachable(&seeds, &[]);
+    assert!(all.contains(&cp("leaf")));
+    let skip: HashSet<_> = [cp("mid")].into_iter().collect();
+    let live = graph.reachable_without(&seeds, &[], &skip);
+    assert!(live.contains(&cp("mid")), "the replaced package is listed");
+    assert!(!live.contains(&cp("leaf")), "but its deps are not followed");
+    let _ = fs::remove_dir_all(&dir);
+}

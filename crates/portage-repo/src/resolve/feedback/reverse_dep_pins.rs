@@ -2,6 +2,28 @@
 
 use crate::resolve::feedback::*;
 
+/// The installed consumers a pass's complete graph can contain: the required
+/// sets' closure that does not run through a package the pass replaces.
+/// Only graph nodes pull their deps in, and a replaced installed package is
+/// not one, so its installed deps are consumers only if something else
+/// reaches them.
+// Portage: depgraph.py, _complete_graph
+pub(crate) fn live_reachable_consumers(
+    ctx: &ResolveCtx<'_>,
+    entries: &[GraphEntry],
+) -> HashSet<(String, String)> {
+    if ctx.slot_op_reachable.is_empty() {
+        return HashSet::new();
+    }
+    let replaced: HashSet<(String, String)> = entries
+        .iter()
+        .filter(|e| merge_bound_cpv(e).is_some())
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    ctx.installed_graph
+        .reachable_without(&ctx.slot_op_seeds, &[], &replaced)
+}
+
 /// Installed reverse dependencies an upgrade breaks: pin or drop them.
 pub(crate) fn step_reverse_dep_pins(
     ctx: &ResolveCtx<'_>,
@@ -21,6 +43,7 @@ pub(crate) fn step_reverse_dep_pins(
     // the broken consumer against the installed instance. Dropped pins accumulate for
     // that residual report; they never enter `slot_constraints`.
     let mut added = false;
+    let live_reachable = live_reachable_consumers(ctx, &pass.entries);
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
         repos: &ctx.repos,
         root: ctx.root,
@@ -28,7 +51,7 @@ pub(crate) fn step_reverse_dep_pins(
         with_bdeps: ctx.with_bdeps,
         excluded: ctx.excluded,
         hard_want: &pass.slot_want,
-        reachable: &ctx.slot_op_reachable,
+        reachable: &live_reachable,
         dynamic_deps: ctx.dynamic_deps,
         ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
         top_level_cps: &ctx.top_level_cps,

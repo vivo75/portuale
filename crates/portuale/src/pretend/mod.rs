@@ -403,6 +403,9 @@ pub fn run(args: &[String]) -> ExitCode {
     // "causing rebuilds" block).
     // Portage: _gen_reinstall_sets; output.py, PkgAttrDisplay.force_reinstall
     force_reinstall_cps.extend(result.rebuild_if_reinstalls.iter().cloned());
+    // The slot-operator replace set tags its members the same way.
+    // Portage: depgraph.py, _iter_atoms_for_pkg (`__auto_slot_operator_replace_installed__`)
+    force_reinstall_cps.extend(result.slot_operator_replaced.iter().cloned());
     show_resolution_report(ShowResolutionReportArgs {
         gated_abort_partial,
         result: &result,

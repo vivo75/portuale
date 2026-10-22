@@ -48,8 +48,11 @@ when a claim turns out false.
   `find_existing_node` pass is old, so earlier versions very likely behave the
   same).
 - **Portuale**: `portuale emerge` copies it (`graph_installed_reuse` in
-  `pass_helpers.rs`), because the merge list must match. `portuale mrg`: not
-  yet decided. Fixture: pmtest `f484b-*`.
+  `pass_helpers.rs`), because the merge list must match. `portuale mrg`:
+  **decided 2026-10-22: diverge** -- always pick the newest visible version,
+  independent of walk order (then a slot conflict and the skipped-update
+  notice, if any, follow normally). Implementation filed as #489, not done
+  yet. Fixture: pmtest `f484b-*`.
 
 ## Q2. The missed-update notice depends on binhost build timestamps (suspect)
 
@@ -75,4 +78,22 @@ when a claim turns out false.
   earlier versions without it do not have this behaviour).
 - **Portuale**: `portuale emerge` copies it (`installed_twin_is_newer_build` in
   `direct_solve.rs`; the notice names `binary` and the build id). `portuale
-  mrg`: not yet decided. Fixture: pmtest `f484-*` (both timestamp orders).
+  mrg`: **decided 2026-10-22: copy** (same as `emerge`, no divergence).
+  Fixture: pmtest `f484-*` (both timestamp orders).
+
+## Q3. The "causing rebuilds" list is in hash order, so two runs can print it differently (suspect)
+
+- **Observed** (2026-10-22, host `@world`, backlog #486 close-out): in
+  `The following packages are causing rebuilds:` Portage lists the providers
+  and, under each, its rebuilt consumers in an order that is not the merge-list
+  order and not alphabetical (for example `libbpf` before `boost` and `xorg-server`
+  before `libplasma`; under `boost` the rows run hugin, mdds, mariadb, libcmis, ...).
+- **Why**: `_show_abi_rebuild_info` (`depgraph.py`) walks sets and dicts keyed by
+  `Package` objects, whose hash comes from the cpv string, so the order most likely
+  follows `PYTHONHASHSEED` (random per process; not re-run with a pinned seed).
+- **Why it looks wrong**: the same resolution prints a differently ordered block
+  on every run; a diff or a log comparison sees noise.
+- **First seen**: Portage 3.0.82.2 (the only version checked).
+- **Portuale**: `portuale emerge` prints the group in provider and consumer
+  alphabetical order, because there is no stable Portage order to copy; compare
+  these blocks as sets. `portuale mrg`: same (sorted).

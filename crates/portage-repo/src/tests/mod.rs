@@ -1653,6 +1653,12 @@ fn ctx_161<'a>(
         set_args: o.set_args.clone(),
         repos,
         slot_op_reachable: o.reachable.clone(),
+        slot_op_seeds: o
+            .reachable
+            .iter()
+            .map(|(c, p)| format!("{c}/{p}"))
+            .collect(),
+        installed_graph: InstalledReachability::new(root),
         world_reachable: o.reachable.clone(),
         blocker_retry_closure: o.blocker_closure.clone(),
         complete_locked_merges: o.locked.clone(),

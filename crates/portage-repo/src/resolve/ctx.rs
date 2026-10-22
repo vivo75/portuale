@@ -143,6 +143,11 @@ pub(crate) struct ResolveCtx<'a> {
     /// complete mode; empty means "not complete mode" and disables the
     /// slot-operator and reverse-dependency scans.
     pub(crate) slot_op_reachable: HashSet<(String, String)>,
+    /// The seeds `slot_op_reachable` was closed from, and the installed index
+    /// it came from: the reverse-dependency scan re-closes them per pass
+    /// without the packages that pass replaces.
+    pub(crate) slot_op_seeds: Vec<String>,
+    pub(crate) installed_graph: InstalledReachability,
     /// Like `slot_op_reachable` but without the requested atoms, so the
     /// reverse scan can tell a world-reached consumer from a merely
     /// requested one.
@@ -217,15 +222,15 @@ impl<'a> ResolveCtx<'a> {
         // still means "not complete mode".
         // One index and one set of parsed `*DEPEND` edges serve all three walks.
         let installed_graph = InstalledReachability::new(&req.root);
+        let mut slot_op_seeds = req.config.complete_seed_atoms.clone();
+        slot_op_seeds.extend(req.atoms.iter().cloned());
+        slot_op_seeds.sort();
+        slot_op_seeds.dedup();
         let slot_op_reachable: HashSet<(String, String)> =
             if req.config.complete_seed_atoms.is_empty() {
                 HashSet::new()
             } else {
-                let mut seeds = req.config.complete_seed_atoms.clone();
-                seeds.extend(req.atoms.iter().cloned());
-                seeds.sort();
-                seeds.dedup();
-                installed_graph.reachable(&seeds, &[])
+                installed_graph.reachable(&slot_op_seeds, &[])
             };
         // Without the requested atoms, so the reverse scan can tell a
         // world-reached consumer from a merely requested one.
@@ -292,6 +297,8 @@ impl<'a> ResolveCtx<'a> {
             set_args: req.set_args.clone(),
             repos: find_repos(&req.config_root)?,
             slot_op_reachable,
+            slot_op_seeds,
+            installed_graph,
             world_reachable,
             blocker_retry_closure,
             complete_locked_merges: req

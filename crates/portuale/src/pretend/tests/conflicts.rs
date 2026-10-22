@@ -101,3 +101,20 @@ fn slot_conflict_colorized_spans_keep_markers_aligned() {
     assert_eq!(ordered.len(), idx.len());
     assert_eq!(careted, ">=2.0");
 }
+
+#[test]
+fn skip_caret_line_pads_to_the_atom_and_marks_a_violated_use_dep() {
+    // Portage: resolver/output.py, format_unmatched_atom (marker is atom-long;
+    // `[nginx]` is marked when the missed package has it disabled).
+    let none: Vec<(String, String)> = Vec::new();
+    let line = skip_conflict_caret_line("<a/b-2.0:=", "0", "0", true, &none);
+    assert_eq!(line, "^    ^^^  ");
+    assert_eq!(line.len(), "<a/b-2.0:=".len());
+    let off = vec![("USE".to_string(), "-nginx".to_string())];
+    let line = skip_conflict_caret_line("a/b[nginx]", "0", "0", false, &off);
+    assert_eq!(line, "    ^^^^^ ");
+    let on = vec![("USE".to_string(), "nginx".to_string())];
+    let line = skip_conflict_caret_line("a/b[nginx]", "0", "0", false, &on);
+    assert_eq!(line.trim(), "");
+    assert_eq!(line.len(), "a/b[nginx]".len());
+}

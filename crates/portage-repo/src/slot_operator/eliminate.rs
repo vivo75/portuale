@@ -426,6 +426,18 @@ impl InstalledReachability {
         world_selected_atoms: &[String],
         system_atoms: &[String],
     ) -> HashSet<Cp> {
+        self.reachable_without(world_selected_atoms, system_atoms, &HashSet::new())
+    }
+
+    /// Like [`Self::reachable`], but a `skip` member (an installed package this
+    /// run replaces, so no graph node) is listed without following its edges.
+    // Portage: depgraph.py, _complete_graph (only graph nodes pull their deps in)
+    pub fn reachable_without(
+        &self,
+        world_selected_atoms: &[String],
+        system_atoms: &[String],
+        skip: &HashSet<Cp>,
+    ) -> HashSet<Cp> {
         let mut reachable: HashSet<Cp> = HashSet::new();
         let mut queue: Vec<Cp> = Vec::new();
         for atom_str in world_selected_atoms.iter().chain(system_atoms) {
@@ -436,6 +448,9 @@ impl InstalledReachability {
             }
         }
         while let Some(cp) = queue.pop() {
+            if skip.contains(&cp) {
+                continue;
+            }
             let Some(&i) = self.by_cp.get(&cp) else {
                 continue;
             };

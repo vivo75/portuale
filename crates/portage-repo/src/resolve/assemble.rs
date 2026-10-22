@@ -231,6 +231,7 @@ pub(crate) fn assemble_result(
         settled_with_backtracking: false,
         abi_rebuilds,
         rebuild_if_reinstalls,
+        slot_operator_replaced: params.probe_replaced.iter().cloned().collect(),
         circular_deps,
         circular_dependency: params.circular_dependency.clone(),
         masked_deps: pass.masked_deps,

@@ -114,7 +114,9 @@ pub(crate) fn assemble_tree_pkg_use_display(
 }
 
 /// Installed-consumer twin of [`skipped_update_use_display_for`]: reads the
-/// vdb-recorded `IUSE`/`USE` with no masking. No force/mask `( )` wraps.
+/// vdb-recorded `IUSE`/`USE` with no masking; profile-forced or -masked flags
+/// keep their `( )` wraps (Portage 3.0.82.2 prints `ABI_X86="(64)"` for an
+/// installed parent).
 // Portage: depgraph.py, pkg_use_display (installed parent)
 pub fn skipped_update_installed_use_display_for(
     root: &Path,
@@ -126,7 +128,21 @@ pub fn skipped_update_installed_use_display_for(
     let (iuse, use_flags) = installed_pkg_iuse_and_use(root, category, package, version);
     let enabled: HashSet<String> = use_flags.iter().cloned().collect();
     let explicit: HashSet<String> = iuse.iter().cloned().collect();
-    assemble_pkg_use_display(&enabled, &explicit, &HashSet::new(), config)
+    let (slot, sub_slot) = read_vdb_slot(root, category, package, version);
+    let repo = installed_pkg_repo(root, category, package, version);
+    let keywords: Vec<String> = vdb_aux_get(root, category, package, version, "KEYWORDS")
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let forced = forced_or_masked_flags_unfiltered(
+        &keywords,
+        &format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo}"),
+        None,
+        category,
+        package,
+        config,
+    );
+    assemble_pkg_use_display(&enabled, &explicit, &forced, config)
 }
 
 /// One consumer's full display for a `SkippedUpdate` row. An empty

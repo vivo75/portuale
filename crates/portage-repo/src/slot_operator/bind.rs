@@ -189,6 +189,7 @@ pub(crate) fn tree_metadata_for(
 pub(crate) fn apply_prune_rebuilds(params: &mut BacktrackParams) {
     params.prune_rebuilds = true;
     params.slot_operator_replace_installed.clear();
+    params.probe_replaced.clear();
     // The forcing half goes with the set.
     params.slot_operator_forced_upgrade.clear();
     let mut removed: Vec<((String, String), String)> = Vec::new();
