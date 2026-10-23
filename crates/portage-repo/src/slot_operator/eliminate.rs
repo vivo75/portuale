@@ -420,6 +420,36 @@ impl InstalledReachability {
         out
     }
 
+    /// The dependency atoms the installed packages in `from` record on `target`
+    /// (blockers excluded), as `(consumer, atom)` pairs with USE conditionals
+    /// evaluated against the consumer's own USE.
+    // Portage: depgraph.py, _slot_operator_check_reverse_dependencies (_parent_atoms)
+    pub fn atoms_on(&self, from: &HashSet<Cp>, target: &Cp) -> Vec<(Cp, String)> {
+        let mut out = Vec::new();
+        for cp in from {
+            let Some(&i) = self.by_cp.get(cp) else {
+                continue;
+            };
+            let p = &self.installed[i];
+            let root = self.root.as_path();
+            let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
+            for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+                let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
+                let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+                    continue;
+                };
+                for atom in atoms.iter().filter(|a| !a.starts_with('!')) {
+                    if let Some(a) = portage_dep::parse_atom(atom)
+                        && (&a.category, &a.package) == (&target.0, &target.1)
+                    {
+                        out.push((cp.clone(), atom.clone()));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The closure of `world_selected_atoms` ∪ `system_atoms` over the edges.
     pub fn reachable(
         &self,

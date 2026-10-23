@@ -44,6 +44,9 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         with_bdeps: false,
         excluded: &[],
         masked: &HashMap::new(),
+        installed: &InstalledReachability::new(&root),
+        live: &HashSet::new(),
+        walked: &HashSet::new(),
     });
     assert_eq!(
         replace,
@@ -71,6 +74,9 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         with_bdeps: false,
         excluded: &[],
         masked: &HashMap::new(),
+        installed: &InstalledReachability::new(&root_same),
+        live: &HashSet::new(),
+        walked: &HashSet::new(),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
@@ -96,6 +102,9 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         with_bdeps: false,
         excluded: &[],
         masked: &HashMap::new(),
+        installed: &InstalledReachability::new(&root),
+        live: &HashSet::new(),
+        walked: &HashSet::new(),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
@@ -113,6 +122,9 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         with_bdeps: false,
         excluded: &excluded,
         masked: &HashMap::new(),
+        installed: &InstalledReachability::new(&root),
+        live: &HashSet::new(),
+        walked: &HashSet::new(),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
@@ -144,9 +156,63 @@ fn built_parent_update_probe_ignores_a_tree_update_the_search_has_masked() {
         with_bdeps: false,
         excluded: &[],
         masked: &masked,
+        installed: &InstalledReachability::new(&root),
+        live: &HashSet::new(),
+        walked: &HashSet::new(),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
         "a masked tree update does not mask the binary"
+    );
+}
+
+#[test]
+fn built_parent_update_probe_leaves_a_child_another_installed_consumer_restricts() {
+    // Portage: `_slot_operator_update_probe` asks `_slot_operator_check_reverse_dependencies`
+    // whether the new child still satisfies the child's other graph parents; an
+    // installed `<dev-libs/mbabilib-2.0:=` refuses mbabilib-2.0, so nothing is masked.
+    let root = mbabilib_vdb("0/1");
+    let d = root.join("var/db/pkg/dev-libs/mbabirestrict-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0\n").unwrap();
+    fs::write(d.join("RDEPEND"), "<dev-libs/mbabilib-2.0:0/1=\n").unwrap();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let local = BinaryIndex::from_pkgdir(&fixtures_root().join("pkgdir"));
+    let entries = [mbabicons_binary()];
+    let installed = InstalledReachability::new(&root);
+    let run = |live: HashSet<(String, String)>, walked: HashSet<(String, String)>| {
+        built_parent_update_probe(BuiltParentUpdateProbeArgs {
+            root: &root,
+            repos: &repos,
+            config: &test_config(),
+            local_binpkg: &local,
+            entries: &entries,
+            with_bdeps: false,
+            excluded: &[],
+            masked: &HashMap::new(),
+            installed: &installed,
+            live: &live,
+            walked: &walked,
+        })
+    };
+    let restrictor = ("dev-libs".to_string(), "mbabirestrict".to_string());
+    let (replace, masks) = run(HashSet::from([restrictor.clone()]), HashSet::new());
+    assert!(
+        replace.is_empty() && masks.is_empty(),
+        "a live consumer restricting the child refuses the update"
+    );
+    let (replace, masks) = run(HashSet::new(), HashSet::new());
+    assert!(
+        !replace.is_empty() && !masks.is_empty(),
+        "control: outside the graph the consumer does not count"
+    );
+    let (replace, masks) = run(
+        HashSet::from([restrictor.clone()]),
+        HashSet::from([restrictor]),
+    );
+    assert!(
+        !replace.is_empty() && !masks.is_empty(),
+        "a consumer the request's walk reaches has an edge to the child and is exempt"
     );
 }

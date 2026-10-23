@@ -166,6 +166,7 @@
 - [crates/portage-repo/src/resolver_trace.rs](portage-repo/resolver_trace.md) — `emerge --pretend --debug` resolver trace.
 - [crates/portage-repo/src/slot_operator/abi_probe.rs](portage-repo/slot_operator/abi_probe.md) — The slot-conflict ABI probe.
 - [crates/portage-repo/src/slot_operator/bind.rs](portage-repo/slot_operator/bind.md) — Binding `:=` dependencies to the selected slot.
+- [crates/portage-repo/src/slot_operator/built_parent_update_probe.rs](portage-repo/slot_operator/built_parent_update_probe.md) — The update probe for a merge-bound binary parent.
 - [crates/portage-repo/src/slot_operator/eliminate.rs](portage-repo/slot_operator/eliminate.md) — Eliminating unnecessary slot-operator rebuilds.
 - [crates/portage-repo/src/slot_operator/force_scan.rs](portage-repo/slot_operator/force_scan.md) — Slot-operator update-force and slot-change probes.
 - [crates/portage-repo/src/slot_operator/rebuild_scan.rs](portage-repo/slot_operator/rebuild_scan.md) — Rebuilds triggered by slot-operator dependencies.

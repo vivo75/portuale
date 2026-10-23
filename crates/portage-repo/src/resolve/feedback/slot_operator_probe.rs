@@ -54,6 +54,14 @@ pub(crate) fn step_built_parent_update_probe(
     if ctx.backtrack_max == 0 || ctx.usepkgonly {
         return BuiltParentProbe::Quiet;
     }
+    // Portage runs this probe after `_complete_graph`, so the installed consumers
+    // are known; a plain pass stands in with the blocker-retry closure.
+    let live = if ctx.slot_op_reachable.is_empty() {
+        ctx.blocker_retry_closure.clone()
+    } else {
+        live_reachable_consumers(ctx, &pass.entries)
+    };
+    let walked = request_walk_consumers(ctx, &pass.entries);
     let (fresh, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
         root: ctx.root,
         repos: &ctx.repos,
@@ -63,6 +71,9 @@ pub(crate) fn step_built_parent_update_probe(
         with_bdeps: ctx.with_bdeps,
         excluded: ctx.excluded,
         masked: &grown.runtime_pkg_mask,
+        installed: &ctx.installed_graph,
+        live: &live,
+        walked: &walked,
     });
     let probed = fresh.clone();
     if !file_unsat_probe_results(&mut *grown, fresh, masks, ctx.usepkgonly, ctx.root) {

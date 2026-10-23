@@ -24,6 +24,22 @@ pub(crate) fn live_reachable_consumers(
         .reachable_without(&ctx.slot_op_seeds, &[], &replaced)
 }
 
+/// The installed packages the request's own atoms reach, not running through a
+/// replaced package: the ones Portage's main walk gives digraph edges.
+// Portage: depgraph.py, _slot_operator_check_reverse_dependencies (digraph.has_edge)
+pub(crate) fn request_walk_consumers(
+    ctx: &ResolveCtx<'_>,
+    entries: &[GraphEntry],
+) -> HashSet<(String, String)> {
+    let replaced: HashSet<(String, String)> = entries
+        .iter()
+        .filter(|e| merge_bound_cpv(e).is_some())
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    ctx.installed_graph
+        .reachable_without(ctx.atoms, &[], &replaced)
+}
+
 /// Installed reverse dependencies an upgrade breaks: pin or drop them.
 pub(crate) fn step_reverse_dep_pins(
     ctx: &ResolveCtx<'_>,

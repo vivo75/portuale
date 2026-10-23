@@ -13,6 +13,13 @@ pub(crate) struct BuiltParentUpdateProbeArgs<'a> {
     pub(crate) excluded: &'a [String],
     /// The pass's `runtime_pkg_mask`: a masked tree instance is no update.
     pub(crate) masked: &'a HashMap<(String, String), Vec<MaskEntry>>,
+    /// The installed dependency graph and the installed consumers the pass's
+    /// complete graph can contain (`live_reachable_consumers`).
+    pub(crate) installed: &'a InstalledReachability,
+    pub(crate) live: &'a HashSet<(String, String)>,
+    /// The installed packages the request's own walk reaches: their dependencies
+    /// have edges in Portage's digraph, which exempts them from the check.
+    pub(crate) walked: &'a HashSet<(String, String)>,
 }
 
 /// [`built_parent_update_probe`]'s result: the installed children joining the
@@ -41,6 +48,9 @@ pub(crate) fn built_parent_update_probe(
         with_bdeps,
         excluded,
         masked,
+        installed,
+        live,
+        walked,
     } = args;
     const DEP_KEYS: [&str; 5] = ["RDEPEND", "PDEPEND", "IDEPEND", "DEPEND", "BDEPEND"];
     let dep_keys: &[&str] = if with_bdeps {
@@ -133,6 +143,9 @@ pub(crate) fn built_parent_update_probe(
                 bound_slot: &bound_slot,
                 excluded,
                 masked,
+                installed,
+                live,
+                walked,
             }) {
                 hit = Some(child.clone());
                 break;
@@ -160,6 +173,9 @@ struct ChildUpdateArgs<'a> {
     bound_slot: &'a str,
     excluded: &'a [String],
     masked: &'a HashMap<(String, String), Vec<MaskEntry>>,
+    installed: &'a InstalledReachability,
+    live: &'a HashSet<(String, String)>,
+    walked: &'a HashSet<(String, String)>,
 }
 
 /// Whether the installed `child` in `bound_slot` has a tree instance with another
@@ -181,6 +197,9 @@ fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
         bound_slot,
         excluded,
         masked,
+        installed,
+        live,
+        walked,
     } = args;
     let (child_cat, child_pkg) = (child.0.as_str(), child.1.as_str());
     if entries.iter().any(|e| {
@@ -268,10 +287,98 @@ fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
             );
             if atoms.iter().all(|a| {
                 portage_dep::match_from_list(a, &[cpv.as_str()]).is_some_and(|m| !m.is_empty())
+            }) && other_consumers_accept(&OtherConsumers {
+                root,
+                installed,
+                live,
+                walked,
+                entries,
+                repos,
+                config,
+                parent,
+                child,
+                cpv: &cpv,
             }) {
                 return true;
             }
         }
     }
     false
+}
+
+/// What [`other_consumers_accept`] checks a candidate child against.
+struct OtherConsumers<'a> {
+    root: &'a Path,
+    installed: &'a InstalledReachability,
+    live: &'a HashSet<(String, String)>,
+    walked: &'a HashSet<(String, String)>,
+    entries: &'a [GraphEntry],
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    parent: &'a (String, String),
+    child: &'a (String, String),
+    cpv: &'a str,
+}
+
+/// Whether every installed consumer of the child that the graph keeps accepts
+/// the candidate child. A consumer this run replaces, one the request's own
+/// walk reaches (it has an edge to the child), one with a visible upgrade, or
+/// the probed parent itself does not count.
+// Portage: depgraph.py, _slot_operator_check_reverse_dependencies
+fn other_consumers_accept(args: &OtherConsumers<'_>) -> bool {
+    let consumers: HashSet<(String, String)> = args
+        .live
+        .iter()
+        .filter(|cp| *cp != args.parent && *cp != args.child)
+        // Portage: a parent with a digraph edge to the child is exempt.
+        .filter(|cp| !args.walked.contains(*cp))
+        .filter(|cp| {
+            !args.entries.iter().any(|e| {
+                e.category == cp.0 && e.package == cp.1 && merge_bound_version(&e.outcome).is_some()
+            })
+        })
+        .cloned()
+        .collect();
+    for (consumer, atom) in args.installed.atoms_on(&consumers, args.child) {
+        if has_visible_upgrade(args.root, args.repos, args.config, &consumer) {
+            continue;
+        }
+        // A built `:slot/sub=` atom is judged without its slot/sub-slot part.
+        let atom = match portage_dep::parse_atom(&atom) {
+            Some(a) if is_built_slot_op(&a) => strip_slot_part(&atom),
+            _ => atom,
+        };
+        if !portage_dep::match_from_list(&atom, &[args.cpv]).is_some_and(|m| !m.is_empty()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// `atom` with its `:slot/sub=` suffix cut back to a bare `:=`.
+fn strip_slot_part(atom: &str) -> String {
+    match atom.find(':') {
+        Some(i) => format!("{}:=", &atom[..i]),
+        None => atom.to_string(),
+    }
+}
+
+/// Whether the tree offers a visible ebuild above the installed `cp`.
+fn has_visible_upgrade(
+    root: &Path,
+    repos: &[RepoConfig],
+    config: &portage_profile::Config,
+    cp: &(String, String),
+) -> bool {
+    let Some(inst) = installed_candidates(root, &cp.0, &cp.1).into_iter().next() else {
+        return false;
+    };
+    let Ok(tree) = list_candidates(repos, &cp.0, &cp.1) else {
+        return false;
+    };
+    tree.iter().any(|c| {
+        c.source == CandidateSource::Ebuild
+            && vercmp_ordering(&c.version, &inst.0) == Ordering::Greater
+            && is_visible(c, &cp.0, &cp.1, config)
+    })
 }
