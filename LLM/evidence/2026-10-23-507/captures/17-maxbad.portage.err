@@ -1,0 +1,2 @@
+!!! Invalid PORTAGE_CIRCULAR_MAX_USE_FLAGS: abc
+!!! Expected an integer greater than zero, using 10 instead.

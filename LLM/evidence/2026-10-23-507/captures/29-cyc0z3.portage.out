@@ -1,0 +1,48 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.82 s (backtrack: 1/20).
+
+{
+  "cycles": [
+    [
+      "dev-libs/cyc0y-1",
+      "dev-libs/cyc0z-3"
+    ],
+    [
+      "dev-libs/cyc0z-3",
+      "dev-libs/cyc0y-1"
+    ]
+  ],
+  "shortest_cycle": [
+    {
+      "parent": "dev-libs/cyc0z-3",
+      "child": "dev-libs/cyc0y-1",
+      "priority": "buildtime",
+      "affecting_use": [
+        "foo"
+      ]
+    },
+    {
+      "parent": "dev-libs/cyc0y-1",
+      "child": "dev-libs/cyc0z-3",
+      "priority": "buildtime",
+      "affecting_use": []
+    }
+  ],
+  "solutions": [
+    {
+      "package": "dev-libs/cyc0z-3",
+      "use_changes": [
+        {
+          "foo": false
+        }
+      ]
+    }
+  ],
+  "test_dep_parents": [],
+  "masked_alternatives": [],
+  "search_truncated": [],
+  "max_affecting_use": 10
+}

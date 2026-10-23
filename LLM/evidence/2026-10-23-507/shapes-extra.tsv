@@ -1,0 +1,10 @@
+45-text	-	-p --color=n --circular-deps-report=text dev-libs/usecyclea
+46-bare	-	-p --color=n --circular-deps-report dev-libs/usecyclea
+47-space	-	-p --color=n --circular-deps-report json dev-libs/usecyclea
+48-nonp	-	--color=n --circular-deps-report=json dev-libs/usecyclea
+49-quiet	-	-pq --color=n --circular-deps-report=json dev-libs/usecyclea
+50-verbose	-	-pv --color=n --circular-deps-report=json dev-libs/cddseva
+51-nodeps	-	-p --color=n --nodeps --circular-deps-report=json dev-libs/usecyclea
+52-true	-	-p --color=n --circular-deps-report=True dev-libs/usecyclea
+53-none	-	-p --color=n --circular-deps-report=none dev-libs/usecyclea
+54-onlydeps	-	-p --color=n --onlydeps --circular-deps-report=json dev-libs/usecyclea

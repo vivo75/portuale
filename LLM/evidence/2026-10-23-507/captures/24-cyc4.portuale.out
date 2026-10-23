@@ -1,0 +1,76 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+
+{
+  "cycles": [
+    [
+      "dev-libs/cyc4b-1.0",
+      "dev-libs/cyc4c-1.0",
+      "dev-libs/cyc4d-1.0",
+      "dev-libs/cyc4a-1.0"
+    ],
+    [
+      "dev-libs/cyc4c-1.0",
+      "dev-libs/cyc4d-1.0",
+      "dev-libs/cyc4a-1.0",
+      "dev-libs/cyc4b-1.0"
+    ],
+    [
+      "dev-libs/cyc4d-1.0",
+      "dev-libs/cyc4a-1.0",
+      "dev-libs/cyc4b-1.0",
+      "dev-libs/cyc4c-1.0"
+    ],
+    [
+      "dev-libs/cyc4a-1.0",
+      "dev-libs/cyc4b-1.0",
+      "dev-libs/cyc4c-1.0",
+      "dev-libs/cyc4d-1.0"
+    ]
+  ],
+  "shortest_cycle": [
+    {
+      "parent": "dev-libs/cyc4a-1.0",
+      "child": "dev-libs/cyc4b-1.0",
+      "priority": "buildtime",
+      "affecting_use": [
+        "x"
+      ]
+    },
+    {
+      "parent": "dev-libs/cyc4b-1.0",
+      "child": "dev-libs/cyc4c-1.0",
+      "priority": "buildtime",
+      "affecting_use": []
+    },
+    {
+      "parent": "dev-libs/cyc4c-1.0",
+      "child": "dev-libs/cyc4d-1.0",
+      "priority": "buildtime",
+      "affecting_use": []
+    },
+    {
+      "parent": "dev-libs/cyc4d-1.0",
+      "child": "dev-libs/cyc4a-1.0",
+      "priority": "buildtime",
+      "affecting_use": []
+    }
+  ],
+  "solutions": [
+    {
+      "package": "dev-libs/cyc4a-1.0",
+      "use_changes": [
+        {
+          "x": false
+        }
+      ]
+    }
+  ],
+  "test_dep_parents": [],
+  "masked_alternatives": [],
+  "search_truncated": [],
+  "max_affecting_use": 10
+}

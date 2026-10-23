@@ -357,6 +357,11 @@ pub struct GraphResult {
     /// suggestions branch). Computed only when a hard cycle was already reported.
     // Portage: circular_dependency_handler.large_cycle_count; digraph.get_cycles medium_soft
     pub large_cycle_count: bool,
+    /// Every elementary cycle of the graph as merge-bound CPVs, in Portage's
+    /// `get_cycles` order (the `cycles` of `--circular-deps-report=json`).
+    /// Computed with `large_cycle_count`, so empty without a hard cycle.
+    // Portage: circular_dependency_handler.cycles
+    pub report_cycles: Vec<Vec<String>>,
     /// The stuck-remainder members in leaf-drain order, as `cat/pkg-version` CPVs,
     /// merge-bound members only. Re-displayed as flat merge lines between the merge
     /// list and the circular-dependencies block (minus tree nesting: portuale's tree

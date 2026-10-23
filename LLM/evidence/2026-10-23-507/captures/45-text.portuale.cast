@@ -1,0 +1,10 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792775734,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n --circular-deps-report=text dev-libs/usecyclea","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.141, "o", "[nomerge       ] dev-libs/usecyclea-1.0::testrepo  USE=\"x\" \r\n"]
+[0.000, "o", "[ebuild  N     ]  dev-libs/usecycleb-1.0::testrepo  0 KiB\r\n"]
+[0.000, "o", "[ebuild  N     ]   dev-libs/usecyclea-1.0::testrepo  USE=\"x\" 0 KiB\r\n\r\nTotal: 2 packages (2 new), Size of downloads: 0 KiB\r\n"]
+[0.000, "o", "\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n"]
+[0.000, "o", "(dev-libs/usecycleb-1.0:0/0::testrepo, ebuild scheduled for merge) depends on\r\n (dev-libs/usecyclea-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)\r\n  (dev-libs/usecycleb-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=x)"]
+[0.000, "o", "\r\n\r\nIt might be possible to break this cycle\r\nby applying the following change:\r\n- dev-libs/usecyclea-1.0 (Change USE: -x)\r\n\r\nNote that this change can be reverted, once the package has been installed.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.004, "x", "1"]

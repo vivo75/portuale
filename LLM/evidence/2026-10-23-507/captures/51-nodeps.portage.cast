@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792775724,"command":"env  /usr/bin/emerge -p --color=n --nodeps --circular-deps-report=json dev-libs/usecyclea","env":{"SHELL":"/bin/bash"}}
+[0.153, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.003, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\n"]
+[0.765, "o", "[ebuild  N     ] dev-libs/usecyclea-1.0  USE=\"x\" \r\n"]
+[0.002, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.066, "x", "0"]

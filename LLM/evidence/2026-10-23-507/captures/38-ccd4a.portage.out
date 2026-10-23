@@ -1,0 +1,48 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.79 s (backtrack: 0/0).
+
+{
+  "cycles": [
+    [
+      "dev-libs/ccd4b-7.3.0",
+      "dev-libs/ccd4a-7.3.0"
+    ],
+    [
+      "dev-libs/ccd4a-7.3.0",
+      "dev-libs/ccd4b-7.3.0"
+    ]
+  ],
+  "shortest_cycle": [
+    {
+      "parent": "dev-libs/ccd4a-7.3.0",
+      "child": "dev-libs/ccd4b-7.3.0",
+      "priority": "buildtime",
+      "affecting_use": []
+    },
+    {
+      "parent": "dev-libs/ccd4b-7.3.0",
+      "child": "dev-libs/ccd4a-7.3.0",
+      "priority": "buildtime",
+      "affecting_use": [
+        "low-memory"
+      ]
+    }
+  ],
+  "solutions": [
+    {
+      "package": "dev-libs/ccd4b-7.3.0",
+      "use_changes": [
+        {
+          "low-memory": true
+        }
+      ]
+    }
+  ],
+  "test_dep_parents": [],
+  "masked_alternatives": [],
+  "search_truncated": [],
+  "max_affecting_use": 10
+}

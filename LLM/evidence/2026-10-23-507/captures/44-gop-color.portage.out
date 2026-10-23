@@ -1,0 +1,33 @@
+
+[32mThese are the packages that would be merged, in order:[39;49;00m
+
+Calculating dependencies ... done!
+Dependency resolution took [32m1.83[39;49;00m s (backtrack: 1/20).
+
+{
+  "cycles": [
+    [
+      "dev-lang/cddgop-2"
+    ]
+  ],
+  "shortest_cycle": [
+    {
+      "parent": "dev-lang/cddgop-2",
+      "child": "dev-lang/cddgop-2",
+      "priority": "buildtime",
+      "affecting_use": []
+    }
+  ],
+  "solutions": [],
+  "test_dep_parents": [],
+  "masked_alternatives": [
+    {
+      "package": "dev-lang/cddgop-2",
+      "alternatives": [
+        "dev-lang/cddgop-bootstrap-1"
+      ]
+    }
+  ],
+  "search_truncated": [],
+  "max_affecting_use": 10
+}

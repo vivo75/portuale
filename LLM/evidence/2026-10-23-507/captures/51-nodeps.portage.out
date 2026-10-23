@@ -1,0 +1,4 @@
+
+These are the packages that would be merged, in order:
+
+[ebuild  N     ] dev-libs/usecyclea-1.0  USE="x" 

@@ -1,0 +1,70 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+
+{
+  "cycles": [
+    [
+      "dev-libs/cddtrnb-1",
+      "dev-libs/cddtrna-1"
+    ],
+    [
+      "dev-libs/cddtrna-1",
+      "dev-libs/cddtrnb-1"
+    ]
+  ],
+  "shortest_cycle": [
+    {
+      "parent": "dev-libs/cddtrna-1",
+      "child": "dev-libs/cddtrnb-1",
+      "priority": "buildtime",
+      "affecting_use": [
+        "flag0",
+        "flag1",
+        "flag10",
+        "flag11",
+        "flag2",
+        "flag3",
+        "flag4",
+        "flag5",
+        "flag6",
+        "flag7",
+        "flag8",
+        "flag9"
+      ]
+    },
+    {
+      "parent": "dev-libs/cddtrnb-1",
+      "child": "dev-libs/cddtrna-1",
+      "priority": "buildtime",
+      "affecting_use": []
+    }
+  ],
+  "solutions": [
+    {
+      "package": "dev-libs/cddtrna-1",
+      "use_changes": [
+        {
+          "flag0": false,
+          "flag1": false,
+          "flag10": false,
+          "flag11": false,
+          "flag2": false,
+          "flag3": false,
+          "flag4": false,
+          "flag5": false,
+          "flag6": false,
+          "flag7": false,
+          "flag8": false,
+          "flag9": false
+        }
+      ]
+    }
+  ],
+  "test_dep_parents": [],
+  "masked_alternatives": [],
+  "search_truncated": [],
+  "max_affecting_use": 16
+}

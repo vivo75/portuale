@@ -122,6 +122,7 @@ pub(crate) fn assemble_result(
         buildpkgonly_deps_unsatisfied,
         circular_deps,
         large_cycle_count,
+        report_cycles,
         cycle_display,
         cycle_display_idx,
     } = build_cycle_display(ctx, &pass, params, &insertion_rank);
@@ -238,6 +239,7 @@ pub(crate) fn assemble_result(
         use_unsat_deps: pass.use_unsat_deps,
         plain_miss_deps: pass.plain_miss_deps,
         large_cycle_count,
+        report_cycles,
         cycle_display,
         virtual_cycle,
     }
@@ -248,6 +250,7 @@ pub(crate) struct BuildCycleDisplayOut {
     pub(crate) buildpkgonly_deps_unsatisfied: bool,
     pub(crate) circular_deps: Vec<Vec<String>>,
     pub(crate) large_cycle_count: bool,
+    pub(crate) report_cycles: Vec<Vec<String>>,
     pub(crate) cycle_display: Vec<String>,
     pub(crate) cycle_display_idx: Vec<usize>,
 }
@@ -354,32 +357,48 @@ pub(crate) fn build_cycle_display(
     // Cycle enumeration + reduced display order for the `large_cycle_count`
     // trailer and the cycle-only re-display. Built on demand: acyclic
     // resolves pay nothing. Portage: circular_dependency_handler.
-    let (large_cycle_count, cycle_display, cycle_display_idx) = if circular_deps.is_empty() {
-        (false, Vec::new(), Vec::new())
-    } else {
-        let (cycles, display) = merge_order::cycle_report(
-            &pass.entries,
-            ctx.atoms,
-            ctx.root,
-            &params.circular_dependency,
-        );
-        let display_idx: Vec<usize> = display
-            .into_iter()
-            .filter(|&i| merge_bound_cpv(&pass.entries[i]).is_some())
-            .collect();
-        let display = display_idx
-            .iter()
-            .filter_map(|&i| merge_bound_cpv(&pass.entries[i]))
-            .collect();
-        (cycles.len() > 3, display, display_idx)
-    };
+    let (large_cycle_count, report_cycles, cycle_display, cycle_display_idx) =
+        if circular_deps.is_empty() {
+            (false, Vec::new(), Vec::new(), Vec::new())
+        } else {
+            let (cycles, display) = merge_order::cycle_report(
+                &pass.entries,
+                ctx.atoms,
+                ctx.root,
+                &params.circular_dependency,
+            );
+            let display_idx: Vec<usize> = display
+                .into_iter()
+                .filter(|&i| merge_bound_cpv(&pass.entries[i]).is_some())
+                .collect();
+            let display = display_idx
+                .iter()
+                .filter_map(|&i| merge_bound_cpv(&pass.entries[i]))
+                .collect();
+            let report_cycles = cpv_cycles(&pass.entries, &cycles);
+            (cycles.len() > 3, report_cycles, display, display_idx)
+        };
     BuildCycleDisplayOut {
         buildpkgonly_deps_unsatisfied,
         circular_deps,
         large_cycle_count,
+        report_cycles,
         cycle_display,
         cycle_display_idx,
     }
+}
+
+/// The elementary cycles (entry indices) as merge-bound CPV lists, in
+/// enumeration order.
+pub(crate) fn cpv_cycles(entries: &[GraphEntry], cycles: &[Vec<usize>]) -> Vec<Vec<String>> {
+    cycles
+        .iter()
+        .map(|c| {
+            c.iter()
+                .filter_map(|&i| merge_bound_cpv(&entries[i]))
+                .collect()
+        })
+        .collect()
 }
 
 /// Fold in the autounmask USE changes and the residual installed-instance slot conflicts.

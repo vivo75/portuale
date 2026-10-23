@@ -1,0 +1,50 @@
+
+[32mThese are the packages that would be merged, in order:[39;49;00m
+
+Calculating dependencies ... done!
+Dependency resolution took [32m1.84[39;49;00m s (backtrack: 1/20).
+
+{
+  "cycles": [
+    [
+      "dev-libs/cddtstb-1",
+      "dev-libs/cddtsta-1"
+    ],
+    [
+      "dev-libs/cddtsta-1",
+      "dev-libs/cddtstb-1"
+    ]
+  ],
+  "shortest_cycle": [
+    {
+      "parent": "dev-libs/cddtsta-1",
+      "child": "dev-libs/cddtstb-1",
+      "priority": "buildtime",
+      "affecting_use": [
+        "test"
+      ]
+    },
+    {
+      "parent": "dev-libs/cddtstb-1",
+      "child": "dev-libs/cddtsta-1",
+      "priority": "buildtime",
+      "affecting_use": []
+    }
+  ],
+  "solutions": [
+    {
+      "package": "dev-libs/cddtsta-1",
+      "use_changes": [
+        {
+          "test": false
+        }
+      ]
+    }
+  ],
+  "test_dep_parents": [
+    "dev-libs/cddtsta-1"
+  ],
+  "masked_alternatives": [],
+  "search_truncated": [],
+  "max_affecting_use": 10
+}

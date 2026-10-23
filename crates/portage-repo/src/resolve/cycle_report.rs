@@ -447,3 +447,132 @@ fn masked_alternatives_for_edge(
     }
     out
 }
+
+/// The changes of one USE solution: `(flag, enabled)`.
+pub type UseSolution = Vec<(String, bool)>;
+
+/// One edge of the shortest cycle in a [`CycleReport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleReportEdge {
+    pub parent: String,
+    pub child: String,
+    /// The edge's last priority, as `str(priority)` prints it.
+    pub priority: String,
+    /// The USE flags the edge is blamed on, sorted, without their state.
+    pub affecting_use: Vec<String>,
+}
+
+/// Everything a circular-dependency report says, before any rendering: the
+/// text report and `--circular-deps-report=json` both read this.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CycleReport {
+    /// Every cycle of the graph, as `get_cycles` enumerates them.
+    pub cycles: Vec<Vec<String>>,
+    /// The first strictly shortest of `cycles`, as one edge per member:
+    /// `edges[i]` goes from `shortest[i - 1]` to `shortest[i]`.
+    pub shortest_cycle: Vec<CycleReportEdge>,
+    /// Per package whose USE would change (sorted by cpv), the solutions
+    /// (flag, enabled) in report order.
+    pub solutions: Vec<(String, Vec<UseSolution>)>,
+    pub test_dep_parents: Vec<String>,
+    /// `(cycle member, masked alternatives)`, sorted.
+    pub masked_alternatives: Vec<(String, Vec<String>)>,
+    pub search_truncated: Vec<String>,
+    pub max_affecting_use: usize,
+}
+
+/// Arguments of [`build_cycle_report`].
+pub struct CycleReportArgs<'a> {
+    /// [`GraphResult::report_cycles`]; when empty `fallback` stands in.
+    pub cycles: &'a [Vec<String>],
+    /// The cycle the resolver reported, used when `cycles` is empty.
+    pub fallback: &'a [String],
+    pub repos: &'a [RepoConfig],
+    pub config: &'a portage_profile::Config,
+    pub autounmask_use_changes: &'a [AutounmaskChange],
+    pub entries: &'a [GraphEntry],
+    pub root: &'a Path,
+    pub max_affecting_use: usize,
+}
+
+/// The data of the circular-dependency report.
+// Portage: resolver/circular_dependency.py, circular_dependency_handler
+pub fn build_cycle_report(args: CycleReportArgs<'_>) -> CycleReport {
+    let CycleReportArgs {
+        cycles,
+        fallback,
+        repos,
+        config,
+        autounmask_use_changes,
+        entries,
+        root,
+        max_affecting_use,
+    } = args;
+    let cycles: Vec<Vec<String>> = if cycles.is_empty() && !fallback.is_empty() {
+        vec![fallback.to_vec()]
+    } else {
+        cycles.to_vec()
+    };
+    let mut report = CycleReport {
+        max_affecting_use,
+        ..CycleReport::default()
+    };
+    let mut shortest: &[String] = &[];
+    for cycle in &cycles {
+        if shortest.is_empty() || cycle.len() < shortest.len() {
+            shortest = cycle;
+        }
+    }
+    let shortest = shortest.to_vec();
+    report.cycles = cycles;
+    if shortest.is_empty() {
+        return report;
+    }
+    let edge_labels = cycle_edge_labels(entries, &shortest);
+    let facts = cycle_report_facts(CycleReportFactsArgs {
+        cycle: &shortest,
+        edge_labels: &edge_labels,
+        repos,
+        config,
+        autounmask_use_changes,
+        root,
+    });
+    let n = shortest.len();
+    for pos in 0..n {
+        let edge = (pos + n - 1) % n;
+        report.shortest_cycle.push(CycleReportEdge {
+            parent: shortest[edge].clone(),
+            child: shortest[pos].clone(),
+            priority: edge_labels[edge].clone(),
+            affecting_use: facts
+                .edge_use
+                .get(edge)
+                .map(|flags| flags.iter().map(|(f, _)| f.clone()).collect())
+                .unwrap_or_default(),
+        });
+    }
+    let search = circular_dep_search(CircularDepSearchArgs {
+        cycle: &shortest,
+        repos,
+        config,
+        autounmask_use_changes,
+        entries,
+        max_affecting_use,
+    });
+    // Suggestions arrive sorted by package then change set.
+    for s in search.suggestions {
+        match report.solutions.last_mut() {
+            Some((pkg, sols)) if *pkg == s.parent_cpv => sols.push(s.changes),
+            _ => report.solutions.push((s.parent_cpv, vec![s.changes])),
+        }
+    }
+    report.search_truncated = search.search_truncated;
+    report.test_dep_parents = facts.test_dep_parents;
+    for (alternative, member) in facts.masked_alternatives {
+        match report.masked_alternatives.last_mut() {
+            Some((m, alts)) if *m == member => alts.push(alternative),
+            _ => report.masked_alternatives.push((member, vec![alternative])),
+        }
+    }
+    report
+}

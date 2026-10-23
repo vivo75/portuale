@@ -1,0 +1,5 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792775714,"command":"env  /usr/bin/emerge --color=n --circular-deps-report=json dev-libs/usecyclea","env":{"SHELL":"/bin/bash"}}
+[0.151, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.000, "o", "emerge: superuser access is required\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.022, "x", "1"]

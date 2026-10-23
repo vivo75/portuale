@@ -173,6 +173,10 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
                 entries: &result.entries,
                 large_cycle_count: result.large_cycle_count,
                 root,
+                format: opts
+                    .circular_deps_report
+                    .unwrap_or(CircularDepsReport::Text),
+                all_cycles: &result.report_cycles,
             });
         }
         pretend_end_news_notice(pretend, repos, root, config, color);

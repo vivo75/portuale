@@ -177,3 +177,80 @@ fn the_search_limit_parses_like_python_int() {
     assert_eq!(python_int("_16"), None);
     assert_eq!(python_int(""), None);
 }
+
+/// The data step of `--circular-deps-report=json` for one atom.
+fn report_for(atom: &str, max: usize) -> CycleReport {
+    let (config, repos) = fixture_config();
+    let result = graph_result_real(atom);
+    build_cycle_report(CycleReportArgs {
+        cycles: &result.report_cycles,
+        fallback: &result.circular_deps[0],
+        repos: &repos,
+        config: &config,
+        autounmask_use_changes: &result.autounmask_use_changes,
+        entries: &result.entries,
+        root: &fixtures_root(),
+        max_affecting_use: max,
+    })
+}
+
+/// Portage 3.0.83-r1, `LLM/evidence/2026-10-23-507/captures/01-use.portage.out`.
+#[test]
+fn json_report_lists_both_rotations_and_the_flag_solution() {
+    let r = report_for("dev-libs/usecyclea", CIRCULAR_MAX_USE_FLAGS_DEFAULT);
+    let a = "dev-libs/usecyclea-1.0".to_string();
+    let b = "dev-libs/usecycleb-1.0".to_string();
+    assert_eq!(
+        r.cycles,
+        vec![vec![b.clone(), a.clone()], vec![a.clone(), b.clone()]]
+    );
+    // The shortest cycle is the first one: edge 0 is the wrap-around a -> b.
+    let edge = |p: &str, c: &str, flags: &[&str]| CycleReportEdge {
+        parent: p.to_string(),
+        child: c.to_string(),
+        priority: "buildtime".to_string(),
+        affecting_use: flags.iter().map(|f| f.to_string()).collect(),
+    };
+    assert_eq!(
+        r.shortest_cycle,
+        vec![edge(&a, &b, &["x"]), edge(&b, &a, &[])]
+    );
+    assert_eq!(r.solutions, vec![(a, vec![flags(&[("x", false)])])]);
+    assert!(r.test_dep_parents.is_empty() && r.search_truncated.is_empty());
+    assert_eq!(r.max_affecting_use, 10);
+}
+
+#[test]
+fn json_report_carries_test_parents_masked_alternatives_and_truncation() {
+    let r = report_for("dev-libs/cddtsta", 10);
+    assert_eq!(r.test_dep_parents, vec!["dev-libs/cddtsta-1".to_string()]);
+    assert_eq!(
+        r.solutions,
+        vec![(
+            "dev-libs/cddtsta-1".to_string(),
+            vec![flags(&[("test", false)])]
+        )]
+    );
+    let r = report_for("dev-lang/cddgo", 10);
+    assert_eq!(r.cycles, vec![vec!["dev-lang/cddgo-2".to_string()]]);
+    assert_eq!(r.shortest_cycle.len(), 1);
+    assert_eq!(r.shortest_cycle[0].parent, r.shortest_cycle[0].child);
+    assert_eq!(
+        r.masked_alternatives,
+        vec![(
+            "dev-lang/cddgo-2".to_string(),
+            vec!["dev-lang/cddgo-bootstrap-1".to_string()]
+        )]
+    );
+    let r = report_for("dev-libs/cddtrna", 10);
+    assert!(r.solutions.is_empty());
+    assert_eq!(r.search_truncated, vec!["dev-libs/cddtrna-1".to_string()]);
+    let r = report_for("dev-libs/cddseva", 10);
+    assert_eq!(
+        r.solutions,
+        vec![(
+            "dev-libs/cddseva-1".to_string(),
+            vec![flags(&[("doc", false), ("nls", false)])]
+        )]
+    );
+}

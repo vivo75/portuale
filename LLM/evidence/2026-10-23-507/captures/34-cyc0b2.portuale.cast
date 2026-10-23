@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792775676,"command":"env  /var/tmp/ev506-bin/emerge -p --circular-deps-report=json --color=n =dev-libs/cyc0b-2","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.123, "o", "\r\n!!! The ebuild selected to satisfy \"=dev-libs/cyc0a-2\" has unmet requirements.\r\n- dev-libs/cyc0a-2::testrepo USE=\"bar foo\" ELIBC=\"glibc\"\r\n\r\n  The following REQUIRED_USE flag constraints are unsatisfied:\r\n    exactly-one-of ( foo bar )\r\n\r\n(dependency required by \"dev-libs/cyc0b-2::testrepo\" [ebuild])\r\n(dependency required by \"=dev-libs/cyc0b-2\" [argument])\r\n\r\n\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.003, "x", "1"]

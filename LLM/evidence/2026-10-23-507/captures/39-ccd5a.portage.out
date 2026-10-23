@@ -1,0 +1,37 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.79 s (backtrack: 0/0).
+
+{
+  "cycles": [
+    [
+      "virtual/ccd5v-1.6.0",
+      "dev-libs/ccd5a-6.1.10.3"
+    ],
+    [
+      "dev-libs/ccd5a-6.1.10.3",
+      "virtual/ccd5v-1.6.0"
+    ]
+  ],
+  "shortest_cycle": [
+    {
+      "parent": "dev-libs/ccd5a-6.1.10.3",
+      "child": "virtual/ccd5v-1.6.0",
+      "priority": "buildtime",
+      "affecting_use": []
+    },
+    {
+      "parent": "virtual/ccd5v-1.6.0",
+      "child": "dev-libs/ccd5a-6.1.10.3",
+      "priority": "runtime",
+      "affecting_use": []
+    }
+  ],
+  "solutions": [],
+  "test_dep_parents": [],
+  "masked_alternatives": [],
+  "search_truncated": [],
+  "max_affecting_use": 10
+}

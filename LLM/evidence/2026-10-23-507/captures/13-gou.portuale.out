@@ -1,0 +1,33 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+
+{
+  "cycles": [
+    [
+      "dev-lang/cddgou-2"
+    ]
+  ],
+  "shortest_cycle": [
+    {
+      "parent": "dev-lang/cddgou-2",
+      "child": "dev-lang/cddgou-2",
+      "priority": "buildtime",
+      "affecting_use": []
+    }
+  ],
+  "solutions": [],
+  "test_dep_parents": [],
+  "masked_alternatives": [
+    {
+      "package": "dev-lang/cddgou-2",
+      "alternatives": [
+        "dev-lang/cddgou-bootstrap-1"
+      ]
+    }
+  ],
+  "search_truncated": [],
+  "max_affecting_use": 10
+}

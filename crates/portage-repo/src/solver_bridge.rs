@@ -627,7 +627,7 @@ fn graph_result_from_order(
             // No backtrack restart runs here, so no cycle map to demote by.
             circular: &HashMap::new(),
         });
-    let (circular_deps, large_cycle_count, cycle_display) =
+    let (circular_deps, large_cycle_count, report_cycles, cycle_display) =
         bridge_circular_display(req, &entries, &insertion_rank);
 
     GraphResult {
@@ -664,6 +664,7 @@ fn graph_result_from_order(
         slot_operator_replaced: Vec::new(),
         circular_deps,
         large_cycle_count,
+        report_cycles,
         cycle_display,
         // A solved plan admits no divergence and ran no relaxation loop.
         masked_deps: Vec::new(),
@@ -1114,13 +1115,17 @@ fn bridge_slot_operator_rebuilds(
     }
 }
 
+/// What [`bridge_circular_display`] returns: the hard cycles, the large-cycle
+/// flag, the report cycles and the reduced display order.
+type BridgeCircularDisplay = (Vec<Vec<String>>, bool, Vec<Vec<String>>, Vec<String>);
+
 /// Circular-dep notice: rebuild the walk's hard/soft edge-kind map over the
 /// entry `deps` edges and report via `find_hard_cycles`, like the walk.
 fn bridge_circular_display(
     req: &ResolveRequest,
     entries: &[GraphEntry],
     insertion_rank: &[usize],
-) -> (Vec<Vec<String>>, bool, Vec<String>) {
+) -> BridgeCircularDisplay {
     let mut edge_kinds: super::EdgeKindMap = HashMap::new();
     for e in entries {
         let owner = (
@@ -1157,8 +1162,8 @@ fn bridge_circular_display(
         Some(insertion_rank),
     );
     // Cycle report only when a hard cycle was reported.
-    let (large_cycle_count, cycle_display) = if circular_deps.is_empty() {
-        (false, Vec::new())
+    let (large_cycle_count, report_cycles, cycle_display) = if circular_deps.is_empty() {
+        (false, Vec::new(), Vec::new())
     } else {
         let (cycles, display) =
             super::merge_order::cycle_report(entries, &req.atoms, &req.root, &HashMap::new());
@@ -1166,9 +1171,15 @@ fn bridge_circular_display(
             .into_iter()
             .filter_map(|i| super::merge_bound_cpv(&entries[i]))
             .collect();
-        (cycles.len() > 3, display)
+        let report_cycles = super::cpv_cycles(entries, &cycles);
+        (cycles.len() > 3, report_cycles, display)
     };
-    (circular_deps, large_cycle_count, cycle_display)
+    (
+        circular_deps,
+        large_cycle_count,
+        report_cycles,
+        cycle_display,
+    )
 }
 
 /// Named slot from a target atom's `:slot` part, if it names one
@@ -9091,7 +9102,7 @@ mod tests {
                 )],
             ),
         ];
-        let (circular_deps, large_cycle_count, _) =
+        let (circular_deps, large_cycle_count, _, _) =
             super::bridge_circular_display(&req, &entries, &[0, 1]);
         assert!(
             circular_deps.is_empty(),

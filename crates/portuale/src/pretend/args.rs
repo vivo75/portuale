@@ -2227,7 +2227,7 @@ fn invalid_choice(opt: &str, value: &str, choices: &str) -> ExitCode {
 /// `--merge-wait-scope` (Portage 3.0.83). The first two take an optional
 /// value that only a following token of the right set is consumed as
 /// (`insert_optional_args`); `=value` and the bare form map `True` to the
-/// default. The third requires a value. All three are inert for now.
+/// default. The third requires a value. Only `--circular-deps-report` acts so far.
 // Portage: _emerge/main.py, insert_optional_args / parse_opts
 fn parse_new_option_opts<'a>(
     opts: &mut EmergeOpts<'a>,

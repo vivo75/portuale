@@ -134,3 +134,32 @@ when a claim turns out false.
 - **First seen**: Portage 3.0.83-r1 (the only version checked).
 - **Portuale**: `portuale emerge` copies it (`masked_deps.rs`,
   `candidate_masking_reasons`). `portuale mrg`: same until decided.
+
+## Q6. `--circular-deps-report=json` prints hash-ordered `use_changes` objects and every cycle once per member (suspect)
+
+- **Observed** (2026-10-23, backlog #507, `LLM/evidence/2026-10-23-507/`): for
+  `dev-libs/cddseva` the `solutions[0].use_changes[0]` object came out as
+  `{"nls": false, "doc": false}` in one run and `{"doc": false, "nls": false}`
+  in the next (six runs without `PYTHONHASHSEED`: 2 and 4); the twelve-flag
+  `PORTAGE_CIRCULAR_MAX_USE_FLAGS=16` object is a random permutation. Separately,
+  a two-package ring is listed twice in `cycles`, once starting at each member
+  (`dev-libs/usecyclea` -> `[b, a]` then `[a, b]`; a four-ring four times), and
+  `shortest_cycle` is the first of them.
+- **Why**: `_show_circular_deps_json` (`lib/_emerge/depgraph.py`) builds each
+  `use_changes` entry with `dict(solution)`, where `solution` is a `frozenset`
+  of `(flag, state)` pairs (same cause as Q4), and takes `handler.cycles`
+  straight from `digraph.get_cycles`, which yields one rotation per node.
+  `parent_solutions[pkg]` is a `set` of those frozensets, so the order of the
+  `use_changes` list of one package is hash order too.
+- **Why it looks wrong**: the report is meant for tinderboxes and other
+  consumers ("machine readable form"), and two runs of the same resolution give
+  different bytes; the rest of the document is sorted on purpose (`affecting_use`,
+  `test_dep_parents`, `search_truncated`, `solutions` by cpv). The rotations are
+  the same cycle reported again, so a consumer counting `len(cycles)` counts
+  members, not cycles.
+- **First seen**: Portage 3.0.83-r1 (the option is new in 3.0.83).
+- **Portuale**: `portuale emerge` prints `use_changes` objects with their flags
+  sorted and the solutions of one package in sorted order (one of Portage's
+  possible outputs), and copies the rotations exactly. `portuale mrg`: same until
+  decided. Compare the key order of `use_changes` as a set (`compare.sh` in the
+  evidence directory sorts the keys).

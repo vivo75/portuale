@@ -320,7 +320,13 @@ pub fn run(args: &[String]) -> ExitCode {
     let display_entries: &[portage_repo::GraphEntry] =
         gated_abort_partial.map_or(entries.as_slice(), Vec::as_slice);
     // `Total:` prints only when the merge list is displayed at all.
-    let display_list_suppressed = gated_abort_partial.is_some() && display_entries.is_empty();
+    // `--circular-deps-report=json` replaces the cycle's merge list with the
+    // JSON document, so no list is shown at all.
+    // Portage: _emerge/depgraph.py, _show_circular_deps
+    let circular_json = opts.circular_deps_report == Some(CircularDepsReport::Json)
+        && circular_report_shown(&result);
+    let display_list_suppressed =
+        (gated_abort_partial.is_some() && display_entries.is_empty()) || circular_json;
 
     // `--autounmask-only` skips the normal merge list and exits 0 after the
     // problem blocks -- but re-shows the list when it has changes to report
@@ -347,6 +353,7 @@ pub fn run(args: &[String]) -> ExitCode {
             autounmask_only: opts.autounmask_only,
             has_changes: has_autounmask_changes,
         });
+    let show_merge_list = show_merge_list && !circular_json;
     show_resolution_header(
         &opts,
         &result,
@@ -356,7 +363,7 @@ pub fn run(args: &[String]) -> ExitCode {
             json: opts.json,
             complete: matches!(result.outcome, portage_repo::ResolveOutcome::Complete),
             list_shown: show_merge_list,
-        }),
+        }) || (opts.pretend && circular_json),
     );
 
     show_pprovided_notice(&result, &color);
@@ -487,7 +494,14 @@ pub(crate) fn finish_run(args: FinishRunArgs<'_>) -> ExitCode {
 
     show_skipped_missing_deps(opts.quiet, opts.debug, result, &color);
 
-    show_missing_args_and_aborts(result, root, &color, repos, config);
+    show_missing_args_and_aborts(ShowMissingArgsAndAbortsArgs {
+        result,
+        root,
+        color: &color,
+        repos,
+        config,
+        circular_deps_report: opts.circular_deps_report,
+    });
 
     if let Some(code) = show_autounmask(ShowAutounmaskArgs {
         opts,

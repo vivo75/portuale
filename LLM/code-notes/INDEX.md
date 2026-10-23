@@ -392,6 +392,7 @@
 - [crates/portuale/src/pretend/display/attrs.rs](portuale/pretend/display/attrs.md) — Merge-list row attributes: columns, version decoration, USE suffix, sizes.
 - [crates/portuale/src/pretend/display/blockers.rs](portuale/pretend/display/blockers.md) — Blocker rows in the merge list.
 - [crates/portuale/src/pretend/display/circular.rs](portuale/pretend/display/circular.md) — The circular-dependency block.
+- [crates/portuale/src/pretend/display/circular_json.rs](portuale/pretend/display/circular_json.md) — `--circular-deps-report=json` (backlog #507, plan 02.442 S8; Portage 3.0.83 `depgraph.py`, `_show_circular_deps_json`, commit `5fcafeaa0`). Oracle: host Portage 3.0.83-r1, `LLM/evidence/2026-10-23-507/` (`probe.sh`, `shapes.tsv`, `shapes-extra.tsv`, `compare.sh`, `captures/*.{out,err,rc,cast}` for both managers).
 - [crates/portuale/src/pretend/display/counters.rs](portuale/pretend/display/counters.md) — The `Total:` summary line for `emerge -pv`.
 - [crates/portuale/src/pretend/display/entry_line.rs](portuale/pretend/display/entry_line.md) — One merge-list row.
 - [crates/portuale/src/pretend/display/tree.rs](portuale/pretend/display/tree.md) — The `--tree` display.

@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792775678,"command":"env  /var/tmp/ev506-bin/emerge -p --circular-deps-report=json --color=n app-misc/bar","env":{"SHELL":"/bin/bash"}}
+[0.005, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.132, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n\r\n\r\n!!! virtual cycle detected:\r\n\r\n  virtual/gzip-1::testrepo\r\n\r\n\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.003, "x", "1"]

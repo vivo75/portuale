@@ -6,14 +6,26 @@ use portage_repo::GraphResult;
 use portage_repo::RepoConfig;
 use portage_repo::SlotConflictInstance;
 
+/// The values [`show_missing_args_and_aborts`] reads from its caller.
+pub(crate) struct ShowMissingArgsAndAbortsArgs<'a> {
+    pub(crate) result: &'a GraphResult,
+    pub(crate) root: &'a Path,
+    pub(crate) color: &'a Colorizer,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a Config,
+    pub(crate) circular_deps_report: Option<CircularDepsReport>,
+}
+
 /// Missing arguments, and the abort reports for cycles and unsatisfied dependencies.
-pub(crate) fn show_missing_args_and_aborts(
-    result: &GraphResult,
-    root: &Path,
-    color: &Colorizer,
-    repos: &[RepoConfig],
-    config: &Config,
-) {
+pub(crate) fn show_missing_args_and_aborts(args: ShowMissingArgsAndAbortsArgs<'_>) {
+    let ShowMissingArgsAndAbortsArgs {
+        result,
+        root,
+        color,
+        repos,
+        config,
+        circular_deps_report,
+    } = args;
     // The world-file tail for dropped set members: the notice fires only for
     // a missing member of the world file itself; the masked-or-don't-exist
     // list names every missing arg in requested order. Neither carries a
@@ -58,6 +70,8 @@ pub(crate) fn show_missing_args_and_aborts(
             entries: &result.entries,
             large_cycle_count: result.large_cycle_count,
             root,
+            format: circular_deps_report.unwrap_or(CircularDepsReport::Text),
+            all_cycles: &result.report_cycles,
         });
     }
 
@@ -998,5 +1012,25 @@ pub(crate) fn show_cycle_redisplay(args: ShowCycleRedisplayArgs<'_>) {
                 circular: &result.circular_dependency,
             });
         }
+    }
+}
+
+/// Whether the circular-dependency report is printed for `result`: a hard
+/// cycle exists and the resolve did not abort for another reason first.
+// Portage: depgraph.py, display_problems
+pub(crate) fn circular_report_shown(result: &GraphResult) -> bool {
+    if result.circular_deps.is_empty() {
+        return false;
+    }
+    match &result.outcome {
+        portage_repo::ResolveOutcome::Aborted { reason, .. }
+            if portage_repo::abort_path_enabled() =>
+        {
+            matches!(
+                reason,
+                portage_repo::AbortReason::UnserializableCycle { .. }
+            )
+        }
+        _ => true,
     }
 }

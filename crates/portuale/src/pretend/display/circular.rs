@@ -49,6 +49,10 @@ pub(crate) struct PrintCircularBlockArgs<'a> {
     pub(crate) large_cycle_count: bool,
     /// The target root, for the installed check of masked alternatives.
     pub(crate) root: &'a Path,
+    /// `--circular-deps-report`.
+    pub(crate) format: CircularDepsReport,
+    /// Every cycle of the graph (`GraphResult::report_cycles`), for `json`.
+    pub(crate) all_cycles: &'a [Vec<String>],
 }
 
 /// The `, USE=<flags>` tail of an edge label: enabled flags red, disabled
@@ -86,6 +90,8 @@ pub(crate) fn print_circular_block(args: PrintCircularBlockArgs<'_>) {
         entries,
         large_cycle_count,
         root,
+        format,
+        all_cycles,
     } = args;
     let (max_affecting_use, invalid_max) = portage_repo::circular_max_use_flags(config);
     if let Some(value) = invalid_max {
@@ -94,6 +100,20 @@ pub(crate) fn print_circular_block(args: PrintCircularBlockArgs<'_>) {
              !!! Expected an integer greater than zero, using {} instead.\n",
             portage_repo::CIRCULAR_MAX_USE_FLAGS_DEFAULT
         );
+    }
+    if format == CircularDepsReport::Json {
+        let report = portage_repo::build_cycle_report(portage_repo::CycleReportArgs {
+            cycles: all_cycles,
+            fallback: cycle,
+            repos,
+            config,
+            autounmask_use_changes,
+            entries,
+            root,
+            max_affecting_use,
+        });
+        print!("{}", render_circular_json(&report));
+        return;
     }
     let facts = portage_repo::cycle_report_facts(portage_repo::CycleReportFactsArgs {
         cycle,
