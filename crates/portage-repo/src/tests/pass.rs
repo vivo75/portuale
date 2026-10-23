@@ -1241,6 +1241,7 @@ fn run_pass_respect_use_filters_a_stale_binary() {
         atoms: atoms.clone(),
         usepkg: true,
         binpkg_respect_use: true,
+        binpkg_respect_user_patches: true,
         ..Default::default()
     };
     let ctx = ctx_161(&dir, &config, repos, &opts);

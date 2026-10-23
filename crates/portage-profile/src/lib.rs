@@ -66,6 +66,7 @@ mod package_files;
 mod pkgindex_header;
 mod profile_chain;
 mod resolve;
+mod user_patches;
 
 #[cfg(test)]
 mod tests;
@@ -82,6 +83,7 @@ pub(crate) use package_files::*;
 pub use pkgindex_header::*;
 pub(crate) use profile_chain::*;
 pub use resolve::*;
+pub use user_patches::*;
 
 pub use phase_environ::{
     ENV_BLACKLIST, ENVIRON_FILTER, PORTUALE_COMPUTED, PhaseUse, apply_unprefixed_use_expand_filter,

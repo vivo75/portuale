@@ -1,0 +1,7 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792790090,"command":"/var/tmp/ev509-bin/emerge -p --color=n -k app-misc/up-b","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.008, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[ebuild  N     ] app-misc/up-b-1.0 to /var/tmp/ev509-tree/root\r\n"]
+[0.000, "o", "\r\n!!! The following binary packages have been ignored due to user patches:\r\n\r\n     app-misc/up-b-1.0-1 for /var/tmp/ev509-tree/root/\r\n\r\nNOTE: The --binpkg-respect-user-patches=n option will prevent\r\n      emerge from ignoring these binary packages.\r\n      Using --binpkg-respect-user-patches=y will silence this\r\n      warning.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev509-tree\u0007"]
+[0.001, "x", "0"]

@@ -1,0 +1,17 @@
+
+!!! The following binary packages have been ignored due to user patches:
+
+     app-misc/up-e-1.0:1-1 for /var/tmp/ev509-tree/root/
+
+NOTE: The --binpkg-respect-user-patches=n option will prevent
+      emerge from ignoring these binary packages.
+      Using --binpkg-respect-user-patches=y will silence this
+      warning.
+
+!!! All binary packages that could satisfy "app-misc/up-e" for /var/tmp/ev509-tree/root/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- app-misc/up-e-1.0::up509 (masked by: user patches)
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+

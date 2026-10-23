@@ -204,6 +204,7 @@ fn greedy_pool(
             config,
             root: ctx.root,
             binpkg_respect_use: ctx.binpkg_respect_use,
+            binpkg_respect_user_patches: ctx.binpkg_respect_user_patches,
             newuse: ctx.newuse,
             changed_use: ctx.changed_use,
             candidates: &mut candidates,

@@ -54,6 +54,13 @@ pub struct Candidate {
     /// This binary instance's own recorded `*DEPEND` strings, so
     /// `--binpkg-changed-deps` compares the exact instance. Empty for ebuilds.
     pub binary_deps: HashMap<String, String>,
+    /// This binary instance's recorded `USER_PATCHES` digest (`""` when
+    /// the index entry carries no key: the `-r1` empty default, bug
+    /// 984255). Compared against the local patch-set digest by the
+    /// `--binpkg-respect-user-patches` filter (backlog #509); ebuilds
+    /// carry `""` (never filtered). Lowercase hex, like Portage.
+    // Portage: Package.py, `user_patches`
+    pub user_patches: String,
 }
 
 impl Candidate {
@@ -84,6 +91,7 @@ impl Candidate {
             build_time: _,    // field-ok: ordering only
             eapi: _,          // field-ok: grammar selection, not matched
             binary_deps: _,   // field-ok: --binpkg-changed-deps data, not matched
+            user_patches: _,  // field-ok: --binpkg-respect-user-patches data, not matched
         } = self;
         format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}")
     }
@@ -217,6 +225,7 @@ pub(crate) fn list_candidates_uncached(
                         build_id: None,
                         build_time: None,
                         eapi,
+                        user_patches: String::new(),
                         binary_deps: HashMap::new(),
                     });
                 }
@@ -245,6 +254,7 @@ pub(crate) fn list_candidates_uncached(
                 remote: false,
                 build_id: None,
                 build_time: None,
+                user_patches: String::new(),
                 // Every cache entry carries `EAPI` (egencache writes it);
                 // without one the ebuild predates the format: EAPI 0.
                 eapi: metadata

@@ -32,6 +32,7 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         pretend,
         ..
     } = opts;
+
     // The ABI-rebuild report: grouped by the provider whose new sub-slot broke
     // each consumer's built `:=` link; each package renders as
     // `(cpv:slot/sub_slot::repo, type scheduled for merge[ to '<root>'])`.
@@ -94,6 +95,23 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
             }
             println!("    {}", render(parent));
         }
+    }
+
+    // The ignored-user-patches block (backlog #509): binaries the
+    // `--binpkg-respect-user-patches` filter dropped for cps that merge.
+    // Portage's `display()` prints it after the ABI rebuilds and before
+    // the changed-deps report; suppressed under `--quiet` and under an
+    // explicit `--binpkg-respect-user-patches=y|n`.
+    // Portage: depgraph.py, _show_ignored_binaries_user_patches
+    if !opts.quiet
+        && opts.binpkg_respect_user_patches.is_none()
+        && let Some(block) = portage_repo::render_ignored_user_patch_binaries(
+            &result.ignored_user_patch_binaries,
+            root,
+            opts.verbose,
+        )
+    {
+        eprint!("{block}");
     }
 
     // The `--changed-deps-report` WARN block, ported verbatim (plain text like

@@ -94,3 +94,4 @@ mod make_globals;
 mod package_files;
 mod profile_chain;
 mod resolve;
+mod user_patches;

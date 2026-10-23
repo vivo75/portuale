@@ -71,6 +71,12 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
                 })
             });
         }
+        // Mirror selection's `--binpkg-respect-user-patches` retain: a
+        // re-derived binary whose digest disagrees with the local patch
+        // set was never eligible either. Portage: depgraph.py
+        if ctx.binpkg_respect_user_patches {
+            binary_candidates.retain(|c| binary_user_patches_ok(c, &key.0, &key.1, config));
+        }
         if binpkg_changed_deps_active(ctx.usepkgonly) {
             binary_candidates.retain(|c| {
                 !binary_deps_changed(BinaryDepsChangedArgs {

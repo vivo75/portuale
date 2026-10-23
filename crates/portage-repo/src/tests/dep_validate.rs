@@ -187,6 +187,7 @@ fn built_binary_skips_the_improper_context_check() {
     let binary = Candidate {
         source: CandidateSource::Binary,
         binary_deps: HashMap::from([("RDEPEND".to_string(), "dev-libs/t341-dep:0/1=".to_string())]),
+        user_patches: String::new(),
         binary_use: Some(HashSet::new()),
         eapi: "8".to_string(),
         iuse: String::new(),

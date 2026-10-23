@@ -50,6 +50,7 @@ fn cand_166(version: &str) -> Candidate {
         build_time: None,
         eapi: "8".to_string(),
         binary_deps: HashMap::new(),
+        user_patches: String::new(),
     }
 }
 
@@ -101,6 +102,7 @@ fn usepkg_dropped_report_lists_only_the_dropped_matches_without_a_reason() {
         "dev-libs/foo",
         "\"dev-libs/foo\"",
         (&exclude, &[]),
+        false,
     )
     .expect("a dropped match");
     assert!(
@@ -108,7 +110,9 @@ fn usepkg_dropped_report_lists_only_the_dropped_matches_without_a_reason() {
         "{report}"
     );
     assert!(!report.contains("foo-2.0"), "{report}");
-    assert!(usepkg_dropped_binary_report(&binaries, "dev-libs/foo", "x", (&[], &[])).is_none());
+    assert!(
+        usepkg_dropped_binary_report(&binaries, "dev-libs/foo", "x", (&[], &[]), false).is_none()
+    );
 }
 
 // ---- `rebuilt_binary_changed` (Portage's two rebuilt_binary triggers). ----

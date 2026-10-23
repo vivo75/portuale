@@ -39,6 +39,9 @@ pub struct ResolveRequest {
     pub changed_slot: bool,
     pub with_test_deps: bool,
     pub changed_deps_report: bool,
+    /// `--verbose`: the ignored-user-patches block also names the
+    /// triggering patch files (backlog #509 oracle shape 11).
+    pub verbose: bool,
     pub selective: bool,
     pub autounmask_suggest_keywords: bool,
     pub autounmask_suggest_use: bool,
@@ -47,6 +50,14 @@ pub struct ResolveRequest {
     pub usepkg: bool,
     pub usepkgonly: bool,
     pub binpkg_respect_use: bool,
+    /// `--binpkg-respect-user-patches[=y|n]` (default on, also with
+    /// `--usepkgonly`): `false` skips the local-patch-digest comparison.
+    /// Portage: depgraph.py, `binpkg_respect_user_patches`
+    pub binpkg_respect_user_patches: bool,
+    /// Whether the option was given explicitly (`=y` or `=n`): an explicit
+    /// value silences the ignored-binaries block either way.
+    /// Portage: depgraph.py, `_show_ignored_binaries`
+    pub binpkg_respect_user_patches_explicit: bool,
     pub usepkg_exclude: Vec<String>,
     pub usepkg_include: Vec<String>,
     pub rebuilt_binaries: bool,
@@ -161,6 +172,7 @@ impl ResolveRequest {
             changed_slot: false,
             with_test_deps: false,
             changed_deps_report: false,
+            verbose: false,
             selective: true,
             autounmask_suggest_keywords: false,
             autounmask_suggest_use: false,
@@ -169,6 +181,8 @@ impl ResolveRequest {
             usepkg: false,
             usepkgonly: false,
             binpkg_respect_use: false,
+            binpkg_respect_user_patches: true,
+            binpkg_respect_user_patches_explicit: false,
             usepkg_exclude: Vec::new(),
             usepkg_include: Vec::new(),
             rebuilt_binaries: false,

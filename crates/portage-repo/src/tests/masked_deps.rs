@@ -523,6 +523,7 @@ fn binary_masked_rows_report_changed_deps_rejections() {
     let binary = Candidate {
         source: CandidateSource::Binary,
         binary_deps: HashMap::from([("RDEPEND".to_string(), "dev-libs/bcdepold".to_string())]),
+        user_patches: String::new(),
         binary_use: Some(HashSet::new()),
         eapi: "8".to_string(),
         repo_name: "testrepo".to_string(),
@@ -532,6 +533,7 @@ fn binary_masked_rows_report_changed_deps_rejections() {
         respect_use: false,
         newuse: false,
         changed_use: false,
+        user_patches: false,
         ebuilds: &[],
         changed_deps: None,
     };
@@ -584,6 +586,7 @@ fn binary_masked_rows_prefer_respect_use_over_changed_deps() {
     let binary = Candidate {
         source: CandidateSource::Binary,
         binary_deps: HashMap::from([("RDEPEND".to_string(), "dev-libs/bcdepold".to_string())]),
+        user_patches: String::new(),
         binary_use: Some(HashSet::new()),
         eapi: "8".to_string(),
         iuse: "x".to_string(),
@@ -598,6 +601,7 @@ fn binary_masked_rows_prefer_respect_use_over_changed_deps() {
             respect_use: true,
             newuse: false,
             changed_use: false,
+            user_patches: false,
             ebuilds: &[],
             changed_deps: Some(BinaryChangedDepsGate {
                 root: &root,

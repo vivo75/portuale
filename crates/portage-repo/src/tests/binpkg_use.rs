@@ -569,19 +569,21 @@ fn binary_masked_report_lists_respect_use_mismatches_as_masked() {
         .is_none()
     );
     // With the respect-use gate the same pool reports one cpv-deduped row.
-    let report = all_binary_masked_report_with_respect_use(
-        &binaries,
-        "dev-libs/t341-dep",
-        &config,
-        "\"dev-libs/t341-dep\"",
-        BinaryRespectUseGate {
+    let report = all_binary_masked_report_with_respect_use(AllBinaryMaskedReportArgs {
+        binaries: &binaries,
+        atom_str: "dev-libs/t341-dep",
+        config: &config,
+        xinfo: "\"dev-libs/t341-dep\"",
+        gate: BinaryRespectUseGate {
             respect_use: true,
             newuse: false,
             changed_use: false,
+            user_patches: false,
             ebuilds: &[],
             changed_deps: None,
         },
-    )
+        binary_header: false,
+    })
     .expect("USE-mismatched binaries report as masked");
     assert!(
         report

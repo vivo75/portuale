@@ -676,6 +676,9 @@ fn graph_onlydeps(
         usepkg: false,
         usepkgonly: false,
         binpkg_respect_use: false,
+        binpkg_respect_user_patches_explicit: false,
+        verbose: false,
+        binpkg_respect_user_patches: true,
         usepkg_exclude: Vec::new(),
         usepkg_include: Vec::new(),
         rebuilt_binaries: false,
@@ -1579,6 +1582,9 @@ struct CtxOpts161 {
     newuse: bool,
     usepkg: bool,
     binpkg_respect_use: bool,
+    binpkg_respect_user_patches_explicit: bool,
+    verbose: bool,
+    binpkg_respect_user_patches: bool,
     usepkgonly: bool,
     nodeps: bool,
     selective: bool,
@@ -1628,6 +1634,9 @@ fn ctx_161<'a>(
         usepkg: o.usepkg,
         usepkgonly: o.usepkgonly,
         binpkg_respect_use: o.binpkg_respect_use,
+        binpkg_respect_user_patches: o.binpkg_respect_user_patches,
+        binpkg_respect_user_patches_explicit: o.binpkg_respect_user_patches_explicit,
+        verbose: o.verbose,
         usepkg_exclude: &NO_STRINGS_161,
         usepkg_include: &NO_STRINGS_161,
         rebuilt_binaries: false,
@@ -2313,6 +2322,7 @@ fn candidate(version: &str, keywords: &[&str]) -> Candidate {
         build_time: None,
         eapi: "8".to_string(),
         binary_deps: HashMap::new(),
+        user_patches: String::new(),
     }
 }
 
@@ -3728,5 +3738,6 @@ mod updates;
 mod use_display;
 mod use_flags;
 mod use_unsat;
+mod user_patches;
 mod visibility;
 mod withhold;

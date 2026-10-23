@@ -100,3 +100,12 @@ Masked-dependency reports.
 
 ## fn is_all_masked_abort_report
 - #351 S7: matches the top-level "all masked" block (`all_masked_report`/`all_binary_masked_report`) by its `!!! All ebuilds that could satisfy` prefix — the only resolver `Err` raised after resolution started, so the only one whose exit path prints the resolution notice. Portage's `for <root>.` header suffix (omitted here per the fixture-miss-message convention) sits after the matched prefix, so both shapes match.
+
+## fn masked_rows_for_pool_inner (user-patches elif, backlog #509)
+- Portage's `elif ... user_patches` (`depgraph.py:6690-6695`): a visible binary the filter dropped reports `user patches`, after `respect_use` and `changed_deps`. Gated on `BinaryRespectUseGate.user_patches` (default-on flag threaded from `--binpkg-respect-user-patches`, `=n` disables); ebuild pools never match (the `Binary` source check). Covered by `test_509_*` pmtest pins and the `mask_reason_is_user_patches_after_changed_deps` unit leg.
+
+## fn render_all_masked_block (binary header, backlog #509)
+- Under `--usepkgonly` the binary pool aborts with Portage's own header `All binary packages that could satisfy` (`depgraph.py:7018-7023`; oracle shape 03). The `binary` flag threads through `all_binary_masked_report_with_respect_use` (`binary_header`) and `usepkg_dropped_binary_report` (`usepkgonly` mode, same header rule); the ebuild-side `all_masked_report` keeps `All ebuilds`. Five existing pins moved with the header (`test_s4_binary_rewritten_*`, `test_s9_build_id_*`, `test_t348_s5_binpkg_*`, `test_changed_deps_top_level_*`, `test_s3_bid_*`); their oracles had pinned only the mask rows, and the header is now Portage-verified.
+
+## fn is_all_masked_abort_report (binary header, backlog #509)
+- Accepts both headers, matched at a line start: the user-patches abort prepends the ignored block ahead of the header. Only used for the abort-path resolution notice (`pretend/gates.rs`); success paths never carry the text.

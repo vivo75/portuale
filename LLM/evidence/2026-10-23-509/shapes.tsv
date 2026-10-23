@@ -1,0 +1,21 @@
+# id <TAB> args (PORTAGE_CONFIGROOT=$T/cfg, ROOT=$T/root)
+# Tree ($T): repo `up509` (up-a..up-e, SLOT 0 except up-e SLOT 1), PKGDIR
+# with five real --buildpkgonly gpkgs whose Packages index carries
+# USER_PATCHES for a/b/c/e (built under patches) and no key for up-d
+# (built without patches). Local patches for a/b/c/e.
+# Per-shape setup (see probe.sh): 02/03/08/09/10/11/12 change up-b's patch
+# content, 04/05 strip up-c's USER_PATCHES line, 13 zeroes up-e's digest.
+01-match-k	-p --color=n -k app-misc/up-a
+02-differ-k	-p --color=n -k app-misc/up-b
+03-differ-K	-p --color=n -K app-misc/up-b
+04-lack-k	-p --color=n -k app-misc/up-c
+05-lack-K	-p --color=n -K app-misc/up-c
+06-trusted-k	-p --color=n -k app-misc/up-d
+07-trusted-K	-p --color=n -K app-misc/up-d
+08-disablen-k	-p --color=n -k --binpkg-respect-user-patches=n app-misc/up-b
+09-disablen-K	-p --color=n -K --binpkg-respect-user-patches=n app-misc/up-b
+10-explicit-y-k	-p --color=n -k --binpkg-respect-user-patches=y app-misc/up-b
+11-verbose-k	-p --color=n -k --verbose app-misc/up-b
+12-differ-K-stderr	-p --color=n -K app-misc/up-b
+13-slot-K	-p --color=n -K app-misc/up-e
+15-stray-k	-p --color=n -k app-misc/up-a

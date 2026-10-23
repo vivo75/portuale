@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792790090,"command":"/var/tmp/ev509-bin/emerge -p --color=n -K app-misc/up-d","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.009, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[binary  N     ] app-misc/up-d-1.0-1 to /var/tmp/ev509-tree/root\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev509-tree\u0007"]
+[0.000, "x", "0"]

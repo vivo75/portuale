@@ -19,7 +19,7 @@ use std::sync::Arc;
 /// and the only producer parses with `parse_atom`, so no parsed-atom or
 /// atom-string comparison is needed.
 struct PoolRow {
-    flags: [bool; 7],
+    flags: [bool; 8],
     root: PathBuf,
     extra_constraints: Vec<String>,
     usepkg_exclude: Vec<String>,
@@ -104,6 +104,7 @@ pub(crate) fn collect_memoized(
         args.usepkgonly,
         args.getbinpkg,
         args.binpkg_respect_use,
+        args.binpkg_respect_user_patches,
         args.newuse,
         args.changed_use,
         args.with_bdeps,
@@ -145,6 +146,7 @@ pub(crate) fn collect_memoized(
         config: args.config,
         root: args.root,
         binpkg_respect_use: args.binpkg_respect_use,
+        binpkg_respect_user_patches: args.binpkg_respect_user_patches,
         newuse: args.newuse,
         changed_use: args.changed_use,
         repos: args.repos,
@@ -192,6 +194,7 @@ mod tests {
             config,
             root: Path::new("/"),
             binpkg_respect_use: true,
+            binpkg_respect_user_patches: true,
             newuse: false,
             changed_use: false,
             candidates: out,

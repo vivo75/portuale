@@ -501,6 +501,10 @@ pub(crate) struct BinaryRespectUseGate<'a> {
     pub(crate) respect_use: bool,
     pub(crate) newuse: bool,
     pub(crate) changed_use: bool,
+    /// `--binpkg-respect-user-patches` (default on): a visible binary whose
+    /// recorded `USER_PATCHES` disagrees with the local patch set reports
+    /// `user patches` (backlog #509), the `elif` after `changed deps`.
+    pub(crate) user_patches: bool,
     pub(crate) ebuilds: &'a [Candidate],
     /// The `--binpkg-changed-deps` inputs selection's second `retain` read
     /// (`None` when `binpkg_changed_deps_active` is off, so a kept binary
@@ -633,6 +637,21 @@ fn masked_rows_for_pool_inner(
                 }
                 continue;
             }
+            // Portage's `elif ... user_patches` (depgraph.py:6690-6695): a
+            // visible binary the filter dropped for disagreeing with the
+            // local patch set reports `user patches` next.
+            let patches_mismatched = use_gate.is_some_and(|g| {
+                g.user_patches
+                    && c.source == CandidateSource::Binary
+                    && !binary_user_patches_ok(c, &atom.category, &atom.package, config)
+            });
+            if patches_mismatched {
+                let output_cpv = output_cpv_for_masked_row(c, atom, &["user patches".to_string()]);
+                if seen.insert(output_cpv.clone()) {
+                    out.push((output_cpv, vec!["user patches".to_string()]));
+                }
+                continue;
+            }
             return None;
         }
         let reasons = candidate_masking_reasons(c, &atom.category, &atom.package, config);
@@ -665,7 +684,7 @@ pub(crate) fn all_masked_report(
     // dependency disclosure.
     let masked = masked_candidates_for_atom(repos, atom_str, config)?;
 
-    render_all_masked_block(xinfo, masked, set_member_of)
+    render_all_masked_block(xinfo, masked, set_member_of, false)
 }
 
 /// Binary-only twin of [`all_masked_report`] for `--usepkgonly`, where
@@ -683,19 +702,21 @@ pub(crate) fn all_binary_masked_report(
     config: &portage_profile::Config,
     xinfo: &str,
 ) -> Option<String> {
-    all_binary_masked_report_with_respect_use(
+    all_binary_masked_report_with_respect_use(AllBinaryMaskedReportArgs {
         binaries,
         atom_str,
         config,
         xinfo,
-        BinaryRespectUseGate {
+        gate: BinaryRespectUseGate {
             respect_use: false,
             newuse: false,
             changed_use: false,
+            user_patches: false,
             ebuilds: &[],
             changed_deps: None,
         },
-    )
+        binary_header: true,
+    })
 }
 
 /// [`all_binary_masked_report`] with the respect-use gate threaded through:
@@ -707,16 +728,33 @@ pub(crate) fn all_binary_masked_report(
 /// Portage's `ignored_binaries[respect_use]`/`[changed_deps]` reasons in
 /// `_show_unsatisfied_dep`.
 // Portage: lib/_emerge/depgraph.py
+/// The values [`all_binary_masked_report_with_respect_use`] reads from its caller.
+pub(crate) struct AllBinaryMaskedReportArgs<'a> {
+    pub(crate) binaries: &'a [Candidate],
+    pub(crate) atom_str: &'a str,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) xinfo: &'a str,
+    pub(crate) gate: BinaryRespectUseGate<'a>,
+    /// `--usepkgonly` mode: the binary pool aborts with the `binary
+    /// packages` header (backlog #509); under `--getbinpkg` alone the
+    /// ebuild header stands.
+    pub(crate) binary_header: bool,
+}
+
 pub(crate) fn all_binary_masked_report_with_respect_use(
-    binaries: &[Candidate],
-    atom_str: &str,
-    config: &portage_profile::Config,
-    xinfo: &str,
-    gate: BinaryRespectUseGate<'_>,
+    args: AllBinaryMaskedReportArgs<'_>,
 ) -> Option<String> {
+    let AllBinaryMaskedReportArgs {
+        binaries,
+        atom_str,
+        config,
+        xinfo,
+        gate,
+        binary_header,
+    } = args;
     let atom = portage_dep::parse_atom(atom_str)?;
     let masked = masked_rows_for_pool_inner(binaries, atom_str, &atom, config, Some(&gate))?;
-    render_all_masked_block(xinfo, masked, None)
+    render_all_masked_block(xinfo, masked, None, binary_header)
 }
 
 /// The values [`binary_masked_rows_for_atom`] reads from its caller.
@@ -770,6 +808,7 @@ pub(crate) struct MaskedRowsForDepArgs<'a> {
     pub(crate) usepkgonly: bool,
     pub(crate) getbinpkg: bool,
     pub(crate) binpkg_respect_use: bool,
+    pub(crate) binpkg_respect_user_patches: bool,
     pub(crate) newuse: bool,
     pub(crate) changed_use: bool,
     pub(crate) with_bdeps: bool,
@@ -798,6 +837,7 @@ pub(crate) fn masked_rows_for_dep(args: MaskedRowsForDepArgs<'_>) -> Vec<(String
         usepkgonly,
         getbinpkg,
         binpkg_respect_use,
+        binpkg_respect_user_patches,
         newuse,
         changed_use,
         with_bdeps,
@@ -844,6 +884,7 @@ pub(crate) fn masked_rows_for_dep(args: MaskedRowsForDepArgs<'_>) -> Vec<(String
             respect_use: binpkg_respect_use,
             newuse,
             changed_use,
+            user_patches: binpkg_respect_user_patches,
             ebuilds: &ebuilds,
             changed_deps,
         },
@@ -862,6 +903,7 @@ pub(crate) fn usepkg_dropped_binary_report(
     atom_str: &str,
     xinfo: &str,
     filters: (&[String], &[String]),
+    usepkgonly: bool,
 ) -> Option<String> {
     let atom = portage_dep::parse_atom(atom_str)?;
     let match_atom = portage_dep::parse_match_atom(atom_str)?;
@@ -892,13 +934,14 @@ pub(crate) fn usepkg_dropped_binary_report(
         .into_iter()
         .map(|c| (output_cpv_for_masked_row(c, &atom, &[]), Vec::new()))
         .collect();
-    render_all_masked_block(xinfo, rows, None)
+    render_all_masked_block(xinfo, rows, None, usepkgonly)
 }
 
 fn render_all_masked_block(
     xinfo: &str,
     masked: Vec<(String, Vec<String>)>,
     set_member_of: Option<&str>,
+    binary: bool,
 ) -> Option<String> {
     // Portage prints the upgrade paragraph whenever any listed row is
     // EAPI-masked (`show_masked_packages` returns `have_eapi_mask`, and
@@ -908,8 +951,12 @@ fn render_all_masked_block(
     let have_eapi_mask = masked
         .iter()
         .any(|(_, reasons)| reasons.iter().any(|r| r.starts_with("EAPI ")));
+    // Under `--usepkgonly` the binary pool aborts with its own header
+    // (backlog #509 oracle shape 03: `All binary packages that could
+    // satisfy`). Portage: depgraph.py, _show_unsatisfied_dep
+    let what = if binary { "binary packages" } else { "ebuilds" };
     let mut out = format!(
-        "\n!!! All ebuilds that could satisfy {xinfo}{} have been masked.\n\
+        "\n!!! All {what} that could satisfy {xinfo}{} have been masked.\n\
          !!! One of the following masked packages is required to complete your request:\n",
         crate::display_root_suffix()
     );
@@ -946,8 +993,13 @@ fn render_all_masked_block(
 /// prints the resolution notice (351-ABORT). The dependency-path masked
 /// disclosures share the sentence but never travel as `Err`.
 pub fn is_all_masked_abort_report(msg: &str) -> bool {
-    msg.trim_start()
-        .starts_with("!!! All ebuilds that could satisfy")
+    // The `--usepkgonly` user-patches abort prepends the ignored-binaries
+    // block ahead of the header (backlog #509), so the header is matched
+    // at a line start rather than at the message start.
+    msg.lines().any(|line| {
+        line.starts_with("!!! All ebuilds that could satisfy")
+            || line.starts_with("!!! All binary packages that could satisfy")
+    })
 }
 
 /// Portage's EAPI-masked upgrade paragraph (the leading blank line

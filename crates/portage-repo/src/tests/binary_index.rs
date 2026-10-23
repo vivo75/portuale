@@ -77,6 +77,7 @@ fn dedup_binary_instances_keeps_newest_build_time_per_group() {
         build_time: Some(bt),
         eapi: "8".to_string(),
         binary_deps: HashMap::new(),
+        user_patches: String::new(),
     };
     let cfg = test_config();
 
@@ -139,6 +140,7 @@ fn dedup_binary_instances_prefers_the_visible_build_over_a_masked_newer_one() {
         build_time: Some(bt),
         eapi: "8".to_string(),
         binary_deps: HashMap::new(),
+        user_patches: String::new(),
     };
     let atom = portage_dep::parse_atom("dev-libs/x").unwrap();
 

@@ -39,6 +39,7 @@ mod updates;
 mod use_display;
 mod use_flags;
 mod use_unsat;
+mod user_patches;
 mod visibility;
 mod visibility_use_flip;
 
@@ -70,6 +71,7 @@ pub use updates::*;
 pub use use_display::*;
 pub use use_flags::*;
 pub(crate) use use_unsat::*;
+pub use user_patches::*;
 pub use visibility::*;
 pub use visibility_use_flip::*;
 

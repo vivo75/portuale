@@ -85,6 +85,25 @@ fn top_level_atom_excluded(
     Ok(any_match && any_excluded)
 }
 
+/// The ignored-user-patches block that precedes a `--usepkgonly` abort
+/// (backlog #509 oracle shapes 03/05/12): the dropped binaries of the
+/// failing atom's pools, nothing eliminated (nothing was selected).
+/// Suppressed under an explicit `--binpkg-respect-user-patches=y|n`, like
+/// the success path, and empty when the filter is off.
+// Portage: depgraph.py, _show_ignored_binaries_user_patches
+pub(crate) fn user_patches_abort_prefix(
+    ctx: &ResolveCtx<'_>,
+    config: &Config,
+    key: &(String, String),
+    binaries: &[Candidate],
+) -> String {
+    if ctx.binpkg_respect_user_patches_explicit {
+        return String::new();
+    }
+    let rows = ignored_user_patches_for_atom(binaries, &key.0, &key.1, config, &[]);
+    render_ignored_user_patch_binaries(&rows, ctx.root, ctx.verbose).unwrap_or_default()
+}
+
 /// A top-level atom with no visible candidate: Portage's drop-or-abort for arguments.
 pub(crate) fn step_top_level_unsatisfied(
     args: StepTopLevelUnsatisfiedArgs<'_>,
@@ -170,27 +189,41 @@ pub(crate) fn step_top_level_unsatisfied(
             // under `binpkg_changed_deps_active` (#420).
             // Otherwise the ebuild-side report below applies unchanged.
             if ctx.usepkgonly {
-                let binaries = list_binary_candidates(&ctx.local_binpkg, &key.0, &key.1);
-                if let Some(report) = all_binary_masked_report_with_respect_use(
-                    &binaries,
-                    current_atom,
-                    config,
-                    &format!("{current_atom:?}"),
-                    BinaryRespectUseGate {
-                        respect_use: ctx.binpkg_respect_use,
-                        newuse: ctx.newuse,
-                        changed_use: ctx.changed_use,
-                        ebuilds: &[],
-                        changed_deps: binpkg_changed_deps_active(ctx.usepkgonly).then_some(
-                            BinaryChangedDepsGate {
-                                root: ctx.root,
-                                repos: &ctx.repos,
-                                with_bdeps: ctx.with_bdeps,
-                            },
-                        ),
-                    },
-                ) {
-                    return Err(Error::Detail(report));
+                let mut binaries = list_binary_candidates(&ctx.local_binpkg, &key.0, &key.1);
+                if ctx.getbinpkg {
+                    binaries.extend(list_remote_binary_candidates(
+                        &config.binrepos,
+                        ctx.root,
+                        &ctx.local_binpkg,
+                        &key.0,
+                        &key.1,
+                    ));
+                }
+                if let Some(report) =
+                    all_binary_masked_report_with_respect_use(AllBinaryMaskedReportArgs {
+                        binaries: &binaries,
+                        atom_str: current_atom,
+                        config,
+                        xinfo: &format!("{current_atom:?}"),
+                        gate: BinaryRespectUseGate {
+                            respect_use: ctx.binpkg_respect_use,
+                            newuse: ctx.newuse,
+                            changed_use: ctx.changed_use,
+                            user_patches: ctx.binpkg_respect_user_patches,
+                            ebuilds: &[],
+                            changed_deps: binpkg_changed_deps_active(ctx.usepkgonly).then_some(
+                                BinaryChangedDepsGate {
+                                    root: ctx.root,
+                                    repos: &ctx.repos,
+                                    with_bdeps: ctx.with_bdeps,
+                                },
+                            ),
+                        },
+                        binary_header: true,
+                    })
+                {
+                    let prefix = user_patches_abort_prefix(ctx, config, key, &binaries);
+                    return Err(Error::Detail(format!("{prefix}{report}")));
                 }
             }
             // An atom matching only masked ebuilds reports the "all masked"
@@ -216,6 +249,7 @@ pub(crate) fn step_top_level_unsatisfied(
                     current_atom,
                     &format!("{current_atom:?}"),
                     (ctx.usepkg_exclude, ctx.usepkg_include),
+                    ctx.usepkgonly,
                 ) {
                     return Err(Error::Detail(report));
                 }
@@ -251,26 +285,31 @@ pub(crate) fn step_top_level_unsatisfied(
                             .unwrap_or_default();
                         &ebuilds
                     };
-                if let Some(report) = all_binary_masked_report_with_respect_use(
-                    &remote,
-                    current_atom,
-                    config,
-                    &format!("{current_atom:?}"),
-                    BinaryRespectUseGate {
-                        respect_use: ctx.binpkg_respect_use,
-                        newuse: ctx.newuse,
-                        changed_use: ctx.changed_use,
-                        ebuilds: ebuild_pool,
-                        changed_deps: binpkg_changed_deps_active(ctx.usepkgonly).then_some(
-                            BinaryChangedDepsGate {
-                                root: ctx.root,
-                                repos: &ctx.repos,
-                                with_bdeps: ctx.with_bdeps,
-                            },
-                        ),
-                    },
-                ) {
-                    return Err(Error::Detail(report));
+                if let Some(report) =
+                    all_binary_masked_report_with_respect_use(AllBinaryMaskedReportArgs {
+                        binaries: &remote,
+                        atom_str: current_atom,
+                        config,
+                        xinfo: &format!("{current_atom:?}"),
+                        gate: BinaryRespectUseGate {
+                            respect_use: ctx.binpkg_respect_use,
+                            newuse: ctx.newuse,
+                            changed_use: ctx.changed_use,
+                            user_patches: ctx.binpkg_respect_user_patches,
+                            ebuilds: ebuild_pool,
+                            changed_deps: binpkg_changed_deps_active(ctx.usepkgonly).then_some(
+                                BinaryChangedDepsGate {
+                                    root: ctx.root,
+                                    repos: &ctx.repos,
+                                    with_bdeps: ctx.with_bdeps,
+                                },
+                            ),
+                        },
+                        binary_header: ctx.usepkgonly,
+                    })
+                {
+                    let prefix = user_patches_abort_prefix(ctx, config, key, &remote);
+                    return Err(Error::Detail(format!("{prefix}{report}")));
                 }
             }
             // A USE miss aborts with the "no ebuilds built with USE flags" block

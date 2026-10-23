@@ -1,0 +1,35 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/updates/2Q-2024..
+
+
+Calculating dependencies ... done!
+Dependency resolution took 1.80 s (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) app-misc/up-b-1.0::up509 for /var/tmp/ev509-tree/root/
+ * up-b-1.0-1.gpkg.tar MD5 SHA1 size ;-) ...                             [ ok ]
+>>> Extracting info
+ * This binary package was built with user patches applied:
+ * =============================================================================
+ * user.patch  b7bab6cdb78ca1425eeae16508c0124ccfc71953f3e2b7c6b1b753837a1a11d3
+ * =============================================================================
+ * 
+>>> Extracting app-misc/up-b-1.0
+
+>>> Installing (1 of 1) app-misc/up-b-1.0::up509 to /var/tmp/ev509-tree/root/
+
+>>> Recording app-misc/up-b in "world" favorites file...
+
+>>> Completed (1 of 1) app-misc/up-b-1.0::up509 to /var/tmp/ev509-tree/root/
+>>> Auto-cleaning packages...
+
+>>> Using system located in ROOT tree /var/tmp/ev509-tree/root/
+
+>>> No outdated packages were found on your system.
+
+ * GNU info directory index is up-to-date.

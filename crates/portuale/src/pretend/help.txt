@@ -78,7 +78,7 @@ Binary packages:
       --getbinpkg-exclude ATOMS, --getbinpkg-include ATOMS  filter remote binhost entries like --exclude; binrepos.conf keys fold in
       --usepkg-exclude ATOMS, --usepkg-include ATOMS  narrow which packages may come from a binary
       --binpkg-respect-use[=y|n]  reject a binary package built with the wrong USE
-      --binpkg-respect-user-patches[=y|n]  accepted; inert until user patches are compared (backlog 509)
+      --binpkg-respect-user-patches[=y|n]  reject a binary built with different user patches
       --binpkg-changed-deps[=y|n]  reject a binary whose recorded deps differ from the ebuild (auto unless -K)
       --use-ebuild-visibility[=y|n]  apply ebuild visibility checks to built packages even under -K
       --rebuilt-binaries[=y|n], --rebuilt-binaries-timestamp N  prefer / bound rebuilt binary packages

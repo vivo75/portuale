@@ -1665,6 +1665,7 @@ dependencies = [
  "portage-dep",
  "portage-util",
  "regex",
+ "sha2",
 ]
 
 [[package]]

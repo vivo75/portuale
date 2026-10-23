@@ -1,0 +1,5 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792790090,"command":"/var/tmp/ev509-bin/emerge -p --color=n -K app-misc/up-e","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.012, "o", "\r\n!!! The following binary packages have been ignored due to user patches:\r\n\r\n     app-misc/up-e-1.0:1-1 for /var/tmp/ev509-tree/root/\r\n\r\nNOTE: The --binpkg-respect-user-patches=n option will prevent\r\n      emerge from ignoring these binary packages.\r\n      Using --binpkg-respect-user-patches=y will silence this\r\n      warning.\r\n\r\n!!! All binary packages that could satisfy \"app-misc/up-e\" for /var/tmp/ev509-tree/root/ have been masked.\r\n!!! One of the following masked packages is required to complete your request:\r\n- app-misc/up-e-1.0::up509 (masked by: user patches)\r\n\r\nFor more information, see the MASKED PACKAGES section in the emerge\r\nman page or refer to the Gentoo Handbook.\r\n\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev509-tree\u0007"]
+[0.000, "x", "1"]

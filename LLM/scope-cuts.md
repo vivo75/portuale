@@ -41,6 +41,6 @@ A marker (`Still deferred`, `remains open`, `still open)`) on line `L` of
 - CUT-5: recursively building a new package against the running root (what-this-proves.md:7000) → none (accepted): partly shipped as the deliberately non-recursive `--root-deps` increment, whose section is cited from the marker's own paragraph. The recursive remainder has no backlog item. Candidate for one.
 - CUT-6: standalone `ebuild <file> <phase>` USE and flags (what-this-proves.md:16061) → none (accepted): backlog #100 (DONE 2026-09-21) made standalone `ebuild` export the full resolved config env. The USE half of the sentence was not re-verified here, so a check of the USE half is worth doing before closing it.
 - CUT-7: upstream brush PRs unopened (what-this-proves.md:16095) → #5: the backlog entry "brush PRs: submit staged fixes" is the follow-up. It needs the owner's GitHub auth, so it is not a portuale code gap.
-- CUT-8: `--binpkg-respect-user-patches` is parsed and stored but changes nothing, no patch digests are compared (what-this-proves.md, backlog #503 paragraph) → #509
+- CUT-8: `--binpkg-respect-user-patches` is parsed and stored but changes nothing, no patch digests are compared (what-this-proves.md, backlog #503 paragraph) → closed #509
 - CUT-9: `--circular-deps-report=json` is parsed and stored, the report keeps one format (what-this-proves.md, backlog #503 paragraph) → closed #507
 - CUT-10: `--merge-wait-scope` is parsed and stored, the scheduler does not use it (what-this-proves.md, backlog #503 paragraph) → #512

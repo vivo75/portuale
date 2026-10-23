@@ -49,6 +49,7 @@
 - [crates/portage-profile/src/resolve/use_masks.rs](portage-profile/resolve/use_masks.md) — Profile `use.mask`, `use.force` and `arch.list`.
 - [crates/portage-profile/src/tests/incrementals.rs](portage-profile/tests/incrementals.md) — Incremental-variable folding tests (USE token replay, wildcard removal, snapshots).
 - [crates/portage-profile/src/tests/resolve.rs](portage-profile/tests/resolve.md) — `resolve_config` end-to-end and per-file folding tests over hand-built and fixture trees.
+- [crates/portage-profile/src/user_patches.rs](portage-profile/user_patches.md) — 
 
 ## portage-repo
 - [crates/portage-repo/src/binary_index.rs](portage-repo/binary_index.md) — The binary package index (`Packages`) and binary candidates.
@@ -231,6 +232,7 @@
 - [crates/portage-repo/src/use_display.rs](portage-repo/use_display.md) — USE flag display columns for `emerge --pretend -v`.
 - [crates/portage-repo/src/use_flags.rs](portage-repo/use_flags.md) — Effective USE and USE mask/force resolution.
 - [crates/portage-repo/src/use_unsat.rs](portage-repo/use_unsat.md) — Reports for dependencies whose USE requirements no candidate meets.
+- [crates/portage-repo/src/user_patches.rs](portage-repo/user_patches.md) — 
 - [crates/portage-repo/src/visibility.rs](portage-repo/visibility.md) — Keyword, mask and license visibility of a candidate.
 - [crates/portage-repo/src/visibility_use_flip.rs](portage-repo/visibility_use_flip.md) — USE-flip suggestions for autounmask.
 

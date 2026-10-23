@@ -1,0 +1,9 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] app-misc/up-b-1.0::up509 to /var/tmp/ev509-tree/root 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB

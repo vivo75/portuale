@@ -561,6 +561,7 @@ pub struct SelectOptions<'a> {
     pub usepkg: bool,
     pub usepkgonly: bool,
     pub binpkg_respect_use: bool,
+    pub binpkg_respect_user_patches: bool,
     pub usepkg_exclude: &'a [String],
     pub usepkg_include: &'a [String],
     pub rebuilt_binaries: bool,
@@ -605,6 +606,7 @@ impl Default for SelectOptions<'_> {
             usepkg: false,
             usepkgonly: false,
             binpkg_respect_use: false,
+            binpkg_respect_user_patches: true,
             usepkg_exclude: &[],
             usepkg_include: &[],
             rebuilt_binaries: false,
@@ -654,6 +656,7 @@ impl ResolveCtx<'_> {
             usepkg: self.usepkg,
             usepkgonly: self.usepkgonly,
             binpkg_respect_use: self.binpkg_respect_use,
+            binpkg_respect_user_patches: self.binpkg_respect_user_patches,
             usepkg_exclude: self.usepkg_exclude,
             usepkg_include: self.usepkg_include,
             rebuilt_binaries: self.rebuilt_binaries,
@@ -700,6 +703,7 @@ pub fn resolve_pretend(
         usepkg,
         usepkgonly,
         binpkg_respect_use,
+        binpkg_respect_user_patches,
         usepkg_exclude,
         usepkg_include,
         rebuilt_binaries,
@@ -753,6 +757,7 @@ pub fn resolve_pretend(
             config,
             root,
             binpkg_respect_use,
+            binpkg_respect_user_patches,
             newuse,
             changed_use,
             candidates: &mut candidates,
@@ -1279,6 +1284,7 @@ pub(crate) struct CollectBinaryCandidatesArgs<'a> {
     pub(crate) config: &'a Config,
     pub(crate) root: &'a Path,
     pub(crate) binpkg_respect_use: bool,
+    pub(crate) binpkg_respect_user_patches: bool,
     pub(crate) newuse: bool,
     pub(crate) changed_use: bool,
     pub(crate) candidates: &'a mut Vec<Candidate>,
@@ -1301,6 +1307,7 @@ pub(crate) fn collect_binary_candidates(args: CollectBinaryCandidatesArgs<'_>) {
         config,
         root,
         binpkg_respect_use,
+        binpkg_respect_user_patches,
         newuse,
         changed_use,
         candidates,
@@ -1352,6 +1359,15 @@ pub(crate) fn collect_binary_candidates(args: CollectBinaryCandidatesArgs<'_>) {
                     respect_use: binpkg_respect_use,
                 })
             });
+        }
+        // `--binpkg-respect-user-patches` (default on, also with
+        // `--usepkgonly`): reject a binary whose recorded `USER_PATCHES`
+        // differs from the local patch-set digest, so a stale build is
+        // rebuilt from source. `=n` skips the comparison outright.
+        // Portage: depgraph.py (bug #917047)
+        if binpkg_respect_user_patches {
+            binary_candidates
+                .retain(|c| binary_user_patches_ok(c, &atom.category, &atom.package, config));
         }
         // `--binpkg-changed-deps` (auto-enabled without `--usepkgonly`): reject a
         // binhost binary whose recorded `*DEPEND` differs from the current ebuild's,

@@ -187,6 +187,12 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         .cloned()
         .unwrap_or_else(|| "/var/cache/binpkgs".to_string());
 
+    // The local user-patch sets for the `--binpkg-respect-user-patches`
+    // comparison (backlog #509): `None` when there is no patches
+    // directory, exactly like Portage's lazy `_user_patches`.
+    // Portage: config.py, `_user_patches` (`UserPatches`)
+    config.user_patches = UserPatchSet::load(config_root);
+
     // binrepos.conf + PORTAGE_BINHOST. `etc/portage/binrepos.conf` may be
     // a directory of `*.conf` fragments, not just a single file. The
     // binrepo key warnings join the profile warning stream (same

@@ -205,6 +205,51 @@ pub(crate) fn assemble_result(
         }
     }
 
+    // The success-path ignored-user-patches rows (backlog #509): for every
+    // merging cp, the filter-dropped binaries Portage accumulates in
+    // `ignored_binaries["user_patches"]`, minus `_eliminate_ignored_binaries`.
+    // Recomputed here from the settled merge list (Portage's displayed-list
+    // filter) because selection's retains are pure and memoized.
+    let mut merging: Vec<((String, String), Vec<SelectedPackage<'_>>)> = Vec::new();
+    let mut merging_idx: HashMap<(String, String), usize> = HashMap::new();
+    if ctx.binpkg_respect_user_patches {
+        for e in &pass.entries {
+            let version = match &e.outcome {
+                PretendOutcome::New { version } => Some(version.as_str()),
+                PretendOutcome::Upgrade { to, .. } => Some(to.as_str()),
+                PretendOutcome::Downgrade { to, .. } => Some(to.as_str()),
+                PretendOutcome::Reinstall { version, .. } => Some(version.as_str()),
+                PretendOutcome::Uninstall { .. }
+                | PretendOutcome::NoVisibleCandidate
+                | PretendOutcome::AlreadyInstalled { .. } => None,
+            };
+            let Some(version) = version else {
+                continue;
+            };
+            let key = (e.category.clone(), e.package.clone());
+            let idx = *merging_idx.entry(key.clone()).or_insert_with(|| {
+                merging.push((key, Vec::new()));
+                merging.len() - 1
+            });
+            merging[idx].1.push(SelectedPackage {
+                version,
+                source: e.source,
+                slot: e.slot.as_deref().unwrap_or("0"),
+            });
+        }
+    }
+    let ignored_user_patch_binaries =
+        ignored_user_patches_for_merging(IgnoredUserPatchesForMergingArgs {
+            usepkg: ctx.usepkg,
+            usepkgonly: ctx.usepkgonly,
+            getbinpkg: ctx.getbinpkg,
+            respect: ctx.binpkg_respect_user_patches,
+            local_binpkg: &ctx.local_binpkg,
+            binrepos: &config.binrepos,
+            root: ctx.root,
+            config,
+            merging: &merging,
+        });
     GraphResult {
         entries: pass.entries,
         backtrack_restarts,
@@ -216,6 +261,7 @@ pub(crate) fn assemble_result(
         skipped_missing_dep_full,
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,
+        ignored_user_patch_binaries,
         buildpkgonly_deps_unsatisfied,
         prune_unresolved: false,
         pprovided_atoms: pass.pprovided_atoms,

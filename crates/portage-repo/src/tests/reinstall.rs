@@ -23,6 +23,7 @@ fn candidate_iuse_and_use_reads_a_binarys_own_baked_use() {
         build_time: Some(1),
         eapi: "8".to_string(),
         binary_deps: HashMap::new(),
+        user_patches: String::new(),
     };
     let (iuse, use_flags) = candidate_iuse_and_use(&c, "dev-libs", "x", &test_config()).unwrap();
     assert_eq!(
@@ -53,6 +54,7 @@ fn best_binary_build_time_is_the_newest_binary_of_the_version() {
         build_time: bt,
         eapi: "8".to_string(),
         binary_deps: HashMap::new(),
+        user_patches: String::new(),
     };
     let cands = vec![
         mk(CandidateSource::Ebuild, "1.0", None),
@@ -550,7 +552,11 @@ fn changed_deps_top_level_reports_the_masked_block() {
     .expect_err("the stale binary is the only candidate: top-level aborts");
     assert_eq!(
         err.to_string(),
-        "\n!!! All ebuilds that could satisfy \"dev-libs/bcdeppkg\" have been masked.\n\
+        // The binary-pool header is Portage's own under `--usepkgonly`
+        // (`All binary packages that could satisfy`, backlog #509 oracle
+        // shape 03; depgraph.py 7018-7023): the #420 oracle pinned only
+        // the `changed deps` row, which is unchanged.
+        "\n!!! All binary packages that could satisfy \"dev-libs/bcdeppkg\" have been masked.\n\
          !!! One of the following masked packages is required to complete your request:\n\
          - dev-libs/bcdeppkg-1.0::gentoo (masked by: changed deps)\n\
          \n\
@@ -693,6 +699,7 @@ fn respect_use_dependency_reports_the_masked_block() {
     let result = ResolveRequest {
         usepkgonly: true,
         binpkg_respect_use: true,
+        binpkg_respect_user_patches: true,
         ..ResolveRequest::new(
             &root,
             &root,
@@ -763,6 +770,7 @@ fn binary_deps_changed_answers_per_recorded_deps_even_when_asked_repeatedly() {
         build_time: Some(1),
         eapi: "8".to_string(),
         binary_deps: HashMap::from([("RDEPEND".to_string(), rdepend.to_string())]),
+        user_patches: String::new(),
     };
     let ask = |c: &Candidate| {
         binary_deps_changed(BinaryDepsChangedArgs {

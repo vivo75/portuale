@@ -358,6 +358,14 @@ fn build_binary_candidates(
                 .iter()
                 .filter_map(|k| entry.get(*k).map(|v| (k.to_string(), v.clone())))
                 .collect(),
+            // A stanza without the key was built without patches (or
+            // predates them): the `-r1` empty default, bug 984255.
+            // Lowercased like Portage's `user_patches` property, so a
+            // hand-made index with uppercase hex compares the same.
+            user_patches: entry
+                .get("USER_PATCHES")
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default(),
         });
     }
     candidates

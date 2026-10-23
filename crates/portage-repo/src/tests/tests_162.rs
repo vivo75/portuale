@@ -475,6 +475,7 @@ fn cand_162(version: &str, keywords: &[&str], slot: &str) -> Candidate {
         build_time: None,
         eapi: "8".to_string(),
         binary_deps: HashMap::new(),
+        user_patches: String::new(),
     }
 }
 

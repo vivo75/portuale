@@ -289,6 +289,12 @@ pub struct Config {
     /// `$PKGDIR` scan fallback when `Packages` is absent (`None` =
     /// no scan). Recomputed each run, never written back.
     pub scanned_binpkgs: Option<Vec<std::collections::HashMap<String, String>>>,
+    /// The loaded `/etc/portage/patches` tree (`None` = no patches
+    /// directory): the local half of the `--binpkg-respect-user-patches`
+    /// comparison (backlog #509). Loaded once in `resolve_config`, read
+    /// by the resolver through `digest`/`files`.
+    // Portage: config.py, `_user_patches` (`UserPatches`)
+    pub user_patches: Option<UserPatchSet>,
     /// Every non-USE/ACCEPT_KEYWORDS variable's final scalar value
     /// (last-level-wins across profile chain + `make.conf`): the
     /// `scalars` map `resolve_config` builds for `${VAR}` substitution,

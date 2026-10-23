@@ -1,0 +1,9 @@
+
+!!! The following binary packages have been ignored due to user patches:
+
+     app-misc/up-c-1.0-1 for /var/tmp/ev509-tree/root/
+
+NOTE: The --binpkg-respect-user-patches=n option will prevent
+      emerge from ignoring these binary packages.
+      Using --binpkg-respect-user-patches=y will silence this
+      warning.
