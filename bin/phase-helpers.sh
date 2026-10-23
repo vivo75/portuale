@@ -528,16 +528,17 @@ econf() {
 
 	__hasgq() { __hasg "$@" >/dev/null ; }
 
-	local phase_func=$(__ebuild_arg_to_phase "${EBUILD_PHASE}")
-	if [[ -n ${phase_func} ]] ; then
+	local ___phase_func
+	__ebuild_arg_to_phase "${EBUILD_PHASE}" ___phase_func
+	if [[ -n ${___phase_func} ]] ; then
 		if ! ___eapi_has_src_configure; then
-			[[ ${phase_func} != src_compile ]] && \
+			[[ ${___phase_func} != src_compile ]] && \
 				eqawarn "QA Notice: econf called in" \
-					"${phase_func} instead of src_compile"
+					"${___phase_func} instead of src_compile"
 		else
-			[[ ${phase_func} != src_configure ]] && \
+			[[ ${___phase_func} != src_configure ]] && \
 				eqawarn "QA Notice: econf called in" \
-					"${phase_func} instead of src_configure"
+					"${___phase_func} instead of src_configure"
 		fi
 	fi
 
@@ -851,10 +852,7 @@ __eapi8_src_prepare() {
 
 ___best_version_and_has_version_common() {
 	local atom root root_arg
-
-	# If ROOT is set to / below then SYSROOT cannot point elsewhere. Even if
-	# ROOT is untouched, setting SYSROOT=/ for this command will always work.
-	local -a cmd=(env SYSROOT=/)
+	local -a eprefix_arg=()
 
 	case $1 in
 		--host-root|-r|-d|-b)
@@ -880,7 +878,7 @@ ___best_version_and_has_version_common() {
 				# Since portageq requires the root argument be consistent
 				# with EPREFIX, ensure consistency here (bug #655414).
 				root=/${PORTAGE_OVERRIDE_EPREFIX#/}
-				cmd+=(EPREFIX="${PORTAGE_OVERRIDE_EPREFIX}")
+				eprefix_arg=(EPREFIX="${PORTAGE_OVERRIDE_EPREFIX}")
 			else
 				root=/
 			fi ;;
@@ -896,7 +894,7 @@ ___best_version_and_has_version_common() {
 						# Use /${PORTAGE_OVERRIDE_EPREFIX#/} to support older
 						# EAPIs, as it is equivalent to BROOT.
 						root=/${PORTAGE_OVERRIDE_EPREFIX#/}
-						cmd+=(EPREFIX="${PORTAGE_OVERRIDE_EPREFIX}")
+						eprefix_arg=(EPREFIX="${PORTAGE_OVERRIDE_EPREFIX}")
 						;;
 				esac
 			else
@@ -908,14 +906,20 @@ ___best_version_and_has_version_common() {
 			fi ;;
 	esac
 
+	local retval
 	if [[ -n ${PORTAGE_IPC_DAEMON} ]] ; then
-		cmd+=("${PORTAGE_BIN_PATH}"/ebuild-ipc "${FUNCNAME[1]}" "${root}" "${atom}")
+		# The daemon answers with the settings of the main portage
+		# process, so ebuild-ipc needs neither SYSROOT nor EPREFIX.
+		__ebuild_ipc "${FUNCNAME[1]}" "${root}" "${atom}"
+		retval=$?
 	else
-		cmd+=("${PORTAGE_BIN_PATH}"/portageq-wrapper "${FUNCNAME[1]}" "${root}" "${atom}")
+		# If ROOT is set to / above then SYSROOT cannot point elsewhere.
+		# Even if ROOT is untouched, setting SYSROOT=/ for this command
+		# will always work.
+		env SYSROOT=/ "${eprefix_arg[@]}" \
+			"${PORTAGE_BIN_PATH}"/portageq-wrapper "${FUNCNAME[1]}" "${root}" "${atom}"
+		retval=$?
 	fi
-
-	"${cmd[@]}"
-	local retval=$?
 
 	case "${retval}" in
 		0|1)
@@ -1139,6 +1143,7 @@ if ___eapi_has_eapply_user; then
 		local basename basedir columns tagfile hr d f
 		local -A patch_by
 		local -a dirents
+		local IFS
 
 		[[ ${EBUILD_PHASE} == prepare ]] || \
 			die "eapply_user() called during invalid phase: ${EBUILD_PHASE}"
@@ -1185,13 +1190,32 @@ if ___eapi_has_eapply_user; then
 		done
 
 		if (( ${#patch_by[@]} > 0 )); then
+			mkdir -p -- "${PORTAGE_BUILDDIR}"/build-info || die "eapply_user: could not create build-info directory"
+			local userpatch_digests="${PORTAGE_BUILDDIR}"/build-info/user_patch.digests
+			local userpatches_hash="${PORTAGE_BUILDDIR}"/build-info/USER_PATCHES
+
 			printf -v hr "%$(( columns - 3 ))s"
 			hr=${hr//?/=}
 			einfo "${PORTAGE_COLOR_INFO}${hr}${PORTAGE_COLOR_NORMAL}"
 			einfo "Applying user patches from ${basedir} ..."
+
+			local hash
+			local total=""
 			while IFS= read -rd '' basename; do
 				eapply -- "${patch_by[$basename]}"
+
+				read -r hash _ < <(sha256sum < "${patch_by[$basename]}") \
+				&& wait "$!" \
+				&& total+="${hash}" \
+				&& printf '%s\0' "${hash}" "${basename}" >> "${userpatch_digests}" \
+				|| die "eapply_user: could not generate individual user patch digests"
 			done < <(printf '%s\0' "${!patch_by[@]}" | LC_ALL=C sort -z)
+
+			read -r hash _ < <(printf '%s' "${total}" | sha256sum) \
+			&& wait "$!" \
+			&& printf '%s\n' "${hash}" > "${userpatches_hash}" \
+			|| die "eapply_user: could not generate hash over all user patches"
+
 			einfo "User patches applied."
 			einfo "${PORTAGE_COLOR_INFO}${hr}${PORTAGE_COLOR_NORMAL}"
 		fi

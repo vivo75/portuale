@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::Config;
 
 /// `environ_filter` keys: never exported to the ebuild environment.
-// Portage: special_env_vars.py, environ_filter (vendored 3.0.82.2)
+// Portage: special_env_vars.py, environ_filter (vendored 3.0.83)
 pub const ENVIRON_FILTER: &[&str] = &[
     "DEPEND",
     "RDEPEND",
@@ -149,8 +149,10 @@ pub const ENV_BLACKLIST: &[&str] = &[
     "PORTAGE_BUILDDIR_LOCKED",
     "PORTAGE_BUILT_USE",
     "PORTAGE_CONFIGROOT",
+    "PORTAGE_EBUILD_EXIT_FD",
     "PORTAGE_EXPLICIT_INHERIT",
     "PORTAGE_INTERNAL_CALLER",
+    "PORTAGE_IPC_ALIVE_FD",
     "PORTAGE_IUSE",
     "PORTAGE_NONFATAL",
     "PORTAGE_PIPE_FD",

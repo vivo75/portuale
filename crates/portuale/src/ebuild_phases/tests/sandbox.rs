@@ -75,9 +75,30 @@ fn sandbox_name_tables_are_one_plain_name_per_line() {
         }
     }
     assert_eq!(SANDBOXED_SRC_PHASES.lines().count(), 6);
-    assert_eq!(ENVIRON_WHITELIST.lines().count(), 154);
+    assert_eq!(ENVIRON_WHITELIST.lines().count(), 158);
     assert!(listed(SANDBOXED_SRC_PHASES, "compile"));
     assert!(!listed(SANDBOXED_SRC_PHASES, "setup"));
     assert!(environ_whitelisted("HOME") && environ_whitelisted("CCACHE_DIR"));
     assert!(!environ_whitelisted("EMERGE_DEFAULT_OPTS"));
+}
+
+/// Portage 3.0.83 `special_env_vars.py` (`5dc9b552e`, `c15ab2464`, `b7052a33d`,
+/// `1bad86d92`) adds four names to `environ_whitelist`, and the two
+/// descriptors also to `env_blacklist`.
+#[test]
+fn environ_whitelist_has_the_portage_3_0_83_additions() {
+    for name in [
+        "USERLAND",
+        "LOCPATH",
+        "PORTAGE_EBUILD_EXIT_FD",
+        "PORTAGE_IPC_ALIVE_FD",
+    ] {
+        assert!(
+            environ_whitelisted(name),
+            "{name} must pass the calling-env filter"
+        );
+    }
+    for name in ["PORTAGE_EBUILD_EXIT_FD", "PORTAGE_IPC_ALIVE_FD"] {
+        assert!(portage_profile::ENV_BLACKLIST.contains(&name));
+    }
 }

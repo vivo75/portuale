@@ -1,0 +1,11 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792768573,"command":"bash /home/vivo/repo/PORTUALE/portuale/LLM/evidence/2026-10-23-505/compare.sh","env":{"SHELL":"/bin/bash"}}
+[1.989, "o", "== Portage 3.0.83-r1 vs portuale (S6): lines differing / total\r\n"]
+[0.001, "o", "74\r\n"]
+[0.000, "o", "== portuale before S6 vs after S6 (the effect of the re-sync)\r\n"]
+[0.000, "o", "114a115,116\r\n> declare -x QEMU_SOFTMMU_TARGETS=\"x86_64\"\r\n> declare -x QEMU_USER_TARGETS=\"\"\r\n"]
+[0.000, "o", "== USERLAND / LOCPATH / QEMU_* in the three saved environments\r\n"]
+[0.001, "o", "/var/tmp/ev505/portage.env:declare -x LOCPATH=\"/var/tmp/ev505/loc\"\r\n/var/tmp/ev505/portage.env:declare -x QEMU_SOFTMMU_TARGETS=\"\"\r\n/var/tmp/ev505/portage.env:declare -x QEMU_USER_TARGETS=\"\"\r\n"]
+[0.000, "o", "/var/tmp/ev505/portage.env:declare -x USERLAND=\"BSD\"\r\n"]
+[0.000, "o", "/var/tmp/ev505/portuale.env:declare -x LOCPATH=\"/var/tmp/ev505/loc\"\r\n/var/tmp/ev505/portuale.env:declare -x QEMU_SOFTMMU_TARGETS=\"x86_64\"\r\n/var/tmp/ev505/portuale.env:declare -x QEMU_USER_TARGETS=\"\"\r\n/var/tmp/ev505/portuale.env:declare -x USERLAND=\"BSD\"\r\n"]
+[0.000, "o", "/var/tmp/ev505/portuale-old.env:declare -x LOCPATH=\"/var/tmp/ev505/loc\"\r\n/var/tmp/ev505/portuale-old.env:declare -x USERLAND=\"BSD\"\r\n"]
+[0.000, "x", "0"]

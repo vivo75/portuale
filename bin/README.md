@@ -6,10 +6,13 @@ execution. It ships with the pilot so `emerge` runs on a host with **no
 Portage installed and no Portage checkout**.
 
 Copied verbatim from the ref recorded in `3rdparty/repos.toml`'s
-`[portage]` entry, *except* `phase-functions.sh`, which carries two local
-changes (the brush strategy #2 temp-file staging, and the `PORTUALE_.*`
-entry in the saved-environment filter; see its own header comment and
-"Re-syncing" below).
+`[portage]` entry (Portage 3.0.83; the Gentoo `-r1` ebuild's only extra
+patch touches `bintree.py`, so every file here is the tag's, checked
+against the host install's copy in #505), *except* `phase-functions.sh`,
+which carries two local changes: the brush strategy #2 temp-file staging
+(`___save_and_filter_ebuild_env` and its three call sites) and the
+`PORTUALE_.*` entry in the saved-environment filter. See its own header
+comment and "Re-syncing" below.
 
 ## What's here
 
@@ -22,7 +25,7 @@ entry in the saved-environment filter; see its own header comment and
 | `filter-bash-environment.py` | stdlib-only (no `import portage`); `__filter_readonly_variables` runs it on every phase's env save |
 | `portuale-python` | **portuale-owned** (not upstream): `PORTAGE_PYTHON` points here in native mode; execs `$PORTUALE_BIN __helper python` (#326 D1) |
 | `chmod-lite` | **portuale-owned** (not upstream): execs `$PORTUALE_BIN __helper chmod-lite`, or the checkout's script with `PORTUALE_PYTHON_HELPERS=real` (#326 D1/D2) |
-| `ebuild-ipc` | **portuale-owned** (not upstream): always exits 127, there is no IPC daemon (#326 D6) |
+| `ebuild-ipc` | **portuale-owned** (not upstream): always exits 127, there is no IPC daemon (#326 D6). Upstream 3.0.83 replaced its `ebuild-ipc` symlink with the Python `ebuild-ipc.py`, which is not vendored: `__ebuild_ipc`/`__ebuild_exit` in `isolated-functions.sh` are reached only under `PORTAGE_IPC_DAEMON`, which portuale never sets (#505) |
 | `portageq-wrapper` | **portuale-owned** (not upstream): execs `$PORTUALE_BIN portageq` (feat#157 S6); no `PATH` fallback (#326 D5) |
 | `ecompress-file` | upstream's bash helper, vendored verbatim (it is not in the `3rdparty` checkout overlay path; a missing copy is fatal in `ecompress`) |
 
@@ -47,8 +50,7 @@ tests) builds the symlink overlay onto `<checkout>/bin/` and needs
 
 When `3rdparty/repos.toml`'s `[portage] commit` is bumped: copy
 each file here over from the new upstream tree, then re-apply the two local
-changes to `phase-functions.sh` (its header names the first; list both
-with `git -C 3rdparty/portage show <old ref>:bin/phase-functions.sh | diff - bin/phase-functions.sh`). A plain
+changes to `phase-functions.sh` (its header names both; list them with `git -C 3rdparty/portage show <old ref>:bin/phase-functions.sh | diff - bin/phase-functions.sh`). A plain
 `diff -r 3rdparty/portage/bin bin` (ignoring `phase-functions.sh`,
 `portageq-wrapper`, the other portuale-owned files listed below, and
 this README) should otherwise be empty. A re-sync that adds or changes

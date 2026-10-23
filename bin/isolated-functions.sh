@@ -33,6 +33,24 @@ __pipestatus() {
 
 shopt -s extdebug
 
+# The client imports nothing from portage, so it needs neither PYTHONPATH
+# nor a wrapper to set one up. It runs with -E so that a PYTHONPATH the
+# ebuild exports cannot shadow the standard library, and with -X utf8 so
+# that it does not re-exec itself for UTF-8 mode, which would drop -E.
+__ebuild_ipc() {
+	"${PORTAGE_PYTHON:-/usr/bin/python}" -E -S -X utf8 "${PORTAGE_BIN_PATH:?}/ebuild-ipc.py" "$@"
+}
+
+# Report the exit status of the phase to portage, on the pipe that it
+# passes in, or with ebuild-ipc if it did not pass one.
+__ebuild_exit() {
+	if [[ -n ${PORTAGE_EBUILD_EXIT_FD} ]]; then
+		printf '%s\n' "$1" >&${PORTAGE_EBUILD_EXIT_FD}
+	else
+		__ebuild_ipc exit "$1"
+	fi
+}
+
 # __dump_trace([number of funcs on stack to skip],
 #            [whitespacing for filenames],
 #            [whitespacing for line numbers])
@@ -197,7 +215,7 @@ die() {
 	[[ -n ${S} ]] && eerror "S: '${S}'"
 
 	[[ -n ${PORTAGE_EBUILD_EXIT_FILE} ]] && : > "${PORTAGE_EBUILD_EXIT_FILE}"
-	[[ -n ${PORTAGE_IPC_DAEMON} ]] && "${PORTAGE_BIN_PATH}"/ebuild-ipc exit 1
+	[[ -n ${PORTAGE_IPC_DAEMON} ]] && __ebuild_exit 1
 
 	# subshell die support
 	if [[ -n ${EBUILD_MASTER_PID} && ${BASHPID} != "${EBUILD_MASTER_PID}" ]] ; then

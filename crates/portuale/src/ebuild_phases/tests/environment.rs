@@ -192,3 +192,42 @@ fn compute_environment_builds_the_builddir_under_the_given_tmpdir() {
     );
     std::fs::remove_dir_all(&probe).ok();
 }
+
+/// The vendored 3.0.83 `__filter_readonly_variables` drops `LOCPATH` with the
+/// other locale variables under `--filter-locale` (`c15ab2464`), keeps an
+/// ebuild-set `QEMU_*` variable (`f7bfe34de`), and the vendored
+/// `phase-functions.sh` keeps both of portuale's local changes.
+/// Expected values from reading Portage 3.0.83-r1's `phase-functions.sh`
+/// and a live `env -i` run of the same function.
+#[test]
+fn vendored_filter_readonly_variables_matches_portage_3_0_83() {
+    let bin_dir = bin_dir().unwrap().to_path_buf();
+    let src = std::fs::read_to_string(bin_dir.join("phase-functions.sh")).unwrap();
+    assert!(src.contains("___save_and_filter_ebuild_env()"));
+    assert!(src.contains("filtered_vars+=( \"PORTUALE_.*\" )"));
+    assert!(src.contains("LC_ALL LANG LOCPATH"));
+    let out = std::process::Command::new("bash")
+        .env_clear()
+        .env("PORTAGE_BIN_PATH", &bin_dir)
+        .arg("-c")
+        .arg(
+            "source \"$PORTAGE_BIN_PATH/isolated-functions.sh\"\n\
+             source \"$PORTAGE_BIN_PATH/phase-functions.sh\"\n\
+             __filter_readonly_variables --filter-locale < <(\n\
+             declare -x LOCPATH=/x LANG=C QEMU_LD_PREFIX=/q FOO=1\n\
+             declare -p LOCPATH LANG QEMU_LD_PREFIX FOO)",
+        )
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("declare -x FOO=\"1\""), "{text}");
+    assert!(text.contains("QEMU_LD_PREFIX"), "{text}");
+    for gone in ["LOCPATH", "LANG"] {
+        assert!(!text.contains(gone), "{gone} must be filtered:\n{text}");
+    }
+}

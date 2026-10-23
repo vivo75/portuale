@@ -9,13 +9,17 @@
 # portuale drives this file directly for real ebuild phase execution, so it
 # has to ship with the pilot (the point is to `emerge` on a host with no
 # Portage installed). Re-sync from upstream by copying the file over and
-# re-applying the one local change below.
+# re-applying the two local changes below.
 #
-# LOCAL CHANGE (brush strategy #2): ___save_and_filter_ebuild_env stages
+# LOCAL CHANGE 1 (brush strategy #2): ___save_and_filter_ebuild_env stages
 # __save_ebuild_env | __filter_readonly_variables through a ${T} temp file so
 # neither shell function is a pipeline stage -- a shell that runs a non-last
 # function pipeline stage inline deadlocks once it writes past the OS pipe
 # buffer. See README.md's "brush strategy #2" section.
+#
+# LOCAL CHANGE 2 (feat#157 S6.4): __filter_readonly_variables also filters
+# "PORTUALE_.*" (portuale's own runtime variables never reach the saved
+# environment).
 # ---------------------------------------------------------------------------
 
 # Hardcoded bash lists are needed for backward compatibility with
@@ -32,7 +36,8 @@ portage_readonly_metadata=(
 portage_readonly_vars=(
 	D EBUILD_PHASE_FUNC EBUILD_SH_ARGS EBUILD_PHASE EMERGE_FROM EBUILD
 	EROOT ED FILESDIR MERGE_TYPE PORTAGE_EBUILD_EXTRA_SOURCE
-	PORTAGE_EBUILD_EXIT_FILE PORTAGE_ECLASS_LOCATIONS
+	PORTAGE_EBUILD_EXIT_FD PORTAGE_EBUILD_EXIT_FILE PORTAGE_ECLASS_LOCATIONS
+	PORTAGE_IPC_ALIVE_FD
 	PORTAGE_EXPLICIT_INHERIT PORTAGE_OVERRIDE_EPREFIX
 	PORTAGE_BINPKG_TAR_OPTS PORTAGE_INTERNAL_CALLER PORTAGE_ACTUAL_DISTDIR
 	PORTAGE_BINPKG_TMPFILE PORTAGE_XATTR_EXCLUDE PORTAGE_REPOSITORIES
@@ -82,8 +87,8 @@ portage_mutable_filtered_vars=( AA HOSTNAME )
 # phase. However, if FEATURES exist inside environment.bz2 then they
 # should be overridden by current settings.
 #
-# --filter-locale causes locale related variables such as LANG and LC_*
-# variables to be filtered. These variables should persist between phases,
+# --filter-locale causes locale related variables such as LANG, LC_* and
+# LOCPATH to be filtered. These variables should persist between phases,
 # in case they are modified by the ebuild. However, the current user
 # settings should be used when loading the environment from a binary or
 # installed package.
@@ -102,20 +107,28 @@ portage_mutable_filtered_vars=( AA HOSTNAME )
 # package was built while protecting against the application of package renames.
 __filter_readonly_variables() {
 	local -a filtered_vars bash_vars qemu_env
+	local -A excluded_vars=( [PATH]=1 [SHELL]=1 )
 	local IFS x
 
-	# preserve QEMU vars for qemu-static
+	# Preserve QEMU vars for qemu-static. Exclude them from the reported
+	# variables below, or an ebuild-set QEMU_* var is taken for a bash one
+	# and filtered out. See bug #978685.
 	for x in ${!QEMU_@}; do
 		qemu_env+=( "${x}=${!x}" )
+		excluded_vars[${x}]=1
 	done
 
 	# Collect an initial list of special bash variables by instructing a
 	# hygienic instance of bash(1) to report them.
 	mapfile -t bash_vars < <(
 		# Like compgen -A variable but doesn't require readline support.
-		env -i -- "${qemu_env[@]}" "${BASH}" -c "printf %s\\\n $(printf '${!%s*} ' {A..Z} {a..z} _)" \
-		| grep -vx -e PATH -e SHELL
+		env -i -- "${qemu_env[@]}" "${BASH}" -c '
+			printf -v p "\${!%s*} " {A..Z} {a..z} _
+			eval "unset p; printf %s\\\\n ${p}"'
 	)
+	for x in "${!bash_vars[@]}"; do
+		[[ -n ${bash_vars[x]} && ${excluded_vars[${bash_vars[x]}]} ]] && unset "bash_vars[x]"
+	done
 	# Incorporate other variables that are known to either be set by or be
 	# able to influence bash. This list was last updated for bash-5.3.
 	# EMACS is omitted, so as not to break the "elisp-common" eclass.
@@ -185,7 +198,7 @@ __filter_readonly_variables() {
 	if has --filter-locale "$@"; then
 		filtered_vars+=(
 			LC_MESSAGES LC_MONETARY LC_COLLATE LC_NUMERIC LC_CTYPE
-			LC_PAPER LC_TIME LC_ALL LANG
+			LC_PAPER LC_TIME LC_ALL LANG LOCPATH
 		)
 	fi
 	if has --allow-extra-vars "$@"; then
@@ -802,7 +815,10 @@ __dyn_install() {
 		QA_DESKTOP_FILE QA_PREBUILT PROVIDES_EXCLUDE REQUIRES_EXCLUDE \
 		PKG_INSTALL_MASK; do
 
-		x=$(echo -n ${!f})
+		# Collapse whitespace into single spaces.
+		# shellcheck disable=SC2086
+		printf -v x '%s ' ${!f}
+		x=${x% }
 		[[ -n ${x} ]] && echo "${x}" > ${f}
 	done
 	# whitespace preserved
@@ -906,11 +922,14 @@ __dyn_help() {
 }
 
 # @FUNCTION: __ebuild_arg_to_phase
+# @USAGE: <arg> [variable]
 # @DESCRIPTION:
 # Translate a known ebuild(1) argument into the precise
-# name of it's corresponding ebuild phase.
+# name of its corresponding ebuild phase. Print it, or assign it to the
+# named variable, which avoids a subshell. That variable must not be
+# named arg or phase_func, which are local here.
 __ebuild_arg_to_phase() {
-	[[ $# -ne 1 ]] && die "expected exactly 1 arg, got $#: $*"
+	[[ $# -ne 1 && $# -ne 2 ]] && die "expected 1 or 2 args, got $#: $*"
 	local arg=$1
 	local phase_func=""
 
@@ -959,8 +978,11 @@ __ebuild_arg_to_phase() {
 			;;
 	esac
 
+	if [[ $# -eq 2 ]]; then
+		printf -v "$2" '%s' "${phase_func}"
+	fi
 	[[ -z ${phase_func} ]] && return 1
-	echo "${phase_func}"
+	[[ $# -eq 1 ]] && echo "${phase_func}"
 	return 0
 }
 
@@ -1117,7 +1139,8 @@ __ebuild_main() {
 		export CCACHE_DISABLE=1
 	fi
 
-	local ___phase_func=$(__ebuild_arg_to_phase "${EBUILD_PHASE}")
+	local ___phase_func
+	__ebuild_arg_to_phase "${EBUILD_PHASE}" ___phase_func
 	[[ -n ${___phase_func} ]] && __ebuild_phase_funcs "${EAPI}" "${___phase_func}"
 
 	__source_all_bashrcs
@@ -1269,6 +1292,6 @@ __ebuild_main() {
 	if [[ -n ${PORTAGE_IPC_DAEMON} ]] ; then
 		[[ ! -s ${SANDBOX_LOG} ]]
 
-		"${PORTAGE_BIN_PATH}"/ebuild-ipc exit $?
+		__ebuild_exit $?
 	fi
 }

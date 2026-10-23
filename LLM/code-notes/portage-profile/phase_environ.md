@@ -16,8 +16,8 @@ Portage `config.environ()` for build-phase environments: the export set a source
 - Expected values were verified live against Portage in the S0 recon (S0 oracle env / oracle rows; the `ebuild_phases` tests cite them the same way).
 
 ## const ENVIRON_FILTER
-- Transcribed verbatim from the vendored 3.0.82.2 checkout; refresh when the vendored portage moves.
-- Portage `special_env_vars.py:257-348` (vendored 3.0.82.2).
+- Transcribed verbatim from the vendored 3.0.83 checkout (3.0.83 changed only `environ_whitelist` and `env_blacklist`, not this list); refresh when the vendored portage moves.
+- Portage `special_env_vars.py:257-348` (vendored 3.0.83).
 
 ## const PORTUALE_COMPUTED
 - Covers `ebuild_phases::phase_env_vars` / `run_commands_async` (the `doebuild_environment()` dynamic set, `doebuild.py:381-545`) and the per-entry threading of `emerge_build::entry_build_env`.
@@ -68,3 +68,6 @@ Portage `config.environ()` for build-phase environments: the export set a source
 ## fn filter_unprefixed_use_expand_value / fn apply_unprefixed_use_expand_filter (#349 S4)
 - Portage `config.py` `setcpv`'s `USE_EXPAND_UNPREFIXED` loop (`for k in ...: var_split = [x for x in var_split if x in use]`): every set unprefixed variable keeps only the tokens the package's USE names, else `""`. The domain is the narrowed `PORTAGE_USE` -- Portage filters after `difference_update` drops non-`IUSE`/non-implicit flags, so only `IUSE ∪ IUSE_EFFECTIVE` membership can keep a token. S0 `e01-full` oracle (`ARCH=""` against `USE="elibc_glibc"`).
 - Placement matters: the filter runs over the *combined* map (scalars from steps 1-3 plus the per-package rows), i.e. `phase_environ` step 5 and the merge tail `entry_phase_env_tail` after its `extend` -- never inside `phase_environ_pkg` alone, whose fresh map never carries the scalar. Unset variables stay unset (Portage only writes the key when it is set somewhere).
+
+## const ENV_BLACKLIST
+- #505 (S6): 3.0.83 added `PORTAGE_EBUILD_EXIT_FD` and `PORTAGE_IPC_ALIVE_FD` here and to `environ_whitelist` (`special_env_vars.py:55,58`); the whitelist half is in `ebuild_phases/environ_whitelist.txt`.

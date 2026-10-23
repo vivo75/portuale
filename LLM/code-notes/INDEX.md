@@ -338,6 +338,7 @@
 - [crates/portuale/src/ebuild_phases/tests/sandbox.rs](portuale/ebuild_phases/tests/sandbox.md) — Sandbox/isolation unit tests for phase execution.
 - [crates/portuale/src/ebuild_phases/tests/single_phase.rs](portuale/ebuild_phases/tests/single_phase.md) — Single-phase and clean-phase end-to-end tests.
 - [crates/portuale/src/ebuild_phases/tests/standalone_config.rs](portuale/ebuild_phases/tests/standalone_config.md) — Standalone-config resolver unit tests (RESTRICT gates, depend-phase reduction, tmpdir, binpkg scalars).
+- [bin/ (vendored Portage phase runtime), tests in crates/portuale/src/ebuild_phases/tests/environment.rs](portuale/ebuild_phases/vendored_bin.md) — What the 3.0.83 re-sync (#505, plan 02.442 S6) changed in the vendored scripts and why the portuale-side pieces stay untouched.
 - [crates/portuale/src/ebuild_unmerge.rs](portuale/ebuild_unmerge.md) — Package removal: `ebuild <file> unmerge`.
 - [crates/portuale/src/elog.rs](portuale/elog.md) — Elog message collection and dispatch (Portage's `lib/portage/elog/`).
 - [crates/portuale/src/embedded_runtime.rs](portuale/embedded_runtime.md) — The phase runtime and package-set definitions compiled into the binary.

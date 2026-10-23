@@ -1,0 +1,5 @@
+# #505 evidence (plan 02.442 S6)
+
+`env-probe.cast`: `compare.sh` runs `ebuild ... clean merge` under host Portage 3.0.83-r1 and `portuale ebuild ... merge` (new `bin/` and old `bin/` from `git archive HEAD`) on the tiny overlay ebuild `ev505-ebuild/` (`IUSE="test"`), under `env -i` with `LOCPATH`/`USERLAND` in the calling environment and a private `PORTAGE_CONFIGROOT` (profile `default/linux/amd64/23.0`), then compares the VDB `environment.bz2` (saved here as `*.env`).
+Setup: `/var/tmp/ev505/cfg/etc/portage/{make.profile -> gentoo/profiles/default/linux/amd64/23.0, make.conf, repos.conf [gentoo, ev]}`, `/var/tmp/ev505/repo` (profiles/repo_name `ev`, metadata/layout.conf `masters = gentoo`, `app-misc/ev505`), `/var/tmp/ev505/oldbin/bin` (`git archive HEAD bin`).
+Result: the remaining Portage-vs-portuale lines are host-config noise (host `/etc/profile.env`, `/etc/portage` leaking into Portage, and portuale's profile USE_EXPAND defaults), identical before and after S6. The only line the re-sync changes: `QEMU_SOFTMMU_TARGETS`/`QEMU_USER_TARGETS` are now saved (Portage saves them; `f7bfe34de`).

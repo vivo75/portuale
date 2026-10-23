@@ -1,0 +1,29 @@
+# L3 source-build parity report
+
+atoms  : /TEST/atomlists/l3-smoke.txt
+mode   : both (control=0)
+jobs   : -j12 (MAKEOPTS; 1 = deterministic)
+concur : 1 (1 = sides overlap; 0 = old serial order)
+cpusets: portage=[0-5,16-21] portuale=[8-13,24-29] (mode=taskset)
+tmpfs  : on (size=8g)
+dates  : 2026-10-23T15:30:37Z
+portage: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l3-20261023T152130Z/portage.merge.log
+portuale: /home/vivo/repo/PORTUALE/pmtest/differential-test-bed/logs/l3-20261023T152130Z/portuale.merge.log
+
+## candidate (portage vs portuale)
+  hard findings     : 0
+  explained         : 0
+  UNEXPLAINED       : 0
+  payload diffs     : 26  (tolerated, non-fatal)
+  mtime-only diffs  : 3939  (non-fatal)
+## control (portage vs portage)
+  (no control run)
+
+## per-PM touched packages
+  portage: 3
+  portuale: 3
+## per-PM build args + tmpfs peak (#280, #282)
+  portage build_args: --oneshot --usepkg=n --color=n
+  portage tmpfs-peak: 931024896	0.9
+  portuale build_args: --oneshot --usepkg=n --color=n
+  portuale tmpfs-peak: 931463168	0.9
