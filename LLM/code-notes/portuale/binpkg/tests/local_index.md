@@ -9,7 +9,7 @@ Local `$PKGDIR` scan tests: fast path, stale vouch, reindex, orphans.
 - Ports Portage's `_populate_local` two classes at the scan boundary (`bintree.py:1185-1199`): an `Invalid` file is skipped (with Portage's warning, whose exact line is pinned by the CLI contract test, not here) and the rest of the pool still resolves.
 
 ## fn populate_local_pkgdir_aborts_on_fatal_files
-- The other class: a `Fatal` file (Portage would traceback) still stops the whole scan.
+- The other class: a `Fatal` file (Portage would traceback; the test uses a junk `.tbz2`, since a metadata link is `Invalid` since `#500`) still stops the whole scan.
 
 ## fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale
 - Backlog #174: Portage's default (`FEATURES=pkgdir-index-trusted`, in Portage's `make.globals` default `FEATURES`) runs `_populate_local` with `reindex=False` -- the `<pkgdir>/Packages` stanza vouches for the file even when its `_mtime_`/`SIZE` no longer agree with the live file, and the file's bytes are first touched at merge by `BinpkgVerifier`. So a stale stanza is reused verbatim here (proven by a bogus SLOT the index claims that the archive itself does not carry) instead of being re-derived; the corruption surfaces at merge via `verify_binpkg_against_index` with Portage's `!!! Digest verification failed:` block. This test previously asserted the reindex behaviour (stale means re-parse), which is only Portage with an explicit `-pkgdir-index-trusted`.

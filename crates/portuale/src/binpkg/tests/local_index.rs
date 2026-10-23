@@ -96,14 +96,15 @@ fn populate_local_pkgdir_aborts_on_fatal_files() {
     let scratch = ScratchDir::new("scan-fatal").unwrap();
     let pkgdir = scratch.path();
     fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
-    let fatal = build_gpkg_with_inner_entries(
-        "fatalpkg-1.0",
-        &[inner_symlink("metadata/DESCRIPTION", "/etc/hostname")],
-    );
-    fs::copy(&fatal, pkgdir.join("dev-libs/fatalpkg-1.0.gpkg.tar")).unwrap();
+    // Every xpak read error is Fatal (`read_xpak_metadata`).
+    fs::write(
+        pkgdir.join("dev-libs/fatalpkg-1.0.tbz2"),
+        b"not an xpak binpkg",
+    )
+    .unwrap();
 
     let err = populate_local_pkgdir(pkgdir, true).expect_err("a fatal file must abort the scan");
-    assert!(err.contains("not in the archive"), "{err}");
+    assert!(err.contains("fatalpkg-1.0.tbz2"), "{err}");
 }
 
 #[test]

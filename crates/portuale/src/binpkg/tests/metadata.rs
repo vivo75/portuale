@@ -141,56 +141,37 @@ fn read_xpak_metadata_reads_a_real_ebuild_package_tbz2() {
 }
 
 #[test]
-fn read_gpkg_metadata_reads_a_crafted_inner_tar_in_process() {
-    // An in-archive symlink yields the target member's bytes.
-    let g = build_gpkg_with_inner_entries(
-        "gen-1.0",
-        &[
-            inner_entry("metadata/SLOT", b"0\n"),
-            inner_entry("metadata/EAPI", b"8\n"),
-            inner_symlink("metadata/DESCRIPTION", "SLOT"),
-        ],
-    );
-    verify_gpkg_manifest(&g, &GpgVerify::default()).expect("the crafted container verifies");
-    let metadata = read_gpkg_metadata(&g).expect("reads");
-    assert_eq!(metadata.get("DESCRIPTION").map(String::as_str), Some("0"));
-    assert_eq!(metadata.get("SLOT").map(String::as_str), Some("0"));
-}
-
-#[test]
-fn read_gpkg_metadata_rejects_an_inner_symlink_to_a_host_path() {
-    // The old walk read the host file's bytes as the value.
+fn read_gpkg_metadata_refuses_inner_links_and_special_members() {
+    // Portage: `gpkg._check_metadata_files`; the skip class, whatever the
+    // link points at, and no host file's bytes leak into the message.
     let host = std::fs::read("/etc/hostname")
         .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_string())
         .unwrap_or_default();
-    let g = build_gpkg_with_inner_entries(
-        "gen-1.0",
-        &[
-            inner_entry("metadata/SLOT", b"0\n"),
-            inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
-        ],
-    );
-    verify_gpkg_manifest(&g, &GpgVerify::default()).expect("the crafted container verifies");
-    let err = read_gpkg_metadata(&g).unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("not in the archive"), "{err}");
-    assert!(
-        host.is_empty() || !err.message().contains(&host),
-        "the host file's bytes leaked into {err:?}"
-    );
+    for bad in [
+        inner_symlink("metadata/DESCRIPTION", "SLOT"),
+        inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
+        inner_hardlink("metadata/DESCRIPTION", "metadata/SLOT"),
+        inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo),
+    ] {
+        let g =
+            build_gpkg_with_inner_entries("gen-1.0", &[inner_entry("metadata/SLOT", b"0\n"), bad]);
+        verify_gpkg_manifest(&g, &GpgVerify::default()).expect("the crafted container verifies");
+        let err = read_gpkg_metadata(&g).unwrap_err();
+        assert!(err.is_invalid(), "{err:?}");
+        assert!(
+            err.message()
+                .contains("Metadata member is not a regular file: metadata/DESCRIPTION"),
+            "{err}"
+        );
+        assert!(
+            host.is_empty() || !err.message().contains(&host),
+            "the host file's bytes leaked into {err:?}"
+        );
+    }
 }
 
 #[test]
-fn read_gpkg_metadata_rejects_inner_fifo_and_outside_names() {
-    // A FIFO errors; the old walk silently skipped the member.
-    let g = build_gpkg_with_inner_entries(
-        "gen-1.0",
-        &[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)],
-    );
-    verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
-    let err = read_gpkg_metadata(&g).unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("a FIFO"), "{err}");
+fn read_gpkg_metadata_rejects_outside_names() {
     // An outside name: the old walk ignored the member entirely.
     let g = build_gpkg_with_inner_entries("gen-1.0", &[inner_entry("other/KEY", b"outside\n")]);
     verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");

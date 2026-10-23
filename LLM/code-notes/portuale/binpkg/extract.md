@@ -2,6 +2,7 @@
 Extracting a binary package's image and metadata at merge time.
 
 ## fn extract_binpkg
+- `#500`: for a gpkg both halves are validated before either is written: `load_gpkg_metadata` (regular members, no duplicate or nested keys), then the image scan inside `extract_gpkg_member`, then the metadata files. A refused metadata member leaves the image directory empty and the other way round.
 - Ports Portage's binary-package unpack (`portage.xpak.tbz2.decompose` / `portage.gpkg.gpkg.decompress` + `_generate_metadata_from_dir` in reverse); scalar metadata has the `build-info` shape.
 - The scalar metadata is `read_{xpak,gpkg}_metadata`'s own map; the two non-scalar members (`environment.bz2` -- the package's saved build-time bash environment -- and `<pf>.ebuild`) are written back verbatim as raw bytes, not through the lossy scalar path.
 - xpak image: the leading `file_len - (infosize + 8)` bytes. Ports `bintree.dbapi.unpack_metadata` -> `tbz2.unpackinfo` (`xpak.py:486-524`): every XPAK member written verbatim. The verbatim write fixed two bugs: an empty `DEBUGBUILD` became `"\n"`, and the trailing space Portage keeps on the last `NEEDED` line was trimmed (the gpkg branch had the same bug class). Found by the L2 xpak control (#326 S5): every XPAK member is written VERBATIM, not as a scalar parse plus reserialize, the same bug the gpkg branch fixed.
@@ -11,16 +12,16 @@ Extracting a binary package's image and metadata at merge time.
 - Portage `unpackinfo`'s target path for one member: the name with leading `/` stripped, joined under `dest` and normalized. A name whose `..` components climb out of `dest` is skipped (`None`), as Portage's `if not filename.startswith(mydest): continue` does.
 
 ## fn extract_gpkg_metadata
-- `#58` K2: the metadata half of `extract_gpkg_member` -- Portage `bintree.dbapi.unpack_metadata` -> `gpkg().unpack_metadata(dest_dir)` extracts every inner `metadata/` member into build-info. Portuale resolves the S1 reader and writes each member as a regular file with its header mode (masked to `0o7777`, setuid/setgid stripped).
+- `#58` K2: the metadata half of `extract_gpkg_member` -- Portage `bintree.dbapi.unpack_metadata` -> `gpkg().unpack_metadata(dest_dir)` extracts every inner `metadata/` member into build-info. Portuale writes each member as a regular file with its header mode (masked to `0o7777`, setuid/setgid stripped). Since `#500` the reader refuses every non-regular member, so no link ever reaches this function.
 - `OpenOptions::mode` passes through the process umask; Portage's `tarfile.extract` chmods the header mode on afterwards, so the mode is set explicitly for a umask-independent result.
 - Ports `bintree.dbapi.unpack_metadata` -> `gpkg().unpack_metadata(dest_dir)`. Portage would extract an in-archive symlink as a symlink, which every later build-info reader (`populate_vdb_tmp`, `BINPKGMD5`, the saved-`environment.bz2` extractor, the `pkg_*` phases) would then follow; Portage's writer never emits one. Nested keys would need directory creation Portage's writer never necessitates.
 
 ## fn scan_image_tar
-- `#58` K2 / S4: Portage `gpkg.tar_safe_extract`'s member rules, applied to the already-decompressed scratch `image.tar` before GNU `tar` unpacks it -- so nothing reaches the filesystem until the whole member list is accepted.
-- Ports Portage's `gpkg.tar_safe_extract` member rules (`gpkg.py:690-724`; validated inside `gpkg.decompress`, `gpkg.py:1071-1103`, but only as it extracts). `isdev()` in Python 3.14 includes FIFOs; symlinks are allowed (a genuine image carries them legitimately).
-- One deliberate addition beyond Portage's rule set (owner-approved, owner-approved 2026-09-16 from S0 cell i18): a member whose path traverses an earlier symlink member is refused. Portage's `tar_safe_extract` would extract through that symlink (as root straight into the host) while GNU `tar` refuses at unpack time; refusing before unpacking makes the guarantee independent of the unpacker.
-- Portage `tar_safe_extract.file_list`, one entry per accepted member (trailing `/` trimmed the way Python `tarfile` trims it).
-
+- `#58` K2 / S4, redone by `#500` (plan 02.442 S1): Portage `gpkg.tar_safe_extract._check_member` (3.0.83-r1, `gpkg.py:702-732`), applied to the already-decompressed scratch `image.tar` before GNU `tar` unpacks it, so nothing reaches the filesystem until the whole member list is accepted. Python's check order is kept: duplicate (also as `./<name>`), absolute, any `..` component (`name.split("/")`, so `a/..` and a bare `..` too), device/FIFO (`isdev()`), hard link whose target is not an earlier member, then `_check_symlink_path` on the parent, on the member and, for a hard link, on its source and on the relocated target of a symlink source (`_check_hardlink`). Messages copy Portage's `Danger: <what> detected: <path>`; the path is the one Portage was checking (parent, member, link source or relocated target), not always the member.
+- Portage checks resolved paths against what it has already extracted. Here that tree is modelled (`ImageLinks`): every symlink member, and every hard link to a symlink (CPython's `os.link` links the symlink itself, so it is a symlink at the new place), keyed by its resolved location. `realpath` is re-implemented over the model: a `..` above the root, an absolute target (it leaves the unpack directory) or a chain of more than 40 links is an escape. A file under a symlink parent that stays inside the image is accepted, as upstream `test_contained_symlink_parent` demands.
+- Two deliberate differences from Portage. (1) The root of the model is the directory GNU `tar` unpacks into (the first name component is stripped like `--strip-components=1`); Portage's root is its temporary directory, one level up, so a link that climbs exactly to that directory is accepted by Portage and refused here (the file would land outside the image under `tar`). The message can then name an earlier path than Portage's (`image/opt/link` instead of `image/../../marker`). (2) A hard link to an in-image symlink followed by a member under the hard link works in Python but makes GNU `tar` fail after a partial unpack ("Not a directory"); nothing in a genuine package has that shape, rc is 1 either way. The previous owner-approved rule (a member under an earlier symlink member is refused) is now the escape rule above: refused only when the link leaves the image.
+- Portage `tar_safe_extract.file_list`: one entry per accepted member, trailing `/` trimmed the way `tarfile` trims it.
+- Evidence and the 23-shape oracle table: `LLM/evidence/2026-10-23-500-501/README.md`; pmtest pin `test_usepkgonly_refuses_hostile_gpkg_archives_like_portage`.
 ## fn xpak_xattr_tar_options
 - Portage `BinpkgExtractorAsync._xpak_start` (`BinpkgExtractorAsync.py:39-50`, #334): under `FEATURES=xattr`, when the tar knows `--xattrs`, extract with `--xattrs --xattrs-include='*'` plus one `--xattrs-exclude=<pat>` per `PORTAGE_XATTR_EXCLUDE` pattern.
 - Under `FEATURES=xattr` the xpak itself was packed with `gtar --xattrs` under the same feature (`misc-functions.sh:587-590`). Portage builds a shell string, so its quoted `'*'` reaches tar as the plain word `*`; this argv is what that shell hands tar.
@@ -33,3 +34,12 @@ Extracting a binary package's image and metadata at merge time.
 - `#58` K2/S3: the inner metadata tar is resolved in process and written as regular files only (no scratch copy, no `tar -xpf`).
 - Portage `gpkg.decompress` validates the image stream with `tar_safe_extract` as it extracts (`gpkg.py:1094-1096`); portuale validates the whole scratch `image.tar` first (`#58` S4, `scan_image_tar`) so a rejected member never reaches the filesystem, then lets GNU `tar` do the actual unpack.
 - Portage `gpkg.tar_safe_extract.extractall(dest)`: the format guarantees the one prefix component, so with `--strip-components=1` the members become `usr/...` / `environment.bz2` directly. Without it every path in the merged package's vdb `CONTENTS` was recorded as `/image/...`, which breaks unmerge (portuale's and Portage's).
+
+## fn load_gpkg_metadata
+- `#500`: reads and validates the inner `metadata.tar` in process without writing. Portage `gpkg._check_metadata_files` runs over `metadata.getmembers()` before anything is extracted (`gpkg.py:856-862`, called at `:891` and `:1002`) and raises `InvalidBinaryPackageFormat` for any member that is not `isreg()`.
+
+## fn check_gpkg_metadata
+- `#58` K2/S3, moved out of `extract_gpkg_metadata` by `#500` so the checks (duplicates, nested keys) run before any file of the package is written.
+
+## fn locate_gpkg_member
+- The outer-container checks and the member lookup shared by the metadata and image halves of `extract_gpkg_member` (was inline there).

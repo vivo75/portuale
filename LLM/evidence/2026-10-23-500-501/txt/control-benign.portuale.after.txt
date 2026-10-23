@@ -1,0 +1,25 @@
+
+>>> Emerging binary (1 of 1) hostile/control-benign-1::porttest for /var/tmp/ev500/root-portuale-control-benign
+>>> Extracting info
+>>> Extracting hostile/control-benign-1
+
+>>> Installing (1 of 1) hostile/control-benign-1::porttest to /var/tmp/ev500/root-portuale-control-benign
+
+>>> Completed (1 of 1) hostile/control-benign-1::porttest to /var/tmp/ev500/root-portuale-control-benign
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- root contents
+./etc
+./opt
+./opt/h
+./opt/h/abs
+./opt/h/bin
+./opt/h/hello
+./opt/h/lnk
+./opt/h/real
+./var
+control-benign-1
+--- outside leak check
+files in outside-x: 0
+ls: cannot access '/etc/evil': No such file or directory

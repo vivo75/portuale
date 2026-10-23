@@ -13,15 +13,10 @@ Metadata reader tests: gpkg scalars, xpak index, error classes.
 - Reads a genuine `.tbz2` checked in at `fixtures/pkgdir/dev-libs/packagepkg-1.0.tbz2`, built once by portuale's own `ebuild <file> package` on `dev-libs/packagepkg` (Portage's `bin/misc-functions.sh` -> unmodified `xpak-helper.py recompose` -> Portage's `xpak.py`). Kept as a committed fixture rather than rebuilt per-test: the read side doesn't need reproducible bytes, and driving `run_package` (the full brush phase chain) here would add parallel-load pressure to the suite's brush-heavy tests for no reader-coverage gain.
 - The fixture ebuild's `RDEPEND="dev-libs/samepkg"` came through via Portage's `build-info` (`ebuild_phases::write_post_install_metadata`), no `Packages` index involved. The bundled `<pf>.ebuild` source is a member too. An xpak never carries CONTENTS (Portage's `xpak()` skips it; generated at merge time). `environment.bz2` is binary, lossy-decoded but present as a key.
 
-## fn read_gpkg_metadata_reads_a_crafted_inner_tar_in_process
-- S0 cell i2: an in-archive symlink yields the target member's bytes (the old extracted-tree walk followed the symlink too, but it could equally follow one out of the archive -- next test).
-
-## fn read_gpkg_metadata_rejects_an_inner_symlink_to_a_host_path
-- S0 cell i1: the old walk read the host file's bytes as the value.
-
-## fn read_gpkg_metadata_rejects_inner_fifo_and_outside_names
-- S0 cell i5: Portage's `extractfile` returns `None`, which errors; the old walk silently skipped the member. S0 cell i8: Portage's `InvalidBinaryPackageFormat`; the old walk ignored the member entirely.
-
+## fn read_gpkg_metadata_refuses_inner_links_and_special_members
+- `#500`: symlink (also to a host path), hard link and FIFO members are `Invalid` (`Metadata member is not a regular file`); S0 cell i1: the host file's bytes never appear in the message.
+## fn read_gpkg_metadata_rejects_outside_names
+- S0 cell i8: Portage's `InvalidBinaryPackageFormat`; the old walk ignored the member entirely.
 ## fn read_gpkg_metadata_reads_nested_keys_and_last_wins_duplicates
 - S0 cell i7b: Portage's key is the remainder after `metadata/`; S0 cell i11: the last member with a name wins (the merge path refuses it).
 

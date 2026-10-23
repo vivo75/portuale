@@ -109,3 +109,14 @@ portuale rebuilt from this working tree: casts `casts/s2-hb-*.portuale.after.cas
 The ROOT difference is older: Portage prints ROOT with a trailing slash everywhere (`Emerging binary ... for <ROOT>/`), portuale echoes the
 `ROOT` string it was given. The pmtest pin passes `ROOT` with a trailing slash. In each refused run the `.partial` stays in the binhost cache, nothing is installed.
 The first `before` rows were measured against the build of eee9edee, see the S2 table above.
+
+## S1 after the fix (#500)
+
+Same 23 archives (`build-hostile.py`), same hermetic setup (`harness/runpm.sh`, config as `harness/make.conf` plus a private
+`repos.conf` with `[DEFAULT] main-repo = gentoo` and `gentoo` at `/.gentoo/repos/gentoo`), portuale rebuilt from this working tree:
+casts `casts/<shape>.portuale.after.cast`, text `txt/<shape>.portuale.after.txt`. rc equals Portage's on all 23 rows:
+control-benign and control-contained-symlink-parent merge (rc 0, the latter leaves `opt/h/real/tool` like Portage); the 21 hostile
+rows exit 1 with nothing installed and an empty image directory (`PORTAGE_TMPDIR/portage/hostile/<pf>/image` exists, empty);
+`/var/tmp/outside-x` stays empty. Messages: `emerge: <archive>: Danger: <what> detected: <path>` (path as Portage prints it, except
+for the shapes where Portage's root is one level higher than the unpack directory, see #514) and, for metadata rows,
+`!!! Invalid binary package: '<archive>', Metadata member is not a regular file: metadata/<name>`.

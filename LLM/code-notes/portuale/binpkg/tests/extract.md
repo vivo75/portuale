@@ -11,11 +11,10 @@ Binpkg extraction tests: xpak verbatim writes, gpkg image/metadata handling.
 - The inner `image/` and `metadata/` top-level dirs that Portage's `tar_safe_extract` strips are stripped here too; members land directly, not one level deep. A missing strip is what made the merged vdb `CONTENTS` record every path as `/image/...`.
 - Slice #58 S3: the metadata side writes the resolved member bytes verbatim as regular files with the header mode (0o644 in the fixture), the same bytes and modes the former `tar -xpf` left (captured on `main`).
 
-## fn extract_binpkg_writes_an_inner_metadata_symlink_as_a_regular_file
-- S0 cell i2: Portage's unpack extracts the symlink as a symlink (its own writer never emits one); portuale writes the resolved target bytes as a regular file with the member's header mode. `pretend.rs::run_info` calls extract_binpkg with no prior read, so this path is what protects it.
-
+## fn extract_binpkg_refuses_an_inner_metadata_symlink_and_writes_nothing
+- `#500`: Portage refuses a metadata link whatever it points at; neither the image nor build-info is written (both halves are validated first). `pretend.rs::run_info` calls extract_binpkg with no prior read, so this path is what protects it.
 ## fn extract_binpkg_rejects_unsafe_inner_metadata_archives
-- S0 cell i1: an escaping symlink (the old `tar -xpf` extracted the symlink itself into build-info, where later readers follow it).
+- S0 cell i1: a metadata symlink is refused (the old `tar -xpf` extracted the symlink itself into build-info, where later readers follow it); since `#500` the text is Portage's `Metadata member is not a regular file`.
 - S0 cell i5: Portage's 3.14 `isdev()` rejects a FIFO on merge too; the old `tar -xpf` created one in build-info.
 - S0 cells i7/i7b: nested keys (K4). S0 cell i11: duplicates (Portage's `tar_safe_extract`).
 
@@ -25,6 +24,12 @@ Binpkg extraction tests: xpak verbatim writes, gpkg image/metadata handling.
 ## fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking
 - The pre-scan runs before the unpack: the image dest stays empty (a FIFO/device member never reaches the filesystem).
 - S0 cells i13/i13b: a char device (Portage's `isdev()`; 3.14 includes FIFO). S0 cells i14/i15: a hard link to a non-member or a later member. S0 cell i16: duplicate names (GNU tar used to last-wins silently). S0 cells i17/i17b: traversal / absolute member names. S0 cell i18: a member under an earlier symlink member (the owner-approved rule beyond Portage's own set).
+
+## fn extract_binpkg_refuses_the_portage_hostile_image_shapes
+- `#500`: one case per shape of the 3.0.83-r1 oracle table (`LLM/evidence/2026-10-23-500-501/README.md`): `a/..`, bare `..`, `./..`, directory through a symlink, symlink parent (absolute, relative, to `/`, through a chain, a loop), hard link to an escaping symlink, relocated relative symlink. Each asserts the `Danger:` text and that neither the image nor build-info directory holds anything.
+
+## fn extract_binpkg_accepts_contained_symlink_parents
+- `#500`: upstream `test_contained_symlink_parent`; the old lexical rule refused it (the `control-contained-symlink-parent` oracle row). Members of the test have no directory entries because the `tar` crate writes them mode 0644, which GNU `tar` cannot traverse.
 
 ## fn extract_binpkg_keeps_a_valid_sparse_xattr_image_working
 - S0 cell i19, the regression shape: legitimate symlink, hardlink-to-earlier, GNU sparse file, PAX xattr records must still extract exactly as before S4 (the pre-scan only rejects).

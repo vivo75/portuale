@@ -270,7 +270,7 @@
 - [crates/portuale/src/binpkg/digest.rs](portuale/binpkg/digest.md) — Digest checks of a `$PKGDIR` binpkg against the index, and checksum-failure renames.
 - [crates/portuale/src/binpkg/extract.rs](portuale/binpkg/extract.md) — Extracting a binary package's image and metadata at merge time.
 - [crates/portuale/src/binpkg/gpg.rs](portuale/binpkg/gpg.md) — GPG binpkg signature policy and verification via the system `gpg`.
-- [crates/portuale/src/binpkg/inner.rs](portuale/binpkg/inner.md) — The gpkg inner `metadata.tar`: limits, members, links.
+- [crates/portuale/src/binpkg/inner.rs](portuale/binpkg/inner.md) — The gpkg inner `metadata.tar`: limits and members.
 - [crates/portuale/src/binpkg/local_index.rs](portuale/binpkg/local_index.md) — The local `$PKGDIR` scan: per-file entries with index fast-path, stale vouching, and orphan re-injection.
 - [crates/portuale/src/binpkg/manifest.rs](portuale/binpkg/manifest.md) — Verifying a gpkg `Manifest` at merge time.
 - [crates/portuale/src/binpkg/metadata.rs](portuale/binpkg/metadata.md) — Reading gpkg and xpak metadata for the `$PKGDIR` scan.

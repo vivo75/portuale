@@ -61,108 +61,71 @@ fn read_inner_metadata_round_trips_regular_members() {
     assert!(metadata.duplicate_keys.is_empty());
 }
 
+/// Portage refuses every metadata member that is not a regular file,
+/// whatever a link points at (`gpkg._check_metadata_files`); the class is
+/// `Invalid` (`InvalidBinaryPackageFormat`), the skip class.
 #[test]
-fn read_inner_metadata_resolves_symlinks_in_archive() {
-    // Covers a `../`-normalized target and a link chain: links join
-    // `dirname(name)/linkname`, normalize, and recurse.
-    let metadata = read_inner(&[
-        inner_entry("metadata/SLOT", b"0\n"),
-        inner_symlink("metadata/DESCRIPTION", "SLOT"),
-        inner_symlink("metadata/A", "B"),
-        inner_symlink("metadata/B", "SLOT"),
-        inner_symlink("metadata/sub/L", "../SLOT"),
-    ])
-    .expect("reads");
-    let by_key = inner_values(&metadata);
-    assert_eq!(by_key["DESCRIPTION"], b"0\n");
-    assert_eq!(by_key["A"], b"0\n");
-    assert_eq!(by_key["sub/L"], b"0\n");
+fn read_inner_metadata_refuses_every_non_regular_member() {
+    let cases: [(&str, InnerTestEntry<'_>); 8] = [
+        ("symlink", inner_symlink("metadata/DESCRIPTION", "SLOT")),
+        (
+            "escaping symlink",
+            inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
+        ),
+        (
+            "symlink loop",
+            inner_symlink("metadata/DESCRIPTION", "DESCRIPTION"),
+        ),
+        (
+            "hardlink",
+            inner_hardlink("metadata/DESCRIPTION", "metadata/SLOT"),
+        ),
+        (
+            "missing hardlink",
+            inner_hardlink("metadata/DESCRIPTION", "etc/hostname"),
+        ),
+        (
+            "fifo",
+            inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo),
+        ),
+        (
+            "character device",
+            inner_special("metadata/DESCRIPTION", tar::EntryType::Char),
+        ),
+        (
+            "block device",
+            inner_special("metadata/DESCRIPTION", tar::EntryType::Block),
+        ),
+    ];
+    for (what, bad) in cases {
+        // A regular `SLOT` first: the link target exists, and is still refused.
+        let err = read_inner(&[inner_entry("metadata/SLOT", b"0\n"), bad]).unwrap_err();
+        assert!(err.is_invalid(), "{what}: {err:?}");
+        assert!(
+            err.message()
+                .ends_with("Metadata member is not a regular file: metadata/DESCRIPTION"),
+            "{what}: {err}"
+        );
+    }
 }
 
 #[test]
-fn read_inner_metadata_rejects_a_symlink_out_of_the_archive() {
-    // A link out of the archive errors; the host file is never read.
-    let err = read_inner(&[
-        inner_entry("metadata/SLOT", b"0\n"),
-        inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
-    ])
-    .unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("not in the archive"), "{err}");
-    assert!(err.message().contains("DESCRIPTION"), "{err}");
-}
-
-#[test]
-fn read_inner_metadata_resolves_hardlinks_to_earlier_members() {
-    // The target has to be *earlier* than the link.
-    let metadata = read_inner(&[
-        inner_entry("metadata/SLOT", b"0\n"),
-        inner_hardlink("metadata/DESCRIPTION", "metadata/SLOT"),
-    ])
-    .expect("reads");
-    assert_eq!(
-        inner_pairs(&metadata),
-        vec![
-            ("SLOT".to_string(), b"0\n".to_vec()),
-            ("DESCRIPTION".to_string(), b"0\n".to_vec()),
-        ]
-    );
-}
-
-#[test]
-fn read_inner_metadata_rejects_hardlinks_to_later_or_missing_members() {
-    // Target comes later.
-    let err = read_inner(&[
-        inner_hardlink("metadata/AAA", "metadata/SLOT"),
-        inner_entry("metadata/SLOT", b"0\n"),
-    ])
-    .unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("not in the archive"), "{err}");
-    // Target is not a member at all.
-    let err = read_inner(&[inner_hardlink("metadata/DESCRIPTION", "etc/hostname")]).unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("not in the archive"), "{err}");
-}
-
-#[test]
-fn read_inner_metadata_rejects_fifo_and_device_members() {
-    // FIFO/device members error, naming the type.
-    let err =
-        read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)]).unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("a FIFO"), "{err}");
-    let err =
-        read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Char)]).unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("a character device"), "{err}");
-    let err =
-        read_inner(&[inner_special("metadata/DESCRIPTION", tar::EntryType::Block)]).unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("a block device"), "{err}");
-}
-
-#[test]
-fn read_inner_metadata_rejects_directory_members_and_outside_names() {
-    // The inner `metadata/` directory member is rejected as outside
-    // `metadata/`: `tarfile` strips the trailing slash, leaving the
-    // bare `metadata` name.
-    let err = read_inner(&[
-        inner_special("metadata/", tar::EntryType::Directory),
-        inner_entry("metadata/SLOT", b"0\n"),
-    ])
-    .unwrap_err();
-    assert!(err.is_invalid(), "{err:?}");
-    assert!(err.message().contains("outside metadata/"), "{err}");
-    // A nested directory member errors; the `sub/KEY` member after it
-    // never resolves.
-    let err = read_inner(&[
-        inner_special("metadata/sub/", tar::EntryType::Directory),
-        inner_entry("metadata/sub/KEY", b"nested\n"),
-    ])
-    .unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("a directory"), "{err}");
+fn read_inner_metadata_refuses_directory_members() {
+    // The `metadata/` directory member and a nested one: both are
+    // directories, not regular files (`tarfile` strips the trailing `/`).
+    for (dir, shown) in [("metadata/", "metadata"), ("metadata/sub/", "metadata/sub")] {
+        let err = read_inner(&[
+            inner_special(dir, tar::EntryType::Directory),
+            inner_entry("metadata/SLOT", b"0\n"),
+        ])
+        .unwrap_err();
+        assert!(err.is_invalid(), "{dir}: {err:?}");
+        assert!(
+            err.message()
+                .ends_with(&format!("Metadata member is not a regular file: {shown}")),
+            "{dir}: {err}"
+        );
+    }
     // A name outside `metadata/`.
     let err = read_inner(&[inner_entry("other/KEY", b"outside\n")]).unwrap_err();
     assert!(err.is_invalid(), "{err:?}");
@@ -177,18 +140,6 @@ fn read_inner_metadata_reads_nested_keys_without_a_directory() {
         inner_pairs(&metadata),
         vec![("sub/KEY".to_string(), b"nested\n".to_vec())]
     );
-}
-
-#[test]
-fn read_inner_metadata_errors_on_symlink_cycles() {
-    // A symlink cycle stops at the depth cap with a named error.
-    let err = read_inner(&[
-        inner_symlink("metadata/A", "B"),
-        inner_symlink("metadata/B", "A"),
-    ])
-    .unwrap_err();
-    assert!(err.is_fatal(), "{err:?}");
-    assert!(err.message().contains("link chain is deeper than"), "{err}");
 }
 
 #[test]
@@ -217,14 +168,14 @@ fn read_inner_metadata_rejects_traversal_and_absolute_names() {
 }
 
 #[test]
-fn read_inner_metadata_reads_unknown_entry_types_as_regular_files() {
-    // Unknown entry types read as regular files.
-    // Portage: gpkg.py, SUPPORTED_TYPES
-    let metadata =
-        read_inner(&[inner_special("metadata/ODD", tar::EntryType::new(b'X'))]).expect("reads");
-    assert_eq!(
-        inner_pairs(&metadata),
-        vec![("ODD".to_string(), Vec::new())]
+fn read_inner_metadata_refuses_unknown_entry_types() {
+    // `TarInfo.isreg` is false for a type byte `tarfile` does not know.
+    // Portage: gpkg.py, `_check_metadata_files`
+    let err = read_inner(&[inner_special("metadata/ODD", tar::EntryType::new(b'X'))]).unwrap_err();
+    assert!(err.is_invalid(), "{err:?}");
+    assert!(
+        err.message().contains("not a regular file: metadata/ODD"),
+        "{err}"
     );
 }
 

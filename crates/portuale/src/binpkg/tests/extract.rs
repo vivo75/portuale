@@ -169,35 +169,40 @@ fn extract_binpkg_rejects_a_gpkg_with_a_bad_manifest() {
 // The merge-path metadata extraction.
 
 #[test]
-fn extract_binpkg_writes_an_inner_metadata_symlink_as_a_regular_file() {
-    // An in-archive symlink yields the resolved target bytes as a
-    // regular file with the header mode.
-    let g = build_gpkg_with_inner_entries(
+fn extract_binpkg_refuses_an_inner_metadata_symlink_and_writes_nothing() {
+    // Portage refuses a link member whatever it points at; the image side
+    // is not unpacked either (both halves are validated before any write).
+    let g = build_gpkg_with_inner_tars(
         "gen-1.0",
         &[
             inner_entry("metadata/SLOT", b"0\n"),
             inner_symlink("metadata/DESCRIPTION", "SLOT"),
         ],
+        &[inner_entry("image/usr/bin/x", b"x\n")],
     );
     let tmp = TempDir::new("binpkg-gpkg-meta").keep();
     let image = tmp.join("image");
     let bi = tmp.join("build-info");
-    extract_binpkg(
+    let err = extract_binpkg(
         &g,
         &image,
         &bi,
         &GpgVerify::default(),
         &crate::ebuild_merge::XattrPolicy::default(),
     )
-    .expect("extract succeeds");
-    use std::os::unix::fs::PermissionsExt;
-    let desc = fs::symlink_metadata(bi.join("DESCRIPTION")).unwrap();
+    .unwrap_err();
     assert!(
-        desc.file_type().is_file(),
-        "the resolved bytes are a regular file, not a symlink"
+        err.contains("Metadata member is not a regular file: metadata/DESCRIPTION"),
+        "{err}"
     );
-    assert_eq!(fs::read(bi.join("DESCRIPTION")).unwrap(), b"0\n");
-    assert_eq!(desc.permissions().mode() & 0o7777, 0o644);
+    assert!(
+        read_dir_sorted(&image).unwrap().is_empty(),
+        "image populated"
+    );
+    assert!(
+        read_dir_sorted(&bi).unwrap().is_empty(),
+        "build-info populated"
+    );
     let _ = fs::remove_dir_all(&tmp);
 }
 
@@ -225,12 +230,12 @@ fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
             inner_entry("metadata/SLOT", b"0\n"),
             inner_symlink("metadata/DESCRIPTION", "/etc/hostname"),
         ],
-        "not in the archive",
+        "Metadata member is not a regular file: metadata/DESCRIPTION",
     );
     // A FIFO is rejected on merge too.
     check(
         &[inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo)],
-        "a FIFO",
+        "Metadata member is not a regular file",
     );
     // Nested keys.
     check(
@@ -238,7 +243,7 @@ fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
             inner_special("metadata/sub/", tar::EntryType::Directory),
             inner_entry("metadata/sub/KEY", b"nested\n"),
         ],
-        "a directory",
+        "Metadata member is not a regular file: metadata/sub",
     );
     check(&[inner_entry("metadata/sub/KEY", b"nested\n")], "is nested");
     // Duplicates are rejected.
@@ -311,23 +316,23 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
     // A char device or FIFO.
     check(
         &[inner_special("image/dev/null0", tar::EntryType::Char)],
-        "a character device",
+        "Danger: device file detected: image/dev/null0",
     );
     check(
         &[inner_special("image/dev/pipe0", tar::EntryType::Fifo)],
-        "a FIFO",
+        "Danger: device file detected: image/dev/pipe0",
     );
     // A hard link to a non-member or a later member.
     check(
         &[inner_hardlink("image/usr/bin/x", "/etc/hostname")],
-        "not an earlier member",
+        "Danger: hardlink escape detected: image/usr/bin/x",
     );
     check(
         &[
             inner_hardlink("image/usr/bin/x", "image/usr/bin/y"),
             inner_entry("image/usr/bin/y", b"later\n"),
         ],
-        "not an earlier member",
+        "Danger: hardlink escape detected: image/usr/bin/x",
     );
     // Duplicate names.
     check(
@@ -335,16 +340,16 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
             inner_entry("image/usr/lib/libfoo.so", b"first\n"),
             inner_entry("image/usr/lib/libfoo.so", b"second\n"),
         ],
-        "is a duplicate",
+        "Danger: duplicate files detected: image/usr/lib/libfoo.so",
     );
     // Traversal / absolute member names.
     check(
         &[inner_entry("image/../etc/x", b"traversal\n")],
-        "has a path traversal",
+        "Danger: path traversal detected: image/../etc/x",
     );
     check(
         &[inner_entry("/image/etc/x", b"absolute\n")],
-        "has an absolute name",
+        "Danger: absolute path detected: /image/etc/x",
     );
     // A member under an earlier symlink member.
     check(
@@ -352,8 +357,171 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
             inner_symlink("image/usr/lib/x", "/etc"),
             inner_entry("image/usr/lib/x/passwd", b"pwned\n"),
         ],
-        "inside the symlink member",
+        "Danger: symlink escape detected: image/usr/lib/x",
     );
+}
+
+/// One hostile image per shape of `LLM/evidence/2026-10-23-500-501`: the
+/// verdict is Portage 3.0.83-r1's, the scan refuses before `tar` runs, so
+/// the image directory stays empty.
+#[test]
+fn extract_binpkg_refuses_the_portage_hostile_image_shapes() {
+    let d = tar::EntryType::Directory;
+    let base = || {
+        vec![
+            inner_special("image", d),
+            inner_special("image/opt", d),
+            inner_entry("image/opt/hello", b"hi\n"),
+        ]
+    };
+    let cases: Vec<(&str, Vec<InnerTestEntry<'_>>, &str)> = vec![
+        (
+            "a/..",
+            vec![inner_special("image/opt/..", d)],
+            "path traversal detected: image/opt/..",
+        ),
+        (
+            "bare ..",
+            vec![inner_special("..", d)],
+            "path traversal detected: ..",
+        ),
+        (
+            "./..",
+            vec![inner_entry("./../evil", b"x")],
+            "path traversal detected: ./../evil",
+        ),
+        (
+            "dir through symlink",
+            vec![
+                inner_symlink("image/link", "/var/tmp/outside-x"),
+                inner_special("image/./link", d),
+            ],
+            "symlink escape detected: image/./link",
+        ),
+        (
+            "abs symlink parent",
+            vec![
+                inner_symlink("image/link", "/var/tmp/outside-x"),
+                inner_entry("image/link/marker", b"x"),
+            ],
+            "symlink escape detected: image/link",
+        ),
+        (
+            "rel symlink parent",
+            vec![
+                inner_symlink("image/link", "../../x"),
+                inner_entry("image/link/marker", b"x"),
+            ],
+            "symlink escape detected: image/link",
+        ),
+        (
+            "symlink to root",
+            vec![
+                inner_symlink("image/x", "/"),
+                inner_entry("image/x/etc/evil", b"x"),
+            ],
+            "symlink escape detected: image/x/etc",
+        ),
+        (
+            "symlink through a symlink chain",
+            vec![
+                inner_symlink("image/a", "b"),
+                inner_symlink("image/b", "../../out"),
+                inner_entry("image/a/f", b"x"),
+            ],
+            "symlink escape detected: image/a",
+        ),
+        (
+            "hardlink to an escaping absolute symlink",
+            vec![
+                inner_symlink("image/link", "/var/tmp/outside-x"),
+                inner_hardlink("image/hardlink", "image/link"),
+            ],
+            "symlink escape detected: image/link",
+        ),
+        (
+            "hardlink relocating a relative symlink",
+            vec![
+                inner_symlink("image/opt/link", "../../marker"),
+                inner_hardlink("image/hard", "image/opt/link"),
+            ],
+            "symlink escape detected: image/opt/link",
+        ),
+        (
+            "hardlink relocating a relative symlink out of its new place",
+            vec![
+                inner_symlink("image/opt/deep/link", "../x"),
+                inner_hardlink("image/hard", "image/opt/deep/link"),
+            ],
+            "symlink escape detected: image/../x",
+        ),
+        (
+            "symlink loop",
+            vec![
+                inner_symlink("image/l", "l"),
+                inner_entry("image/l/f", b"x"),
+            ],
+            "symlink escape detected: image/l",
+        ),
+    ];
+    for (what, extra, needle) in cases {
+        let image: Vec<_> = base().into_iter().chain(extra).collect();
+        let g =
+            build_gpkg_with_inner_tars("gen-1.0", &[inner_entry("metadata/SLOT", b"0\n")], &image);
+        let tmp = TempDir::new("binpkg-gpkg-hostile").keep();
+        let err = extract_binpkg(
+            &g,
+            &tmp.join("image"),
+            &tmp.join("build-info"),
+            &GpgVerify::default(),
+            &crate::ebuild_merge::XattrPolicy::default(),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains(needle),
+            "{what}: expected {needle:?} in {err:?}"
+        );
+        assert!(
+            read_dir_sorted(&tmp.join("image")).unwrap().is_empty(),
+            "{what}: image populated"
+        );
+        assert!(
+            read_dir_sorted(&tmp.join("build-info")).unwrap().is_empty(),
+            "{what}: build-info populated"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+}
+
+/// `test_contained_symlink_parent` (upstream), plus the hard link of a
+/// symlink that stays inside: Portage accepts both and so does portuale.
+#[test]
+fn extract_binpkg_accepts_contained_symlink_parents() {
+    let g = build_gpkg_with_inner_tars(
+        "gen-1.0",
+        &[inner_entry("metadata/SLOT", b"0\n")],
+        &[
+            inner_entry("image/opt/real/seed", b"s\n"),
+            inner_symlink("image/opt/bin", "real"),
+            inner_entry("image/opt/bin/tool", b"t\n"),
+            inner_symlink("image/opt/up", "../opt/real"),
+            inner_hardlink("image/opt/hard", "image/opt/up"),
+        ],
+    );
+    let tmp = TempDir::new("binpkg-gpkg-contained").keep();
+    let image = tmp.join("image");
+    extract_binpkg(
+        &g,
+        &image,
+        &tmp.join("build-info"),
+        &GpgVerify::default(),
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )
+    .expect("a contained symlink parent is accepted");
+    assert_eq!(fs::read(image.join("opt/real/tool")).unwrap(), b"t\n");
+    // The hard link of an in-image symlink is itself a symlink (`os.link`).
+    assert!(fs::symlink_metadata(image.join("opt/hard")).is_ok());
+    let _ = fs::remove_dir_all(&tmp);
 }
 
 #[test]
