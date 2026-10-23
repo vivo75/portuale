@@ -32,6 +32,7 @@ pub(crate) fn step_solvable_slot_conflicts(
                     slot_conflict_flag_sets(&ctx.repos, config, &pkg_key.0, &pkg_key.1, &c.version);
                 wants.iter().all(|w| {
                     portage_dep::match_from_list(w, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
+                        // drop-ok: kept
                         && portage_dep::parse_atom(w).is_none_or(|a| match &a.use_deps {
                             None => true,
                             Some(ud) => portage_dep::use_deps_satisfied(ud, &iuse, &use_flags),

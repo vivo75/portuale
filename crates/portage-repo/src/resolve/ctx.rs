@@ -318,7 +318,7 @@ impl<'a> ResolveCtx<'a> {
             top_level_cps: req
                 .atoms
                 .iter()
-                .filter_map(|a| portage_dep::parse_atom(a))
+                .filter_map(|a| parse_dep_atom(a, "ctx"))
                 .map(|a| (a.category, a.package))
                 .collect(),
             local_binpkg: build_local_binpkg_index(&req.config),

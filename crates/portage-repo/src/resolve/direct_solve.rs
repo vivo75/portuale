@@ -56,7 +56,7 @@ pub(crate) fn direct_solve_atom_matches(
     if arg_mode && inst.installed {
         return false;
     }
-    let Some(atom) = portage_dep::parse_atom(atom_text) else {
+    let Some(atom) = parse_dep_atom(atom_text, "direct_solve") else {
         return false;
     };
     // A bare `cat/pkg:=` matches its own conflict's every instance: Portage
@@ -282,7 +282,7 @@ pub(crate) fn solve_one_conflict(args: SolveOneConflictArgs<'_>) -> ControlFlow<
     // Slot-operator rebuild conflicts and need-rebuild-trailer conflicts
     // never enter the direct solve; they survive as-is.
     let stuck_rebuild_parent = c.instances.iter().flat_map(|i| &i.parents).any(|p| {
-        let Some(atom) = portage_dep::parse_atom(&p.atom) else {
+        let Some(atom) = parse_dep_atom(&p.atom, "direct_solve") else {
             return false;
         };
         if !is_built_slot_op(&atom) {

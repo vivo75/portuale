@@ -135,7 +135,7 @@ pub(crate) fn maybe_missing_dep_backtrack(args: MaybeMissingDepBacktrackArgs<'_>
 /// on) has: Portage holds both packages in the slot, so they conflict.
 // Portage: depgraph.py, _add_pkg (built instance vs installed twin)
 fn merge_instance_fails_use_deps(entry: &GraphEntry, atom_text: &str, config: &Config) -> bool {
-    let Some(use_deps) = portage_dep::parse_atom(atom_text)
+    let Some(use_deps) = parse_dep_atom(atom_text, "pass_unresolved_dep")
         .and_then(|a| a.use_deps)
         .filter(|d| !d.is_empty())
     else {

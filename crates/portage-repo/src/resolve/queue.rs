@@ -254,7 +254,7 @@ pub(crate) fn enqueue_flat_deps(args: EnqueueFlatDepsArgs<'_>) {
         // atom (Portage never relaxes a build-time edge in `_serialize_tasks`,
         // so a self loop dead-ends and aborts either way).
         // Portage: depgraph.py
-        let self_naming = portage_dep::parse_atom(&tok).is_some_and(|at| {
+        let self_naming = parse_dep_atom(&tok, "queue").is_some_and(|at| {
             at.blocker == portage_dep::Blocker::None && at.category == key.0 && at.package == key.1
         });
         let buildtime_hard = buildtime_atoms.contains(&tok)
@@ -270,7 +270,7 @@ pub(crate) fn enqueue_flat_deps(args: EnqueueFlatDepsArgs<'_>) {
             .unwrap_or_else(|| tok.clone());
         let unevaluated = if evaluated != tok { Some(tok) } else { None };
         let tok = evaluated;
-        if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+        if let Some(dep_atom) = parse_dep_atom(&tok, "queue")
             && dep_atom.blocker != portage_dep::Blocker::None
         {
             // The token survived the build-time-keys flatten.

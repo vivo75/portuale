@@ -16,11 +16,11 @@ pub(crate) fn is_built_slot_op(atom: &portage_dep::Atom) -> bool {
 /// a live slot-operator atom wins over a recorded built one. Scoped to that
 /// pair; every other combination keeps first-wins.
 pub(crate) fn live_miss_atom_supersedes(recorded: &str, candidate: &str) -> bool {
-    let recorded_built = portage_dep::parse_atom(recorded).is_some_and(|a| is_built_slot_op(&a));
+    let recorded_built = parse_dep_atom(recorded, "rev_dep").is_some_and(|a| is_built_slot_op(&a));
     if !recorded_built {
         return false;
     }
-    if let Some(new) = portage_dep::parse_atom(candidate) {
+    if let Some(new) = parse_dep_atom(candidate, "rev_dep") {
         return new.slot_operator.is_some() && !is_built_slot_op(&new);
     }
     // The bare suffix form (`<cat/pkg-2:=`) never parses here but is always
@@ -45,6 +45,7 @@ pub(crate) fn reverse_dep_constraint_atom(atom_str: &str, atom: &portage_dep::At
 /// bare `:=` (rebuild, never withhold). Non-built/unparseable returns verbatim.
 // Portage: depgraph.py, _slot_operator_check_reverse_dependencies
 pub(crate) fn relax_built_slot_operator_atom(atom_str: &str) -> String {
+    // drop-ok: unparseable atom returned verbatim, not dropped
     let Some(atom) = portage_dep::parse_atom(atom_str) else {
         return atom_str.to_string();
     };
@@ -68,7 +69,7 @@ pub(crate) fn relax_built_slot_operator_atom(atom_str: &str) -> String {
 /// conflict. A version veto still records normally; unparseable never triggers.
 // Portage: depgraph.py, _minimize_children (update probe)
 pub(crate) fn built_slot_operator_rebuild_trigger(atom_str: &str, existing_str: &str) -> bool {
-    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+    let Some(atom) = parse_dep_atom(atom_str, "rev_dep") else {
         return false;
     };
     if !is_built_slot_op(&atom) {
@@ -118,12 +119,14 @@ pub(crate) fn rev_dep_pin_holdable(args: RevDepPinHoldableArgs<'_>) -> bool {
         upgraded_slots,
         hard_atoms,
     } = args;
+    // drop-ok: enforce
     if portage_dep::parse_atom(pin).is_none() {
         return true;
     }
     // An unparseable hard atom cannot constrain anything: enforce.
     let mut hard_parsed: Vec<(&str, portage_dep::Atom)> = Vec::new();
     for h in hard_atoms {
+        // drop-ok: enforce
         match portage_dep::parse_atom(h) {
             Some(a) => hard_parsed.push((h.as_str(), a)),
             None => return true,
@@ -608,7 +611,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         repos,
         enforced,
     } = args;
-    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+    let Some(atom) = parse_dep_atom(atom_str, "rev_dep") else {
         return ControlFlow::Break(());
     };
     if atom.blocker != portage_dep::Blocker::None {

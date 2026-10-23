@@ -167,7 +167,7 @@ pub(crate) fn record_merge_order_deps(args: RecordMergeOrderDepsArgs<'_>) {
     if state.entries[entry_idx].targets_running_root {
         let mut visited_cps: HashSet<(String, String)> = HashSet::new();
         for v in state.visited_atoms.iter() {
-            if let Some(a) = portage_dep::parse_atom(v) {
+            if let Some(a) = parse_dep_atom(v, "pass_enqueue_deps") {
                 visited_cps.insert((a.category, a.package));
             }
         }
@@ -650,7 +650,7 @@ pub(crate) fn record_slot_pullers_and_enqueue(args: RecordSlotPullersAndEnqueueA
     // Record this package as a puller of every non-blocker `cat/pkg` its
     // dep string names (atom text kept for the `pulled in by` lines).
     for tok in &flat_deps {
-        if let Some(dep_atom) = portage_dep::parse_atom(tok)
+        if let Some(dep_atom) = parse_dep_atom(tok, "pass_enqueue_deps")
             && dep_atom.blocker == portage_dep::Blocker::None
         {
             state

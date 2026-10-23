@@ -144,7 +144,9 @@ pub(crate) fn unsatisfied_root_deps_atoms(args: UnsatisfiedRootDepsAtomsArgs<'_>
     })
     .into_iter()
     // Same producer-side evaluation, so this set is evaluated-keyed too.
-    .filter(|t| portage_dep::parse_atom(t).is_some_and(|a| a.blocker == portage_dep::Blocker::None))
+    .filter(|t| {
+        parse_dep_atom(t, "root_deps").is_some_and(|a| a.blocker == portage_dep::Blocker::None)
+    })
     .filter(|t| !running_root_satisfies_atom(t, running_root, config))
     .collect()
 }
@@ -205,7 +207,7 @@ pub(crate) fn resolve_root_deps_build_entries(
         seen,
         local_binpkg,
     } = args;
-    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+    let Some(atom) = parse_dep_atom(atom_str, "root_deps") else {
         return Vec::new();
     };
     let key = (atom.category.clone(), atom.package.clone());

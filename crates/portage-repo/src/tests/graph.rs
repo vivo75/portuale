@@ -4682,3 +4682,14 @@ fn update_selective_keeps_an_installed_only_argument() {
         ]
     );
 }
+
+#[test]
+fn atoms_all_in_graph_counts_an_unparseable_atom_as_dropped() {
+    // The `graph_lookup` site is a production literal shared with parallel tests:
+    // assert it rose, not an exact value.
+    use crate::tests::globals::site_count;
+    let before = site_count("graph_lookup");
+    let atoms = ["]]bad[".to_string()];
+    assert!(!atoms_all_in_graph(&atoms, &[], &test_config(), &[]));
+    assert!(site_count("graph_lookup") > before);
+}

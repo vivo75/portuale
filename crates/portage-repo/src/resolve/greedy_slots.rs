@@ -87,7 +87,7 @@ pub(crate) fn greedy_slot_atoms(args: GreedySlotsArgs<'_>) -> Vec<String> {
         if !atom_str.contains('/') {
             continue;
         }
-        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        let Some(atom) = parse_dep_atom(atom_str, "greedy_slots") else {
             continue;
         };
         if atom.blocker != portage_dep::Blocker::None {
@@ -402,7 +402,8 @@ fn blocker_atoms_for(
             .filter(|t| {
                 // Blocker-ness comes from the raw token: the strip below (which
                 // `match_from_list` applies too) parses the bare form.
-                t.starts_with('!') && portage_dep::parse_atom(t.trim_start_matches('!')).is_some()
+                t.starts_with('!')
+                    && parse_dep_atom(t.trim_start_matches('!'), "greedy_slots").is_some()
             })
             .collect(),
     )
@@ -422,7 +423,7 @@ fn blocker_hits(
         if !b.starts_with('!') {
             return false;
         }
-        let Some(atom) = portage_dep::parse_atom(b.trim_start_matches('!')) else {
+        let Some(atom) = parse_dep_atom(b.trim_start_matches('!'), "greedy_slots") else {
             return false;
         };
         // `match_from_list` strips the blocker itself and matches the bare

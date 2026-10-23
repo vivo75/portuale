@@ -483,7 +483,8 @@ pub(crate) fn collect_withheld_updates(
             .reverse_dep_pins
             .iter()
             .filter(|pin| {
-                !portage_dep::parse_atom(&pin.raw_atom).is_some_and(|a| a.slot_operator.is_some())
+                !parse_dep_atom(&pin.raw_atom, "assemble")
+                    .is_some_and(|a| a.slot_operator.is_some())
             })
             .cloned()
             .collect()

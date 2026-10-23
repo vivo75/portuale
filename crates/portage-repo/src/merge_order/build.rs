@@ -1,6 +1,7 @@
 //! Building the digraph and biasing it toward Portage's order.
 
 use crate::merge_order::*;
+use crate::parse_dep_atom;
 
 /// Builds the merge-order digraph out of the resolved `entries`.
 ///
@@ -60,7 +61,7 @@ pub(crate) fn build_digraph(
         true
     };
     for atom_str in top_level_atoms {
-        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        let Some(atom) = parse_dep_atom(atom_str, "build_top_level_atoms") else {
             continue;
         };
         if atom.blocker != portage_dep::Blocker::None {
@@ -240,7 +241,7 @@ pub(crate) fn deep_system_deps(
     let system_cps: HashSet<(String, String)> = config
         .system_packages
         .iter()
-        .filter_map(|a| portage_dep::parse_atom(a))
+        .filter_map(|a| parse_dep_atom(a, "build_system_packages"))
         .map(|a| (a.category, a.package))
         .collect();
     let mut deep = vec![false; g.n];

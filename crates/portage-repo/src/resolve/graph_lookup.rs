@@ -13,7 +13,7 @@ use crate::*;
 /// construction. The USE side is a separate fact (`all_use_satisfied`) that
 /// `disjunction_preference` computes and combines with this one itself.
 pub(crate) fn atom_cp_installed(root: &Path, atom_str: &str) -> bool {
-    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+    let Some(atom) = parse_dep_atom(atom_str, "graph_lookup") else {
         return false;
     };
     if atom.blocker != portage_dep::Blocker::None || atom.category == "virtual" {
@@ -81,7 +81,7 @@ pub fn best_installed_match(
     unevaluated: Option<&str>,
     implicit_iuse: &dyn Fn() -> HashSet<String>,
 ) -> Option<String> {
-    let atom = portage_dep::parse_atom(atom_str)?;
+    let atom = parse_dep_atom(atom_str, "graph_lookup")?;
     let installed = installed_candidates(root, &atom.category, &atom.package);
     if installed.is_empty() {
         return None;
@@ -138,7 +138,7 @@ pub(crate) fn atom_installed_in_slot_of(
     atom_str: &str,
     extra_constraints: &[String],
 ) -> bool {
-    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+    let Some(atom) = parse_dep_atom(atom_str, "graph_lookup") else {
         return false;
     };
     if atom.blocker != portage_dep::Blocker::None || atom.category == "virtual" {
@@ -177,7 +177,7 @@ pub(crate) fn atom_matches_graph(
     config: &portage_profile::Config,
     queued_cps: &HashSet<(String, String)>,
 ) -> bool {
-    let Some(parsed) = portage_dep::parse_atom(atom_str) else {
+    let Some(parsed) = parse_dep_atom(atom_str, "graph_lookup") else {
         return false;
     };
     if parsed.blocker != portage_dep::Blocker::None {
@@ -232,7 +232,7 @@ pub(crate) fn atom_cp_present_in_graph(
     config: &portage_profile::Config,
     queued_cps: &HashSet<(String, String)>,
 ) -> bool {
-    let Some(parsed) = portage_dep::parse_atom(atom_str) else {
+    let Some(parsed) = parse_dep_atom(atom_str, "graph_lookup") else {
         return false;
     };
     if parsed.blocker != portage_dep::Blocker::None {
@@ -272,7 +272,8 @@ pub(crate) fn atoms_all_in_graph(
     let non_blocker: Vec<&String> = atoms
         .iter()
         .filter(|a| {
-            portage_dep::parse_atom(a).is_some_and(|p| p.blocker == portage_dep::Blocker::None)
+            parse_dep_atom(a, "graph_lookup")
+                .is_some_and(|p| p.blocker == portage_dep::Blocker::None)
         })
         .collect();
     if non_blocker.is_empty() {
@@ -284,7 +285,7 @@ pub(crate) fn atoms_all_in_graph(
     let queued_cps: HashSet<(String, String)> = queued
         .iter()
         .filter_map(|q| {
-            portage_dep::parse_atom(&q.atom).map(|a| (a.category.clone(), a.package.clone()))
+            parse_dep_atom(&q.atom, "graph_lookup").map(|a| (a.category.clone(), a.package.clone()))
         })
         .collect();
     non_blocker
@@ -302,7 +303,7 @@ pub(crate) fn visible_tree_matches(
     config: &portage_profile::Config,
     extra_constraints: &[String],
 ) -> Vec<(String, String)> {
-    let Some(atom) = portage_dep::parse_atom(atom_str) else {
+    let Some(atom) = parse_dep_atom(atom_str, "graph_lookup") else {
         return Vec::new();
     };
     let Ok(candidates) = list_candidates(repos, &atom.category, &atom.package) else {

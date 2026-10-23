@@ -1,6 +1,7 @@
 //! `--debug` merge-order dumps and node-selection traces.
 
 use crate::merge_order::*;
+use crate::parse_dep_atom;
 
 /// `PORTUALE_MO_SEL=1`: one `MO_SEL` line per `select_nodes` iteration to stderr.
 /// Never on by default, so a normal run is byte-identical.
@@ -170,7 +171,7 @@ pub(crate) fn debug_dump_graph(
             .push(j);
     }
     for atom_str in top_level_atoms {
-        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        let Some(atom) = parse_dep_atom(atom_str, "debug_top_level_atoms") else {
             continue;
         };
         if atom.blocker != portage_dep::Blocker::None {

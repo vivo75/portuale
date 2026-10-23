@@ -81,3 +81,15 @@ per header rule `:1-10`.
   (trajectory, mask_built, uninstall-block, binary-vs-ebuild), porting `#442`
   (3.0.82.2→3.0.83), plan-cache `#473,#475`. The recurring bug moved from
   atom-grammar to solver-trajectory — same "report, don't enforce" + backtrack shape.
+
+## Now implemented (#492, 2026-10-23)
+
+Checklist item 1 and the §5 coverage audit are now mechanisms, not conventions:
+`parse_dep_atom(token, site)` (`crates/portage-repo/src/globals.rs`) counts every
+skipped dependency token per site; a source-scan test
+(`every_dep_atom_parse_is_counted_or_justified`) fails on any `portage_dep::parse_atom(`
+that is neither routed through it nor marked `// drop-ok: <reason>`;
+`PORTUALE_REPORT_UNPARSED_DEP_TOKENS=1` prints the per-site line and pmtest's
+`check_unparsed_dep_tokens` asserts zero. The §5 orphan cuts live in
+`LLM/scope-cuts.md`, checked by `LLM/tools/cut_registry_check.py`.
+Items 2-6 of the checklist remain conventions.

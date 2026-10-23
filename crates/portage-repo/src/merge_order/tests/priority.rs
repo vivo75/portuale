@@ -532,3 +532,20 @@ fn split_disjunctive_keeps_a_group_when_a_second_group_marker_is_pending() {
         (vec![], vec![("dev-libs/a".to_string(), 0, 0)])
     );
 }
+
+#[test]
+fn dep_edges_count_an_unparseable_token_against_the_digraph_site() {
+    // The `merge-order digraph` site is a production literal shared with parallel
+    // tests: assert it rose, and that the good atom beside the bad one still edges.
+    use crate::tests::globals::site_count;
+    let before = site_count("merge-order digraph");
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "RDEPEND".to_string(),
+        ">>>bad[ dev-libs/prioritygood".to_string(),
+    );
+    let edges = dep_edges_from_metadata(&metadata, &HashSet::new(), &["RDEPEND"], false);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].atom, "dev-libs/prioritygood");
+    assert!(site_count("merge-order digraph") > before);
+}

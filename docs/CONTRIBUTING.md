@@ -46,6 +46,15 @@ manager pass; fix the package manager instead.
   contract pins land in `pmtest` on a same-named branch, and the two
   messages quote each other.
 
+## Dependency tokens
+
+- A new `portage_dep::parse_atom(` on a dependency token uses
+  `portage_repo::parse_dep_atom(token, "<site>")`, which counts a skipped token.
+- Where skipping is intended, keep `parse_atom` and add `// drop-ok: <reason>` on the
+  same or the preceding line; the test `every_dep_atom_parse_is_counted_or_justified`
+  enforces this.
+- `PORTUALE_REPORT_UNPARSED_DEP_TOKENS=1` prints the total and the per-site counts.
+
 ## Function size and argument structs
 
 Keep functions short and calls readable.

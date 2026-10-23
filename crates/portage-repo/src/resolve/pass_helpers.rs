@@ -157,7 +157,7 @@ pub(crate) fn minimize_children(
     let mut matches: Vec<(String, Vec<(String, bool)>)> = Vec::new();
     for (a, o) in &picks {
         let Some(own) = pkg_of(o) else { continue };
-        let parsed = portage_dep::parse_atom(a);
+        let parsed = parse_dep_atom(a, "pass_helpers");
         let use_deps = parsed
             .as_ref()
             .and_then(|x| x.use_deps.as_ref())
@@ -395,7 +395,7 @@ pub(crate) fn arg_pinned_installed_reuse(args: ArgPinnedInstalledReuseArgs<'_>) 
         let extra_constraints = union_constraints.get(key).unwrap_or(&empty_constraints);
         let mut kept: Vec<(String, String)> = Vec::new();
         for t in ctx.atoms {
-            let Some(arg) = portage_dep::parse_atom(t) else {
+            let Some(arg) = parse_dep_atom(t, "pass_helpers") else {
                 continue;
             };
             if arg.blocker != portage_dep::Blocker::None {

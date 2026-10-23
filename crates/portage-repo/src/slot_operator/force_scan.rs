@@ -126,7 +126,7 @@ pub(crate) fn slot_operator_update_force_scan(
                         .map(String::from)
                         .collect::<Vec<_>>()
                 })
-                .filter_map(|tok| portage_dep::parse_atom(&tok))
+                .filter_map(|tok| parse_dep_atom(&tok, "force_scan_live_tokens"))
                 .filter(|a| {
                     a.blocker == portage_dep::Blocker::None
                         && a.slot_operator == Some(portage_dep::SlotOperator::Equals)
@@ -168,7 +168,7 @@ pub(crate) fn slot_operator_update_force_scan(
                 let parent_atoms: Vec<&str> = live_atoms
                     .iter()
                     .filter_map(|t| {
-                        let a = portage_dep::parse_atom(t)?;
+                        let a = parse_dep_atom(t, "force_scan_parent_atoms")?;
                         (a.blocker == portage_dep::Blocker::None
                             && a.category == child_cp.0
                             && a.package == child_cp.1)
@@ -290,7 +290,7 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                 continue;
             };
             for token in tokens {
-                let Some(atom) = portage_dep::parse_atom(&token) else {
+                let Some(atom) = parse_dep_atom(&token, "force_scan_tokens") else {
                     continue;
                 };
                 if atom.slot_operator != Some(portage_dep::SlotOperator::Equals)
@@ -454,7 +454,7 @@ pub(crate) fn replacement_accepts(args: ReplacementAcceptsArgs<'_>) -> bool {
         })
         .flatten()
         .filter_map(|t| {
-            let a = portage_dep::parse_atom(&t)?;
+            let a = parse_dep_atom(&t, "force_scan_provider_atoms")?;
             (a.blocker == portage_dep::Blocker::None
                 && a.category == provider_cp.0
                 && a.package == provider_cp.1)

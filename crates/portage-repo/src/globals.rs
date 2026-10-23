@@ -127,13 +127,44 @@ pub fn resolver_debug() -> bool {
 pub(crate) static UNPARSED_DEP_TOKENS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+/// Per-site counts of the dependency tokens dropped as unparseable, keyed by the
+/// call site's literal name (sorted for stable output).
+static UNPARSED_DEP_SITES: std::sync::Mutex<std::collections::BTreeMap<&'static str, usize>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
 /// Record one dependency token dropped as unparseable (debug builds also name
 /// it on stderr).
-pub fn note_unparsed_dep_token(token: &str, site: &str) {
+pub fn note_unparsed_dep_token(token: &str, site: &'static str) {
     UNPARSED_DEP_TOKENS.fetch_add(1, AtomicOrdering::Relaxed);
+    *UNPARSED_DEP_SITES.lock().unwrap().entry(site).or_insert(0) += 1;
     if cfg!(debug_assertions) {
         eprintln!("portage-repo: dropped unparseable dependency token {token:?} ({site})");
     }
+}
+
+/// Parse one dependency token as an atom. `None` means the token was unparseable and
+/// was counted against `site` (see [`unparsed_dep_sites`]). Dependency-string grammar
+/// tokens (`||`, `^^`, `??`, parentheses, `flag?`) are not atoms: they read as `None`
+/// without a count, so raw `*DEPEND` strings can be fed in whole.
+pub fn parse_dep_atom(token: &str, site: &'static str) -> Option<portage_dep::Atom> {
+    if matches!(token, "||" | "^^" | "??" | "(" | ")") || token.ends_with('?') {
+        return None;
+    }
+    let atom = portage_dep::parse_atom(token);
+    if atom.is_none() {
+        note_unparsed_dep_token(token, site);
+    }
+    atom
+}
+
+/// Unparseable dependency tokens per call site, sorted by site.
+pub fn unparsed_dep_sites() -> Vec<(&'static str, usize)> {
+    UNPARSED_DEP_SITES
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(site, n)| (*site, *n))
+        .collect()
 }
 
 /// How many dependency tokens this process dropped as unparseable.

@@ -280,7 +280,7 @@ fn with_arg_cp_index<R>(arg_atoms: &[String], f: impl FnOnce(&ArgCpIndex) -> R) 
         if last.as_ref().is_none_or(|(atoms, _)| atoms != arg_atoms) {
             let mut index = ArgCpIndex::new();
             for (i, arg) in arg_atoms.iter().enumerate() {
-                if let Some(a) = portage_dep::parse_atom(arg) {
+                if let Some(a) = parse_dep_atom(arg, "pretend") {
                     index
                         .entry(a.category)
                         .or_default()
@@ -727,6 +727,7 @@ pub fn resolve_pretend(
     } = *opts;
     // Portage: create_depgraph_params.py (`--emptytree` pops `selective`).
     let selective = selective && !empty;
+    // drop-ok: argument atom; InvalidAtom error returned
     let atom = portage_dep::parse_atom(atom_str).ok_or_else(|| Error::InvalidAtom {
         atom: atom_str.to_string(),
     })?;

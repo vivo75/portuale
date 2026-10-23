@@ -362,7 +362,7 @@ impl InstalledReachability {
     }
 
     fn matches_cp(&self, atom_str: &str) -> Option<Cp> {
-        let a = portage_dep::parse_atom(atom_str)?;
+        let a = parse_dep_atom(atom_str, "eliminate_matches_cp")?;
         let cp = (a.category, a.package);
         // A slot/version-constrained seed still only needs cp-level
         // reachability here.
@@ -439,7 +439,7 @@ impl InstalledReachability {
                     continue;
                 };
                 for atom in atoms.iter().filter(|a| !a.starts_with('!')) {
-                    if let Some(a) = portage_dep::parse_atom(atom)
+                    if let Some(a) = parse_dep_atom(atom, "eliminate_dep_atoms")
                         && (&a.category, &a.package) == (&target.0, &target.1)
                     {
                         out.push((cp.clone(), atom.clone()));
@@ -726,7 +726,7 @@ pub(crate) fn rebuild_if_entries(args: RebuildIfEntriesArgs<'_>) -> Vec<GraphEnt
 
         let triggered = flat
             .iter()
-            .filter_map(|t| portage_dep::parse_atom(t))
+            .filter_map(|t| parse_dep_atom(t, "eliminate_flat_tokens"))
             .any(|atom| {
                 if atom.blocker != portage_dep::Blocker::None {
                     return false;

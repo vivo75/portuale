@@ -91,7 +91,7 @@ pub(crate) fn constraint_withheld_updates(
                 // regardless of USE.
                 let mut use_ok = true;
                 if !structurally_excluded {
-                    if let Some(atom) = portage_dep::parse_atom(&pin.raw_atom) {
+                    if let Some(atom) = parse_dep_atom(&pin.raw_atom, "withhold") {
                         let use_deps = atom.use_deps.unwrap_or_default();
                         if !use_deps.is_empty() {
                             let cpv = format!(
@@ -331,7 +331,7 @@ pub(crate) fn backtrack_missed_updates(
             if !any_selected
                 && matches!(entry.reason, MaskReason::MissingDependency { .. })
                 && missing_args.iter().any(|a| {
-                    portage_dep::parse_atom(a).is_some_and(|p| {
+                    parse_dep_atom(a, "withhold").is_some_and(|p| {
                         p.category == *cat
                             && p.package == *pkg
                             && p.blocker == portage_dep::Blocker::None

@@ -89,7 +89,7 @@ pub(crate) fn set_seed_holds_instance(args: SetSeedHoldsInstanceArgs<'_>) -> boo
         portage_dep::match_from_list(atom, &[cpv]).is_some_and(|m| !m.is_empty())
     };
     set_seed_atoms.iter().any(|a| {
-        let Some(parsed) = portage_dep::parse_atom(a) else {
+        let Some(parsed) = parse_dep_atom(a, "blockers") else {
             return false;
         };
         parsed.blocker == portage_dep::Blocker::None
@@ -164,7 +164,7 @@ pub(crate) fn graph_has_parent(args: GraphHasParentArgs<'_>) -> bool {
             // Rebound edge: this parent merges, its atom is a bare `:=`, and the
             // dep's cp merges in another slot -- no longer a parent here.
             if merge_bound_version(&e.outcome).is_some()
-                && let Some(atom) = portage_dep::parse_atom(&d.atom)
+                && let Some(atom) = parse_dep_atom(&d.atom, "blockers")
                 && atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
                 && atom.slot.is_none()
                 && merge_slots
@@ -475,7 +475,7 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
             if tok == "||" {
                 continue;
             }
-            if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+            if let Some(dep_atom) = parse_dep_atom(&tok, "blockers")
                 && dep_atom.blocker != portage_dep::Blocker::None
             {
                 let duplicate = pending_blockers.iter().any(|p| {
@@ -594,7 +594,7 @@ pub(crate) fn resolve_blockers_with_seeds(
         // The blocker atom's own `[use]` deps must match the blocked package:
         // `match_from_list` sees only a cpv string, so a satisfied no-op
         // blocker is dropped against recorded (installed) / effective USE.
-        let blocker_use_deps: Vec<portage_dep::UseDep> = portage_dep::parse_atom(&pb.atom_str)
+        let blocker_use_deps: Vec<portage_dep::UseDep> = parse_dep_atom(&pb.atom_str, "blockers")
             .and_then(|a| a.use_deps)
             .unwrap_or_default();
         // An installed instance replaced in its own slot by a merge-bound entry

@@ -427,7 +427,7 @@ pub(crate) fn enqueue_plain_tokens(args: EnqueuePlainTokensArgs<'_>) {
             None
         };
         let tok = evaluated;
-        if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+        if let Some(dep_atom) = parse_dep_atom(&tok, "enqueue")
             && dep_atom.blocker != portage_dep::Blocker::None
         {
             // Provenance against the build-time-keys flatten above.
@@ -456,7 +456,7 @@ pub(crate) fn enqueue_plain_tokens(args: EnqueuePlainTokensArgs<'_>) {
         // A dependency the installed parent itself satisfies is its graph node
         // already -- no New/Upgrade/Reinstall decision is ever made for it. A
         // self atom on a *different* slot still queues normally.
-        if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+        if let Some(dep_atom) = parse_dep_atom(&tok, "enqueue")
             && (dep_atom.category, dep_atom.package) == owner_key
             && best_installed_matching(root, &tok, config)
                 .is_some_and(|version| version == owner_version)
@@ -465,7 +465,7 @@ pub(crate) fn enqueue_plain_tokens(args: EnqueuePlainTokensArgs<'_>) {
         }
         // Record the installed parent as a puller before queueing, so its
         // built `:S/SS=` atoms reach the `need_rebuild` scan.
-        if let Some(dep_atom) = portage_dep::parse_atom(&tok) {
+        if let Some(dep_atom) = parse_dep_atom(&tok, "enqueue") {
             slot_pullers
                 .entry((dep_atom.category.clone(), dep_atom.package.clone()))
                 .or_default()

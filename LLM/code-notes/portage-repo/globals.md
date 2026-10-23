@@ -40,6 +40,9 @@ Process-wide switches the CLI sets once per run.
 ## static UNPARSED_DEP_TOKENS
 - Portage's `use_reduce(token_class=Atom)` raises `InvalidDependString` on an unparseable token; portuale skips it, so a grammar gap in `portage-dep` would otherwise vanish silently from the graph (`docs/history/second_python_copy_removal.md` §4). `emerge --pretend` reports the total on stderr when `PORTUALE_REPORT_UNPARSED_DEP_TOKENS` is set.
 
+## fn parse_dep_atom
+- Backlog #492 (plan `LLM/02.492-dep-drop-ledger.opus.md`). Single choke for parsing a dependency token: `None` counts the token against its call site (`UNPARSED_DEP_SITES`, read with `unparsed_dep_sites`), so a skipped dependency is visible in the `PORTUALE_REPORT_UNPARSED_DEP_TOKENS` report instead of vanishing. Grammar tokens (`||`, `^^`, `??`, parentheses, `flag?`) read as `None` uncounted because raw vdb `*DEPEND` strings are fed in whole (found by the pmtest gate, 2026-10-23). Sites that intend to skip keep `portage_dep::parse_atom` with a `// drop-ok: <reason>` comment; `tests/dep_drop_lint.rs` scans `resolve/`, `slot_operator/`, `merge_order/` and `solver_bridge.rs` for any other bare call.
+
 ## static EBUILD_DB_DROPPED
 - Backlog #396. `--usepkgonly=n` stores `False` under the key, and `"--usepkgonly" not in myopts` (`depgraph.py:809`) is then false, so Portage builds its dbs list without the ebuild database although binaries are not exclusive. Probe: `-pv --usepkgonly=n <new package>` is rc 1 `no ebuilds to satisfy`, not a merge. A process-global rather than a `ResolveRequest` field because the pool is built at four sites (`candidate_pool`, `greedy_slots`, `resolve_pretend`, the dependency installed fallback) and `SelectOptions` has 35 construction sites. Evidence: `LLM/evidence/2026-10-18-s8/out/c396-*.txt`.
 

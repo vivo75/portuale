@@ -24,8 +24,8 @@ pub(crate) fn autounmask_dep_chain(
             .iter()
             .copied()
             .filter(|t| {
-                portage_dep::parse_atom(t).is_some_and(|a| {
-                    portage_dep::parse_atom(current_atom)
+                parse_dep_atom(t, "autounmask").is_some_and(|a| {
+                    parse_dep_atom(current_atom, "autounmask")
                         .is_some_and(|c| a.category == c.category && a.package == c.package)
                 })
             })
@@ -50,7 +50,7 @@ pub(crate) fn autounmask_dep_chain(
         let mut args: Vec<String> = top_level
             .iter()
             .filter(|t| {
-                portage_dep::parse_atom(t).is_some_and(|a| {
+                parse_dep_atom(t, "autounmask").is_some_and(|a| {
                     a.category == cur.0
                         && a.package == cur.1
                         && a.blocker == portage_dep::Blocker::None
@@ -179,7 +179,7 @@ pub(crate) fn required_use_dep_chain(
         .iter()
         .copied()
         .filter(|t| {
-            portage_dep::parse_atom(t).is_some_and(|a| a.category == *oc && a.package == *op)
+            parse_dep_atom(t, "autounmask").is_some_and(|a| a.category == *oc && a.package == *op)
         })
         .collect();
     matches.sort_unstable();

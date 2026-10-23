@@ -92,7 +92,7 @@ pub(crate) fn built_slot_operator_atoms(
     };
     flat.into_iter()
         .filter(|tok| {
-            portage_dep::parse_atom(tok).is_some_and(|a| {
+            parse_dep_atom(tok, "installed_meta").is_some_and(|a| {
                 a.slot_operator == Some(portage_dep::SlotOperator::Equals) && a.sub_slot.is_some()
             })
         })

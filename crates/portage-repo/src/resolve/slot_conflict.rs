@@ -163,7 +163,7 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
     let mut parents_b: Vec<SlotConflictParent> = Vec::new();
     if let Some(pullers) = slot_pullers.get(&(category.to_string(), package.to_string())) {
         for (pc, pp, pv, atom) in pullers {
-            let parsed = portage_dep::parse_atom(atom);
+            let parsed = parse_dep_atom(atom, "slot_conflict");
             let use_ok = |iuse: &HashSet<String>, use_: &HashSet<String>| match &parsed {
                 Some(a) => match &a.use_deps {
                     Some(ud) => portage_dep::use_deps_satisfied(ud, iuse, use_),
@@ -325,7 +325,7 @@ pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) ->
         let mut parents_per_inst: Vec<Vec<SlotConflictParent>> = vec![Vec::new(); instances.len()];
         if let Some(cp_pullers) = pullers.get(&(key.0.clone(), key.1.clone())) {
             for (pc, pp, pv, atom) in cp_pullers {
-                let parsed = portage_dep::parse_atom(atom);
+                let parsed = parse_dep_atom(atom, "slot_conflict");
                 for (ii, inst) in instances.iter().enumerate() {
                     // Same probe as `direct_solve_atom_matches` (tree slot/sub-slot,
                     // USE against resolved flags); installed instances use vdb.
@@ -644,7 +644,7 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
     // check must also evaluate its use-deps against the merge's decided
     // USE (uncomputable USE falls back to the version-only check).
     let merge_str = format!("{category}/{package}-{merge_ver}:{slot}/{merge_sub}::{merge_repo}");
-    let use_still_broken = portage_dep::parse_atom(&pin.atom)
+    let use_still_broken = parse_dep_atom(&pin.atom, "slot_conflict")
         .and_then(|parsed| parsed.use_deps)
         .filter(|deps| !deps.is_empty())
         .is_some_and(|deps| {
@@ -713,7 +713,7 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
     let (m_iuse, m_use) = slot_conflict_flag_sets(repos, config, &category, &package, &merge_ver);
     let (i_iuse, i_use) = installed_pkg_iuse_and_use(root, &category, &package, &inst.version);
     let use_ok_for = |atom_str: &str, iuse: &HashSet<String>, use_: &HashSet<String>| -> bool {
-        match portage_dep::parse_atom(atom_str) {
+        match parse_dep_atom(atom_str, "slot_conflict") {
             Some(a) => match &a.use_deps {
                 Some(ud) => portage_dep::use_deps_satisfied(ud, iuse, use_),
                 None => true,

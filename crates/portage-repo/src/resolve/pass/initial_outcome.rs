@@ -74,7 +74,7 @@ pub(crate) fn resolve_initial_outcome(
         if let Some(version) = reused_version
             && let Ok(candidates) = crate::list_candidates(&ctx.repos, &key.0, &key.1)
             && let Some(candidate) = candidates.iter().find(|c| &c.version == version)
-            && let Some(parsed) = portage_dep::parse_atom(current_atom)
+            && let Some(parsed) = parse_dep_atom(current_atom, "pass_initial_outcome")
         {
             let empty_constraints: Vec<String> = Vec::new();
             let extra = union_constraints.get(key).unwrap_or(&empty_constraints);
@@ -111,7 +111,7 @@ pub(crate) fn resolve_initial_outcome(
             if it.owner.as_ref() != Some(o) || it.depth != depth || it.from_disjunction {
                 break;
             }
-            if let Some(a) = portage_dep::parse_atom(&it.atom)
+            if let Some(a) = parse_dep_atom(&it.atom, "pass_initial_outcome")
                 && a.blocker == portage_dep::Blocker::None
                 && a.category == key.0
                 && a.package == key.1
@@ -148,7 +148,7 @@ pub(crate) fn resolve_initial_outcome(
                 if matches!(out, PretendOutcome::NoVisibleCandidate)
                     && depth != 0
                     && !ctx.empty
-                    && (portage_dep::parse_atom(a)
+                    && (parse_dep_atom(a, "pass_initial_outcome")
                         .is_some_and(|p| p.slot.is_some() || p.slot_operator.is_some())
                         || !cp_has_tree_or_binary_candidate(
                             &ctx.repos,

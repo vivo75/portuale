@@ -388,7 +388,7 @@ pub(crate) fn fill_use_change_chains(
 ) {
     for change in changes.iter_mut() {
         if change.dep_chain.is_empty()
-            && let Some(atom) = portage_dep::parse_atom(&change.atom)
+            && let Some(atom) = parse_dep_atom(&change.atom, "feedback")
         {
             let owner = entries
                 .iter()
@@ -417,7 +417,7 @@ pub(crate) fn fill_non_use_change_chains(
 ) {
     for change in changes.iter_mut() {
         if change.dep_chain.is_empty()
-            && let Some(atom) = portage_dep::parse_atom(&change.atom)
+            && let Some(atom) = parse_dep_atom(&change.atom, "feedback")
         {
             let owner = entries
                 .iter()

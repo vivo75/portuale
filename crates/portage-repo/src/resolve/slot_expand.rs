@@ -43,7 +43,7 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
         evaluated,
         atom_running,
     } = args;
-    let Some(atom) = portage_dep::parse_atom(evaluated) else {
+    let Some(atom) = parse_dep_atom(evaluated, "slot_expand") else {
         return false;
     };
     if atom.blocker != portage_dep::Blocker::None {
@@ -679,7 +679,7 @@ pub(crate) fn enqueue_flipped_tokens(args: EnqueueFlippedTokensArgs<'_>) -> Cont
     }
     let new_toks = kept_toks;
     for tok in &new_toks {
-        if let Some(dep_atom) = portage_dep::parse_atom(tok)
+        if let Some(dep_atom) = parse_dep_atom(tok, "slot_expand")
             && dep_atom.blocker == portage_dep::Blocker::None
         {
             state
@@ -716,7 +716,7 @@ pub(crate) fn enqueue_flipped_tokens(args: EnqueueFlippedTokensArgs<'_>) -> Cont
     let new_targets: HashSet<(String, String)> = new_toks
         .iter()
         .filter_map(|tok| {
-            portage_dep::parse_atom(tok)
+            parse_dep_atom(tok, "slot_expand")
                 .map(|dep_atom| (dep_atom.category.clone(), dep_atom.package.clone()))
         })
         .collect();

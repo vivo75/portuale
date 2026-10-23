@@ -180,7 +180,7 @@ pub(crate) fn slot_operator_rebuild_scan(
                         .map(String::from)
                         .collect::<Vec<_>>()
                 })
-                .filter_map(|tok| portage_dep::parse_atom(&tok))
+                .filter_map(|tok| parse_dep_atom(&tok, "rebuild_scan_tokens"))
                 .filter_map(|atom| {
                     slot_op_edge_for_atom(
                         atom,

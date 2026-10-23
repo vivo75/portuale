@@ -1,6 +1,7 @@
 //! Dependency priorities, the edges they label and the ignore rungs.
 
 use crate::merge_order::*;
+use crate::parse_dep_atom;
 
 /// The per-edge dependency classification driving every `ignore_priority` decision.
 /// `cross` is always `false` (one root at a time); `ignored` is expressed by
@@ -92,8 +93,8 @@ pub(crate) fn split_disjunctive(tokens: &[String]) -> (Vec<String>, Vec<(String,
             }
             _ => {
                 pending_any_of = false;
-                let is_virtual =
-                    portage_dep::parse_atom(tok).is_some_and(|a| a.category == "virtual");
+                let is_virtual = parse_dep_atom(tok, "priority_tok_virtual")
+                    .is_some_and(|a| a.category == "virtual");
                 if let Some(aod) = any_of_depth {
                     disjunctive.push((tok.clone(), group, branch));
                     if depth == aod {
@@ -177,8 +178,7 @@ pub(crate) fn dep_edges_from_metadata(
                 continue;
             }
             let disjunctive = alt.is_some();
-            let Some(dep_atom) = portage_dep::parse_atom(&t) else {
-                crate::note_unparsed_dep_token(&t, "merge-order digraph");
+            let Some(dep_atom) = crate::parse_dep_atom(&t, "merge-order digraph") else {
                 continue;
             };
             if dep_atom.blocker != portage_dep::Blocker::None {

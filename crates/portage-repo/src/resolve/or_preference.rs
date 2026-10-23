@@ -36,7 +36,7 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
         update,
     } = args;
     atoms.iter().any(|a| {
-        let Some(at) = portage_dep::parse_atom(a) else {
+        let Some(at) = parse_dep_atom(a, "or_preference") else {
             return false;
         };
         if at.blocker != portage_dep::Blocker::None
@@ -79,7 +79,7 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
         if in_slot.is_empty() {
             let mut hypothetical: Vec<String> = Vec::new();
             for q in queued {
-                let Some(qat) = portage_dep::parse_atom(&q.atom) else {
+                let Some(qat) = parse_dep_atom(&q.atom, "or_preference") else {
                     continue;
                 };
                 if qat.category != at.category || qat.package != at.package {
@@ -183,7 +183,7 @@ pub(crate) fn disjunction_preference(
         gate_queued,
     } = args;
     let constraints_for = |a: &str| -> &[String] {
-        portage_dep::parse_atom(a)
+        parse_dep_atom(a, "or_preference")
             .and_then(|at| constraints.get(&(at.category, at.package)))
             .map_or(&[][..], Vec::as_slice)
     };
@@ -201,7 +201,7 @@ pub(crate) fn disjunction_preference(
     // self-naming atoms only.
     let mut queued_cps: Option<HashSet<(String, String)>> = None;
     for a in atoms {
-        let self_naming = portage_dep::parse_atom(a).is_some_and(|at| {
+        let self_naming = parse_dep_atom(a, "or_preference").is_some_and(|at| {
             at.blocker == portage_dep::Blocker::None
                 && at.category == self_cp.1
                 && at.package == self_cp.2
@@ -216,7 +216,7 @@ pub(crate) fn disjunction_preference(
                     gate_queued
                         .iter()
                         .filter_map(|q| {
-                            portage_dep::parse_atom(&q.atom)
+                            parse_dep_atom(&q.atom, "or_preference")
                                 .map(|at| (at.category.clone(), at.package.clone()))
                         })
                         .collect()
@@ -267,7 +267,7 @@ pub(crate) fn disjunction_preference(
         let non_blocker: Vec<&String> = atoms
             .iter()
             .filter(|a| {
-                portage_dep::parse_atom(a)
+                parse_dep_atom(a, "or_preference")
                     .is_some_and(|at| at.blocker == portage_dep::Blocker::None)
             })
             .collect();
@@ -286,7 +286,7 @@ pub(crate) fn disjunction_preference(
         // Portage's own fuzzy cp-level fallback -- plain vdb match, deliberately NOT
         // `atom_cp_installed` (that helper's `virtual/` exemption doesn't apply here).
         let any_cp_installed = non_blocker.iter().any(|a| {
-            portage_dep::parse_atom(a)
+            parse_dep_atom(a, "or_preference")
                 .is_some_and(|at| !installed_candidates(root, &at.category, &at.package).is_empty())
         });
         return if any_cp_installed {
@@ -317,7 +317,7 @@ pub(crate) fn disjunction_preference(
     // `parent.onlydeps` half stays cut: `--onlydeps` isn't threaded to this depth.
     if let Some(children) = circular_dependency.get(self_cp) {
         let circular_hit = atoms.iter().any(|a| {
-            let Some(atom) = portage_dep::parse_atom(a) else {
+            let Some(atom) = parse_dep_atom(a, "or_preference") else {
                 return false;
             };
             if atom.blocker != portage_dep::Blocker::None {
@@ -417,7 +417,7 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
         cp_map: HashMap<String, String>,
     }
     let constraints_for = |a: &str| -> &[String] {
-        portage_dep::parse_atom(a)
+        parse_dep_atom(a, "or_preference")
             .and_then(|at| constraints.get(&(at.category, at.package)))
             .map_or(&[][..], Vec::as_slice)
     };
@@ -427,7 +427,7 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
         .map(|(id, atoms)| {
             let mut cp_map: HashMap<String, String> = HashMap::new();
             for a in atoms {
-                let Some(atom) = portage_dep::parse_atom(a) else {
+                let Some(atom) = parse_dep_atom(a, "or_preference") else {
                     continue;
                 };
                 if atom.blocker != portage_dep::Blocker::None {

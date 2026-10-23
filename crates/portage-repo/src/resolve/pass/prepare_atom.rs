@@ -45,10 +45,14 @@ pub(crate) fn prepare_queued_atom<'a, 's>(
         unevaluated_atom,
         first_pass,
     } = args;
-    let Some(atom) = portage_dep::parse_atom(current_atom) else {
-        if owner.is_some() {
-            note_unparsed_dep_token(current_atom, "resolver queue");
-        }
+    // Only a dependency token (one with an owner) is counted; a top-level argument is not.
+    let parsed = if owner.is_some() {
+        parse_dep_atom(current_atom, "resolver queue")
+    } else {
+        // drop-ok: top-level argument, not a dependency token
+        portage_dep::parse_atom(current_atom)
+    };
+    let Some(atom) = parsed else {
         return ControlFlow::Break(());
     };
     if atom.blocker != portage_dep::Blocker::None {

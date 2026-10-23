@@ -36,6 +36,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::Write;
 
+use crate::parse_dep_atom;
+
 use super::{
     AbortOutcomeArgs, AutounmaskChange, Candidate, Deep, EffectiveUseFlagsArgs, GraphEntry,
     GraphResult, InstalledDepStringArgs, InstalledMetaLayer, InstalledRef, InstalledUseState,
@@ -918,7 +920,7 @@ fn collect_bridge_blockers(
         for tok in flat {
             let evaluated = portage_dep::evaluate_atom_conditionals(&tok, use_set)
                 .unwrap_or_else(|| tok.clone());
-            let Some(dep_atom) = portage_dep::parse_atom(&evaluated) else {
+            let Some(dep_atom) = parse_dep_atom(&evaluated, "solver_bridge_flat_tokens") else {
                 continue;
             };
             if dep_atom.blocker == portage_dep::Blocker::None {
@@ -1091,7 +1093,7 @@ fn bridge_slot_operator_rebuilds(
         let top_level_cps: HashSet<(String, String)> = req
             .atoms
             .iter()
-            .filter_map(|a| portage_dep::parse_atom(a))
+            .filter_map(|a| parse_dep_atom(a, "solver_bridge_request_cps"))
             .map(|atom| (atom.category, atom.package))
             .collect();
         // The raw request atoms, for the greedy-eligibility half of the gate.
@@ -1516,7 +1518,7 @@ fn has_installed_parent(
                         return false;
                     };
                     atoms.iter().any(|atom_str| {
-                        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+                        let Some(atom) = parse_dep_atom(atom_str, "solver_bridge_dep_atoms") else {
                             return false;
                         };
                         if atom.blocker != portage_dep::Blocker::None
@@ -4049,7 +4051,7 @@ fn bridge_validate_aborts(
             .atoms
             .iter()
             .find(|atom| {
-                portage_dep::parse_atom(atom).is_some_and(|parsed| {
+                parse_dep_atom(atom, "solver_bridge_request_match").is_some_and(|parsed| {
                     format!("{}/{}", parsed.category, parsed.package) == member.cp
                 })
             })
@@ -4065,7 +4067,7 @@ fn bridge_validate_aborts(
         // Walk (last-declared-first) order for top-level violations; a
         // dependency-only violation keeps plan order.
         let key = match req.atoms.iter().rposition(|atom| {
-            portage_dep::parse_atom(atom).is_some_and(|parsed| {
+            parse_dep_atom(atom, "solver_bridge_request_key").is_some_and(|parsed| {
                 format!("{}/{}", parsed.category, parsed.package) == member.cp
             })
         }) {
@@ -4138,7 +4140,7 @@ fn bridge_validate_aborts(
             // Build-time keys travel for every merge-bound ebuild: the default
             // walk drops them only for a *binary* candidate without
             // `--with-bdeps` (`enqueue_deps.rs`), and the bridge offers none.
-            let Some(parsed) = portage_dep::parse_atom(&dep.evaluated) else {
+            let Some(parsed) = parse_dep_atom(&dep.evaluated, "solver_bridge_build_deps") else {
                 continue;
             };
             if parsed.blocker != portage_dep::Blocker::None {
@@ -4479,7 +4481,7 @@ fn parent_flip_rescue(args: ParentFlipRescueArgs<'_>) -> Option<ParentFlipRescue
         }
     }
     let re_atom = portage_dep::evaluate_atom_conditionals(unevaluated, &new_use)?;
-    let re_parsed = portage_dep::parse_atom(&re_atom)?;
+    let re_parsed = parse_dep_atom(&re_atom, "solver_bridge_re_atom")?;
     let re_use_deps = re_parsed.use_deps.clone().unwrap_or_default();
     if !portage_dep::use_deps_satisfied_union(
         &re_use_deps,
@@ -4512,7 +4514,7 @@ fn parent_flip_rescue(args: ParentFlipRescueArgs<'_>) -> Option<ParentFlipRescue
         .atoms
         .iter()
         .find(|atom| {
-            portage_dep::parse_atom(atom).is_some_and(|a| {
+            parse_dep_atom(atom, "solver_bridge_dep_chain").is_some_and(|a| {
                 a.category == pc && a.package == pp && a.blocker == portage_dep::Blocker::None
             })
         })

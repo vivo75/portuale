@@ -153,6 +153,11 @@ fn run_emerge(args: &[String]) -> ExitCode {
             "portuale: unparsed dependency tokens: {}",
             portage_repo::unparsed_dep_tokens()
         );
+        let sites: Vec<String> = portage_repo::unparsed_dep_sites()
+            .iter()
+            .map(|(site, n)| format!("{site}={n}"))
+            .collect();
+        eprintln!("portuale: unparsed dependency sites: {}", sites.join(","));
     }
     code
 }

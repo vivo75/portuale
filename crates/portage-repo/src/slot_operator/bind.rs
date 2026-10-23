@@ -88,6 +88,7 @@ pub(crate) fn built_equals_shift_unrebuildable(
 /// own slot-dep substring (`:=` / `:2=` / `:2/3=`), which appears exactly
 /// once in a well-formed atom, so `replacen(.., 1)` is safe.
 pub(crate) fn bind_slot_operator_token(token: &str, entries: &[GraphEntry], root: &Path) -> String {
+    // drop-ok: unparseable token returned unchanged, not dropped
     let Some(atom) = portage_dep::parse_atom(token) else {
         return token.to_string();
     };
@@ -157,6 +158,7 @@ pub(crate) fn strip_libc_atoms(
         return atoms;
     }
     atoms.retain(|t| {
+        // drop-ok: kept
         portage_dep::parse_atom(t).is_none_or(|a| !libc_cps.contains(&(a.category, a.package)))
     });
     atoms

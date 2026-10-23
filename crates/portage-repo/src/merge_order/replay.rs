@@ -1,6 +1,7 @@
 //! Replaying `_create_graph` for fail-fast passes.
 
 use crate::merge_order::*;
+use crate::parse_dep_atom;
 
 /// A `(category, package)` key.
 pub(crate) type Cp = (String, String);
@@ -87,7 +88,7 @@ pub(crate) fn replay_create_graph(args: ReplayCreateGraphArgs<'_>) -> WalkReplay
     let mut discovered = vec![false; n];
     let mut stack: Vec<usize> = Vec::new();
     for (ai, atom_str) in top_level_atoms.iter().enumerate() {
-        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        let Some(atom) = parse_dep_atom(atom_str, "replay_top_level_atoms") else {
             continue;
         };
         if atom.blocker != portage_dep::Blocker::None {
@@ -207,8 +208,9 @@ pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
         if edge.disjunctive != disjunctive || edge.key != key || alt_suppressed[i].contains(&ei) {
             continue;
         }
+        // drop-ok: fallback; dropped only if next line also fails
         let Some(atom) = portage_dep::parse_atom(&edge.evaluated)
-            .or_else(|| portage_dep::parse_atom(&edge.atom))
+            .or_else(|| parse_dep_atom(&edge.atom, "replay_edge_atoms"))
         else {
             continue;
         };
@@ -239,7 +241,7 @@ pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
             .collect();
         // Only unconditional `flag` / `-flag` use-deps are checked: conditional ones
         // depend on the parent's own USE, which the walk may itself change.
-        let written: HashSet<String> = portage_dep::parse_atom(&edge.atom)
+        let written: HashSet<String> = parse_dep_atom(&edge.atom, "replay_written_use_deps")
             .and_then(|a| a.use_deps)
             .unwrap_or_default()
             .into_iter()

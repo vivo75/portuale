@@ -1553,3 +1553,42 @@ fn run_pass_package_use_mask_hides_test_deps() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn prepare_queued_atom_counts_an_unparseable_atom_only_under_an_owner() {
+    // The `resolver queue` site is counted only when the atom has an owner (a
+    // dependency edge); a top-level argument is not a dependency token. Without
+    // an owner the count must not move. The site is a production literal, so
+    // this test is the only one that feeds it an owner-bearing bad token.
+    use crate::tests::globals::site_count;
+    let dir = slotundo_temp_dir("prepare-queued-unparsed");
+    let config = test_config();
+    let opts = CtxOpts161::default();
+    let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
+    let mut state = PassState::default();
+    let unevaluated: Option<String> = None;
+    let run = |state: &mut PassState, owner: &Option<(String, String)>| {
+        prepare_queued_atom(PrepareQueuedAtomArgs {
+            current_atom: ">>>bad[",
+            owner,
+            pprovided_refs: &[],
+            depth: 0,
+            state,
+            item_targets_running_root: false,
+            ctx: &ctx,
+            buildtime_hard: false,
+            item_owner_targets_running_root: false,
+            config: &config,
+            unevaluated_atom: &unevaluated,
+            first_pass: true,
+        })
+    };
+    let before = site_count("resolver queue");
+    let no_owner: Option<(String, String)> = None;
+    assert!(run(&mut state, &no_owner).is_break());
+    assert_eq!(site_count("resolver queue"), before);
+    let owner = Some(("dev-libs".to_string(), "prepowner".to_string()));
+    assert!(run(&mut state, &owner).is_break());
+    assert!(site_count("resolver queue") > before);
+    let _ = fs::remove_dir_all(&dir);
+}

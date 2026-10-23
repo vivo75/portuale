@@ -110,3 +110,26 @@ fn stale_built_slot_operator_dep_of_an_installed_package_settles_installed() {
         ]
     );
 }
+
+#[test]
+fn unsatisfied_root_deps_counts_an_unparseable_token_as_dropped() {
+    // The `root_deps` site is a production literal, so other parallel tests may
+    // also count against it: assert it rose, not an exact value.
+    use crate::tests::globals::site_count;
+    let before = site_count("root_deps");
+    let metadata = HashMap::from([(
+        "RDEPEND".to_string(),
+        "dev-libs/rdpgood >>>bad[".to_string(),
+    )]);
+    let got = unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
+        metadata: &metadata,
+        use_flags: &HashSet::new(),
+        repos: &[],
+        config: &test_config(),
+        running_root: Path::new("/nonexistent-root-for-this-test"),
+        dep_keys: &["RDEPEND"],
+        empty_groups_always_true: false,
+    });
+    assert!(!got.iter().any(|t| t.contains("bad")), "got {got:?}");
+    assert!(site_count("root_deps") > before);
+}

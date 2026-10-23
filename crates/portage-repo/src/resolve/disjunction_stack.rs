@@ -703,7 +703,7 @@ fn enqueue_chosen_atoms(args: EnqueueChosenAtomsArgs<'_>) {
             // Puller recording for the chosen atoms, mirroring
             // `record_slot_pullers_and_enqueue`.
             for tok in &flat_deps {
-                if let Some(dep_atom) = portage_dep::parse_atom(tok)
+                if let Some(dep_atom) = parse_dep_atom(tok, "disjunction_stack")
                     && dep_atom.blocker == portage_dep::Blocker::None
                 {
                     state
@@ -822,7 +822,7 @@ fn enqueue_chosen_atoms(args: EnqueueChosenAtomsArgs<'_>) {
                 return;
             }
             for tok in seen_toks.iter().chain(kept_toks.iter()) {
-                if let Some(dep_atom) = portage_dep::parse_atom(tok)
+                if let Some(dep_atom) = parse_dep_atom(tok, "disjunction_stack")
                     && dep_atom.blocker == portage_dep::Blocker::None
                 {
                     state
@@ -867,7 +867,7 @@ fn enqueue_chosen_atoms(args: EnqueueChosenAtomsArgs<'_>) {
                 .iter()
                 .chain(kept_toks.iter())
                 .filter_map(|tok| {
-                    portage_dep::parse_atom(tok)
+                    parse_dep_atom(tok, "disjunction_stack")
                         .map(|dep_atom| (dep_atom.category.clone(), dep_atom.package.clone()))
                 })
                 .collect();

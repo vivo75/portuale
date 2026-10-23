@@ -1,6 +1,7 @@
 //! Installed packages pulled into the merge-order graph.
 
 use crate::merge_order::*;
+use crate::parse_dep_atom;
 
 /// Whether an installed package matches `edge`'s atom. For a slot-operator edge
 /// the match must carry the resolved child's own slot/sub-slot.
@@ -197,6 +198,7 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
     // uses; the injected-libc strip below is only sound on that Raw path.
     let libc_cps = crate::libc_provider_cps(root);
     let is_injected_libc = |atom: &str| -> bool {
+        // drop-ok: unparseable atom kept, not stripped
         let Some(a) = portage_dep::parse_atom(atom) else {
             return false;
         };
@@ -301,7 +303,7 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
     system_atoms_sorted.sort();
     if !virtuals_only {
         for atom_str in &system_atoms_sorted {
-            let Some(atom) = portage_dep::parse_atom(atom_str) else {
+            let Some(atom) = parse_dep_atom(atom_str, "installed_closure_system_atoms") else {
                 continue;
             };
             add_node(

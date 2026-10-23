@@ -81,7 +81,7 @@ pub(crate) fn collect_probe_parents(
         for key in dep_keys {
             let tokens = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
             for token in tokens.split_whitespace() {
-                let Some(atom) = portage_dep::parse_atom(token) else {
+                let Some(atom) = parse_dep_atom(token, "abi_probe_vdb_deps") else {
                     continue;
                 };
                 if atom.blocker != portage_dep::Blocker::None {
@@ -107,7 +107,7 @@ pub(crate) fn add_argument_probe_parents(
     top_level_atoms: &HashSet<String>,
 ) {
     for token in top_level_atoms {
-        let Some(atom) = portage_dep::parse_atom(token) else {
+        let Some(atom) = parse_dep_atom(token, "abi_probe_argument_atoms") else {
             continue;
         };
         if atom.blocker != portage_dep::Blocker::None {
@@ -233,7 +233,7 @@ pub(crate) fn slot_conflict_abi_probe(
                 {
                     continue;
                 }
-                let Some(atom) = portage_dep::parse_atom(&parent.atom) else {
+                let Some(atom) = parse_dep_atom(&parent.atom, "abi_probe_parent_atom") else {
                     continue;
                 };
                 if !is_built_slot_op(&atom) {
@@ -309,7 +309,7 @@ pub(crate) fn slot_conflict_abi_probe(
                         })
                         .flatten()
                         .any(|tok| {
-                            let Some(la) = portage_dep::parse_atom(&tok) else {
+                            let Some(la) = parse_dep_atom(&tok, "abi_probe_live_deps") else {
                                 return false;
                             };
                             if la.blocker != portage_dep::Blocker::None {
@@ -377,7 +377,7 @@ pub(crate) fn slot_conflict_abi_display_pairs(
         for key in dep_keys {
             let recorded = read_vdb_string(root, &e.category, &e.package, version, key);
             for tok in recorded.split_whitespace() {
-                let Some(atom) = portage_dep::parse_atom(tok) else {
+                let Some(atom) = parse_dep_atom(tok, "abi_probe_recorded_deps") else {
                     continue;
                 };
                 if !is_built_slot_op(&atom) {
@@ -446,7 +446,7 @@ pub(crate) fn greedy_pinned_cps(
 ) -> HashSet<(String, String)> {
     let mut out = HashSet::new();
     for atom_str in atoms {
-        let Some(atom) = portage_dep::parse_atom(atom_str) else {
+        let Some(atom) = parse_dep_atom(atom_str, "abi_probe_pinned_atoms") else {
             continue;
         };
         let cp = (atom.category.clone(), atom.package.clone());
@@ -540,7 +540,7 @@ pub(crate) fn greedy_pin_survives_revision(
             let atoms =
                 flat_dep_atoms(meta.get(key).map(String::as_str).unwrap_or(""), &use_flags)?;
             for tok in atoms {
-                let Some(la) = portage_dep::parse_atom(&tok) else {
+                let Some(la) = parse_dep_atom(&tok, "abi_probe_meta_deps") else {
                     continue;
                 };
                 if la.blocker != portage_dep::Blocker::None {
@@ -628,7 +628,7 @@ pub(crate) fn replacement_parent_accepts(args: ReplacementParentAcceptsArgs<'_>)
             })
             .flatten()
         {
-            let Some(la) = portage_dep::parse_atom(&tok) else {
+            let Some(la) = parse_dep_atom(&tok, "abi_probe_meta_tokens") else {
                 continue;
             };
             if la.blocker != portage_dep::Blocker::None

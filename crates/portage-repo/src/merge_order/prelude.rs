@@ -1,6 +1,7 @@
 //! Per-run lookups shared by the digraph build.
 
 use crate::merge_order::*;
+use crate::parse_dep_atom;
 
 /// Shared prelude of `build_digraph` and `kept_alt_branches`: the `cat/pkg`
 /// index, installed flags, and per-entry candidate strings.
@@ -187,7 +188,7 @@ impl DigraphPrelude<'_> {
         if cands.len() < 2 {
             return cands;
         }
-        let Some(parsed) = portage_dep::parse_atom(atom) else {
+        let Some(parsed) = parse_dep_atom(atom, "prelude_atom") else {
             return cands;
         };
         let use_deps = parsed.use_deps.unwrap_or_default();

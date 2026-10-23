@@ -69,7 +69,7 @@ pub(crate) fn parent_use_flip(
     else {
         return Ok(ControlFlow::Continue((current_atom, atom)));
     };
-    let Some(_re_parsed) = portage_dep::parse_atom(&re_atom) else {
+    let Some(_re_parsed) = parse_dep_atom(&re_atom, "pass_parent_use_flip") else {
         return Ok(ControlFlow::Continue((current_atom, atom)));
     };
     let re_outcome = resolve_pretend(
@@ -117,7 +117,7 @@ pub(crate) fn parent_use_flip(
             .top_level
             .iter()
             .find(|t| {
-                portage_dep::parse_atom(t).is_some_and(|a| {
+                parse_dep_atom(t, "pass_parent_use_flip").is_some_and(|a| {
                     a.category == pc && a.package == pp && a.blocker == portage_dep::Blocker::None
                 })
             })

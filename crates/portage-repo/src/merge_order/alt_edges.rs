@@ -1,6 +1,7 @@
 //! Which `||` branches contribute edges.
 
 use crate::merge_order::*;
+use crate::parse_dep_atom;
 
 /// Per `(key, group)`, the `deps` indices of the `||` branches not picked.
 ///
@@ -75,7 +76,7 @@ pub(crate) fn suppressed_alt_edges(
                     *all_inst.entry(b).or_insert(true) &= inst_m;
                     *all_any.entry(b).or_insert(true) &= any_m;
                     if let Some(children) = children
-                        && let Some(atom) = portage_dep::parse_atom(&edge.atom)
+                        && let Some(atom) = parse_dep_atom(&edge.atom, "alt_edges_edge_atom")
                         && atom.blocker == portage_dep::Blocker::None
                         && !installed_by_cp
                             .get(&(atom.category.clone(), atom.package.clone()))

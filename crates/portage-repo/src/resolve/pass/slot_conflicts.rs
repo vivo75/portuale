@@ -127,7 +127,7 @@ pub(crate) fn solve_pass_slot_conflicts(
                     if tok == "||" {
                         continue;
                     }
-                    if let Some(dep_atom) = portage_dep::parse_atom(&tok)
+                    if let Some(dep_atom) = parse_dep_atom(&tok, "pass_slot_conflicts")
                         && dep_atom.blocker != portage_dep::Blocker::None
                     {
                         let duplicate = state.pending_blockers.iter().any(|pb| {

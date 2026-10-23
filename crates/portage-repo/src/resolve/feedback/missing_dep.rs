@@ -21,7 +21,7 @@ pub(crate) fn step_missing_dep(
         // a miss falls through to the mask below. Skipped under `--usepkgonly`.
         if ctx.backtrack_max > 0
             && !ctx.usepkgonly
-            && portage_dep::parse_atom(&dep_atom).is_some_and(|a| is_built_slot_op(&a))
+            && parse_dep_atom(&dep_atom, "missing_dep").is_some_and(|a| is_built_slot_op(&a))
         {
             let (fresh, binary_masks) =
                 slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {

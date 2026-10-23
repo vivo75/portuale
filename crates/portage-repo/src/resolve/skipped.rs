@@ -161,6 +161,7 @@ pub(crate) fn missing_dep_full_row(
     let chain = vec![(format!("{cat}/{pkg}-{ver}::{repo}"), "ebuild".to_string())];
     let dep = match masked_candidates_for_atom(repos, atom, config) {
         Some(masked) => {
+            // drop-ok: fallback to known cat/pkg, not dropped
             let (acat, apkg) = portage_dep::parse_atom(atom)
                 .map(|a| (a.category, a.package))
                 .unwrap_or_else(|| (cat.to_string(), pkg.to_string()));
@@ -173,6 +174,7 @@ pub(crate) fn missing_dep_full_row(
             })
         }
         None => {
+            // drop-ok: fallback to known cat/pkg, not dropped
             let (acat, apkg) = portage_dep::parse_atom(atom)
                 .map(|a| (a.category, a.package))
                 .unwrap_or_else(|| (cat.to_string(), pkg.to_string()));

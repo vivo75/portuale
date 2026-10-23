@@ -122,7 +122,7 @@ pub(crate) fn built_parent_update_probe(
             .collect();
         let mut hit: Option<(String, String)> = None;
         for token in bin_tokens {
-            let Some(atom) = portage_dep::parse_atom(&token) else {
+            let Some(atom) = parse_dep_atom(&token, "built_parent_bin_tokens") else {
                 continue;
             };
             if atom.blocker != portage_dep::Blocker::None || !is_built_slot_op(&atom) {
@@ -247,7 +247,7 @@ fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
                 continue;
             };
             for token in tokens {
-                let Some(atom) = portage_dep::parse_atom(&token) else {
+                let Some(atom) = parse_dep_atom(&token, "built_parent_tokens") else {
                     continue;
                 };
                 if atom.blocker == portage_dep::Blocker::None
@@ -344,6 +344,7 @@ fn other_consumers_accept(args: &OtherConsumers<'_>) -> bool {
             continue;
         }
         // A built `:slot/sub=` atom is judged without its slot/sub-slot part.
+        // drop-ok: unparseable atom kept verbatim, not dropped
         let atom = match portage_dep::parse_atom(&atom) {
             Some(a) if is_built_slot_op(&a) => strip_slot_part(&atom),
             _ => atom,

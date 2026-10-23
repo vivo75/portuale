@@ -636,7 +636,7 @@ pub fn circular_dep_solutions(
         // `parent_atom`: the (unevaluated) token in `dep` that pulls the child.
         let ccp = format!("{ccat}/{cpkg}");
         let Some(parent_atom) = dep_tokens.iter().find(|t| {
-            portage_dep::parse_atom(t)
+            parse_dep_atom(t, "cycles")
                 .is_some_and(|a| format!("{}/{}", a.category, a.package) == ccp)
         }) else {
             continue;
@@ -803,7 +803,7 @@ pub(crate) fn grandparent_use_conflict(
         for key in ["DEPEND", "BDEPEND", "RDEPEND", "PDEPEND"] {
             let Some(dep) = omd.get(key) else { continue };
             for tok in dep.split_whitespace() {
-                let Some(a) = portage_dep::parse_atom(tok) else {
+                let Some(a) = parse_dep_atom(tok, "cycles") else {
                     continue;
                 };
                 if format!("{}/{}", a.category, a.package) != pcp {
