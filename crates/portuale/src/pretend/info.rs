@@ -201,29 +201,6 @@ pub(crate) fn print_info_header(
         }
     }
 
-    // --- per-repo `Timestamp` / `Head commit of repository` ---
-    for repo in repos {
-        if let Ok(text) = std::fs::read_to_string(repo.location.join("metadata/timestamp.chk"))
-            && let Some(first) = text.lines().next()
-        {
-            println!("Timestamp of repository {}: {}", repo.name, first.trim());
-        }
-        if repo.sync_type.as_deref() == Some("git")
-            && let Some(head) = std::process::Command::new("git")
-                .args(["-C"])
-                .arg(&repo.location)
-                .args(["rev-parse", "HEAD"])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                .filter(|s| !s.is_empty())
-        {
-            println!("Head commit of repository {}: {head}", repo.name);
-            println!();
-        }
-    }
-
     // --- `sh:` -- the /bin/sh provider ---
     let sh_target = std::fs::canonicalize(config_root.join("bin/sh"))
         .or_else(|_| std::fs::canonicalize("/bin/sh"))
@@ -278,6 +255,35 @@ pub(crate) fn print_info_header(
             width = cp_max + 1
         );
     }
+}
+
+/// First entry of `metadata/timestamp.chk` (`portage.grabfile`: comments and
+/// blank lines skipped).
+/// Portage: _emerge/actions.py, action_info
+pub(crate) fn repo_timestamp(location: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(location.join("metadata/timestamp.chk")).ok()?;
+    text.lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .find(|l| !l.is_empty())
+        .map(str::to_string)
+}
+
+/// `git rev-parse HEAD` of a git-synced repo (the git sync module's
+/// `retrieve_head`); other sync types print nothing.
+/// Portage: _emerge/actions.py, action_info
+pub(crate) fn repo_head_commit(sync_type: Option<&str>, location: &Path) -> Option<String> {
+    if sync_type != Some("git") {
+        return None;
+    }
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(location)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// The active profile path relative to the main repo's `profiles/` dir; else
@@ -422,7 +428,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
     print_info_header(config, repos, root, config_root, !atom_args.is_empty());
 
     // Repositories.
-    println!("Repositories:\n");
+    println!("\nRepositories:\n");
     let name_of: std::collections::HashMap<&Path, &str> = repos
         .iter()
         .map(|r| (r.location.as_path(), r.name.as_str()))
@@ -437,7 +443,10 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
             println!("    sync-type: {t}");
         }
         if let Some(u) = &repo.sync_uri {
-            println!("    sync-uri: {u}");
+            println!(
+                "    sync-uri: {}",
+                crate::emerge_getbinpkg::hide_binhost_passwd(u)
+            );
         }
         if !repo.masters.is_empty() {
             let ms: Vec<&str> = repo
@@ -460,6 +469,12 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
         for (k, v) in &repo.module_specific_options {
             println!("    {k}: {v}");
         }
+        if let Some(ts) = repo_timestamp(&repo.location) {
+            println!("    timestamp: {ts}");
+        }
+        if let Some(head) = repo_head_commit(repo.sync_type.as_deref(), &repo.location) {
+            println!("    head commit: {head}");
+        }
         println!();
     }
 
@@ -477,7 +492,10 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                 println!("    location: {loc}");
             }
             println!("    priority: {}", br.priority);
-            println!("    sync-uri: {}", br.sync_uri);
+            println!(
+                "    sync-uri: {}",
+                crate::emerge_getbinpkg::hide_binhost_passwd(&br.sync_uri)
+            );
             println!(
                 "    verify-signature: {}",
                 if br.verify_signature { "True" } else { "False" }

@@ -1,0 +1,9 @@
+!!! Repository 'second' is missing masters attribute in '/var/tmp/ev504-tree/repo2/metadata/layout.conf'
+!!! Set 'masters = main' in this file for future compatibility
+!!! Repository 'third' is missing masters attribute in '/var/tmp/ev504-tree/repo3/metadata/layout.conf'
+!!! Set 'masters = main' in this file for future compatibility
+!!! Repository 'second' is missing masters attribute in '/var/tmp/ev504-tree/repo2/metadata/layout.conf'
+!!! Set 'masters = main' in this file for future compatibility
+!!! Repository 'third' is missing masters attribute in '/var/tmp/ev504-tree/repo3/metadata/layout.conf'
+!!! Set 'masters = main' in this file for future compatibility
+error: could not lock config file /etc/gitconfig: Permission denied
