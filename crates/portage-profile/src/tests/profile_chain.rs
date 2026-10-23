@@ -9,8 +9,8 @@ use super::*;
 /// and had `\${VAR}` wrongly expanded (the #70 bug).
 #[test]
 fn make_globals_fetch_commands_match_portage_varexpand() {
-    let text = r#"FETCHCOMMAND="wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) distfile-fetch\" -O \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
-RESUMECOMMAND="wget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) distfile-fetch\" -O \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
+    let text = r#"FETCHCOMMAND="wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, gentoo.org) distfile-fetch\" -O \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
+RESUMECOMMAND="wget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, gentoo.org) distfile-fetch\" -O \"\${DISTDIR}/\${FILE}\" \"\${URI}\""
 
 FETCHCOMMAND_RSYNC="rsync -LtvP \"\${URI}\" \"\${DISTDIR}/\${FILE}\""
 RESUMECOMMAND_RSYNC="rsync -LtvP \"\${URI}\" \"\${DISTDIR}/\${FILE}\""
@@ -29,11 +29,11 @@ PORTAGE_GPG_SIGNING_COMMAND="gpg --sign --digest-algo SHA256 --clearsign --yes -
     for (key, want) in [
         (
             "FETCHCOMMAND",
-            r#"wget -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, https://www.gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}""#,
+            r#"wget -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}""#,
         ),
         (
             "RESUMECOMMAND",
-            r#"wget -c -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, https://www.gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}""#,
+            r#"wget -c -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}""#,
         ),
         (
             "FETCHCOMMAND_RSYNC",

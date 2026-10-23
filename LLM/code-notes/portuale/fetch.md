@@ -49,7 +49,7 @@ Network fetch of a package's distfiles via `wget` (locking, mirrors, resume, dig
 - Ports Portage `fetch.py:1456-1475` (`PORTAGE_RO_DISTDIRS`, `fetch.py:1055-1059`): read-only distdir sources, existing directories only (`shlex.split` + `isdir` at option-build time), each layout-resolved and digest-checked.
 
 ## fn wget_fetch
-- Ports `make.globals`'s default `FETCHCOMMAND` verbatim: `wget -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, https://www.gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}"`. Invoked as a genuine subprocess with the exact same arguments, not reimplemented as an in-process HTTP client. A failed fetch removes whatever partial file `wget` left behind, same "don't leave broken state around" reasoning `emerge_build.rs`'s build-failure handling applies elsewhere.
+- Ports `make.globals`'s default `FETCHCOMMAND` verbatim: `wget -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}"`. Invoked as a genuine subprocess with the exact same arguments, not reimplemented as an in-process HTTP client. A failed fetch removes whatever partial file `wget` left behind, same "don't leave broken state around" reasoning `emerge_build.rs`'s build-failure handling applies elsewhere.
 - The transport itself is `portage_fetch::download_via_wget` (shared with the `mrg-director` `Fetcher` seam); this wrapper names the non-resume `FETCHCOMMAND` for its own callers (the standalone mirror `layout.conf` read and the remote-`Packages` fetches in `emerge_getbinpkg`), while `fetch_src_uri`'s candidate loop dispatches Portage's fresh-vs-resume split through the seam.
 
 ## fn wget_fetch_quiet

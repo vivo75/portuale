@@ -1,0 +1,4 @@
+wget -c -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, https://www.gentoo.org) distfile-fetch
+wget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) distfile-fetch
+wget -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, https://www.gentoo.org) distfile-fetch
+wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) distfile-fetch

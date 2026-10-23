@@ -1,0 +1,3 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792758497,"command":"LLM/evidence/2026-10-23-502/probe.sh portage","env":{"SHELL":"/bin/bash"}}
+[0.134, "o", "wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, gentoo.org) distfile-fetch\" -O \"${DISTDIR}/${FILE}\" \"${URI}\"\r\nwget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, gentoo.org) distfile-fetch\" -O \"${DISTDIR}/${FILE}\" \"${URI}\"\r\n"]
+[0.015, "x", "0"]

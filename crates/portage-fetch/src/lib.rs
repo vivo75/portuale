@@ -324,13 +324,13 @@ fn to_hex(bytes: &[u8]) -> String {
 
 /// Portage `make.globals`'s default `FETCHCOMMAND` template, verbatim.
 pub const DEFAULT_FETCHCOMMAND: &str = concat!(
-    "wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) ",
+    "wget -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, gentoo.org) ",
     "distfile-fetch\" -O \"${DISTDIR}/${FILE}\" \"${URI}\""
 );
 
 /// Portage `make.globals`'s `RESUMECOMMAND`: `FETCHCOMMAND` plus `-c`.
 pub const DEFAULT_RESUMECOMMAND: &str = concat!(
-    "wget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, https://www.gentoo.org) ",
+    "wget -c -t 3 -T 60 --passive-ftp -U \"Portage (Gentoo, gentoo.org) ",
     "distfile-fetch\" -O \"${DISTDIR}/${FILE}\" \"${URI}\""
 );
 
@@ -949,6 +949,31 @@ mod tests {
         let dir = TempDir::new(&format!("portage_fetch_test_{}_{}", std::process::id(), n)).keep();
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Oracle: host `portageq envvar FETCHCOMMAND RESUMECOMMAND` (Portage
+    /// 3.0.83-r1, User-Agent `Portage (Gentoo, gentoo.org)`, bug 983844).
+    #[test]
+    fn default_commands_match_make_globals_and_portage_3_0_83() {
+        let globals = include_str!("../../../cnf/make.globals");
+        for (name, value) in [
+            ("FETCHCOMMAND", DEFAULT_FETCHCOMMAND),
+            ("RESUMECOMMAND", DEFAULT_RESUMECOMMAND),
+        ] {
+            let escaped = value
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('$', "\\$");
+            assert!(
+                globals
+                    .lines()
+                    .any(|l| l == format!("{name}=\"{escaped}\"")),
+                "{name} differs from cnf/make.globals"
+            );
+        }
+        assert!(
+            DEFAULT_FETCHCOMMAND.contains("-U \"Portage (Gentoo, gentoo.org) distfile-fetch\"")
+        );
     }
 
     #[test]
