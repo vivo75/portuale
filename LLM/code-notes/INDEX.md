@@ -1,5 +1,8 @@
 # Code notes (#336): context moved out of code comments, keyed by file and symbol
 
+## 3rdparty
+- [3rdparty/repos.toml](3rdparty/repos.md) — The pin of the mirrored Portage reference checkout, and what the checkout is and is not (#499, plan 02.442 S0).
+
 ## _dupes-skipped.md
 - [Dupes groups skipped by #338](_dupes-skipped.md) — Backlog #338's record: dupes method, before numbers, the three folds, and every skipped group with its reason.
 

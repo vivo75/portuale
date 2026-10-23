@@ -2,8 +2,8 @@
 """Generate the S2 oracle TSV from the installed Portage (do not hand-copy).
 
 Re-runs the ``probe_atoms.py`` battery (83 strings x 9 modes) against the
-*installed* Portage (3.0.82.2, native C parser on by default) and writes
-``crates/portage-dep/src/testdata/atoms-3.0.82.2.tsv`` with columns
+*installed* Portage (3.0.83, native C parser on by default) and writes
+``crates/portage-dep/src/testdata/atoms-<version>.tsv`` with columns
 ``atom \\t mode \\t verdict \\t fields-or-message``.
 
 Portage is still the oracle at test-generation time (AGENTS.md rule 4):
@@ -31,7 +31,7 @@ from portage.exception import InvalidAtom
 
 import portage
 
-EXPECTED_PORTAGE_VERSION = "3.0.82.2"
+EXPECTED_PORTAGE_VERSION = "3.0.83"
 
 ORACLE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -47,7 +47,7 @@ OUT = os.path.join(
     "portage-dep",
     "src",
     "testdata",
-    "atoms-3.0.82.2.tsv",
+    f"atoms-{EXPECTED_PORTAGE_VERSION}.tsv",
 )
 
 MODES = [
@@ -92,7 +92,11 @@ def render(atom):
 
 
 def main():
-    assert portage.VERSION == EXPECTED_PORTAGE_VERSION, portage.VERSION
+    if portage.VERSION != EXPECTED_PORTAGE_VERSION:
+        sys.exit(
+            f"host Portage is {portage.VERSION}, tool expects "
+            f"{EXPECTED_PORTAGE_VERSION}: refusing to write a misnamed table"
+        )
     cases = read_cases()
     assert len(cases) == 83, len(cases)
     n_s3 = 0

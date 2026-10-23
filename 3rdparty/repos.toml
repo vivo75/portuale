@@ -21,19 +21,22 @@ checkout_path = "3rdparty/portage"
 # `commit` is the tag's underlying commit: `git rev-parse <ref>^{commit}`
 # (annotated tags -- plain `git rev-parse <ref>` gives the tag object).
 # Re-verify: `git -C 3rdparty/portage describe --tags` reads `<ref>`.
-ref = "portage-3.0.82.2"
-commit = "1d95fc2c552a2c7d347e54093fa0e5b172a57004"
-pinned_at = "2026-09-01"
+# The oracle host runs the 3.0.83-r1 ebuild: the tag plus one downstream
+# patch (bintree.py, empty USER_PATCHES default); read bintree behaviour
+# from the host install, not this checkout (LLM/code-notes/3rdparty/repos.md).
+ref = "portage-3.0.83"
+commit = "ae324a8092c0e4c8353dbece6231aff421620d93"
+pinned_at = "2026-10-23"
 # Vendored into the tree (so `emerge` runs with no Portage installed):
 #   bin/  -- ebuild.sh + its whole source closure, every ebuild-helpers/
 #            script, estrip/ecompress, the *-qa-check.d/ sets, and the
 #            stdlib-only filter-bash-environment.py. Only bin/phase-functions.sh
-#            diverges (brush strategy #2 -- see its header). The
+#            diverges (two local changes, see its header and bin/README.md). The
 #            portuale-owned shims next to them (portuale-python,
 #            chmod-lite, ebuild-ipc, portageq-wrapper) answer natively, so
 #            no portage-importing .py helper is vendored or needed (#326
 #            S2-S7). Re-sync on a `commit` bump by copying the upstream
-#            files over + re-applying that one change; `diff -r
+#            files over + re-applying those two changes; `diff -r
 #            3rdparty/portage/bin bin` should then be empty bar
 #            phase-functions.sh + bin/README.md. A re-sync that adds or
 #            changes a Python call site needs its helper ported first --

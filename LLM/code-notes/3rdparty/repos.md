@@ -1,0 +1,9 @@
+# 3rdparty/repos.toml
+The pin of the mirrored Portage reference checkout, and what the checkout is and is not (#499, plan 02.442 S0).
+
+## table portage
+- Pin since 2026-10-23: tag `portage-3.0.83`, `commit = ae324a8092c0e4c8353dbece6231aff421620d93` (`git -C 3rdparty/portage rev-parse portage-3.0.83^{commit}`). The tag object `e409b5a188b7233d49cf44c1eedd755be1b7be76` must not be used as `commit`.
+- The oracle host runs the Gentoo `-r1` ebuild of 3.0.83 (`emerge --version` on the host prints `Portage 3.0.83`, no suffix). The ebuild is the tag plus one downstream patch: an empty `USER_PATCHES` default among the Packages-index defaults in `bintree.py` (bug 984255). So `bintree` behaviour is read from the host install (`python3 -c 'import portage'`), not from the checkout.
+- `3rdparty/` is gitignored; the checkout is not a submodule. It was parked on branch `cleanroom-portage-3.0.82.2` and is now detached at `portage-3.0.83` (`git -C 3rdparty/portage describe --tags` reads `portage-3.0.83`); the cleanroom branch is still a ref there. `PORTUALE_PORTAGE_CHECKOUT` users must move their checkout to the same tag.
+- `bin/` carries two local changes in `phase-functions.sh`, not one: the `___save_and_filter_ebuild_env` temp-file staging (brush strategy #2) and the `PORTUALE_.*` entry in `filtered_vars` (feat#157 S6.4). Check with `git -C 3rdparty/portage show <old ref>:bin/phase-functions.sh | diff - bin/phase-functions.sh`. The `bin/` re-sync itself is S6 (#505); until then `diff -r 3rdparty/portage/bin bin` shows the 3.0.82.2 to 3.0.83 upstream changes.
+- The oracle-table tools (`LLM/tools/atom_oracle_table.py`, `eapi_attrs_table.py`) exit with a message when the host `portage.VERSION` is not their `EXPECTED_PORTAGE_VERSION` (now `3.0.83`), and name the output after that constant. The checked-in `*-3.0.82.2.tsv` files and their `include_str!` sites are renamed and regenerated in S10b (#510).

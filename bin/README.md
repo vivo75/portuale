@@ -6,8 +6,10 @@ execution. It ships with the pilot so `emerge` runs on a host with **no
 Portage installed and no Portage checkout**.
 
 Copied verbatim from the ref recorded in `3rdparty/repos.toml`'s
-`[portage]` entry, *except* `phase-functions.sh`, which carries one local
-change (see its own header comment — brush strategy #2).
+`[portage]` entry, *except* `phase-functions.sh`, which carries two local
+changes (the brush strategy #2 temp-file staging, and the `PORTUALE_.*`
+entry in the saved-environment filter; see its own header comment and
+"Re-syncing" below).
 
 ## What's here
 
@@ -44,8 +46,9 @@ tests) builds the symlink overlay onto `<checkout>/bin/` and needs
 ## Re-syncing from upstream
 
 When `3rdparty/repos.toml`'s `[portage] commit` is bumped: copy
-each file here over from the new upstream tree, then re-apply the local
-change noted in `phase-functions.sh`'s header. A plain
+each file here over from the new upstream tree, then re-apply the two local
+changes to `phase-functions.sh` (its header names the first; list both
+with `git -C 3rdparty/portage show <old ref>:bin/phase-functions.sh | diff - bin/phase-functions.sh`). A plain
 `diff -r 3rdparty/portage/bin bin` (ignoring `phase-functions.sh`,
 `portageq-wrapper`, the other portuale-owned files listed below, and
 this README) should otherwise be empty. A re-sync that adds or changes

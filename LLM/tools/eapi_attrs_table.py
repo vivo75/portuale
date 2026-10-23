@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate the S1 oracle TSV from the installed Portage (do not hand-copy).
 
-Re-reads ``portage.eapi._get_eapi_attrs`` live (3.0.82.2) and writes
-``crates/portage-dep/src/testdata/eapi-attrs-3.0.82.2.tsv`` with columns
+Re-reads ``portage.eapi._get_eapi_attrs`` live (3.0.83) and writes
+``crates/portage-dep/src/testdata/eapi-attrs-<version>.tsv`` with columns
 ``eapi \\t field \\t verdict \\t value``.
 
 Portage is still the oracle at test-generation time (AGENTS.md rule 4):
@@ -20,11 +20,12 @@ render exactly that text.
 """
 
 import os
+import sys
 
 import portage
 from portage.eapi import Eapi, _get_eapi_attrs
 
-EXPECTED_PORTAGE_VERSION = "3.0.82.2"
+EXPECTED_PORTAGE_VERSION = "3.0.83"
 
 OUT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -34,7 +35,7 @@ OUT = os.path.join(
     "portage-dep",
     "src",
     "testdata",
-    "eapi-attrs-3.0.82.2.tsv",
+    f"eapi-attrs-{EXPECTED_PORTAGE_VERSION}.tsv",
 )
 
 # Digits plus the testing spelling; deprecated/whitespace spellings are
@@ -44,7 +45,11 @@ ERR_EAPIS = ["3_pre1", " 8"]
 
 
 def main():
-    assert portage.VERSION == EXPECTED_PORTAGE_VERSION, portage.VERSION
+    if portage.VERSION != EXPECTED_PORTAGE_VERSION:
+        sys.exit(
+            f"host Portage is {portage.VERSION}, tool expects "
+            f"{EXPECTED_PORTAGE_VERSION}: refusing to write a misnamed table"
+        )
     fields = list(_get_eapi_attrs(None)._fields)
     assert len(fields) == 38, fields
     n_ok = 0

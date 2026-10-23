@@ -4,7 +4,7 @@
 Each edit is an exact (file, old, new) triple; the script refuses to run if an
 `old` string is missing or ambiguous. Text Portage itself prints is never in
 this list (none of these strings occur in Portage 3.0.82.2's `_emerge/` or
-`bin/`).
+`bin/`; not re-checked against 3.0.83).
 """
 
 import sys
