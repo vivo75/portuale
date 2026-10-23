@@ -1,0 +1,10 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792777573,"command":"env ROOT=/var/tmp/ev508-tree/root-03-pair-both /var/tmp/ev508-bin/emerge -p --depclean dev-libs/dccyca dev-libs/dccycb","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.001, "o", ">>> Calculating removal order...\r\n\u001b[32m>>> These are the packages that would be unmerged:\u001b[39;49;00m\r\n"]
+[0.000, "o", "\r\n dev-libs/dccycb\r\n    selected: \u001b[31;01m1.0 \u001b[39;49;00m\r\n   protected: none \r\n     omitted: none \r\n\r\n"]
+[0.000, "o", " dev-libs/dccyca\r\n    selected: \u001b[31;01m1.0 \u001b[39;49;00m\r\n"]
+[0.000, "o", "   protected: none \r\n     omitted: none \r\n"]
+[0.000, "o", "\r\nAll selected packages: =dev-libs/dccyca-1.0 =dev-libs/dccycb-1.0\r\n\r\n>>> \u001b[31;01m'Selected'\u001b[39;49;00m packages are slated for removal.\r\n>>> \u001b[32;01m'Protected'\u001b[39;49;00m and \u001b[32;01m'omitted'\u001b[39;49;00m packages will not be removed.\r\n"]
+[0.000, "o", "Packages installed:   3\r\nPackages in world:    1\r\nPackages in system:   2\r\nRequired packages:    1\r\nNumber to remove:     2\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev508-tree\u0007"]
+[0.000, "x", "0"]

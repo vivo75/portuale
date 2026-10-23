@@ -1,0 +1,14 @@
+# id <TAB> installed (comma list) <TAB> world (comma list) <TAB> emerge args
+01-pair-a	dccyca,dccycb,dccycw	dccycw	-p --depclean dev-libs/dccyca
+02-pair-b	dccyca,dccycb,dccycw	dccycw	-p --depclean dev-libs/dccycb
+03-pair-both	dccyca,dccycb,dccycw	dccycw	-p --depclean dev-libs/dccyca dev-libs/dccycb
+04-pair-noargs	dccyca,dccycb,dccycw	dccycw	-p --depclean
+05-pair-verbose	dccyca,dccycb,dccycw	dccycw	-p --depclean --verbose dev-libs/dccyca
+06-pair-world-parent	dccyca,dccycb,dccycw	dccycw,dccyca	-p --depclean dev-libs/dccyca
+07-pair-protected-parent	dccyca,dccycb,dccycp,dccycw	dccycw	-p --depclean dev-libs/dccyca
+08-three-cycle	dccycx,dccycy,dccycz,dccycw	dccycw	-p --depclean dev-libs/dccycx
+09-three-cycle-two-args	dccycx,dccycy,dccycz,dccycw	dccycw	-p --depclean dev-libs/dccycx dev-libs/dccycy
+10-pair-world-member-b	dccyca,dccycb,dccycw	dccycw,dccycb	-p --depclean dev-libs/dccyca
+11-pair-a-no-pretend	dccyca,dccycb,dccycw	dccycw	--depclean dev-libs/dccyca
+12-system-cycle	systempkg=dev-libs/dccyca,dccyca=dev-libs/systempkg,dccycw	dccycw	-p --depclean dev-libs/dccyca
+13-system-cycle-no-args	systempkg=dev-libs/dccyca,dccyca=dev-libs/systempkg,dccycw	dccycw	-p --depclean

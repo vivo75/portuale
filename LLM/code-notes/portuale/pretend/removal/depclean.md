@@ -35,3 +35,10 @@
 - Stats block: Portage's `action_depclean` prints it after `unmerge()` returns. A mid-removal failure Portage-`sys.exit`s before this.
 - Removal-order line: Portage's `_calc_depclean` prints `>>> Calculating removal order...` only when there's something to remove; then `unmerge(..., "unmerge", cleanlist)` renders the per-package block.
 - Portage's `action_depclean` calls `unmerge(root_config, myopts, "unmerge", cleanlist, ordered=ordered)` -- the same `unmerge()` the `-C` path uses. Without `--pretend`, `run_unmerge_pretend` removes them.
+
+## fn print_cycle_suggestion
+- Text of Portage's `show_cycle_suggestion` (`_emerge/actions.py`, `96c320967`, bug 346351, backlog #508). Printed after the package's own `pulled in by` block (`--verbose`), in the kept order, the same order Portage uses (`sorted(vardb, cmp_pkg_cpv)`; portuale keeps its existing version-aware order for the reverse-dependency blocks, so a cpv sort can differ only for versions that compare differently as strings).
+- Oracle `LLM/evidence/2026-10-23-508/` (13 shapes, `compare.sh`): stdout lines match, rc matches.
+
+## fn run_depclean_pretend (#508)
+- Empty cleanlist with package arguments and without `--pretend`: Portage `_calc_depclean` ends with `if args_set and "--pretend" not in myopts: return _depclean_result(1, ...)` and `action_depclean` returns before the summary, so the run prints the nothing-selected lines and exits 1 with no `Packages installed:` block. Portuale now does the same (before, it printed the summary and exited 0). Oracle `11-pair-a-no-pretend` (rc 1 on both managers).

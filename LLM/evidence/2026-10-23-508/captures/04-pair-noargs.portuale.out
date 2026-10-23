@@ -1,0 +1,34 @@
+
+ * Always study the list of packages to be cleaned for any obvious
+ * mistakes. Packages that are part of the world set will always
+ * be kept.  They can be manually added to this set with
+ * `emerge --noreplace <atom>`.  Packages that are listed in
+ * package.provided (see portage(5)) will be removed by
+ * depclean, even if they are part of the world set.
+ * 
+ * As a safety measure, depclean will not remove any packages
+ * unless *all* required dependencies have been resolved.  As a
+ * consequence of this, it often becomes necessary to run 
+ * `emerge --update --newuse --deep @world` prior to depclean.
+>>> Calculating removal order...
+>>> These are the packages that would be unmerged:
+
+ dev-libs/dccycb
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+ dev-libs/dccyca
+    selected: 1.0 
+   protected: none 
+     omitted: none 
+
+All selected packages: =dev-libs/dccyca-1.0 =dev-libs/dccycb-1.0
+
+>>> 'Selected' packages are slated for removal.
+>>> 'Protected' and 'omitted' packages will not be removed.
+Packages installed:   3
+Packages in world:    1
+Packages in system:   2
+Required packages:    1
+Number to remove:     2

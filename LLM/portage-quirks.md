@@ -163,3 +163,33 @@ when a claim turns out false.
   possible outputs), and copies the rotations exactly. `portuale mrg`: same until
   decided. Compare the key order of `use_changes` as a set (`compare.sh` in the
   evidence directory sorts the keys).
+
+## Q7. `--depclean ARG` names a cycle as "only required by packages that it requires itself" even when a world-listed member is still needed by @world (suspect)
+
+- **Observed** (2026-10-23, backlog #508, `LLM/evidence/2026-10-23-508/`, shape
+  `06-pair-world-parent`): the world file lists `dev-libs/dccycw` and
+  `dev-libs/dccyca`, the cycle is `dccyca <-> dccycb`, and `emerge -p --depclean
+  dev-libs/dccyca` prints `dev-libs/dccyca-1.0 is only required by packages that
+  it requires itself. Pass all of them at once in order to remove them:
+  emerge --depclean =dev-libs/dccyca-1.0 =dev-libs/dccycb-1.0`. The suggested
+  command, passed with both atoms, selects both packages for removal (`Number to
+  remove: 2`), `dccyca` included even though `@world` names it.
+- **Why**: `show_cycle_suggestion` (`lib/_emerge/actions.py`, added by
+  `96c320967`) skips only the protected set when it looks for parents outside the
+  cycle. In `args` mode `_calc_depclean` empties `selected_set` (`deselect`
+  defaults to on), so the `world` set is never recorded as a parent of the
+  cycle members (`_parent_atoms` of `dccyca` holds just `dccycb`). The
+  `@selected` membership therefore never blocks the notice, and the wording
+  "only required by packages that it requires itself" is untrue for that package.
+- **Why it looks wrong**: the notice exists to explain why a package survives
+  `--depclean ARG`; for a package the world file still names, it is not the
+  reason. The command it prints removes a world-listed package. This is the
+  documented argument semantics (named packages are removed and deselected), so
+  the removal itself is consistent; the wording is what looks off. The commit's
+  own comment ("Only protected because --depclean was given arguments") shows the
+  author considered the parent set, and did not mention world.
+- **First seen**: Portage 3.0.83-r1 (`96c320967`, bug 346351).
+- **Portuale**: copies it. `pretend/removal/depclean.rs` and
+  `portage-repo/src/depclean.rs` (`cycle_suggestions`) print the notice for a
+  world-listed member, because portuale drops `@selected` seeds in `args` mode
+  like Portage. Pinned by `test_508_world_listed_member_still_gets_the_notice`.

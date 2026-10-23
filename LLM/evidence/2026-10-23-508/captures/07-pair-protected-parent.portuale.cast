@@ -1,0 +1,5 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792777573,"command":"env ROOT=/var/tmp/ev508-tree/root-07-pair-protected-parent /var/tmp/ev508-bin/emerge -p --depclean dev-libs/dccyca","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.001, "o", ">>> No packages selected for removal by depclean\r\n>>> To see reverse dependencies, use --verbose\r\nPackages installed:   4\r\nPackages in world:    1\r\nPackages in system:   2\r\nRequired packages:    4\r\nNumber to remove:     0\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev508-tree\u0007"]
+[0.000, "x", "0"]

@@ -659,3 +659,188 @@ fn prune_cleanlist_removes_superseded_versions_only() {
     std::fs::remove_dir_all(&root).ok();
     std::fs::remove_dir_all(&root2).ok();
 }
+
+/// Installs `(package, RDEPEND)` pairs under `dev-libs` in a fresh root.
+fn install_dev_libs_root(name: &str, installed: &[(&str, &str)]) -> std::path::PathBuf {
+    let root = masters_test_root(name);
+    for (package, rdepend) in installed {
+        let d = root
+            .join("var/db/pkg/dev-libs")
+            .join(format!("{package}-1.0"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), "0\n").unwrap();
+        if !rdepend.is_empty() {
+            std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    root
+}
+
+/// `(pkg, members)` of each cycle notice, cpv strings.
+fn cycle_notices(result: &DepcleanResult) -> Vec<(String, Vec<String>)> {
+    result
+        .cycle_suggestions
+        .iter()
+        .map(|s| {
+            let mut members: Vec<String> = s.members.iter().map(|m| m.cpv()).collect();
+            members.sort();
+            (s.pkg.cpv(), members)
+        })
+        .collect()
+}
+
+#[test]
+fn depclean_cycle_notice_names_the_pair_when_only_the_cycle_keeps_it() {
+    // #508 / Portage 3.0.83-r1 `_calc_depclean`: A and B require each other,
+    // B is protected (not named), C is world. `--depclean A` removes nothing
+    // and the notice names both members (oracle: LLM/evidence/2026-10-23-508).
+    let root = install_dev_libs_root(
+        "depclean-cycle-pair-508",
+        &[
+            ("dccyca", "dev-libs/dccycb"),
+            ("dccycb", "dev-libs/dccyca"),
+            ("dccycw", ""),
+        ],
+    );
+    let world = [("dev-libs/dccycw".to_string(), "@selected".to_string())];
+    let run = |args: &[String]| {
+        depclean_cleanlist(DepcleanCleanlistArgs {
+            root: &root,
+            world_seeds: &world,
+            system_atoms: &[],
+            args,
+            deselect: true,
+            lib_protected_providers: &[],
+            package_provided: &[],
+        })
+    };
+    let result = run(&["dev-libs/dccyca".to_string()]);
+    assert!(result.cleanlist.is_empty());
+    assert_eq!(
+        cycle_notices(&result),
+        vec![(
+            "dev-libs/dccyca-1.0".to_string(),
+            vec![
+                "dev-libs/dccyca-1.0".to_string(),
+                "dev-libs/dccycb-1.0".to_string()
+            ],
+        )]
+    );
+    // Naming the other member gives its own notice, with the same members.
+    let result = run(&["dev-libs/dccycb".to_string()]);
+    assert_eq!(
+        cycle_notices(&result)
+            .iter()
+            .map(|(p, _)| p.as_str())
+            .collect::<Vec<_>>(),
+        vec!["dev-libs/dccycb-1.0"]
+    );
+    // Without arguments there is no notice (Portage only asks in `args` mode).
+    assert!(run(&[]).cycle_suggestions.is_empty());
+}
+
+#[test]
+fn depclean_cycle_notice_is_silenced_by_a_parent_outside_the_cycle() {
+    // dccycp is protected (not named) and requires dccyca: Portage's
+    // `_parent_atoms` of dccyca then holds a Package outside the cycle.
+    let root = install_dev_libs_root(
+        "depclean-cycle-outside-508",
+        &[
+            ("dccyca", "dev-libs/dccycb"),
+            ("dccycb", "dev-libs/dccyca"),
+            ("dccycp", "dev-libs/dccyca"),
+            ("dccycw", ""),
+        ],
+    );
+    let world = [("dev-libs/dccycw".to_string(), "@selected".to_string())];
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &world,
+        system_atoms: &[],
+        args: &["dev-libs/dccyca".to_string()],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
+    assert!(result.cycle_suggestions.is_empty());
+    assert!(!result.kept_parents.is_empty());
+}
+
+#[test]
+fn depclean_cycle_notice_lists_every_member_of_a_three_cycle() {
+    // dccycx -> dccycy -> dccycz -> dccycx: one notice, three members.
+    let root = install_dev_libs_root(
+        "depclean-cycle-three-508",
+        &[
+            ("dccycx", "dev-libs/dccycy"),
+            ("dccycy", "dev-libs/dccycz"),
+            ("dccycz", "dev-libs/dccycx"),
+            ("dccycw", ""),
+        ],
+    );
+    let world = [("dev-libs/dccycw".to_string(), "@selected".to_string())];
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &world,
+        system_atoms: &[],
+        args: &["dev-libs/dccycx".to_string()],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
+    assert_eq!(
+        cycle_notices(&result),
+        vec![(
+            "dev-libs/dccycx-1.0".to_string(),
+            vec![
+                "dev-libs/dccycx-1.0".to_string(),
+                "dev-libs/dccycy-1.0".to_string(),
+                "dev-libs/dccycz-1.0".to_string(),
+            ],
+        )]
+    );
+}
+
+#[test]
+fn depclean_cycle_notice_ignores_a_package_that_only_requires_itself() {
+    // A self-edge is a cycle of one: no notice (Portage `len(members) < 2`).
+    let root = install_dev_libs_root("depclean-cycle-self-508", &[("dccyca", "dev-libs/dccyca")]);
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[],
+        system_atoms: &[],
+        args: &["dev-libs/dccyca".to_string()],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
+    assert!(result.cycle_suggestions.is_empty());
+}
+
+#[test]
+fn strongly_connected_components_groups_cycles_and_survives_long_chains() {
+    // 0 -> 1 -> 2 -> 0 is one component; 3 -> 2 hangs off it; 4 <-> 5 is
+    // another; 6 stands alone.
+    let adj = vec![vec![1], vec![2], vec![0], vec![2], vec![5], vec![4], vec![]];
+    let comp = crate::depclean::strongly_connected_components(&adj);
+    assert_eq!(comp[0], comp[1]);
+    assert_eq!(comp[1], comp[2]);
+    assert_eq!(comp[4], comp[5]);
+    let distinct = [comp[0], comp[3], comp[4], comp[6]];
+    for (i, a) in distinct.iter().enumerate() {
+        for b in &distinct[i + 1..] {
+            assert_ne!(a, b);
+        }
+    }
+    // A 200 000 node chain has no cycles and must not overflow the stack.
+    let n = 200_000;
+    let chain: Vec<Vec<usize>> = (0..n)
+        .map(|i| if i + 1 < n { vec![i + 1] } else { vec![] })
+        .collect();
+    let comp = crate::depclean::strongly_connected_components(&chain);
+    let mut seen: Vec<usize> = comp.clone();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), n);
+}

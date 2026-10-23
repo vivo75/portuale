@@ -1,0 +1,5 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792777573,"command":"env ROOT=/var/tmp/ev508-tree/root-11-pair-a-no-pretend /var/tmp/ev508-bin/emerge --depclean dev-libs/dccyca","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.001, "o", "  dev-libs/dccyca-1.0 is only required by packages that it requires\r\n  itself. Pass all of them at once in order to remove them:\r\n    emerge --depclean =dev-libs/dccyca-1.0 =dev-libs/dccycb-1.0\r\n\r\n>>> No packages selected for removal by depclean\r\n>>> To see reverse dependencies, use --verbose\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev508-tree\u0007"]
+[0.000, "x", "1"]

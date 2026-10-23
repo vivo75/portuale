@@ -53,3 +53,19 @@ depclean, prune and clean selection.
 
 ## fn strip_slot_operator_one
 - Guards: a plain `:=` (no slot), a `:2` / `:2/3` (no operator), or a `:2*` is left untouched, matching Portage `strip_slots`'s `x.slot_operator == "=" and x.slot is not None` guard (`lib/portage/dep/_slot_operator.py:11`). `::repo` uses `::` and use-deps live inside `[...]`, so a single leftmost replacement is safe.
+
+## struct CycleSuggestion
+- Portage `show_cycle_suggestion` (`_emerge/actions.py`, `_calc_depclean`, commit `96c320967`, bug 346351, backlog #508): one notice per kept, `args`-matched package whose strongly connected component has at least two members and no member is recorded as a parent from outside the component. `members` holds the package and the rest of its component.
+- `DepcleanResult.cycle_suggestions` is empty without `args` and for `--prune` (Portage only calls `show_cycle_suggestion` in the `action == "depclean"` branch with `args_set`).
+
+## fn strongly_connected_components
+- Tarjan's algorithm, iterative (an explicit `work` stack of `(node, next successor)`), so a 200 000 node chain does not overflow the thread stack (test `strongly_connected_components_groups_cycles_and_survives_long_chains`). Portage: `digraph.strongly_connected_components()`, the call behind `cycle_members` in `_calc_depclean`.
+
+## fn cycle_suggestions
+- Portage `show_cycle_suggestion` (`actions.py`, `_calc_depclean`, `96c320967`). Graph = the reachable installed packages; edges = one per recorded parent (`parent_atoms`), `parent -> child`, for package parents only. Portage's digraph has the same edges for resolved deps.
+- Outside-parent rule: a member with any recorded parent edge whose label is not a member suppresses the notice. Portage's check skips only the protected set (`____depclean_protected_set____`), and portuale records no edge from the protected roots, so the rule reduces to "any parent outside the component". Parents that do count: a protected package outside the cycle (oracle `07-pair-protected-parent`) and the `@system` set (oracle `12-system-cycle`: `_parent_atoms` holds `('system', ...)`).
+- `@selected` / `world` parents do not count, because portuale drops world seeds in `args` mode (`deselect` default), matching Portage, where `_parent_atoms` never holds the `world` set in `args` mode. Oracles `06-pair-world-parent`, `10-pair-world-member-b`. Portage quirk: LLM/portage-quirks.md Q7.
+- Self-loops are not members (`len(members) < 2`), oracle-free but matches `show_cycle_suggestion`'s early return.
+
+## fn print_cycle_suggestion (portuale)
+- Portage `show_cycle_suggestion`'s text (`96c320967`): the two-line sentence, then `emerge --depclean` with every member as `=cpv`, sorted as strings (`sorted("=" + member.cpv ...)`), then a blank line. Written to stdout (Portage `writemsg_stdout`), no colour.

@@ -224,6 +224,25 @@ pub(crate) fn depclean_unresolved_halt(
     Some(ExitCode::from(1))
 }
 
+/// The `--depclean` notice for a package only kept by a dependency cycle: the
+/// command that removes every member at once (bug 346351).
+/// Portage: _emerge/actions.py, _calc_depclean (`show_cycle_suggestion`)
+fn print_cycle_suggestion(cycle: &portage_repo::CycleSuggestion) {
+    let mut atoms: Vec<String> = cycle
+        .members
+        .iter()
+        .map(|m| format!("={}", m.cpv()))
+        .collect();
+    atoms.sort();
+    println!(
+        "  {} is only required by packages that it requires",
+        cycle.pkg.cpv()
+    );
+    println!("  itself. Pass all of them at once in order to remove them:");
+    println!("    emerge --depclean {}", atoms.join(" "));
+    println!();
+}
+
 /// Arguments of [`run_depclean_pretend`].
 pub(crate) struct RunDepcleanPretendArgs<'a> {
     pub(crate) targets: &'a [&'a str],
@@ -419,13 +438,23 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
     // The reverse-dep blocks come right after the advisory and before the
     // removal-order line / empty message.
     // Portage: _emerge/actions.py, create_cleanlist
-    if verbose {
-        for (pkg, lines) in &result.kept_parents {
+    // A cycle notice follows the package's own block (Portage calls
+    // `show_parents` and then `show_cycle_suggestion` per package).
+    // Portage: _emerge/actions.py, _calc_depclean
+    for (pkg, lines) in &result.kept_parents {
+        if verbose {
             println!("  {} pulled in by:", pkg.cpv());
             for line in lines {
                 println!("    {line}");
             }
             println!();
+        }
+        if let Some(cycle) = result
+            .cycle_suggestions
+            .iter()
+            .find(|s| s.pkg.cpv() == pkg.cpv())
+        {
+            print_cycle_suggestion(cycle);
         }
     }
 
@@ -447,6 +476,13 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         // Real `create_cleanlist`: `if "--verbose" not in myopts`.
         if !verbose {
             println!(">>> To see reverse dependencies, use --verbose");
+        }
+        // With package arguments and nothing selected, Portage's
+        // `_calc_depclean` returns failure unless pretending, and
+        // `action_depclean` stops before the summary.
+        // Portage: _emerge/actions.py, _calc_depclean
+        if !pretend && !args.is_empty() {
+            return ExitCode::from(1);
         }
         stats();
         return ExitCode::SUCCESS;

@@ -1,0 +1,13 @@
+  dev-libs/dccyca-1.0 pulled in by:
+    dev-libs/dccycb-1.0 requires dev-libs/dccyca
+
+  dev-libs/dccyca-1.0 is only required by packages that it requires
+  itself. Pass all of them at once in order to remove them:
+    emerge --depclean =dev-libs/dccyca-1.0 =dev-libs/dccycb-1.0
+
+>>> No packages selected for removal by depclean
+Packages installed:   3
+Packages in world:    1
+Packages in system:   2
+Required packages:    3
+Number to remove:     0

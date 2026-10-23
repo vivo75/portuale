@@ -1,0 +1,15 @@
+  dev-libs/dccycx-1.0 is only required by packages that it requires
+  itself. Pass all of them at once in order to remove them:
+    emerge --depclean =dev-libs/dccycx-1.0 =dev-libs/dccycy-1.0 =dev-libs/dccycz-1.0
+
+  dev-libs/dccycy-1.0 is only required by packages that it requires
+  itself. Pass all of them at once in order to remove them:
+    emerge --depclean =dev-libs/dccycx-1.0 =dev-libs/dccycy-1.0 =dev-libs/dccycz-1.0
+
+>>> No packages selected for removal by depclean
+>>> To see reverse dependencies, use --verbose
+Packages installed:   4
+Packages in world:    1
+Packages in system:   2
+Required packages:    4
+Number to remove:     0

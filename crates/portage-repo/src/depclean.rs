@@ -24,10 +24,86 @@ pub struct DepcleanResult {
     /// Portage `show_parents` lines for every *kept* package, rendered and
     /// sorted (`<parent> requires <atom>, <atom>` per line), cpv order.
     pub kept_parents: Vec<(InstalledPackage, Vec<String>)>,
+    /// Portage `show_cycle_suggestion` for every *kept*, `args`-matched package
+    /// that only a dependency cycle keeps (`args` mode of `--depclean` only;
+    /// empty without `args` and for `--prune`). Shown after the package's own
+    /// `kept_parents` block, in the same order.
+    pub cycle_suggestions: Vec<CycleSuggestion>,
     /// `(atom, parent_cpv)` for every *kept* package's hard runtime dependency
     /// no installed package satisfies: the caller prints the unresolvable
     /// block and exits 1 without removing anything. Sorted, deduped.
     pub unresolved: Vec<(String, String)>,
+}
+
+/// `_parent_atoms` of the depclean walk: child key -> `(parent cpv or set label, atom)`.
+type ParentAtoms = HashMap<(String, String, String), Vec<(String, String)>>;
+
+/// One `--depclean` cycle notice: `pkg` is kept only because the packages in
+/// `members` require each other (`members` holds `pkg` and at least one more).
+#[derive(Debug, Clone)]
+pub struct CycleSuggestion {
+    pub pkg: InstalledPackage,
+    pub members: Vec<InstalledPackage>,
+}
+
+/// Tarjan's strongly connected components over `adj` (node -> successors),
+/// iterative so a long dependency chain cannot exhaust the stack. Returns the
+/// component number of every node; nodes share a number iff they lie on a
+/// common cycle. Portage: `digraph.strongly_connected_components()`.
+pub(crate) fn strongly_connected_components(adj: &[Vec<usize>]) -> Vec<usize> {
+    const UNVISITED: usize = usize::MAX;
+    let n = adj.len();
+    let mut index = vec![UNVISITED; n];
+    let mut low = vec![0usize; n];
+    let mut on_stack = vec![false; n];
+    let mut comp = vec![UNVISITED; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut next_index = 0usize;
+    let mut next_comp = 0usize;
+    for root in 0..n {
+        if index[root] != UNVISITED {
+            continue;
+        }
+        // (node, index of the next successor to look at)
+        let mut work: Vec<(usize, usize)> = vec![(root, 0)];
+        index[root] = next_index;
+        low[root] = next_index;
+        next_index += 1;
+        stack.push(root);
+        on_stack[root] = true;
+        while let Some(&(v, next_edge)) = work.last() {
+            if next_edge < adj[v].len() {
+                work.last_mut().expect("non-empty work stack").1 += 1;
+                let w = adj[v][next_edge];
+                if index[w] == UNVISITED {
+                    index[w] = next_index;
+                    low[w] = next_index;
+                    next_index += 1;
+                    stack.push(w);
+                    on_stack[w] = true;
+                    work.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+                continue;
+            }
+            work.pop();
+            if low[v] == index[v] {
+                while let Some(w) = stack.pop() {
+                    on_stack[w] = false;
+                    comp[w] = next_comp;
+                    if w == v {
+                        break;
+                    }
+                }
+                next_comp += 1;
+            }
+            if let Some(&(parent, _)) = work.last() {
+                low[parent] = low[parent].min(low[v]);
+            }
+        }
+    }
+    comp
 }
 
 /// Portage `_calc_depclean`'s unmerge-order pass (Portage actions):
@@ -498,6 +574,14 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
             .then_with(|| a.package.cmp(&b.package))
             .then_with(|| vercmp_ordering(&a.version, &b.version))
     });
+    // Portage `show_cycle_suggestion`: only `args` mode asks, and only for the
+    // packages the args name (`kept` above).
+    let cycle_suggestions = if args.is_empty() {
+        Vec::new()
+    } else {
+        cycle_suggestions(&kept, &parent_atoms, &reachable, &installed)
+    };
+
     let mut kept_parents: Vec<(InstalledPackage, Vec<String>)> = Vec::new();
     for p in kept {
         let Some(edges) = parent_atoms.get(&key(p)) else {
@@ -530,8 +614,77 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
         required_count,
         ordered,
         kept_parents,
+        cycle_suggestions,
         unresolved,
     }
+}
+
+/// Portage `show_cycle_suggestion` (`_calc_depclean`, `action == "depclean"`
+/// with `args_set`) for each `kept` package. The graph is the reachable set with
+/// one edge per recorded parent (`parent_atoms`); a package gets a notice when
+/// its strongly connected component has at least two members and no member is
+/// required by anything outside the component. `parent_atoms` records the
+/// `@system` set as a parent and the protected packages as parents, but no
+/// `@selected` parent in `args` mode (Portage empties `selected_set` there).
+fn cycle_suggestions(
+    kept: &[&InstalledPackage],
+    parent_atoms: &ParentAtoms,
+    reachable: &HashSet<(String, String, String)>,
+    installed: &[InstalledPackage],
+) -> Vec<CycleSuggestion> {
+    let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
+    let nodes: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|p| reachable.contains(&key(p)))
+        .collect();
+    let index_of: HashMap<(String, String, String), usize> =
+        nodes.iter().enumerate().map(|(i, p)| (key(p), i)).collect();
+    let cpv_index: HashMap<String, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.cpv(), i))
+        .collect();
+    // `adj[parent]` lists every `child` that `parent` resolves.
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    for (child_key, edges) in parent_atoms {
+        let Some(&child) = index_of.get(child_key) else {
+            continue;
+        };
+        for (parent_cpv, _) in edges {
+            if let Some(&parent) = cpv_index.get(parent_cpv) {
+                adj[parent].push(child);
+            }
+        }
+    }
+    let comp = strongly_connected_components(&adj);
+
+    let mut out = Vec::new();
+    for pkg in kept {
+        let Some(&me) = index_of.get(&key(pkg)) else {
+            continue;
+        };
+        let members: Vec<&InstalledPackage> = (0..nodes.len())
+            .filter(|&i| comp[i] == comp[me])
+            .map(|i| nodes[i])
+            .collect();
+        if members.len() < 2 {
+            continue;
+        }
+        let member_cpvs: HashSet<String> = members.iter().map(|m| m.cpv()).collect();
+        let outside_parent = members.iter().any(|m| {
+            parent_atoms
+                .get(&key(m))
+                .is_some_and(|edges| edges.iter().any(|(p, _)| !member_cpvs.contains(p)))
+        });
+        if outside_parent {
+            continue;
+        }
+        out.push(CycleSuggestion {
+            pkg: (*pkg).clone(),
+            members: members.into_iter().cloned().collect(),
+        });
+    }
+    out
 }
 
 /// Portage `emerge --prune`'s removal list (`_calc_depclean` with
@@ -728,6 +881,7 @@ pub fn prune_cleanlist(
         required_count,
         ordered,
         kept_parents,
+        cycle_suggestions: Vec::new(),
         unresolved,
     }
 }
