@@ -1,0 +1,5 @@
+[nomerge       ] dev-libs/usecyclea-1.0::testrepo USE="[31;01mx[39;49;00m" 
+[[32mebuild[39;49;00m  [32;01mN[39;49;00m     ]  [32mdev-libs/usecycleb-1.0::testrepo[39;49;00m  0 KiB
+[[32;01mebuild[39;49;00m  [32;01mN[39;49;00m     ]   [32;01mdev-libs/usecyclea-1.0::testrepo[39;49;00m  USE="[31;01mx[39;49;00m" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

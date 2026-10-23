@@ -71,3 +71,20 @@ fn circular_node_text_matches_portage_package_str() {
         "(\x1b[35mdev-libs/binpkg-1.0:0/0::testrepo\x1b[39;49;00m, binary scheduled for merge)"
     );
 }
+
+#[test]
+fn edge_use_tail_colours_flags_like_portage_3_0_83() {
+    // Portage 3.0.83-r1 `_edge_description`: enabled flags red, disabled ones
+    // blue with a `-`, sorted, after `, USE=` (LLM/evidence/2026-10-23-506,
+    // shapes 07 and 09).
+    let flags = vec![("nls".to_string(), true), ("system-b".to_string(), false)];
+    assert_eq!(
+        edge_use_tail(&flags, &Colorizer::new(false)),
+        ", USE=nls -system-b"
+    );
+    assert_eq!(
+        edge_use_tail(&flags, &Colorizer::new(true)),
+        ", USE=\x1b[31;01mnls\x1b[39;49;00m \x1b[34;01m-system-b\x1b[39;49;00m"
+    );
+    assert_eq!(edge_use_tail(&[], &Colorizer::new(true)), "");
+}

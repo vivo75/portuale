@@ -1,0 +1,7 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792770177,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n --autounmask-use=n dev-libs/cddtdoa","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.138, "o", "[nomerge       ] dev-libs/cddtdoa-1::testrepo USE=\"doc test\" \r\n"]
+[0.001, "o", "[ebuild  N     ]  dev-libs/cddtdob-1::testrepo  0 KiB\r\n[ebuild  N     ]   dev-libs/cddtdoa-1::testrepo  USE=\"doc test\" 0 KiB\r\n\r\nTotal: 2 packages (2 new), Size of downloads: 0 KiB\r\n\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n(dev-libs/cddtdob-1:0/0::testrepo, ebuild scheduled for merge) depends on\r\n (dev-libs/cddtdoa-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)\r\n  (dev-libs/cddtdob-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)"]
+[0.000, "o", "\r\n\r\nIt might be possible to break this cycle\r\nby applying the following change:\r\n- dev-libs/cddtdoa-1 (Change USE: -doc -test)\r\n\r\nNote that this change can be reverted, once the package has been installed.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.003, "x", "1"]

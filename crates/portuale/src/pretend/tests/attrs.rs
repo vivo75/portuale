@@ -272,7 +272,9 @@ fn nomerge_row_carries_the_use_suffix_when_the_package_has_one() {
             disp_ver: "1.0",
             indent: " ",
             quiet: false,
-            tail: &use_str
+            tail: &use_str,
+            color: &nc,
+            color_key: "PKG_NOMERGE",
         }),
         "[nomerge       ]  dev-libs/gpcyclea-1.0 USE=\"x\" "
     );
@@ -298,7 +300,9 @@ fn nomerge_row_carries_the_use_suffix_when_the_package_has_one() {
             disp_ver: "1.0",
             indent: "",
             quiet: false,
-            tail: &bare_use
+            tail: &bare_use,
+            color: &nc,
+            color_key: "PKG_NOMERGE",
         }),
         "[nomerge       ] dev-libs/diamond-1.0"
     );
@@ -309,7 +313,9 @@ fn nomerge_row_carries_the_use_suffix_when_the_package_has_one() {
             disp_ver: "1.0",
             indent: " ",
             quiet: true,
-            tail: &bare_use
+            tail: &bare_use,
+            color: &nc,
+            color_key: "PKG_NOMERGE",
         }),
         "[nomerge      ]  dev-libs/diamond-1.0"
     );
@@ -369,5 +375,26 @@ fn use_suffix_renders_portages_trailing_space_after_each_use_group() {
             color: &nc
         }),
         ""
+    );
+}
+
+#[test]
+fn nomerge_row_colours_word_and_package_with_the_row_colour() {
+    // Portage `Display.pkgprint`: `[` + colour("nomerge".ljust(13)) + " ] "
+    // + colour(pkg); `PKG_NOMERGE` is teal (LLM/evidence/2026-10-23-506,
+    // shape 02, `ROOT=/` so the tail is the bare space before oldbest).
+    let c = Colorizer::new(true);
+    assert_eq!(
+        nomerge_row(NomergeRowArgs {
+            category: "dev-libs",
+            package: "usecyclea",
+            disp_ver: "1.0",
+            indent: "",
+            quiet: false,
+            tail: " ",
+            color: &c,
+            color_key: "PKG_NOMERGE",
+        }),
+        "[\x1b[36mnomerge      \x1b[39;49;00m ] \x1b[36mdev-libs/usecyclea-1.0\x1b[39;49;00m "
     );
 }

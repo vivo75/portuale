@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792771271,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n =dev-libs/cyc0z-1","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.126, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[ebuild  N     ] dev-libs/cyc0z-1  USE=\"bar foo\" \r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.003, "x", "0"]

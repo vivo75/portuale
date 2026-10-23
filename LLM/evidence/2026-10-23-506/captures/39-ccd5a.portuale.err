@@ -1,0 +1,11 @@
+
+
+
+ * Error: circular dependencies:
+
+(virtual/ccd5v-1.6.0:1.6/1.6::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/ccd5a-6.1.10.3:6/6::testrepo, ebuild scheduled for merge) (runtime)
+  (virtual/ccd5v-1.6.0:1.6/1.6::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

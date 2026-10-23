@@ -1,0 +1,10 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/slcirc-2.0:2.0/2.0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/slcirc-2.0:2.0/2.0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

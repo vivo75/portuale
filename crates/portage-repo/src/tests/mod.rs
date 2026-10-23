@@ -3685,6 +3685,7 @@ mod candidates;
 mod complete_graph;
 mod config_match;
 mod conflict_use_display;
+mod cycle_report;
 mod cycles;
 mod dep_drop_lint;
 mod dep_validate;

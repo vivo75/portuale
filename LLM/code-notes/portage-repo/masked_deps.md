@@ -88,6 +88,7 @@ Masked-dependency reports.
 - #420 real-fixture grounding (s10x, host Portage 3.0.82.2 live): cell A needs a synthetic *parent* binary row — without one Portage reports the parent miss (`there are no binary packages to satisfy "app-misc/t341-built"`) and never reaches the dep. The slot-op dep atom prints whole (`"dev-libs/t341-dep:0/1="`). Local cells read `::testrepo` (the synthetic row's REPO). The remote twin (`--getbinpkgonly`, `::gentoo` row) shares this helper but is portuale-verified only: live Portage cannot consume the fixture binhost index (zero `PATH` lines — `get_binpkg_format` rejects every entry), so no live remote oracle exists.
 
 ## fn candidate_masking_reasons
+- Backlog #506: no `-<arch> keyword` reason. Portage's `_getmaskingstatus` walks KEYWORDS after `KeywordsManager.getKeywords` stacks them incrementally, which drops every `-arch` token, so `KEYWORDS="-amd64"` reads `missing keyword` (host capture, `LLM/evidence/2026-10-23-506/`; `LLM/portage-quirks.md` Q5). The `-arch` text in the reason-order note above is Portage dead code.
 - #348 S5: an unsupported EAPI reports the lone `EAPI <eapi>` reason before every other mask (raw head/index value: `EAPI 99`, `EAPI 7_alpha`). Portage: `getmaskingstatus.py`.
 
 ## fn masked_rows_for_pool

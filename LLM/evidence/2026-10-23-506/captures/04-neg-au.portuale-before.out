@@ -1,0 +1,5 @@
+[nomerge       ] dev-libs/cddnega-1::testrepo USE="-system-b" 
+[ebuild  N     ]  dev-libs/cddnegb-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cddnega-1::testrepo  USE="-system-b" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

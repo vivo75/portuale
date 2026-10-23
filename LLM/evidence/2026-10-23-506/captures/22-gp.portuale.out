@@ -1,0 +1,6 @@
+[ebuild  N     ] dev-libs/gpcyclec-1.0::testrepo  0 KiB
+[nomerge       ]  dev-libs/gpcyclea-1.0::testrepo  USE="x" 
+[ebuild  N     ]   dev-libs/gpcycleb-1.0::testrepo  0 KiB
+[ebuild  N     ]    dev-libs/gpcyclea-1.0::testrepo  USE="x" 0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB

@@ -1,0 +1,7 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792770185,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n --backtrack=0 dev-libs/ccd5a","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.125, "o", "[ebuild  N     ] dev-libs/ccd5a-6.1.10.3:6::testrepo  0 KiB\r\n"]
+[0.001, "o", "[ebuild  N     ]  virtual/ccd5v-1.6.0:1.6::testrepo  0 KiB\r\n\r\nTotal: 2 packages (2 new), Size of downloads: 0 KiB\r\n\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n(virtual/ccd5v-1.6.0:1.6/1.6::testrepo, ebuild scheduled for merge) depends on\r\n (dev-libs/ccd5a-6.1.10.3:6/6::testrepo, ebuild scheduled for merge) (runtime)\r\n  (virtual/ccd5v-1.6.0:1.6/1.6::testrepo, ebuild scheduled for merge) (buildtime)"]
+[0.000, "o", "\r\n\r\n * Note that circular dependencies can often be avoided by temporarily\r\n * disabling USE flags that trigger optional dependencies.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.003, "x", "1"]

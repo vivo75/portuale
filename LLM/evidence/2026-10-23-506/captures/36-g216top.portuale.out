@@ -1,0 +1,7 @@
+[nomerge       ] app-misc/g216top-1.0::testrepo 
+[nomerge       ]  dev-libs/g216mid-1.0::testrepo 
+[ebuild  N     ]   dev-lang/g216comp-1.0::testrepo  0 KiB
+[ebuild  N     ] app-misc/g216top-1.0::testrepo  0 KiB
+[ebuild  N     ]  dev-libs/g216mid-1.0::testrepo  0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB

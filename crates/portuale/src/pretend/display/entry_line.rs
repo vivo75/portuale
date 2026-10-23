@@ -40,8 +40,9 @@ pub(crate) struct PrintEntryLineArgs<'a> {
     pub(crate) use_unsat_deps: &'a [portage_repo::UseUnsatDepReport],
     /// Plain-miss disclosures, rendered last in the `NoVisibleCandidate` arm.
     pub(crate) plain_miss_deps: &'a [portage_repo::PlainMissDepReport],
-    /// Show fetch sizes even when they are `0 KiB`. True only for the
-    /// circular re-display; every other caller passes false.
+    /// True only for the circular re-display: fetch sizes show even when
+    /// they are `0 KiB`, and arguments are not coloured as world. Every
+    /// other caller passes false.
     pub(crate) force_sizes: bool,
     /// The settling pass's recorded cycle edges, for the trailing blocker
     /// disposition.
@@ -119,7 +120,10 @@ pub(crate) fn print_entry_line(args: PrintEntryLineArgs<'_>) {
     // slot/repo/virtual logic is cut (see `update_world_file`).
     // Portage: output.py, Display.check_system_world
     let binary = entry.source == portage_repo::CandidateSource::Binary;
-    let is_favorite = top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
+    // The circular re-display passes no favorites, so arguments are not
+    // coloured as world there. Portage: depgraph.py, _show_circular_deps
+    let is_favorite =
+        !force_sizes && top_level_pkgs.contains(&(entry.category.clone(), entry.package.clone()));
     let unslotted = entry.slot.as_deref().unwrap_or("0") == "0";
     // Placed right before `use_suffix` in each arm, matching Portage's own
     // ordering (`pkg_str + " " + oldbest + "to " + pkg.root`).
@@ -833,15 +837,18 @@ impl EntryLineCtx<'_> {
             ..
         } = self;
         let oldbest = self.oldbest_str();
-        let mut tail = String::new();
+        // The space after the version is unconditional, like a merge row's:
+        // with `ROOT=/` and no USE the row ends in a space, and a USE display
+        // follows after two.
+        // Portage: output.py, Display._set_no_columns
+        let mut tail = String::from(" ");
         if !oldbest.is_empty() {
-            tail.push(' ');
             tail.push_str(&color.c("blue", &oldbest));
         }
         if !root_annotation.is_empty() {
-            // The space after the version is unconditional, so the suffix
-            // carries its own leading space even when oldbest is empty.
-            tail.push(' ');
+            if !oldbest.is_empty() {
+                tail.push(' ');
+            }
             tail.push_str(&self.root_col(root_annotation));
         }
         // The nomerge arm carries the same USE suffix as a merge row.
@@ -852,6 +859,14 @@ impl EntryLineCtx<'_> {
             alphabetical,
             color,
         }));
+        let (system, world) = self.classify(version);
+        let color_key = if system {
+            "PKG_NOMERGE_SYSTEM"
+        } else if world {
+            "PKG_NOMERGE_WORLD"
+        } else {
+            "PKG_NOMERGE"
+        };
         println!(
             "{}",
             nomerge_row(NomergeRowArgs {
@@ -860,7 +875,9 @@ impl EntryLineCtx<'_> {
                 disp_ver: &self.disp_version(version),
                 indent,
                 quiet,
-                tail: &tail
+                tail: &tail,
+                color,
+                color_key,
             })
         );
     }

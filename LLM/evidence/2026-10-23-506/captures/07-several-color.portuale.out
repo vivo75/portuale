@@ -1,0 +1,5 @@
+[[36mnomerge      [39;49;00m ] [36mdev-libs/cddseva-1::testrepo[39;49;00m  USE="[31;01mdoc[39;49;00m [31;01mnls[39;49;00m" 
+[[32mebuild[39;49;00m  [32;01mN[39;49;00m     ]  [32mdev-libs/cddsevb-1::testrepo[39;49;00m  0 KiB
+[[32mebuild[39;49;00m  [32;01mN[39;49;00m     ]   [32mdev-libs/cddseva-1::testrepo[39;49;00m  USE="[31;01mdoc[39;49;00m [31;01mnls[39;49;00m" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

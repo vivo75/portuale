@@ -1,0 +1,14 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/ccd4b-7.3.0:7.3.0/7.3.0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/ccd4a-7.3.0:0/73::testrepo, ebuild scheduled for merge) (buildtime, USE=-low-memory)
+  (dev-libs/ccd4b-7.3.0:7.3.0/7.3.0::testrepo, ebuild scheduled for merge) (buildtime)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/ccd4b-7.3.0 (Change USE: +low-memory)
+
+Note that this change can be reverted, once the package has been installed.

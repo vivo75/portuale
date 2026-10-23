@@ -1,0 +1,7 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792771266,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n dev-lang/cddgo","env":{"SHELL":"/bin/bash"}}
+[0.005, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.181, "o", "[ebuild  N     ] dev-lang/cddgo-2::testrepo  0 KiB\r\n\r\nTotal: 1 package (1 new), Size of downloads: 0 KiB\r\n\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n(dev-lang/cddgo-2:0/0::testrepo, ebuild scheduled for merge) depends on\r\n (dev-lang/cddgo-2:0/0::testrepo, ebuild scheduled for merge) (buildtime)"]
+[0.000, "o", "\r\n\r\n * The following masked packages could be used instead of a\r\n * package in the cycle. Unmasking them, for example via\r\n * /etc/portage/package.accept_keywords, might solve it:\r\n- "]
+[0.000, "o", "dev-lang/cddgo-bootstrap-1 (instead of dev-lang/cddgo-2)\r\n\r\n\r\n * Note that circular dependencies can often be avoided by temporarily\r\n * disabling USE flags that trigger optional dependencies.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.005, "x", "1"]

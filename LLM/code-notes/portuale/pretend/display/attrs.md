@@ -28,6 +28,7 @@ Merge-list row attributes: columns, version decoration, USE suffix, sizes. Conte
 - Backlog #272: Portage's `_create_use_string` (`output_helpers.py:336-338`) returns `f'{name}="{ret}" '` -- one trailing space per non-empty group, concatenated directly -- and `print_messages` (`output.py:542-544`) joins the whole display with a single leading space. Portage's `print_messages` (`myprint += " " + self.verboseadd`) puts a single space between the line (already ending with the oldbest slot's trailing space) and the USE display. Each group is therefore rendered with its own trailing space below.
 
 ## fn nomerge_row
+- Backlog #506: Portage `Display.pkgprint` colours both the bracket word (`"nomerge".ljust(13)`, then `empty_space_in_brackets()` outside the colour) and the package text with `PKG_NOMERGE` (teal), `PKG_NOMERGE_SYSTEM` or `PKG_NOMERGE_WORLD`; the row used to be uncoloured. Host capture `LLM/evidence/2026-10-23-506/` shape 02.
 - The ancestor arm's exact rendering contract is unit-pinned (#154). A USE-less nomerge row is byte-identical to the pre-#154 rendering. The `--quiet` narrowing is portuale's established quiet rendering, pinned by the quiet contract tests.
 
 ## fn root_suffix

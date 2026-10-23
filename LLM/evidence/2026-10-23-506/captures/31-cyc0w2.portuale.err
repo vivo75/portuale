@@ -1,0 +1,14 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=foo)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cyc0z-3 (Change USE: -foo)
+ (This change might require USE changes on parent packages.)
+Note that this change can be reverted, once the package has been installed.

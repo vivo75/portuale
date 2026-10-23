@@ -1,0 +1,11 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/gpcycleb-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/gpcyclea-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/gpcycleb-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

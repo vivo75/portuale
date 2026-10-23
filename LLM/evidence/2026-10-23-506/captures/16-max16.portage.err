@@ -1,0 +1,14 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/cddtrnb-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cddtrna-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cddtrnb-1:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=flag0 flag1 flag10 flag11 flag2 flag3 flag4 flag5 flag6 flag7 flag8 flag9)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cddtrna-1 (Change USE: -flag7 -flag11 -flag10 -flag2 -flag4 -flag1 -flag0 -flag5 -flag9 -flag3 -flag8 -flag6)
+
+Note that this change can be reverted, once the package has been installed.

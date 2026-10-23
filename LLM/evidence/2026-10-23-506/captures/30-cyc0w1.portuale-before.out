@@ -1,0 +1,5 @@
+[ebuild  N     ] dev-libs/cyc0w-1::testrepo  0 KiB
+[ebuild  N     ]  dev-libs/cyc0y-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cyc0z-3::testrepo  USE="bar foo" 0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB

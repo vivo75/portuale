@@ -1,0 +1,24 @@
+
+
+
+[31;01m * [39;49;00mError: circular dependencies:
+
+([32mdev-libs/cddtstb-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) depends on
+ ([32mdev-libs/cddtsta-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) (buildtime)
+  ([32mdev-libs/cddtstb-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) (buildtime, USE=[31;01mtest[39;49;00m)
+
+[31;01m * [39;49;00mThis cycle involves test dependencies. If you do not
+[31;01m * [39;49;00mneed to run the test suites of the packages listed below,
+[31;01m * [39;49;00mdisable FEATURES=test for them. Put FEATURES="-test" in
+[31;01m * [39;49;00m/etc/portage/env/no-test.conf, then add the following to
+[31;01m * [39;49;00m/etc/portage/package.env (see "package.env" in the
+[31;01m * [39;49;00mportage(5) man page for more details):
+
+=dev-libs/cddtsta-1 no-test.conf
+
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cddtsta-1 (Change USE: [34;01m-test[39;49;00m)
+
+Note that this change can be reverted, once the package has been installed.

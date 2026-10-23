@@ -1,0 +1,11 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792770184,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n --backtrack=0 app-misc/g216top","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.131, "o", "[nomerge       ] app-misc/g216top-1.0::testrepo\r\n[nomerge       ]  dev-libs/g216mid-1.0::testrepo\r\n"]
+[0.000, "o", "[ebuild  N     ]   dev-lang/g216comp-1.0::testrepo  0 KiB\r\n[ebuild  N     ] app-misc/g216top-1.0::testrepo  0 KiB\r\n"]
+[0.000, "o", "[ebuild  N     ]  dev-libs/g216mid-1.0::testrepo  0 KiB\r\n\r\nTotal: 3 packages (3 new), Size of downloads: 0 KiB\r\n"]
+[0.000, "o", "\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n"]
+[0.000, "o", "(dev-lang/g216comp-1.0:0/0::testrepo, ebuild scheduled for merge) depends on\r\n"]
+[0.000, "o", " (dev-lang/g216comp-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)"]
+[0.000, "o", "\r\n\r\n * Note that circular dependencies can often be avoided by temporarily\r\n * disabling USE flags that trigger optional dependencies.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.004, "x", "1"]

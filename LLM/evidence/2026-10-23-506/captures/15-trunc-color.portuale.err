@@ -1,0 +1,18 @@
+
+
+
+[31;01m * [39;49;00mError: circular dependencies:
+
+([32mdev-libs/cddtrnb-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) depends on
+ ([32mdev-libs/cddtrna-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) (buildtime)
+  ([32mdev-libs/cddtrnb-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) (buildtime, USE=[31;01mflag0[39;49;00m [31;01mflag1[39;49;00m [31;01mflag10[39;49;00m [31;01mflag11[39;49;00m [31;01mflag2[39;49;00m [31;01mflag3[39;49;00m [31;01mflag4[39;49;00m [31;01mflag5[39;49;00m [31;01mflag6[39;49;00m [31;01mflag7[39;49;00m [31;01mflag8[39;49;00m [31;01mflag9[39;49;00m)
+
+[31;01m * [39;49;00mThe search for USE changes was given up on for the following
+[31;01m * [39;49;00mpackages, because they have too many USE flags that affect the
+[31;01m * [39;49;00mdependency. Raise PORTAGE_CIRCULAR_MAX_USE_FLAGS (currently 10)
+[31;01m * [39;49;00mto search harder:
+- dev-libs/cddtrna-1
+
+
+[31;01m * [39;49;00mNote that circular dependencies can often be avoided by temporarily
+[31;01m * [39;49;00mdisabling USE flags that trigger optional dependencies.

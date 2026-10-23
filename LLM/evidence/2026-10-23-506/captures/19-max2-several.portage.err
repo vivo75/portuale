@@ -1,0 +1,18 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/cddsevb-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cddseva-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cddsevb-1:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=doc nls)
+
+ * The search for USE changes was given up on for the following
+ * packages, because they have too many USE flags that affect the
+ * dependency. Raise PORTAGE_CIRCULAR_MAX_USE_FLAGS (currently 1)
+ * to search harder:
+- dev-libs/cddseva-1
+
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

@@ -1,0 +1,10 @@
+
+!!! The ebuild selected to satisfy "=dev-libs/cyc0a-2" has unmet requirements.
+- dev-libs/cyc0a-2::testrepo USE="bar foo" ELIBC="glibc"
+
+  The following REQUIRED_USE flag constraints are unsatisfied:
+    exactly-one-of ( foo bar )
+
+(dependency required by "dev-libs/cyc0b-2::testrepo" [ebuild])
+(dependency required by "=dev-libs/cyc0b-2" [argument])
+

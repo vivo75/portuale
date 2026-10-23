@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792771271,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n =dev-libs/cyc0w-1","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.137, "o", "[ebuild  N     ] dev-libs/cyc0w-1::testrepo  0 KiB\r\n[ebuild  N     ]  dev-libs/cyc0y-1::testrepo  0 KiB\r\n[ebuild  N     ]   dev-libs/cyc0z-3::testrepo  USE=\"bar foo\" 0 KiB\r\n\r\nTotal: 3 packages (3 new), Size of downloads: 0 KiB\r\n\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on\r\n (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)\r\n  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=foo)\r\n\r\n * Note that circular dependencies can often be avoided by temporarily\r\n * disabling USE flags that trigger optional dependencies.\r\n\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.004, "x", "1"]

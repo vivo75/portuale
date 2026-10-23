@@ -1,0 +1,5 @@
+[nomerge       ] dev-libs/hardcyclea-1.0::testrepo 
+[ebuild  N     ]  dev-libs/hardcycleb-1.0::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/hardcyclea-1.0::testrepo  0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

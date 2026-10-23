@@ -1,0 +1,24 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/cddtstb-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cddtsta-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cddtstb-1:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=test)
+
+ * This cycle involves test dependencies. If you do not
+ * need to run the test suites of the packages listed below,
+ * disable FEATURES=test for them. Put FEATURES="-test" in
+ * /etc/portage/env/no-test.conf, then add the following to
+ * /etc/portage/package.env (see "package.env" in the
+ * portage(5) man page for more details):
+
+=dev-libs/cddtsta-1 no-test.conf
+
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cddtsta-1 (Change USE: -test)
+
+Note that this change can be reverted, once the package has been installed.

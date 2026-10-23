@@ -1,0 +1,7 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792770182,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n =dev-libs/cyc0z-3","env":{"SHELL":"/bin/bash"}}
+[0.005, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.146, "o", "[nomerge       ] dev-libs/cyc0z-3::testrepo USE=\"bar foo\" \r\n"]
+[0.000, "o", "[ebuild  N     ]  dev-libs/cyc0y-1::testrepo  0 KiB\r\n[ebuild  N     ]   dev-libs/cyc0z-3::testrepo  USE=\"bar foo\" 0 KiB\r\n\r\nTotal: 2 packages (2 new), Size of downloads: 0 KiB\r\n\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on\r\n (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)\r\n"]
+[0.000, "o", "  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)"]
+[0.000, "o", "\r\n\r\nIt might be possible to break this cycle\r\nby applying the following change:\r\n- dev-libs/cyc0z-3 (Change USE: -foo)\r\n\r\nNote that this change can be reverted, once the package has been installed.\r\n\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.005, "x", "1"]

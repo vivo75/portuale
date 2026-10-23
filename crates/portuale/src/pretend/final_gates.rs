@@ -172,6 +172,7 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
                 autounmask_use_changes: &result.autounmask_use_changes,
                 entries: &result.entries,
                 large_cycle_count: result.large_cycle_count,
+                root,
             });
         }
         pretend_end_news_notice(pretend, repos, root, config, color);

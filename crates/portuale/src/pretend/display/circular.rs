@@ -47,6 +47,28 @@ pub(crate) struct PrintCircularBlockArgs<'a> {
     pub(crate) autounmask_use_changes: &'a [portage_repo::AutounmaskChange],
     pub(crate) entries: &'a [portage_repo::GraphEntry],
     pub(crate) large_cycle_count: bool,
+    /// The target root, for the installed check of masked alternatives.
+    pub(crate) root: &'a Path,
+}
+
+/// The `, USE=<flags>` tail of an edge label: enabled flags red, disabled
+/// ones blue with a `-`. Empty when no flag is blamed.
+// Portage: resolver/circular_dependency.py, _edge_description
+pub(crate) fn edge_use_tail(flags: &[(String, bool)], color: &Colorizer) -> String {
+    if flags.is_empty() {
+        return String::new();
+    }
+    let rendered: Vec<String> = flags
+        .iter()
+        .map(|(flag, on)| {
+            if *on {
+                color.c("red", flag)
+            } else {
+                color.c("blue", &format!("-{flag}"))
+            }
+        })
+        .collect();
+    format!(", USE={}", rendered.join(" "))
 }
 
 /// Portage's `_show_circular_deps`: the `* Error: circular dependencies:`
@@ -63,7 +85,38 @@ pub(crate) fn print_circular_block(args: PrintCircularBlockArgs<'_>) {
         autounmask_use_changes,
         entries,
         large_cycle_count,
+        root,
     } = args;
+    let (max_affecting_use, invalid_max) = portage_repo::circular_max_use_flags(config);
+    if let Some(value) = invalid_max {
+        eprint!(
+            "!!! Invalid PORTAGE_CIRCULAR_MAX_USE_FLAGS: {value}\n\
+             !!! Expected an integer greater than zero, using {} instead.\n",
+            portage_repo::CIRCULAR_MAX_USE_FLAGS_DEFAULT
+        );
+    }
+    let facts = portage_repo::cycle_report_facts(portage_repo::CycleReportFactsArgs {
+        cycle,
+        edge_labels,
+        repos,
+        config,
+        autounmask_use_changes,
+        root,
+    });
+    // `labels[i]` is the edge `cycle[i] -> cycle[i + 1]`.
+    let labels: Vec<String> = edge_labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let tail = facts
+                .edge_use
+                .get(i)
+                .map(|flags| edge_use_tail(flags, color))
+                .unwrap_or_default();
+            format!("{label}{tail}")
+        })
+        .collect();
+    let edge_labels = labels.as_slice();
     let prefix = color.c("BAD", " * ");
     eprint!("\n\n\n{prefix}Error: circular dependencies:\n\n");
     // `<node> depends on`, then each subsequent `<node> (<priorities[-1]>)`
@@ -127,9 +180,51 @@ pub(crate) fn print_circular_block(args: PrintCircularBlockArgs<'_>) {
     ));
     eprint!("{}", lines.join("\n"));
 
+    let search = portage_repo::circular_dep_search(portage_repo::CircularDepSearchArgs {
+        cycle,
+        repos,
+        config,
+        autounmask_use_changes,
+        entries,
+        max_affecting_use,
+    });
+    if !search.search_truncated.is_empty() {
+        eprint!(
+            "\n\n{prefix}The search for USE changes was given up on for the following\n\
+             {prefix}packages, because they have too many USE flags that affect the\n\
+             {prefix}dependency. Raise PORTAGE_CIRCULAR_MAX_USE_FLAGS (currently {max_affecting_use})\n\
+             {prefix}to search harder:\n"
+        );
+        for cpv in &search.search_truncated {
+            eprintln!("- {cpv}");
+        }
+    }
+    if !facts.masked_alternatives.is_empty() {
+        eprint!(
+            "\n\n{prefix}The following masked packages could be used instead of a\n\
+             {prefix}package in the cycle. Unmasking them, for example via\n\
+             {prefix}/etc/portage/package.accept_keywords, might solve it:\n"
+        );
+        for (alternative, member) in &facts.masked_alternatives {
+            eprintln!("- {alternative} (instead of {member})");
+        }
+    }
+    if !facts.test_dep_parents.is_empty() {
+        eprint!(
+            "\n\n{prefix}This cycle involves test dependencies. If you do not\n\
+             {prefix}need to run the test suites of the packages listed below,\n\
+             {prefix}disable FEATURES=test for them. Put FEATURES=\"-test\" in\n\
+             {prefix}/etc/portage/env/no-test.conf, then add the following to\n\
+             {prefix}/etc/portage/package.env (see \"package.env\" in the\n\
+             {prefix}portage(5) man page for more details):\n\n"
+        );
+        for cpv in &facts.test_dep_parents {
+            eprintln!("={cpv} no-test.conf");
+        }
+    }
+
     // A concrete `Change USE:` fix prints instead of the generic advisory.
-    let suggestions =
-        portage_repo::circular_dep_solutions(cycle, repos, config, autounmask_use_changes, entries);
+    let suggestions = search.suggestions;
     if suggestions.is_empty() {
         eprint!(
             "\n\n{prefix}Note that circular dependencies can often be avoided by temporarily\n\

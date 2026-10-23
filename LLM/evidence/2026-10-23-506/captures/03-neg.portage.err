@@ -1,0 +1,14 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/cddnegb-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cddnega-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cddnegb-1:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=-system-b)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cddnega-1 (Change USE: +system-b)
+
+Note that this change can be reverted, once the package has been installed.

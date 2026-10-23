@@ -1,0 +1,14 @@
+
+
+
+[31;01m * [39;49;00mError: circular dependencies:
+
+([32mdev-libs/cddsevb-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) depends on
+ ([32mdev-libs/cddseva-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) (buildtime)
+  ([32mdev-libs/cddsevb-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) (buildtime, USE=[31;01mdoc[39;49;00m [31;01mnls[39;49;00m)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cddseva-1 (Change USE: [34;01m-nls[39;49;00m [34;01m-doc[39;49;00m)
+
+Note that this change can be reverted, once the package has been installed.

@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792771270,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n --backtrack=0 dev-libs/slcirc","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.124, "o", "[ebuild  N     ] dev-libs/slcirc-2.0:2.0::testrepo  0 KiB\r\n\r\nTotal: 1 package (1 new), Size of downloads: 0 KiB\r\n\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n(dev-libs/slcirc-2.0:2.0/2.0::testrepo, ebuild scheduled for merge) depends on\r\n (dev-libs/slcirc-2.0:2.0/2.0::testrepo, ebuild scheduled for merge) (buildtime)\r\n\r\n * Note that circular dependencies can often be avoided by temporarily\r\n * disabling USE flags that trigger optional dependencies.\r\n\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.003, "x", "1"]

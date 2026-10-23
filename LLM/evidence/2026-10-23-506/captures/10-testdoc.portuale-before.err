@@ -1,0 +1,14 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/cddtdob-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cddtdoa-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cddtdob-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cddtdoa-1 (Change USE: -doc -test)
+
+Note that this change can be reverted, once the package has been installed.

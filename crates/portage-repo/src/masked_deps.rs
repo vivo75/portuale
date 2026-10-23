@@ -385,17 +385,15 @@ pub(crate) fn candidate_masking_reasons(
         accept_keywords: &config.accept_keywords,
         package_accept_keywords: &config.package_accept_keywords,
     }) {
+        // Portage stacks KEYWORDS incrementally first, which drops every
+        // `-arch` token, so a `-arch` alone reads as `missing keyword`
+        // (LLM/portage-quirks.md Q5).
         let kmask = eff_keywords
             .iter()
             .find_map(|k| {
                 k.strip_prefix('~')
                     .filter(|a| config.accept_keywords.contains(*a))
                     .map(|a| format!("~{a}"))
-                    .or_else(|| {
-                        k.strip_prefix('-')
-                            .filter(|a| config.accept_keywords.contains(*a))
-                            .map(|a| format!("-{a}"))
-                    })
             })
             .unwrap_or_else(|| "missing".to_string());
         reasons.push(format!("{kmask} keyword"));

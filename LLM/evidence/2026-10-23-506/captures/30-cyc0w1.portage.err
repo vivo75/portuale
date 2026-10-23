@@ -1,0 +1,11 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc0z-3:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc0y-1:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=foo)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

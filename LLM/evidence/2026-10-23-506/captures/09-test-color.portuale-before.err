@@ -1,0 +1,14 @@
+
+
+
+[31;01m * [39;49;00mError: circular dependencies:
+
+([32mdev-libs/cddtstb-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) depends on
+ ([32mdev-libs/cddtsta-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) (buildtime)
+  ([32mdev-libs/cddtstb-1:0/0::testrepo[39;49;00m, ebuild scheduled for merge) (buildtime)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cddtsta-1 (Change USE: [34;01m-test[39;49;00m)
+
+Note that this change can be reverted, once the package has been installed.

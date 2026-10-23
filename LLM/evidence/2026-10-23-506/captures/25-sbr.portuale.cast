@@ -1,0 +1,11 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792771270,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n dev-libs/sbrA","env":{"SHELL":"/bin/bash"}}
+[0.005, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.142, "o", "[nomerge       ] dev-libs/sbrA-1.0::testrepo \r\n"]
+[0.000, "o", "[ebuild  N     ]  dev-libs/sbrB-1.0::testrepo  0 KiB\r\n"]
+[0.000, "o", "[ebuild  N     ]   dev-libs/sbrA-1.0::testrepo  0 KiB\r\n\r\n"]
+[0.000, "o", "Total: 2 packages (2 new), Size of downloads: 0 KiB\r\n"]
+[0.000, "o", "\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n"]
+[0.000, "o", "(dev-libs/sbrA-1.0:0/0::testrepo, ebuild scheduled for merge) depends on\r\n (dev-libs/sbrB-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)\r\n  (dev-libs/sbrA-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)"]
+[0.000, "o", "\r\n\r\n * Note that circular dependencies can often be avoided by temporarily\r\n * disabling USE flags that trigger optional dependencies.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.005, "x", "1"]

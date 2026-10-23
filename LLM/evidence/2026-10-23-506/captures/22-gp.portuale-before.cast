@@ -1,0 +1,11 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792770180,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n --tree dev-libs/gpcyclec","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.139, "o", "[ebuild  N     ] dev-libs/gpcyclec-1.0::testrepo  0 KiB\r\n[nomerge       ]  dev-libs/gpcyclea-1.0::testrepo USE=\"x\" \r\n"]
+[0.001, "o", "[ebuild  N     ]   dev-libs/gpcycleb-1.0::testrepo  0 KiB\r\n"]
+[0.000, "o", "[ebuild  N     ]    dev-libs/gpcyclea-1.0::testrepo  USE=\"x\" 0 KiB\r\n\r\nTotal: 3 packages (3 new), Size of downloads: 0 KiB\r\n"]
+[0.000, "o", "\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n"]
+[0.000, "o", "(dev-libs/gpcycleb-1.0:0/0::testrepo, ebuild scheduled for merge) depends on\r\n"]
+[0.000, "o", " (dev-libs/gpcyclea-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)\r\n  (dev-libs/gpcycleb-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)"]
+[0.000, "o", "\r\n\r\n * Note that circular dependencies can often be avoided by temporarily\r\n * disabling USE flags that trigger optional dependencies.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.003, "x", "1"]

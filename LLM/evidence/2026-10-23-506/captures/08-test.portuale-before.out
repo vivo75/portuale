@@ -1,0 +1,5 @@
+[nomerge       ] dev-libs/cddtsta-1::testrepo USE="test" 
+[ebuild  N     ]  dev-libs/cddtstb-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cddtsta-1::testrepo  USE="test" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

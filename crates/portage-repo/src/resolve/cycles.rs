@@ -559,11 +559,7 @@ pub struct CircularSuggestion {
     pub followup: bool,
 }
 
-/// For each edge of the shortest cycle, the minimal `package.use` changes on
-/// the *depending* package that would drop the offending atom from its
-/// build-time deps without violating its own `REQUIRED_USE`. Deduped and
-/// sorted for a deterministic render.
-// Portage: resolver/circular_dependency.py, _find_suggestions
+/// [`circular_dep_search`] with the default search limit, suggestions only.
 pub fn circular_dep_solutions(
     cycle: &[String],
     repos: &[RepoConfig],
@@ -571,11 +567,56 @@ pub fn circular_dep_solutions(
     autounmask_use_changes: &[AutounmaskChange],
     entries: &[GraphEntry],
 ) -> Vec<CircularSuggestion> {
-    const MAX_AFFECTING_USE: usize = 10;
+    circular_dep_search(CircularDepSearchArgs {
+        cycle,
+        repos,
+        config,
+        autounmask_use_changes,
+        entries,
+        max_affecting_use: CIRCULAR_MAX_USE_FLAGS_DEFAULT,
+    })
+    .suggestions
+}
+
+/// Arguments of [`circular_dep_search`].
+pub struct CircularDepSearchArgs<'a> {
+    pub cycle: &'a [String],
+    pub repos: &'a [RepoConfig],
+    pub config: &'a portage_profile::Config,
+    pub autounmask_use_changes: &'a [AutounmaskChange],
+    pub entries: &'a [GraphEntry],
+    /// `PORTAGE_CIRCULAR_MAX_USE_FLAGS` (see [`circular_max_use_flags`]).
+    pub max_affecting_use: usize,
+}
+
+/// The result of [`circular_dep_search`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CircularDepSearch {
+    pub suggestions: Vec<CircularSuggestion>,
+    /// Packages whose search was given up on because too many enabled
+    /// flags affect the dependency, sorted.
+    pub search_truncated: Vec<String>,
+}
+
+/// For each edge of the shortest cycle, the minimal `package.use` changes on
+/// the *depending* package that would drop the offending atom from its
+/// build-time deps without violating its own `REQUIRED_USE`. Deduped and
+/// sorted for a deterministic render.
+// Portage: resolver/circular_dependency.py, _find_suggestions
+pub fn circular_dep_search(args: CircularDepSearchArgs<'_>) -> CircularDepSearch {
+    let CircularDepSearchArgs {
+        cycle,
+        repos,
+        config,
+        autounmask_use_changes,
+        entries,
+        max_affecting_use,
+    } = args;
     let mut out: Vec<CircularSuggestion> = Vec::new();
+    let mut truncated: BTreeSet<String> = BTreeSet::new();
     let n = cycle.len();
     if n == 0 {
-        return out;
+        return CircularDepSearch::default();
     }
 
     for pos in 0..n {
@@ -669,7 +710,7 @@ pub fn circular_dep_solutions(
             let mut total: HashSet<String> = affecting.clone();
             total.extend(ruf.iter().cloned());
             total.retain(|f| !untouchable.contains(f));
-            if total.len() <= MAX_AFFECTING_USE {
+            if total.len() <= max_affecting_use {
                 affecting = total;
             }
         }
@@ -679,10 +720,11 @@ pub fn circular_dep_solutions(
         }
         let mut affecting: Vec<String> = affecting.into_iter().collect();
         affecting.sort();
-        if affecting.len() > MAX_AFFECTING_USE {
+        if affecting.len() > max_affecting_use {
             // Drop irrelevant not-currently-enabled flags.
             affecting.retain(|f| parent_use.contains(f));
-            if affecting.len() > MAX_AFFECTING_USE {
+            if affecting.len() > max_affecting_use {
+                truncated.insert(format!("{pcat}/{ppkg}-{pver}"));
                 continue;
             }
         }
@@ -758,7 +800,10 @@ pub fn circular_dep_solutions(
         (a.parent_cpv.as_str(), &a.changes).cmp(&(b.parent_cpv.as_str(), &b.changes))
     });
     out.dedup();
-    out
+    CircularDepSearch {
+        suggestions: out,
+        search_truncated: truncated.into_iter().collect(),
+    }
 }
 
 /// Whether a grandparent's own atom on `parent`'s `cat/pkg` constrains a flag

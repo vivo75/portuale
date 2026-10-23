@@ -97,3 +97,40 @@ when a claim turns out false.
 - **Portuale**: `portuale emerge` prints the group in provider and consumer
   alphabetical order, because there is no stable Portage order to copy; compare
   these blocks as sets. `portuale mrg`: same (sorted).
+
+## Q4. The flags of a `Change USE:` cycle suggestion are printed in hash order (suspect)
+
+- **Observed** (2026-10-23, backlog #506, `LLM/evidence/2026-10-23-506/`): for
+  `dev-libs/cddseva` (`doc? ( B ) nls? ( B )`, `--autounmask-use=n`) Portage
+  3.0.83-r1 printed `(Change USE: -nls -doc)` in the recorded run and
+  `-doc -nls` under `PYTHONHASHSEED=0..6`, `-nls -doc` under `PYTHONHASHSEED=7`;
+  the twelve-flag `PORTAGE_CIRCULAR_MAX_USE_FLAGS=16` suggestion is a random
+  permutation as well.
+- **Why**: `circular_dependency_handler._find_suggestions`
+  (`lib/_emerge/resolver/circular_dependency.py`) joins the flags of each
+  solution, a `frozenset` of `(flag, state)` pairs, without sorting, and string
+  hashing is seeded per process.
+- **Why it looks wrong**: the same resolution prints a different line from run to
+  run; the per-edge `USE=` list added in 3.0.83 (`_edge_description`) is sorted.
+- **First seen**: Portage 3.0.83-r1 (the only version checked; the join is older).
+- **Portuale**: `portuale emerge` prints the flags sorted; compare the line as a
+  set (`compare.sh` in the evidence directory does). `portuale mrg`: same.
+
+## Q5. The `-arch keyword` mask reason can never be printed (suspect)
+
+- **Observed** (2026-10-23, backlog #506): a package with `KEYWORDS="-amd64"` on
+  an `amd64` system is reported `(masked by: missing keyword)`, and the circular
+  report lists it as a masked alternative that `package.accept_keywords` can
+  unmask (`dev-lang/cddgok-bootstrap-1`, shape 42 of
+  `LLM/evidence/2026-10-23-506/`).
+- **Why**: `_getmaskingstatus` (`lib/portage/package/ebuild/getmaskingstatus.py`)
+  has a branch for `gp == "-" + myarch` that would report `-amd64 keyword`
+  without an unmask hint, but it walks the keywords from
+  `KeywordsManager.getKeywords`, which stacks them incrementally
+  (`stack_lists(..., incremental=True)`) and so drops every `-arch` token first.
+- **Why it looks wrong**: the dead branch says the author meant `-arch` to be a
+  distinct, not config-liftable mask; the user is told a keyword is missing when
+  the ebuild explicitly marks the arch broken.
+- **First seen**: Portage 3.0.83-r1 (the only version checked).
+- **Portuale**: `portuale emerge` copies it (`masked_deps.rs`,
+  `candidate_masking_reasons`). `portuale mrg`: same until decided.

@@ -1,0 +1,20 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/cyc4b-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cyc4c-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cyc4d-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+   (dev-libs/cyc4a-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+    (dev-libs/cyc4b-1.0:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=x)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cyc4a-1.0 (Change USE: -x)
+
+Note that this change can be reverted, once the package has been installed.
+
+Note that the dependency graph contains a lot of cycles.
+Several changes might be required to resolve all cycles.
+Temporarily changing some use flag for all packages might be the better option.

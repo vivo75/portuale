@@ -57,6 +57,7 @@ pub(crate) fn show_missing_args_and_aborts(
             autounmask_use_changes: &result.autounmask_use_changes,
             entries: &result.entries,
             large_cycle_count: result.large_cycle_count,
+            root,
         });
     }
 

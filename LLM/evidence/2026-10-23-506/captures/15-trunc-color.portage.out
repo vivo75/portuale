@@ -1,0 +1,11 @@
+
+[32mThese are the packages that would be merged, in order:[39;49;00m
+
+Calculating dependencies ... done!
+Dependency resolution took [32m1.83[39;49;00m s (backtrack: 1/20).
+
+[[36mnomerge      [39;49;00m ] [36mdev-libs/cddtrna-1::testrepo[39;49;00m  USE="[31;01mflag0[39;49;00m [31;01mflag1[39;49;00m [31;01mflag2[39;49;00m [31;01mflag3[39;49;00m [31;01mflag4[39;49;00m [31;01mflag5[39;49;00m [31;01mflag6[39;49;00m [31;01mflag7[39;49;00m [31;01mflag8[39;49;00m [31;01mflag9[39;49;00m [31;01mflag10[39;49;00m [31;01mflag11[39;49;00m" 
+[[32mebuild[39;49;00m  [32;01mN[39;49;00m     ]  [32mdev-libs/cddtrnb-1::testrepo[39;49;00m  0 KiB
+[[32mebuild[39;49;00m  [32;01mN[39;49;00m     ]   [32mdev-libs/cddtrna-1::testrepo[39;49;00m  USE="[31;01mflag0[39;49;00m [31;01mflag1[39;49;00m [31;01mflag2[39;49;00m [31;01mflag3[39;49;00m [31;01mflag4[39;49;00m [31;01mflag5[39;49;00m [31;01mflag6[39;49;00m [31;01mflag7[39;49;00m [31;01mflag8[39;49;00m [31;01mflag9[39;49;00m [31;01mflag10[39;49;00m [31;01mflag11[39;49;00m" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

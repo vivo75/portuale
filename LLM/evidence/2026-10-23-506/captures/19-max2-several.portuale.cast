@@ -1,0 +1,10 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792771268,"command":"env PORTAGE_CIRCULAR_MAX_USE_FLAGS=1 /var/tmp/ev506-bin/emerge -p --color=n --autounmask-use=n dev-libs/cddseva","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.142, "o", "[nomerge       ] dev-libs/cddseva-1::testrepo  USE=\"doc nls\" \r\n"]
+[0.000, "o", "[ebuild  N     ]  dev-libs/cddsevb-1::testrepo  0 KiB\r\n"]
+[0.000, "o", "[ebuild  N     ]   dev-libs/cddseva-1::testrepo  USE=\"doc nls\" 0 KiB\r\n\r\n"]
+[0.000, "o", "Total: 2 packages (2 new), Size of downloads: 0 KiB\r\n"]
+[0.001, "o", "\r\n\r\n\r\n * Error: circular dependencies:\r\n\r\n(dev-libs/cddsevb-1:0/0::testrepo, ebuild scheduled for merge) depends on\r\n (dev-libs/cddseva-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)\r\n  (dev-libs/cddsevb-1:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=doc nls)\r\n\r\n * The search for USE changes was given up on for the following\r\n * packages, because they have too many USE flags that affect the\r\n * dependency. Raise PORTAGE_CIRCULAR_MAX_USE_FLAGS (currently 1)\r\n * to search harder:\r\n- "]
+[0.000, "o", "dev-libs/cddseva-1\r\n\r\n\r\n * Note that circular dependencies can often be avoided by temporarily\r\n * disabling USE flags that trigger optional dependencies.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.004, "x", "1"]

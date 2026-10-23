@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792770186,"command":"env  /var/tmp/ev506-bin/emerge -p --color=n app-misc/foo","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.126, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n\r\n\r\n!!! virtual cycle detected:\r\n\r\n  virtual/A-1::testrepo\r\n  virtual/B-1::testrepo\r\n  virtual/C-1::testrepo\r\n\r\n\u001b]0;vivo@:/var/tmp/ev506-tree\u0007"]
+[0.004, "x", "1"]

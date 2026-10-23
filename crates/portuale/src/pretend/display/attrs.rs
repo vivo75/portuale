@@ -325,11 +325,16 @@ pub(crate) struct NomergeRowArgs<'a> {
     pub(crate) indent: &'a str,
     pub(crate) quiet: bool,
     pub(crate) tail: &'a str,
+    pub(crate) color: &'a Colorizer,
+    /// `PKG_NOMERGE`, `PKG_NOMERGE_SYSTEM` or `PKG_NOMERGE_WORLD`.
+    pub(crate) color_key: &'a str,
 }
 
 /// Pure constructor for the `[nomerge …]` row. `tail` carries the oldbest /
-/// running-root / USE pieces (each empty when absent). The bracket pad is
-/// `"nomerge".ljust(13)` plus `empty_space_in_brackets()`.
+/// running-root / USE pieces (each empty when absent). The bracket word is
+/// `"nomerge".ljust(13)` in the row's colour, then `empty_space_in_brackets()`;
+/// the package text takes the same colour.
+/// Portage: output.py, Display._set_no_columns, Display.pkgprint
 pub(crate) fn nomerge_row(args: NomergeRowArgs<'_>) -> String {
     let NomergeRowArgs {
         category,
@@ -338,9 +343,13 @@ pub(crate) fn nomerge_row(args: NomergeRowArgs<'_>) -> String {
         indent,
         quiet,
         tail,
+        color,
+        color_key,
     } = args;
-    let pad = if quiet { "      " } else { "       " };
-    format!("[nomerge{pad}] {indent}{category}/{package}-{disp_ver}{tail}")
+    let addl = if quiet { "" } else { " " };
+    let word = color.c(color_key, "nomerge      ");
+    let pkg = color.c(color_key, &format!("{category}/{package}-{disp_ver}"));
+    format!("[{word}{addl}] {indent}{pkg}{tail}")
 }
 
 /// Portage's `darkgreen("to " + pkg.root)` suffix, per merge row: an entry

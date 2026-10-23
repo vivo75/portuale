@@ -1,0 +1,5 @@
+[nomerge       ] dev-libs/cddseva-1::testrepo  USE="doc nls" 
+[ebuild  N     ]  dev-libs/cddsevb-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cddseva-1::testrepo  USE="doc nls" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

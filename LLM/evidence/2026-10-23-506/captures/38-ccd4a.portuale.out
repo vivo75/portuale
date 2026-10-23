@@ -1,0 +1,5 @@
+[nomerge       ] dev-libs/ccd4a-7.3.0:0/73::testrepo 
+[ebuild  N     ]  dev-libs/ccd4b-7.3.0:7.3.0::testrepo  USE="-low-memory" 0 KiB
+[ebuild  N     ]   dev-libs/ccd4a-7.3.0:0/73::testrepo  0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

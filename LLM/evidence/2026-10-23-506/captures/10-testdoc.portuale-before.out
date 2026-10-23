@@ -1,0 +1,5 @@
+[nomerge       ] dev-libs/cddtdoa-1::testrepo USE="doc test" 
+[ebuild  N     ]  dev-libs/cddtdob-1::testrepo  0 KiB
+[ebuild  N     ]   dev-libs/cddtdoa-1::testrepo  USE="doc test" 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

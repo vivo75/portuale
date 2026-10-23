@@ -1,0 +1,14 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/cddsevb-1:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/cddseva-1:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/cddsevb-1:0/0::testrepo, ebuild scheduled for merge) (buildtime, USE=doc nls)
+
+It might be possible to break this cycle
+by applying the following change:
+- dev-libs/cddseva-1 (Change USE: -doc -nls)
+
+Note that this change can be reverted, once the package has been installed.

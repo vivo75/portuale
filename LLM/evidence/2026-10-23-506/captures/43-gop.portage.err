@@ -1,0 +1,16 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-lang/cddgop-2:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-lang/cddgop-2:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+
+ * The following masked packages could be used instead of a
+ * package in the cycle. Unmasking them, for example via
+ * /etc/portage/package.accept_keywords, might solve it:
+- dev-lang/cddgop-bootstrap-1 (instead of dev-lang/cddgop-2)
+
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

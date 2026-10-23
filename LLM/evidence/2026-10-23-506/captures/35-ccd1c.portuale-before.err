@@ -1,0 +1,11 @@
+
+
+
+ * Error: circular dependencies:
+
+(dev-libs/ccd1a-1.9.2:0/0::testrepo, ebuild scheduled for merge) depends on
+ (dev-libs/ccd1c-3.16.2:0/0::testrepo, ebuild scheduled for merge) (buildtime)
+  (dev-libs/ccd1a-1.9.2:0/0::testrepo, ebuild scheduled for merge) (buildtime_slot_op)
+
+ * Note that circular dependencies can often be avoided by temporarily
+ * disabling USE flags that trigger optional dependencies.

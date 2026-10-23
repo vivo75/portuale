@@ -1,0 +1,9 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.85 s (backtrack: 0/0).
+
+[ebuild  N     ] dev-lang/g216comp-1.0::testrepo  0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
