@@ -347,6 +347,20 @@ mod tests {
     }
 
     #[test]
+    fn does_not_recognize_the_three_3_0_83_options() {
+        // Backlog #503: accepted (inert) by the caller, so excluded here;
+        // `--cycle-break` is not an option in Portage either (a non-goal).
+        for flag in [
+            "--binpkg-respect-user-patches",
+            "--circular-deps-report=json",
+            "--merge-wait-scope=none",
+            "--cycle-break",
+        ] {
+            assert!(lookup(flag).is_none(), "{flag}");
+        }
+    }
+
+    #[test]
     fn does_not_recognize_a_bundled_short_flag() {
         assert!(lookup("-pv").is_none());
     }

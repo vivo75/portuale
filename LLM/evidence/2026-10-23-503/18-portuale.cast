@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792767600,"command":"bash -c '../../../target/release/portuale emerge -p app-misc/nothing-here --merge-wait-scope=all; echo rc=$?' 2>&1","env":{"SHELL":"/bin/bash"}}
+[0.021, "o", "emerge: error: argument --merge-wait-scope: invalid choice: 'all' (choose from 'deep', 'system', 'toolchain', 'none')\r\n"]
+[0.000, "o", "rc=2\r\n"]
+[0.000, "x", "0"]

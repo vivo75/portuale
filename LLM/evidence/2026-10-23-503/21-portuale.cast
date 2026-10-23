@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792767621,"command":"bash -c '../../../target/release/portuale emerge -p app-misc/nothing-here --cycle-break; echo rc=$?' 2>&1","env":{"SHELL":"/bin/bash"}}
+[0.053, "o", "emerge: error: unrecognized arguments: --cycle-break\r\n"]
+[0.001, "o", "rc=2\r\n"]
+[0.000, "x", "0"]

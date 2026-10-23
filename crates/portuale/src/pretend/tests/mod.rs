@@ -652,6 +652,7 @@ mod gates;
 mod help;
 mod info;
 mod json;
+mod new_options;
 mod news;
 mod prompt;
 mod remote;

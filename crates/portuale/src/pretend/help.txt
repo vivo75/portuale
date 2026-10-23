@@ -78,6 +78,7 @@ Binary packages:
       --getbinpkg-exclude ATOMS, --getbinpkg-include ATOMS  filter remote binhost entries like --exclude; binrepos.conf keys fold in
       --usepkg-exclude ATOMS, --usepkg-include ATOMS  narrow which packages may come from a binary
       --binpkg-respect-use[=y|n]  reject a binary package built with the wrong USE
+      --binpkg-respect-user-patches[=y|n]  accepted; inert until user patches are compared (backlog 509)
       --binpkg-changed-deps[=y|n]  reject a binary whose recorded deps differ from the ebuild (auto unless -K)
       --use-ebuild-visibility[=y|n]  apply ebuild visibility checks to built packages even under -K
       --rebuilt-binaries[=y|n], --rebuilt-binaries-timestamp N  prefer / bound rebuilt binary packages
@@ -92,6 +93,7 @@ Build scheduling:
       --read-news[=y|n]      with --ask: offer to read unread news via eselect
       --ignore-default-opts  ignore the EMERGE_DEFAULT_OPTS variable for this run
       --keep-going           on a build failure, drop that package's dependents and carry on
+      --merge-wait-scope <deep|system|toolchain|none>  accepted; inert until merge-wait scheduling lands (backlog 512)
       --quiet-build[=y|n]    redirect a build's phase output to ${T}/build.log (implied by -j >1 and -q)
 
 Output:
@@ -103,6 +105,7 @@ Output:
       --unordered-display, --alphabetical  merge-list ordering variants
       --color <y|n>         force colour output on or off
       --verbose-slot-rebuilds[=y|n]  show the atoms forcing a slot-operator rebuild
+      --circular-deps-report[=text|json]  accepted; the json format is inert until backlog 507
       --verbose-conflicts   list every parent of a slot conflict, not one per collision reason
       --ignore-built-slot-operator-deps[=y|n]  ignore recorded := slot-operator dependencies
       --depclean-lib-check[=y|n]  with --depclean/--prune: scan for soname breakage (default y)

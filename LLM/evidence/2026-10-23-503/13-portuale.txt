@@ -1,0 +1,3 @@
+$ ../../../target/release/portuale emerge -p app-misc/nothing-here --circular-deps-report=
+emerge: error: argument --circular-deps-report: invalid choice: '' (choose from 'True', 'text', 'json')
+rc=2

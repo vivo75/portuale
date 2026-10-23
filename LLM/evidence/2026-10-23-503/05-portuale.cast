@@ -1,0 +1,3 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792767401,"command":"bash -c '../../../target/release/portuale emerge -p app-misc/nothing-here --binpkg-respect-user-patches=maybe; echo rc=$?' 2>&1","env":{"SHELL":"/bin/bash"}}
+[0.020, "o", "emerge: error: argument --binpkg-respect-user-patches: invalid choice: 'maybe' (choose from 'True', 'y', 'n')\r\nrc=2\r\n"]
+[0.000, "x", "0"]

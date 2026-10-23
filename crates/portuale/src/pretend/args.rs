@@ -129,6 +129,14 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) getbinpkg_given: bool,
     pub(crate) getbinpkgonly: bool,
     pub(crate) binpkg_respect_use: Option<bool>,
+    // Accepted like Portage 3.0.83 but inert until #509 / #507 / #512
+    // (`LLM/scope-cuts.md`): nothing reads these three yet.
+    #[allow(dead_code)]
+    pub(crate) binpkg_respect_user_patches: Option<bool>,
+    #[allow(dead_code)]
+    pub(crate) circular_deps_report: Option<CircularDepsReport>,
+    #[allow(dead_code)]
+    pub(crate) merge_wait_scope: Option<MergeWaitScope>,
     pub(crate) quickpkg_direct: Option<bool>,
     pub(crate) quickpkg_direct_root: Option<String>,
     pub(crate) rebuilt_binaries: Option<bool>,
@@ -373,6 +381,9 @@ impl<'a> Default for EmergeOpts<'a> {
             getbinpkg_given: false,
             getbinpkgonly: false,
             binpkg_respect_use: None,
+            binpkg_respect_user_patches: None,
+            circular_deps_report: None,
+            merge_wait_scope: None,
             // --quickpkg-direct (+ REQUIRED value) + --quickpkg-direct-root: when
             // active, every package installed in the source root becomes a binary
             // candidate for the target-`ROOT` build.
@@ -2188,6 +2199,100 @@ fn parse_autounmask_scope_opts<'a>(
 }
 
 /// Binary-package flags. Returns whether the token was consumed.
+/// Format of the circular-dependency report (`--circular-deps-report`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CircularDepsReport {
+    Text,
+    Json,
+}
+
+/// Which packages `--merge-wait-scope` treats as system packages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MergeWaitScope {
+    Deep,
+    System,
+    Toolchain,
+    None,
+}
+
+/// `argument OPT: invalid choice` line, as argparse words it.
+// Portage: _emerge/main.py, parse_opts
+fn invalid_choice(opt: &str, value: &str, choices: &str) -> ExitCode {
+    parser_error(&format!(
+        "argument {opt}: invalid choice: '{value}' (choose from {choices})"
+    ))
+}
+
+/// `--binpkg-respect-user-patches`, `--circular-deps-report`,
+/// `--merge-wait-scope` (Portage 3.0.83). The first two take an optional
+/// value that only a following token of the right set is consumed as
+/// (`insert_optional_args`); `=value` and the bare form map `True` to the
+/// default. The third requires a value. All three are inert for now.
+// Portage: _emerge/main.py, insert_optional_args / parse_opts
+fn parse_new_option_opts<'a>(
+    opts: &mut EmergeOpts<'a>,
+    args: &'a [String],
+    idx: &mut usize,
+    arg: &'a str,
+) -> Result<bool, ExitCode> {
+    const BOOL: &str = "'True', 'y', 'n'";
+    const REPORT: &str = "'True', 'text', 'json'";
+    const SCOPE: &str = "'deep', 'system', 'toolchain', 'none'";
+    let (name, inline) = match arg.split_once('=') {
+        Some((n, v)) if n.starts_with("--") => (n, Some(v)),
+        _ => (arg, None),
+    };
+    let next = args.get(*idx + 1).map(String::as_str);
+    let optional_value = |accepted: &[&str]| match (inline, next) {
+        (Some(v), _) => (Some(v), 1),
+        (None, Some(n)) if accepted.contains(&n) => (Some(n), 2),
+        (None, _) => (None, 1),
+    };
+    let used = match name {
+        "--binpkg-respect-user-patches" => {
+            let (value, used) = optional_value(&["y", "n"]);
+            opts.binpkg_respect_user_patches = Some(match value {
+                None | Some("True" | "y") => true,
+                Some("n") => false,
+                Some(v) => return Err(invalid_choice(name, v, BOOL)),
+            });
+            used
+        }
+        "--circular-deps-report" => {
+            let (value, used) = optional_value(&["text", "json"]);
+            opts.circular_deps_report = Some(match value {
+                None | Some("True" | "text") => CircularDepsReport::Text,
+                Some("json") => CircularDepsReport::Json,
+                Some(v) => return Err(invalid_choice(name, v, REPORT)),
+            });
+            used
+        }
+        "--merge-wait-scope" => {
+            // argparse's plain `store`: the next token is the value, whatever it is.
+            let (value, used) = match (inline, next) {
+                (Some(v), _) => (v, 1),
+                (None, Some(n)) => (n, 2),
+                (None, None) => {
+                    return Err(parser_error(
+                        "argument --merge-wait-scope: expected one argument",
+                    ));
+                }
+            };
+            opts.merge_wait_scope = Some(match value {
+                "deep" => MergeWaitScope::Deep,
+                "system" => MergeWaitScope::System,
+                "toolchain" => MergeWaitScope::Toolchain,
+                "none" => MergeWaitScope::None,
+                v => return Err(invalid_choice(name, v, SCOPE)),
+            });
+            used
+        }
+        _ => return Ok(false),
+    };
+    *idx += used;
+    Ok(true)
+}
+
 fn parse_binpkg_opts<'a>(
     opts: &mut EmergeOpts<'a>,
     args: &'a [String],
@@ -2575,6 +2680,7 @@ pub(crate) fn parse_emerge_args(args: &[String]) -> Result<EmergeOpts<'_>, ExitC
             || parse_autounmask_opts(&mut opts, args, &mut i, arg)?
             || parse_autounmask_scope_opts(&mut opts, args, &mut i, arg)?
             || parse_binpkg_opts(&mut opts, args, &mut i, arg)?
+            || parse_new_option_opts(&mut opts, args, &mut i, arg)?
             || parse_quickpkg_opts(&mut opts, args, &mut i, arg)?
             || parse_tail_opts(&mut opts, args, &mut i, arg)?;
     }

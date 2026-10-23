@@ -1,0 +1,8 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792767367,"command":"bash -c '../../../target/release/portuale emerge -p app-misc/nothing-here --binpkg-respect-user-patches=y; echo rc=$?' 2>&1","env":{"SHELL":"/bin/bash"}}
+[0.023, "o", "\u001b]0;portuale: emerge\u0007"]
+[3.300, "o", "[f1r] Local copy of remote index is up-to-date and will be used.\r\n"]
+[0.133, "o", "[gentoo] Local copy of remote index is within TTL and will be used.\r\n"]
+[0.081, "o", "\r\n\u001b[32mThese are the packages that would be merged, in order:\u001b[39;49;00m\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took \u001b[32m\u001b[39;49;00m s (backtrack: 0/20).\r\n\r\nemerge: there are no ebuilds to satisfy \u001b[32;01m\"app-misc/nothing-here\"\u001b[39;49;00m.\r\n"]
+[0.003, "o", "\u001b]0;vivo@:~/repo/PORTUALE/portuale/LLM/evidence/2026-10-23-503\u0007"]
+[0.009, "o", "rc=1\r\n"]
+[0.000, "x", "0"]

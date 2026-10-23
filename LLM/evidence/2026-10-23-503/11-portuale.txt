@@ -1,0 +1,3 @@
+$ ../../../target/release/portuale emerge -p app-misc/nothing-here --circular-deps-report=xml
+emerge: error: argument --circular-deps-report: invalid choice: 'xml' (choose from 'True', 'text', 'json')
+rc=2

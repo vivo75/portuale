@@ -1,0 +1,3 @@
+$ ../../../target/release/portuale emerge -p app-misc/nothing-here --merge-wait-scope=all
+emerge: error: argument --merge-wait-scope: invalid choice: 'all' (choose from 'deep', 'system', 'toolchain', 'none')
+rc=2

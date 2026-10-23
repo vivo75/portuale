@@ -1,0 +1,15 @@
+$ emerge -p app-misc/nothing-here --merge-wait-scope=toolchain
+[gentoo] Local copy of remote index is within TTL and will be used.
+[f1r] Local copy of remote index is up-to-date and will be used.
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 1.43 s (backtrack: 0/20).
+
+
+emerge: there are no ebuilds to satisfy "app-misc/nothing-here".
+
+emerge: searching for similar names...
+emerge: Maybe you meant any of these: app-misc/note, app-misc/gnote, app-misc/ranger?
+rc=1
