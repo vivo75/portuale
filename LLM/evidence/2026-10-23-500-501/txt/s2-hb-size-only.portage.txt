@@ -1,0 +1,38 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+
+
+[gentoo] Local copy of remote index is within TTL and will be used.
+[f1r] Local copy of remote index is up-to-date and will be used.
+
+>>> Running pre-merge checks for hostile/hb-size-only-1
+--2026-10-23 12:33:36--  http://127.0.0.1:18766/hostile/hb-size-only/hb-size-only-1-1.gpkg.tar
+Connecting to 127.0.0.1:18766... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 20480 (20K) [application/x-tar]
+Saving to: ‘/var/tmp/ev500/binhost-cache-portage-hb-size-only/hostile/hb-size-only/hb-size-only-1-1.gpkg.tar.partial’
+
+     0K .......... ..........                                 100% 1.11G=0s
+
+2026-10-23 12:33:36 (1.11 GB/s) - ‘/var/tmp/ev500/binhost-cache-portage-hb-size-only/hostile/hb-size-only/hb-size-only-1-1.gpkg.tar.partial’ saved [20480/20480]
+
+
+!!! Digest verification failed:
+!!! /var/tmp/ev500/binhost-cache-portage-hb-size-only/hostile/hb-size-only/hb-size-only-1-1.gpkg.tar.partial
+!!! Reason: binhost's Packages index lacks size and checksum
+!!! for this package
+
+>>> Failed to emerge hostile/hb-size-only-1 for /var/tmp/ev500/root-bh-portage-hb-size-only/
+rc=1
+--- server requests
+"GET /Packages.gz HTTP/1.1" 404
+"GET /Packages HTTP/1.1" 200
+"GET /hostile/hb-size-only/hb-size-only-1-1.gpkg.tar HTTP/1.1" 200
+--- installed
+ls: cannot access '/var/tmp/ev500/root-bh-portage-hb-size-only/var/db/pkg/hostile': No such file or directory
+ls: cannot access '/var/tmp/ev500/root-bh-portage-hb-size-only/opt/h': No such file or directory
+--- fetched file

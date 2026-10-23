@@ -1,0 +1,14 @@
+
+>>> Emerging binary (1 of 1) hostile/img-dotdot-dotslash-1::porttest for /var/tmp/ev500/root-portuale-img-dotdot-dotslash
+>>> Extracting info
+>>> Extracting hostile/img-dotdot-dotslash-1
+
+>>> Installing (1 of 1) hostile/img-dotdot-dotslash-1::porttest to /var/tmp/ev500/root-portuale-img-dotdot-dotslash
+emerge: /var/tmp/ev500/arch-portuale/img-dotdot-dotslash/hostile/img-dotdot-dotslash/img-dotdot-dotslash-1-1.gpkg.tar: image.tar member "./../evil" has a path traversal
+rc=1
+--- root contents
+./var
+ls: cannot access './var/db/pkg/hostile': No such file or directory
+--- outside leak check
+files in outside-x: 0
+ls: cannot access '/etc/evil': No such file or directory

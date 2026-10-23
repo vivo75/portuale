@@ -1,0 +1,48 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+
+
+[gentoo] Local copy of remote index is within TTL and will be used.
+[f1r] Local copy of remote index is up-to-date and will be used.
+
+>>> Running pre-merge checks for hostile/hb-full-1
+--2026-10-23 12:33:52--  http://127.0.0.1:18766/hostile/hb-full/hb-full-1-1.gpkg.tar
+Connecting to 127.0.0.1:18766... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 20480 (20K) [application/x-tar]
+Saving to: ‘/var/tmp/ev500/binhost-cache-portage-hb-full/hostile/hb-full/hb-full-1-1.gpkg.tar.partial’
+
+     0K .......... ..........                                 100% 2.38G=0s
+
+2026-10-23 12:33:52 (2.38 GB/s) - ‘/var/tmp/ev500/binhost-cache-portage-hb-full/hostile/hb-full/hb-full-1-1.gpkg.tar.partial’ saved [20480/20480]
+
+ * hb-full-1-1.gpkg.tar MD5 SHA1 size ;-) ...                            [ ok ]
+
+>>> Emerging binary (1 of 1) hostile/hb-full-1::porttest for /var/tmp/ev500/root-bh-portage-hb-full/
+ * hb-full-1-1.gpkg.tar MD5 SHA1 size ;-) ...                            [ ok ]
+>>> Extracting info
+>>> Extracting hostile/hb-full-1
+
+>>> Installing (1 of 1) hostile/hb-full-1::porttest to /var/tmp/ev500/root-bh-portage-hb-full/
+
+>>> Completed (1 of 1) hostile/hb-full-1::porttest to /var/tmp/ev500/root-bh-portage-hb-full/
+>>> Auto-cleaning packages...
+
+>>> Using system located in ROOT tree /var/tmp/ev500/root-bh-portage-hb-full/
+
+>>> No outdated packages were found on your system.
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- server requests
+"GET /Packages.gz HTTP/1.1" 404
+"GET /Packages HTTP/1.1" 200
+"GET /hostile/hb-full/hb-full-1-1.gpkg.tar HTTP/1.1" 200
+--- installed
+hb-full-1
+hello
+--- fetched file

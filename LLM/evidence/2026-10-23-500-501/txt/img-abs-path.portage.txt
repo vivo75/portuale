@@ -1,0 +1,30 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+
+
+
+>>> Running pre-merge checks for hostile/img-abs-path-1
+ * img-abs-path-1-1.gpkg.tar size ;-) ...                                [ ok ]
+
+>>> Emerging binary (1 of 1) hostile/img-abs-path-1::porttest for /var/tmp/ev500/root-portage-img-abs-path/
+ * img-abs-path-1-1.gpkg.tar size ;-) ...                                [ ok ]
+>>> Extracting info
+>>> Extracting hostile/img-abs-path-1
+Danger: absolute path detected: /etc/evil
+!!!Extract failed.
+!!! Error extracting '/var/tmp/ev500/arch-portage/img-abs-path/hostile/img-abs-path/img-abs-path-1-1.gpkg.tar', Absolute path detected.
+
+>>> Failed to emerge hostile/img-abs-path-1 for /var/tmp/ev500/root-portage-img-abs-path/, Log file:
+
+>>>  '/var/tmp/ev500/pt-portage-img-abs-path/portage/hostile/img-abs-path-1/temp/build.log'
+rc=1
+--- root contents
+./var
+ls: cannot access './var/db/pkg/hostile': No such file or directory
+--- outside leak check
+files in outside-x: 0
+ls: cannot access '/etc/evil': No such file or directory

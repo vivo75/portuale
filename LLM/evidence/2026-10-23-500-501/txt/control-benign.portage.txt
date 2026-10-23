@@ -1,0 +1,43 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+
+
+
+>>> Running pre-merge checks for hostile/control-benign-1
+ * control-benign-1-1.gpkg.tar size ;-) ...                              [ ok ]
+
+>>> Emerging binary (1 of 1) hostile/control-benign-1::porttest for /var/tmp/ev500/root-portage-control-benign/
+ * control-benign-1-1.gpkg.tar size ;-) ...                              [ ok ]
+>>> Extracting info
+>>> Extracting hostile/control-benign-1
+
+>>> Installing (1 of 1) hostile/control-benign-1::porttest to /var/tmp/ev500/root-portage-control-benign/
+[33m * [39;49;00mQA Notice: Symbolic link /opt/h/abs points to /usr/lib64/libfoo.so.1 which does not exist.
+
+>>> Completed (1 of 1) hostile/control-benign-1::porttest to /var/tmp/ev500/root-portage-control-benign/
+>>> Auto-cleaning packages...
+
+>>> Using system located in ROOT tree /var/tmp/ev500/root-portage-control-benign/
+
+>>> No outdated packages were found on your system.
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- root contents
+./etc
+./opt
+./opt/h
+./opt/h/abs
+./opt/h/bin
+./opt/h/hello
+./opt/h/lnk
+./opt/h/real
+./var
+control-benign-1
+--- outside leak check
+files in outside-x: 0
+ls: cannot access '/etc/evil': No such file or directory

@@ -1,0 +1,17 @@
+
+>>> Emerging binary (1 of 1) hostile/img-dotdot-bare-1::porttest for /var/tmp/ev500/root-portuale-img-dotdot-bare
+>>> Extracting info
+>>> Extracting hostile/img-dotdot-bare-1
+
+>>> Installing (1 of 1) hostile/img-dotdot-bare-1::porttest to /var/tmp/ev500/root-portuale-img-dotdot-bare
+tar: Removing leading `..' from member names
+tar: ../: Member name contains '..'
+tar: Exiting with failure status due to previous errors
+emerge: tar ["-xpf", "/tmp/portuale-gpkg-member-3732470-1792758690776046399/image.tar", "-C", "/var/tmp/ev500/pt-portuale-img-dotdot-bare/portage/hostile/img-dotdot-bare-1/image", "--strip-components=1"] failed (exit status: 2)
+rc=1
+--- root contents
+./var
+ls: cannot access './var/db/pkg/hostile': No such file or directory
+--- outside leak check
+files in outside-x: 0
+ls: cannot access '/etc/evil': No such file or directory

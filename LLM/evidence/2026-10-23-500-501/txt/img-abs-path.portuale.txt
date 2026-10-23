@@ -1,0 +1,14 @@
+
+>>> Emerging binary (1 of 1) hostile/img-abs-path-1::porttest for /var/tmp/ev500/root-portuale-img-abs-path
+>>> Extracting info
+>>> Extracting hostile/img-abs-path-1
+
+>>> Installing (1 of 1) hostile/img-abs-path-1::porttest to /var/tmp/ev500/root-portuale-img-abs-path
+emerge: /var/tmp/ev500/arch-portuale/img-abs-path/hostile/img-abs-path/img-abs-path-1-1.gpkg.tar: image.tar member "/etc/evil" has an absolute name
+rc=1
+--- root contents
+./var
+ls: cannot access './var/db/pkg/hostile': No such file or directory
+--- outside leak check
+files in outside-x: 0
+ls: cannot access '/etc/evil': No such file or directory

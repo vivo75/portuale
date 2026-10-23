@@ -1,0 +1,21 @@
+
+>>> Emerging binary (1 of 1) hostile/meta-extra-symlink-1::porttest for /var/tmp/ev500/root-portuale-meta-extra-symlink
+>>> Extracting info
+>>> Extracting hostile/meta-extra-symlink-1
+
+>>> Installing (1 of 1) hostile/meta-extra-symlink-1::porttest to /var/tmp/ev500/root-portuale-meta-extra-symlink
+
+>>> Completed (1 of 1) hostile/meta-extra-symlink-1::porttest to /var/tmp/ev500/root-portuale-meta-extra-symlink
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- root contents
+./etc
+./opt
+./opt/h
+./opt/h/hello
+./var
+meta-extra-symlink-1
+--- outside leak check
+files in outside-x: 0
+ls: cannot access '/etc/evil': No such file or directory

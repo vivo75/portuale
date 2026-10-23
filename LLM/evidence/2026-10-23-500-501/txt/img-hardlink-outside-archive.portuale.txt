@@ -1,0 +1,14 @@
+
+>>> Emerging binary (1 of 1) hostile/img-hardlink-outside-archive-1::porttest for /var/tmp/ev500/root-portuale-img-hardlink-outside-archive
+>>> Extracting info
+>>> Extracting hostile/img-hardlink-outside-archive-1
+
+>>> Installing (1 of 1) hostile/img-hardlink-outside-archive-1::porttest to /var/tmp/ev500/root-portuale-img-hardlink-outside-archive
+emerge: /var/tmp/ev500/arch-portuale/img-hardlink-outside-archive/hostile/img-hardlink-outside-archive/img-hardlink-outside-archive-1-1.gpkg.tar: image.tar member "image/shadow" hard link target "/etc/shadow" is not an earlier member
+rc=1
+--- root contents
+./var
+ls: cannot access './var/db/pkg/hostile': No such file or directory
+--- outside leak check
+files in outside-x: 0
+ls: cannot access '/etc/evil': No such file or directory
