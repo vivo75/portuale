@@ -1,0 +1,19 @@
+VERSION HEAD /var/tmp/ev510-probe/p3082/lib/portage/__init__.py
+games-arcade/2048	eapi=8	Atom	OK	cp=games-arcade/2048 ver=None use=None
+games-arcade/2048	eapi=8	reduce-Atom	OK	['games-arcade/2048']
+games-arcade/2048	eapi=8	reduce-str	OK	['games-arcade/2048']
+games-arcade/2048	eapi=None	Atom	OK	cp=games-arcade/2048 ver=None use=None
+games-arcade/2048	eapi=None	reduce-Atom	OK	['games-arcade/2048']
+games-arcade/2048	eapi=None	reduce-str	OK	['games-arcade/2048']
+dev-util/timidity--	eapi=8	Atom	OK	cp=dev-util/timidity-- ver=None use=None
+dev-util/timidity--	eapi=8	reduce-Atom	OK	['dev-util/timidity--']
+dev-util/timidity--	eapi=8	reduce-str	OK	['dev-util/timidity--']
+dev-util/timidity--	eapi=None	Atom	OK	cp=dev-util/timidity-- ver=None use=None
+dev-util/timidity--	eapi=None	reduce-Atom	OK	['dev-util/timidity--']
+dev-util/timidity--	eapi=None	reduce-str	OK	['dev-util/timidity--']
+cat/pkg[a(+),-a]	eapi=8	Atom	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	eapi=8	reduce-Atom	EXC	InvalidDependString: invalid use dep token: '-a'
+cat/pkg[a(+),-a]	eapi=8	reduce-str	OK	['cat/pkg[a(+),-a]']
+cat/pkg[a(+),-a]	eapi=None	Atom	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	eapi=None	reduce-Atom	EXC	InvalidDependString: invalid use dep token: '-a'
+cat/pkg[a(+),-a]	eapi=None	reduce-str	OK	['cat/pkg[a(+),-a]']

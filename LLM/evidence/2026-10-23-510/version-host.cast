@@ -1,0 +1,5 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792778664,"command":"emerge --version","env":{"SHELL":"/bin/bash"}}
+[0.197, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.454, "o", "Portage 3.0.83 (python 3.14.8-final-0, default/linux/amd64/23.0/desktop/plasma/systemd, gcc-16, glibc-2.44-r4, 6.18.39-serv x86_64)\r\n"]
+[0.000, "o", "\u001b]0;vivo@:~/repo/PORTUALE/portuale/LLM/evidence/2026-10-23-510\u0007"]
+[0.027, "x", "0"]

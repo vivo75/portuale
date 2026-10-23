@@ -193,3 +193,38 @@ when a claim turns out false.
   `portage-repo/src/depclean.rs` (`cycle_suggestions`) print the notice for a
   world-listed member, because portuale drops `@selected` seeds in `args` mode
   like Portage. Pinned by `test_508_world_listed_member_still_gets_the_notice`.
+
+## Q8. `use_reduce` without `token_class` accepts a use dep that `Atom` rejects, and the reducer's error text changed in 3.0.83 (suspect)
+
+- **Observed** (2026-10-23, backlog #510, `LLM/evidence/2026-10-23-510/`,
+  `probe.py` run with `python3 -I` on the host and on the 3.0.82.2 tag built
+  with its C parser): for `cat/pkg[a(+),-a]` in EAPI 8 and in EAPI-less mode,
+  `Atom("cat/pkg[a(+),-a]")` raises `Invalid use dep: '-a'`, while
+  `use_reduce("cat/pkg[a(+),-a]", eapi="8")` (no `token_class`) returns
+  `['cat/pkg[a(+),-a]']`. With `token_class=Atom` the reducer raises
+  `InvalidDependString` on both versions, with different text: 3.0.82.2
+  `Invalid atom (Invalid use dep: '-a'), token 1`, 3.0.83-r1 `invalid use dep
+  token: '-a'` (the C fast path, `src/dep_parser.c` `py_classify_use_deps`).
+- **Why**: `use_reduce` only builds `Atom`s when `token_class` is given
+  (`lib/portage/dep/__init__.py`, the fast-path gate `token_class is Atom`, and
+  the regex path that calls `token_class`). Without it the tokens are plain
+  strings, so the missing-USE-default rule of `_use_dep` is never run. The
+  reducer's `Atom` path and the constructor agree on acceptance; only the
+  string path is looser.
+- **Why it looks wrong**: a dependency string the reducer hands back as valid
+  would be rejected by the constructor it is supposed to mirror; callers that
+  reduce a string to flags and never build `Atom`s (`use_reduce` default) see
+  an atom Portage itself calls invalid.
+- **Not reproduced**: the plan (`LLM/02.442-port-portage-3.0.83.opus.md`,
+  S10b) said 3.0.82.2 made the two entry points disagree on `games-arcade/2048`,
+  `dev-util/timidity--` and `cat/pkg[a(+),-a]`. On the 3.0.82.2 tag, built with
+  its own C parser, all three agree: the C-parser fixes it needs
+  (`6a64fb2f4`, `4f76d9ee5`, `a2206fc32`, equal in 3.0.83 to `450282d84`,
+  `8bf578fd7`, `bdce305cd`) are already in that tag. The disagreement existed
+  only before those commits, not in a released version.
+- **First seen**: 3.0.82.2 (string path, and the message text); 3.0.83-r1 for
+  the new message text.
+- **Portuale**: copies the string path. `portage-use-reduce`'s `use_reduce_flat`
+  takes the plain token list and only the `_validated` variant runs an atom hook
+  (`crates/portage-use-reduce/src/lib.rs`). The `Invalid atom (…), token N`
+  wrapper is portuale's, pinned there, and the 3.0.83 text is not copied.

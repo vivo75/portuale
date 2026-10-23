@@ -1,0 +1,14 @@
+games-emulation/81-libretro  C=OK ['games-emulation/81-libretro']            py=OK ['games-emulation/81-libretro']            same
+games-emulation/2048-libretro C=OK ['games-emulation/2048-libretro']          py=OK ['games-emulation/2048-libretro']          same
+games-arcade/2048            C=OK ['games-arcade/2048']                      py=OK ['games-arcade/2048']                      same
+dev-util/diff-mode-          C=OK ['dev-util/diff-mode-']                    py=OK ['dev-util/diff-mode-']                    same
+dev-util/timidity--          C=OK ['dev-util/timidity--']                    py=OK ['dev-util/timidity--']                    same
+dev-util/frob---             C=OK ['dev-util/frob---']                       py=OK ['dev-util/frob---']                       same
+dev-util/diffball-9-         C=OK ['dev-util/diffball-9-']                   py=OK ['dev-util/diffball-9-']                   same
+dev-util/foo-2048+           C=OK ['dev-util/foo-2048+']                     py=OK ['dev-util/foo-2048+']                     same
+dev-util/foo-9-bar           C=OK ['dev-util/foo-9-bar']                     py=OK ['dev-util/foo-9-bar']                     same
+cat/pkg[a(+),-a]             C=ERR                                           py=ERR                                           same
+cat/pkg[a(+),a(-)]           C=ERR                                           py=ERR                                           same
+cat/pkg[a,a(+)]              C=ERR                                           py=ERR                                           same
+cat/pkg[a(+),b,-a(+)]        C=OK ['cat/pkg[a(+),b,-a(+)]']                  py=OK ['cat/pkg[a(+),b,-a(+)]']                  same
+cat/pkg[a(+),-a(+)]          C=OK ['cat/pkg[a(+),-a(+)]']                    py=OK ['cat/pkg[a(+),-a(+)]']                    same

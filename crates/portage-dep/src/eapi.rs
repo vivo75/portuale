@@ -284,8 +284,8 @@ mod tests {
 
     #[test]
     fn attrs_match_generated_oracle_tsv() {
-        // Every row of testdata/eapi-attrs-3.0.82.2.tsv, generated from
-        // Portage 3.0.82.2 by LLM/tools/eapi_attrs_table.py. The expected
+        // Every row of testdata/eapi-attrs-3.0.83.tsv, generated from
+        // Portage 3.0.83-r1 by LLM/tools/eapi_attrs_table.py. The expected
         // struct is built field-by-field from the TSV rows, so a field
         // added without a row fails: the literal misses the new field at
         // compile time and `cell` panics on the missing row at run time.
@@ -295,7 +295,7 @@ mod tests {
         let mut ok_cells: HashMap<(String, String), bool> = HashMap::new();
         let mut err_rows = 0;
         let mut rows = 0;
-        for row in include_str!("testdata/eapi-attrs-3.0.82.2.tsv")
+        for row in include_str!("testdata/eapi-attrs-3.0.83.tsv")
             .lines()
             .skip(1)
         {
