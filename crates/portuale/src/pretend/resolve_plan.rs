@@ -246,13 +246,19 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
     // Portage: _emerge/actions.py, bintree.py
     if getbinpkg {
         let _refresh_span = portage_util::profile::span("refresh_binhost_indexes");
-        emerge_getbinpkg::refresh_binhost_indexes(
-            &config.binrepos,
+        // Portage 3.0.83's per-binrepo `gpkg_only`: signed-only runs
+        // (`FEATURES=binpkg-request-signature`) serve no xpak from any repo.
+        let binpkg_request_signature = config
+            .resolved_incremental("FEATURES")
+            .is_some_and(|flags| flags.iter().any(|f| f == "binpkg-request-signature"));
+        emerge_getbinpkg::refresh_binhost_indexes(emerge_getbinpkg::RefreshBinhostIndexesArgs {
+            binrepos: &config.binrepos,
             root,
             pretend,
-            getbinpkg_exclude,
-            getbinpkg_include,
-        );
+            cli_exclude: getbinpkg_exclude,
+            cli_include: getbinpkg_include,
+            binpkg_request_signature,
+        });
     }
     // Atoms in both CLI lists warn (after the refresh: Portage populates
     // before adjusting configs, so the per-repo warnings print first).

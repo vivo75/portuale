@@ -1,0 +1,3 @@
+[mixsig] Remote XPAK binpkgs in 'file:///var/tmp/ev511-tree/binhost-sig' ignored: signatures are missing (FEATURES=binpkg-request-signature or verify-signature in binrepos.conf).
+Unsupported binary package format from 'app-misc/s511-e-1.weird'
+Unsupported binary package format from ''

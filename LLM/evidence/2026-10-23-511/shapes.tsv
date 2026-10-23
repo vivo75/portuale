@@ -1,0 +1,14 @@
+# id	env	args
+01-sig-gpkg	-	-p --color=n --getbinpkg app-misc/s511-a
+02-sig-xpak	-	-p --color=n --getbinpkg app-misc/s511-b
+03-sig-gpkg-nobuildid	-	-p --color=n --getbinpkg app-misc/s511-c
+04-sig-xpak-nobuildid	-	-p --color=n --getbinpkg app-misc/s511-d
+05-sig-badext	-	-p --color=n --getbinpkg app-misc/s511-e
+06-sig-nopath	-	-p --color=n --getbinpkg app-misc/s511-f
+07-plain-xpak	-	-p --color=n --getbinpkg app-misc/s511-g
+08-plain-gpkg-nobuildid	-	-p --color=n --getbinpkg app-misc/s511-h
+09-sig-all	-	-p --color=n --getbinpkg app-misc/s511-a app-misc/s511-c app-misc/s511-b
+10-plain-reqsig	FEATURES="-news binpkg-request-signature"	-p --color=n --getbinpkg app-misc/s511-g
+11-plain-badext	-	-p --color=n --getbinpkg app-misc/s511-i
+12-plain-nopath	-	-p --color=n --getbinpkg app-misc/s511-j
+13-sig-multi-missing	-	-p --color=n --getbinpkg app-misc/s511-a app-misc/s511-b app-misc/s511-c app-misc/s511-d app-misc/s511-e app-misc/s511-f

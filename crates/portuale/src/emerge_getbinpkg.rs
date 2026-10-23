@@ -95,10 +95,13 @@ pub(crate) fn binhost_unsupported_version_warning(
 /// Remote entries matching the effective `--getbinpkg-exclude` (or missing
 /// from a non-empty `--getbinpkg-include`) never reach the in-memory pool:
 /// each binrepo's own keys fold with the CLI sets and conflicting atoms
-/// warn per repo, like Portage. The on-disk/EDB cache keeps the unfiltered
-/// index (Portage filters when reading, not when writing, so a later run
-/// without the option is unpoisoned). Local `PKGDIR` instances are never
-/// filtered.
+/// warn per repo, like Portage. Under this binrepo's `gpkg_only` rule
+/// (Portage 3.0.83: `FEATURES=binpkg-request-signature` or its own
+/// `verify-signature`) xpak `PATH` entries are dropped with the ignored
+/// warning, and unknown `PATH`s with an `Unsupported …` line. The on-disk/EDB
+/// cache keeps the unfiltered index (Portage filters when reading, not when
+/// writing, so a later run without the option is unpoisoned). Local
+/// `PKGDIR` instances are never filtered.
 ///
 /// A cached `TIMESTAMP` turns the fetch into a conditional GET
 /// (`If-Modified-Since: TIMESTAMP + 5 s`; 304 keeps the cache). Deliberate
@@ -108,16 +111,34 @@ pub(crate) fn binhost_unsupported_version_warning(
 /// is dropped with Portage's own warning, discarding even a stale cache; no
 /// `--verbose` detail, `ssh://`, pool filtering, or trust-helper gating.
 // Portage: lib/portage/dbapi/bintree.py, _populate_remote
-pub fn refresh_binhost_indexes(
-    binrepos: &[BinRepo],
-    root: &Path,
-    pretend: bool,
-    cli_exclude: &[String],
-    cli_include: &[String],
-) {
-    for binrepo in binrepos {
+/// Arguments of [`refresh_binhost_indexes`].
+pub struct RefreshBinhostIndexesArgs<'a> {
+    pub binrepos: &'a [BinRepo],
+    pub root: &'a Path,
+    pub pretend: bool,
+    pub cli_exclude: &'a [String],
+    pub cli_include: &'a [String],
+    pub binpkg_request_signature: bool,
+}
+
+pub fn refresh_binhost_indexes(args: RefreshBinhostIndexesArgs<'_>) {
+    let RefreshBinhostIndexesArgs {
+        binrepos,
+        root,
+        pretend,
+        cli_exclude,
+        cli_include,
+        binpkg_request_signature,
+    } = args;
+    // Descending priority: Portage's `_populate_remote` runs
+    // `reversed(...)` over the ascending config, so every per-repo message
+    // (fetch warnings, the exclude/include conflict warnings, the `Local
+    // copy …` notes, the `gpkg_only` warnings) prints highest-priority
+    // first.
+    for binrepo in binrepos.iter().rev() {
         let filter = GetbinpkgFilter::for_binrepo(binrepo, cli_exclude, cli_include);
-        let outcome = refresh_one_binrepo(binrepo, root, pretend, &filter);
+        let gpkg_only = binrepo_gpkg_only(binrepo, binpkg_request_signature);
+        let outcome = refresh_one_binrepo(binrepo, root, pretend, &filter, gpkg_only);
         if let Some(warning) = outcome.stderr_warning {
             eprint!("{warning}");
         }
@@ -226,6 +247,69 @@ pub(crate) fn warn_getbinpkg_cli_overlap(exclude: &[String], include: &[String])
     }
 }
 
+/// Portage 3.0.83's per-binrepo `gpkg_only`: a repo whose index must be
+/// signature-clean serves no xpak entry (`bintree._populate_remote`,
+/// `7e2dcd0bd`). True when the run requests signed binaries
+/// (`FEATURES=binpkg-request-signature`, which also covers local binpkgs)
+/// or when this binrepo verifies signatures. An absent
+/// `verify-signature` key counts as true (stock Portage ships
+/// `[DEFAULT] verify-signature = true` in the global `binrepos.conf`).
+// Portage: lib/portage/dbapi/bintree.py, _populate_remote
+pub(crate) fn binrepo_gpkg_only(binrepo: &BinRepo, binpkg_request_signature: bool) -> bool {
+    binpkg_request_signature || binrepo.verify_signature
+}
+
+/// Portage 3.0.83's ignored-remote-xpak warning (`78607215e`): printed once
+/// per binrepo, naming the index's `URI` header (else the sync URI, which
+/// Portage does not mask here). Plain text: the colour Portage's
+/// `colorize("WARN", …)` adds under `--color=y` is not modelled, like the
+/// other binhost warnings here.
+// Portage: lib/portage/dbapi/bintree.py, _populate_remote_repo
+pub(crate) fn remote_xpak_ignored_warning(binrepo_name: &str, remote_base_uri: &str) -> String {
+    format!(
+        "[{binrepo_name}] Remote XPAK binpkgs in '{remote_base_uri}' ignored: signatures are missing (FEATURES=binpkg-request-signature or verify-signature in binrepos.conf).\n"
+    )
+}
+
+/// Portage's `InvalidBinaryPackageFormat` text for a remote `PATH` with an
+/// unknown extension (an absent `PATH` reads as `''`): one line per entry,
+/// with no once-per-repo gate.
+// Portage: lib/portage/binpkg.py, get_binpkg_format (remote=True)
+pub(crate) fn unsupported_binpkg_format_warning(path: &str) -> String {
+    format!("Unsupported binary package format from '{path}'\n")
+}
+
+/// Split a binrepo's fetched `Packages` entries into the pool
+/// (`kept`) plus the `gpkg_only` stderr text. A `.gpkg.tar` `PATH` is kept;
+/// an xpak one (`.tbz2`/`.xpak`, Portage's `SUPPORTED_XPAK_EXTENSIONS`) is
+/// dropped with the once-per-repo ignored warning; anything else (unknown
+/// or absent `PATH`) is dropped with its own `Unsupported …` line. Runs
+/// after the exclude/include filter, like Portage's populate order.
+// Portage: lib/portage/dbapi/bintree.py, _populate_remote_repo
+pub(crate) fn apply_gpkg_only(
+    entries: Vec<std::collections::HashMap<String, String>>,
+    binrepo_name: &str,
+    remote_base_uri: &str,
+) -> (Vec<std::collections::HashMap<String, String>>, String) {
+    let mut kept = Vec::with_capacity(entries.len());
+    let mut stderr = String::new();
+    let mut warned = false;
+    for entry in entries {
+        let path = entry.get("PATH").map(String::as_str).unwrap_or("");
+        if path.ends_with(".gpkg.tar") {
+            kept.push(entry);
+        } else if path.ends_with(".tbz2") || path.ends_with(".xpak") {
+            if !warned {
+                warned = true;
+                stderr.push_str(&remote_xpak_ignored_warning(binrepo_name, remote_base_uri));
+            }
+        } else {
+            stderr.push_str(&unsupported_binpkg_format_warning(path));
+        }
+    }
+    (kept, stderr)
+}
+
 /// One binrepo's run index (installed via the remote-index override, keyed by
 /// the same `packages_dir` the resolver reads) plus Portage's messages for the
 /// caller to print.
@@ -267,6 +351,7 @@ fn refresh_one_binrepo(
     root: &Path,
     pretend: bool,
     filter: &GetbinpkgFilter,
+    gpkg_only: bool,
 ) -> RefreshOutcome {
     // Messages print the configured URI; fetch URLs use the stripped form.
     let raw = binrepo.sync_uri.as_str();
@@ -278,12 +363,25 @@ fn refresh_one_binrepo(
         );
     };
     // Filtered entries feed the in-memory pool; the cache write below
-    // keeps the unfiltered index (see `refresh_binhost_indexes`).
-    let ok_entries = |entries: Vec<std::collections::HashMap<String, String>>| {
-        ok(portage_repo::BinaryIndex::from_entries(
-            filter.apply(entries),
-        ));
-    };
+    // keeps the unfiltered index (see `refresh_binhost_indexes`). Under
+    // `gpkg_only` the exclude/include survivors are split once more (xpak
+    // dropped with the warning, unknown `PATH`s with their own line).
+    let ok_entries =
+        |header: &std::collections::HashMap<String, String>,
+         entries: Vec<std::collections::HashMap<String, String>>| {
+            let entries = filter.apply(entries);
+            let (entries, gpkg_warning) = if gpkg_only {
+                // Portage reads the index's own `URI` header, else the base URL.
+                let base = header.get("URI").map(String::as_str).unwrap_or(uri);
+                apply_gpkg_only(entries, &binrepo.name, base)
+            } else {
+                (entries, String::new())
+            };
+            if !gpkg_warning.is_empty() {
+                eprint!("{gpkg_warning}");
+            }
+            ok(portage_repo::BinaryIndex::from_entries(entries));
+        };
     let cached_file = edb_cache_packages_file(root, raw);
     let cached_text = std::fs::read_to_string(&cached_file).ok();
     let (cached_header, cached_entries) = cached_text
@@ -299,7 +397,7 @@ fn refresh_one_binrepo(
             .is_some_and(|s| !s.is_empty())
         && binrepo.frozen
     {
-        ok_entries(cached_entries.clone());
+        ok_entries(&cached_header, cached_entries.clone());
         return RefreshOutcome {
             stderr_warning: None,
             stdout_note: Some(use_cached_note(&binrepo.name, "frozen")),
@@ -315,7 +413,7 @@ fn refresh_one_binrepo(
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.0);
     if downloaded_at > 0.0 && ttl_secs > 0.0 && downloaded_at + ttl_secs > unix_now() {
-        ok_entries(cached_entries.clone());
+        ok_entries(&cached_header, cached_entries.clone());
         return RefreshOutcome {
             stderr_warning: None,
             stdout_note: Some(use_cached_note(&binrepo.name, "within TTL")),
@@ -339,7 +437,7 @@ fn refresh_one_binrepo(
             ));
             if pretend {
                 // Keep the stale copy and say so.
-                ok_entries(cached_entries.clone());
+                ok_entries(&cached_header, cached_entries.clone());
                 RefreshOutcome {
                     stderr_warning: warning,
                     stdout_note: Some(format!(
@@ -359,7 +457,7 @@ fn refresh_one_binrepo(
         }
         Ok(None) => {
             // 304: Portage's `UseCachedCopyOfRemoteIndex("up-to-date")`, no rewrite.
-            ok_entries(cached_entries.clone());
+            ok_entries(&cached_header, cached_entries.clone());
             RefreshOutcome {
                 stderr_warning: None,
                 stdout_note: Some(use_cached_note(&binrepo.name, "up-to-date")),
@@ -409,7 +507,7 @@ fn refresh_one_binrepo(
                 _ => false,
             };
             if stale_remote {
-                ok_entries(cached_entries.clone());
+                ok_entries(&cached_header, cached_entries.clone());
                 let up_to_date =
                     !uri.starts_with("file://") && local_ts.is_some() && local_ts == remote_ts;
                 return RefreshOutcome {
@@ -419,7 +517,7 @@ fn refresh_one_binrepo(
             }
             let now = unix_now() as u64;
             let staged = stamp_download_timestamp(&remote_text, now);
-            ok_entries(remote_entries);
+            ok_entries(&remote_header, remote_entries);
             // Best-effort cache write: an unwritable cache dir is ignored; only a
             // write error on a writable dir warns (refreshes stay non-fatal).
             // Either way the in-memory index above is what the run resolves from.
@@ -3054,6 +3152,7 @@ mod tests {
             &root,
             false,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         );
         assert_eq!(
             outcome.stdout_note.as_deref(),
@@ -3331,7 +3430,14 @@ mod tests {
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false, &[], &[]);
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: std::slice::from_ref(&binrepo),
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
         let cached = binrepo.packages_dir(&root).join("Packages");
         // The promoted index is cached with a fresh DOWNLOAD_TIMESTAMP header, so
         // it differs from the served bytes by exactly that line.
@@ -3378,7 +3484,14 @@ mod tests {
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false, &[], &[]);
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: std::slice::from_ref(&binrepo),
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
         assert!(
             !binrepo.packages_dir(&root).join("Packages").exists(),
             "a corrupt Packages.gz warns with no plain-Packages fallback"
@@ -3424,6 +3537,7 @@ mod tests {
             &root,
             false,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         )
         .stderr_warning
         .expect("a 500ing binhost warns");
@@ -3560,7 +3674,14 @@ mod tests {
         std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
         let cached = "TIMESTAMP: 100\nVERSION: 0\nPACKAGES: 1\nDOWNLOAD_TIMESTAMP: 1\n\nCPV: dev-libs/foo-1.0\n\n";
         std::fs::write(&cache, cached).unwrap();
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false, &[], &[]);
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: std::slice::from_ref(&binrepo),
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
         assert_eq!(rx.recv().unwrap(), "GET /Packages.gz HTTP/1.1");
         assert_eq!(rx.recv().unwrap(), "Thu, 01 Jan 1970 00:01:45 GMT");
         assert_eq!(std::fs::read_to_string(&cache).unwrap(), cached);
@@ -3600,7 +3721,14 @@ mod tests {
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
-        refresh_binhost_indexes(std::slice::from_ref(&binrepo), &root, false, &[], &[]);
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: std::slice::from_ref(&binrepo),
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
         assert!(
             !binrepo.packages_dir(&root).join("Packages").exists(),
             "a failed refresh leaves no cache file for the resolver to trust"
@@ -3617,6 +3745,151 @@ mod tests {
             .into_iter()
             .map(|c| c.version)
             .collect()
+    }
+
+    /// Portage 3.0.83's per-binrepo `gpkg_only` (`7e2dcd0bd`): the run-wide
+    /// `FEATURES=binpkg-request-signature` forces every repo; otherwise each
+    /// repo's own `verify-signature` decides (an absent key inherits true
+    /// from the global `[DEFAULT]`, so only explicit `false` opts out).
+    #[test]
+    fn binrepo_gpkg_only_follows_request_signature_or_verify_signature() {
+        let verifying = BinRepo {
+            verify_signature: true,
+            ..BinRepo::default()
+        };
+        let plain = BinRepo {
+            verify_signature: false,
+            ..BinRepo::default()
+        };
+        assert!(binrepo_gpkg_only(&verifying, false));
+        assert!(binrepo_gpkg_only(&verifying, true));
+        assert!(!binrepo_gpkg_only(&plain, false));
+        assert!(binrepo_gpkg_only(&plain, true));
+    }
+
+    /// `apply_gpkg_only`: a `.gpkg.tar` `PATH` is kept; xpak ones
+    /// (`.tbz2`/`.xpak`) are dropped with a single ignored warning no matter
+    /// how many; unknown or absent `PATH`s are dropped with one
+    /// `Unsupported …` line each, in index order. Exact texts are Portage
+    /// 3.0.83's (`78607215e`, `get_binpkg_format` remote error), captured in
+    /// `LLM/evidence/2026-10-23-511/captures/01-sig-gpkg.portage.err`.
+    #[test]
+    fn apply_gpkg_only_keeps_gpkg_warns_once_for_xpak_and_per_unknown_path() {
+        let entry = |path: Option<&str>| {
+            let mut e = std::collections::HashMap::new();
+            e.insert("CPV".to_string(), "dev-libs/mix-1.0".to_string());
+            if let Some(p) = path {
+                e.insert("PATH".to_string(), p.to_string());
+            }
+            e
+        };
+        let (kept, stderr) = apply_gpkg_only(
+            vec![
+                entry(Some("dev-libs/mix-1-1.gpkg.tar")),
+                entry(Some("dev-libs/mix-1-1.tbz2")),
+                entry(Some("dev-libs/mix-1-1.xpak")),
+                entry(Some("dev-libs/mix-1-1.weird")),
+                entry(None),
+            ],
+            "mixsig",
+            "file:///binhost-sig",
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(
+            kept[0].get("PATH").map(String::as_str),
+            Some("dev-libs/mix-1-1.gpkg.tar")
+        );
+        assert_eq!(
+            stderr,
+            "[mixsig] Remote XPAK binpkgs in 'file:///binhost-sig' ignored: signatures are missing (FEATURES=binpkg-request-signature or verify-signature in binrepos.conf).\n\
+             Unsupported binary package format from 'dev-libs/mix-1-1.weird'\n\
+             Unsupported binary package format from ''\n"
+        );
+    }
+
+    /// End to end through `refresh_binhost_indexes`: a verifying repo serves
+    /// only the gpkg entry while a non-verifying repo serves both, and
+    /// `binpkg-request-signature` filters the non-verifying repo too.
+    #[test]
+    fn refresh_binhost_indexes_applies_gpkg_only_per_binrepo() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let sig = tmp.join("binhost-sig");
+        let plain = tmp.join("binhost-plain");
+        std::fs::create_dir_all(&sig).unwrap();
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(
+            sig.join("Packages"),
+            packages_index(&[
+                "CPV: dev-libs/sig-g-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: s\nPATH: dev-libs/sig-g-1.0.gpkg.tar",
+                "CPV: dev-libs/sig-x-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: s\nPATH: dev-libs/sig-x-1.0.tbz2",
+            ]),
+        )
+        .unwrap();
+        std::fs::write(
+            plain.join("Packages"),
+            packages_index(&[
+                "CPV: dev-libs/plain-x-1.0\nSLOT: 0\nKEYWORDS: amd64\nREPO: s\nPATH: dev-libs/plain-x-1.0.tbz2",
+            ]),
+        )
+        .unwrap();
+        let repo = |name: &str, dir: &std::path::Path, verify_signature: bool| BinRepo {
+            name: name.to_string(),
+            sync_uri: format!("file://{}", dir.display()),
+            priority: 1,
+            location: None,
+            verify_signature,
+            frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
+        };
+        let sig_repo = repo("mixsig", &sig, true);
+        let plain_repo = repo("mixplain", &plain, false);
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: std::slice::from_ref(&sig_repo),
+            root: &root,
+            pretend: true,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
+        assert_eq!(
+            remote_versions(std::slice::from_ref(&sig_repo), &root, "sig-g"),
+            vec!["1.0"],
+            "the verifying repo serves the gpkg entry",
+        );
+        assert!(
+            remote_versions(std::slice::from_ref(&sig_repo), &root, "sig-x").is_empty(),
+            "the verifying repo drops the xpak entry",
+        );
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: std::slice::from_ref(&plain_repo),
+            root: &root,
+            pretend: true,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
+        assert_eq!(
+            remote_versions(std::slice::from_ref(&plain_repo), &root, "plain-x"),
+            vec!["1.0"],
+            "the plain repo serves the xpak entry",
+        );
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: std::slice::from_ref(&plain_repo),
+            root: &root,
+            pretend: true,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: true,
+        });
+        assert!(
+            remote_versions(std::slice::from_ref(&plain_repo), &root, "plain-x").is_empty(),
+            "binpkg-request-signature filters every repo",
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -3664,7 +3937,10 @@ mod tests {
             sync_uri: format!("file://{}", binhost.display()),
             priority: 1,
             location: None,
-            verify_signature: true,
+            // `false`: the served entry has no `PATH`, which Portage 3.0.83
+            // drops from a verifying repo (`gpkg_only`); this case covers the
+            // unwritable cache, not that policy.
+            verify_signature: false,
             frozen: false,
             fetchcommand: None,
             resumecommand: None,
@@ -3676,6 +3952,7 @@ mod tests {
             &root,
             pretend,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         );
         assert!(
             outcome.stderr_warning.is_none(),
@@ -3739,6 +4016,7 @@ mod tests {
             &root,
             true,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         );
         assert!(
             outcome
@@ -3803,6 +4081,7 @@ mod tests {
             &root,
             false,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         );
         assert!(
             outcome
@@ -3857,6 +4136,7 @@ mod tests {
             &root,
             true,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         );
         assert!(outcome.stderr_warning.is_none());
         assert_eq!(
@@ -3906,6 +4186,7 @@ mod tests {
             &root,
             false,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         );
         assert!(outcome.stderr_warning.is_none());
         assert!(outcome.stdout_note.is_none());
@@ -3958,6 +4239,7 @@ mod tests {
             &root,
             false,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         );
         assert!(outcome.stderr_warning.is_none());
         assert!(outcome.stdout_note.is_none());
@@ -4000,6 +4282,7 @@ mod tests {
             &root,
             true,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         );
         assert!(outcome.stderr_warning.is_none());
         assert_eq!(
@@ -4100,7 +4383,10 @@ mod tests {
             sync_uri: format!("file://{}", binhost.display()),
             priority: 1,
             location: None,
-            verify_signature: true,
+            // `false`: the entries here have no `PATH`, which Portage 3.0.83
+            // drops from a verifying repo (`gpkg_only`); these cases cover
+            // the TIMESTAMP/VERSION drop, not that policy.
+            verify_signature: false,
             frozen: false,
             fetchcommand: None,
             resumecommand: None,
@@ -4116,6 +4402,7 @@ mod tests {
             &root,
             pretend,
             &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            false,
         );
         assert_eq!(
             outcome.stderr_warning.as_deref(),
@@ -4173,7 +4460,10 @@ mod tests {
                     .to_string_lossy()
                     .to_string(),
             ),
-            verify_signature: true,
+            // `false`: the tests below serve a `.tbz2`, which Portage 3.0.83
+            // ignores from a verifying repo (`gpkg_only`); policy is covered
+            // by the `gpkg_only` unit tests, not these download/merge paths.
+            verify_signature: false,
             frozen: false,
             fetchcommand: None,
             resumecommand: None,
@@ -4182,7 +4472,14 @@ mod tests {
         }];
         // A failed refresh warns on stderr and resolves against the local pool --
         // here the plain Packages succeeds, so the live index lands in the cache.
-        refresh_binhost_indexes(&binrepos, &root, false, &[], &[]);
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: &binrepos,
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
         assert!(
             root.join("var/cache/edb/binhost/127.0.0.1/Packages")
                 .is_file(),
@@ -4291,7 +4588,10 @@ mod tests {
                     .to_string_lossy()
                     .to_string(),
             ),
-            verify_signature: true,
+            // `false`: the tests below serve a `.tbz2`, which Portage 3.0.83
+            // ignores from a verifying repo (`gpkg_only`); policy is covered
+            // by the `gpkg_only` unit tests, not these download/merge paths.
+            verify_signature: false,
             frozen: false,
             fetchcommand: None,
             resumecommand: None,
@@ -4300,7 +4600,14 @@ mod tests {
         }];
         // A failed refresh warns on stderr and resolves against the local pool --
         // here the plain Packages succeeds, so the live index lands in the cache.
-        refresh_binhost_indexes(&binrepos, &root, false, &[], &[]);
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: &binrepos,
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
         assert!(
             root.join("var/cache/edb/binhost/127.0.0.1/Packages")
                 .is_file(),
@@ -4418,14 +4725,24 @@ mod tests {
                     .to_string_lossy()
                     .to_string(),
             ),
-            verify_signature: true,
+            // `false`: the tests below serve a `.tbz2`, which Portage 3.0.83
+            // ignores from a verifying repo (`gpkg_only`); policy is covered
+            // by the `gpkg_only` unit tests, not these download/merge paths.
+            verify_signature: false,
             frozen: false,
             fetchcommand: None,
             resumecommand: None,
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         }];
-        refresh_binhost_indexes(&binrepos, &root, false, &[], &[]);
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: &binrepos,
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
 
         let config = Config {
             binrepos: binrepos.clone(),

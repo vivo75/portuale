@@ -1,0 +1,10 @@
+ERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'
+[mixsig] Remote XPAK binpkgs in 'file:///var/tmp/ev511-tree/binhost-sig' ignored: signatures are missing (FEATURES=binpkg-request-signature or verify-signature in binrepos.conf).
+Unsupported binary package format from 'app-misc/s511-e-1.weird'
+Unsupported binary package format from ''
+[f1r] Local copy of remote index is up-to-date and will be used.
+
+emerge: there are no ebuilds to satisfy "app-misc/s511-d" for /var/tmp/ev511-tree/root/.
+
+emerge: searching for similar names...
+emerge: Maybe you meant any of these: app-misc/s511-j, app-misc/s511-i, app-misc/s511-h?

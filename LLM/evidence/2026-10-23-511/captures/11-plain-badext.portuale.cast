@@ -1,0 +1,7 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792783447,"command":"env  /var/tmp/ev511-bin/emerge -p --color=n --getbinpkg app-misc/s511-i","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.008, "o", "[mixsig] Remote XPAK binpkgs in 'file:///var/tmp/ev511-tree/binhost-sig' ignored: signatures are missing (FEATURES=binpkg-request-signature or verify-signature in binrepos.conf).\r\nUnsupported binary package format from 'app-misc/s511-e-1.weird'\r\nUnsupported binary package format from ''\r\n"]
+[0.001, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[binary  N g   ] app-misc/s511-i-1-1 to /var/tmp/ev511-tree/root\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev511-tree\u0007"]
+[0.000, "x", "0"]

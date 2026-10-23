@@ -15,7 +15,12 @@ pub struct BinRepo {
     pub priority: i32,
     /// `location`: explicit value or `None`. Display-only (`emerge --info`).
     pub location: Option<String>,
-    /// `verify-signature` (default `true`).
+    /// `verify-signature`: an absent key means `true` — stock Portage
+    /// ships `[DEFAULT] verify-signature = true` in its global
+    /// `binrepos.conf` (`cnf/binrepos.conf` in the checkout,
+    /// `/usr/share/portage/config/binrepos.conf` installed), which every
+    /// section inherits, and `BinRepoConfig` keeps `None` (falsy only where
+    /// a tri-state is read; the GPG layer and `--info` treat it as true).
     pub verify_signature: bool,
     /// `frozen` (default `false`): cached `Packages` used as-is, never
     /// refreshed.
@@ -196,6 +201,8 @@ pub(crate) fn parse_binrepos(
     let mut sync_uri: Option<String> = None;
     let mut priority: i32 = 0;
     let mut location: Option<String> = None;
+    // Absent means true: stock Portage ships `[DEFAULT] verify-signature
+    // = true` in the global binrepos.conf, inherited by every section.
     let mut verify_signature = true;
     let mut frozen = false;
     let mut fetchcommand: Option<String> = None;
@@ -282,16 +289,13 @@ pub(crate) fn parse_binrepos(
                 "fetchcommand" => fetchcommand = Some(v.trim().to_string()),
                 "resumecommand" => resumecommand = Some(v.trim().to_string()),
                 "verify-signature" => {
-                    verify_signature = matches!(
-                        v.trim().to_ascii_lowercase().as_str(),
-                        "true" | "yes" | "1" | "on"
-                    )
+                    // Portage: `in ("true", "yes")` only.
+                    verify_signature =
+                        matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "yes")
                 }
                 "frozen" => {
-                    frozen = matches!(
-                        v.trim().to_ascii_lowercase().as_str(),
-                        "true" | "yes" | "1" | "on"
-                    )
+                    // Portage `_bool_opts`: `in ("true", "yes")` only.
+                    frozen = matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "yes")
                 }
                 // One section may repeat a key; Portage's config parser
                 // keeps the last, so later lines overwrite.
@@ -334,6 +338,9 @@ pub(crate) fn parse_binrepos(
                 priority: current_priority,
                 // No `<EPREFIX>/var/cache/binhost/<name>` fallback with `PORTAGE_BINHOST`.
                 location: None,
+                // Implicit entries carry no keys (Portage reads them from
+                // the config sections only): the global `[DEFAULT]` still
+                // applies, so true.
                 verify_signature: true,
                 frozen: false,
                 fetchcommand: None,
