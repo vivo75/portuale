@@ -24,6 +24,7 @@ pub(crate) fn still_listed_parents<'a>(
         installed.iter().any(|(v, s, ss)| {
             portage_versions::vercmp(v, version).is_some_and(|c| c > 0)
                 && Some(s.as_str()) != selected_slot
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 && match_from_list(atom_str, &[format!("{cat}/{pkg}-{v}:{s}/{ss}").as_str()])
                     .is_some_and(|m| !m.is_empty())
         })
@@ -439,6 +440,7 @@ pub(crate) fn select_unmerge_targets(args: SelectUnmergeTargetsArgs<'_>) -> Opti
                 .into_iter()
                 .filter(|(version, slot, sub_slot)| {
                     let cs = format!(
+                        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                         "{}/{}-{version}:{slot}/{sub_slot}",
                         atom.category, atom.package
                     );
@@ -668,6 +670,7 @@ pub(crate) fn deselect_from_world(
         portage_repo::installed_candidates(root, &atom.category, &atom.package)
             .into_iter()
             .any(|(v, slot, sub_slot)| {
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 let cs = format!("{}/{}-{v}:{slot}/{sub_slot}", atom.category, atom.package);
                 match_from_list(raw, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
             })
@@ -781,6 +784,7 @@ pub(crate) fn resolve_cleanup_args(
                 portage_repo::installed_candidates(root, &atom.category, &atom.package)
                     .iter()
                     .any(|(v, s, sub)| {
+                        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                         let cs = format!("{}/{}-{v}:{s}/{sub}", atom.category, atom.package);
                         match_from_list(a, &[cs.as_str()]).is_some_and(|m| !m.is_empty())
                     })

@@ -90,6 +90,7 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
             continue;
         }
         let (i_slot, i_sub) = read_vdb_slot(root, &cp.0, &cp.1, version);
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         let installed_str = format!("{}/{}-{version}:{i_slot}/{i_sub}", cp.0, cp.1);
         // Rule 4.
         let parents_match = slot_want

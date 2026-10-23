@@ -166,6 +166,7 @@ pub fn installed_reverse_dependents(
     let (slot, sub_slot) =
         read_vdb_slot(root, consumer_category, consumer_package, consumer_version);
     let candidate =
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         format!("{consumer_category}/{consumer_package}-{consumer_version}:{slot}/{sub_slot}");
     let db = portage_vdb::for_root(root);
     // A database backend narrows the entries via its dependency index; the
@@ -366,6 +367,7 @@ pub(crate) fn running_root_satisfies_atom(
         .iter()
         .map(|(version, slot, sub_slot)| {
             format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{version}:{slot}/{sub_slot}",
                 atom.category, atom.package
             )

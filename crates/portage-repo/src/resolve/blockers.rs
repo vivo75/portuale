@@ -72,6 +72,7 @@ pub(crate) fn set_seed_holds_instance(args: SetSeedHoldsInstanceArgs<'_>) -> boo
         slot,
         sub_slot,
     } = args;
+    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
     let candidate = format!("{category}/{package}-{version}:{slot}/{sub_slot}");
     let merged: Vec<String> = entries
         .iter()
@@ -79,6 +80,7 @@ pub(crate) fn set_seed_holds_instance(args: SetSeedHoldsInstanceArgs<'_>) -> boo
         .filter_map(|e| {
             let v = merge_bound_version(&e.outcome)?;
             Some(format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{category}/{package}-{v}:{}/{}",
                 e.slot.as_deref().unwrap_or("0"),
                 e.sub_slot.as_deref().or(e.slot.as_deref()).unwrap_or("0")
@@ -149,6 +151,7 @@ pub(crate) fn graph_has_parent(args: GraphHasParentArgs<'_>) -> bool {
         entries,
         merge_slots,
     } = args;
+    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
     let candidate = format!("{category}/{package}-{version}:{slot}/{sub_slot}");
     entries.iter().any(|e| {
         if (&e.category, &e.package) == (&exclude.0, &exclude.1) {
@@ -580,6 +583,7 @@ pub(crate) fn resolve_blockers_with_seeds(
         }
         let candidate_strs: Vec<String> = candidates
             .iter()
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             .map(|(v, s, ss)| format!("{}/{}-{v}:{s}/{ss}", pb.target_category, pb.target_package))
             .collect();
         let refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();

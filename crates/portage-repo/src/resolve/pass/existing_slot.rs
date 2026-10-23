@@ -53,9 +53,11 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
         // `:slot`-only string even when the sub-slots agree.
         let existing_sub = slot_conflict_meta(&ctx.repos, &key.0, &key.1, &existing_version).0;
         let existing_str = if existing_sub.is_empty() {
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             format!("{}/{}-{existing_version}:{slot}", key.0, key.1)
         } else {
             format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{existing_version}:{slot}/{existing_sub}",
                 key.0, key.1
             )
@@ -168,8 +170,10 @@ pub(crate) fn existing_slot_unsatisfied(args: ExistingSlotUnsatisfiedArgs<'_>) -
             .filter(|r| r.slot == slot)
             .any(|r| {
                 let inst = if r.sub_slot.is_empty() {
+                    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                     format!("{}/{}-{}:{slot}", key.0, key.1, r.version)
                 } else {
+                    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                     format!("{}/{}-{}:{slot}/{}", key.0, key.1, r.version, r.sub_slot)
                 };
                 portage_dep::match_from_list(current_atom, &[inst.as_str()])

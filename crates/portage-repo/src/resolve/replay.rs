@@ -260,7 +260,6 @@ pub(crate) fn replay_conflict_use_display(
             config: ctx.config,
             category: &entry.category,
             package: &entry.package,
-            version,
         },
     ))
 }

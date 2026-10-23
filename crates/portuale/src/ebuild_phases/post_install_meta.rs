@@ -24,6 +24,7 @@ pub(crate) fn bind_slot_operator(token: &str, root: &Path) -> String {
         .into_iter()
         .filter(|(version, slot, sub_slot)| {
             let cpv_slot = format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{version}:{slot}/{sub_slot}",
                 atom.category, atom.package
             );

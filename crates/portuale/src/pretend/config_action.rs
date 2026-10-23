@@ -76,6 +76,7 @@ pub(crate) fn run_config_action(args: RunConfigActionArgs<'_>) -> ExitCode {
             .into_iter()
             .filter(|(version, slot, sub_slot)| {
                 let cs = format!(
+                    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                     "{}/{}-{version}:{slot}/{sub_slot}",
                     atom.category, atom.package
                 );

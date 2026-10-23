@@ -207,6 +207,7 @@ pub(crate) fn slot_operator_update_force_scan(
                 }
                 let Some((cand, _)) = best else { continue };
                 let cand_str = format!(
+                    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                     "{}/{}-{}:{}/{}",
                     child_cp.0, child_cp.1, cand.version, cand.slot, cand.sub_slot
                 );

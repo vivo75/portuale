@@ -331,6 +331,7 @@ pub(crate) fn slot_conflict_need_rebuild(args: SlotConflictNeedRebuildArgs<'_>) 
     let against = if slot.is_empty() {
         format!("{ccat}/{cpkg}-{cver}")
     } else {
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         format!("{ccat}/{cpkg}-{cver}:{slot}")
     };
     if excluded

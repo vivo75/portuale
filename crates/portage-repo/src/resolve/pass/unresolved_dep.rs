@@ -221,9 +221,11 @@ pub(crate) fn record_installed_slot_collision(
             // (a built `cat/pkg:0/2=` puller matches no `:slot`-only string).
             let existing_sub = slot_conflict_meta(&ctx.repos, &key.0, &key.1, &existing_version).0;
             let existing_str = if existing_sub.is_empty() {
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 format!("{}/{}-{existing_version}:{inst_slot}", key.0, key.1)
             } else {
                 format!(
+                    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                     "{}/{}-{existing_version}:{inst_slot}/{existing_sub}",
                     key.0, key.1
                 )

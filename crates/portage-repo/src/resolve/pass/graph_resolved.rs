@@ -118,9 +118,11 @@ pub(crate) fn graph_resolved_entry<'a, 's>(
             .map(|r| r.sub_slot)
             .unwrap_or_default();
         let installed_str = if installed_sub.is_empty() {
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             format!("{}/{}-{installed_version}:{slot}", key.0, key.1)
         } else {
             format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{installed_version}:{slot}/{installed_sub}",
                 key.0, key.1
             )

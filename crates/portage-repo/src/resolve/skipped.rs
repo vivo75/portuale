@@ -315,6 +315,7 @@ pub(crate) fn backtrack_masked_match(
             let probe = if slot.is_empty() {
                 format!("{c}/{p}-{ver}")
             } else {
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 format!("{c}/{p}-{ver}:{slot}")
             };
             if portage_dep::match_from_list(&probe_atom, &[probe.as_str()])

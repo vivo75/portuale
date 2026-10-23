@@ -53,7 +53,6 @@ pub fn skipped_update_use_display_for(
         config,
         category,
         package,
-        version,
     })
 }
 
@@ -65,7 +64,6 @@ pub(crate) struct AssembleTreePkgUseDisplayArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
-    pub(crate) version: &'a str,
 }
 
 /// Shared assembly tail of the tree display and the replayed conflict
@@ -81,7 +79,6 @@ pub(crate) fn assemble_tree_pkg_use_display(
         config,
         category,
         package,
-        version,
     } = args;
     let iuse_str = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
     let explicit: HashSet<String> = iuse_str
@@ -89,7 +86,6 @@ pub(crate) fn assemble_tree_pkg_use_display(
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect();
     let eapi = metadata.get("EAPI").map(String::as_str).unwrap_or("");
-    debug_assert_eq!(version, cand.version, "callers pick `cand` by `version`");
     let candidate_str = cand.match_str(category, package);
     // Portage `pkg.use.force ∪ pkg.use.mask` after `setcpv`: unfiltered, since
     // the `( )` wraps apply to implicit-domain flags too.

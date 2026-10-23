@@ -73,6 +73,7 @@ pub(crate) fn installed_candidates_by_cp(
             .entry((p.category.clone(), p.package.clone()))
             .or_default()
             .push(format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{}:{slot}/{sub_slot}",
                 p.category, p.package, p.version
             ));
@@ -173,6 +174,7 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
                 if let Some(a) = atom
                     && !portage_dep::match_from_list(
                         a,
+                        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                         &[format!("{cat}/{pkg}-{}:{}", p.version, p.slot).as_str()],
                     )
                     .is_some_and(|m| !m.is_empty())

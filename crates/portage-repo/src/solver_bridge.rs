@@ -1495,6 +1495,7 @@ fn has_installed_parent(
     version: &str,
 ) -> bool {
     let (slot, sub_slot) = super::read_vdb_slot(root, category, package, version);
+    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
     let candidate = format!("{category}/{package}-{version}:{slot}/{sub_slot}");
     super::all_installed_packages(root)
         .iter()

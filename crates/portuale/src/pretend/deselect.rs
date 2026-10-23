@@ -51,6 +51,7 @@ pub(crate) fn run_deselect(
             for (version, slot, _sub_slot) in
                 portage_repo::installed_candidates(root, &atom.category, &atom.package)
             {
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 let candidate_str = format!("{}/{}-{version}:{slot}", atom.category, atom.package);
                 if match_from_list(target, &[candidate_str.as_str()]).is_some_and(|m| !m.is_empty())
                     && let Some(vardb_atom) =

@@ -51,6 +51,7 @@ pub(crate) fn topological_removal_order(
     }
     let cand_strs: Vec<String> = cleanlist
         .iter()
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         .map(|p| format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot))
         .collect();
     // `deps[i]` = indices `j` that `cleanlist[i]` depends on (`i` unmerges
@@ -242,6 +243,7 @@ pub(crate) fn unresolved_runtime_deps(
         .map(|p| {
             let (_slot, sub_slot) = read_vdb_slot(root, &p.category, &p.package, &p.version);
             format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{}:{}/{}",
                 p.category, p.package, p.version, p.slot, sub_slot
             )
@@ -360,6 +362,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
         .iter()
         .map(|p| {
             (
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot),
                 p,
             )
@@ -382,6 +385,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
 
     let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
     let matched_by_args = |p: &InstalledPackage| -> bool {
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
         args.iter().any(|a| {
             portage_dep::parse_atom(a)
@@ -587,6 +591,7 @@ pub fn prune_cleanlist(
         if args.is_empty() {
             return multi_version.contains(&(p.category.clone(), p.package.clone()));
         }
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
         args.iter().any(|a| {
             portage_dep::parse_atom(a)
@@ -603,6 +608,7 @@ pub fn prune_cleanlist(
         .iter()
         .map(|p| {
             (
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot),
                 p,
             )
@@ -751,6 +757,7 @@ pub fn prune_nodeps_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp
         installed
             .iter()
             .filter(|p| {
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
                 args.iter().any(|a| {
                     portage_dep::parse_atom(a)
@@ -801,6 +808,7 @@ pub fn clean_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
         installed
             .iter()
             .filter(|p| {
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
                 args.iter().any(|a| {
                     portage_dep::parse_atom(a)

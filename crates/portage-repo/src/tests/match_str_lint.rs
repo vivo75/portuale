@@ -4,6 +4,8 @@
 //! same or the preceding line (a record that is not a `Candidate`, or a
 //! display string). Otherwise a hand-built string can drop a field again, as
 //! the sub-slot was once dropped (what-this-proves.md, sub-slot history).
+//! The partial `cat/pkg-ver:slot[/sub]` form (no `::repo`) is scanned too; all
+//! its sites are marked, none migrated (adding the repo would change the string).
 
 use std::{fs, path::Path};
 
@@ -23,10 +25,19 @@ fn skip_group(s: &str) -> Option<&str> {
     s.strip_prefix('{')?.split_once('}').map(|(_, rest)| rest)
 }
 
+/// True when `line` formats the partial form `-{..}:{..}` (a version group
+/// directly followed by a slot group, i.e. `cat/pkg-ver:slot[/sub]` with no
+/// `::repo`).
+fn formats_partial_shape(line: &str) -> bool {
+    line.match_indices("}-{")
+        .any(|(i, _)| skip_group(&line[i + 2..]).is_some_and(|r| r.starts_with(":{")))
+}
+
 /// True when `line` formats a candidate string: `:{..}/{..}::{..}` (positional
-/// or named arguments), or an `::__installed__` repo sentinel after a `}`.
+/// or named arguments), an `::__installed__` repo sentinel after a `}`, or the
+/// partial `-{..}:{..}` form without a repo.
 fn formats_candidate_shape(line: &str) -> bool {
-    if line.contains("}::__installed__") {
+    if line.contains("}::__installed__") || formats_partial_shape(line) {
         return true;
     }
     line.match_indices(":{").any(|(i, _)| {
@@ -128,9 +139,10 @@ fn scanner_accepts_justified_and_ignores_partial_or_test_code() {
     let same = "format!(\"{}/{}-{}:{}/{}::{}\") // match-str-ok: display only\n";
     let prev = "// match-str-ok: installed record\nformat!(\"{}/{}-{}:{}/{}::{}\")\n";
     let empty = "format!(\"{}/{}-{}:{}/{}::{}\") // match-str-ok:\n";
-    let partial = "format!(\"{}/{}-{}:{}/{}\")\n";
+    let partial = "format!(\"{}/{}\")\n";
+    let partial_marked = "// match-str-ok: vdb row\nformat!(\"{}/{}-{}:{}/{}\")\n";
     let in_tests = "#[cfg(test)]\nmod tests {\n    format!(\"{}/{}-{}:{}/{}::{}\")\n}\n";
-    for ok in [same, prev, partial, in_tests] {
+    for ok in [same, prev, partial, partial_marked, in_tests] {
         scan_text("x.rs", ok, &mut out);
     }
     assert!(out.is_empty(), "{out:?}");
@@ -147,4 +159,25 @@ fn choke_file_is_not_scanned() {
         &mut out,
     );
     assert!(out.is_empty());
+}
+
+#[test]
+fn scanner_flags_partial_strings_without_repo() {
+    for src in [
+        "format!(\"{}/{}-{}:{}/{}\", a, b, c, d, e)\n",
+        "format!(\"{cat}/{pkg}-{v}:{slot}\")\n",
+        "format!(\"{}/{}-{ver}:{s}/{ss}\", a, b)\n",
+    ] {
+        let mut out = Vec::new();
+        scan_text("x.rs", src, &mut out);
+        assert_eq!(out.len(), 1, "{src}");
+    }
+    // A version without a slot, or a slot with no version group, is not the shape.
+    let mut out = Vec::new();
+    scan_text(
+        "x.rs",
+        "format!(\"{}/{}-{}\", a, b, c)\nformat!(\"{a}:{b}\")\n",
+        &mut out,
+    );
+    assert!(out.is_empty(), "{out:?}");
 }

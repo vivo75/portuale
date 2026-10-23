@@ -27,6 +27,7 @@ pub(crate) fn step_solvable_slot_conflicts(
             let candidates =
                 list_candidates(&ctx.repos, &pkg_key.0, &pkg_key.1).unwrap_or_default();
             let solvable = candidates.iter().any(|c| {
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 let cs = format!("{}/{}-{}:{}", pkg_key.0, pkg_key.1, c.version, c.slot);
                 let (iuse, use_flags) =
                     slot_conflict_flag_sets(&ctx.repos, config, &pkg_key.0, &pkg_key.1, &c.version);

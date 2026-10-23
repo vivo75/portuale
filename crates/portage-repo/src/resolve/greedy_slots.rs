@@ -105,6 +105,7 @@ pub(crate) fn greedy_slot_atoms(args: GreedySlotsArgs<'_>) -> Vec<String> {
         let installed = installed_candidates(ctx.root, &atom.category, &atom.package);
         let installed_strs: Vec<String> = installed
             .iter()
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             .map(|(v, s, ss)| format!("{}/{}-{v}:{s}/{ss}", atom.category, atom.package))
             .collect();
         let installed_refs: Vec<&str> = installed_strs.iter().map(String::as_str).collect();
@@ -322,6 +323,7 @@ pub(crate) fn greedy_lookahead(
 /// `cat/pkg-ver:slot/subslot` for blocker matching.
 fn greedy_candidate_str(key: &(String, String), cand: &Candidate) -> String {
     format!(
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         "{}/{}-{}:{}/{}",
         key.0, key.1, cand.version, cand.slot, cand.sub_slot
     )

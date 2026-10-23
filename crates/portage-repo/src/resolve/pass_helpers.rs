@@ -132,6 +132,7 @@ pub(crate) fn minimize_children(
         };
         let sub = if sub.is_empty() { slot.clone() } else { sub };
         if repo.is_empty() {
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             format!("{}/{}-{version}:{slot}/{sub}", key.0, key.1)
         } else {
             // match-str-ok: installed/ebuild mix with empty-repo and empty-sub-slot handling that match_str lacks
@@ -301,8 +302,10 @@ pub(crate) fn graph_installed_reuse(args: GraphInstalledReuseArgs<'_>) -> Option
         .map(|(_, _, sub)| sub)
         .unwrap_or_default();
     let installed_str = if sub.is_empty() {
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         format!("{}/{}-{version}:{fresh_slot}", key.0, key.1)
     } else {
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         format!("{}/{}-{version}:{fresh_slot}/{sub}", key.0, key.1)
     };
     if portage_dep::match_from_list(current_atom, &[installed_str.as_str()])
@@ -446,8 +449,10 @@ pub(crate) fn arg_pinned_installed_reuse(args: ArgPinnedInstalledReuseArgs<'_>) 
             .map(|(_, _, sub)| sub.clone())
             .unwrap_or_default();
         let pinned_str = if sub.is_empty() {
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             format!("{}/{}-{version}:{slot}", key.0, key.1)
         } else {
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             format!("{}/{}-{version}:{slot}/{sub}", key.0, key.1)
         };
         if portage_dep::match_from_list(current_atom, &[pinned_str.as_str()])

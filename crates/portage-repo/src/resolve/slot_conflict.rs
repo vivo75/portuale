@@ -141,8 +141,10 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
     // Match strings carry the sub-slot, or built slot-operator pullers vanish.
     let with_sub = |v: &str, sub: &str| {
         if sub.is_empty() {
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             format!("{category}/{package}-{v}:{slot}")
         } else {
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             format!("{category}/{package}-{v}:{slot}/{sub}")
         }
     };
@@ -336,8 +338,10 @@ pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) ->
                         slot_conflict_meta(repos, category, package, &inst.version).0
                     };
                     let match_str = if sub.is_empty() {
+                        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                         format!("{category}/{package}-{}:{slot}", inst.version)
                     } else {
+                        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                         format!("{category}/{package}-{}:{slot}/{sub}", inst.version)
                     };
                     let (iuse, use_) = if inst.installed {
@@ -570,6 +574,7 @@ pub(crate) fn build_residual_slot_conflicts(
                 continue;
             };
             let inst_str = format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{}:{}/{}",
                 record.category, record.package, inst.version, record.slot, inst.sub_slot
             );
@@ -676,6 +681,7 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
     let mut inst: Option<&InstalledRef> = None;
     for r in &refs {
         let s = format!(
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             "{category}/{package}-{}:{}/{}",
             r.version, r.slot, r.sub_slot
         );
@@ -708,8 +714,10 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
     // parents: hard pullers matching the installed version, plus the
     // dropped consumer pins below.
     let (m_sub, _m_repo, _) = slot_conflict_meta(repos, &category, &package, &merge_ver);
+    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
     let merge_match = format!("{category}/{package}-{merge_ver}:{slot}/{m_sub}");
     let inst_match = format!(
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         "{category}/{package}-{}:{}/{}",
         inst.version, inst.slot, inst.sub_slot
     );

@@ -131,11 +131,13 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
     let existing_sub = slot_conflict_meta(&ctx.repos, &key2.0, &key2.1, &existing_version2).0;
     let existing_match_str = if existing_sub.is_empty() {
         format!(
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             "{}/{}-{existing_version2}:{}",
             key2.0, key2.1, resolved.slot
         )
     } else {
         format!(
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             "{}/{}-{existing_version2}:{}/{}",
             key2.0, key2.1, resolved.slot, existing_sub
         )

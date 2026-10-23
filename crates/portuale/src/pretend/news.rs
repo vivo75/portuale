@@ -619,6 +619,7 @@ pub(crate) fn news_item_relevant(text: &str, root: &Path, context: &NewsContext)
                 .iter()
                 .any(|(version, slot, sub_slot)| {
                     let candidate = format!(
+                        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                         "{}/{}-{version}:{slot}/{sub_slot}",
                         atom.category, atom.package
                     );

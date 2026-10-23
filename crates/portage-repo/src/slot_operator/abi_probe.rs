@@ -251,6 +251,7 @@ pub(crate) fn slot_conflict_abi_probe(
                         continue;
                     }
                     let c_str = format!(
+                        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                         "{cat}/{pkg}-{cver}:{slot}/{csub}",
                         cat = sc.category,
                         pkg = sc.package,
@@ -453,6 +454,7 @@ pub(crate) fn greedy_pinned_cps(
         let mut slots: HashSet<String> = HashSet::new();
         if let Some(insts) = installed_by_cp.get(&cp) {
             for (version, slot) in insts {
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 let r = format!("{}/{}-{version}:{slot}", atom.category, atom.package);
                 if portage_dep::match_from_list(atom_str, &[r.as_str()])
                     .is_some_and(|m| !m.is_empty())
@@ -466,6 +468,7 @@ pub(crate) fn greedy_pinned_cps(
                 .iter()
                 .filter(|c| {
                     let r = format!(
+                        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                         "{}/{}-{}:{}/{}",
                         atom.category, atom.package, c.version, c.slot, c.sub_slot
                     );
@@ -548,10 +551,12 @@ pub(crate) fn greedy_pin_survives_revision(
         return false;
     };
     let g_ref = format!(
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         "{}/{}-{}:{}/{}",
         provider_cp.0, provider_cp.1, g.version, g.slot, g.sub_slot
     );
     let h_ref = format!(
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         "{}/{}-{}:{}/{}",
         provider_cp.0, provider_cp.1, h.version, h.slot, h.sub_slot
     );

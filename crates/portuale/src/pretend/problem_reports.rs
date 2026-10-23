@@ -307,6 +307,7 @@ pub(crate) fn show_skipped_updates(
                         Some(id) => (
                             "binary",
                             match s.consumer_cpv.split_once(':') {
+                                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                                 Some((head, tail)) => format!("{head}-{id}:{tail}"),
                                 None => format!("{}-{id}", s.consumer_cpv),
                             },

@@ -108,7 +108,7 @@ Checklist items 2, 3 and 6 are mechanised; item 5 is partly mechanised.
 * **Checklist 2 (grammar: resolvable and unsatisfiable case): mechanised.** pmtest
   `pytests-contract-suite/grammar_registry.py` lists each grammar feature with a resolvable
   and an unsatisfiable CASES entry; `test_grammar_registry.py` checks both and Portage's wording.
-  Features without both cases stay in EXEMPT with a backlog number (#494-#497).
+  Features without both cases stay in EXEMPT with a reason (since #494-#497 only `::repo` remains, because Portage masks it inside a *DEPEND).
 * **Checklist 5 (docs): partly mechanised.** `LLM/tools/doc_status_check.py` checks plan
   `Status:` headers against the backlog, duplicate numbers across both backlog files,
   `Oracle:`/`Premise:` on new entries, and tier prefixes; `LLM/tools/cut_registry_check.py`

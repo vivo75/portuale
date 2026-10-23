@@ -206,11 +206,13 @@ pub(crate) fn dump_atom_candidates(
     let inst = installed_candidates(root, category, package);
     let strs: Vec<String> = inst
         .iter()
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         .map(|(v, s, ss)| format!("{category}/{package}-{v}:{s}/{ss}"))
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
     let matched = portage_dep::match_from_list(atom, &refs).unwrap_or_default();
     for (v, s, ss) in &inst {
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         let key = format!("{category}/{package}-{v}:{s}/{ss}");
         if matched.iter().any(|m| *m == key) {
             line(

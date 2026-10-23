@@ -326,6 +326,7 @@ fn slot_op_edge_for_atom(
         if a_slot == n_slot && a_sub != n_sub {
             let display = format!("{}/{}-{n_ver}", atom.category, atom.package);
             let cand = format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{n_ver}:{n_slot}/{n_sub}",
                 atom.category, atom.package
             );
@@ -378,6 +379,7 @@ fn slot_op_edge_for_atom(
                 .filter(|r| r.slot != a_slot)
                 .filter(|r| {
                     let s = format!(
+                        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                         "{}/{}-{}:{}",
                         provider_cp.0, provider_cp.1, r.version, r.slot
                     );
@@ -451,6 +453,7 @@ fn slot_op_edge_for_atom(
             }
             let display = format!("{}/{}-{c_ver}", atom.category, atom.package);
             let cand = format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{c_ver}:{c_slot}/{c_sub}",
                 atom.category, atom.package
             );

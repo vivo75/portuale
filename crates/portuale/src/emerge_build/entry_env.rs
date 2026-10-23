@@ -112,6 +112,7 @@ pub(crate) fn entry_cpv_slot(entry: &GraphEntry, version: &str) -> String {
     let slot = entry.slot.as_deref().unwrap_or("0");
     let sub_slot = entry.sub_slot.as_deref().unwrap_or(slot);
     format!(
+        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
         "{}/{}-{version}:{slot}/{sub_slot}",
         entry.category, entry.package
     )

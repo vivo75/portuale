@@ -80,6 +80,7 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
     let mut choices: Vec<MaskChoice> = versions
         .into_iter()
         .map(|ver| {
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             let candidate = format!("{}/{}-{}:{}", sc.category, sc.package, ver, sc.slot);
             let parents: Vec<((String, String, String), String)> = all_parents
                 .iter()
@@ -130,6 +131,7 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
                     sibs.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
                     for c in sibs {
                         let sim_cpv =
+                            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                             format!("{}/{}-{}:{}", sc.category, sc.package, c.version, sc.slot);
                         let subset: Vec<((String, String, String), String)> = parents
                             .iter()

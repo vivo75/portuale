@@ -79,6 +79,7 @@ pub(crate) fn resolve_initial_outcome(
             let empty_constraints: Vec<String> = Vec::new();
             let extra = union_constraints.get(key).unwrap_or(&empty_constraints);
             let candidate_str = format!(
+                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 "{}/{}-{version}:{}/{}",
                 key.0, key.1, candidate.slot, candidate.sub_slot
             );

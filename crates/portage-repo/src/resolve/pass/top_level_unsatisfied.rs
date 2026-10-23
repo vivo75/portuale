@@ -77,6 +77,7 @@ fn top_level_atom_excluded(
     }
     for (version, slot, sub_slot) in installed_candidates(ctx.root, &atom.category, &atom.package) {
         fold(format!(
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             "{}/{}-{version}:{slot}/{sub_slot}",
             atom.category, atom.package
         ));

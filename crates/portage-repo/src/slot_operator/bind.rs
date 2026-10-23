@@ -97,6 +97,7 @@ pub(crate) fn bind_slot_operator_token(token: &str, entries: &[GraphEntry], root
     }
     let matches = |version: &str, slot: &str, sub_slot: &str| {
         let candidate = format!(
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             "{}/{}-{version}:{slot}/{sub_slot}",
             atom.category, atom.package
         );
