@@ -59,16 +59,10 @@ fn top_level_atom_excluded(
         }
     };
     for c in list_candidates(&ctx.repos, &atom.category, &atom.package)?.iter() {
-        fold(format!(
-            "{}/{}-{}:{}/{}::{}",
-            atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-        ));
+        fold(c.match_str(&atom.category, &atom.package));
     }
     for c in list_binary_candidates(&ctx.local_binpkg, &atom.category, &atom.package) {
-        fold(format!(
-            "{}/{}-{}:{}/{}::{}",
-            atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-        ));
+        fold(c.match_str(&atom.category, &atom.package));
     }
     if ctx.getbinpkg {
         for c in list_remote_binary_candidates(
@@ -78,10 +72,7 @@ fn top_level_atom_excluded(
             &atom.category,
             &atom.package,
         ) {
-            fold(format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            ));
+            fold(c.match_str(&atom.category, &atom.package));
         }
     }
     for (version, slot, sub_slot) in installed_candidates(ctx.root, &atom.category, &atom.package) {

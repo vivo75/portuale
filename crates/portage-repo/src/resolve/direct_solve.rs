@@ -84,6 +84,7 @@ pub(crate) fn direct_solve_atom_matches(
     let (sub, repo, slot_of_ver) =
         slot_conflict_meta(input.repos, &c.category, &c.package, &inst.version);
     let probe = format!(
+        // match-str-ok: installed record plus slot_conflict_meta, not a Candidate
         "{}/{}-{}:{}/{}::{}",
         c.category, c.package, inst.version, slot_of_ver, sub, repo
     );
@@ -574,6 +575,7 @@ pub(crate) fn pair_instance_with_others(args: PairInstanceWithOthersArgs<'_>) {
                         .find(|r| r.version == pv)
                 {
                     (
+                        // match-str-ok: installed ref row (r.repo), not a Candidate
                         format!("{pc}/{pp}-{pv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
                         true,
                     )

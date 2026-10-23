@@ -139,6 +139,7 @@ pub(crate) fn node_label(e: &GraphEntry, root: &Path, installed: bool) -> String
         format!("{ty} scheduled for merge")
     };
     format!(
+        // match-str-ok: trace/display line, not a match string
         "({}/{}-{ver}{build_id_str}:{slot}/{sub_slot}::{repo}, {state})",
         e.category, e.package
     )
@@ -186,20 +187,12 @@ pub(crate) fn dump_atom_candidates(
     if let Ok(cands) = list_candidates(repos, category, package) {
         let strs: Vec<String> = cands
             .iter()
-            .map(|c| {
-                format!(
-                    "{category}/{package}-{}:{}/{}::{}",
-                    c.version, c.slot, c.sub_slot, c.repo_name
-                )
-            })
+            .map(|c| c.match_str(category, package))
             .collect();
         let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
         let matched = portage_dep::match_from_list(atom, &refs).unwrap_or_default();
         for c in cands.iter() {
-            let s = format!(
-                "{category}/{package}-{}:{}/{}::{}",
-                c.version, c.slot, c.sub_slot, c.repo_name
-            );
+            let s = c.match_str(category, package);
             if matched.iter().any(|m| *m == s) {
                 line(
                     "ebuild",
@@ -470,6 +463,7 @@ pub(crate) fn dump_resolution_walk(
             "ebuild scheduled for merge".to_string()
         };
         out(format_args!(
+            // match-str-ok: trace/display line, not a match string
             "\nChild:         ({cat}/{pkg}-{ver}:{slot}/{sub_slot}::{repo}, {state}) USE=\"{}\"\n",
             installed_use_str(root, cat, pkg, ver)
         ));

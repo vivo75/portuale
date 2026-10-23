@@ -285,6 +285,7 @@ pub(crate) fn digraph_prelude<'a>(entries: &'a [GraphEntry], root: &Path) -> Dig
             };
             let repo = e.repo_name.as_deref().unwrap_or("gentoo");
             Some(format!(
+                // match-str-ok: merge-list entry (Option slot/repo, vdb fallback), not a Candidate
                 "{}/{}-{ver}:{slot}/{sub_slot}::{repo}",
                 e.category, e.package
             ))

@@ -77,6 +77,7 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         let render = |cpv: &str| -> String {
             match by_cpv.get(cpv) {
                 Some((slot, sub_slot, repo, type_name, build)) => format!(
+                    // match-str-ok: display line, not a match string
                     "({cpv}{build}:{slot}/{sub_slot}::{repo}, {type_name} scheduled for merge{root_suffix})"
                 ),
                 None => cpv.to_string(),
@@ -234,6 +235,7 @@ pub(crate) fn print_resolver_debug(
         let label = |cpv: &str| -> String {
             match by_cpv.get(cpv) {
                 Some((_, slot, sub_slot, repo, ty)) => {
+                    // match-str-ok: display line, not a match string
                     format!("({cpv}:{slot}/{sub_slot}::{repo}, {ty} scheduled for merge)")
                 }
                 None => format!("({cpv}, installed)"),

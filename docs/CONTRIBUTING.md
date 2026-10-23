@@ -60,3 +60,13 @@ manager pass; fix the package manager instead.
 Keep functions short and calls readable.
 A function taking more than five parameters takes one `<Fname>Args` struct
 built with named fields (see `clippy.toml`).
+
+## Recurring-issue checks
+
+- A new `Atom` or `Candidate` field fails to compile in `candidate_hits` or
+  `Candidate::match_str` until it carries a census marker (`read:` or `field-ok:`).
+- A new grammar feature gets a row in `GRAMMAR` (`pytests-contract-suite/grammar_registry.py`,
+  pmtest) with a resolvable and an unsatisfiable case.
+- A new backlog entry above #493 gets an `Oracle:` or `Premise:` line; `doc_status_check.py` checks it.
+- Before a commit, run `LLM/tools/pair_check.sh` and `python3 LLM/tools/doc_status_check.py` by
+  hand when `LLM/tools/gate.sh` is not running.

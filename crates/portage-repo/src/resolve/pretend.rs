@@ -45,15 +45,7 @@ pub(crate) fn dependency_avoid_update_candidate<'a>(
     } = args;
     let all_candidates_by_str: HashMap<String, &Candidate> = candidates
         .iter()
-        .map(|c| {
-            (
-                format!(
-                    "{}/{}-{}:{}/{}::{}",
-                    atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-                ),
-                c,
-            )
-        })
+        .map(|c| (c.match_str(&atom.category, &atom.package), c))
         .collect();
     let all_refs: Vec<&str> = all_candidates_by_str.keys().map(String::as_str).collect();
     portage_dep::match_from_list(atom_str, &all_refs)?
@@ -250,6 +242,7 @@ pub(crate) fn installed_matches_argument(args: InstalledArgumentMatchArgs<'_>) -
         sub_slot,
         repo_name,
     } = args;
+    // match-str-ok: InstalledArgumentMatchArgs: installed instance fields, not a Candidate
     let probe = format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}");
     with_arg_cp_index(arg_atoms, |index| {
         index
@@ -870,6 +863,7 @@ pub fn resolve_pretend(
                 .unwrap_or_default();
             let repo = installed_pkg_repo(root, &atom.category, &atom.package, &inst_version);
             let probe = format!(
+                // match-str-ok: installed instance (vdb slot/repo), not a Candidate
                 "{}/{}-{inst_version}:{slot}/{sub_slot}::{repo}",
                 atom.category, atom.package
             );
@@ -925,12 +919,7 @@ pub fn resolve_pretend(
     // equal instance (dep:2994-3008, S9).
     let candidate_strs: Vec<String> = visible
         .iter()
-        .map(|c| {
-            format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
+        .map(|c| c.match_str(&atom.category, &atom.package))
         .collect();
     let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
     let candidate_pairs: Vec<(&str, Option<&str>)> = candidate_str_refs
@@ -1400,10 +1389,7 @@ pub(crate) fn collect_binary_candidates(args: CollectBinaryCandidatesArgs<'_>) {
                 c.source == CandidateSource::Ebuild
                     && is_visible(c, &atom.category, &atom.package, config)
                     && {
-                        let s = format!(
-                            "{}/{}-{}:{}/{}::{}",
-                            atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-                        );
+                        let s = c.match_str(&atom.category, &atom.package);
                         portage_dep::match_from_list(atom_str, &[s.as_str()])
                             .is_some_and(|r| !r.is_empty())
                     }
@@ -1500,15 +1486,7 @@ pub(crate) fn select_best_candidate(
                 vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
             })
     {
-        let installed_str = format!(
-            "{}/{}-{}:{}/{}::{}",
-            atom.category,
-            atom.package,
-            installed_best.version,
-            installed_best.slot,
-            installed_best.sub_slot,
-            installed_best.repo_name
-        );
+        let installed_str = installed_best.match_str(&atom.category, &atom.package);
         if excluded
             .iter()
             .any(|ex| matches_cli_option_atom(ex, &installed_str))
@@ -1595,10 +1573,7 @@ pub(crate) fn select_best_candidate(
         .iter()
         .filter_map(|m| by_str.get(m).copied())
         .filter(|c| {
-            let candidate_str = format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            );
+            let candidate_str = c.match_str(&atom.category, &atom.package);
             !excluded
                 .iter()
                 .any(|ex| matches_cli_option_atom(ex, &candidate_str))
@@ -1828,10 +1803,7 @@ pub(crate) fn satisfies_extra_constraints(
     if extra_constraints.is_empty() {
         return true;
     }
-    let s = format!(
-        "{}/{}-{}:{}/{}::{}",
-        atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-    );
+    let s = c.match_str(&atom.category, &atom.package);
     extra_constraints
         .iter()
         .all(|ec| match ec.strip_prefix('!') {
@@ -1859,10 +1831,7 @@ fn usable(
     atom_str: &str,
     extra_constraints: &[String],
 ) -> bool {
-    let s = format!(
-        "{}/{}-{}:{}/{}::{}",
-        atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-    );
+    let s = c.match_str(&atom.category, &atom.package);
     // The atom match sees the candidate's binary build-id, so an
     // `=`+build-id request is usable only by the equal instance
     // (dep:2994-3008, S9).

@@ -93,10 +93,7 @@ pub(crate) fn chain_node_usedep_suffix(args: ChainNodeUsedepSuffixArgs<'_>) -> S
     }
     // Portage `affecting_use.difference_update(node.use.mask, node.use.force)`.
     if let Some(ref cand) = candidate {
-        let candidate_str = format!(
-            "{}/{}-{}:{}/{}::{}",
-            node.category, node.package, cand.version, cand.slot, cand.sub_slot, cand.repo_name
-        );
+        let candidate_str = cand.match_str(&node.category, &node.package);
         let eff_keywords = effective_keywords(
             config,
             &candidate_str,

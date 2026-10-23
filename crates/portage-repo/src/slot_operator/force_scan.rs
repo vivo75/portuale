@@ -191,10 +191,7 @@ pub(crate) fn slot_operator_update_force_scan(
                     {
                         continue;
                     }
-                    let s = format!(
-                        "{}/{}-{}:{}/{}::{}",
-                        child_cp.0, child_cp.1, c.version, c.slot, c.sub_slot, c.repo_name
-                    );
+                    let s = c.match_str(&child_cp.0, &child_cp.1);
                     let ok = parent_atoms.iter().all(|a| {
                         portage_dep::match_from_list(a, &[s.as_str()])
                             .is_some_and(|m| !m.is_empty())
@@ -374,15 +371,7 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                     else {
                         continue;
                     };
-                    let tree_str = format!(
-                        "{}/{}-{}:{}/{}::{}",
-                        atom.category,
-                        atom.package,
-                        tree.version,
-                        tree.slot,
-                        tree.sub_slot,
-                        tree.repo_name
-                    );
+                    let tree_str = tree.match_str(&atom.category, &atom.package);
                     if excluded
                         .iter()
                         .any(|ex| matches_cli_option_atom(ex, &tree_str))

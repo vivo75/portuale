@@ -604,10 +604,7 @@ pub fn circular_dep_solutions(
             .split_whitespace()
             .map(|t| t.trim_start_matches(['+', '-']).to_string())
             .collect();
-        let parent_str = format!(
-            "{pcat}/{ppkg}-{pver}:{}/{}::{}",
-            pc.slot, pc.sub_slot, pc.repo_name
-        );
+        let parent_str = pc.match_str(&pcat, &ppkg);
         // The parent USE plus the autounmask-USE overlay; the changed flags
         // themselves stay untouchable below.
         let mut parent_use: HashSet<String> = effective_use_flags(EffectiveUseFlagsArgs {

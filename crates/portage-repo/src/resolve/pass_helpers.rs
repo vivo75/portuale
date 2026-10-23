@@ -134,6 +134,7 @@ pub(crate) fn minimize_children(
         if repo.is_empty() {
             format!("{}/{}-{version}:{slot}/{sub}", key.0, key.1)
         } else {
+            // match-str-ok: installed/ebuild mix with empty-repo and empty-sub-slot handling that match_str lacks
             format!("{}/{}-{version}:{slot}/{sub}::{repo}", key.0, key.1)
         }
     };

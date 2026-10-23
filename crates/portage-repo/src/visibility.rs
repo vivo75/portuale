@@ -207,10 +207,7 @@ pub fn is_visible(
     thread_local! {
         static IV_CACHE: RefCell<IvCache> = RefCell::new(HashMap::new());
     }
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
     let key = {
         use std::hash::{Hash, Hasher};
         let config_fp = is_visible_fingerprint(config);
@@ -279,10 +276,7 @@ pub(crate) fn is_visible_uncached(
     if !md5_dict::eapi_is_supported(&candidate.eapi) {
         return false;
     }
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
 
     // The mask check sees the candidate's binary build-id: an `=`+build-id
     // `package.mask` line masks only the equal instance (dep:2994-3008, S9).
@@ -389,10 +383,7 @@ pub(crate) fn visible_with_relax(args: VisibleWithRelaxArgs<'_>) -> bool {
     if !md5_dict::eapi_is_supported(&candidate.eapi) {
         return false;
     }
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
 
     if !relax_masks {
         // The mask check sees the candidate's binary build-id (S9), as in
@@ -486,10 +477,7 @@ pub(crate) fn keyword_masked_only(
     if !md5_dict::eapi_is_supported(&candidate.eapi) {
         return false;
     }
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
 
     // The mask check sees the candidate's binary build-id: an `=`+build-id
     // `package.mask` line masks only the equal instance (dep:2994-3008, S9).
@@ -576,10 +564,7 @@ pub(crate) fn mask_masked_only(
     if !md5_dict::eapi_is_supported(&candidate.eapi) {
         return false;
     }
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
     // The mask check sees the candidate's binary build-id: an `=`+build-id
     // `package.mask` line masks only the equal instance (dep:2994-3008, S9).
     let masked = any_config_entry_matches_with_build_id(
@@ -679,10 +664,7 @@ pub(crate) fn license_masked_only(
     if !md5_dict::eapi_is_supported(&candidate.eapi) {
         return false;
     }
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
 
     // The mask check sees the candidate's binary build-id: an `=`+build-id
     // `package.mask` line masks only the equal instance (dep:2994-3008, S9).
@@ -806,10 +788,7 @@ pub(crate) fn suggested_license_candidate(
             vercmp_ordering(&a.version, &b.version).then(a.repo_priority.cmp(&b.repo_priority))
         })
         .map(|c| {
-            let cs = format!(
-                "{category}/{package}-{}:{}/{}::{}",
-                c.version, c.slot, c.sub_slot, c.repo_name
-            );
+            let cs = c.match_str(category, package);
             (
                 c.version.clone(),
                 missing_licenses(c, category, package, &cs, config).join(" "),

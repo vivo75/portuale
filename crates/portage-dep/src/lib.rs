@@ -39,6 +39,8 @@ pub use specificity::atom_specificity;
 pub mod eapi;
 
 #[cfg(test)]
+mod tests_atom_census;
+#[cfg(test)]
 mod tests_extended_match;
 #[cfg(test)]
 mod tests_grammar;
@@ -1432,6 +1434,23 @@ pub fn evaluate_atom_conditionals(atom_str: &str, parent_use: &HashSet<String>) 
 /// One parsed candidate against one parsed atom: cp, version (plus the
 /// `=`-only build-id rule), slot, repo.
 fn candidate_hits(atom: &Atom, candidate: &Candidate) -> bool {
+    // Exhaustive on purpose (no `..`): a new `Atom` field must be decided here.
+    // The census in tests_atom_census.rs checks each marker.
+    let Atom {
+        blocker: _,       // field-ok: stripped by parse_match_atom before parsing
+        operator: _,      // read: matches_version
+        category: _,      // read: candidate_hits
+        package: _,       // read: candidate_hits
+        version: _,       // read: matches_version
+        revision: _,      // read: matches_version
+        slot: _,          // read: matches_slot
+        sub_slot: _,      // read: matches_slot
+        slot_operator: _, // field-ok: ignored by design, see matches_slot (lib.rs:1105-1107)
+        use_deps: _,      // field-ok: checked by use_deps_satisfied, not the matcher
+        repo: _,          // read: matches_repo
+        build_id: _,      // read: matches_version
+        extended: _,      // read: candidate_hits
+    } = atom;
     // Portage dep:2934-2943: exact cp or `extended_cp_match`.
     let exact = atom.category == candidate.category && atom.package == candidate.package;
     if !exact

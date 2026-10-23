@@ -118,10 +118,7 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
                         if !is_visible(c, &sc.category, &sc.package, config) {
                             continue;
                         }
-                        let cand_str = format!(
-                            "{}/{}-{}:{}/{}::{}",
-                            sc.category, sc.package, c.version, c.slot, c.sub_slot, c.repo_name
-                        );
+                        let cand_str = c.match_str(&sc.category, &sc.package);
                         if excluded
                             .iter()
                             .any(|ex| matches_cli_option_atom(ex, &cand_str))

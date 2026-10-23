@@ -158,12 +158,7 @@ pub fn resolve_info_candidate(
     }
     let candidate_strs: Vec<String> = visible
         .iter()
-        .map(|c| {
-            format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
+        .map(|c| c.match_str(&atom.category, &atom.package))
         .collect();
     let refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
     let Some(matched) = portage_dep::match_from_list(atom_str, &refs) else {
@@ -216,10 +211,7 @@ pub fn resolve_info_candidate(
         .collect();
     disp.sort_by_key(|p| alnum_sort_key(&p.0));
     let cpv = format!("{}/{}-{}", atom.category, atom.package, best.version);
-    let candidate_str = format!(
-        "{}/{}-{}:{}/{}::{}",
-        atom.category, atom.package, best.version, best.slot, best.sub_slot, best.repo_name
-    );
+    let candidate_str = best.match_str(&atom.category, &atom.package);
     let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
         iuse: &best.iuse,
         keywords: &best.keywords,
@@ -330,12 +322,7 @@ pub fn resolve_info_binary_candidate(
     }
     let candidate_strs: Vec<String> = candidates
         .iter()
-        .map(|c| {
-            format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
+        .map(|c| c.match_str(&atom.category, &atom.package))
         .collect();
     let refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
     let Some(matched) = portage_dep::match_from_list(atom_str, &refs) else {
@@ -386,10 +373,7 @@ pub fn resolve_info_binary_candidate(
             .collect();
         disp.sort_by_key(|p| alnum_sort_key(&p.0));
         let cpv = format!("{}/{}-{}", atom.category, atom.package, best.version);
-        let candidate_str = format!(
-            "{}/{}-{}:{}/{}::{}",
-            atom.category, atom.package, best.version, best.slot, best.sub_slot, best.repo_name
-        );
+        let candidate_str = best.match_str(&atom.category, &atom.package);
         let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
             iuse: &best.iuse,
             keywords: &best.keywords,
@@ -557,6 +541,7 @@ pub fn resolve_installed_info(
         .iter()
         .map(|(v, s, ss)| {
             format!(
+                // match-str-ok: installed (vdb) tuples plus installed_pkg_repo, not a Candidate
                 "{}/{}-{v}:{s}/{ss}::{}",
                 atom.category,
                 atom.package,

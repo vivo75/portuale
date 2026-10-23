@@ -145,12 +145,7 @@ pub(crate) fn use_unsat_candidates_for_atom(
 
     let strs: Vec<String> = candidates
         .iter()
-        .map(|c| {
-            format!(
-                "{}/{}-{}:{}/{}::{}",
-                display.category, display.package, c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
+        .map(|c| c.match_str(&display.category, &display.package))
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
     // Version/slot filter, USE and visibility ignored (like Portage's
@@ -246,10 +241,7 @@ pub(crate) fn use_unsat_candidates_for_atom(
         }
         // A flag pinned by this candidate's own `use.mask`/`use.force`
         // is not adjustable: no row, and the candidate stays out.
-        let candidate_str = format!(
-            "{}/{}-{}:{}/{}::{}",
-            display.category, display.package, c.version, c.slot, c.sub_slot, c.repo_name
-        );
+        let candidate_str = c.match_str(&display.category, &display.package);
         let eff_keywords = effective_keywords(
             config,
             &candidate_str,

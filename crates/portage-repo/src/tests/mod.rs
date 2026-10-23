@@ -3704,6 +3704,7 @@ mod installed;
 mod installed_meta;
 mod license;
 mod masked_deps;
+mod match_str_lint;
 mod merge_bound;
 mod merge_order;
 mod metadata_cache;

@@ -90,6 +90,7 @@ pub fn best_installed_match(
         .iter()
         .map(|(v, s, ss)| {
             format!(
+                // match-str-ok: installed (vdb) tuples plus installed_pkg_repo, not a Candidate
                 "{}/{}-{v}:{s}/{ss}::{}",
                 atom.category,
                 atom.package,
@@ -315,12 +316,7 @@ pub(crate) fn visible_tree_matches(
         .collect();
     let strs: Vec<String> = visible
         .iter()
-        .map(|c| {
-            format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
+        .map(|c| c.match_str(&atom.category, &atom.package))
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
     let stripped = portage_dep::without_use(atom_str);

@@ -217,10 +217,7 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
                         && is_visible(c, &owner.0, &owner.1, config)
                         && !masked_version(owner, &c.version)
                 }) {
-                    let cand_str = format!(
-                        "{}/{}-{}:{}/{}::{}",
-                        owner.0, owner.1, cand.version, cand.slot, cand.sub_slot, cand.repo_name
-                    );
+                    let cand_str = cand.match_str(&owner.0, &owner.1);
                     if excluded
                         .iter()
                         .any(|ex| matches_cli_option_atom(ex, &cand_str))

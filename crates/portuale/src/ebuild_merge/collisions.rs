@@ -58,6 +58,7 @@ pub(crate) fn blocked_installed_packages(
             .map(|s| s.split_whitespace().map(String::from).collect())
             .unwrap_or_default();
         let candidate_str = format!(
+            // match-str-ok: installed-package env fields, not a Candidate
             "{}/{}-{}:{slot}/{slot}::{repository}",
             env.category, env.split.pn, env.split.pvr
         );

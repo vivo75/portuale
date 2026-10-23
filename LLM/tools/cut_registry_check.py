@@ -2,7 +2,8 @@
 """Check the scope-cut registry (LLM/scope-cuts.md) against the backlog and
 against the deferred-cut markers in LLM/what-this-proves.md.
 
-Usage: cut_registry_check.py [--registry F] [--backlog F] [--proof F]
+Usage: cut_registry_check.py [--registry F] [--backlog F ...] [--proof F]
+(--backlog repeats; default is every LLM/backlog-tasks*.md)
 Exit 0 when clean, 1 with one line per violation on stdout otherwise.
 
 Registry grammar (one entry per line, `- ` bullet at column 0):
@@ -22,13 +23,14 @@ Rules:
 """
 
 import argparse
+import glob
 import os
 import re
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DEFAULT_REGISTRY = os.path.join(ROOT, "LLM", "scope-cuts.md")
-DEFAULT_BACKLOG = os.path.join(ROOT, "LLM", "backlog-tasks.md")
+DEFAULT_BACKLOGS = sorted(glob.glob(os.path.join(ROOT, "LLM", "backlog-tasks*.md")))
 DEFAULT_PROOF = os.path.join(ROOT, "LLM", "what-this-proves.md")
 
 REG_LINE = re.compile(r"^- CUT-(\d+):\s*(.*)$")
@@ -76,17 +78,19 @@ def parse_registry(path):
     return entries, problems
 
 
-def parse_backlog(path):
+def parse_backlog(paths):
     """Return {number: status word or ""} for each `N. **` entry (first wins).
+    `paths` is one file or a list (the backlog is split over several files).
 
     An entry without a leading status word (e.g. `5. **brush PRs: ...`) exists
     but has no status, so it is never treated as DONE."""
     status = {}
-    with open(path) as f:
-        for text in f:
-            m = BACKLOG_ENTRY.match(text)
-            if m:
-                status.setdefault(int(m.group(1)), m.group(2) or "")
+    for path in [paths] if isinstance(paths, str) else paths:
+        with open(path) as f:
+            for text in f:
+                m = BACKLOG_ENTRY.match(text)
+                if m:
+                    status.setdefault(int(m.group(1)), m.group(2) or "")
     return status
 
 
@@ -100,7 +104,7 @@ def check(registry, backlog, proof):
             continue
         if num not in status:
             problems.append(f"{registry}:{lineno}: CUT-{n} points at backlog #{num}, "
-                            "which is not in backlog-tasks.md")
+                            "which is not in backlog-tasks*.md")
         elif kind == "open" and status[num] == "DONE":
             problems.append(f"{registry}:{lineno}: CUT-{n} is open but backlog #{num} "
                             "is DONE (if the follow-up shipped, write → closed #"
@@ -128,10 +132,10 @@ def check(registry, backlog, proof):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--registry", default=DEFAULT_REGISTRY)
-    ap.add_argument("--backlog", default=DEFAULT_BACKLOG)
+    ap.add_argument("--backlog", action="append")
     ap.add_argument("--proof", default=DEFAULT_PROOF)
     args = ap.parse_args(argv)
-    problems = check(args.registry, args.backlog, args.proof)
+    problems = check(args.registry, args.backlog or DEFAULT_BACKLOGS, args.proof)
     for p in problems:
         print(p)
     if problems:

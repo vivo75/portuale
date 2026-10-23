@@ -56,6 +56,39 @@ pub struct Candidate {
     pub binary_deps: HashMap<String, String>,
 }
 
+impl Candidate {
+    /// The string an atom is matched against: `cat/pkg-ver:slot/sub::repo`.
+    /// The only place that formats it from a `Candidate`; `match_str_lint`
+    /// rejects hand-built copies, which once dropped the sub-slot.
+    /// Portage: `match_from_list` is handed a `Package`'s cpv with slot,
+    /// sub-slot and repo attributes (`dep/__init__.py`, `match_from_list`).
+    #[must_use]
+    pub fn match_str(&self, category: &str, package: &str) -> String {
+        // Exhaustive, no `..`: a new field must be classified here.
+        let Candidate {
+            version,          // read: match_str
+            keywords: _,      // field-ok: keyword visibility, not part of the atom-match string
+            slot,             // read: match_str
+            sub_slot,         // read: match_str
+            repo_location: _, // field-ok: a path; the match string carries the repo name
+            repo_priority: _, // field-ok: tie-break order, not matched
+            repo_name,        // read: match_str
+            license: _,       // field-ok: license masking is not an atom property
+            iuse: _,          // field-ok: USE deps are checked apart from the string
+            properties: _,    // field-ok: not an atom property
+            restrict: _,      // field-ok: not an atom property
+            source: _,        // field-ok: ebuild vs binary is not matched by atoms
+            binary_use: _,    // field-ok: USE deps are checked apart from the string
+            remote: _,        // field-ok: display flag
+            build_id: _,      // field-ok: a `-<build_id>` atom is matched by the caller
+            build_time: _,    // field-ok: ordering only
+            eapi: _,          // field-ok: grammar selection, not matched
+            binary_deps: _,   // field-ok: --binpkg-changed-deps data, not matched
+        } = self;
+        format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo_name}")
+    }
+}
+
 /// The head EAPI of one ebuild file when Portage would mask by it: `Some`
 /// for a non-empty, unsupported head value (`99`, `7_alpha`), `None`
 /// otherwise (supported, empty, or unreadable — those stay on the

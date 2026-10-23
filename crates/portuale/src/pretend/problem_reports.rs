@@ -246,6 +246,7 @@ pub(crate) fn show_skipped_updates(
                 None => ("ebuild", String::new()),
             };
             println!(
+                // match-str-ok: display line / conflict record, not a Candidate
                 "  ({}/{}-{}{}:{}/{}::{}, {} scheduled for merge{}) {} conflicts with",
                 header.category,
                 header.package,
@@ -590,6 +591,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
     if inst.installed {
         // An installed instance names its position.
         println!(
+            // match-str-ok: display line / conflict record, not a Candidate
             "  ({}/{}-{}:{}/{}::{}, installed{}) {} pulled in by",
             c.category,
             c.package,
@@ -602,6 +604,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         );
     } else {
         println!(
+            // match-str-ok: display line / conflict record, not a Candidate
             "  ({}/{}-{}:{}/{}::{}, ebuild scheduled for merge) {} pulled in by",
             c.category,
             c.package,
@@ -636,6 +639,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
             };
             ConflictOther {
                 cpv: format!(
+                    // match-str-ok: display line / conflict record, not a Candidate
                     "{}/{}-{}:{}/{}::{}",
                     c.category, c.package, o.version, c.slot, o.sub_slot, o.repo_name
                 ),

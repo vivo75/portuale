@@ -139,10 +139,12 @@ pub(crate) fn missing_dep_full_row(
         }
     }
     let selected_display = if let Some((v, s, ss, r)) = selected_merge {
+        // match-str-ok: conflict-block display line, not a match string
         format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, ebuild scheduled for merge)")
     } else if let Some(v) = selected_installed {
         let (s, ss) = read_vdb_slot(root, cat, pkg, v);
         let r = installed_pkg_repo(root, cat, pkg, v);
+        // match-str-ok: conflict-block display line, not a match string
         format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, installed)")
     } else {
         // No settled entry holds the slot, but the vdb holds the masked version
@@ -153,9 +155,11 @@ pub(crate) fn missing_dep_full_row(
             .map(|(iv, _, _)| iv)?;
         let (s, ss) = read_vdb_slot(root, cat, pkg, &v);
         let r = installed_pkg_repo(root, cat, pkg, &v);
+        // match-str-ok: conflict-block display line, not a match string
         format!("({cat}/{pkg}-{v}:{s}/{ss}::{r}, installed)")
     };
     let skipped_display =
+        // match-str-ok: conflict-block display line, not a match string
         format!("({cat}/{pkg}-{ver}:{slot}/{sub}::{repo}, ebuild scheduled for merge)");
     // The chain is the single skipped node (not in the settled graph).
     let chain = vec![(format!("{cat}/{pkg}-{ver}::{repo}"), "ebuild".to_string())];

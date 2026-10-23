@@ -161,12 +161,7 @@ pub(crate) fn rev_dep_pin_holdable(args: RevDepPinHoldableArgs<'_>) -> bool {
         let repo_cands: Vec<String> = cands
             .iter()
             .filter(|c| &c.slot == *slot)
-            .map(|c| {
-                format!(
-                    "{}/{}-{}:{}/{}::{}",
-                    cp.0, cp.1, c.version, c.slot, c.sub_slot, c.repo_name
-                )
-            })
+            .map(|c| c.match_str(&cp.0, &cp.1))
             .collect();
         if holds_for(slot, &repo_cands) {
             return true;
@@ -180,6 +175,7 @@ pub(crate) fn rev_dep_pin_holdable(args: RevDepPinHoldableArgs<'_>) -> bool {
                     read_vdb_slot(root, &p.category, &p.package, &p.version);
                 (inst_slot == **slot).then(|| {
                     format!(
+                        // match-str-ok: installed side (inst_slot/installed_pkg_repo), not a Candidate
                         "{}/{}-{}:{}/{}::{}",
                         p.category,
                         p.package,
@@ -358,6 +354,7 @@ pub(crate) fn reverse_dependency_constraints(
                 (cp.clone(), slot.clone()),
                 UseBreakSource {
                     candidate: format!(
+                        // match-str-ok: merge-list entry (Option slot/repo), not a Candidate
                         "{}/{}-{version}:{slot}/{}::{}",
                         e.category,
                         e.package,
@@ -384,6 +381,7 @@ pub(crate) fn reverse_dependency_constraints(
             (cp, e.slot.clone().unwrap_or_else(|| "0".to_string())),
             (
                 format!(
+                    // match-str-ok: merge-list entry (Option slot/repo), not a Candidate
                     "{}/{}-{to}:{}/{}::{}",
                     e.category,
                     e.package,

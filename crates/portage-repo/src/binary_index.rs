@@ -379,6 +379,7 @@ fn remote_record_match_str(record: &HashMap<String, String>) -> Option<String> {
         .cloned()
         .unwrap_or_else(|| "__unknown__".to_string());
     Some(format!(
+        // match-str-ok: remote Packages record (HashMap fields), not a Candidate
         "{category}/{package}-{version}:{slot}/{sub_slot}::{repo}"
     ))
 }

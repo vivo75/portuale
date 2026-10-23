@@ -244,6 +244,7 @@ pub(crate) fn slot_conflict_puller_cpv(
         return String::new();
     }
     let (psub, prepo, pslot) = slot_conflict_meta(repos, pc, pp, pv);
+    // match-str-ok: slot_conflict_meta/installed ref fields, not a Candidate
     format!("{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}")
 }
 
@@ -586,6 +587,7 @@ pub(crate) fn build_residual_slot_conflicts(
                 None => ("0".to_string(), "0".to_string(), "__unknown__".to_string()),
             };
             let entry = SlotConflictParent {
+                // match-str-ok: slot_conflict_meta/installed ref fields, not a Candidate
                 parent_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
                 atom: pin.atom.clone(),
                 use_display: installed_use_display_for(root, config, cc, cp2, cv),
@@ -643,6 +645,7 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
     // A `[use]`-carrying pin version-matches by construction, so the holds
     // check must also evaluate its use-deps against the merge's decided
     // USE (uncomputable USE falls back to the version-only check).
+    // match-str-ok: slot_conflict_meta/installed ref fields, not a Candidate
     let merge_str = format!("{category}/{package}-{merge_ver}:{slot}/{merge_sub}::{merge_repo}");
     let use_still_broken = parse_dep_atom(&pin.atom, "slot_conflict")
         .and_then(|parsed| parsed.use_deps)

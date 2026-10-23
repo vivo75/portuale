@@ -31,10 +31,7 @@ pub(crate) fn flag_is_settable(args: FlagIsSettableArgs<'_>) -> bool {
         return false;
     };
     let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or_default();
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
     let synthetic_token = if desired {
         flag.to_string()
     } else {
@@ -420,12 +417,7 @@ pub(crate) fn viable_parent_flip_targets(
     };
     let strs: Vec<String> = candidates
         .iter()
-        .map(|c| {
-            format!(
-                "{}/{}-{}:{}/{}::{}",
-                category, package, c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
+        .map(|c| c.match_str(&category, &package))
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
     // Version/slot filter, USE and visibility ignored.
@@ -484,10 +476,7 @@ pub(crate) fn viable_parent_flip_targets(
             .collect();
         // A flag the child would need but mask/force pins: no parent
         // flip either.
-        let candidate_str = format!(
-            "{}/{}-{}:{}/{}::{}",
-            category, package, c.version, c.slot, c.sub_slot, c.repo_name
-        );
+        let candidate_str = c.match_str(&category, &package);
         let eff_keywords =
             effective_keywords(config, &candidate_str, &category, &package, &c.keywords);
         let stable = is_stable(IsStableArgs {

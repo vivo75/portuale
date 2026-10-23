@@ -119,6 +119,7 @@ pub(crate) fn step_reverse_dep_pins(
                         ),
                         _ => continue,
                     };
+                    // match-str-ok: merge-list entry (Option slot/repo), not a Candidate
                     let candidate = format!("{}/{}-{ver}:{slot}/{sub}::{repo}", pin.cp.0, pin.cp.1);
                     if portage_dep::match_from_list(&pin.atom, &[candidate.as_str()])
                         .is_some_and(|m| !m.is_empty())

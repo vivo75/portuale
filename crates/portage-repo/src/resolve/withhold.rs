@@ -77,10 +77,7 @@ pub(crate) fn constraint_withheld_updates(
                     std::cmp::Ordering::Equal if cand.sub_slot != settled_sub => {}
                     _ => continue,
                 }
-                let probe = format!(
-                    "{}/{}-{}:{}/{}::{}",
-                    pin.cp.0, pin.cp.1, cand.version, cand.slot, cand.sub_slot, cand.repo_name
-                );
+                let probe = cand.match_str(&pin.cp.0, &pin.cp.1);
                 let structurally_excluded =
                     portage_dep::match_from_list(&pin.atom, &[probe.as_str()])
                         .is_none_or(|m| m.is_empty());
@@ -94,15 +91,7 @@ pub(crate) fn constraint_withheld_updates(
                     if let Some(atom) = parse_dep_atom(&pin.raw_atom, "withhold") {
                         let use_deps = atom.use_deps.unwrap_or_default();
                         if !use_deps.is_empty() {
-                            let cpv = format!(
-                                "{}/{}-{}:{}/{}::{}",
-                                pin.cp.0,
-                                pin.cp.1,
-                                cand.version,
-                                cand.slot,
-                                cand.sub_slot,
-                                cand.repo_name
-                            );
+                            let cpv = cand.match_str(&pin.cp.0, &pin.cp.1);
                             let enabled = effective_use_flags(EffectiveUseFlagsArgs {
                                 config,
                                 iuse: &cand.iuse,
@@ -161,6 +150,7 @@ pub(crate) fn constraint_withheld_updates(
                 ),
                 atom: pin.raw_atom.clone(),
                 consumer_cpv: format!(
+                    // match-str-ok: slot_conflict_meta tuple, not a Candidate
                     "{cc}/{cp2}-{}:{cslot}/{csub}::{crepo}",
                     installed_version_with_build_id(root, cc, cp2, cv)
                 ),
@@ -395,6 +385,7 @@ pub(crate) fn backtrack_missed_updates(
                     let (consumer_cpv, consumer_installed, consumer_use) = match &installed_ref {
                         Some(r) => (
                             format!(
+                                // match-str-ok: installed ref row (r.repo), not a Candidate
                                 "{pc}/{pp}-{}:{}/{}::{}",
                                 installed_version_with_build_id(root, &pc, &pp, &pv),
                                 r.slot,

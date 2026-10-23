@@ -27,10 +27,7 @@ pub(crate) fn replay_use_of(
         .split_whitespace()
         .map(|t| t.trim_start_matches(['+', '-']).to_string())
         .collect();
-    let cpv = format!(
-        "{}/{}-{version}:{}/{}::{}",
-        e.category, e.package, cand.slot, cand.sub_slot, cand.repo_name
-    );
+    let cpv = cand.match_str(&e.category, &e.package);
     Some(merge_order::ReplayUse {
         iuse: valid_iuse(&declared, ctx.config),
         enabled: effective_use_flags(EffectiveUseFlagsArgs {
@@ -315,6 +312,7 @@ pub(crate) fn replay_slot_conflicts(
                         slot_conflict_meta(&ctx.repos, &pe.category, &pe.package, v);
                     Some(SlotConflictParent {
                         parent_cpv: format!(
+                            // match-str-ok: slot_conflict_meta tuple of an entry, not a Candidate
                             "{}/{}-{v}:{slot}/{sub}::{repo}",
                             pe.category, pe.package
                         ),
@@ -406,10 +404,7 @@ pub(crate) fn apply_replay_flips(
                     }
                 }
             }
-            let cpv = format!(
-                "{}/{}-{version}:{}/{}::{}",
-                cp.0, cp.1, cand.slot, cand.sub_slot, cand.repo_name
-            );
+            let cpv = cand.match_str(&cp.0, &cp.1);
             let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
                 iuse: &cand.iuse,
                 keywords: &cand.keywords,

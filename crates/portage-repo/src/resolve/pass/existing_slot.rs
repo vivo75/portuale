@@ -306,10 +306,7 @@ pub(crate) fn existing_slot_version_mismatch(args: ExistingSlotVersionMismatchAr
                 .split_whitespace()
                 .map(|t| t.trim_start_matches(['+', '-']).to_string())
                 .collect();
-            let existing_cand_str = format!(
-                "{}/{}-{existing_version}:{}/{}::{}",
-                key.0, key.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
-            );
+            let existing_cand_str = existing_cand.match_str(&key.0, &key.1);
             let existing_use = effective_use_flags(EffectiveUseFlagsArgs {
                 config,
                 iuse: &existing_cand.iuse,
@@ -387,10 +384,7 @@ pub(crate) fn existing_slot_use_flip_suggestion(args: ExistingSlotUseFlipSuggest
                 .split_whitespace()
                 .map(|t| t.trim_start_matches(['+', '-']).to_string())
                 .collect();
-            let existing_cand_str = format!(
-                "{}/{}-{existing_version}:{}/{}::{}",
-                key.0, key.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
-            );
+            let existing_cand_str = existing_cand.match_str(&key.0, &key.1);
             let existing_use = effective_use_flags(EffectiveUseFlagsArgs {
                 config,
                 iuse: &existing_cand.iuse,

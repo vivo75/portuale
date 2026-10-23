@@ -397,9 +397,11 @@ The prior per-slice narrative of this section is in
 
 ### Merge-path safety gate (mandatory)
 
-Any change that touches the merge path — `ebuild_merge.rs` (particularly
-`merge_tree`'s file-writing branches, collision handling, vdb writes) or
-the ordering around it in `emerge_build.rs`/`emerge_getbinpkg.rs` — must
+Any change that touches the merge path — `crates/portuale/src/ebuild_merge/`
+(particularly `merge_tree` in `tree.rs`: file-writing branches, collision
+handling, vdb writes), the ordering around it in
+`crates/portuale/src/emerge_build/` and `emerge_getbinpkg.rs`, or the
+unmerge half in `ebuild_unmerge.rs` — must
 be verified by a **successful test merge of `sys-libs/glibc` and
 `app-shells/bash`** before the slice is considered done, in addition to
 the normal verification pass. These are the two packages whose running
@@ -415,6 +417,13 @@ differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlist
 L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
   differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
 ```
+
+**Evidence file (new convention, plan 02.493):** a branch that touches those
+paths records its gate result in `LLM/evidence/merge-gate-<branch>.md`
+(`/` in the branch name becomes `-`), naming a `sys-libs/glibc` and an
+`app-shells/bash` merge result. `LLM/tools/pair_check.sh` (run by
+`LLM/tools/gate.sh`) fails a merge-path diff without that file. Older gate
+results sit inside slice evidence files and are not retrofitted.
 
 The third invocation below is required for any change to the **unmerge**
 half of the merge path (`remove_contents`, the replace loop): it

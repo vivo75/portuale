@@ -817,6 +817,7 @@ fn bridge_use_columns(
     // Forced/masked-flag `( )` markers via the walk's own helper, with the same
     // candidate spelling the walk resolves under.
     let candidate_str = format!(
+        // match-str-ok: solver record (cp + record fields), not a Candidate
         "{cp}-{version}:{}/{sub}::{repo}",
         record.slot,
         sub = record.sub_slot,
@@ -4099,6 +4100,7 @@ fn bridge_validate_aborts(
         .map(|member| {
             let entry = member.entry;
             format!(
+                // match-str-ok: solver graph entry (Option fields), not a Candidate
                 "{}-{}:{}/{}::{}",
                 member.cp,
                 member.version,

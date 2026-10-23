@@ -104,6 +104,7 @@ pub(crate) fn fill_uninstall_displays(
             .map(str::to_string)
             .collect();
         let candidate_str = format!(
+            // match-str-ok: merge-list entry Option fields with candidate fallback, not a pure Candidate
             "{cat}/{pkg}-{version}:{}/{}::{}",
             e.slot.as_deref().unwrap_or("0"),
             e.sub_slot.as_deref().unwrap_or("0"),
@@ -225,6 +226,7 @@ pub(crate) fn refresh_one_entry_display(
         .repo_name
         .clone()
         .unwrap_or_else(|| cand.repo_name.clone());
+    // match-str-ok: merge-list entry Option fields with candidate fallback, not a pure Candidate
     let candidate_str = format!("{cat}/{pkg}-{version}:{slot}/{sub_slot}::{repo_name}");
     let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
         config,

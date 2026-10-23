@@ -562,10 +562,7 @@ pub(crate) fn candidate_iuse_and_use(
         .split_whitespace()
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect();
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
     let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
         config,
         iuse: metadata.get("IUSE").map(String::as_str).unwrap_or_default(),

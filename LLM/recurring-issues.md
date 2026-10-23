@@ -93,3 +93,33 @@ that is neither routed through it nor marked `// drop-ok: <reason>`;
 `check_unparsed_dep_tokens` asserts zero. The §5 orphan cuts live in
 `LLM/scope-cuts.md`, checked by `LLM/tools/cut_registry_check.py`.
 Items 2-6 of the checklist remain conventions.
+
+## Now implemented (#493, 2026-10-23)
+
+Checklist items 2, 3 and 6 are mechanised; item 5 is partly mechanised.
+
+* **Checklist 3 (Atom and Candidate field census): mechanised.** `candidate_hits` in
+  `crates/portage-dep/src/lib.rs` destructures every `Atom` field with no `..`, so a new field
+  fails to compile until it is marked `read:` or `field-ok:` (census tests in
+  `crates/portage-dep/src/tests_atom_census.rs`). `Candidate::match_str`
+  (`crates/portage-repo/src/candidates.rs`) is the one place a candidate string is built; the
+  lint in `crates/portage-repo/src/tests/match_str_lint.rs` fails on a hand-built copy that is
+  not marked.
+* **Checklist 2 (grammar: resolvable and unsatisfiable case): mechanised.** pmtest
+  `pytests-contract-suite/grammar_registry.py` lists each grammar feature with a resolvable
+  and an unsatisfiable CASES entry; `test_grammar_registry.py` checks both and Portage's wording.
+  Features without both cases stay in EXEMPT with a backlog number (#494-#497).
+* **Checklist 5 (docs): partly mechanised.** `LLM/tools/doc_status_check.py` checks plan
+  `Status:` headers against the backlog, duplicate numbers across both backlog files,
+  `Oracle:`/`Premise:` on new entries, and tier prefixes; `LLM/tools/cut_registry_check.py`
+  checks the scope-cut registry. Not checked: that cuts stay in the module doc, and that
+  `what-this-proves.md` stays append-only.
+* **Checklist 6 (pairing, corpus bless, merge-path gate): mechanised.**
+  `LLM/tools/pair_check.sh` checks the paired branch names and sha quotes, that a corpus bless
+  rides in pmtest, and that a merge-path change has the glibc and bash evidence file. `gate.sh`
+  runs it.
+
+**Stays a convention:** item 4 (visited-set exact text; `||` fallback keeps every
+alternative), and the parity families (silent-drop, oracle-grounded parity, the scope-cut
+families). No tool can tell a wrong Portage expected value from a right one, so the
+oracle-first rule stays a human step.

@@ -89,10 +89,8 @@ pub(crate) fn assemble_tree_pkg_use_display(
         .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
         .collect();
     let eapi = metadata.get("EAPI").map(String::as_str).unwrap_or("");
-    let candidate_str = format!(
-        "{category}/{package}-{version}:{}/{}::{}",
-        cand.slot, cand.sub_slot, cand.repo_name
-    );
+    debug_assert_eq!(version, cand.version, "callers pick `cand` by `version`");
+    let candidate_str = cand.match_str(category, package);
     // Portage `pkg.use.force ∪ pkg.use.mask` after `setcpv`: unfiltered, since
     // the `( )` wraps apply to implicit-domain flags too.
     let force_mask = forced_or_masked_flags_unfiltered(
@@ -136,6 +134,7 @@ pub fn skipped_update_installed_use_display_for(
         .collect();
     let forced = forced_or_masked_flags_unfiltered(
         &keywords,
+        // match-str-ok: installed instance (vdb slot/repo), not a Candidate
         &format!("{category}/{package}-{version}:{slot}/{sub_slot}::{repo}"),
         None,
         category,

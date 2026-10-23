@@ -281,10 +281,7 @@ fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
             {
                 continue;
             }
-            let cpv = format!(
-                "{child_cat}/{child_pkg}-{}:{}/{}::{}",
-                cand.version, cand.slot, cand.sub_slot, cand.repo_name
-            );
+            let cpv = cand.match_str(child_cat, child_pkg);
             if atoms.iter().all(|a| {
                 portage_dep::match_from_list(a, &[cpv.as_str()]).is_some_and(|m| !m.is_empty())
             }) && other_consumers_accept(&OtherConsumers {

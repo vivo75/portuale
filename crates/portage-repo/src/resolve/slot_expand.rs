@@ -185,10 +185,7 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
             .split_whitespace()
             .map(|t| t.trim_start_matches(['+', '-']).to_string())
             .collect();
-        let existing_cand_str = format!(
-            "{}/{}-{existing_version2}:{}/{}::{}",
-            key2.0, key2.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
-        );
+        let existing_cand_str = existing_cand.match_str(&key2.0, &key2.1);
         let existing_use = effective_use_flags(EffectiveUseFlagsArgs {
             config,
             iuse: &existing_cand.iuse,
@@ -775,10 +772,7 @@ pub(crate) fn enqueue_test_deps_for_flip(args: EnqueueTestDepsForFlipArgs<'_>) {
             .split_whitespace()
             .map(|tok| tok.trim_start_matches(['+', '-']).to_string())
             .collect();
-        let candidate_str = format!(
-            "{}/{}-{existing_version}:{}/{}::{}",
-            key.0, key.1, existing_cand.slot, existing_cand.sub_slot, existing_cand.repo_name
-        );
+        let candidate_str = existing_cand.match_str(&key.0, &key.1);
         let test_masked = config.use_mask.contains("test")
             || specificity_ordered_flags(
                 &config.package_use_mask,

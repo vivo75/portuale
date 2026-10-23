@@ -284,10 +284,7 @@ pub(crate) fn slot_conflict_abi_probe(
                             .iter()
                             .filter(|c| c.version == pver && c.source == CandidateSource::Ebuild)
                             .max_by_key(|c| c.repo_priority)?;
-                        let cand_str = format!(
-                            "{pcat}/{ppkg}-{}:{}/{}::{}",
-                            c.version, c.slot, c.sub_slot, c.repo_name
-                        );
+                        let cand_str = c.match_str(&pcat, &ppkg);
                         Some(effective_use_flags_uncached(
                             EffectiveUseFlagsUncachedArgs {
                                 config,
@@ -522,10 +519,7 @@ pub(crate) fn greedy_pin_survives_revision(
     let blockers_of = |c: &Candidate| -> Option<HashSet<String>> {
         let pf = format!("{}-{}", provider_cp.1, c.version);
         let meta = repo_aux_metadata(&c.repo_location, &provider_cp.0, &pf).ok()?;
-        let cand_str = format!(
-            "{}/{}-{}:{}/{}::{}",
-            provider_cp.0, provider_cp.1, c.version, c.slot, c.sub_slot, c.repo_name
-        );
+        let cand_str = c.match_str(&provider_cp.0, &provider_cp.1);
         let use_flags = effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
             config,
             iuse: meta.get("IUSE").map(String::as_str).unwrap_or_default(),
@@ -608,10 +602,7 @@ pub(crate) fn replacement_parent_accepts(args: ReplacementParentAcceptsArgs<'_>)
         else {
             continue;
         };
-        let cand_str = format!(
-            "{cat}/{pkg}-{}:{}/{}::{}",
-            c.version, c.slot, c.sub_slot, c.repo_name
-        );
+        let cand_str = c.match_str(cat, pkg);
         let use_flags = effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
             config,
             iuse: meta.get("IUSE").map(String::as_str).unwrap_or_default(),

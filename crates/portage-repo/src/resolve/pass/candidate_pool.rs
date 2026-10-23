@@ -90,10 +90,7 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
         if (!ctx.usepkgonly || uev) && !binary_candidates.is_empty() {
             let some_ebuild_matches = repo_candidates.iter().any(|c| {
                 c.source == CandidateSource::Ebuild && is_visible(c, &key.0, &key.1, config) && {
-                    let s = format!(
-                        "{}/{}-{}:{}/{}::{}",
-                        key.0, key.1, c.version, c.slot, c.sub_slot, c.repo_name
-                    );
+                    let s = c.match_str(&key.0, &key.1);
                     portage_dep::match_from_list(current_atom, &[s.as_str()])
                         .is_some_and(|r| !r.is_empty())
                 }

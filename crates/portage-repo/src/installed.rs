@@ -303,6 +303,7 @@ pub(crate) fn best_installed_for_atom(
     let cands = installed_candidates(root, category, package);
     let strs: Vec<String> = cands
         .iter()
+        // match-str-ok: installed instance: `::__installed__` repo sentinel, not a Candidate
         .map(|(v, s, ss)| format!("{category}/{package}-{v}:{s}/{ss}::__installed__"))
         .collect();
     let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
@@ -331,6 +332,7 @@ pub(crate) fn complete_mode_withheld_version(
         .map(|(v, s, ss)| {
             (
                 v.clone(),
+                // match-str-ok: installed instance: `::__installed__` repo sentinel, not a Candidate
                 format!("{category}/{package}-{v}:{s}/{ss}::__installed__"),
             )
         })
@@ -510,10 +512,7 @@ pub fn candidate_use_flags_display(
     let Some(iuse) = metadata.get("IUSE") else {
         return Vec::new();
     };
-    let candidate_str = format!(
-        "{category}/{package}-{version}:{}/{}::{}",
-        candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
     let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
         config,
         iuse,
@@ -554,10 +553,7 @@ pub fn candidate_interactive(
     else {
         return false;
     };
-    let candidate_str = format!(
-        "{category}/{package}-{version}:{}/{}::{}",
-        candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
     evaluated_metadata_tokens(EvaluatedMetadataTokensArgs {
         value_str: &candidate.properties,
         candidate: &candidate,
@@ -593,10 +589,7 @@ pub fn candidate_effective_use_flags(
     // A missing `IUSE` key is an empty `IUSE`, not missing metadata: the md5-cache
     // writer omits empty fields, but the package still gets its implicit USE.
     let iuse = metadata.get("IUSE").map(String::as_str).unwrap_or("");
-    let candidate_str = format!(
-        "{category}/{package}-{version}:{}/{}::{}",
-        candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
     let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
         config,
         iuse,

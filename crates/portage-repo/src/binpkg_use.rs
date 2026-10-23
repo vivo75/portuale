@@ -70,16 +70,8 @@ pub(crate) fn binpkg_respect_use_ok(args: BinpkgRespectUseOkArgs<'_>) -> bool {
     thread_local! {
         static BRU_CACHE: RefCell<BruCache> = RefCell::new(HashMap::new());
     }
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
-    let ebuild_str = ebuild_at_version.map(|e| {
-        format!(
-            "{category}/{package}-{}:{}/{}::{}",
-            e.version, e.slot, e.sub_slot, e.repo_name
-        )
-    });
+    let candidate_str = candidate.match_str(category, package);
+    let ebuild_str = ebuild_at_version.map(|e| e.match_str(category, package));
     let key = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -195,10 +187,7 @@ pub(crate) fn binpkg_respect_use_ok_uncached(args: BinpkgRespectUseOkUncachedArg
         .collect();
     let (cur_iuse, cur_use, forced_flags) = match ebuild_at_version {
         Some(ebuild) if ebuild.source != CandidateSource::Binary => {
-            let ebuild_str = format!(
-                "{category}/{package}-{}:{}/{}::{}",
-                ebuild.version, ebuild.slot, ebuild.sub_slot, ebuild.repo_name
-            );
+            let ebuild_str = ebuild.match_str(category, package);
             let forced = forced_or_masked_flags_unfiltered(
                 &ebuild.keywords,
                 &ebuild_str,
@@ -215,10 +204,7 @@ pub(crate) fn binpkg_respect_use_ok_uncached(args: BinpkgRespectUseOkUncachedArg
         // selection for the binary's own cpv over its own IUSE, never the
         // baked USE; `forced_flags` likewise. See the fn doc comment.
         _ => {
-            let candidate_str = format!(
-                "{category}/{package}-{}:{}/{}::{}",
-                candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-            );
+            let candidate_str = candidate.match_str(category, package);
             let forced = forced_or_masked_flags_unfiltered(
                 &candidate.keywords,
                 &candidate_str,
@@ -273,10 +259,7 @@ pub(crate) fn filter_usepkg_exclude_include(
     binary_candidates
         .into_iter()
         .filter(|c| {
-            let candidate_str = format!(
-                "{category}/{package}-{}:{}/{}::{}",
-                c.version, c.slot, c.sub_slot, c.repo_name
-            );
+            let candidate_str = c.match_str(category, package);
             let is_excluded = usepkg_exclude
                 .iter()
                 .any(|ex| matches_cli_option_atom(ex, &candidate_str));

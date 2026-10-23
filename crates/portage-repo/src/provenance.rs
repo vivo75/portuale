@@ -30,10 +30,7 @@ pub(crate) fn visibility_provenance(
     package: &str,
     config: &portage_profile::Config,
 ) -> VisibilityProvenance {
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
 
     // The mask/unmask match sees the candidate's binary build-id (S9), so
     // an `=`+build-id entry provenances to the right instance.
@@ -173,10 +170,7 @@ pub(crate) fn keyword_mask_marker(
     if mask_entry.is_some() {
         return Some('#');
     }
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
     // The effective KEYWORDS (profile `package.keywords` applied): a stable
     // keyword added by a profile node reads as globally accepted here.
     let eff_keywords = effective_keywords(

@@ -147,7 +147,7 @@ content, never duplicated:
 
 Backlog item numbers are global across tiers and **never reused**. Before
 filing, take the next free number by scanning *all* tiers
-(`grep -nE '^[0-9]+\. \*\*' LLM/backlog-tasks.md`), not just the tier
+(`grep -nE '^[0-9]+\. \*\*' LLM/backlog-tasks*.md`, both files), not just the tier
 you are writing in — two items filed 13 minutes apart into different
 tiers both claimed #58 on 2026-09-15. Plan filenames are
 `<tier>.<item>-<slug>.opus.md`, so the numeric prefix must match the tier

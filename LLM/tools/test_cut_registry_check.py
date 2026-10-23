@@ -46,6 +46,18 @@ def scratch(registry, backlog=BACKLOG, proof=PROOF):
                      paths["what-this-proves.md"])
 
 
+def scratch_two_backlogs(registry, second):
+    """Run the checker with the backlog split over two files."""
+    d = tempfile.mkdtemp()
+    paths = []
+    for name, text in (("scope-cuts.md", registry), ("backlog-tasks.md", BACKLOG),
+                       ("backlog-tasks-2026-10.md", second), ("what-this-proves.md", PROOF)):
+        paths.append(os.path.join(d, name))
+        with open(paths[-1], "w") as f:
+            f.write(text)
+    return crc.check(paths[0], paths[1:3], paths[3])
+
+
 ACK_760 = "- CUT-1: the thing nobody did (what-this-proves.md:4) → none (accepted): tiny.\n"
 
 
@@ -113,6 +125,19 @@ class CutRegistryCheck(unittest.TestCase):
         reg = ACK_760 + "- CUT-1: again (what-this-proves.md:9) → none (accepted): x.\n"
         problems = scratch(reg)
         self.assertTrue(any("CUT-1" in p and "duplicate" in p for p in problems), problems)
+
+    def test_c_number_defined_only_in_second_backlog_file_exists(self):
+        reg = ACK_760 + "- CUT-2: lives in the second file (what-this-proves.md:4) → #300\n"
+        self.assertEqual(scratch_two_backlogs(reg, "300. **OPEN (filed 2026-10-02).** body\n"), [])
+        problems = scratch_two_backlogs(reg, "")
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("#300", problems[0])
+
+    def test_a_done_entry_in_second_backlog_file_closes_the_cut(self):
+        reg = ACK_760 + "- CUT-2: shipped (what-this-proves.md:4) → #300\n"
+        problems = scratch_two_backlogs(reg, "300. **DONE 2026-10-02.** body\n")
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("DONE", problems[0])
 
     def test_prose_lines_are_not_registry_entries(self):
         reg = ("# Scope cuts\n\nSee `CUT-n` in the header; `→ #N` links a cut.\n"

@@ -219,10 +219,7 @@ fn greedy_pool(
         .into_iter()
         .filter(|c| is_visible(c, &atom.category, &atom.package, config))
         .map(|c| {
-            let text = format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            );
+            let text = c.match_str(&atom.category, &atom.package);
             GreedyEntry { candidate: c, text }
         })
         .filter(|e| {
@@ -348,10 +345,7 @@ fn greedy_use_sets(
         .map(|f| f.trim_start_matches(['+', '-']).to_string())
         .filter(|f| !f.is_empty())
         .collect();
-    let candidate_str = format!(
-        "{}/{}-{}:{}/{}::{}",
-        key.0, key.1, cand.version, cand.slot, cand.sub_slot, cand.repo_name
-    );
+    let candidate_str = cand.match_str(&key.0, &key.1);
     let enabled = effective_use_flags(EffectiveUseFlagsArgs {
         config,
         iuse: raw_iuse,
@@ -383,10 +377,7 @@ fn blocker_atoms_for(
         depstr.push_str(meta.get(k).map(String::as_str).unwrap_or(""));
         depstr.push(' ');
     }
-    let candidate_str = format!(
-        "{}/{}-{}:{}/{}::{}",
-        key.0, key.1, cand.version, cand.slot, cand.sub_slot, cand.repo_name
-    );
+    let candidate_str = cand.match_str(&key.0, &key.1);
     let use_flags = effective_use_flags(EffectiveUseFlagsArgs {
         config,
         iuse: meta.get("IUSE").map(String::as_str).unwrap_or(""),

@@ -70,6 +70,7 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
     let keyword_mask =
         keyword_mask_marker(resolved, &key.0, &key.1, config, &provenance.mask_entry);
     let resolved_cpv_str = format!(
+        // match-str-ok: loose &str slot/sub-slot/repo arguments of the entry builder, not a Candidate
         "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
         key.0, key.1
     );
@@ -150,6 +151,7 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
     // Portage: depgraph.py, _add_pkg
     let already_installed_outcome = matches!(outcome, PretendOutcome::AlreadyInstalled { .. });
     let candidate_str = format!(
+        // match-str-ok: loose &str slot/sub-slot/repo arguments of the entry builder, not a Candidate
         "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
         key.0, key.1
     );

@@ -28,6 +28,7 @@ pub(crate) fn circular_node_text(args: CircularNodeTextArgs<'_>) -> String {
         type_name,
         color,
     } = args;
+    // match-str-ok: display header, not a match string
     let head = format!("{cpv}:{slot}/{sub_slot}::{repo}");
     let head = match type_name {
         "binary" => color.c("PKG_BINARY_MERGE", &head),

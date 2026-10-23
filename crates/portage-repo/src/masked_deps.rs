@@ -40,12 +40,7 @@ pub(crate) fn atom_currently_satisfiable(
 
     let candidate_strs: Vec<String> = visible
         .iter()
-        .map(|c| {
-            format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
+        .map(|c| c.match_str(&atom.category, &atom.package))
         .collect();
     let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
     let Some(matched) = portage_dep::match_from_list(atom_str, &candidate_str_refs) else {
@@ -251,12 +246,7 @@ pub(crate) fn highest_available_candidate_ignoring_use(
     }
     let candidate_strs: Vec<String> = visible
         .iter()
-        .map(|c| {
-            format!(
-                "{category}/{package}-{}:{}/{}::{}",
-                c.version, c.slot, c.sub_slot, c.repo_name
-            )
-        })
+        .map(|c| c.match_str(category, package))
         .collect();
     let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
     let matched = portage_dep::match_from_list(stripped, &candidate_str_refs)?;
@@ -293,10 +283,7 @@ pub(crate) fn highest_available_candidate_ignoring_use(
         .filter_map(|m| by_str.get(m))
         .max_by(|a, b| vercmp_ordering(&a.version, &b.version))?;
     let (iuse, use_flags) = candidate_iuse_and_use(best, category, package, config)?;
-    let best_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        best.version, best.slot, best.sub_slot, best.repo_name
-    );
+    let best_str = best.match_str(category, package);
     Some((
         best_str,
         best.keywords.clone(),
@@ -323,10 +310,7 @@ pub(crate) fn candidate_masking_reasons(
     if !md5_dict::eapi_is_supported(&candidate.eapi) {
         return vec![format!("EAPI {}", candidate.eapi)];
     }
-    let candidate_str = format!(
-        "{category}/{package}-{}:{}/{}::{}",
-        candidate.version, candidate.slot, candidate.sub_slot, candidate.repo_name
-    );
+    let candidate_str = candidate.match_str(category, package);
     let mut reasons = Vec::new();
 
     if any_config_entry_matches_with_build_id(
@@ -580,10 +564,7 @@ fn masked_rows_for_pool_inner(
     let mut masked: Vec<&Candidate> = candidates
         .iter()
         .filter(|c| {
-            let s = format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            );
+            let s = c.match_str(&atom.category, &atom.package);
             portage_dep::match_atom_matches_candidate(&match_atom, &s, c.build_id.as_deref())
         })
         .collect();
@@ -901,10 +882,7 @@ pub(crate) fn usepkg_dropped_binary_report(
                 .any(|k| k.version == c.version && k.build_id == c.build_id)
         })
         .filter(|c| {
-            let s = format!(
-                "{}/{}-{}:{}/{}::{}",
-                atom.category, atom.package, c.version, c.slot, c.sub_slot, c.repo_name
-            );
+            let s = c.match_str(&atom.category, &atom.package);
             portage_dep::match_atom_matches_candidate(&match_atom, &s, c.build_id.as_deref())
         })
         .collect();
