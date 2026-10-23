@@ -29,3 +29,9 @@ Digest checks of a `$PKGDIR` binpkg against the index, and checksum-failure rena
 - Portage `_emerge/BinpkgVerifier._digest_exception`'s own failure block (`BinpkgVerifier.py`), byte-shaped: a leading blank line, three `!!!` lines (the path, the `Failed on <name> verification` reason, `Got`/`Expected`), then the bare `File renamed to '<path>'` line (no `!!!` prefix, Portage's own `f"File renamed to ..."`).
 - Portage emits it through the scheduler (stdout + package log); portuale prints it to stdout.
 - `renamed` is the `checksum_failure_rename` result -- when the rename itself failed the caller passes the original path (the file is still there), so the line always names a real location.
+
+## fn index_has_size_and_checksum
+- Ports the guard at the top of `BinpkgVerifier._start`: `self.pkg.remote and not ("size" in digests and digests.keys() - {"size"})`. `digests` is `bintree._get_digests`: every `get_valid_checksum_keys()` key with a non-empty value, plus `size` only when `int(SIZE)` parses. So SIZE alone, a checksum alone and neither all fail with the same text (verified on 3.0.83-r1, `LLM/evidence/2026-10-23-500-501/txt/s2-hb-*`); the guard runs before `PORTAGE_CHECKSUM_FILTER` is applied. Only remote records go through it: a local `$PKGDIR` record without `SIZE` still "verifies nothing" (`verify_binpkg_against_index`), as in Portage. Backlog #501.
+
+## fn missing_digests_block
+- `BinpkgVerifier._missing_digests_exception` text, byte for byte; unlike `_digest_exception` it renames nothing and has no `Got`/`Expected`/`File renamed` lines.

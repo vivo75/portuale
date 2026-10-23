@@ -64,6 +64,45 @@ pub fn verify_binpkg_against_index(
     Ok(())
 }
 
+/// Every checksum key Portage's `get_valid_checksum_keys()` knows.
+const VALID_CHECKSUM_KEYS: [&str; 10] = [
+    "BLAKE2B",
+    "BLAKE2S",
+    "MD5",
+    "RMD160",
+    "SHA1",
+    "SHA256",
+    "SHA3_256",
+    "SHA3_512",
+    "SHA512",
+    "WHIRLPOOL",
+];
+
+/// Whether a remote index record carries both a parseable `SIZE` and at
+/// least one non-empty checksum field. A record with only one of the two
+/// (or neither) is refused after the download.
+// Portage: `_emerge/BinpkgVerifier._start`, `bintree._get_digests`.
+pub(crate) fn index_has_size_and_checksum(record: &HashMap<String, String>) -> bool {
+    let size_ok = record
+        .get("SIZE")
+        .is_some_and(|s| s.trim().parse::<i64>().is_ok());
+    size_ok
+        && VALID_CHECKSUM_KEYS
+            .iter()
+            .any(|k| record.get(*k).is_some_and(|v| !v.is_empty()))
+}
+
+/// The refusal block for a remote record without size and checksum: a
+/// leading blank line, the `.partial` path, the reason, and no `File
+/// renamed` line (the file is left as is).
+// Portage: `_emerge/BinpkgVerifier._missing_digests_exception`.
+pub fn missing_digests_block(partial: &Path) -> String {
+    format!(
+        "\n!!! Digest verification failed:\n!!! {}\n!!! Reason: binhost's Packages index lacks size and checksum\n!!! for this package\n",
+        partial.display()
+    )
+}
+
 /// Hex digest of the whole file with `algo` (`MD5`/`SHA1`/`SHA256`/
 /// `SHA512`). `None` for an unknown name or an unreadable file.
 pub(crate) fn file_hex_digest(path: &Path, algo: &str) -> Option<String> {

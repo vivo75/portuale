@@ -144,7 +144,11 @@ impl RemoteBinaryJob<'_> {
                 true
             }
             Err(e) => {
-                eprintln!("!!! {e}");
+                if let crate::emerge_getbinpkg::DownloadError::MissingDigests { partial } = &e {
+                    print!("{}", crate::binpkg::missing_digests_block(partial));
+                } else {
+                    eprintln!("!!! {e}");
+                }
                 print!(
                     "{}",
                     crate::emerge_getbinpkg::failed_pkg_msg(&cpv, self.root, None)

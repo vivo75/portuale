@@ -20,10 +20,17 @@ fn remote_success_prints_no_post_merge_notice_like_portage() {
     let size = std::fs::metadata(binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"))
         .unwrap()
         .len();
+    let md5 = {
+        use md5::Digest as _;
+        md5::Md5::digest(std::fs::read(binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2")).unwrap())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
     std::fs::write(
         binhost.join("Packages"),
         format!(
-            "TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 1\n\nBUILD_ID: 1\nCPV: dev-libs/binpkgrmpkg-1.0\nDEFINED_PHASES: -\nEAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgrmpkg-1.0.tbz2\nREPO: testrepo\nSIZE: {size}\nSLOT: 0\nUSE:\n"
+            "TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 1\n\nBUILD_ID: 1\nCPV: dev-libs/binpkgrmpkg-1.0\nDEFINED_PHASES: -\nEAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgrmpkg-1.0.tbz2\nREPO: testrepo\nSIZE: {size}\nMD5: {md5}\nSLOT: 0\nUSE:\n"
         ),
     )
     .unwrap();

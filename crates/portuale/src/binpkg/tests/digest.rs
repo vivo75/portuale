@@ -178,3 +178,41 @@ fn checksum_failure_rename_moves_to_a_checksum_failure_sibling() {
     assert!(!second.exists());
     assert_eq!(fs::read(&reused).unwrap(), b"corrupt-bytes");
 }
+
+#[test]
+fn index_has_size_and_checksum_needs_both() {
+    let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    assert!(index_has_size_and_checksum(&rec(&[
+        ("SIZE", "5"),
+        ("SHA512", "ab")
+    ])));
+    assert!(index_has_size_and_checksum(&rec(&[
+        ("SIZE", " 5 "),
+        ("MD5", "ab")
+    ])));
+    assert!(!index_has_size_and_checksum(&rec(&[])));
+    assert!(!index_has_size_and_checksum(&rec(&[("SIZE", "5")])));
+    assert!(!index_has_size_and_checksum(&rec(&[("MD5", "ab")])));
+    assert!(!index_has_size_and_checksum(&rec(&[
+        ("SIZE", "5"),
+        ("MD5", "")
+    ])));
+    assert!(!index_has_size_and_checksum(&rec(&[
+        ("SIZE", "x"),
+        ("MD5", "ab")
+    ])));
+}
+
+#[test]
+fn missing_digests_block_matches_the_portage_text() {
+    let p = Path::new("/c/hostile/hb-none/hb-none-1-1.gpkg.tar.partial");
+    assert_eq!(
+        missing_digests_block(p),
+        "\n!!! Digest verification failed:\n!!! /c/hostile/hb-none/hb-none-1-1.gpkg.tar.partial\n!!! Reason: binhost's Packages index lacks size and checksum\n!!! for this package\n"
+    );
+}

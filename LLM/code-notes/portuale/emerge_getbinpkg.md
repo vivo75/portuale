@@ -111,7 +111,13 @@
 - Ports `BinpkgVerifier._start` / `_display_success`: uppercase hash names present in the index record (filtered by `PORTAGE_CHECKSUM_FILTER`) plus `size`, ASCII-sorted (`MD5 SHA1 size`); `None` without a parseable `SIZE` (backlog #428, #436d).
 
 ## fn download_and_verify
-- Portage `bintree.gettbz2` / `_get_digests` + `digestCheck`: uses per-binrepo `fetchcommand`/`resumecommand` when set in `binrepos.conf` (backlog #436a), else `FETCHCOMMAND`/`RESUMECOMMAND` from config (backlog #428); the `Packages` record's `MD5`/`SHA1` fields surviving `PORTAGE_CHECKSUM_FILTER` (backlog #436d) are verified against the downloaded file, and a mismatch removes the file and fails.
+- Portage `bintree.gettbz2` / `_get_digests` + `digestCheck`: uses per-binrepo `fetchcommand`/`resumecommand` when set in `binrepos.conf` (backlog #436a), else `FETCHCOMMAND`/`RESUMECOMMAND` from config (backlog #428); the `Packages` record's `MD5`/`SHA1` fields surviving `PORTAGE_CHECKSUM_FILTER` (backlog #436d) are verified against the downloaded file, and a mismatch removes the file and fails. A record without both `SIZE` and a checksum is refused first (see `enum DownloadError`, backlog #501).
+
+## enum DownloadError
+- `MissingDigests { partial }` is the remote-record refusal (backlog #501): `download_and_verify` fetches into `<file>.partial` first, then refuses a record without a parseable `SIZE` *and* a checksum key (`index_has_size_and_checksum`), leaving the `.partial` in place. Portage: `BinpkgVerifier._start` runs after the download, so the fetch is attempted (oracle `LLM/evidence/2026-10-23-500-501/`, casts `s2-hb-*`: GET of the gpkg is logged, then rc 1). Callers: the merge path prints the block and the `>>> Failed to emerge` tail; `--fetchonly` prints the block; `remote/plan.rs` uses the one-line `Display` text (its output shape is not pinned against Portage).
+
+## fn report_digest_failure
+- Shared by the local-digest and the missing-digest refusals. The local branch also writes the block to `build.log` and names the log in the tail; the remote refusal has no log (`has_log: false`): Portage's `PORTAGE_LOG_FILE` is not set when the verifier refuses a freshly fetched binary (oracle: empty `PORTAGE_TMPDIR/portage`, tail `>>> Failed to emerge <cpv> for <ROOT>/` with no `, Log file:`). Known older difference, not touched: Portage prints ROOT with a trailing slash, portuale echoes the string it got.
 
 ## fn failed_pkg_msg
 - Ports Portage `Scheduler._failed_pkg_msg(pkg, "emerge", "for")` (`Scheduler.py:2366-2381`, backlog #174): each `_status_msg` emits its own leading blank line, then `>>> <msg>`; the log line carries Portage's own leading space (`f" '{log}'"`). Each `_status_msg` writes its own leading blank line first (`writemsg_level("\n")` before `displayMessage`), and the `>>> ` prefix is `JobStatusDisplay._format_msg`; the ` for <root>` suffix appears when `ROOT != "/"` (Portage `pkg.root_config.settings["ROOT"]`).

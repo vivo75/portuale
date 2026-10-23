@@ -922,7 +922,7 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
                 .ok_or_else(|| {
                     format!("{cp}-{version}: binhost record names unknown repo {binrepo_name:?}")
                 })?;
-            let path = download_and_verify(DownloadAndVerifyArgs {
+            let downloaded = download_and_verify(DownloadAndVerifyArgs {
                 sync_uri: &binrepo.sync_uri,
                 record: &record,
                 category: &entry.category,
@@ -930,7 +930,25 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
                 version: &version,
                 pkgdir: &binrepo_download_dir(config, binrepo, &eprefix_from_env(), pkgdir),
                 config,
-            })?;
+            });
+            let path = match downloaded {
+                Ok(path) => path,
+                Err(DownloadError::MissingDigests { partial }) => {
+                    let block = crate::binpkg::missing_digests_block(&partial);
+                    return Err(report_digest_failure(
+                        &block,
+                        &DigestFailureCtx {
+                            entry,
+                            version: &version,
+                            root,
+                            portage_tmpdir,
+                            merge_options,
+                            has_log: false,
+                        },
+                    ));
+                }
+                Err(DownloadError::Other(e)) => return Err(e),
+            };
             let portage_quiet = merge_options
                 .build_env
                 .iter()
@@ -1023,32 +1041,20 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
     if let Some(record) = &local_record
         && let Err(mismatch) = crate::binpkg::verify_binpkg_against_index(&binpkg_path, record)
     {
-        let cpv = format!("{}/{}-{version}", entry.category, entry.package);
         let renamed = crate::binpkg::checksum_failure_rename(&binpkg_path)
             .unwrap_or_else(|| binpkg_path.clone());
         let block = crate::binpkg::digest_failure_block(&binpkg_path, &mismatch, &renamed);
-        // The log holds exactly this block: the block is appended to the fresh
-        // `PORTAGE_LOG_FILE`, the same `${PORTAGE_BUILDDIR}/temp/build.log`.
-        let log_path = crate::emerge_build::build_log_path(
-            portage_tmpdir,
-            &entry.category,
-            &entry.package,
-            &version,
-            &crate::emerge_build::resolved_features(merge_options),
-        );
-        // Only a log that exists and is non-empty is reported (`, Log file:`
-        // suffix), exactly like Portage with no located log.
-        let log_ready = log_path
-            .parent()
-            .is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
-            && std::fs::write(&log_path, block.as_bytes()).is_ok()
-            && std::fs::metadata(&log_path).is_ok_and(|st| st.len() > 0);
-        print!("{block}");
-        print!(
-            "{}",
-            failed_pkg_msg(&cpv, root, log_ready.then_some(log_path.as_path()))
-        );
-        return Err(binpkg_digest_failure(&cpv));
+        return Err(report_digest_failure(
+            &block,
+            &DigestFailureCtx {
+                entry,
+                version: &version,
+                root,
+                portage_tmpdir,
+                merge_options,
+                has_log: true,
+            },
+        ));
     }
 
     // A vouched local binpkg's verifier line, then the extract steps: all
@@ -1181,6 +1187,58 @@ pub(crate) fn failed_install_pkg_msg(cpv: &str, root: &Path, log_path: Option<&P
         ),
         None => format!("\n>>> Failed to install {cpv}{for_root}\n"),
     }
+}
+
+/// What [`report_digest_failure`] needs to name the package and find its log.
+struct DigestFailureCtx<'a> {
+    entry: &'a GraphEntry,
+    version: &'a str,
+    root: &'a Path,
+    portage_tmpdir: &'a Path,
+    merge_options: &'a MergeOptions,
+    /// Whether the package has a `build.log` to hold the block. A local
+    /// binpkg does; a remote one is refused before Portage initialises
+    /// `PORTAGE_LOG_FILE`, so it has none and the tail names no log.
+    // Portage: _emerge/Binpkg.py, _start_fetcher / _fetcher_exit
+    has_log: bool,
+}
+
+/// Print a verifier failure `block` to stdout and (with `has_log`) the
+/// package `build.log` (the log holds exactly this block), then the `>>> Failed to emerge ...`
+/// tail, and return the silent sentinel error the CLI boundary drops (exit
+/// 1, no resume notice, no `emerge:` line).
+// Portage: _emerge/BinpkgVerifier.py, _digest_exception / _missing_digests_exception
+fn report_digest_failure(block: &str, ctx: &DigestFailureCtx<'_>) -> String {
+    let DigestFailureCtx {
+        entry,
+        version,
+        root,
+        portage_tmpdir,
+        merge_options,
+        has_log,
+    } = ctx;
+    let cpv = format!("{}/{}-{version}", entry.category, entry.package);
+    let log_path = crate::emerge_build::build_log_path(
+        portage_tmpdir,
+        &entry.category,
+        &entry.package,
+        version,
+        &crate::emerge_build::resolved_features(merge_options),
+    );
+    // Only a log that exists and is non-empty is reported (`, Log file:`
+    // suffix), exactly like Portage with no located log.
+    let log_ready = *has_log
+        && log_path
+            .parent()
+            .is_some_and(|dir| std::fs::create_dir_all(dir).is_ok())
+        && std::fs::write(&log_path, block.as_bytes()).is_ok()
+        && std::fs::metadata(&log_path).is_ok_and(|st| st.len() > 0);
+    print!("{block}");
+    print!(
+        "{}",
+        failed_pkg_msg(&cpv, root, log_ready.then_some(log_path.as_path()))
+    );
+    binpkg_digest_failure(&cpv)
 }
 
 /// The error for a merge-time binpkg digest failure whose output is already
@@ -1478,13 +1536,42 @@ pub(crate) fn verified_digest_names_filtered(
     Some(names)
 }
 
+/// Why [`download_and_verify`] failed.
+#[derive(Debug)]
+pub(crate) enum DownloadError {
+    /// The index record lacks a `SIZE` or every checksum; the downloaded
+    /// `.partial` stays on disk.
+    MissingDigests { partial: std::path::PathBuf },
+    /// Any other failure, as the one-line message.
+    Other(String),
+}
+
+impl From<String> for DownloadError {
+    fn from(e: String) -> Self {
+        Self::Other(e)
+    }
+}
+
+impl std::fmt::Display for DownloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingDigests { partial } => write!(
+                f,
+                "{}: binhost's Packages index lacks size and checksum",
+                partial.display()
+            ),
+            Self::Other(e) => f.write_str(e),
+        }
+    }
+}
+
 /// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into `$PKGDIR`,
 /// then verify it against the index `SIZE` and the `MD5`/`SHA1` fields present.
 /// A mismatch removes the file and fails.
 // Portage: lib/portage/dbapi/bintree.py, gettbz2
 pub(crate) fn download_and_verify(
     args: DownloadAndVerifyArgs<'_>,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<std::path::PathBuf, DownloadError> {
     let DownloadAndVerifyArgs {
         sync_uri,
         record,
@@ -1543,16 +1630,24 @@ pub(crate) fn download_and_verify(
         })?;
     }
 
+    // A remote record needs both a SIZE and a checksum; one without leaves
+    // nothing to compare against. Refused after the download, with the
+    // `.partial` left in place.
+    // Portage: _emerge/BinpkgVerifier.py, _start
+    if !crate::binpkg::index_has_size_and_checksum(record) {
+        return Err(DownloadError::MissingDigests { partial: dest });
+    }
+
     if let Some(expected) = record.get("SIZE").and_then(|s| s.parse::<u64>().ok()) {
         let actual = std::fs::metadata(&dest)
             .map_err(|e| format!("{}: {e}", dest.display()))?
             .len();
         if actual != expected {
             let _ = std::fs::remove_file(&dest);
-            return Err(format!(
+            return Err(DownloadError::Other(format!(
                 "{}: downloaded size {actual} != index SIZE {expected}",
                 dest.display()
-            ));
+            )));
         }
     }
 
@@ -1588,10 +1683,10 @@ pub(crate) fn download_and_verify(
                 .collect();
             if !actual.eq_ignore_ascii_case(&expected_md5) {
                 let _ = std::fs::remove_file(&dest);
-                return Err(format!(
+                return Err(DownloadError::Other(format!(
                     "{}: MD5 mismatch (index {expected_md5}, got {actual})",
                     dest.display()
-                ));
+                )));
             }
         }
         if let Some(expected_sha1) = want_sha1 {
@@ -1602,10 +1697,10 @@ pub(crate) fn download_and_verify(
                 .collect();
             if !actual.eq_ignore_ascii_case(&expected_sha1) {
                 let _ = std::fs::remove_file(&dest);
-                return Err(format!(
+                return Err(DownloadError::Other(format!(
                     "{}: SHA1 mismatch (index {expected_sha1}, got {actual})",
                     dest.display()
-                ));
+                )));
             }
         }
     }
@@ -2828,11 +2923,14 @@ mod tests {
             "FETCHCOMMAND".to_string(),
             format!("sh {} ${{DISTDIR}} ${{FILE}} ${{URI}}", script.display()),
         );
-        let record: HashMap<String, String> =
-            [("SIZE", "4618"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
+        let record: HashMap<String, String> = [
+            ("SIZE", "4618"),
+            ("MD5", "54cab52a68eda02d7d41561b8f7d318a"),
+            ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         let got = download_and_verify(DownloadAndVerifyArgs {
             sync_uri: &base,
             record: &record,
@@ -2972,11 +3070,14 @@ mod tests {
         config
             .other_vars
             .insert("RESUMECOMMAND".into(), "/bin/false ${FILE}".into());
-        let record: HashMap<String, String> =
-            [("SIZE", "4618"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
+        let record: HashMap<String, String> = [
+            ("SIZE", "4618"),
+            ("MD5", "54cab52a68eda02d7d41561b8f7d318a"),
+            ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         // Pre-seed `.partial` so the first call exercises `resumecommand`, then
         // remove the downloaded file so the second exercises `fetchcommand`.
         let partial = pkgdir.join("dev-libs/packagepkg-1.0.tbz2.partial");
@@ -3087,7 +3188,11 @@ mod tests {
         std::fs::remove_file(&got).unwrap();
 
         // Wrong SIZE -> rejected, file removed.
-        let bad_size = record(&[("SIZE", "9999"), ("PATH", "dev-libs/packagepkg-1.0.tbz2")]);
+        let bad_size = record(&[
+            ("SIZE", "9999"),
+            ("MD5", FIXTURE_MD5),
+            ("PATH", "dev-libs/packagepkg-1.0.tbz2"),
+        ]);
         let err = download_and_verify(DownloadAndVerifyArgs {
             sync_uri: &base,
             record: &bad_size,
@@ -3097,7 +3202,8 @@ mod tests {
             pkgdir: &pkgdir,
             config: &Config::default(),
         })
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("!= index SIZE 9999"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2.partial").exists());
@@ -3117,7 +3223,8 @@ mod tests {
             pkgdir: &pkgdir,
             config: &Config::default(),
         })
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("MD5 mismatch"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
 
@@ -3138,9 +3245,55 @@ mod tests {
             pkgdir: &pkgdir,
             config: &Config::default(),
         })
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("SHA1 mismatch"), "{err}");
         assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_and_verify_refuses_a_record_without_size_and_checksum_after_the_fetch() {
+        // Portage 3.0.83-r1 (LLM/evidence/2026-10-23-500-501, `s2-hb-*`): the file IS
+        // fetched, then refused with rc 1, and the `.partial` stays. The same for
+        // no digest at all, SIZE only and checksum only.
+        let tmp = tempdir();
+        let pkgdir = tmp.join("pkgdir");
+        let body =
+            std::fs::read(fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
+        for pairs in [
+            vec![],
+            vec![("SIZE", "4618")],
+            vec![("MD5", "54cab52a68eda02d7d41561b8f7d318a")],
+        ] {
+            let mut routes = HashMap::new();
+            routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), body.clone());
+            let (base, h) = serve(routes, 1);
+            let mut record: HashMap<String, String> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            record.insert("PATH".into(), "dev-libs/packagepkg-1.0.tbz2".into());
+            let err = download_and_verify(DownloadAndVerifyArgs {
+                sync_uri: &base,
+                record: &record,
+                category: "dev-libs",
+                package: "packagepkg",
+                version: "1.0",
+                pkgdir: &pkgdir,
+                config: &Config::default(),
+            })
+            .unwrap_err();
+            h.join().unwrap();
+            let partial = pkgdir.join("dev-libs/packagepkg-1.0.tbz2.partial");
+            match err {
+                DownloadError::MissingDigests { partial: p } => assert_eq!(p, partial),
+                DownloadError::Other(e) => panic!("{pairs:?}: {e}"),
+            }
+            assert!(partial.is_file(), "{pairs:?}: the .partial is left behind");
+            assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").exists());
+            std::fs::remove_file(&partial).unwrap();
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -4002,7 +4155,7 @@ mod tests {
         let index = packages_index(&[
             "BUILD_ID: 1\nCPV: dev-libs/packagepkg-1.0\nDEFINED_PHASES: install\n\
              EAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/packagepkg-1.0.tbz2\n\
-             RDEPEND: dev-libs/samepkg\nREPO: gentoo\nSIZE: 4618\nSLOT: 0\nUSE:",
+             RDEPEND: dev-libs/samepkg\nREPO: gentoo\nSIZE: 4618\nMD5: 54cab52a68eda02d7d41561b8f7d318a\nSLOT: 0\nUSE:",
         ]);
         let mut routes = HashMap::new();
         routes.insert("/Packages".to_string(), index);
@@ -4109,6 +4262,117 @@ mod tests {
     }
 
     #[test]
+    fn run_merge_plan_refuses_a_remote_binpkg_whose_index_lacks_a_checksum() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let tbz2 =
+            std::fs::read(fixtures_root().join("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
+        let index = packages_index(&[
+            "BUILD_ID: 1\nCPV: dev-libs/packagepkg-1.0\nDEFINED_PHASES: install\n\
+             EAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/packagepkg-1.0.tbz2\n\
+             RDEPEND: dev-libs/samepkg\nREPO: gentoo\nSIZE: 4618\nSLOT: 0\nUSE:",
+        ]);
+        let mut routes = HashMap::new();
+        routes.insert("/Packages".to_string(), index);
+        routes.insert("/dev-libs/packagepkg-1.0.tbz2".to_string(), tbz2);
+        // Refresh tries Packages.gz + Packages.zst (both 404 here) before the
+        // plain Packages, then the binpkg download = 4 connections.
+        let (base, _h) = serve(routes, 4);
+
+        let binrepos = vec![BinRepo {
+            name: "test".into(),
+            sync_uri: base.clone(),
+            priority: 1,
+            location: Some(
+                root.join("var/cache/binhost/test")
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+            verify_signature: true,
+            frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
+        }];
+        // A failed refresh warns on stderr and resolves against the local pool --
+        // here the plain Packages succeeds, so the live index lands in the cache.
+        refresh_binhost_indexes(&binrepos, &root, false, &[], &[]);
+        assert!(
+            root.join("var/cache/edb/binhost/127.0.0.1/Packages")
+                .is_file(),
+            "the live Packages landed in the edb cache"
+        );
+
+        let config = Config {
+            binrepos: binrepos.clone(),
+            pkgdir: pkgdir.to_string_lossy().to_string(),
+            ..Config::default()
+        };
+        let entry = GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: "packagepkg".into(),
+            outcome: PretendOutcome::New {
+                version: "1.0".into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("gentoo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: vec![],
+            required_by: vec![],
+            source: CandidateSource::Binary,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: true,
+            build_id: None,
+            build_time: None,
+            deps: Vec::new(),
+        };
+
+        // Portage 3.0.83-r1 (LLM/evidence/2026-10-23-500-501, `s2-hb-size-only`):
+        // fetched, then refused before install; the `.partial` stays.
+        let err = run_merge_plan(RunMergePlanArgs {
+            entries: &[entry],
+            config: &config,
+            repos: &[],
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            merge_options: &MergeOptions::default(),
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            mode: crate::emerge_build::StatusMode::for_tests(),
+        })
+        .expect_err("a record without a checksum is refused");
+        // The block and tail already went to stdout; the pass reports it silently.
+        assert_eq!(err.to_string(), "failed packages already reported");
+        let dir = root.join("var/cache/binhost/test/dev-libs");
+        assert!(dir.join("packagepkg-1.0.tbz2.partial").is_file());
+        assert!(!dir.join("packagepkg-1.0.tbz2").exists());
+        assert!(!root.join("usr/share/packagepkg/hello.txt").exists());
+        assert!(!root.join("var/db/pkg/dev-libs/packagepkg-1.0").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn run_merge_plan_upgrades_over_an_installed_binpkg() {
         let tmp = tempdir();
         let root = tmp.join("root");
@@ -4136,7 +4400,7 @@ mod tests {
         let index = packages_index(&[
             "BUILD_ID: 1\nCPV: dev-libs/packagepkg-1.0\nDEFINED_PHASES: install\n\
              EAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/packagepkg-1.0.tbz2\n\
-             RDEPEND: dev-libs/samepkg\nREPO: gentoo\nSIZE: 4618\nSLOT: 0\nUSE:",
+             RDEPEND: dev-libs/samepkg\nREPO: gentoo\nSIZE: 4618\nMD5: 54cab52a68eda02d7d41561b8f7d318a\nSLOT: 0\nUSE:",
         ]);
         let mut routes = HashMap::new();
         routes.insert("/Packages".to_string(), index);
@@ -4319,12 +4583,19 @@ mod tests {
         let size = std::fs::metadata(binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2"))
             .unwrap()
             .len();
+        let md5 = {
+            use md5::Digest as _;
+            md5::Md5::digest(std::fs::read(binhost.join("dev-libs/binpkgrmpkg-1.0.tbz2")).unwrap())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
         std::fs::write(
             binhost.join("Packages"),
             format!(
                 "TIMESTAMP: 0\nPACKAGES: 1\n\nBUILD_ID: 1\nCPV: dev-libs/binpkgrmpkg-1.0\n\
                  DEFINED_PHASES: -\nEAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgrmpkg-1.0.tbz2\n\
-                 REPO: testrepo\nSIZE: {size}\nSLOT: 0\nUSE:\n"
+                 REPO: testrepo\nSIZE: {size}\nMD5: {md5}\nSLOT: 0\nUSE:\n"
             ),
         )
         .unwrap();

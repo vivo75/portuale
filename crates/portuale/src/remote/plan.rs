@@ -419,7 +419,8 @@ pub(crate) fn run_one_remote_unit(args: RunOneRemoteUnitArgs<'_>) -> Result<(), 
                 ),
                 config,
             },
-        )?
+        )
+        .map_err(|e| e.to_string())?
     } else {
         crate::emerge_getbinpkg::resolve_local_binpkg(
             pkgdir,

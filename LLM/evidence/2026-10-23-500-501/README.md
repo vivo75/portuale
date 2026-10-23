@@ -88,3 +88,24 @@ So the fetch IS attempted (the check is in BinpkgVerifier, after download); S2 d
 
 Caveats: the default `binrepos.conf` still lists [gentoo]/[f1r] from the host cache ("within TTL", no network use seen);
 casts show wget progress for the S2 fetch.
+
+## S2 after the fix (#501)
+
+Same hermetic setup rebuilt (the first one was removed): `build-hostile.py` for `hb-none`, `hb-size-only`, `hb-sum-only`, `hb-full`
+into one served dir, `emaint binhost --fix`, fields then deleted from `Packages` as above; config as `harness/make.conf` plus
+a private `repos.conf` (gentoo at `/.gentoo/repos/gentoo`) and an empty `binrepos.conf` (so the host's `[gentoo]`/`[f1r]` lines of the first capture are gone).
+Portage 3.0.83-r1 re-run on `hb-none` gave the same block as `txt/s2-hb-none.portage.txt`; the Portage run leaves
+`PORTAGE_TMPDIR/portage` empty (no build log), hence no `, Log file:` suffix in its tail.
+
+portuale rebuilt from this working tree: casts `casts/s2-hb-*.portuale.after.cast`, text `txt/s2-hb-*.portuale.after.txt`.
+
+| index entry | Portage rc | portuale rc (before) | portuale rc (after) | block vs Portage |
+|---|---|---|---|---|
+| hb-none | 1 | 0 | 1 | identical except ROOT trailing slash |
+| hb-size-only | 1 | 0 | 1 | identical except ROOT trailing slash |
+| hb-sum-only | 1 | 0 | 1 | identical except ROOT trailing slash |
+| hb-full | 0 | 0 | 0 | no refusal text |
+
+The ROOT difference is older: Portage prints ROOT with a trailing slash everywhere (`Emerging binary ... for <ROOT>/`), portuale echoes the
+`ROOT` string it was given. The pmtest pin passes `ROOT` with a trailing slash. In each refused run the `.partial` stays in the binhost cache, nothing is installed.
+The first `before` rows were measured against the build of eee9edee, see the S2 table above.

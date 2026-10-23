@@ -1,0 +1,31 @@
+
+>>> Emerging binary (1 of 1) hostile/hb-full-1::porttest for /var/tmp/ev500/root-bh-portuale-hb-full
+--2026-10-23 12:52:43--  http://127.0.0.1:18766/hostile/hb-full/hb-full-1-1.gpkg.tar
+Connecting to 127.0.0.1:18766... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 20480 (20K) [application/x-tar]
+Saving to: ‘/var/tmp/ev500/binhost-cache-portuale-hb-full/hostile/hb-full/hb-full-1-1.gpkg.tar.partial’
+
+     0K .......... ..........                                 100% 2.83G=0s
+
+2026-10-23 12:52:43 (2.83 GB/s) - ‘/var/tmp/ev500/binhost-cache-portuale-hb-full/hostile/hb-full/hb-full-1-1.gpkg.tar.partial’ saved [20480/20480]
+
+ * hb-full-1-1.gpkg.tar MD5 SHA1 size ;-) ...                            [ ok ]
+>>> Extracting info
+>>> Extracting hostile/hb-full-1
+
+>>> Installing (1 of 1) hostile/hb-full-1::porttest to /var/tmp/ev500/root-bh-portuale-hb-full
+
+>>> Completed (1 of 1) hostile/hb-full-1::porttest to /var/tmp/ev500/root-bh-portuale-hb-full
+
+ * GNU info directory index is up-to-date.
+rc=0
+--- server requests
+"GET /Packages.gz HTTP/1.1" 404
+"GET /Packages.zst HTTP/1.1" 404
+"GET /Packages HTTP/1.1" 200
+"GET /hostile/hb-full/hb-full-1-1.gpkg.tar HTTP/1.1" 200
+--- installed
+hb-full-1
+hello
+--- fetched file

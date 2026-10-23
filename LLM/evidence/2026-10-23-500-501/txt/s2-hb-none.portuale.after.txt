@@ -1,0 +1,29 @@
+
+>>> Emerging binary (1 of 1) hostile/hb-none-1::porttest for /var/tmp/ev500/root-bh-portuale-hb-none
+--2026-10-23 12:52:36--  http://127.0.0.1:18766/hostile/hb-none/hb-none-1-1.gpkg.tar
+Connecting to 127.0.0.1:18766... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 20480 (20K) [application/x-tar]
+Saving to: ‘/var/tmp/ev500/binhost-cache-portuale-hb-none/hostile/hb-none/hb-none-1-1.gpkg.tar.partial’
+
+     0K .......... ..........                                 100% 2.56G=0s
+
+2026-10-23 12:52:36 (2.56 GB/s) - ‘/var/tmp/ev500/binhost-cache-portuale-hb-none/hostile/hb-none/hb-none-1-1.gpkg.tar.partial’ saved [20480/20480]
+
+
+!!! Digest verification failed:
+!!! /var/tmp/ev500/binhost-cache-portuale-hb-none/hostile/hb-none/hb-none-1-1.gpkg.tar.partial
+!!! Reason: binhost's Packages index lacks size and checksum
+!!! for this package
+
+>>> Failed to emerge hostile/hb-none-1 for /var/tmp/ev500/root-bh-portuale-hb-none
+rc=1
+--- server requests
+"GET /Packages.gz HTTP/1.1" 404
+"GET /Packages.zst HTTP/1.1" 404
+"GET /Packages HTTP/1.1" 200
+"GET /hostile/hb-none/hb-none-1-1.gpkg.tar HTTP/1.1" 200
+--- installed
+ls: cannot access '/var/tmp/ev500/root-bh-portuale-hb-none/var/db/pkg/hostile': No such file or directory
+ls: cannot access '/var/tmp/ev500/root-bh-portuale-hb-none/opt/h': No such file or directory
+--- fetched file
