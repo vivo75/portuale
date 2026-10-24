@@ -258,3 +258,34 @@ fn unmerge_backup_gate_stays_on_for_an_env_only_token() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Backlog #521: the removal display opens with the non-`/` ROOT notice and,
+/// under `--pretend`, the unmerged header — each with its own leading blank
+/// line, `--quiet` dropping the blanks (`_unmerge_display`).
+// Portage: _emerge/unmerge.py, _unmerge_display
+#[test]
+fn unmerge_display_header_prints_the_root_notice_and_the_header() {
+    let color = Colorizer::new(false);
+    let root = std::path::Path::new("/tmp/some-root");
+    // A non-`/` ROOT under `--pretend`: the ROOT notice, then the header.
+    assert_eq!(
+        unmerge_display_header_text(root, true, false, &color),
+        "\n>>> Using system located in ROOT tree /tmp/some-root/\n\
+         \n>>> These are the packages that would be unmerged:\n"
+    );
+    // `ROOT=/` drops the notice, keeping the header's blank line.
+    assert_eq!(
+        unmerge_display_header_text(std::path::Path::new("/"), true, false, &color),
+        "\n>>> These are the packages that would be unmerged:\n"
+    );
+    // Not `--pretend`: the notice only.
+    assert_eq!(
+        unmerge_display_header_text(root, false, false, &color),
+        "\n>>> Using system located in ROOT tree /tmp/some-root/\n"
+    );
+    // `--quiet`: no leading blanks anywhere.
+    assert_eq!(
+        unmerge_display_header_text(root, true, true, &color),
+        ">>> Using system located in ROOT tree /tmp/some-root/\n"
+    );
+}

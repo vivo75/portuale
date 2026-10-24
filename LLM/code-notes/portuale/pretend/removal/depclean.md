@@ -14,6 +14,12 @@
 - Warning shape: Portage's `"".join(bad(" * ") + f"{line}\n" for line in textwrap.wrap(msg, 70))` -- the wrap is pinned here since it never changes. Second `msg` list: a blank ` * ` line, then `  <cpv> pulled in by:` and `    <consumer> needs <sonames>` per provider, then a trailing blank ` * ` line.
 - Advisory-line encoding: `None` = Portage's leading bare `writemsg_stdout("\n")`; `Some("")` = Portage's `msg.append("\n")` (still `WARN(" * ")`-prefixed); `Some(text)` = a ` * `-prefixed advisory line. The first paragraph (`Depclean may break link level dependencies...`) is printed only when `--depclean-lib-check=n`.
 
+## fn print_cleanlist_blocks (#523)
+- `create_cleanlist`'s reverse-dependency blocks (`show_parents` under `--verbose`, then the per-package `show_cycle_suggestion`), extracted so both passes share them: Portage calls `create_cleanlist()` once before the `--depclean-lib-check` scan and again after the re-closure (`actions.py:1640`, `:1874`), so the blocks legitimately print twice when the lib check fires. The second pass is preceded by another `Calculating dependencies ... done!` (`:1859-1862`).
+
+## fn apply_depclean_lib_check (return value, #523)
+- Returns `(result, recomputed)`; `recomputed` drives the second notice + block printing in `run_depclean_pretend` and `run_pretend`'s prune half. Its three progress lines (`>>> Checking for lib consumers...`, `>>> Assigning files to packages...`, `>>> Adding lib providers to graph...`) are Portage INFO-level `writemsg_level`, i.e. **stdout**; only the "In order to avoid breakage" warning block is WARNING-level (stderr).
+
 ## fn depclean_unresolved_halt
 - Ports Portage's `_calc_depclean` `unresolved_deps()` halt (`actions.py:1177-1248`): depclean/prune print the `bad(" * ")`-prefixed `Dependencies could not be completely resolved ...` block (`logging.ERROR` -> stderr) and exit 1 without removing anything. `is_prune` adds the prune-only `use --nodeps` trailer. Wrap: Portage's `textwrap.wrap(..., 65)` -- pinned, it never changes.
 

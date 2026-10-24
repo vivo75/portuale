@@ -152,18 +152,17 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         }
     }
 
-    // This header shows only under `--pretend`/`--ask`, even when nothing
-    // ends up selected; a removal run doesn't print it at all.
+    // The `>>> Using system located in ROOT tree` line (non-`/` ROOT) and,
+    // under `--pretend`/`--ask`, the `>>> These are the packages that would
+    // be unmerged:` header share one helper with the `--clean`/`--prune`
+    // path, each carrying Portage's leading blank line.
     // Portage: unmerge.py, _unmerge_display
-    if pretend {
-        println!(
-            "{}",
-            color.c(
-                "darkgreen",
-                ">>> These are the packages that would be unmerged:"
-            )
-        );
-    }
+    print_unmerge_display_header(UnmergeDisplayHeaderArgs {
+        root,
+        pretend,
+        quiet,
+        color,
+    });
 
     // The one package `unmerge` always refuses to select, moving it to
     // `protected` with an eerror note.
@@ -285,8 +284,9 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         "\n>>> {} packages are slated for removal.",
         color.c("UNMERGE_WARN", "'Selected'")
     );
+    // Portage's legend block ends with a blank line (unmerge.py:563-569).
     println!(
-        ">>> {} and {} packages will not be removed.",
+        ">>> {} and {} packages will not be removed.\n",
         color.c("GOOD", "'Protected'"),
         color.c("GOOD", "'omitted'")
     );
@@ -313,6 +313,63 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         });
     }
     ExitCode::SUCCESS
+}
+
+/// The values [`print_unmerge_display_header`] reads from its caller.
+pub(crate) struct UnmergeDisplayHeaderArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) pretend: bool,
+    pub(crate) quiet: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
+/// Portage `_unmerge_display`'s two opening lines as text: the
+/// `>>> Using system located in ROOT tree <root>/` notice for a non-`/`
+/// ROOT (every removal display: `-C`, `--clean`, `--depclean`), and the
+/// `>>> These are the packages that would be unmerged:` header under
+/// `--pretend`/`--ask`. Both carry a leading blank line unless `--quiet`
+/// (backlog #521).
+// Portage: _emerge/unmerge.py, _unmerge_display
+pub(crate) fn unmerge_display_header_text(
+    root: &Path,
+    pretend: bool,
+    quiet: bool,
+    color: &Colorizer,
+) -> String {
+    let newline = if quiet { "" } else { "\n" };
+    let mut out = String::new();
+    if root != Path::new("/") {
+        out.push_str(&color.c(
+            "darkgreen",
+            &format!(
+                "{newline}>>> Using system located in ROOT tree {}/",
+                root.display()
+            ),
+        ));
+        out.push('\n');
+    }
+    if pretend && !quiet {
+        out.push_str(&color.c(
+            "darkgreen",
+            &format!("{newline}>>> These are the packages that would be unmerged:"),
+        ));
+        out.push('\n');
+    }
+    out
+}
+
+/// Prints [`unmerge_display_header_text`].
+pub(crate) fn print_unmerge_display_header(args: UnmergeDisplayHeaderArgs<'_>) {
+    let UnmergeDisplayHeaderArgs {
+        root,
+        pretend,
+        quiet,
+        color,
+    } = args;
+    print!(
+        "{}",
+        unmerge_display_header_text(root, pretend, quiet, color)
+    );
 }
 
 /// The values [`print_unmerge_selection`] reads from its caller.

@@ -105,6 +105,38 @@ pub(crate) fn lib_consumer_scan(
     out
 }
 
+/// The values [`print_cleanlist_blocks`] reads from its caller.
+pub(crate) struct CleanlistBlocksArgs<'a> {
+    pub(crate) result: &'a portage_repo::DepcleanResult,
+    pub(crate) verbose: bool,
+}
+
+/// Portage `create_cleanlist`'s reverse-dependency blocks: the `--verbose`
+/// `pulled in by:` list per kept package (in cleanlist order), each followed
+/// by its cycle notice. Called once per pass — Portage runs the whole
+/// function again after the `--depclean-lib-check` second graph, so the
+/// blocks legitimately print twice when the lib check fires (backlog #523).
+// Portage: _emerge/actions.py, create_cleanlist
+pub(crate) fn print_cleanlist_blocks(args: CleanlistBlocksArgs<'_>) {
+    let CleanlistBlocksArgs { result, verbose } = args;
+    for (pkg, lines) in &result.kept_parents {
+        if verbose {
+            println!("  {} pulled in by:", pkg.cpv());
+            for line in lines {
+                println!("    {line}");
+            }
+            println!();
+        }
+        if let Some(cycle) = result
+            .cycle_suggestions
+            .iter()
+            .find(|s| s.pkg.cpv() == pkg.cpv())
+        {
+            print_cycle_suggestion(cycle);
+        }
+    }
+}
+
 /// The `--depclean-lib-check` phase: run `lib_consumer_scan` on the
 /// tentative cleanlist, warn about providers that must be kept, and hand
 /// them to `recompute` (a second pass seeding them as roots so their own
@@ -119,10 +151,10 @@ pub(crate) fn apply_depclean_lib_check(
     lib_check: LibCheck,
     color: &Colorizer,
     recompute: impl FnOnce(&[portage_repo::InstalledPackage]) -> portage_repo::DepcleanResult,
-) -> portage_repo::DepcleanResult {
+) -> (portage_repo::DepcleanResult, bool) {
     let LibCheck { on, preserve_libs } = lib_check;
     if !on || result.cleanlist.is_empty() {
-        return result;
+        return (result, false);
     }
     let scanned: Vec<portage_repo::InstalledPackage> = result
         .cleanlist
@@ -138,14 +170,17 @@ pub(crate) fn apply_depclean_lib_check(
         .cloned()
         .collect();
     if preserve_libs && scanned.is_empty() {
-        return result;
+        return (result, false);
     }
-    eprintln!(">>> Checking for lib consumers...");
+    // These progress lines are `writemsg_level` at the INFO level, i.e.
+    // stdout, unlike the warning block below (WARNING → stderr).
+    // Portage: _emerge/actions.py, _calc_depclean
+    println!(">>> Checking for lib consumers...");
     let protections = lib_consumer_scan(root, &result.cleanlist, &scanned);
     if protections.is_empty() {
-        return result;
+        return (result, false);
     }
-    eprintln!(">>> Assigning files to packages...");
+    println!(">>> Assigning files to packages...");
 
     // The wrap is pinned here since it never changes.
     let star = color.c("BAD", " * ");
@@ -167,10 +202,10 @@ pub(crate) fn apply_depclean_lib_check(
     }
     eprintln!("{star}");
 
-    eprintln!(">>> Adding lib providers to graph...");
+    println!(">>> Adding lib providers to graph...");
     let providers: Vec<portage_repo::InstalledPackage> =
         protections.iter().map(|p| p.provider.clone()).collect();
-    recompute(&providers)
+    (recompute(&providers), true)
 }
 
 /// The unresolved-dependency halt: when a kept installed package has a hard
@@ -364,6 +399,15 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         }
     }
 
+    // `_complete_graph` runs behind the resolver's notice: Portage prints
+    // `Calculating dependencies ... done!` on stdout (the spinner's static
+    // form when piped), preceded by its blank line and with no timing line
+    // (depclean never calls `_show_resolution_report`). Backlog #522.
+    // Portage: _emerge/actions.py, _calc_depclean; stdout_spinner.end_notice
+    if resolution_notice_shown(quiet, false) {
+        println!("\nCalculating dependencies ... done!");
+    }
+
     // `@world` = the `world` file plus each `world_sets` nested set's own
     // atoms, kept as `(atom, label)` pairs for the `--verbose` reverse-dep
     // display.
@@ -416,6 +460,15 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
     if let Some(code) = depclean_unresolved_halt(&result.unresolved, false, color) {
         return code;
     }
+    // `create_cleanlist`'s reverse-dep blocks (and the per-package cycle
+    // notice after each), printed for the FIRST pass before the lib check
+    // and again after the second `_complete_graph` — Portage calls
+    // `create_cleanlist()` once per round and the blocks live inside it
+    // (backlog #523).
+    print_cleanlist_blocks(CleanlistBlocksArgs {
+        result: &result,
+        verbose,
+    });
     // The `--depclean-lib-check` phase: a cleanlist package still needed
     // at link level by a survivor is kept, with its own deps.
     // Portage: _emerge/actions.py, _calc_depclean
@@ -423,39 +476,29 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         on: lib_check,
         preserve_libs: config_has_preserve_libs(config),
     };
-    let result = apply_depclean_lib_check(root, result, lib_check_phase, color, |providers| {
-        portage_repo::depclean_cleanlist(portage_repo::DepcleanCleanlistArgs {
-            root,
-            world_seeds: &world_seeds,
-            system_atoms: &config.system_packages,
-            args: &args,
-            deselect,
-            lib_protected_providers: providers,
-            package_provided: &config.package_provided,
-        })
-    });
-
-    // The reverse-dep blocks come right after the advisory and before the
-    // removal-order line / empty message.
-    // Portage: _emerge/actions.py, create_cleanlist
-    // A cycle notice follows the package's own block (Portage calls
-    // `show_parents` and then `show_cycle_suggestion` per package).
-    // Portage: _emerge/actions.py, _calc_depclean
-    for (pkg, lines) in &result.kept_parents {
-        if verbose {
-            println!("  {} pulled in by:", pkg.cpv());
-            for line in lines {
-                println!("    {line}");
-            }
-            println!();
+    let (result, recomputed) =
+        apply_depclean_lib_check(root, result, lib_check_phase, color, |providers| {
+            portage_repo::depclean_cleanlist(portage_repo::DepcleanCleanlistArgs {
+                root,
+                world_seeds: &world_seeds,
+                system_atoms: &config.system_packages,
+                args: &args,
+                deselect,
+                lib_protected_providers: providers,
+                package_provided: &config.package_provided,
+            })
+        });
+    if recomputed {
+        // The second `_complete_graph` sits behind its own resolver notice,
+        // then its own `create_cleanlist()` prints the blocks again.
+        // Portage: _emerge/actions.py, _calc_depclean
+        if resolution_notice_shown(quiet, false) {
+            println!("\nCalculating dependencies ... done!");
         }
-        if let Some(cycle) = result
-            .cycle_suggestions
-            .iter()
-            .find(|s| s.pkg.cpv() == pkg.cpv())
-        {
-            print_cycle_suggestion(cycle);
-        }
+        print_cleanlist_blocks(CleanlistBlocksArgs {
+            result: &result,
+            verbose,
+        });
     }
 
     let installed_total = portage_repo::all_installed_packages(root).len();

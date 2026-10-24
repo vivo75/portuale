@@ -26,6 +26,9 @@
 - Bare name: Portage's `vartree.dep_match` "null category" lookup; ambiguous is Portage's `AmbiguousPackageName`.
 - Omitted: Portage's `vartree.dep_match(cp)` minus selected/protected.
 
+## fn unmerge_display_header_text (#521)
+- `_unmerge_display`'s two opening lines, as text so the unit test can pin them: for a non-`/` ROOT, `newline + ">>> Using system located in ROOT tree <ROOT>/"` (Portage's `settings["ROOT"]` already carries the trailing slash); under `--pretend`/`--ask`, `newline + ">>> These are the packages that would be unmerged:"`. `newline` is `"\n"` unless `--quiet`, hence the leading blank line on both. Shared by `-C`, `--clean`/`--rage-clean`, `--prune` and `--depclean`; `print_unmerge_display_header` is the printing wrapper. The legend block closes with a blank line (`unmerge.py:563-569` prints `...will not be removed.\n\n`).
+
 ## fn print_unmerge_selection
 - System warning: Portage's `_unmerge_display` `if not (protected or omitted) and cp in syslist`, to stderr (Portage's `writemsg_level(..., level=logging.WARNING)`).
 - `syslist = root_config.sets["system"].getAtoms()`.

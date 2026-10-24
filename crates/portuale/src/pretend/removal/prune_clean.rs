@@ -59,24 +59,26 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
     }
     // `--depclean-lib-check` applies to `--prune` too.
     // Portage: _emerge/actions.py, _calc_depclean
+    // The inline reverse-dep display prints while the removal list is
+    // built — once per `create_cleanlist()` pass, so twice when the lib
+    // check fires a second graph (backlog #523).
+    if verbose {
+        print_prune_parents(&result);
+    }
     let lib_check_phase = LibCheck {
         on: lib_check,
         preserve_libs: config_has_preserve_libs(config),
     };
-    let result = apply_depclean_lib_check(root, result, lib_check_phase, color, |providers| {
-        portage_repo::prune_cleanlist(root, &args, providers, &config.package_provided)
-    });
-
-    // The inline reverse-dep display prints while the removal list is
-    // built, before the removal-order line / empty message.
-    // Portage: _emerge/actions.py, create_cleanlist
-    if verbose {
-        for (pkg, lines) in &result.kept_parents {
-            println!("  {} pulled in by:", pkg.cpv());
-            for line in lines {
-                println!("    {line}");
-            }
-            println!();
+    let (result, recomputed) =
+        apply_depclean_lib_check(root, result, lib_check_phase, color, |providers| {
+            portage_repo::prune_cleanlist(root, &args, providers, &config.package_provided)
+        });
+    if recomputed {
+        if resolution_notice_shown(quiet, false) {
+            println!("\nCalculating dependencies ... done!");
+        }
+        if verbose {
+            print_prune_parents(&result);
         }
     }
 
@@ -115,6 +117,18 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
         quiet,
         noinfo,
     })
+}
+
+/// The `--verbose` reverse-dependency list of a `--prune` pass.
+// Portage: _emerge/actions.py, create_cleanlist
+fn print_prune_parents(result: &portage_repo::DepcleanResult) {
+    for (pkg, lines) in &result.kept_parents {
+        println!("  {} pulled in by:", pkg.cpv());
+        for line in lines {
+            println!("    {line}");
+        }
+        println!();
+    }
 }
 
 /// Arguments of [`run_prune_nodeps_pretend`].
@@ -284,17 +298,15 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
         portage_repo::prune_nodeps_selection(root, &args)
     };
 
-    // The header is `--pretend`/`--ask`-only.
+    // The header is `--pretend`/`--ask`-only, preceded by the non-`/` ROOT
+    // notice; both carry Portage's leading blank line (backlog #521).
     // Portage: unmerge.py, _unmerge_display
-    if pretend {
-        println!(
-            "{}",
-            color.c(
-                "darkgreen",
-                ">>> These are the packages that would be unmerged:"
-            )
-        );
-    }
+    print_unmerge_display_header(UnmergeDisplayHeaderArgs {
+        root,
+        pretend,
+        quiet,
+        color,
+    });
 
     // `sys-apps/portage` self-skip: selected versions move to `protected`
     // with the eerror. Dead code in practice (never installed twice), kept
@@ -386,8 +398,9 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
         "\n>>> {} packages are slated for removal.",
         color.c("UNMERGE_WARN", "'Selected'")
     );
+    // Portage's legend block ends with a blank line (unmerge.py:563-569).
     println!(
-        ">>> {} and {} packages will not be removed.",
+        ">>> {} and {} packages will not be removed.\n",
         color.c("GOOD", "'Protected'"),
         color.c("GOOD", "'omitted'")
     );
