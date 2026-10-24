@@ -118,7 +118,8 @@ pub(crate) fn can_skip_source_phases(
 /// command's `phase_prerequisites` chain in a fresh shell per phase.
 /// Fetch runs once up front when the chain includes `unpack`; a successful
 /// `install` is followed by post-install metadata, the `install_qa_check ...`
-/// sequence (`EBUILD_PHASE` still `"install"`), and the soname deps.
+/// sequence (with `EBUILD_PHASE` popped, like Portage's `MiscFunctionsProcess`),
+/// and the soname deps.
 // Portage: doebuild.py, EbuildPhase.py, config.py, bin/ebuild.sh
 pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result<i32, String> {
     let RunCommandsAsyncArgs {
@@ -285,10 +286,12 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
             if status != 0 {
                 return Ok(status);
             }
-            // Portage: EbuildPhase.py, _post_phase_cmds — after a successful
-            // `install`, run `install_qa_check install_symlink_html_docs
-            // install_hooks` here: unconditional, and never part of
-            // `phase_prerequisites`' own chain. `misc-functions.sh`
+            // Portage: _emerge/EbuildPhase.py, _post_phase_cmds — after a
+            // successful `install`, run `install_qa_check
+            // install_symlink_html_docs install_hooks` here, on every path:
+            // `doebuild()` reaches the same `_PostPhaseCommands` through its
+            // synchronous `EbuildPhase` (`_spawn_phase`), so a direct
+            // `ebuild` run QA-checks exactly like a merge. `misc-functions.sh`
             // re-splits its args on whitespace, so one space-joined string
             // equals three argv entries.
             if phase == "install" {
@@ -306,6 +309,13 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
                     config_root,
                     shell,
                     log_file,
+                    // Portage: _emerge/EbuildPhase.py,
+                    // MiscFunctionsProcess._spawn — a misc spawn is not a
+                    // real phase, so `EBUILD_PHASE` is popped and `use()`'s
+                    // `IUSE`-membership gate stays off (a repo-local check
+                    // like `60noop-testsuites`' `use test` must not die for
+                    // an ebuild without that flag).
+                    drop_ebuild_phase: true,
                 })
                 .await?;
                 if qa_status != 0 {

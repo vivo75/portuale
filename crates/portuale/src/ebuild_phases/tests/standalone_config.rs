@@ -592,6 +592,7 @@ fn phase_env_vars_exports_the_resolved_direct_path_shape() {
             helpers_dir: &helpers_dir,
             config_root: &root.cfg,
             extra_env: &[("DISTDIR".to_string(), "/conf/dist".to_string())],
+            drop_ebuild_phase: false,
         });
         let get = |key: &str| vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
         assert_eq!(
@@ -661,6 +662,7 @@ fn phase_env_vars_leaves_portage_quiet_unset_unless_the_run_is_quiet() {
             helpers_dir: &helpers_dir,
             config_root: &root.cfg,
             extra_env: &[],
+            drop_ebuild_phase: false,
         };
         let vars = phase_env_vars(base);
         assert!(
@@ -676,6 +678,7 @@ fn phase_env_vars_leaves_portage_quiet_unset_unless_the_run_is_quiet() {
             helpers_dir: &helpers_dir,
             config_root: &root.cfg,
             extra_env: &[("PORTAGE_QUIET".to_string(), "1".to_string())],
+            drop_ebuild_phase: false,
         });
         assert_eq!(
             vars.iter()

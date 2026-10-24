@@ -13,6 +13,10 @@ pub(crate) struct RunMiscFunctionsArgs<'a> {
     pub(crate) config_root: &'a Path,
     pub(crate) shell: ShellBackend,
     pub(crate) log_file: PhaseLog<'a>,
+    /// Drop `EBUILD_PHASE` from the spawned env (Portage's
+    /// `MiscFunctionsProcess._spawn` pops it): `true` for the post-`install`
+    /// QA spawn, `false` for real misc phases like `instprep`.
+    pub(crate) drop_ebuild_phase: bool,
 }
 
 /// Runs `bin/misc-functions.sh __dyn_<mydo>` directly: unlike `doebuild` commands
@@ -31,6 +35,7 @@ pub(crate) async fn run_misc_functions(args: RunMiscFunctionsArgs<'_>) -> Result
         config_root,
         shell,
         log_file,
+        drop_ebuild_phase,
     } = args;
     let bin_dir = bin_dir()?.to_path_buf();
     let helpers_dir = bin_dir.join("ebuild-helpers");
@@ -58,6 +63,7 @@ pub(crate) async fn run_misc_functions(args: RunMiscFunctionsArgs<'_>) -> Result
                 helpers_dir: &helpers_dir,
                 config_root,
                 log_file,
+                drop_ebuild_phase,
             })
             .await
         }
@@ -73,6 +79,7 @@ pub(crate) async fn run_misc_functions(args: RunMiscFunctionsArgs<'_>) -> Result
             config_root,
             log_file,
             fs_sandbox,
+            drop_ebuild_phase,
         }),
     }
 }
@@ -88,6 +95,8 @@ pub(crate) struct RunMiscFunctionsBrushArgs<'a> {
     pub(crate) helpers_dir: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) log_file: PhaseLog<'a>,
+    /// Drop `EBUILD_PHASE` from the spawned env (see [`RunMiscFunctionsArgs`]).
+    pub(crate) drop_ebuild_phase: bool,
 }
 
 pub(crate) async fn run_misc_functions_brush(
@@ -104,6 +113,7 @@ pub(crate) async fn run_misc_functions_brush(
         helpers_dir,
         config_root,
         log_file,
+        drop_ebuild_phase,
     } = args;
     let _umask = UmaskGuard::save();
     let mut shell = new_brush_phase_shell().await?;
@@ -118,6 +128,7 @@ pub(crate) async fn run_misc_functions_brush(
         helpers_dir,
         config_root,
         extra_env,
+        drop_ebuild_phase,
     });
     // Drop shell before pump (see `open_log_file`): capture the outcome, then return.
     let outcome: Result<i32, String> = async {
@@ -155,6 +166,8 @@ pub(crate) struct RunMiscFunctionsBashArgs<'a> {
     pub(crate) config_root: &'a Path,
     pub(crate) log_file: PhaseLog<'a>,
     pub(crate) fs_sandbox: bool,
+    /// Drop `EBUILD_PHASE` from the spawned env (see [`RunMiscFunctionsArgs`]).
+    pub(crate) drop_ebuild_phase: bool,
 }
 
 /// `Bash`: a genuine `bash <bin_dir>/misc-functions.sh <dyn_command>` subprocess,
@@ -173,6 +186,7 @@ pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Res
         config_root,
         log_file,
         fs_sandbox,
+        drop_ebuild_phase,
     } = args;
     let mut vars = phase_env_vars(PhaseEnvVarsArgs {
         env,
@@ -183,6 +197,7 @@ pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Res
         helpers_dir,
         config_root,
         extra_env,
+        drop_ebuild_phase,
     });
     if fs_sandbox {
         // Portage: MiscFunctionsProcess._spawn — separate log, sandbox enabled the
@@ -296,6 +311,10 @@ pub(crate) fn run_misc_function(args: RunMiscFunctionArgs<'_>) -> Result<i32, St
             config_root,
             shell,
             log_file,
+            // `__dyn_package` runs through `doebuild()`'s `misc_sh` spawn
+            // (`_spawn_actionmap["package"]`), which keeps `EBUILD_PHASE` —
+            // only `_emerge`'s `MiscFunctionsProcess` pops it.
+            drop_ebuild_phase: false,
         })
         .await
     })

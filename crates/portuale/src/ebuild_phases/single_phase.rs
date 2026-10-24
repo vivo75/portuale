@@ -280,6 +280,9 @@ pub(crate) fn run_instprep(args: RunInstprepArgs<'_>) -> Result<i32, String> {
             config_root,
             shell,
             log_file,
+            // `instprep` runs as a real `EbuildPhase` in Portage
+            // (`vartree.py`, `dblink.treewalk`), so `EBUILD_PHASE` stays.
+            drop_ebuild_phase: false,
         })
         .await
     })

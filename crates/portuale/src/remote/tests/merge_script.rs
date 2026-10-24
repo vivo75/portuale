@@ -261,14 +261,22 @@ fn phase_script_runs_pkg_pretend_from_saved_env() {
 #[test]
 fn collect_server_locale_forwards_only_set_vars() {
     use std::collections::HashMap;
-    let env: HashMap<&str, &str> = [("LANG", "C.UTF-8"), ("LANGUAGE", ""), ("TERM", "xterm")]
-        .into_iter()
-        .collect();
+    let env: HashMap<&str, &str> = [
+        ("LANG", "C.UTF-8"),
+        ("LANGUAGE", ""),
+        ("LC_ALL", ""),
+        ("LOCPATH", "/var/db/repos/gentoo"),
+        ("TERM", "xterm"),
+    ]
+    .into_iter()
+    .collect();
     let got = collect_server_locale(|name| env.get(name).map(|v| v.to_string()));
     let names: Vec<&str> = got.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(names, vec!["LANG", "LANGUAGE"]);
+    assert_eq!(names, vec!["LANG", "LANGUAGE", "LC_ALL", "LOCPATH"]);
     assert_eq!(got[0].1, "C.UTF-8");
     assert_eq!(got[1].1, "");
+    assert_eq!(got[2].1, "");
+    assert_eq!(got[3].1, "/var/db/repos/gentoo");
 }
 
 /// Render level: the regen script unsets `O`/`SHELL`/`LC_ALL` (posixish)

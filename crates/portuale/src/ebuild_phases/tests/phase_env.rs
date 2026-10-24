@@ -195,6 +195,7 @@ fn standalone_phase_env_layers_matching_package_env_build_vars() {
             helpers_dir: &bin_dir.join("ebuild-helpers"),
             config_root: &fixtures,
             extra_env: &[],
+            drop_ebuild_phase: false,
         })
     };
     let get = |vars: &[(String, String)], key: &str| {
@@ -312,6 +313,7 @@ fn standalone_setup_exports_the_eapi_phase_environment() {
             helpers_dir: &bin_dir.join("ebuild-helpers"),
             config_root: &fixtures,
             extra_env,
+            drop_ebuild_phase: false,
         })
     };
     let get = |vars: &[(String, String)], key: &str| {
@@ -434,6 +436,7 @@ fn old_eapi_closes_the_gated_phase_exports() {
         helpers_dir: &bin_dir.join("ebuild-helpers"),
         config_root: &tmp,
         extra_env: &[],
+        drop_ebuild_phase: false,
     });
     let get = |key: &str| {
         vars.iter()
@@ -450,6 +453,64 @@ fn old_eapi_closes_the_gated_phase_exports() {
     assert_eq!(get("A").as_deref(), Some(""));
     assert_eq!(get("SLOT").as_deref(), Some("0"));
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Backlog #516: a `misc-functions.sh` spawn (`install_qa_check ...`) is not
+/// a real phase — Portage's `MiscFunctionsProcess._spawn` pops `EBUILD_PHASE`
+/// from the child env, so `use()`'s `IUSE`-membership gate stays off there —
+/// while a real phase spawn keeps it. Everything else is identical.
+/// Portage: _emerge/EbuildPhase.py, MiscFunctionsProcess._spawn
+#[test]
+fn drop_ebuild_phase_pops_only_the_phase_var() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let repo = fixtures.join("repo");
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-drop-phase").keep();
+    let bin_dir = bin_dir().unwrap().to_path_buf();
+    let env = compute_environment(
+        &repo.join("dev-libs/usebuildpkg/usebuildpkg-1.0.ebuild"),
+        &portage_tmpdir,
+    )
+    .expect("fixture ebuild parses");
+    let vars_for = |drop: bool| {
+        phase_env_vars(PhaseEnvVarsArgs {
+            env: &env,
+            root: &fixtures,
+            ebuild_phase_value: "install",
+            debug: false,
+            bin_dir: &bin_dir,
+            helpers_dir: &bin_dir.join("ebuild-helpers"),
+            config_root: &fixtures,
+            extra_env: &[],
+            drop_ebuild_phase: drop,
+        })
+    };
+    let get = |vars: &[(String, String)], key: &str| {
+        vars.iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .next_back()
+    };
+    let kept = vars_for(false);
+    assert_eq!(get(&kept, "EBUILD_PHASE").as_deref(), Some("install"));
+    let popped = vars_for(true);
+    assert_eq!(get(&popped, "EBUILD_PHASE"), None);
+    // The rest of the spawn env is untouched.
+    for key in [
+        "EBUILD_PHASE_FUNC",
+        "PORTAGE_INTERNAL_CALLER",
+        "IUSE_EFFECTIVE",
+        "USE",
+        "T",
+        "D",
+        "S",
+    ] {
+        assert_eq!(
+            get(&popped, key),
+            get(&kept, key),
+            "{key} must survive the pop"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
 /// The brush setup script defines `___in_portage_iuse` instead of
@@ -474,6 +535,7 @@ fn brush_setup_script_defines_in_portage_iuse_as_a_function() {
         helpers_dir: &bin_dir.join("ebuild-helpers"),
         config_root: &fixtures,
         extra_env: &[],
+        drop_ebuild_phase: false,
     });
     assert!(script.contains("___in_portage_iuse() {"), "{script}");
     assert!(!script.contains("export BASH_FUNC"), "{script}");
@@ -517,6 +579,7 @@ fn phase_env_names_the_user_bashrc_and_hook_dir_under_the_config_root() {
         helpers_dir: &bin_dir.join("ebuild-helpers"),
         config_root: Path::new("/var/tmp/cfg"),
         extra_env: &[],
+        drop_ebuild_phase: false,
     });
     let get = |k: &str| vars.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
     assert_eq!(

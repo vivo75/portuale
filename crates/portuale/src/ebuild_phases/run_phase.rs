@@ -170,6 +170,7 @@ pub(crate) async fn run_one_phase_brush(args: RunOnePhaseBrushArgs<'_>) -> Resul
         helpers_dir,
         config_root,
         extra_env,
+        drop_ebuild_phase: false,
     });
     // Shell must drop before pump (EOF then finish): capture the outcome, drop in
     // order, then return. No `?` may return between here and the drops.
@@ -253,6 +254,7 @@ pub(crate) fn run_one_phase_bash(args: RunOnePhaseBashArgs<'_>) -> Result<i32, S
         helpers_dir,
         config_root,
         extra_env,
+        drop_ebuild_phase: false,
     });
     spawn_bash_script(SpawnBashScriptArgs {
         script: &bin_dir.join("ebuild.sh"),

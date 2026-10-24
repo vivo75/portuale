@@ -146,6 +146,7 @@ fn phase_setup_script_exports_extra_env_features_last() {
         helpers_dir: &bin_dir().unwrap().join("ebuild-helpers"),
         config_root: Path::new("/dev/null/no-config-root"),
         extra_env: &[("FEATURES".to_string(), "resolved one".to_string())],
+        drop_ebuild_phase: false,
     });
     let features: Vec<&str> = script
         .lines()

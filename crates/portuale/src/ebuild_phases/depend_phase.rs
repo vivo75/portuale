@@ -46,6 +46,7 @@ pub(crate) fn run_depend_phase(
         helpers_dir: &helpers_dir,
         config_root,
         extra_env: &[],
+        drop_ebuild_phase: false,
     });
     vars.push(("PORTAGE_PIPE_FD".to_string(), "9".to_string()));
 

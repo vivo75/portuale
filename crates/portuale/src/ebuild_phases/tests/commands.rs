@@ -365,6 +365,8 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        // The merge path runs the post-`install` QA sequence; the direct
+        // `ebuild` path never does (backlog #516).
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -378,6 +380,89 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
     assert!(
         image_dir.join("usr/lib/keptempty").is_dir(),
         "a keepdir'd directory (real ebuild-author idiom) must survive"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Backlog #516: the post-`install` QA spawn carries no `EBUILD_PHASE`
+/// (Portage's `MiscFunctionsProcess._spawn` pops it), so a repo-local check
+/// calling `use test` on an ebuild without that flag passes instead of dying
+/// with `USE Flag 'test' not in IUSE`. The probe check records the phase var
+/// it saw plus which `use test` arm it took, under `${T}`; the run must exit
+/// 0 with `EBUILD_PHASE` unset and exactly one arm marker (QA really ran).
+/// `doebuild()` reaches the same `_PostPhaseCommands` through its synchronous
+/// `EbuildPhase`, so the direct `ebuild` path and the merge path behave alike
+/// here (a host `ebuild ... install` runs `95empty-dirs` the same way).
+#[test]
+fn install_qa_spawn_pops_ebuild_phase_so_use_test_does_not_die() {
+    let tmp = TempDir::new("ebuild-phases-test-516-noiuse-qa").keep();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let repo_root = tmp.join("repo");
+    let pkg_dir = repo_root.join("dev-libs/noiuseqa");
+    std::fs::create_dir_all(repo_root.join("profiles")).unwrap();
+    std::fs::write(repo_root.join("profiles/repo_name"), "noiuseqatest\n").unwrap();
+    std::fs::create_dir_all(repo_root.join("metadata/install-qa-check.d")).unwrap();
+    std::fs::write(
+        repo_root.join("metadata/install-qa-check.d/65probe-noiuse"),
+        "# probe: EBUILD_PHASE must be unset in the QA spawn\n\
+         probe_noiuse_check() {\n\
+         \techo \"EBUILD_PHASE=[${EBUILD_PHASE-unset}]\" > \"${T}/qa-ebuild-phase\"\n\
+         \tif use test; then\n\
+         \t\t: > \"${T}/qa-probe-ran\"\n\
+         \telse\n\
+         \t\t: > \"${T}/qa-probe-skip\"\n\
+         \tfi\n\
+         }\n\
+         probe_noiuse_check\n\
+         : # guarantee successful exit\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    std::fs::write(
+        pkg_dir.join("noiuseqa-1.0.ebuild"),
+        "EAPI=8\n\
+         DESCRIPTION=\"fixture: no IUSE, probe post-install QA gating\"\n\
+         SLOT=\"0\"\n\
+         KEYWORDS=\"amd64\"\n\
+         S=\"${WORKDIR}\"\n\
+         src_install() {\n\
+         \tdodir /usr/share/noiuseqa\n\
+         }\n",
+    )
+    .unwrap();
+
+    let ebuild_path = pkg_dir.join("noiuseqa-1.0.ebuild");
+    let portage_tmpdir = tmp.join("portage-tmpdir");
+    let status = run_commands(RunCommandsArgs {
+        ebuild_path: &ebuild_path,
+        commands: &["install"],
+        root: Path::new("/"),
+        portage_tmpdir: &portage_tmpdir,
+        distdir: &portage_tmpdir.join("distfiles"),
+        debug: false,
+        config_root: Path::new("/dev/null/no-config-root"),
+        shell: ShellBackend::Brush,
+        log_file: PhaseLog::Inherit,
+        skip_noop_src_phases: false,
+        build_env: &[],
+    })
+    .expect("run_commands should not itself error");
+    assert_eq!(
+        status, 0,
+        "install must not die in `use test` without EBUILD_PHASE"
+    );
+    let t_dir = portage_tmpdir.join("portage/dev-libs/noiuseqa-1.0/temp");
+    assert_eq!(
+        std::fs::read_to_string(t_dir.join("qa-ebuild-phase")).unwrap(),
+        "EBUILD_PHASE=[unset]\n",
+        "the QA spawn carries no EBUILD_PHASE"
+    );
+    let ran = t_dir.join("qa-probe-ran").is_file();
+    let skipped = t_dir.join("qa-probe-skip").is_file();
+    assert!(
+        ran ^ skipped,
+        "the QA check ran exactly once (ran={ran}, skipped={skipped})"
     );
 
     let _ = std::fs::remove_dir_all(&tmp);

@@ -18,6 +18,7 @@ The phase and merge shell scripts sent to the client.
 
 ## const REGEN_LOCALE_VARS
 - Portage's saved locale comes from the calling environment through `environ_whitelist` (`special_env_vars.py`: `LANG` plus the `LC_*` list), and for `mrg` the calling environment is the server process.
+- `LOCPATH` rides the same list (backlog #516): it sits in Portage's `environ_whitelist` (`special_env_vars.py`), so a `locale-gen`d client root keeps working after the regen.
 
 ## fn collect_server_locale
 - One entry per variable the getter reports as set, even empty: a set-but-empty `LANG` is still the calling environment's value, which is what Portage's whitelist passes through.

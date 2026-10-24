@@ -67,6 +67,13 @@ pub(crate) struct PhaseEnvVarsArgs<'a> {
     pub(crate) helpers_dir: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) extra_env: &'a [(String, String)],
+    /// Drop `EBUILD_PHASE` from the spawned env: Portage's
+    /// `MiscFunctionsProcess._spawn` pops it so `bashrc` code (and `use()`'s
+    /// `IUSE`-membership gate) doesn't treat the misc command as a real
+    /// phase. `false` for real phases and `instprep` (a real `EbuildPhase`
+    /// there keeps it).
+    /// Portage: _emerge/EbuildPhase.py, MiscFunctionsProcess._spawn
+    pub(crate) drop_ebuild_phase: bool,
 }
 
 pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)> {
@@ -79,6 +86,7 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
         helpers_dir,
         config_root,
         extra_env,
+        drop_ebuild_phase,
     } = args;
     // No EPREFIX support: `ED` collapses to `D`'s value, no separate computation.
     let attrs = portage_dep::eapi::eapi_attrs(Some(&env.eapi))
@@ -191,6 +199,13 @@ pub(crate) fn phase_env_vars(args: PhaseEnvVarsArgs<'_>) -> Vec<(String, String)
         ),
         ("EBUILD_PHASE".to_string(), ebuild_phase_value.to_string()),
     ]);
+    // A misc-functions spawn (`install_qa_check`, hooks) is not a real
+    // phase: Portage's `MiscFunctionsProcess._spawn` pops `EBUILD_PHASE`,
+    // so `use()`'s `IUSE`-membership gate stays off there.
+    // Portage: _emerge/EbuildPhase.py, MiscFunctionsProcess._spawn
+    if drop_ebuild_phase {
+        vars.retain(|(k, _)| k != "EBUILD_PHASE");
+    }
 
     // Resolved `FEATURES` when already in `vars` (the standalone folded
     // base); else the run's resolved list from `extra_env`, falling back
@@ -650,6 +665,13 @@ pub(crate) struct PhaseSetupScriptArgs<'a> {
     pub(crate) helpers_dir: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) extra_env: &'a [(String, String)],
+    /// Drop `EBUILD_PHASE` from the spawned env: Portage's
+    /// `MiscFunctionsProcess._spawn` pops it so `bashrc` code (and `use()`'s
+    /// `IUSE`-membership gate) doesn't treat the misc command as a real
+    /// phase. `false` for real phases and `instprep` (a real `EbuildPhase`
+    /// there keeps it).
+    /// Portage: _emerge/EbuildPhase.py, MiscFunctionsProcess._spawn
+    pub(crate) drop_ebuild_phase: bool,
 }
 
 /// `Brush`-only: `phase_env_vars` as single-quote-escaped `export` text (config
@@ -665,6 +687,7 @@ pub(crate) fn phase_setup_script(args: PhaseSetupScriptArgs<'_>) -> String {
         helpers_dir,
         config_root,
         extra_env,
+        drop_ebuild_phase,
     } = args;
     let vars = phase_env_vars(PhaseEnvVarsArgs {
         env,
@@ -675,6 +698,7 @@ pub(crate) fn phase_setup_script(args: PhaseSetupScriptArgs<'_>) -> String {
         helpers_dir,
         config_root,
         extra_env,
+        drop_ebuild_phase,
     });
     let mut script = String::new();
     // Brush inherits the process env: drop what the whitelist wouldn't keep first.

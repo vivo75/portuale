@@ -32,6 +32,9 @@ The environment variables and PATH a phase runs with.
 ## fn phase_env_vars (FEATURES)
 - The merge path's base has no `FEATURES`, so the run's resolved list from `extra_env` stands (still overridden downstream by `extra_env`); the standalone `phase_environ` base already folds run-wide + package.env + calling env, which a raw literal must not clobber. No-config runs keep the process value (#349 S4; before, the fallback was always the raw process read).
 
+## fn phase_env_vars (drop_ebuild_phase, #516)
+- `drop_ebuild_phase: true` retains `EBUILD_PHASE` out of the spawned env, matching Portage's `MiscFunctionsProcess._spawn` (`_emerge/EbuildPhase.py`), which pops it so `bashrc` code (and `use()`'s `IUSE`-membership gate, `phase-helpers.sh:270`) doesn't treat the misc command as a real phase. Only the post-`install` QA spawn sets it (`run_misc_functions` from `run_commands_async`); real phases and `__dyn_instprep`/`__dyn_package` keep `EBUILD_PHASE`.
+
 ## fn phase_env_vars (RESTRICT/PROPERTIES)
 - From the package's already-USE-reduced `RESTRICT`/`PROPERTIES` (`str(self._pkg.restrict)`/`str(self._pkg.properties)`). Bash consults these directly: the `RESTRICT=test` skip, `RESTRICT=nostrip`/`RESTRICT=strip`. The raw `RESTRICT`/`PROPERTIES` are never exported (only the ebuild's own bash sees the raw unreduced values via its sourced metadata). `depend` reduces on the config `USE` set (Portage's `PORTAGE_USE`); see `restrict_and_properties`.
 
