@@ -83,6 +83,7 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         load_average,
         quiet_build,
         quiet,
+        merge_wait_scope,
         ..
     } = opts;
     // Plain `emerge <atom>`: source build + merge. The up-front resume save is
@@ -98,6 +99,7 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
         onlydeps,
         quiet,
         quiet_build,
+        merge_wait_scope,
     };
     let _ = crate::mtimedb::write_resume_list(root, atom_args, &resume_mergelist, &resume_opts);
     let merge_outcome = emerge_build::run_source_merge(emerge_build::RunSourceMergeArgs {
@@ -126,6 +128,7 @@ pub(crate) fn run_source_merge_plan(args: RunSourceMergePlanArgs<'_>) -> Option<
             onlydeps,
             quiet,
             quiet_build,
+            merge_wait_scope,
         };
         if !unmerged.is_empty()
             && let Err(w) =
@@ -184,6 +187,7 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         ref buildpkg_exclude,
         quiet,
         quiet_build,
+        merge_wait_scope,
         ..
     } = opts;
     // Remote execution (`mrg --remote-hostname` + `--getbinpkgonly`): the same
@@ -241,6 +245,7 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         onlydeps,
         quiet,
         quiet_build,
+        merge_wait_scope,
     };
     let _ = crate::mtimedb::write_resume_list(root, atom_args, &resume_mergelist, &resume_opts);
     // Merge every resolved entry, per-entry `Binary` vs `Source`.
@@ -277,6 +282,7 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
             onlydeps,
             quiet,
             quiet_build,
+            merge_wait_scope,
         };
         if !unmerged.is_empty()
             && let Err(w) =

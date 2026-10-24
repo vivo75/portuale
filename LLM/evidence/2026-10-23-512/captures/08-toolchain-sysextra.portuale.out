@@ -1,0 +1,23 @@
+22:56:05 Calculating dependencies ... done!
+22:56:05 Dependency resolution took (backtrack: 0/20).
+22:56:05 
+22:56:05 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:56:05 >>> Jobs: 0 of 2 complete, 2 running                                    
+22:56:05 >>> Emerging (1 of 2) app-misc/sysextra-1.0::mw512 for /var/tmp/ev512-tree/root
+22:56:05 >>> Emerging (2 of 2) app-misc/slow-1.0::mw512 for /var/tmp/ev512-tree/root
+22:56:05 >>> Jobs: 0 of 2 complete, 2 running                                    
+22:56:05 >>> Jobs: 0 of 2 complete, 2 running                                    
+22:56:08 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:56:08 >>> Installing (1 of 2) app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root
+22:56:08 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:56:08 >>> Completed (1 of 2) app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root
+22:56:08 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:56:08 >>> Jobs: 1 of 2 complete, 1 running                                    
+22:56:26 >>> Jobs: 1 of 2 complete                                               
+22:56:26 >>> Installing (2 of 2) app-misc/slow-1.0::mw512 to /var/tmp/ev512-tree/root
+22:56:26 >>> Jobs: 1 of 2 complete                                               
+22:56:26 >>> Completed (2 of 2) app-misc/slow-1.0::mw512 to /var/tmp/ev512-tree/root
+22:56:26 >>> Jobs: 1 of 2 complete                                               
+22:56:26 >>> Jobs: 2 of 2 complete                                               
+22:56:26 
+22:56:26  * GNU info directory index is up-to-date.

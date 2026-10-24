@@ -1,0 +1,3 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792794476,"command":"/var/tmp/ev512-bin/emerge --oneshot --color=n --merge-wait-scope=bogus =app-misc/slow-1.0","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "emerge: error: argument --merge-wait-scope: invalid choice: 'bogus' (choose from 'deep', 'system', 'toolchain', 'none')\r\n"]
+[0.000, "x", "2"]

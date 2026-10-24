@@ -50,7 +50,7 @@ pub struct CycleSuggestion {
 /// iterative so a long dependency chain cannot exhaust the stack. Returns the
 /// component number of every node; nodes share a number iff they lie on a
 /// common cycle. Portage: `digraph.strongly_connected_components()`.
-pub(crate) fn strongly_connected_components(adj: &[Vec<usize>]) -> Vec<usize> {
+pub fn strongly_connected_components(adj: &[Vec<usize>]) -> Vec<usize> {
     const UNVISITED: usize = usize::MAX;
     let n = adj.len();
     let mut index = vec![UNVISITED; n];

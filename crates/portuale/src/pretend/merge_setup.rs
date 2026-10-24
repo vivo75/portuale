@@ -34,6 +34,7 @@ pub(crate) fn merge_setup(
         shell,
         debug,
         buildpkg_opt,
+        merge_wait_scope,
         ..
     } = opts;
     // The status-line blank rule lives in the merge functions' `StatusDisplay`;
@@ -83,6 +84,9 @@ pub(crate) fn merge_setup(
             .push(("PORTAGE_QUIET".to_string(), "1".to_string()));
     }
     merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
+    // `--merge-wait-scope` rides into the scheduler through the merge
+    // options; unset means Portage's `deep` default (backlog #512).
+    merge_options.merge_wait_scope = merge_wait_scope.unwrap_or_default();
     // `INSTALL_MASK` + the `no{man,info,doc}` `FEATURES` fold, from the
     // resolved config, not the process env.
     // Portage: bin/misc-functions.sh, preinst_mask

@@ -126,6 +126,7 @@ mod buildpkgonly;
 mod entries;
 mod entry_env;
 mod logs;
+mod merge_wait;
 mod resume;
 mod scheduler;
 mod source_merge;

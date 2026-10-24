@@ -1,0 +1,23 @@
+22:56:46 Calculating dependencies ... done!
+22:56:46 Dependency resolution took (backtrack: 0/20).
+22:56:46 
+22:56:46 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:56:46 >>> Emerging (1 of 2) dev-libs/cycB-1.0::mw512 for /var/tmp/ev512-tree/root
+22:56:46 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:56:55 >>> Jobs: 0 of 2 complete                                               
+22:56:55 >>> Installing (1 of 2) dev-libs/cycB-1.0::mw512 to /var/tmp/ev512-tree/root
+22:56:55 >>> Jobs: 0 of 2 complete                                               
+22:56:55 >>> Completed (1 of 2) dev-libs/cycB-1.0::mw512 to /var/tmp/ev512-tree/root
+22:56:55 >>> Jobs: 0 of 2 complete                                               
+22:56:55 >>> Jobs: 1 of 2 complete                                               
+22:56:55 >>> Jobs: 1 of 2 complete, 1 running                                    
+22:56:55 >>> Emerging (2 of 2) dev-libs/cycA-1.0::mw512 for /var/tmp/ev512-tree/root
+22:56:55 >>> Jobs: 1 of 2 complete, 1 running                                    
+22:57:03 >>> Jobs: 1 of 2 complete                                               
+22:57:03 >>> Installing (2 of 2) dev-libs/cycA-1.0::mw512 to /var/tmp/ev512-tree/root
+22:57:03 >>> Jobs: 1 of 2 complete                                               
+22:57:03 >>> Completed (2 of 2) dev-libs/cycA-1.0::mw512 to /var/tmp/ev512-tree/root
+22:57:03 >>> Jobs: 1 of 2 complete                                               
+22:57:03 >>> Jobs: 2 of 2 complete                                               
+22:57:03 
+22:57:03  * GNU info directory index is up-to-date.

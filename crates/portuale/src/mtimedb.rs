@@ -32,7 +32,8 @@ pub type ResumeCpv = (ResumeEntryKind, String, String, String);
 
 /// The subset of `mtimedb["resume"]["myopts"]` that changes how `--resume`
 /// replays the mergelist: `--oneshot` and `--onlydeps` govern
-/// world-recording; `--quiet` and `--quiet-build` govern the display.
+/// world-recording; `--quiet` and `--quiet-build` govern the display;
+/// `--merge-wait-scope` governs the scheduler barriers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ResumeOpts {
     pub oneshot: bool,
@@ -40,6 +41,8 @@ pub struct ResumeOpts {
     pub quiet: bool,
     /// `--quiet-build`: `Some(true)` bare/`=y`, `Some(false)` `=n`.
     pub quiet_build: Option<bool>,
+    /// `--merge-wait-scope`, as given; `None` (unset) replays as `deep`.
+    pub merge_wait_scope: Option<crate::pretend::MergeWaitScope>,
 }
 
 /// `(favorites, mergelist, myopts)` from `mtimedb["resume"]`.
@@ -99,6 +102,13 @@ fn format_section_body(root: &Path, section: &Section) -> String {
         .collect();
     // `myopts` keys in `json.dumps(sort_keys=True)` order.
     let mut opt_pairs: Vec<String> = Vec::new();
+    if let Some(scope) = section.opts.merge_wait_scope {
+        opt_pairs.push(format!(
+            "\t\t\t{}: \"{}\"",
+            json_str("--merge-wait-scope"),
+            scope.as_str()
+        ));
+    }
     if section.opts.oneshot {
         opt_pairs.push(format!("\t\t\t{}: true", json_str("--oneshot")));
     }
@@ -258,6 +268,7 @@ fn parse_section(object: &str) -> Option<Section> {
         onlydeps: myopts_block.contains("\"--onlydeps\""),
         quiet: myopts_block.contains("\"--quiet\""),
         quiet_build: parse_quiet_build(myopts_block),
+        merge_wait_scope: parse_merge_wait_scope(myopts_block),
     };
 
     Some(Section {
@@ -265,6 +276,15 @@ fn parse_section(object: &str) -> Option<Section> {
         mergelist,
         opts,
     })
+}
+
+/// `--merge-wait-scope` from a `myopts` block: Portage stores the scope
+/// word as a string (`"deep"`); absent means the `deep` default.
+fn parse_merge_wait_scope(myopts_block: &str) -> Option<crate::pretend::MergeWaitScope> {
+    let after = myopts_block.split("\"--merge-wait-scope\"").nth(1)?;
+    let value = after.trim_start().strip_prefix(':')?.trim_start();
+    let word = value.strip_prefix('"')?.split('"').next()?;
+    crate::pretend::MergeWaitScope::parse(word)
 }
 
 /// `--quiet-build` from a `myopts` block: Portage stores bare/`y` as
@@ -640,10 +660,26 @@ mod tests {
                 onlydeps: true,
                 quiet: true,
                 quiet_build,
+                merge_wait_scope: None,
             };
             write_resume_list(&root, &[], cpv, &opts).unwrap();
             assert_eq!(read_resume_list(&root).unwrap().2, opts);
         }
+        // A saved scope round-trips and sorts first in `myopts` (own
+        // root: this write must not disturb the flag soup below).
+        let scope_root = tmproot();
+        let opts = ResumeOpts {
+            oneshot: true,
+            merge_wait_scope: Some(crate::pretend::MergeWaitScope::System),
+            ..ResumeOpts::default()
+        };
+        write_resume_list(&scope_root, &[], cpv, &opts).unwrap();
+        assert_eq!(read_resume_list(&scope_root).unwrap().2, opts);
+        let scope_text = std::fs::read_to_string(mtimedb_path(&scope_root)).unwrap();
+        assert!(scope_text.contains("\"--merge-wait-scope\": \"system\""));
+        let at = |k: &str| scope_text.find(k).unwrap();
+        assert!(at("--merge-wait-scope") < at("--oneshot"));
+        let _ = std::fs::remove_dir_all(&scope_root);
         // `json.dumps(sort_keys=True)`: `--oneshot` < `--onlydeps` < `--quiet`.
         let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
         let at = |k: &str| text.find(k).unwrap();

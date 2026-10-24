@@ -350,6 +350,7 @@
 - [crates/portuale/src/emerge_build/failure.rs](portuale/emerge_build/failure.md) — The failed-build endgame (backlog #426). Ground truth: `LLM/evidence/2026-10-19-b423/portage.txt`, design `LLM/evidence/2026-10-19-b426-design.md`.
 - [emerge_build/fetchonly.rs](portuale/emerge_build/fetchonly.md) — 
 - [crates/portuale/src/emerge_build/logs.rs](portuale/emerge_build/logs.md) — Build logs: per-package `build.log` placement, `PORTAGE_LOGDIR` symlinks, and failure tails.
+- [crates/portuale/src/emerge_build/merge_wait.rs](portuale/emerge_build/merge_wait.md) — Merge-wait barriers and cycle-aware build readiness for the `-j` scheduler (backlog #512).
 - [crates/portuale/src/emerge_build/mod.rs](portuale/emerge_build/mod.md) — `--buildpkgonly` execution without `--pretend`: builds a binary package per entry the pretend gate proved safe.
 - [crates/portuale/src/emerge_build/resume.rs](portuale/emerge_build/resume.md) — `--resume` entries and their repositories.
 - [crates/portuale/src/emerge_build/scheduler.rs](portuale/emerge_build/scheduler.md) — The parallel build scheduler (`--jobs`): concurrent `install` builds, serialized vdb merges.

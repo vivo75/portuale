@@ -121,6 +121,7 @@ fn install_dies_like_portage_when_s_is_missing() {
         shell: ShellBackend::default(),
         log_file: PhaseLog::Capture(&log_file),
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands_logged should not itself error");
@@ -680,6 +681,7 @@ fn brush_phase_env_is_filtered_of_bash_special_variables() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Capture(&log),
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands_logged should not itself error");

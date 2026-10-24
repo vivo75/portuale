@@ -129,13 +129,13 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) getbinpkg_given: bool,
     pub(crate) getbinpkgonly: bool,
     pub(crate) binpkg_respect_use: Option<bool>,
-    // Accepted like Portage 3.0.83 but inert until #509 / #507 / #512
-    // (`LLM/scope-cuts.md`): nothing reads these three yet.
+    // Accepted like Portage 3.0.83; all three act now (user patches #509,
+    // json report #507, merge-wait scope #512: `LLM/scope-cuts.md`
+    // CUT-8..CUT-10 are closed).
     #[allow(dead_code)]
     pub(crate) binpkg_respect_user_patches: Option<bool>,
     #[allow(dead_code)]
     pub(crate) circular_deps_report: Option<CircularDepsReport>,
-    #[allow(dead_code)]
     pub(crate) merge_wait_scope: Option<MergeWaitScope>,
     pub(crate) quickpkg_direct: Option<bool>,
     pub(crate) quickpkg_direct_root: Option<String>,
@@ -2207,12 +2207,38 @@ pub(crate) enum CircularDepsReport {
 }
 
 /// Which packages `--merge-wait-scope` treats as system packages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum MergeWaitScope {
+    /// `@system` plus its transitive runtime dependencies (Portage's
+    /// default, preserving the historical behaviour).
+    #[default]
     Deep,
     System,
     Toolchain,
     None,
+}
+
+impl MergeWaitScope {
+    /// The `emerge` spelling, also used in the saved resume list.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            MergeWaitScope::Deep => "deep",
+            MergeWaitScope::System => "system",
+            MergeWaitScope::Toolchain => "toolchain",
+            MergeWaitScope::None => "none",
+        }
+    }
+
+    /// Parses what [`MergeWaitScope::as_str`] writes.
+    pub(crate) fn parse(s: &str) -> Option<MergeWaitScope> {
+        match s {
+            "deep" => Some(MergeWaitScope::Deep),
+            "system" => Some(MergeWaitScope::System),
+            "toolchain" => Some(MergeWaitScope::Toolchain),
+            "none" => Some(MergeWaitScope::None),
+            _ => None,
+        }
+    }
 }
 
 /// `argument OPT: invalid choice` line, as argparse words it.
@@ -2227,7 +2253,9 @@ fn invalid_choice(opt: &str, value: &str, choices: &str) -> ExitCode {
 /// `--merge-wait-scope` (Portage 3.0.83). The first two take an optional
 /// value that only a following token of the right set is consumed as
 /// (`insert_optional_args`); `=value` and the bare form map `True` to the
-/// default. The third requires a value. Only `--circular-deps-report` acts so far.
+/// default. The third requires a value. The first acts in the binary
+/// filter (#509), the second in the cycle report (#507), the third in the
+/// `-j` scheduler (#512).
 // Portage: _emerge/main.py, insert_optional_args / parse_opts
 fn parse_new_option_opts<'a>(
     opts: &mut EmergeOpts<'a>,

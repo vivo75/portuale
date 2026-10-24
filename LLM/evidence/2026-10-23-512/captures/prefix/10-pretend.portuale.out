@@ -1,0 +1,23 @@
+22:27:41 Calculating dependencies ... done!
+22:27:41 Dependency resolution took (backtrack: 0/20).
+22:27:41 
+22:27:41 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:27:41 >>> Jobs: 0 of 2 complete, 2 running                                    
+22:27:41 >>> Emerging (1 of 2) dev-libs/ppA-1.0::mw512 for /var/tmp/ev512-tree/root
+22:27:41 >>> Jobs: 0 of 2 complete, 2 running                                    
+22:27:41 >>> Emerging (2 of 2) dev-libs/ppB-1.0::mw512 for /var/tmp/ev512-tree/root
+22:27:41 >>> Jobs: 0 of 2 complete, 2 running                                    
+22:27:48 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:27:48 >>> Installing (1 of 2) dev-libs/ppA-1.0::mw512 to /var/tmp/ev512-tree/root
+22:27:48 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:27:48 >>> Completed (1 of 2) dev-libs/ppA-1.0::mw512 to /var/tmp/ev512-tree/root
+22:27:48 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:27:48 >>> Jobs: 1 of 2 complete, 1 running                                    
+22:27:48 >>> Jobs: 1 of 2 complete                                               
+22:27:48 >>> Installing (2 of 2) dev-libs/ppB-1.0::mw512 to /var/tmp/ev512-tree/root
+22:27:48 >>> Jobs: 1 of 2 complete                                               
+22:27:48 >>> Completed (2 of 2) dev-libs/ppB-1.0::mw512 to /var/tmp/ev512-tree/root
+22:27:48 >>> Jobs: 1 of 2 complete                                               
+22:27:48 >>> Jobs: 2 of 2 complete                                               
+22:27:48 
+22:27:48  * GNU info directory index is up-to-date.

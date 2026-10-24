@@ -131,6 +131,9 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<MergePassReport,
                 capture_log: true,
                 progress: entry_progress,
                 display: &display,
+                // The serial loop runs the whole chain per entry (no
+                // up-front `pkg_pretend` pass there): `pretend` stays in.
+                skip_pretend: false,
             }) {
                 Ok(path) => {
                     display.build_finished();

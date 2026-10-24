@@ -43,4 +43,4 @@ A marker (`Still deferred`, `remains open`, `still open)`) on line `L` of
 - CUT-7: upstream brush PRs unopened (what-this-proves.md:16095) → #5: the backlog entry "brush PRs: submit staged fixes" is the follow-up. It needs the owner's GitHub auth, so it is not a portuale code gap.
 - CUT-8: `--binpkg-respect-user-patches` is parsed and stored but changes nothing, no patch digests are compared (what-this-proves.md, backlog #503 paragraph) → closed #509
 - CUT-9: `--circular-deps-report=json` is parsed and stored, the report keeps one format (what-this-proves.md, backlog #503 paragraph) → closed #507
-- CUT-10: `--merge-wait-scope` is parsed and stored, the scheduler does not use it (what-this-proves.md, backlog #503 paragraph) → #512
+- CUT-10: `--merge-wait-scope` is parsed and stored, the scheduler does not use it (what-this-proves.md, backlog #503 paragraph) → closed #512

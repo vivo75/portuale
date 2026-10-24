@@ -66,3 +66,6 @@
 
 ## tests: driver_sequence_rotates_first_then_saves_up_front_and_shrinks_per_merge
 - The whole backlog #168 driver lifecycle in one hermetic sequence.
+
+## ResumeOpts.merge_wait_scope (#512)
+- `--merge-wait-scope` persists in `mtimedb["resume"]["myopts"]` as `"--merge-wait-scope": "<deep|system|toolchain|none>"` (first key in `json.dumps(sort_keys=True)` order), so `emerge --resume` replays the scope the original run used; absent means Portage's `deep` default. The substring reader tolerates Portage-written files; old files without the key resume as `deep`.

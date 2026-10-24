@@ -1,0 +1,15 @@
+id	pm-invariant
+01-scope-deep	glibc Installing AFTER slow Installing; Jobs shows `1 merge wait`
+02-scope-system	same as deep for glibc (glibc in @system)
+03-scope-toolchain	same as deep for glibc (glibc in CORE_TOOLCHAIN)
+04-scope-none	glibc Installing BEFORE slow Installing (parallel, no barrier)
+05-default-features	everything barriers (FEATURES=merge-wait): install order serial after builds drain
+06-deep-closure	runtime-dep Installing AFTER slow Installing (deep runtime dep of @system)
+07-system-closure	runtime-dep Installing BEFORE slow Installing (not in @system); glibc still after
+08-toolchain-sysextra	sysextra Installing BEFORE slow Installing (not toolchain); glibc absent
+09-cycle	cycA+cycB builds overlap (wall < 2*CYC+slack); Installing order B before A
+10-pretend	ppA block before ppB block (mergelist order); BEGIN overlap in time
+11-bad-scope	rc 2, `invalid choice` on stderr
+12-missing-scope	rc 2, `expected one argument` on stderr
+13-sigint	rc 130, no `>>> Installing` line, empty app-misc VDB
+14-cgroup	`=== Resource usage for {build,install} of {cpv}: ...` in log/stdout, or env premise

@@ -22,3 +22,6 @@ The options every merge path shares: status mode, package and merge options, POR
 
 ## S6 (351-MARK): PORTAGE_QUIET follows --quiet
 - `merge_setup` threads `PORTAGE_QUIET=1` into `merge_options.build_env` only when `opts.quiet` (Portage `doebuild.py:500-501`, `noiselimit < 0`); the phase env no longer sets it by default, so `__vecho` markers print. `--quiet-build` stays a pure log redirect (`capture_log` in `merge_run.rs`), never `PORTAGE_QUIET`.
+
+## merge_wait_scope threading (#512)
+- `merge_setup` maps `opts.merge_wait_scope` (unset → `Deep`) into `merge_options.merge_wait_scope` for the `-j` scheduler; `merge_run` saves the same value into the resume `myopts` (fresh save and failure re-save, source and binpkg paths), and the `--resume` path replays it. Portage: `_emerge/Scheduler.py:257`.

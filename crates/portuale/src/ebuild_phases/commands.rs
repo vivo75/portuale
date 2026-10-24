@@ -54,6 +54,9 @@ pub(crate) struct RunCommandsAsyncArgs<'a> {
     /// phase like `doebuild()`; the scheduler-driven `--buildpkgonly`
     /// build goes through `EbuildExecuter` and skips (backlog #458).
     pub(crate) skip_noop_src_phases: bool,
+    /// The scheduler's up-front `pkg_pretend` pass already ran it: start
+    /// the chain at `setup`, like `EbuildBuild` does after `_run_pkg_pretend`.
+    pub(crate) skip_pretend: bool,
 }
 
 /// Portage's `EbuildExecuter._skippable_src_phases`: the phases whose
@@ -130,6 +133,7 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
         log_file,
         build_env,
         skip_noop_src_phases,
+        skip_pretend,
     } = args;
     let env = compute_environment(ebuild_path, portage_tmpdir)?;
 
@@ -246,6 +250,11 @@ pub(crate) async fn run_commands_async(args: RunCommandsAsyncArgs<'_>) -> Result
         // phase skips the no-op defaults outright.
         let mut skip_src: Option<bool> = None;
         for phase in chain_here {
+            // The scheduler pre-ran `pkg_pretend` up front and replays its
+            // output itself: the build starts at `setup`, like `EbuildBuild`.
+            if skip_pretend && phase == "pretend" {
+                continue;
+            }
             if skip_noop_src_phases
                 && SKIPPABLE_SRC_PHASES.contains(&phase)
                 && *skip_src.get_or_insert_with(|| {
@@ -385,6 +394,8 @@ pub fn run_commands(args: RunCommandsArgs<'_>) -> Result<i32, String> {
         log_file,
         build_env,
         skip_noop_src_phases,
+        // The direct `ebuild` paths never pre-run `pkg_pretend`.
+        skip_pretend: false,
     })
 }
 
@@ -404,6 +415,10 @@ pub struct RunCommandsLoggedArgs<'a> {
     /// sourceless package. The direct `ebuild` and `package` paths run
     /// every phase like `doebuild()`.
     pub skip_noop_src_phases: bool,
+    /// The scheduler's up-front `pkg_pretend` pass already ran it: start
+    /// the chain at `setup`. Only the scheduler sets this; every other
+    /// caller runs the whole chain from `pretend`.
+    pub skip_pretend: bool,
 }
 
 /// Like `run_commands`, but every phase appends stdout+stderr to `log_file`
@@ -422,6 +437,7 @@ pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, Strin
         log_file,
         build_env,
         skip_noop_src_phases,
+        skip_pretend,
     } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(run_commands_async(RunCommandsAsyncArgs {
@@ -436,6 +452,7 @@ pub fn run_commands_logged(args: RunCommandsLoggedArgs<'_>) -> Result<i32, Strin
         log_file,
         build_env,
         skip_noop_src_phases,
+        skip_pretend,
     }))
 }
 

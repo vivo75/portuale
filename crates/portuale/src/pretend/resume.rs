@@ -339,6 +339,9 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     merge_options.build_env = crate::emerge_build::run_wide_phase_env(config);
     merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
     merge_options.package_env_vars = config.package_env_vars.clone();
+    // The saved `myopts` replays the scope the original run used; unset
+    // means Portage's `deep` default (backlog #512).
+    merge_options.merge_wait_scope = opts.merge_wait_scope.unwrap_or_default();
     // An all-source list goes through `run_source_merge`; a list with a
     // resumed binary entry goes through `run_merge_plan` instead (the
     // resume mergelist can mix both). The saved `myopts` carries no

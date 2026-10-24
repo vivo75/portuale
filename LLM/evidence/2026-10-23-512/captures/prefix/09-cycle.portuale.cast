@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792794461,"command":"/var/tmp/ev512-bin/emerge --oneshot --color=n --jobs=2 =dev-libs/cycA-1.0 =dev-libs/cycB-1.0","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.008, "o", "Calculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.001, "o", "\r\n * GNU info directory index is up-to-date.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev512-tree\u0007"]
+[0.000, "x", "0"]

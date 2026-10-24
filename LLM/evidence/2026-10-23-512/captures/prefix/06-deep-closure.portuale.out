@@ -1,0 +1,50 @@
+22:25:33 Calculating dependencies ... done!
+22:25:33 Dependency resolution took (backtrack: 0/20).
+22:25:33 
+22:25:33 >>> Jobs: 0 of 5 complete, 1 running                                    
+22:25:33 >>> Jobs: 0 of 5 complete, 2 running                                    
+22:25:33 >>> Emerging (1 of 5) dev-libs/deeper-runtime-dep-1.0::mw512 for /var/tmp/ev512-tree/root
+22:25:33 >>> Emerging (2 of 5) app-misc/sysextra-1.0::mw512 for /var/tmp/ev512-tree/root
+22:25:33 >>> Jobs: 0 of 5 complete, 2 running                                    
+22:25:33 >>> Jobs: 0 of 5 complete, 2 running                                    
+22:25:35 >>> Jobs: 0 of 5 complete, 1 running                                    
+22:25:35 >>> Installing (2 of 5) app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:35 >>> Jobs: 0 of 5 complete, 1 running                                    
+22:25:35 >>> Completed (2 of 5) app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:35 >>> Jobs: 0 of 5 complete, 1 running                                    
+22:25:35 >>> Jobs: 1 of 5 complete, 1 running                                    
+22:25:35 >>> Jobs: 1 of 5 complete, 2 running                                    
+22:25:35 >>> Jobs: 1 of 5 complete, 1 running                                    
+22:25:35 >>> Emerging (3 of 5) app-misc/slow-1.0::mw512 for /var/tmp/ev512-tree/root
+22:25:35 >>> Jobs: 1 of 5 complete, 1 running                                    
+22:25:35 >>> Installing (1 of 5) dev-libs/deeper-runtime-dep-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:35 >>> Jobs: 1 of 5 complete, 1 running                                    
+22:25:35 >>> Completed (1 of 5) dev-libs/deeper-runtime-dep-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:35 >>> Jobs: 1 of 5 complete, 1 running                                    
+22:25:35 >>> Jobs: 2 of 5 complete, 1 running                                    
+22:25:35 >>> Jobs: 2 of 5 complete, 2 running                                    
+22:25:35 >>> Emerging (4 of 5) dev-libs/runtime-dep-1.0::mw512 for /var/tmp/ev512-tree/root
+22:25:35 >>> Jobs: 2 of 5 complete, 2 running                                    
+22:25:38 >>> Jobs: 2 of 5 complete, 1 running                                    
+22:25:38 >>> Installing (4 of 5) dev-libs/runtime-dep-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:38 >>> Jobs: 2 of 5 complete, 1 running                                    
+22:25:38 >>> Completed (4 of 5) dev-libs/runtime-dep-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:38 >>> Jobs: 2 of 5 complete, 1 running                                    
+22:25:38 >>> Jobs: 3 of 5 complete, 1 running                                    
+22:25:38 >>> Jobs: 3 of 5 complete, 2 running                                    
+22:25:38 >>> Emerging (5 of 5) sys-libs/glibc-1.0::mw512 for /var/tmp/ev512-tree/root
+22:25:38 >>> Jobs: 3 of 5 complete, 2 running                                    
+22:25:40 >>> Jobs: 3 of 5 complete, 1 running                                    
+22:25:40 >>> Installing (5 of 5) sys-libs/glibc-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:40 >>> Jobs: 3 of 5 complete, 1 running                                    
+22:25:40 >>> Completed (5 of 5) sys-libs/glibc-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:40 >>> Jobs: 3 of 5 complete, 1 running                                    
+22:25:40 >>> Jobs: 4 of 5 complete, 1 running                                    
+22:25:56 >>> Jobs: 4 of 5 complete                                               
+22:25:56 >>> Installing (3 of 5) app-misc/slow-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:56 >>> Jobs: 4 of 5 complete                                               
+22:25:56 >>> Completed (3 of 5) app-misc/slow-1.0::mw512 to /var/tmp/ev512-tree/root
+22:25:56 >>> Jobs: 4 of 5 complete                                               
+22:25:56 >>> Jobs: 5 of 5 complete                                               
+22:25:56 
+22:25:56  * GNU info directory index is up-to-date.

@@ -1,0 +1,93 @@
+22:16:04 
+22:16:04 Performing Global Updates
+22:16:04 (Could take a couple of minutes if you have a lot of binary packages.)
+22:16:04   .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+22:16:04   s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+22:16:04   p='update /etc/portage/package.*'
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/2Q-2022...........
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/3Q-2025.......
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/1Q-2026...
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/3Q-2022.....................
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/1Q-2021.......
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/4Q-2020.......
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/2Q-2025......
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/4Q-2024...............................................................................
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/2Q-2021.......
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/1Q-2025...........................
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/3Q-2026.
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/3Q-2021...........
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/2Q-2026......
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/4Q-2023........................................
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/4Q-2021.......................................................................
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/2Q-2024...........
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/1Q-2020.........
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/3Q-2023..................
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/3Q-2024.............
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/2Q-2023..............................
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/4Q-2026..
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/4Q-2022........
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/3Q-2020..............
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/1Q-2023.......................
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/1Q-2024........................................................................................
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/4Q-2025...
+22:16:04 /.gentoo/repos/gentoo/profiles/updates/2Q-2020.........
+22:16:04 /home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/updates/2Q-2024..
+22:16:04 
+22:16:04 
+22:16:06 Calculating dependencies ... done!
+22:16:06 Dependency resolution took 1.86 s (backtrack: 0/20).
+22:16:06 
+22:16:07 >>> Verifying ebuild manifests
+22:16:07 >>> Jobs: 0 of 5 complete, 1 running                                    Load avg: 1.97, 1.52, 1.69
+22:16:07 >>> Emerging (1 of 5) dev-libs/deeper-runtime-dep-1.0::mw512 for /var/tmp/ev512-tree/root/
+22:16:07 >>> Jobs: 0 of 5 complete, 1 running                                    Load avg: 1.97, 1.52, 1.69
+22:16:07 >>> Jobs: 0 of 5 complete, 2 running                                    Load avg: 1.97, 1.52, 1.69
+22:16:07 >>> Emerging (2 of 5) app-misc/sysextra-1.0::mw512 for /var/tmp/ev512-tree/root/
+22:16:07 >>> Jobs: 0 of 5 complete, 2 running                                    Load avg: 1.97, 1.52, 1.69
+22:16:09 >>> Jobs: 0 of 5 complete, 1 running                                    Load avg: 1.97, 1.52, 1.69
+22:16:09 >>> Jobs: 0 of 5 complete, 2 running, 1 merge wait                      Load avg: 1.97, 1.52, 1.69
+22:16:09 >>> Emerging (3 of 5) app-misc/slow-1.0::mw512 for /var/tmp/ev512-tree/root/
+22:16:09 >>> Jobs: 0 of 5 complete, 2 running, 1 merge wait                      Load avg: 1.97, 1.52, 1.69
+22:16:09 >>> Jobs: 0 of 5 complete, 1 running, 1 merge wait                      Load avg: 1.97, 1.52, 1.69
+22:16:30 >>> Installing (3 of 5) app-misc/slow-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:30 >>> Jobs: 0 of 5 complete, 1 running, 2 merge wait                      Load avg: 1.57, 1.46, 1.67
+22:16:30 >>> Jobs: 0 of 5 complete, 2 merge wait                                 Load avg: 1.57, 1.46, 1.67
+22:16:30 >>> Completed (3 of 5) app-misc/slow-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:30 >>> Jobs: 0 of 5 complete, 2 merge wait                                 Load avg: 1.60, 1.46, 1.67
+22:16:30 >>> Jobs: 1 of 5 complete, 2 merge wait                                 Load avg: 1.60, 1.46, 1.67
+22:16:30 >>> Installing (2 of 5) app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:30 >>> Jobs: 1 of 5 complete, 2 merge wait                                 Load avg: 1.60, 1.46, 1.67
+22:16:30 >>> Completed (2 of 5) app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:30 >>> Jobs: 1 of 5 complete, 1 merge wait                                 Load avg: 1.60, 1.46, 1.67
+22:16:30 >>> Jobs: 2 of 5 complete, 1 merge wait                                 Load avg: 1.60, 1.46, 1.67
+22:16:30 >>> Installing (1 of 5) dev-libs/deeper-runtime-dep-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:30 >>> Jobs: 2 of 5 complete, 1 merge wait                                 Load avg: 1.60, 1.46, 1.67
+22:16:30 >>> Completed (1 of 5) dev-libs/deeper-runtime-dep-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:30 >>> Jobs: 2 of 5 complete                                               Load avg: 1.60, 1.46, 1.67
+22:16:30 >>> Jobs: 3 of 5 complete                                               Load avg: 1.60, 1.46, 1.67
+22:16:30 >>> Jobs: 3 of 5 complete, 1 running                                    Load avg: 1.60, 1.46, 1.67
+22:16:30 >>> Emerging (4 of 5) dev-libs/runtime-dep-1.0::mw512 for /var/tmp/ev512-tree/root/
+22:16:30 >>> Jobs: 3 of 5 complete, 1 running                                    Load avg: 1.60, 1.46, 1.67
+22:16:33 >>> Jobs: 3 of 5 complete                                               Load avg: 1.60, 1.46, 1.67
+22:16:33 >>> Installing (4 of 5) dev-libs/runtime-dep-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:33 >>> Jobs: 3 of 5 complete, 1 merge wait                                 Load avg: 1.60, 1.46, 1.67
+22:16:33 >>> Completed (4 of 5) dev-libs/runtime-dep-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:33 >>> Jobs: 3 of 5 complete                                               Load avg: 1.60, 1.46, 1.67
+22:16:33 >>> Jobs: 4 of 5 complete                                               Load avg: 1.60, 1.46, 1.67
+22:16:33 >>> Jobs: 4 of 5 complete, 1 running                                    Load avg: 1.60, 1.46, 1.67
+22:16:33 >>> Emerging (5 of 5) sys-libs/glibc-1.0::mw512 for /var/tmp/ev512-tree/root/
+22:16:33 >>> Jobs: 4 of 5 complete, 1 running                                    Load avg: 1.60, 1.46, 1.67
+22:16:36 >>> Jobs: 4 of 5 complete                                               Load avg: 1.48, 1.44, 1.66
+22:16:36 >>> Installing (5 of 5) sys-libs/glibc-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:36 >>> Jobs: 4 of 5 complete, 1 merge wait                                 Load avg: 1.48, 1.44, 1.66
+22:16:36 >>> Completed (5 of 5) sys-libs/glibc-1.0::mw512 to /var/tmp/ev512-tree/root/
+22:16:36 >>> Jobs: 4 of 5 complete                                               Load avg: 1.48, 1.44, 1.66
+22:16:36 >>> Jobs: 5 of 5 complete                                               Load avg: 1.48, 1.44, 1.66
+22:16:36 
+22:16:36 >>> Auto-cleaning packages...
+22:16:36 
+22:16:36 >>> Using system located in ROOT tree /var/tmp/ev512-tree/root/
+22:16:36 
+22:16:36 >>> No outdated packages were found on your system.
+22:16:36 
+22:16:36  * GNU info directory index is up-to-date.

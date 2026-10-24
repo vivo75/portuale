@@ -1,0 +1,1 @@
+emerge: error: argument --merge-wait-scope: invalid choice: 'bogus' (choose from 'deep', 'system', 'toolchain', 'none')

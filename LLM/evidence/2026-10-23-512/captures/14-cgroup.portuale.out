@@ -1,0 +1,18 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+
+
+>>> Emerging (1 of 1) app-misc/sysextra-1.0::mw512 for /var/tmp/ev512-tree/root
+
+>>> Installing (1 of 1) app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root
+
+>>> Completed (1 of 1) app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root
+
+ * GNU info directory index is up-to-date.

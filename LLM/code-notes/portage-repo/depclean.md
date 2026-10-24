@@ -69,3 +69,6 @@ depclean, prune and clean selection.
 
 ## fn print_cycle_suggestion (portuale)
 - Portage `show_cycle_suggestion`'s text (`96c320967`): the two-line sentence, then `emerge --depclean` with every member as `=cpv`, sorted as strings (`sorted("=" + member.cpv ...)`), then a blank line. Written to stdout (Portage `writemsg_stdout`), no colour.
+
+## fn strongly_connected_components visibility (#512)
+- Promoted from `pub(crate)` to `pub` (re-exported through `pub use depclean::*`) so the `-j` scheduler can find dependency cycles (`merge_wait::cyclic_nodes`): Portage `Scheduler._find_cyclic_nodes` runs the same `digraph.strongly_connected_components()`. No behaviour change; the depclean callers are untouched.

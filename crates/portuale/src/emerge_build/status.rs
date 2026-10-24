@@ -218,6 +218,9 @@ pub(crate) struct StatusState {
     pub(crate) curval: usize,
     pub(crate) running: usize,
     pub(crate) failed: usize,
+    /// Builds finished whose merge waits for idle builders
+    /// (`--merge-wait-scope`, backlog #512).
+    pub(crate) merge_wait: usize,
     /// A `>>> Jobs:` line has been printed: the current status re-displays
     /// after every status line once one is on screen.
     pub(crate) displayed: bool,
@@ -233,6 +236,7 @@ impl StatusDisplay {
                 curval: 0,
                 running: 0,
                 failed: 0,
+                merge_wait: 0,
                 displayed: false,
             }),
         }
@@ -304,11 +308,21 @@ impl StatusDisplay {
         state.curval = 0;
         state.running = 0;
         state.failed = 0;
+        state.merge_wait = 0;
     }
 
     /// Failure: record it for the display.
     pub(crate) fn job_failed(&self) {
         self.state.lock().unwrap().failed += 1;
+        if self.mode.show_jobs {
+            self.print_jobs();
+        }
+    }
+
+    /// A build finished into the merge-wait queue (or the queue drained):
+    /// the `N merge wait` arm of the next `>>> Jobs:` line follows.
+    pub(crate) fn set_merge_wait(&self, n: usize) {
+        self.state.lock().unwrap().merge_wait = n;
         if self.mode.show_jobs {
             self.print_jobs();
         }
@@ -332,7 +346,7 @@ impl StatusDisplay {
             maxval: state.maxval,
             running: state.running,
             failed: state.failed,
-            merge_wait: 0,
+            merge_wait: state.merge_wait,
         })
     }
 }

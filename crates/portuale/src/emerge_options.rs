@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn does_not_recognize_the_three_3_0_83_options() {
-        // Backlog #503: accepted (inert) by the caller, so excluded here;
+        // Backlog #503: accepted by the caller, so excluded here;
         // `--cycle-break` is not an option in Portage either (a non-goal).
         for flag in [
             "--binpkg-respect-user-patches",

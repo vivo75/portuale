@@ -1,0 +1,10 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792796424,"command":"/var/tmp/ev512-bin/emerge --oneshot --color=n --jobs=2 --verbose =app-misc/sysextra-1.0","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.010, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[ebuild   R    ] app-misc/sysextra-1.0::mw512 to /var/tmp/ev512-tree/root 0 KiB\r\n\r\nTotal: 1 package (1 reinstall), Size of downloads: 0 KiB\r\n\r\n"]
+[0.038, "o", "\r\n>>> Emerging (\u001b[33;01m1\u001b[39;49;00m of \u001b[33;01m1\u001b[39;49;00m) \u001b[32mapp-misc/sysextra-1.0::mw512\u001b[39;49;00m for /var/tmp/ev512-tree/root\r\n"]
+[2.308, "o", "\r\n>>> Installing (\u001b[33;01m1\u001b[39;49;00m of \u001b[33;01m1\u001b[39;49;00m) \u001b[32mapp-misc/sysextra-1.0::mw512\u001b[39;49;00m to /var/tmp/ev512-tree/root\r\n"]
+[0.086, "o", "\r\n>>> Completed (\u001b[33;01m1\u001b[39;49;00m of \u001b[33;01m1\u001b[39;49;00m) \u001b[32mapp-misc/sysextra-1.0::mw512\u001b[39;49;00m to /var/tmp/ev512-tree/root\r\n"]
+[0.021, "o", "\r\n * GNU info directory index is up-to-date.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev512-tree\u0007"]
+[0.001, "x", "0"]

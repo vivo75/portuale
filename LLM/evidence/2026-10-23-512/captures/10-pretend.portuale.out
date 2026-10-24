@@ -1,0 +1,29 @@
+22:57:20 Calculating dependencies ... done!
+22:57:20 Dependency resolution took (backtrack: 0/20).
+22:57:20 
+22:57:25  [32m*[0m PRETEND-BEGIN ppA 1792796240.662463523
+22:57:25  [32m*[0m PRETEND-BODY ppA
+22:57:25  [32m*[0m PRETEND-END ppA 1792796245.665647457
+22:57:25  [32m*[0m PRETEND-BEGIN ppB 1792796240.662893319
+22:57:25  [32m*[0m PRETEND-BODY ppB
+22:57:25  [32m*[0m PRETEND-END ppB 1792796245.665860702
+22:57:25 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:57:25 >>> Jobs: 0 of 2 complete, 2 running                                    
+22:57:25 >>> Emerging (1 of 2) dev-libs/ppA-1.0::mw512 for /var/tmp/ev512-tree/root
+22:57:25 >>> Emerging (2 of 2) dev-libs/ppB-1.0::mw512 for /var/tmp/ev512-tree/root
+22:57:25 >>> Jobs: 0 of 2 complete, 2 running                                    
+22:57:25 >>> Jobs: 0 of 2 complete, 2 running                                    
+22:57:27 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:57:27 >>> Installing (2 of 2) dev-libs/ppB-1.0::mw512 to /var/tmp/ev512-tree/root
+22:57:27 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:57:28 >>> Completed (2 of 2) dev-libs/ppB-1.0::mw512 to /var/tmp/ev512-tree/root
+22:57:28 >>> Jobs: 0 of 2 complete, 1 running                                    
+22:57:28 >>> Jobs: 1 of 2 complete, 1 running                                    
+22:57:28 >>> Jobs: 1 of 2 complete                                               
+22:57:28 >>> Installing (1 of 2) dev-libs/ppA-1.0::mw512 to /var/tmp/ev512-tree/root
+22:57:28 >>> Jobs: 1 of 2 complete                                               
+22:57:28 >>> Completed (1 of 2) dev-libs/ppA-1.0::mw512 to /var/tmp/ev512-tree/root
+22:57:28 >>> Jobs: 1 of 2 complete                                               
+22:57:28 >>> Jobs: 2 of 2 complete                                               
+22:57:28 
+22:57:28  * GNU info directory index is up-to-date.

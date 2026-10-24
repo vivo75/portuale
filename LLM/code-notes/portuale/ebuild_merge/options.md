@@ -49,3 +49,6 @@ Env-var-sourced merge options for `run_merge` plus the `movefile` xattr policy.
   `emerge`-scheduler paths never do (their listing would go to the build
   log, which portuale does not reproduce). Portage discriminator:
   `dblink._display_merge`'s foreground scheduler vs background task.
+
+## MergeOptions.merge_wait_scope (#512)
+- `--merge-wait-scope` rides into the `-j` scheduler through the merge options (`merge_setup` maps the parsed `EmergeOpts`, unset means Portage's `deep` default; the `--resume` path replays the saved `myopts` value). `Default`/`from_env` are both `Deep`, so every existing literal (`..MergeOptions::default()`) keeps the old behaviour. Portage: `_emerge/Scheduler.py:257` (`myopts.get("--merge-wait-scope", "deep")`).

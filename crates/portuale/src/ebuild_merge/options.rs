@@ -84,6 +84,9 @@ pub struct MergeOptions {
     pub quiet: bool,
     /// `--quiet-fail`: no whole-log dump after a lone background failure.
     pub quiet_fail: bool,
+    /// `--merge-wait-scope`: which merges barrier on idle builders
+    /// (backlog #512). `Deep` is Portage's default.
+    pub merge_wait_scope: crate::pretend::MergeWaitScope,
 }
 
 impl Default for MergeOptions {
@@ -117,6 +120,7 @@ impl Default for MergeOptions {
             world_recorder: None,
             quiet: false,
             quiet_fail: false,
+            merge_wait_scope: crate::pretend::MergeWaitScope::default(),
         }
     }
 }
@@ -187,6 +191,7 @@ impl MergeOptions {
             world_recorder: None,
             quiet: false,
             quiet_fail: false,
+            merge_wait_scope: crate::pretend::MergeWaitScope::default(),
         }
     }
 }
