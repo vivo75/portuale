@@ -615,20 +615,19 @@ fn graph_result_from_order(
     let (slot_op_rebuilds, abi_rebuilds) = bridge_slot_operator_rebuilds(req, repos, &entries);
     entries.extend(slot_op_rebuilds);
     // Same merge-order sort the walk applies: engine order only seeds positions.
-    let (entries, insertion_rank) =
-        super::topological_merge_order(super::TopologicalMergeOrderArgs {
-            entries,
-            top_level_atoms: &req.atoms,
-            config: &req.config,
-            root: &req.root,
-            implicit_system_deps: req.implicit_system_deps,
-            repos,
-            dynamic_deps: req.dynamic_deps,
-            // No backtrack restart runs here, so no cycle map to demote by.
-            circular: &HashMap::new(),
-        });
+    let (entries, _) = super::topological_merge_order(super::TopologicalMergeOrderArgs {
+        entries,
+        top_level_atoms: &req.atoms,
+        config: &req.config,
+        root: &req.root,
+        implicit_system_deps: req.implicit_system_deps,
+        repos,
+        dynamic_deps: req.dynamic_deps,
+        // No backtrack restart runs here, so no cycle map to demote by.
+        circular: &HashMap::new(),
+    });
     let (circular_deps, large_cycle_count, report_cycles, cycle_display) =
-        bridge_circular_display(req, &entries, &insertion_rank);
+        bridge_circular_display(req, &entries);
 
     GraphResult {
         entries,
@@ -1122,11 +1121,7 @@ type BridgeCircularDisplay = (Vec<Vec<String>>, bool, Vec<Vec<String>>, Vec<Stri
 
 /// Circular-dep notice: rebuild the walk's hard/soft edge-kind map over the
 /// entry `deps` edges and report via `find_hard_cycles`, like the walk.
-fn bridge_circular_display(
-    req: &ResolveRequest,
-    entries: &[GraphEntry],
-    insertion_rank: &[usize],
-) -> BridgeCircularDisplay {
+fn bridge_circular_display(req: &ResolveRequest, entries: &[GraphEntry]) -> BridgeCircularDisplay {
     let mut edge_kinds: super::EdgeKindMap = HashMap::new();
     for e in entries {
         let owner = (
@@ -1160,14 +1155,20 @@ fn bridge_circular_display(
         &edge_kinds,
         &req.root,
         &HashMap::new(),
-        Some(insertion_rank),
+        &req.atoms,
+        req.onlydeps,
     );
     // Cycle report only when a hard cycle was reported.
     let (large_cycle_count, report_cycles, cycle_display) = if circular_deps.is_empty() {
         (false, Vec::new(), Vec::new())
     } else {
-        let (cycles, display) =
-            super::merge_order::cycle_report(entries, &req.atoms, &req.root, &HashMap::new());
+        let (cycles, display) = super::merge_order::cycle_report(
+            entries,
+            &req.atoms,
+            &req.root,
+            &HashMap::new(),
+            req.onlydeps,
+        );
         let display = display
             .into_iter()
             .filter_map(|i| super::merge_bound_cpv(&entries[i]))
@@ -9107,7 +9108,7 @@ mod tests {
             ),
         ];
         let (circular_deps, large_cycle_count, _, _) =
-            super::bridge_circular_display(&req, &entries, &[0, 1]);
+            super::bridge_circular_display(&req, &entries);
         assert!(
             circular_deps.is_empty(),
             "a runtime back edge breaks the hard cycle: {circular_deps:?}"

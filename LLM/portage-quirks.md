@@ -264,3 +264,22 @@ when a claim turns out false.
   member under the deferred `..` symlink instead, rc 2), but the composed
   outcome matches: rc 1, nothing installed, empty image dir. The L5 cell
   pins the pair (1, 1) with this quirk cited.
+
+## Q11. The `usage:` block's option order is hash-randomized per process (suspect)
+
+- **What it does**: every argparse-native error (`invalid choice`,
+  `unrecognized arguments`) is preceded by the full 78-line `usage:`
+  block, whose option order differs from run to run: three identical
+  host invocations (`emerge -p --circular-deps-report=none x`) with
+  `PYTHONHASHSEED=0/1/42` produce three different md5s, differing from
+  the first wrapped line on. Source: argparse builds the usage parts
+  from a `frozenset`-ordered option container (the 347-USG cut).
+- **Why it looks wrong**: `--help` text is stable, but the error-path
+  usage is not -- the same command prints different help in different
+  processes.
+- **First seen**: 3.0.83-r1 (host Portage, `LLM/evidence/2026-10-23-507/
+  captures/53-none.portage.err` vs re-runs).
+- **Portuale**: prints the oracle capture's order verbatim on every
+  `invalid choice` error (backlog #520), like the sorted `Change USE:`
+  flags of Q4 -- deterministic, matching Portage's line set but only
+  occasionally its order.

@@ -326,6 +326,16 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
                     color,
                 });
             }
+            // A REQUIRED_USE unmet-requirements abort prints the resolution
+            // preamble first (stdout), like every other `--pretend` run that
+            // reaches resolution: Portage emits it at action start
+            // (`_start_resolution_display`), ahead of the rows. Backlog #519.
+            if is_required_use_report(&msg) {
+                print!(
+                    "{}",
+                    abort_preamble(opts.quiet, 0, opts.backtrack_max, color)
+                );
+            }
             // Portage never prefixes a `!!!`-headed report with `emerge: `;
             // it is emitted verbatim. The resolver library builds these
             // strings plain; Portage's `_show_unsatisfied_dep` spans are

@@ -215,7 +215,8 @@ fn softened_buildtime_edge_hides_from_hard_cycles_but_not_restart_cycles() {
             &map,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            None
+            &[],
+            false,
         )
         .is_empty()
     );
@@ -261,7 +262,8 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
             &hard,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            None
+            &[],
+            false,
         ),
         vec![vec![hardcpv("hcb"), hardcpv("hca")]]
     );
@@ -276,7 +278,8 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
             &mixed,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            None
+            &[],
+            false,
         )
         .is_empty()
     );
@@ -298,7 +301,8 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
             &hard,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            None
+            &[],
+            false,
         )
         .is_empty()
     );
@@ -331,8 +335,9 @@ fn find_hard_cycles_starts_where_portages_get_cycles_starts() {
             &hard,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            // The insertion-rank path (what the resolver threads).
-            Some(&[0, 1])
+            // No request atoms: the discovery order seeds the walk.
+            &[],
+            false,
         ),
         vec![vec![
             cpv("dev-libs", "u249json"),
@@ -371,7 +376,8 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
             &hard,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            None
+            &[],
+            false,
         ),
         vec![vec![hardcpv("hcs", "1.0")]]
     );
@@ -385,7 +391,8 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
             &hard,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            None
+            &[],
+            false,
         )
         .is_empty()
     );
@@ -399,7 +406,8 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
             &hard,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            None
+            &[],
+            false,
         ),
         vec![vec![hardcpv("hcs", "1.0")]]
     );
@@ -410,7 +418,7 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
     let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
     std::fs::create_dir_all(&inst_dir).unwrap();
     std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
-    assert!(find_hard_cycles(&entries, &hard, &root, &HashMap::new(), None).is_empty());
+    assert!(find_hard_cycles(&entries, &hard, &root, &HashMap::new(), &[], false).is_empty());
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -542,7 +550,8 @@ fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
             &map,
             Path::new("/nonexistent-root"),
             &HashMap::new(),
-            None
+            &[],
+            false,
         )
         .is_empty()
     );
@@ -600,7 +609,14 @@ fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
     // (earliest-inserted `sown`, so the ring closes through its child).
     let root = make_vdb("n228-slot-gate-other-slot", "0");
     assert_eq!(
-        find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new(), None),
+        find_hard_cycles(
+            &make_entries(),
+            &make_map(),
+            &root,
+            &HashMap::new(),
+            &[],
+            false
+        ),
         vec![vec![
             "dev-libs/sdep-1.0".to_string(),
             "dev-libs/sown-1.0".to_string()
@@ -609,7 +625,15 @@ fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
     // Installed slot `1/0`, child slot `1/0`: satisfied (soft).
     let root = make_vdb("n228-slot-gate-same-slot", "1/0");
     assert!(
-        find_hard_cycles(&make_entries(), &make_map(), &root, &HashMap::new(), None).is_empty()
+        find_hard_cycles(
+            &make_entries(),
+            &make_map(),
+            &root,
+            &HashMap::new(),
+            &[],
+            false
+        )
+        .is_empty()
     );
 }
 

@@ -236,8 +236,10 @@ pub(crate) fn render_required_use_block(args: RenderRequiredUseBlockArgs<'_>) ->
             .iter()
             .map(|(node, ty)| format!("(dependency required by \"{node}\" [{ty}])"))
             .collect();
+        // No trailing newline: the print site terminates the report with
+        // one (`eprintln!`), like Portage's final `writemsg`, so the block
+        // ends exactly after the last chain line (backlog #517 (c)).
         out.push_str(&lines.join("\n"));
-        out.push('\n');
     }
     out
 }

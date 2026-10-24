@@ -44,3 +44,4 @@ A marker (`Still deferred`, `remains open`, `still open)`) on line `L` of
 - CUT-8: `--binpkg-respect-user-patches` is parsed and stored but changes nothing, no patch digests are compared (what-this-proves.md, backlog #503 paragraph) → closed #509
 - CUT-9: `--circular-deps-report=json` is parsed and stored, the report keeps one format (what-this-proves.md, backlog #503 paragraph) → closed #507
 - CUT-10: `--merge-wait-scope` is parsed and stored, the scheduler does not use it (what-this-proves.md, backlog #503 paragraph) → closed #512
+- CUT-11: cycle-report `_find_suggestions` on `RDEPEND` runtime edges, binary packages as masked alternatives, and the 3.0.83 `_find_cycles` lower-priority fallback and prune stop (`3b6976a5c`; no black-box shape found) (backlog #517 (e)) → none (accepted): wontfix per Task 3 triage; unported until a shape grounds it.

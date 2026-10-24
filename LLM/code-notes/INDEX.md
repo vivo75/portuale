@@ -437,6 +437,7 @@
 - [crates/portuale/src/pretend/tests/resume.rs](portuale/pretend/tests/resume.md) — Resume news notices, pretend write isolation, and the not-merged tail.
 - [crates/portuale/src/pretend/tests/unmerge.rs](portuale/pretend/tests/unmerge.md) — Unmerge info-regen wiring, the end notice, and set-parent detection.
 - [crates/portuale/src/pretend/tests/world.rs](portuale/pretend/tests/world.md) — World and world_sets recording, usersets candidacy, and the installed set.
+- [crates/portuale/src/pretend/usage_text.rs](portuale/pretend/usage_text.md) — Portage 3.0.83's full `usage:` block for `emerge`.
 - [crates/portuale/src/pretend/world.rs](portuale/pretend/world.md) — The world and world_sets files.
 - [crates/portuale/src/privileges.rs](portuale/privileges.md) — The privilege check for merging into a root.
 - [crates/portuale/src/regen.rs](portuale/regen.md) — `emerge --regen`: regenerate every repo's md5-cache from the `depend` phases.

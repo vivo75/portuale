@@ -79,6 +79,24 @@ pub(crate) fn edge_use_tail(flags: &[(String, bool)], color: &Colorizer) -> Stri
 /// block, the `Change USE:` suggestion-or-advisory branch, and the
 /// `large_cycle_count` trailer. Prints only -- call sites return the exit.
 /// Portage: depgraph.py, _show_circular_deps
+///
+/// The `!!! Invalid PORTAGE_CIRCULAR_MAX_USE_FLAGS` warning is NOT emitted
+/// here on the text path: Portage warns at handler construction, before the
+/// merge-list rows print, so the render path (`render_merge_rows`, forced
+/// display) and the gate-off path (`final_gates`) emit it ahead of the
+/// block instead (backlog #517 (d)). The `json` branch still warns first,
+/// like Portage's handler-then-`_show_json`.
+pub(crate) fn warn_invalid_circular_max_use_flags(config: &portage_profile::Config) {
+    let (_, invalid_max) = portage_repo::circular_max_use_flags(config);
+    if let Some(value) = invalid_max {
+        eprint!(
+            "!!! Invalid PORTAGE_CIRCULAR_MAX_USE_FLAGS: {value}\n\
+             !!! Expected an integer greater than zero, using {} instead.\n",
+            portage_repo::CIRCULAR_MAX_USE_FLAGS_DEFAULT
+        );
+    }
+}
+
 pub(crate) fn print_circular_block(args: PrintCircularBlockArgs<'_>) {
     let PrintCircularBlockArgs {
         cycle,
@@ -93,15 +111,9 @@ pub(crate) fn print_circular_block(args: PrintCircularBlockArgs<'_>) {
         format,
         all_cycles,
     } = args;
-    let (max_affecting_use, invalid_max) = portage_repo::circular_max_use_flags(config);
-    if let Some(value) = invalid_max {
-        eprint!(
-            "!!! Invalid PORTAGE_CIRCULAR_MAX_USE_FLAGS: {value}\n\
-             !!! Expected an integer greater than zero, using {} instead.\n",
-            portage_repo::CIRCULAR_MAX_USE_FLAGS_DEFAULT
-        );
-    }
+    let (max_affecting_use, _) = portage_repo::circular_max_use_flags(config);
     if format == CircularDepsReport::Json {
+        warn_invalid_circular_max_use_flags(config);
         let report = portage_repo::build_cycle_report(portage_repo::CycleReportArgs {
             cycles: all_cycles,
             fallback: cycle,

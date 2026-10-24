@@ -68,13 +68,22 @@ pub(crate) fn owner_self_loop(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn find_hard_cycles(
     entries: &[GraphEntry],
     edge_kind_map: &EdgeKindMap,
     root: &Path,
     circular: &HashMap<RootCp, Vec<CircularDepChild>>,
-    insertion_rank: Option<&[usize]>,
+    top_level_atoms: &[String],
+    // `--onlydeps`: Portage does not insert the target up front; the graph
+    // starts from the targets' dependencies (backlog #518). Seeds are the
+    // targets' resolved direct deps in atom order, then the targets.
+    onlydeps: bool,
 ) -> Vec<Vec<String>> {
+    // `top_level_atoms`: raw request atoms in order (`ResolveCtx::atoms` /
+    // `ResolveRequest::atoms`). Portage inserts the targets first, in atom
+    // order. Unparseable atoms (sets, …) are skipped; with no usable targets
+    // the discovery order seeds the walk instead.
     // Finds the shortest unbreakable cycle: hard edges only (unsatisfied
     // build-time with no run-time alternative, plus unsatisfied
     // non-optional slot-operator edges). Empty when acyclic.
@@ -154,14 +163,103 @@ pub(crate) fn find_hard_cycles(
             }
         }
     }
-    // Order analogue of the digraph's node insertion order: the scheduler's
-    // pre-bias rank when threaded, else the resolver's `discovery` stamp.
-    let order_key = |i: usize| -> (usize, usize) {
-        match insertion_rank {
-            Some(ranks) => (ranks[i], i),
-            None => (entries[i].discovery, i),
+    // Portage's digraph node insertion order: `_add_pkg` recurses
+    // synchronously (`_add_dep` calls it directly), so nodes land in DFS
+    // pre-order from the targets over the parent-scan order (`RDEPEND`,
+    // `IDEPEND`, `PDEPEND`, `DEPEND`, `BDEPEND` -- `entry.deps` order --
+    // times declaration order), not in pop/`discovery` order. Portage's
+    // `get_cycles` iterates `self.nodes` in that insertion order and keeps
+    // the first strictly-shortest cycle, so the printed ring's start node
+    // is the earliest-inserted one (backlog #517 (a)). Rebuild that order
+    // here: DFS pre-order from the request targets (atom order), then from
+    // every still-unseen entry in `discovery` order for disconnected
+    // components -- over the merge-bound `deps` edges (selected `||`
+    // branches only, like the adjacency below).
+    // Portage: depgraph.py, _add_pkg/_add_dep; util/digraph.py, add
+    let mut scan_pos = vec![usize::MAX; entries.len()];
+    {
+        let mut seen = HashSet::new();
+        let mut order: Vec<usize> = Vec::new();
+        let mut seeds: Vec<usize> = Vec::new();
+        for atom in top_level_atoms {
+            let Some(parsed) = crate::parse_dep_atom(atom, "find_hard_cycles-targets") else {
+                continue;
+            };
+            // The target resolves in the target root; a running-root
+            // instance with the same cp must not seed first.
+            let mut target_instances: Vec<usize> = Vec::new();
+            for running in [false, true] {
+                if let Some(&i) =
+                    root_index.get(&(running, parsed.category.as_str(), parsed.package.as_str()))
+                    && !target_instances.contains(&i)
+                {
+                    target_instances.push(i);
+                }
+            }
+            if target_instances.is_empty()
+                && let Some(&i) = cp_index.get(&(parsed.category.as_str(), parsed.package.as_str()))
+            {
+                target_instances.push(i);
+            }
+            for &i in &target_instances {
+                if onlydeps {
+                    // The target itself is not inserted up front; seed its
+                    // resolved direct deps in declaration order instead.
+                    for (ei, dep) in entries[i].deps.iter().enumerate() {
+                        if dep.alt.is_some() && !kept[i].contains(&ei) {
+                            continue;
+                        }
+                        if let Some(di) = dep_child_lookup(
+                            &root_index,
+                            &cp_index,
+                            entries[i].targets_running_root,
+                            dep,
+                        ) && !seeds.contains(&di)
+                        {
+                            seeds.push(di);
+                        }
+                    }
+                }
+                if !seeds.contains(&i) {
+                    seeds.push(i);
+                }
+            }
         }
-    };
+        let mut by_discovery: Vec<usize> = (0..entries.len()).collect();
+        by_discovery.sort_by_key(|&i| (entries[i].discovery, i));
+        for &seed in seeds.iter().chain(by_discovery.iter()) {
+            if !seen.insert(seed) {
+                continue;
+            }
+            let mut stack = vec![seed];
+            while let Some(u) = stack.pop() {
+                order.push(u);
+                // Push children reversed so the pop visits them in
+                // declaration order.
+                let mut kids: Vec<usize> = Vec::new();
+                for (ei, dep) in entries[u].deps.iter().enumerate() {
+                    if dep.alt.is_some() && !kept[u].contains(&ei) {
+                        continue;
+                    }
+                    if let Some(di) = dep_child_lookup(
+                        &root_index,
+                        &cp_index,
+                        entries[u].targets_running_root,
+                        dep,
+                    ) && seen.insert(di)
+                    {
+                        kids.push(di);
+                    }
+                }
+                kids.reverse();
+                stack.extend(kids);
+            }
+        }
+        for (pos, &i) in order.iter().enumerate() {
+            scan_pos[i] = pos;
+        }
+    }
+    let order_key = |i: usize| -> (usize, usize) { (scan_pos[i], i) };
     for v in &mut adj {
         // Insertion order, not array position.
         v.sort_by_key(|&i| order_key(i));

@@ -3411,7 +3411,7 @@ fn required_use_violated_dependency_still_fails_the_whole_call() {
          \n  The following REQUIRED_USE flag constraints are unsatisfied:\n\
          \x20   foo? ( bar )\n\n\
          (dependency required by \"dev-libs/requiredusebadparentpkg-1.0::testrepo\" [ebuild])\n\
-         (dependency required by \"dev-libs/requiredusebadparentpkg\" [argument])\n"
+         (dependency required by \"dev-libs/requiredusebadparentpkg\" [argument])"
     );
 }
 

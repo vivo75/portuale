@@ -106,7 +106,7 @@ pub(crate) fn assemble_result(
     // the other way. Re-sort into merge order now that every `required_by`
     // edge is known; the insertion rank travels alongside for the cycle
     // reporter below.
-    let (sorted_entries, insertion_rank) = topological_merge_order(TopologicalMergeOrderArgs {
+    let (sorted_entries, _) = topological_merge_order(TopologicalMergeOrderArgs {
         entries: pass.entries,
         top_level_atoms: ctx.atoms,
         config,
@@ -125,7 +125,7 @@ pub(crate) fn assemble_result(
         report_cycles,
         cycle_display,
         cycle_display_idx,
-    } = build_cycle_display(ctx, &pass, params, &insertion_rank);
+    } = build_cycle_display(ctx, &pass, params);
 
     collect_autounmask_and_conflicts(params, &mut pass, ctx, config);
 
@@ -306,7 +306,6 @@ pub(crate) fn build_cycle_display(
     ctx: &ResolveCtx<'_>,
     pass: &PassResult,
     params: &BacktrackParams,
-    insertion_rank: &[usize],
 ) -> BuildCycleDisplayOut {
     // See GraphResult::buildpkgonly_deps_unsatisfied's doc comment.
     let buildpkgonly_deps_unsatisfied = ctx.buildpkgonly && {
@@ -351,7 +350,8 @@ pub(crate) fn build_cycle_display(
         &pass.edge_kind_map,
         ctx.root,
         &params.circular_dependency,
-        Some(insertion_rank),
+        ctx.atoms,
+        ctx.onlydeps,
     );
 
     // A persisting restart cycle the hard reporter cannot see: backtracking
@@ -385,15 +385,19 @@ pub(crate) fn build_cycle_display(
             if cpvs.len() != cycle.len() {
                 continue;
             }
-            // Lowest-index rotation: rotating to entries order would move
-            // pins grounded elsewhere, and this dedupes repeats into one ring.
-            let min_pos = cpvs
+            // Portage's `get_cycles` prints from the earliest-inserted node:
+            // the ring starts at its successor and ends with it (the
+            // shortest child-`>`node path for the earliest node). Rotate the
+            // index cycle so the lowest-`discovery` node is last (backlog
+            // #517 (a)); this dedupes repeats into one ring.
+            let min_pos = cycle
                 .iter()
                 .enumerate()
-                .min_by_key(|&(p, _)| cycle[p])
+                .min_by_key(|&(_, &i)| (pass.entries[i].discovery, i))
                 .map(|(p, _)| p)
                 .unwrap_or(0);
-            cpvs.rotate_left(min_pos);
+            let len = cpvs.len();
+            cpvs.rotate_left((min_pos + 1) % len);
             if !circular_deps.contains(&cpvs) {
                 circular_deps.push(cpvs);
             }
@@ -412,6 +416,7 @@ pub(crate) fn build_cycle_display(
                 ctx.atoms,
                 ctx.root,
                 &params.circular_dependency,
+                ctx.onlydeps,
             );
             let display_idx: Vec<usize> = display
                 .into_iter()

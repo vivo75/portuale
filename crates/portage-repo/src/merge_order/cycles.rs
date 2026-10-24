@@ -138,8 +138,13 @@ pub(crate) fn harvest_cycle(g: &Digraph, sub: &HashSet<usize>) -> Vec<usize> {
 /// Portage: portage.util.digraph, get_cycles
 ///
 /// `ig` is the survival filter; pass `None` for the unfiltered graph.
-/// Traversal order is fixed (sorted indices) for determinism.
-pub(crate) fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usize>> {
+/// Nodes iterate in `order` (Portage's digraph insertion order); children in
+/// edge order. Callers pass the scan order, not necessarily `g.order`.
+pub(crate) fn elementary_cycles(
+    g: &Digraph,
+    ig: Option<Ignore>,
+    order: &[usize],
+) -> Vec<Vec<usize>> {
     use std::collections::VecDeque;
     /// BFS shortest path: first visit wins per node, returned on reaching `end`.
     fn shortest_path(
@@ -178,7 +183,7 @@ pub(crate) fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usiz
     }
 
     let mut all: Vec<Vec<usize>> = Vec::new();
-    for &node in &g.order {
+    for &node in order {
         // Record every path tied at the shortest length seen for this node.
         let mut min_len: Option<usize> = None;
         let mut cands: Vec<Vec<usize>> = Vec::new();
@@ -205,7 +210,11 @@ pub(crate) fn elementary_cycles(g: &Digraph, ig: Option<Ignore>) -> Vec<Vec<usiz
 
 /// Leaf-drain over an explicit drain set, falling back to the lowest-order
 /// remaining node when nothing is a leaf.
-/// Portage: circular_dependency_handler, _prepare_reduced_merge_list
+/// Portage: circular_dependency_handler, _prepare_reduced_merge_list.
+/// The drain order is Portage's merge-order bias: nodes sorted by parent
+/// count, descending (`depgraph.py`, `_merge_order_bias`; Python's sort is
+/// stable, so ties keep insertion order). The bias decides the fallback
+/// pick for pure cycles (backlog #517 (b)).
 pub(crate) fn reduced_merge_order(
     g: &Digraph,
     drain: &HashSet<usize>,
@@ -213,10 +222,13 @@ pub(crate) fn reduced_merge_order(
 ) -> Vec<usize> {
     // A node is a leaf when it has no still-remaining child in the drain set.
     let mut remaining: HashSet<usize> = drain.clone();
+    // Bias order, computed once: parent count, descending, stable over the
+    // digraph insertion order (`sort_by_key` is stable).
+    let mut biased: Vec<usize> = g.order.clone();
+    biased.sort_by_key(|&i| std::cmp::Reverse(g.parents.get(i).map_or(0, Vec::len)));
     let mut out: Vec<usize> = Vec::new();
     while !remaining.is_empty() {
-        let mut leaves: Vec<usize> = g
-            .order
+        let mut leaves: Vec<usize> = biased
             .iter()
             .copied()
             .filter(|i| {
@@ -226,7 +238,7 @@ pub(crate) fn reduced_merge_order(
         if leaves.is_empty() {
             // Lowest-order remaining node; target-rooted instances go first.
             let pos: HashMap<usize, usize> =
-                g.order.iter().enumerate().map(|(p, &i)| (i, p)).collect();
+                biased.iter().enumerate().map(|(p, &i)| (i, p)).collect();
             leaves = remaining
                 .iter()
                 .copied()
@@ -261,9 +273,55 @@ pub(crate) fn cycle_report(
     top_level_atoms: &[String],
     root: &Path,
     circular: &HashMap<RootCp, Vec<CircularDepChild>>,
+    onlydeps: bool,
 ) -> (Vec<Vec<usize>>, Vec<usize>) {
     let g = build_digraph(entries, top_level_atoms, root, circular);
-    let cycles = elementary_cycles(&g, satisfied_medium_soft_rung());
+    // Portage's digraph insertion order: DFS pre-order from the targets
+    // (backlog #517 (a)); under `--onlydeps` the targets are not inserted
+    // up front, so the seeds are their direct children (backlog #518).
+    let mut seeds: Vec<usize> = Vec::new();
+    for atom in top_level_atoms {
+        let Some(parsed) = crate::parse_dep_atom(atom, "cycle_report-targets") else {
+            continue;
+        };
+        let target = entries
+            .iter()
+            .position(|e| e.category == parsed.category && e.package == parsed.package);
+        let Some(t) = target else { continue };
+        if onlydeps {
+            for (c, _) in &g.children[t] {
+                if !seeds.contains(c) {
+                    seeds.push(*c);
+                }
+            }
+        }
+        if !seeds.contains(&t) {
+            seeds.push(t);
+        }
+    }
+    let mut scan: Vec<usize> = Vec::new();
+    {
+        let mut seen = std::collections::HashSet::new();
+        let mut stack: Vec<usize> = Vec::new();
+        for &seed in seeds.iter().chain(g.order.iter()) {
+            if !seen.insert(seed) {
+                continue;
+            }
+            stack.push(seed);
+            while let Some(u) = stack.pop() {
+                scan.push(u);
+                let mut kids: Vec<usize> = Vec::new();
+                for (c, _) in &g.children[u] {
+                    if seen.insert(*c) {
+                        kids.push(*c);
+                    }
+                }
+                kids.reverse();
+                stack.extend(kids);
+            }
+        }
+    }
+    let cycles = elementary_cycles(&g, satisfied_medium_soft_rung(), &scan);
     let members: HashSet<usize> = cycles.iter().flatten().copied().collect();
     let mut cp_indices: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {

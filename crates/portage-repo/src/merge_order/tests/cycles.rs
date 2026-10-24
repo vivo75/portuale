@@ -13,14 +13,14 @@ fn elementary_cycles_counts_rotations_like_portage() {
             (3, 0, prio(1)),
         ],
     );
-    let cycles = elementary_cycles(&square, None);
+    let cycles = elementary_cycles(&square, None, &square.order);
     assert_eq!(cycles.len(), 4);
     for c in &cycles {
         assert_eq!(c.len(), 4);
     }
     // Triangle: three rotations.
     let tri = test_graph(3, &[(0, 1, prio(1)), (1, 2, prio(1)), (2, 0, prio(1))]);
-    assert_eq!(elementary_cycles(&tri, None).len(), 3);
+    assert_eq!(elementary_cycles(&tri, None, &tri.order).len(), 3);
     // Acyclic diamond: none.
     let dag = test_graph(
         4,
@@ -31,11 +31,11 @@ fn elementary_cycles_counts_rotations_like_portage() {
             (2, 3, prio(1)),
         ],
     );
-    assert!(elementary_cycles(&dag, None).is_empty());
+    assert!(elementary_cycles(&dag, None, &dag.order).is_empty());
     // Self-loop: the singleton record, like Portage's
     // shortest_path(x, x) == [x].
     let slf = test_graph(1, &[(0, 0, prio(1))]);
-    assert_eq!(elementary_cycles(&slf, None), vec![vec![0]]);
+    assert_eq!(elementary_cycles(&slf, None, &slf.order), vec![vec![0]]);
 }
 
 #[test]
@@ -51,9 +51,9 @@ fn elementary_cycles_honors_the_survival_filter() {
             (3, 0, prio(1)),
         ],
     );
-    assert_eq!(elementary_cycles(&g, None).len(), 4);
+    assert_eq!(elementary_cycles(&g, None, &g.order).len(), 4);
     assert!(
-        elementary_cycles(&g, satisfied_medium_soft_rung()).is_empty(),
+        elementary_cycles(&g, satisfied_medium_soft_rung(), &g.order).is_empty(),
         "a filter-dropped edge breaks every ring"
     );
 }
@@ -74,7 +74,7 @@ fn elementary_cycles_keeps_every_tied_shortest_path() {
             (3, 0, prio(1)),
         ],
     );
-    let cycles = elementary_cycles(&g, None);
+    let cycles = elementary_cycles(&g, None, &g.order);
     let from_zero: Vec<_> = cycles.iter().filter(|c| c.last() == Some(&0)).collect();
     assert_eq!(from_zero.len(), 2, "both tied paths recorded: {cycles:?}");
     assert_eq!(cycles.len(), 5);
@@ -199,6 +199,7 @@ fn cycle_report_reports_the_ring_and_its_requirer_cone() {
         &["dev-libs/owner".to_string()],
         root,
         &HashMap::new(),
+        false,
     );
     assert!(
         !cycles.is_empty(),
@@ -229,7 +230,7 @@ fn elementary_cycles_records_only_the_shortest_path_per_node() {
             (3, 0, prio(2)),
         ],
     );
-    let cycles = elementary_cycles(&g, None);
+    let cycles = elementary_cycles(&g, None, &g.order);
     let to_zero: Vec<Vec<usize>> = cycles
         .iter()
         .filter(|c| c.last() == Some(&0))

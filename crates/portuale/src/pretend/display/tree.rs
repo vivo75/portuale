@@ -276,6 +276,11 @@ pub(crate) fn unordered_display_order(
     } else {
         let mut tree_nodes: Vec<TreeNode> = Vec::new();
         let mut shown_edges: HashSet<(TreeNode, TreeNode)> = HashSet::new();
+        // Portage's `display()` reverses `mylist` for `--tree`
+        // (`depgraph.py`, `display`); the forced circular re-display goes
+        // through the same `display()`, so the reversal applies there too
+        // (backlog #517 (b)): `node_order` is merge-list direction and the
+        // walk consumes it reversed.
         for &x in node_order.iter().rev() {
             let mut depth = tree_nodes.len();
             while depth > 0 && !children_of(children, tree_nodes[depth - 1]).contains(&x) {

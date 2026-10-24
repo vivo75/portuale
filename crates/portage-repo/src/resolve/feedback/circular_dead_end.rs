@@ -23,10 +23,8 @@ pub(crate) fn step_circular_dead_end(
         &pass.edge_kind_map,
         ctx.root,
         &grown.circular_dependency,
-        // Only the single-node `cycle_restartable` gate reads the result, so the
-        // insertion rank (a post-sort notion) is meaningless here; `None` falls
-        // back to `discovery` order.
-        None,
+        ctx.atoms,
+        ctx.onlydeps,
     );
     if hard_cycles.len() == 1
         && cycle_restartable(

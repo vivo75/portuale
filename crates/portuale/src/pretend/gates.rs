@@ -144,6 +144,17 @@ pub(crate) fn top_level_abort_notice_shown(msg: &str) -> bool {
     portage_repo::is_all_masked_abort_report(msg) || is_plain_miss_report(msg)
 }
 
+/// Whether `msg` is a REQUIRED_USE unmet-requirements report (`!!! The
+/// ebuild selected to satisfy ... has unmet requirements.` plus the
+/// `(dependency required by ...)` chain): like every other `--pretend`
+/// run that reaches resolution, Portage prints the preamble first
+/// (backlog #519).
+// Portage: _emerge/depgraph.py, _start_resolution_display
+pub(crate) fn is_required_use_report(msg: &str) -> bool {
+    msg.starts_with("\n!!! The ebuild selected to satisfy \"")
+        && msg.contains("has unmet requirements.")
+}
+
 /// A resolve error whose first line is Portage's `there are no ebuilds (or
 /// binary packages) to satisfy "<atom>"`: it prints the resolution notice
 /// first too, and a blank line ahead of the `emerge:` line (backlog #470).

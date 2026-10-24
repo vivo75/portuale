@@ -181,6 +181,16 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         );
     if let Some(cycle) = result.circular_deps.first() {
         if !gated_abort {
+            // Portage warns at handler construction, ahead of the rows the
+            // merge list just printed (backlog #517 (d)); `json` warns for
+            // itself inside the block.
+            if opts
+                .circular_deps_report
+                .unwrap_or(CircularDepsReport::Text)
+                != CircularDepsReport::Json
+            {
+                warn_invalid_circular_max_use_flags(config);
+            }
             print_circular_block(PrintCircularBlockArgs {
                 cycle,
                 edge_labels: &portage_repo::cycle_edge_labels(&result.entries, cycle),

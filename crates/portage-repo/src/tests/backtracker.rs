@@ -231,8 +231,10 @@ fn softened_ring_reports_the_persisting_cycle_with_backtracking_on() {
     assert_eq!(
         result.circular_deps,
         vec![vec![
-            "dev-libs/sbrA-1.0".to_string(),
-            "dev-libs/sbrB-1.0".to_string()
+            // Backlog #517 (a): Portage's ring starts at the earliest-inserted
+            // node's child (`sbrB`), not at the lowest entry index.
+            "dev-libs/sbrB-1.0".to_string(),
+            "dev-libs/sbrA-1.0".to_string()
         ]],
         "{:?}",
         result.circular_deps

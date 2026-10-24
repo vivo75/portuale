@@ -31,7 +31,7 @@ Assembling the final result.
 
 ## fn build_cycle_display (restart cycles)
 - Backlog #221: either backtracking never ran (`--backtrack=0`, where Portage fails instead of retrying: pg5's runtime-closing ring) or a retry ran and the demotion did not break it (Portage's `unsolved_cycle` -- e.g. a single-branch `||` closing the ring, demoted but still picked as last resort). Portage's own error block covers these (its `get_cycles` runs over the `medium_soft` rung, which keeps unsatisfied runtime edges). Same precedence as `collect_feedback`'s own trigger; with backtracking on, a clean pass carrying a trigger cycle always retries out of `collect_feedback`, so a settled one either broke the ring (nothing to report) or is unsolved (recorded map).
-- Backlog #278: this leg stays on the old lowest-index rotation on purpose -- it only fires when the hard reporter above is empty (persisting soft-containing rings Portage prints from its own fuller-graph `shortest_cycle[0]`), and rotating those to entries order would move pins (e.g. `sbrA`) Portage grounds elsewhere. It also dedupes the one-cycle-per-hard-edge repeats into a single ring.
+- Backlog #517 (a): the ring rotates so the lowest-`discovery` node comes last (its successor starts the print), matching Portage's `get_cycles` choice of printing from the first node's child -- the old lowest-index rotation put `sbrA` first where Portage starts at `sbrB`. It also dedupes the one-cycle-per-hard-edge repeats into a single ring.
 
 ## fn build_cycle_display (cycle enumeration)
 - Portage `circular_dependency_handler`, fed by `get_cycles` over the `medium_soft` rung. Only a reported hard cycle consumes either number.

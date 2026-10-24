@@ -52,6 +52,7 @@ mod resolve_plan;
 mod resume;
 mod search;
 mod standalone_actions;
+mod usage_text;
 mod world;
 
 #[cfg(test)]
@@ -87,6 +88,7 @@ pub(crate) use resolve_plan::*;
 pub(crate) use resume::*;
 pub(crate) use search::*;
 pub(crate) use standalone_actions::*;
+pub(crate) use usage_text::*;
 pub(crate) use world::*;
 
 use crate::difflib;
@@ -146,9 +148,12 @@ fn report_option(token: &str) -> ExitCode {
 }
 
 /// Renders one Portage `_emerge/main.py` `parser.error(message)` line: the
-/// `usage:` block Portage prints above it is a documented cut (347-USG:
-/// its option order comes from a `frozenset`, so it is not reproducible
-/// byte for byte), and only the error line is printed. The message is
+/// `usage:` block Portage prints above it stays cut for the
+/// `parser.error`-passed messages (347-USG: their option order comes from a
+/// `frozenset`, so it is not reproducible byte for byte) -- except
+/// argparse-native `invalid choice` errors, whose block portuale prints
+/// from the fixed 3.0.83 capture (backlog #520; see `parser_error`).
+/// Only the error line is printed here. The message is
 /// taken exactly as Portage passes it, trailing `\n` included, so
 /// `parser.error`-origin lines end in a blank line while argparse-native
 /// ones (`unrecognized arguments`, `invalid choice`) end in one `\n`.
@@ -162,6 +167,13 @@ pub(crate) fn parser_error_text(message: &str) -> String {
 /// `parser.error` (which also exits 2).
 // Portage: _emerge/main.py, parse_opts
 pub(crate) fn parser_error(message: &str) -> ExitCode {
+    // Portage's argparse prints the full `usage:` block above an
+    // `invalid choice` error (backlog #520); the block's option order is
+    // hash-randomized per Portage process, so portuale prints the fixed
+    // 3.0.83 capture instead (see `usage_text`, quirks Q4/Q6 analogue).
+    if message.contains("invalid choice") {
+        eprint!("{PORTAGE_USAGE_TEXT}");
+    }
     eprint!("{}", parser_error_text(message));
     ExitCode::from(2)
 }
@@ -648,6 +660,25 @@ pub(crate) fn show_resolution_report(args: ShowResolutionReportArgs<'_>) {
     };
     // The rendered tree rows, for the circular `Total:` recount only.
     let mut rendered_rows: Vec<(usize, bool)> = Vec::new();
+    // A circular abort prints the resolution preamble before the re-display,
+    // like every other `--pretend` run: Portage emits it at action start
+    // (`_start_resolution_display`), ahead of the rows (backlog #519). The
+    // non-pretend abort keeps the legacy silent shape.
+    if circular_forced_display
+        && opts.pretend
+        && !matches!(opts.circular_deps_report, Some(CircularDepsReport::Json))
+        && !result.circular_deps.is_empty()
+    {
+        print!(
+            "{}",
+            abort_preamble(
+                disp_quiet,
+                result.backtrack_restarts,
+                result.backtrack_max,
+                &color
+            )
+        );
+    }
     render_merge_list(RenderMergeListArgs {
         plan,
         opts,

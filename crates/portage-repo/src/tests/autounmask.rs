@@ -262,10 +262,15 @@ fn abort_outcome_membership_and_order() {
             graph_result_autounmask("dev-libs/abort-au-restart-cycle"),
         ),
     ] {
+        // Backlog #517 (b): Portage's merge-order bias (`_merge_order_bias`,
+        // parent count descending) puts a parentless top target last; the
+        // cycle arms (one parent each) drain first. Verified against host
+        // Portage's re-display (`[ebuild] top`, `[nomerge] a`,
+        // `[ebuild] b`, `[ebuild] a`) for the `mid` and `last` tops.
         let expected = vec![
-            format!("{top}-1.0"),
             "dev-libs/abort-cycle-a-1.0".to_string(),
             "dev-libs/abort-cycle-b-1.0".to_string(),
+            format!("{top}-1.0"),
         ];
         match &result.outcome {
             ResolveOutcome::Aborted {
