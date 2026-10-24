@@ -11,6 +11,26 @@
 - Portage `action_config`: with `--ask`, prompt `Ready to configure <cpv>?` (No -> exit 130); without it, print `Configuring pkg...`.
 - Portage `action_config`: `doebuild(ebuildpath, "clean", ...)` on success -- drop the per-package builddir.
 
+## fn qualified_suggestion_matches / bare_name_matches (#535)
+- Backlog #535, Task 6 Step 1: the qualified branch used to match
+  case-sensitively, so `app-misc/Cor` competed as `Cor` and lost to
+  `app-misc/soreqb` for `app-misc/zznope1`. Portage lowercases every
+  candidate and matches the lowered target, mapping winners back to
+  original case (`dbapi/_similar_name_search.py`); over the same candidate
+  set it answers `E, foo, Cor`, which is what portuale prints now (Rust
+  `qualified_branch_matches_lowercased_and_restores_case`, oracle: live
+  host probe of `similar_name_search` over the fixture+s511 set).
+- The bare-name branch keeps Portage's `identical` nuance: a lowered name
+  equal to the typed one is dropped only when every original-case owner is
+  case-identical to it, so a `cat/foo`+`cat/Foo` pair is kept for `foo`
+  (both orders observed stable across PYTHONHASHSEED 1,2,3,7; portuale's
+  map order is deterministic).
+- What was NOT fixed: live Portage answers `note, gnote, pet` in the 511
+  probe env because its portdb always carries the implicit EPREFIX `gentoo`
+  repo alongside the configured ones; portuale resolves configured repos
+  only (hermetic fixture model). Same for which miss is named first in a
+  multi-atom abort (resolver walk order; owner wontfix, #535).
+
 ## fn misspell_suggestion_block
 - Ports Portage's `depgraph.py:7034-7066` + `dbapi/_similar_name_search.py` for `--misspell-suggestions` (default on).
 - Returns the block with no trailing newline -- the caller adds one.

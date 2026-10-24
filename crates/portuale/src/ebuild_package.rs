@@ -2789,8 +2789,8 @@ mod tests {
         // The directory scan reads the file directly: the just-written entry's
         // `_mtime_`/`SIZE` still agree with the file, so this hits the
         // mtime-staleness fast path rather than re-parsing the archive.
-        let scanned =
-            crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
+        let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir, true, false)
+            .expect("scan succeeds");
         assert_eq!(scanned.len(), 1);
         assert_eq!(
             scanned[0].get("CPV").map(String::as_str),
@@ -2884,8 +2884,8 @@ mod tests {
 
         // The scan walks the subdir, keeps each build's BUILD_ID, and CPV stays
         // the bare `cat/pf` (downstream splits `PF` from `CPV`, like Portage).
-        let scanned =
-            crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
+        let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir, true, false)
+            .expect("scan succeeds");
         assert_eq!(scanned.len(), 2);
         let build_ids: std::collections::HashSet<&str> = scanned
             .iter()
@@ -3019,8 +3019,8 @@ mod tests {
 
         // Drop the just-written index so the scan must parse the archive.
         let _ = std::fs::remove_file(options.pkgdir.join("Packages"));
-        let scanned =
-            crate::binpkg::populate_local_pkgdir(&options.pkgdir, true).expect("scan succeeds");
+        let scanned = crate::binpkg::populate_local_pkgdir(&options.pkgdir, true, false)
+            .expect("scan succeeds");
         assert_eq!(scanned.len(), 1);
         assert_eq!(
             scanned[0].get("CPV").map(String::as_str),

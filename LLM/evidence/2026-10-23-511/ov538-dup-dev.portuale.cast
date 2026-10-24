@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792866395,"command":"env /var/tmp/ev511-bin/emerge -p --color=n --usepkgonly dev-libs/dup","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.008, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[binary  N     ] dev-libs/dup-1.0 to /var/tmp/ev538-pkgdir/root\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev538-pkgdir\u0007"]
+[0.000, "x", "0"]

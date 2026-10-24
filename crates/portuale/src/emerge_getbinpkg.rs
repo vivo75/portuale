@@ -134,11 +134,21 @@ pub fn refresh_binhost_indexes(args: RefreshBinhostIndexesArgs<'_>) {
     // `reversed(...)` over the ascending config, so every per-repo message
     // (fetch warnings, the exclude/include conflict warnings, the `Local
     // copy …` notes, the `gpkg_only` warnings) prints highest-priority
-    // first.
+    // first. `seen` is the cross-repo `cpv_exists` gate: an instance a
+    // higher-priority repo already injected shadows the same instance
+    // below, before its `gpkg_only` check (backlog #536).
+    let mut seen: std::collections::HashSet<RemoteInstanceKey> = std::collections::HashSet::new();
     for binrepo in binrepos.iter().rev() {
         let filter = GetbinpkgFilter::for_binrepo(binrepo, cli_exclude, cli_include);
         let gpkg_only = binrepo_gpkg_only(binrepo, binpkg_request_signature);
-        let outcome = refresh_one_binrepo(binrepo, root, pretend, &filter, gpkg_only);
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo,
+            root,
+            pretend,
+            filter: &filter,
+            gpkg_only,
+            seen: &mut seen,
+        });
         if let Some(warning) = outcome.stderr_warning {
             eprint!("{warning}");
         }
@@ -279,6 +289,32 @@ pub(crate) fn unsupported_binpkg_format_warning(path: &str) -> String {
     format!("Unsupported binary package format from '{path}'\n")
 }
 
+/// Portage 3.0.83's inter-repo overlap gate (`bintree._populate_remote_repo`,
+/// backlog #536): an entry whose instance a higher-priority repo already
+/// injected is skipped before its `gpkg_only` check, so neither the
+/// `Unsupported …` line nor the once-per-repo xpak warning fires for it.
+/// The key mirrors `dbapi._instance_key` under binpkg-multi-instance
+/// (`(cpv, build_id, file_size, build_time, mtime)`); the index carries no
+/// `MTIME` key, so same-`(CPV, BUILD_ID, SIZE, BUILD_TIME)` entries share
+/// one key. Like Portage, only injected (kept) entries populate the set.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct RemoteInstanceKey {
+    cpv: String,
+    build_id: String,
+    size: String,
+    build_time: String,
+}
+
+fn remote_instance_key(entry: &std::collections::HashMap<String, String>) -> RemoteInstanceKey {
+    let get = |k: &str| entry.get(k).cloned().unwrap_or_default();
+    RemoteInstanceKey {
+        cpv: get("CPV"),
+        build_id: get("BUILD_ID"),
+        size: get("SIZE"),
+        build_time: get("BUILD_TIME"),
+    }
+}
+
 /// Split a binrepo's fetched `Packages` entries into the pool
 /// (`kept`) plus the `gpkg_only` stderr text. A `.gpkg.tar` `PATH` is kept;
 /// an xpak one (`.tbz2`/`.xpak`, Portage's `SUPPORTED_XPAK_EXTENSIONS`) is
@@ -346,13 +382,25 @@ fn edb_cache_packages_file(root: &Path, sync_uri: &str) -> std::path::PathBuf {
     .packages_dir(root)
     .join("Packages")
 }
-fn refresh_one_binrepo(
-    binrepo: &BinRepo,
-    root: &Path,
+/// Arguments of [`refresh_one_binrepo`].
+struct RefreshOneBinrepoArgs<'a> {
+    binrepo: &'a BinRepo,
+    root: &'a Path,
     pretend: bool,
-    filter: &GetbinpkgFilter,
+    filter: &'a GetbinpkgFilter,
     gpkg_only: bool,
-) -> RefreshOutcome {
+    seen: &'a mut std::collections::HashSet<RemoteInstanceKey>,
+}
+
+fn refresh_one_binrepo(args: RefreshOneBinrepoArgs<'_>) -> RefreshOutcome {
+    let RefreshOneBinrepoArgs {
+        binrepo,
+        root,
+        pretend,
+        filter,
+        gpkg_only,
+        seen,
+    } = args;
     // Messages print the configured URI; fetch URLs use the stripped form.
     let raw = binrepo.sync_uri.as_str();
     let uri = raw.trim_end_matches('/');
@@ -366,10 +414,17 @@ fn refresh_one_binrepo(
     // keeps the unfiltered index (see `refresh_binhost_indexes`). Under
     // `gpkg_only` the exclude/include survivors are split once more (xpak
     // dropped with the warning, unknown `PATH`s with their own line).
-    let ok_entries =
+    let mut ok_entries =
         |header: &std::collections::HashMap<String, String>,
          entries: Vec<std::collections::HashMap<String, String>>| {
             let entries = filter.apply(entries);
+            // Inter-repo overlap, before the `gpkg_only` check: an instance
+            // a higher-priority repo already injected never reaches this
+            // repo's format check or warnings (backlog #536).
+            let entries: Vec<_> = entries
+                .into_iter()
+                .filter(|e| !seen.contains(&remote_instance_key(e)))
+                .collect();
             let (entries, gpkg_warning) = if gpkg_only {
                 // Portage reads the index's own `URI` header, else the base URL.
                 let base = header.get("URI").map(String::as_str).unwrap_or(uri);
@@ -377,6 +432,11 @@ fn refresh_one_binrepo(
             } else {
                 (entries, String::new())
             };
+            // Only injected entries populate the gate: dropped ones must not
+            // shadow the same instance below.
+            for e in &entries {
+                seen.insert(remote_instance_key(e));
+            }
             if !gpkg_warning.is_empty() {
                 eprint!("{gpkg_warning}");
             }
@@ -2065,7 +2125,8 @@ mod tests {
 
         // The scan half of the same shape: the truncated file is accepted on the
         // index's word, so resolution can select it.
-        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir, true).expect("scan succeeds");
+        let scanned =
+            crate::binpkg::populate_local_pkgdir(&pkgdir, true, false).expect("scan succeeds");
         assert_eq!(scanned.len(), 1, "{scanned:?}");
 
         let pt = tmp.join("pt");
@@ -2148,7 +2209,8 @@ mod tests {
 
         // The scan half: the removed file's stanza rejoins the pool, so the
         // binary can be selected.
-        let scanned = crate::binpkg::populate_local_pkgdir(&pkgdir, true).expect("scan succeeds");
+        let scanned =
+            crate::binpkg::populate_local_pkgdir(&pkgdir, true, false).expect("scan succeeds");
         assert_eq!(scanned.len(), 1, "{scanned:?}");
         assert_eq!(
             scanned[0].get("CPV").map(String::as_str),
@@ -3147,13 +3209,14 @@ mod tests {
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, pkg_index).unwrap();
-        let outcome = refresh_one_binrepo(
-            &binrepo,
-            &root,
-            false,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        );
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
+            pretend: false,
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        });
         assert_eq!(
             outcome.stdout_note.as_deref(),
             Some("[perrepo] Local copy of remote index is up-to-date and will be used.\n")
@@ -3532,13 +3595,14 @@ mod tests {
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
-        let warning = refresh_one_binrepo(
-            &binrepo,
-            &root,
-            false,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        )
+        let warning = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
+            pretend: false,
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        })
         .stderr_warning
         .expect("a 500ing binhost warns");
         assert!(
@@ -3767,6 +3831,49 @@ mod tests {
         assert!(binrepo_gpkg_only(&plain, true));
     }
 
+    /// Backlog #536: the inter-repo overlap gate keys shadowed entries by
+    /// instance (`CPV`, `BUILD_ID`, `SIZE`, `BUILD_TIME`), mirroring
+    /// `dbapi._instance_key` under binpkg-multi-instance — not by bare CPV.
+    /// Same instance in two repos shares one key however the `PATH`s differ;
+    /// a different `BUILD_ID` is a different key (both stay visible, newest
+    /// build wins at pick time, like Portage).
+    #[test]
+    fn remote_instance_key_groups_by_instance_not_path() {
+        use std::collections::HashMap;
+        let entry = |cpv: &str, path: &str, bid: &str| {
+            let mut m = HashMap::new();
+            m.insert("CPV".to_string(), cpv.to_string());
+            m.insert("PATH".to_string(), path.to_string());
+            m.insert("BUILD_ID".to_string(), bid.to_string());
+            m.insert("SIZE".to_string(), "100".to_string());
+            m.insert("BUILD_TIME".to_string(), "1000".to_string());
+            m
+        };
+        // Same CPV+BUILD_ID, gpkg in one repo and unknown extension in the
+        // other: one key, so the lower-priority copy is skipped silently.
+        assert_eq!(
+            remote_instance_key(&entry(
+                "app-misc/s511ov-1",
+                "app-misc/s511ov-1.gpkg.tar",
+                "1"
+            )),
+            remote_instance_key(&entry("app-misc/s511ov-1", "app-misc/s511ov-1.weird", "1")),
+        );
+        // Same CPV, different BUILD_ID: different keys, both stay visible.
+        assert_ne!(
+            remote_instance_key(&entry(
+                "app-misc/s511ov-1",
+                "app-misc/s511ov-1.gpkg.tar",
+                "1"
+            )),
+            remote_instance_key(&entry(
+                "app-misc/s511ov-1",
+                "app-misc/s511ov-1.gpkg.tar",
+                "2"
+            )),
+        );
+    }
+
     /// `apply_gpkg_only`: a `.gpkg.tar` `PATH` is kept; xpak ones
     /// (`.tbz2`/`.xpak`) are dropped with a single ignored warning no matter
     /// how many; unknown or absent `PATH`s are dropped with one
@@ -3947,13 +4054,14 @@ mod tests {
             getbinpkg_exclude: Vec::new(),
             getbinpkg_include: Vec::new(),
         };
-        let outcome = refresh_one_binrepo(
-            &binrepo,
-            &root,
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
             pretend,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        );
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        });
         assert!(
             outcome.stderr_warning.is_none(),
             "pretend={pretend}: an unwritable cache dir is ignored silently like real: {:?}",
@@ -4011,13 +4119,14 @@ mod tests {
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, stale).unwrap();
-        let outcome = refresh_one_binrepo(
-            &binrepo,
-            &root,
-            true,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        );
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
+            pretend: true,
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        });
         assert!(
             outcome
                 .stderr_warning
@@ -4076,13 +4185,14 @@ mod tests {
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, stale).unwrap();
-        let outcome = refresh_one_binrepo(
-            &binrepo,
-            &root,
-            false,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        );
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
+            pretend: false,
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        });
         assert!(
             outcome
                 .stderr_warning
@@ -4131,13 +4241,14 @@ mod tests {
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, &cached_body).unwrap();
-        let outcome = refresh_one_binrepo(
-            &binrepo,
-            &root,
-            true,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        );
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
+            pretend: true,
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        });
         assert!(outcome.stderr_warning.is_none());
         assert_eq!(
             outcome.stdout_note.as_deref(),
@@ -4181,13 +4292,14 @@ mod tests {
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, stale).unwrap();
-        let outcome = refresh_one_binrepo(
-            &binrepo,
-            &root,
-            false,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        );
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
+            pretend: false,
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        });
         assert!(outcome.stderr_warning.is_none());
         assert!(outcome.stdout_note.is_none());
         let (header, entries) =
@@ -4234,13 +4346,14 @@ mod tests {
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, cached_body).unwrap();
-        let outcome = refresh_one_binrepo(
-            &binrepo,
-            &root,
-            false,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        );
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
+            pretend: false,
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        });
         assert!(outcome.stderr_warning.is_none());
         assert!(outcome.stdout_note.is_none());
         assert_eq!(
@@ -4277,13 +4390,14 @@ mod tests {
         let cached = binrepo.packages_dir(&root).join("Packages");
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, cached_body).unwrap();
-        let outcome = refresh_one_binrepo(
-            &binrepo,
-            &root,
-            true,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        );
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
+            pretend: true,
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        });
         assert!(outcome.stderr_warning.is_none());
         assert_eq!(
             outcome.stdout_note.as_deref(),
@@ -4397,13 +4511,14 @@ mod tests {
         let cached = edb_cache_packages_file(&root, &binrepo.sync_uri);
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::write(&cached, stale).unwrap();
-        let outcome = refresh_one_binrepo(
-            &binrepo,
-            &root,
+        let outcome = refresh_one_binrepo(RefreshOneBinrepoArgs {
+            binrepo: &binrepo,
+            root: &root,
             pretend,
-            &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
-            false,
-        );
+            filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
+            gpkg_only: false,
+            seen: &mut std::collections::HashSet::new(),
+        });
         assert_eq!(
             outcome.stderr_warning.as_deref(),
             Some(expected_warning),

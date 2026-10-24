@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792867739,"command":"env /var/tmp/ev511-bin/emerge -p --color=n --getbinpkg app-misc/s539","env":{"SHELL":"/bin/bash"}}
+[0.005, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.038, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[binary  N g   ] app-misc/s539-1-1 to /var/tmp/ev539-pkgdir/root\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev539-pkgdir\u0007"]
+[0.001, "x", "0"]

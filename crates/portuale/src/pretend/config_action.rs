@@ -179,7 +179,8 @@ pub(crate) struct SimilarNameDbs<'a> {
 /// aborts a top-level atom whose `cat/pkg` genuinely doesn't exist in any
 /// repo, print close `cat/pkg` matches. Returns the block to append to the
 /// already-printed `emerge: <message>`, or `None` when it doesn't apply.
-/// Portage: depgraph.py, _similar_name_search
+// Portage: portage/dbapi/_similar_name_search.py (`similar_name_search`),
+// called from depgraph.py `_show_unsatisfied_dep` and actions.py
 pub(crate) fn misspell_suggestion_block(
     message: &str,
     repos: &[portage_repo::RepoConfig],
@@ -221,17 +222,33 @@ pub(crate) fn misspell_suggestion_block(
     if ebuild_has || installed_has || binary_has {
         return None;
     }
-    let mut all_cp: std::collections::BTreeSet<String> = portage_repo::all_installed_packages(root)
+    let mut orig_cp_map: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for cp in portage_repo::all_installed_packages(root)
         .iter()
         .map(|p| format!("{}/{}", p.category, p.package))
-        .collect();
-    if dbs.ebuild {
-        all_cp.extend(portage_repo::all_cp(repos));
+        .chain(
+            dbs.ebuild
+                .then(|| portage_repo::all_cp(repos))
+                .into_iter()
+                .flatten(),
+        )
+        .chain(binary.into_iter().flatten())
+    {
+        // `all_cp.discard(atom.cp)`: the exact-case target goes before the
+        // lowercase map is built.
+        // Portage: portage/dbapi/_similar_name_search.py
+        if cp == target {
+            continue;
+        }
+        // The candidate pool is a set in Portage: the same `cat/pkg` may
+        // arrive from the installed db, the ebuild repos and the binhosts,
+        // but suggests only once.
+        let owners = orig_cp_map.entry(cp.to_lowercase()).or_default();
+        if !owners.contains(&cp) {
+            owners.push(cp);
+        }
     }
-    all_cp.extend(binary.into_iter().flatten());
-    all_cp.remove(&target);
-    let all_cp: Vec<String> = all_cp.into_iter().collect();
-    let matches = difflib::get_close_matches(&target, &all_cp, 3, 0.6);
+    let matches = qualified_suggestion_matches(&target.to_lowercase(), &orig_cp_map);
     let tail = match matches.len() {
         0 => " nothing similar found.".to_string(),
         1 => format!("\nemerge: Maybe you meant {}?", matches[0]),
@@ -243,9 +260,60 @@ pub(crate) fn misspell_suggestion_block(
     Some(format!("\n\nemerge: searching for similar names...{tail}"))
 }
 
+/// Portage `similar_name_search` over an already-built lowercase map
+/// (`orig_cp_map`: lowered `cat/pkg` -> original-case owners): the close
+/// matches of the lowered target, mapped back to original case in map
+/// order. Unit tests pin Portage's exact winners on small oracle sets.
+/// Portage: portage/dbapi/_similar_name_search.py
+fn qualified_suggestion_matches(
+    target_lower: &str,
+    orig_cp_map: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let lowered: Vec<String> = orig_cp_map.keys().cloned().collect();
+    let mut matches: Vec<String> = Vec::new();
+    for m in difflib::get_close_matches(target_lower, &lowered, 3, 0.6) {
+        matches.extend(orig_cp_map[m.as_str()].iter().cloned());
+    }
+    matches
+}
+
+/// Portage's bare-name `similar_name_search` over an already-built lowercase
+/// map: the close package names, each expanded to every original-case
+/// `cat/pkg` carrying it. Unit tests pin Portage's exact winners on small
+/// oracle sets.
+// Portage: portage/dbapi/_similar_name_search.py
+fn bare_name_matches(
+    name: &str,
+    orig_by_lower: &std::collections::BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let pkg = name.to_lowercase();
+    let mut pkg_to_cp: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for (lower, owners) in orig_by_lower {
+        let other = lower.split_once('/').map_or(lower.as_str(), |(_, p)| p);
+        if other == pkg
+            && owners
+                .iter()
+                .all(|o| o.split_once('/').map_or(o.as_str(), |(_, p)| p) == name)
+        {
+            continue;
+        }
+        pkg_to_cp
+            .entry(other.to_string())
+            .or_default()
+            .extend(owners.iter().cloned());
+    }
+    let names: Vec<String> = pkg_to_cp.keys().cloned().collect();
+    difflib::get_close_matches(&pkg, &names, 3, 0.6)
+        .iter()
+        .flat_map(|m| pkg_to_cp[m].clone())
+        .collect()
+}
+
 /// The bare-name branch of `similar_name_search` (`cat == "null"`): the
 /// close matches are package names, each expanded to every `cat/pkg` that
-/// carries it. Names equal to the typed one are dropped.
+/// carries it. A name equal to the typed one is dropped only when every
+/// original-case owner is case-identical to it (a pair differing solely by
+/// case, like `cat/foo` + `cat/Foo` for `foo`, is kept).
 // Portage: dbapi/_similar_name_search.py
 fn bare_name_suggestion_block(
     name: &str,
@@ -260,23 +328,20 @@ fn bare_name_suggestion_block(
     if dbs.ebuild {
         all_cp.extend(portage_repo::all_cp(repos));
     }
-    let pkg = name.to_lowercase();
-    let mut pkg_to_cp: std::collections::BTreeMap<String, Vec<String>> = Default::default();
-    for cp in &all_cp {
-        let other = cp
-            .split_once('/')
-            .map_or(cp.as_str(), |(_, p)| p)
-            .to_lowercase();
-        if other == pkg {
-            continue;
+    // Group by lowered `cat/pkg` first: a lowered package name equal to the
+    // typed one is dropped only when every original-case owner is
+    // case-identical to it, i.e. the pair differs solely by case.
+    // Portage: dbapi/_similar_name_search.py (the `identical` loop).
+    let mut orig_by_lower: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+    for cp in all_cp {
+        // Same set semantics as the qualified branch: one owner per
+        // original-case spelling.
+        let owners = orig_by_lower.entry(cp.to_lowercase()).or_default();
+        if !owners.contains(&cp) {
+            owners.push(cp);
         }
-        pkg_to_cp.entry(other).or_default().push(cp.clone());
     }
-    let names: Vec<String> = pkg_to_cp.keys().cloned().collect();
-    let matches: Vec<String> = difflib::get_close_matches(&pkg, &names, 3, 0.6)
-        .iter()
-        .flat_map(|m| pkg_to_cp[m].clone())
-        .collect();
+    let matches = bare_name_matches(name, &orig_by_lower);
     let tail = match matches.len() {
         0 => " nothing similar found.".to_string(),
         1 => format!("\nemerge: Maybe you meant {}?", matches[0]),
@@ -286,4 +351,64 @@ fn bare_name_suggestion_block(
         ),
     };
     Some(format!("\n\nemerge: searching for similar names...{tail}"))
+}
+
+#[cfg(test)]
+mod similar_name_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn lower_map(cps: &[&str]) -> BTreeMap<String, Vec<String>> {
+        // Sorted like the production path, which iterates a BTreeSet.
+        let mut sorted: Vec<&str> = cps.to_vec();
+        sorted.sort_unstable();
+        let mut m: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for cp in sorted {
+            m.entry(cp.to_lowercase()).or_default().push(cp.to_string());
+        }
+        m
+    }
+
+    /// Backlog #535, Task 6 Step 1: the qualified branch matches
+    /// case-insensitively like Portage (`similar_name_search` lowercases
+    /// every candidate and maps the winners back to original case), so
+    /// `app-misc/Cor` competes as `app-misc/cor` but prints as `app-misc/Cor`.
+    /// Oracle: host Portage 3.0.83 over the fixture+s511 candidate set
+    /// (`python3` probe of `dbapi/_similar_name_search.py`).
+    #[test]
+    fn qualified_branch_matches_lowercased_and_restores_case() {
+        let map = lower_map(&[
+            "app-misc/E",
+            "app-misc/foo",
+            "app-misc/Cor",
+            "app-misc/soreqb",
+            "app-misc/bar",
+            "app-misc/baz",
+        ]);
+        assert_eq!(
+            qualified_suggestion_matches("app-misc/zznope1", &map),
+            vec!["app-misc/E", "app-misc/foo", "app-misc/Cor"],
+        );
+    }
+
+    /// The bare-name branch expands a near package name to its owners.
+    /// Oracle: same probe (`Atom('null/soreqa')` -> `['app-misc/soreqb']`).
+    #[test]
+    fn bare_branch_expands_a_near_package_name() {
+        let map = lower_map(&["app-misc/soreqb", "app-misc/bar"]);
+        assert_eq!(bare_name_matches("soreqa", &map), vec!["app-misc/soreqb"],);
+    }
+
+    /// A name equal to the typed one is dropped only when every owner is
+    /// case-identical to it; a pair differing solely by case is kept.
+    /// Oracle: same probe (`Atom('null/foo')` over `cat/foo`+`cat/Foo` keeps
+    /// both; over `cat/foo` alone drops it). Portage expands the kept pair
+    /// in set order; portuale's map order is deterministic.
+    #[test]
+    fn bare_branch_keeps_a_pair_differing_only_by_case() {
+        let map = lower_map(&["cat/foo", "cat/Foo"]);
+        assert_eq!(bare_name_matches("foo", &map), vec!["cat/Foo", "cat/foo"],);
+        let single = lower_map(&["cat/foo"]);
+        assert!(bare_name_matches("foo", &single).is_empty());
+    }
 }

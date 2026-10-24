@@ -346,6 +346,20 @@ pub(crate) fn pkgdir_index_trusted(config: &portage_profile::Config) -> bool {
     }
 }
 
+/// Whether the local `$PKGDIR` scan serves xpak files at all: false under
+/// `FEATURES=binpkg-request-signature` (Portage's local `gpkg_only`,
+/// `bintree._populate_local`). Same resolved chain as every other read.
+pub(crate) fn pkgdir_gpkg_only(config: &portage_profile::Config) -> bool {
+    const TOKEN: &str = "binpkg-request-signature";
+    match config.resolved_incremental("FEATURES") {
+        None => config
+            .other_vars
+            .get("FEATURES")
+            .is_some_and(|f| f.split_whitespace().any(|t| t == TOKEN)),
+        Some(folded) => folded.iter().any(|t| t == TOKEN),
+    }
+}
+
 /// Resolved merge-time `FEATURES`, space-joined; shared with the remote server.
 pub(crate) fn config_features_string(config: &portage_profile::Config) -> String {
     config_features_list(config).join(" ")

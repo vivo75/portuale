@@ -196,131 +196,93 @@ pub(crate) fn parse_binrepos(
     let mut repos: Vec<BinRepo> = Vec::new();
     let mut seen_uris: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // INI sections.
-    let mut section: Option<String> = None;
-    let mut sync_uri: Option<String> = None;
-    let mut priority: i32 = 0;
-    let mut location: Option<String> = None;
-    // Absent means true: stock Portage ships `[DEFAULT] verify-signature
-    // = true` in the global binrepos.conf, inherited by every section.
-    let mut verify_signature = true;
-    let mut frozen = false;
-    let mut fetchcommand: Option<String> = None;
-    let mut resumecommand: Option<String> = None;
-    let mut raw_exclude = String::new();
-    let mut raw_include = String::new();
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    let flush = |section: &mut Option<String>,
-                 sync_uri: &mut Option<String>,
-                 priority: &mut i32,
-                 location: &mut Option<String>,
-                 verify_signature: &mut bool,
-                 frozen: &mut bool,
-                 fetchcommand: &mut Option<String>,
-                 resumecommand: &mut Option<String>,
-                 raw_exclude: &mut String,
-                 raw_include: &mut String,
-                 repos: &mut Vec<BinRepo>,
-                 seen: &mut std::collections::HashSet<String>,
-                 warnings: &mut Vec<ProfileWarning>| {
-        if let (Some(name), Some(uri)) = (section.take(), sync_uri.take()) {
-            let uri = uri.trim_end_matches('/').to_string();
-            seen.insert(uri.clone());
-            // Portage skips the key validation for a `DEFAULT` section
-            // (its keys are defaults, not a repo); the section is dropped
-            // below either way.
-            let (getbinpkg_exclude, getbinpkg_include) = if name == "DEFAULT" {
-                (Vec::new(), Vec::new())
-            } else {
-                validated_getbinpkg_keys(&name, raw_exclude, raw_include, warnings)
+    // INI sections, in file order. Raw values; a repeated key keeps the
+    // last line, like Portage's config parser.
+    let mut sections: Vec<(String, std::collections::HashMap<String, String>)> = Vec::new();
+    {
+        let mut current: Option<(String, std::collections::HashMap<String, String>)> = None;
+        let mut push =
+            |current: &mut Option<(String, std::collections::HashMap<String, String>)>| {
+                if let Some((name, kv)) = current.take() {
+                    sections.push((name, kv));
+                }
             };
-            repos.push(BinRepo {
-                name,
-                sync_uri: uri,
-                priority: *priority,
-                location: location.take(),
-                verify_signature: *verify_signature,
-                frozen: *frozen,
-                fetchcommand: fetchcommand.take(),
-                resumecommand: resumecommand.take(),
-                getbinpkg_exclude,
-                getbinpkg_include,
-            });
-        }
-        *priority = 0;
-        *location = None;
-        *verify_signature = true;
-        *frozen = false;
-        *fetchcommand = None;
-        *resumecommand = None;
-        raw_exclude.clear();
-        raw_include.clear();
-    };
-    for line in binrepos_conf.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-            continue;
-        }
-        if let Some(inner) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            flush(
-                &mut section,
-                &mut sync_uri,
-                &mut priority,
-                &mut location,
-                &mut verify_signature,
-                &mut frozen,
-                &mut fetchcommand,
-                &mut resumecommand,
-                &mut raw_exclude,
-                &mut raw_include,
-                &mut repos,
-                &mut seen_uris,
-                warnings,
-            );
-            section = Some(inner.trim().to_string());
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=') {
-            match k.trim() {
+        for line in binrepos_conf.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+            if let Some(inner) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                push(&mut current);
+                current = Some((inner.trim().to_string(), std::collections::HashMap::new()));
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=')
+                && let Some((_, kv)) = current.as_mut()
+            {
                 // `${VAR}` expands from the environment (relocatable fixtures).
-                "sync-uri" => sync_uri = Some(substitute(v.trim(), &HashMap::new())),
-                "priority" => priority = v.trim().parse().unwrap_or(0),
-                "location" => location = Some(substitute(v.trim(), &HashMap::new())),
-                "fetchcommand" => fetchcommand = Some(v.trim().to_string()),
-                "resumecommand" => resumecommand = Some(v.trim().to_string()),
-                "verify-signature" => {
-                    // Portage: `in ("true", "yes")` only.
-                    verify_signature =
-                        matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "yes")
-                }
-                "frozen" => {
-                    // Portage `_bool_opts`: `in ("true", "yes")` only.
-                    frozen = matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "yes")
-                }
-                // One section may repeat a key; Portage's config parser
-                // keeps the last, so later lines overwrite.
-                "getbinpkg-exclude" => raw_exclude = v.trim().to_string(),
-                "getbinpkg-include" => raw_include = v.trim().to_string(),
-                _ => {}
+                let value = match k.trim() {
+                    "sync-uri" | "location" => substitute(v.trim(), &HashMap::new()),
+                    _ => v.trim().to_string(),
+                };
+                kv.insert(k.trim().to_string(), value);
             }
         }
+        push(&mut current);
     }
-    flush(
-        &mut section,
-        &mut sync_uri,
-        &mut priority,
-        &mut location,
-        &mut verify_signature,
-        &mut frozen,
-        &mut fetchcommand,
-        &mut resumecommand,
-        &mut raw_exclude,
-        &mut raw_include,
-        &mut repos,
-        &mut seen_uris,
-        warnings,
-    );
-    repos.retain(|r| r.name != "DEFAULT");
+    // Portage's configparser gives every section the `[DEFAULT]` values;
+    // a section's own key wins. Ultimate fallbacks: the stock global
+    // config's `[DEFAULT] verify-signature = true`, parser-default
+    // `frozen = false`, and empty for the rest.
+    let defaults: std::collections::HashMap<String, String> = sections
+        .iter()
+        .find(|(name, _)| name == "DEFAULT")
+        .map(|(_, kv)| kv.clone())
+        .unwrap_or_default();
+    let get = |kv: &std::collections::HashMap<String, String>, key: &str| -> Option<String> {
+        kv.get(key).or_else(|| defaults.get(key)).cloned()
+    };
+    let parse_bool = |s: &str| matches!(s.to_ascii_lowercase().as_str(), "true" | "yes");
+    for (name, kv) in &sections {
+        if name == "DEFAULT" {
+            continue;
+        }
+        let Some(uri) = get(kv, "sync-uri").map(|u| u.trim_end_matches('/').to_string()) else {
+            continue;
+        };
+        seen_uris.insert(uri.clone());
+        // Portage skips the key validation for a `DEFAULT` section
+        // (its keys are defaults, not a repo).
+        let (getbinpkg_exclude, getbinpkg_include) = validated_getbinpkg_keys(
+            name,
+            &get(kv, "getbinpkg-exclude").unwrap_or_default(),
+            &get(kv, "getbinpkg-include").unwrap_or_default(),
+            warnings,
+        );
+        let priority = get(kv, "priority")
+            .as_deref()
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
+        repos.push(BinRepo {
+            name: name.clone(),
+            sync_uri: uri,
+            priority,
+            location: get(kv, "location"),
+            verify_signature: get(kv, "verify-signature")
+                .as_deref()
+                .map(parse_bool)
+                .unwrap_or(true),
+            frozen: get(kv, "frozen")
+                .as_deref()
+                .map(parse_bool)
+                .unwrap_or(false),
+            fetchcommand: get(kv, "fetchcommand"),
+            resumecommand: get(kv, "resumecommand"),
+            getbinpkg_exclude,
+            getbinpkg_include,
+        });
+    }
 
     // Implicit PORTAGE_BINHOST entries, reversed with incrementing priority.
     let mut current_priority = 0;

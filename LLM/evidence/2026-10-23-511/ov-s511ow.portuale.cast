@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792865108,"command":"env /var/tmp/ev511-bin/emerge -p --color=n --getbinpkg app-misc/s511ow","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.009, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[binary  N g   ] app-misc/s511ow-1-1 to /var/tmp/ev511-overlap/root\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev511-overlap\u0007"]
+[0.001, "x", "0"]

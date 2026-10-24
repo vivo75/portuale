@@ -3,30 +3,40 @@
 use crate::binpkg::*;
 
 /// The parsed `<pkgdir>/Packages` pool one `$PKGDIR` file scan vouches
-/// files against: the basename lookup, the stanzas behind it, and which
-/// stanzas the walk consumed (the leftovers seed the stale-index
+/// files against: the (directory, basename) lookup, the stanzas behind it,
+/// and which stanzas the walk consumed (the leftovers seed the stale-index
 /// re-injection). One struct so the per-file scan stays under the
 /// argument-count lint.
 pub(crate) struct IndexVouch<'a> {
-    /// `PATH` basename -> stanza indices into `stanzas`.
-    pub(crate) by_basename: HashMap<&'a str, Vec<usize>>,
+    /// `(PATH` directory, basename) -> stanza indices into `stanzas`.
+    /// Portage keys by `(os.path.dirname(path), basename)` (bug 978985):
+    /// the same basename in two subdirs with equal `SIZE`/`_mtime_` must
+    /// not vouch for each other's file.
+    pub(crate) by_basename: HashMap<(&'a str, &'a str), Vec<usize>>,
     /// The parsed `<pkgdir>/Packages` stanzas.
     pub(crate) stanzas: &'a [HashMap<String, String>],
     /// Stanza indices the walk consumed, parallel to `stanzas`.
     pub(crate) vouched: &'a mut [bool],
 }
 
+/// Portage's local `gpkg_only` warning, once per scan (`bintree.py`
+/// prints it colorized `WARN`; portuale prints it plain like its other
+/// binhost warnings).
+pub(crate) const LOCAL_XPAK_IGNORED_WARNING: &str =
+    "Local XPAK packages are ignored due to 'binpkg-request-signature'.\n";
+
 /// Walk `pkgdir` for binpkg *files* and synthesize one `Packages`-style
 /// entry per file from its own embedded metadata, fast-pathed against
-/// already-parsed `<pkgdir>/Packages` entries first: a basename-matched
-/// candidate whose `_mtime_`/`SIZE` still agree with the live file and
-/// which carries [`PKGINDEX_MINIMUM_KEYS`] is reused verbatim (its `PATH`
-/// refreshed in case the file moved). A basename-matched entry whose
-/// `_mtime_`/`SIZE` no longer agree is *still* reused verbatim under the
-/// default `trust_index = true`: the file is first touched at merge, by
-/// digest verification, so only `CPV` is required of the vouched stanza.
-/// Only a file no stanza vouches for is freshly parsed, and gets a fresh
-/// `_mtime_`/`SIZE` so a later call can hit the fast path.
+/// already-parsed `<pkgdir>/Packages` entries first: a (directory,
+/// basename)-matched candidate whose `_mtime_`/`SIZE` still agree with the
+/// live file and which carries [`PKGINDEX_MINIMUM_KEYS`] is reused verbatim
+/// (its `PATH` refreshed in case the file moved). A (directory,
+/// basename)-matched entry whose `_mtime_`/`SIZE` no longer agree is *still*
+/// reused verbatim under the default `trust_index = true`: the file is
+/// first touched at merge, by digest verification, so only `CPV` is required
+/// of the vouched stanza. Only a file no stanza vouches for is freshly
+/// parsed, and gets a fresh `_mtime_`/`SIZE` so a later call can hit the
+/// fast path.
 ///
 /// `$PKGDIR` layout is `<pkgdir>/<category>/<pf>.{tbz2,gpkg.tar}` for a
 /// single instance, and -- under `FEATURES=binpkg-multi-instance` --
@@ -45,7 +55,17 @@ pub(crate) struct IndexVouch<'a> {
 /// verbatim under `trust_index = true`, so the resolver still selects the
 /// binary and the merge aborts instead of silently falling back to the
 /// ebuild. Only stanzas whose `PATH` names no live file inject, and only
-/// stanzas carrying a `CPV`.
+/// stanzas carrying a `CPV`. Under `gpkg_only` a `PATH`-less stanza is
+/// skipped instead (it would default to a `.tbz2`); the pre-walk stanza
+/// pass already warned for it.
+///
+/// `gpkg_only` (`FEATURES=binpkg-request-signature`) drops local xpak
+/// files with Portage's once-per-scan `Local XPAK packages are ignored…`
+/// warning (printed plain, like portuale's other binhost warnings;
+/// Portage colorizes `WARN`): in reindex mode every xpak file is skipped
+/// with the warning (Portage never vouches there); in trusted mode only
+/// xpak files no stanza vouches for are skipped, silently (Portage serves
+/// indexed xpak stanzas without ever walking, and never sees the file).
 ///
 /// `trust_index = false` (`FEATURES=-pkgdir-index-trusted`) is the reindex
 /// mode: only the `_mtime_`/`SIZE` fast path is trusted, a changed file is
@@ -60,14 +80,16 @@ pub(crate) struct IndexVouch<'a> {
 pub fn populate_local_pkgdir(
     pkgdir: &Path,
     trust_index: bool,
+    gpkg_only: bool,
 ) -> Result<Vec<HashMap<String, String>>, String> {
     let existing = portage_repo::read_packages_index(pkgdir);
-    let mut by_basename: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut by_basename: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
     for (i, e) in existing.iter().enumerate() {
         if let Some(path) = e.get("PATH")
+            && let Some(parent) = Path::new(path).parent().and_then(|p| p.to_str())
             && let Some(basename) = Path::new(path).file_name().and_then(|n| n.to_str())
         {
-            by_basename.entry(basename).or_default().push(i);
+            by_basename.entry((parent, basename)).or_default().push(i);
         }
     }
     // Which `existing` stanzas the walk consumes; the rest are orphan
@@ -100,6 +122,19 @@ pub fn populate_local_pkgdir(
     let Ok(cat_paths) = portage_util::read_dir_paths(pkgdir) else {
         return Ok(out);
     };
+    // Portage's once-per-scan `gpkg_only` warning state. The stanza loop
+    // runs first (a `PATH`-less stanza is warned and skipped there), then
+    // the walk: at most one warning per scan, in Portage's order.
+    let mut gpkg_warned = false;
+    if gpkg_only
+        && existing.iter().any(|e| {
+            e.get("PATH").is_none_or(|p| p.is_empty())
+                && e.get("CPV").is_some_and(|c| !c.is_empty())
+        })
+    {
+        gpkg_warned = true;
+        eprint!("{LOCAL_XPAK_IGNORED_WARNING}");
+    }
     for cat_path in cat_paths {
         if !cat_path.is_dir() {
             continue;
@@ -119,6 +154,25 @@ pub fn populate_local_pkgdir(
                         continue;
                     };
                     let path_field = format!("{category}/{name}/{mname}");
+                    // An xpak file is invisible under `gpkg_only` unless a
+                    // stanza vouches for this exact `(dir, basename)`
+                    // (trusted mode serves indexed xpak stanzas without
+                    // ever walking; reindex mode has no stanza pool). The
+                    // warning fires only on the reindex walk: in trusted
+                    // mode Portage never sees the file at all.
+                    if gpkg_only
+                        && (mname.ends_with(".tbz2") || mname.ends_with(".xpak"))
+                        && (!trust_index
+                            || !vouch
+                                .by_basename
+                                .contains_key(&(format!("{category}/{name}").as_str(), mname)))
+                    {
+                        if !trust_index && !gpkg_warned {
+                            gpkg_warned = true;
+                            eprint!("{LOCAL_XPAK_IGNORED_WARNING}");
+                        }
+                        continue;
+                    }
                     let Some(e) = record(
                         &mfile,
                         scan_binpkg_file(ScanBinpkgFileArgs {
@@ -147,6 +201,18 @@ pub fn populate_local_pkgdir(
                 continue;
             }
             let path_field = format!("{category}/{name}");
+            if gpkg_only
+                && (name.ends_with(".tbz2") || name.ends_with(".xpak"))
+                && (!trust_index || !vouch.by_basename.contains_key(&(category, name)))
+            {
+                // Warned only on the reindex walk; see the multi-instance
+                // arm above.
+                if !trust_index && !gpkg_warned {
+                    gpkg_warned = true;
+                    eprint!("{LOCAL_XPAK_IGNORED_WARNING}");
+                }
+                continue;
+            }
             if let Some(e) = record(
                 &entry,
                 scan_binpkg_file(ScanBinpkgFileArgs {
@@ -176,12 +242,13 @@ pub fn populate_local_pkgdir(
             };
             // A PATH-less stanza defaults to `<cpv>.tbz2`; a live file there
             // was already consumed by the walk, so only the missing half
-            // injects.
-            let rel = stanza
-                .get("PATH")
-                .filter(|p| !p.is_empty())
-                .cloned()
-                .unwrap_or_else(|| format!("{cpv}.tbz2"));
+            // injects. Under `gpkg_only` that default is an xpak: it was
+            // already warned (and skipped) by the pre-walk stanza pass.
+            let rel = match stanza.get("PATH").filter(|p| !p.is_empty()) {
+                Some(p) => p.clone(),
+                None if gpkg_only => continue,
+                None => format!("{cpv}.tbz2"),
+            };
             if pkgdir.join(&rel).is_file() {
                 continue;
             }
@@ -285,10 +352,16 @@ pub(crate) fn scan_binpkg_file(
     let mtime = file_mtime(&st);
     let size = st.len();
 
+    let dir = Path::new(&path_field)
+        .parent()
+        .and_then(|p| p.to_str())
+        .unwrap_or("");
     // The live mtime/size must agree with the stanza, which must also
     // carry every minimum key; otherwise the stanza is re-parsed, not
-    // vouched.
-    if let Some(candidates) = vouch.by_basename.get(basename)
+    // vouched. The lookup is by (directory, basename): a stanza vouches
+    // only for its own dir's file.
+    // Portage: bintree.py, _populate_local (`basename_index`).
+    if let Some(candidates) = vouch.by_basename.get(&(dir, basename))
         && let Some(hit) = candidates.iter().copied().find(|&i| {
             let d = &vouch.stanzas[i];
             d.get("_mtime_").and_then(|m| m.parse::<i64>().ok()) == Some(mtime)
@@ -310,7 +383,7 @@ pub(crate) fn scan_binpkg_file(
     // file's own category. A file no stanza vouches for keeps the reindex
     // behavior below. With `trust_index == false` this whole arm is off.
     if trust_index
-        && let Some(candidates) = vouch.by_basename.get(basename)
+        && let Some(candidates) = vouch.by_basename.get(&(dir, basename))
         && let Some(hit) = candidates.iter().copied().find(|&i| {
             let d = &vouch.stanzas[i];
             d.contains_key("CPV")

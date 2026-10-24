@@ -1,0 +1,7 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[binary  N g   ] app-misc/s511ov-1-1 to /var/tmp/ev511-overlap/root

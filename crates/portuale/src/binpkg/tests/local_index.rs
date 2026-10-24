@@ -7,7 +7,7 @@ fn populate_local_pkgdir_synthesizes_a_packages_style_entry_per_binpkg_file() {
     // walks unconditionally, so both files are freshly parsed from
     // disk regardless of what the index claims.
     // Portage: bintree.py, _populate_local
-    let entries = populate_local_pkgdir(&fixture("pkgdir"), true).expect("scan succeeds");
+    let entries = populate_local_pkgdir(&fixture("pkgdir"), true, false).expect("scan succeeds");
     let by_cpv: HashMap<&str, &HashMap<String, String>> = entries
         .iter()
         .map(|e| (e.get("CPV").unwrap().as_str(), e))
@@ -51,13 +51,13 @@ fn populate_local_pkgdir_synthesizes_a_packages_style_entry_per_binpkg_file() {
 #[test]
 fn populate_local_pkgdir_of_a_missing_or_empty_dir_is_empty() {
     assert!(
-        populate_local_pkgdir(Path::new("/nonexistent/pkgdir"), true)
+        populate_local_pkgdir(Path::new("/nonexistent/pkgdir"), true, false)
             .unwrap()
             .is_empty()
     );
     let scratch = ScratchDir::new("scan-empty").unwrap();
     assert!(
-        populate_local_pkgdir(scratch.path(), true)
+        populate_local_pkgdir(scratch.path(), true, false)
             .unwrap()
             .is_empty()
     );
@@ -81,8 +81,8 @@ fn populate_local_pkgdir_skips_invalid_files_and_keeps_the_pool() {
         build_gpkg_with_inner_entries("invalidpkg-1.0", &[inner_entry("other/KEY", b"outside\n")]);
     fs::copy(&invalid, pkgdir.join("dev-libs/invalidpkg-1.0.gpkg.tar")).unwrap();
 
-    let entries =
-        populate_local_pkgdir(pkgdir, true).expect("an invalid file must not abort the scan");
+    let entries = populate_local_pkgdir(pkgdir, true, false)
+        .expect("an invalid file must not abort the scan");
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(
         entries[0].get("CPV").map(String::as_str),
@@ -103,7 +103,8 @@ fn populate_local_pkgdir_aborts_on_fatal_files() {
     )
     .unwrap();
 
-    let err = populate_local_pkgdir(pkgdir, true).expect_err("a fatal file must abort the scan");
+    let err =
+        populate_local_pkgdir(pkgdir, true, false).expect_err("a fatal file must abort the scan");
     assert!(err.contains("fatalpkg-1.0.tbz2"), "{err}");
 }
 
@@ -134,7 +135,7 @@ fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale() {
         format!("TIMESTAMP: 0\n\n{trusted}"),
     )
     .unwrap();
-    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, true, false).expect("scan succeeds");
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].get("SLOT").map(String::as_str),
@@ -149,7 +150,7 @@ fn populate_local_pkgdir_trusts_an_index_entry_even_when_stale() {
         real_mtime + 1000
     );
     fs::write(pkgdir.join("Packages"), format!("TIMESTAMP: 0\n\n{stale}")).unwrap();
-    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, true, false).expect("scan succeeds");
     assert_eq!(entries.len(), 1);
     assert_eq!(
         entries[0].get("SLOT").map(String::as_str),
@@ -184,7 +185,7 @@ fn populate_local_pkgdir_accepts_a_truncated_binpkg_the_index_vouches_for() {
         ),
     )
     .unwrap();
-    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, true, false).expect("scan succeeds");
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(
         entries[0].get("CPV").map(String::as_str),
@@ -221,7 +222,7 @@ fn populate_local_pkgdir_vouches_by_category_plus_basename() {
          CPV: cat-b/same-1.0\nSLOT: 0\nSIZE: 17\n_mtime_: 1\nPATH: cat-b/same-1.0.tbz2\n",
     )
     .unwrap();
-    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, true, false).expect("scan succeeds");
     assert_eq!(entries.len(), 2, "{entries:?}");
     for entry in &entries {
         let cpv = entry.get("CPV").map(String::as_str).unwrap_or("");
@@ -260,7 +261,7 @@ fn populate_local_pkgdir_reinjects_a_removed_files_index_stanza() {
         ),
     )
     .unwrap();
-    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, true, false).expect("scan succeeds");
     assert_eq!(entries.len(), 2, "{entries:?}");
     // `CPV`-sorted: the orphan sorts first.
     assert_eq!(
@@ -287,7 +288,7 @@ fn populate_local_pkgdir_reinjects_a_removed_files_index_stanza() {
          CPV: dev-libs/gonepkg-1.0\nSLOT: 0\nSIZE: 12345\n_mtime_: 1\nPATH: dev-libs/gonepkg-1.0.tbz2\n",
     )
     .unwrap();
-    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, true, false).expect("scan succeeds");
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(
         entries[0].get("CPV").map(String::as_str),
@@ -319,7 +320,7 @@ fn populate_local_pkgdir_reindex_reparses_a_changed_file() {
     )
     .unwrap();
 
-    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, true, false).expect("scan succeeds");
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(
         entries[0].get("SLOT").map(String::as_str),
@@ -327,7 +328,7 @@ fn populate_local_pkgdir_reindex_reparses_a_changed_file() {
         "trusted mode keeps the stale stanza verbatim"
     );
 
-    let entries = populate_local_pkgdir(pkgdir, false).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, false, false).expect("scan succeeds");
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(
         entries[0].get("SLOT").map(String::as_str),
@@ -365,7 +366,7 @@ fn populate_local_pkgdir_reindex_reparses_a_key_incomplete_stanza() {
     );
     fs::write(pkgdir.join("Packages"), &stanza).unwrap();
 
-    let entries = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, true, false).expect("scan succeeds");
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(
         entries[0].get("SLOT").map(String::as_str),
@@ -373,7 +374,7 @@ fn populate_local_pkgdir_reindex_reparses_a_key_incomplete_stanza() {
         "trusted mode keeps the key-incomplete stanza verbatim"
     );
 
-    let entries = populate_local_pkgdir(pkgdir, false).expect("scan succeeds");
+    let entries = populate_local_pkgdir(pkgdir, false, false).expect("scan succeeds");
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(
         entries[0].get("SLOT").map(String::as_str),
@@ -416,10 +417,10 @@ fn populate_local_pkgdir_reindex_drops_a_removed_files_index_stanza() {
     )
     .unwrap();
 
-    let trusted = populate_local_pkgdir(pkgdir, true).expect("scan succeeds");
+    let trusted = populate_local_pkgdir(pkgdir, true, false).expect("scan succeeds");
     assert_eq!(trusted.len(), 2, "{trusted:?}");
 
-    let reindexed = populate_local_pkgdir(pkgdir, false).expect("scan succeeds");
+    let reindexed = populate_local_pkgdir(pkgdir, false, false).expect("scan succeeds");
     assert_eq!(reindexed.len(), 1, "{reindexed:?}");
     assert_eq!(
         reindexed[0].get("CPV").map(String::as_str),
@@ -453,7 +454,7 @@ fn populate_local_pkgdir_parses_unindexed_files_in_both_modes() {
     assert!(!pkgdir.join("Packages").exists());
 
     for trust in [true, false] {
-        let entries = populate_local_pkgdir(pkgdir, trust).expect("scan succeeds");
+        let entries = populate_local_pkgdir(pkgdir, trust, false).expect("scan succeeds");
         assert_eq!(entries.len(), 1, "trust={trust}: {entries:?}");
         assert_eq!(
             entries[0].get("CPV").map(String::as_str),
@@ -465,5 +466,44 @@ fn populate_local_pkgdir_parses_unindexed_files_in_both_modes() {
             Some("0"),
             "trust={trust}: parsed from the archive: {entries:?}"
         );
+    }
+}
+
+/// Backlog #537: under `gpkg_only` (`FEATURES=binpkg-request-signature`)
+/// a local xpak is skipped while the gpkg next to it still pools, in both
+/// trust modes (no index here, so nothing could vouch either way).
+/// Portage: `bintree._populate_local`.
+#[test]
+fn populate_local_pkgdir_ignores_xpak_but_keeps_gpkg_under_gpkg_only() {
+    let scratch = ScratchDir::new("scan-gpkg-only").unwrap();
+    let pkgdir = scratch.path();
+    fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+    fs::copy(
+        fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2"),
+        pkgdir.join("dev-libs/packagepkg-1.0.tbz2"),
+    )
+    .unwrap();
+    fs::copy(
+        fixture("pkgdir/dev-libs/gpkgreadpkg-1.0.gpkg.tar"),
+        pkgdir.join("dev-libs/gpkgreadpkg-1.0.gpkg.tar"),
+    )
+    .unwrap();
+
+    for trust in [true, false] {
+        let plain = populate_local_pkgdir(pkgdir, trust, false).expect("scan succeeds");
+        let plain: Vec<&str> = plain
+            .iter()
+            .filter_map(|e| e.get("CPV").map(String::as_str))
+            .collect();
+        assert!(plain.contains(&"dev-libs/packagepkg-1.0"), "{plain:?}");
+        assert!(plain.contains(&"dev-libs/gpkgreadpkg-1.0"), "{plain:?}");
+
+        let signed = populate_local_pkgdir(pkgdir, trust, true).expect("scan succeeds");
+        let signed: Vec<&str> = signed
+            .iter()
+            .filter_map(|e| e.get("CPV").map(String::as_str))
+            .collect();
+        assert!(!signed.contains(&"dev-libs/packagepkg-1.0"), "{signed:?}");
+        assert!(signed.contains(&"dev-libs/gpkgreadpkg-1.0"), "{signed:?}");
     }
 }

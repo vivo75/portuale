@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792867740,"command":"env /var/tmp/ev511-bin/emerge -p --color=n --getbinpkg app-misc/s539","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.036, "o", "[plain] Remote XPAK binpkgs in 'file:///var/tmp/ev539-pkgdir/binhost' ignored: signatures are missing (FEATURES=binpkg-request-signature or verify-signature in binrepos.conf).\r\n"]
+[0.001, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n\r\nemerge: there are no ebuilds to satisfy \"app-misc/s539\" for /var/tmp/ev539-pkgdir/root/."]
+[0.010, "o", "\r\n\r\nemerge: searching for similar names...\r\nemerge: Maybe you meant any of these: app-misc/E, app-misc/D, app-misc/C?\r\n\u001b]0;vivo@:/var/tmp/ev539-pkgdir\u0007"]
+[0.000, "x", "1"]

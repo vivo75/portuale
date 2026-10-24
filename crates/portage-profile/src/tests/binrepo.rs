@@ -123,3 +123,55 @@ sync-uri = https://plain.example.org/amd64/
     assert!(repos[0].frozen, "frozenrepo is frozen");
     assert!(!repos[1].frozen, "plainrepo defaults to unfrozen");
 }
+
+/// Backlog #539: every `[section]` inherits the `[DEFAULT]` keys, like
+/// Portage's configparser (`BinRepoConfigLoader` reads
+/// `dict(parser[section].items())`, which includes defaults). A keyless
+/// section under `[DEFAULT] verify-signature = false` opts out of
+/// `gpkg_only`; without the default the stock-global `true` applies.
+#[test]
+fn parse_binrepos_sections_inherit_default_keys() {
+    let conf = "\
+[DEFAULT]
+verify-signature = false
+frozen = true
+
+[plain]
+sync-uri = file:///srv/plain
+priority = 2
+";
+    let mut warnings = Vec::new();
+    let repos = parse_binrepos(conf, "", &mut warnings);
+    assert!(warnings.is_empty());
+    assert_eq!(repos.len(), 1);
+    // Keyless section: both keys come from `[DEFAULT]`.
+    assert!(!repos[0].verify_signature);
+    assert!(repos[0].frozen);
+    assert_eq!(repos[0].priority, 2);
+
+    // The section's own keys win over the defaults.
+    let conf = "\
+[DEFAULT]
+verify-signature = false
+
+[plain]
+sync-uri = file:///srv/plain
+verify-signature = yes
+";
+    let mut warnings = Vec::new();
+    let repos = parse_binrepos(conf, "", &mut warnings);
+    assert!(warnings.is_empty());
+    assert!(repos[0].verify_signature);
+
+    // No `[DEFAULT]`: the stock-global default (`verify-signature = true`)
+    // and the parser default (`frozen = false`) apply.
+    let conf = "\
+[plain]
+sync-uri = file:///srv/plain
+";
+    let mut warnings = Vec::new();
+    let repos = parse_binrepos(conf, "", &mut warnings);
+    assert!(warnings.is_empty());
+    assert!(repos[0].verify_signature);
+    assert!(!repos[0].frozen);
+}

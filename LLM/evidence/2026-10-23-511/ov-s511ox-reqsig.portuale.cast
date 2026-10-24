@@ -1,0 +1,7 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792865108,"command":"env FEATURES=\"-news binpkg-request-signature\" /var/tmp/ev511-bin/emerge -p --color=n --getbinpkg app-misc/s511ox","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.008, "o", "[mixplain] Remote XPAK binpkgs in 'file:///var/tmp/ev511-overlap/binhost-plain' ignored: signatures are missing (FEATURES=binpkg-request-signature or verify-signature in binrepos.conf).\r\n"]
+[0.000, "o", "Unsupported binary package format from 'app-misc/s511ow-1.weird'\r\nUnsupported binary package format from 'app-misc/s511ox-1.weird'\r\n"]
+[0.000, "o", "\r\nThese are the packages that would be merged, in order:\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n\r\nemerge: there are no ebuilds to satisfy \"app-misc/s511ox\" for /var/tmp/ev511-overlap/root/."]
+[0.010, "o", "\r\n\r\nemerge: searching for similar names...\r\nemerge: Maybe you meant any of these: app-misc/s511ov, app-misc/s511-a, app-misc/foo?\r\n\u001b]0;vivo@:/var/tmp/ev511-overlap\u0007"]
+[0.000, "x", "1"]

@@ -178,6 +178,8 @@ Expected: PASS.
 
 ### Task 6: #535–#539 — binhost
 
+Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+
 **Files:**
 - Modify: `crates/portage-profile/src/binrepo.rs`, `crates/portuale/src/emerge_getbinpkg.rs`, `crates/portage-repo` `populate_local_pkgdir`, `crates/portuale/src/binpkg/local_index.rs`
 - Test: scratch-repo shapes `LLM/evidence/2026-10-23-511/` + nuovo shape overlap
@@ -185,27 +187,27 @@ Expected: PASS.
 **Interfaces:**
 - Consumes: captures `13-sig-multi-missing.*`, layout overlap `s511-e/f` history + `containment_root` semantics da Task 1.
 
-- [ ] **Step 1: Check singolo atom mancante: se `Maybe you meant` differisce, fix quello; altrimenti #535 wontfix (Portage first-in-argv deterministico su PYTHONHASHSEED 1–6, valore basso)**
+- [x] **Step 1: Check singolo atom mancante: se `Maybe you meant` differisce, fix quello; altrimenti #535 wontfix (Portage first-in-argv deterministico su PYTHONHASHSEED 1–6, valore basso)**
 
 Run: `emerge -p --color=n app-misc/zznope1 app-misc/zznope2` su entrambi + capture singolo-atom `emerge -p --color=n app-misc/zznope1` su entrambi.
 Expected post-fix: singolo-atom identico a Portage su entrambi i lati; multi-atom resta wontfix #535 salvo decisione owner.
 
-- [ ] **Step 2: #536 overlap — porta `cpv_exists` skip pre-`gpkg_only` in ordine descending-priority; probe dedicato overlap con policy `gpkg_only` diverse**
-- [ ] **Step 3: #537 — `gpkg_only` locale `$PKGDIR` sotto `FEATURES=binpkg-request-signature` (ignora xpak con warning `Local XPAK packages are ignored…`)**
-- [ ] **Step 4: #538 — `basename_index` key `(dir, basename)` non solo basename (bug 978985)**
+- [x] **Step 2: #536 overlap — porta `cpv_exists` skip pre-`gpkg_only` in ordine descending-priority; probe dedicato overlap con policy `gpkg_only` diverse**
+- [x] **Step 3: #537 — `gpkg_only` locale `$PKGDIR` sotto `FEATURES=binpkg-request-signature` (ignora xpak con warning `Local XPAK packages are ignored…`)**
+- [x] **Step 4: #538 — `basename_index` key `(dir, basename)` non solo basename (bug 978985)**
 
 Test: due same-basename in diverse subdir `$PKGDIR` con uguali SIZE/mtime.
 
-- [ ] **Step 5: #539 — eredita `[DEFAULT]` di `binrepos.conf` config-root (configparser inheritance) per `verify-signature`/`frozen`**
+- [x] **Step 5: #539 — eredita `[DEFAULT]` di `binrepos.conf` config-root (configparser inheritance) per `verify-signature`/`frozen`**
 
 Test: `[DEFAULT] verify-signature = false` + sezione keyless xpak-serving.
 
-- [ ] **Step 6: Run**
+- [x] **Step 6: Run**
 
 Run: `cargo test --release -p portage-profile binrepo` + pmtest getbinpkg pins
 Expected: 12/13→13/13 + nuovi shape.
 
-- [ ] **Step 7: Commit pair**
+- [x] **Step 7: Commit pair**
 
 ### Task 7: #540–#542 — user patches writer/VDB/extraction
 

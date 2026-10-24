@@ -1,0 +1,8 @@
+[mixplain] Remote XPAK binpkgs in 'file:///var/tmp/ev511-overlap/binhost-plain' ignored: signatures are missing (FEATURES=binpkg-request-signature or verify-signature in binrepos.conf).
+Unsupported binary package format from 'app-misc/s511ow-1.weird'
+Unsupported binary package format from 'app-misc/s511ox-1.weird'
+
+emerge: there are no ebuilds to satisfy "app-misc/s511ox" for /var/tmp/ev511-overlap/root/.
+
+emerge: searching for similar names...
+emerge: Maybe you meant any of these: app-misc/s511ov, app-misc/s511-a, app-misc/foo?

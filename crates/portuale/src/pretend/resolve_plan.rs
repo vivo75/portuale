@@ -191,9 +191,15 @@ pub(crate) fn plan_resolve(args: PlanResolveArgs<'_, '_>) -> Result<ResolvePlan,
     // Portage: bintree.py, _populate_local
     if usepkg || usepkgonly {
         let pkgdir_path = Path::new(&config.pkgdir);
-        match crate::binpkg::populate_local_pkgdir(pkgdir_path, pkgdir_index_trusted(config)) {
-            Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
-            Ok(_) => {}
+        match crate::binpkg::populate_local_pkgdir(
+            pkgdir_path,
+            pkgdir_index_trusted(config),
+            pkgdir_gpkg_only(config),
+        ) {
+            // `Some` even when empty: an empty scan is a result (no pool),
+            // while `None` means no scan ran and the index file is the
+            // pool (paths that never reach this scan).
+            Ok(entries) => config.scanned_binpkgs = Some(entries),
             Err(e) => {
                 eprintln!("emerge: scanning {}: {e}", config.pkgdir);
                 return Err(ExitCode::from(1));

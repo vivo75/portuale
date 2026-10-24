@@ -260,9 +260,10 @@ pub(crate) fn dispatch_queries(args: DispatchQueriesArgs<'_>) -> Option<ExitCode
             match crate::binpkg::populate_local_pkgdir(
                 Path::new(&config.pkgdir),
                 pkgdir_index_trusted(config),
+                pkgdir_gpkg_only(config),
             ) {
-                Ok(entries) if !entries.is_empty() => config.scanned_binpkgs = Some(entries),
-                Ok(_) => {}
+                // `Some` even when empty: see the resolve_plan scan.
+                Ok(entries) => config.scanned_binpkgs = Some(entries),
                 Err(e) => {
                     eprintln!("emerge: scanning {}: {e}", config.pkgdir);
                     return Some(ExitCode::from(1));
