@@ -119,6 +119,24 @@ binary): SIGINT strictly mid-wait gives rc 130, zero `Installing`
 lines, empty VDB. Shape 14 (`cgroup.sh`, post-fix binary): rc 0, no
 `Resource usage` anywhere (residue #543).
 
+## Task 8 shapes (15-17, backlog #544-#546; same `captures/`)
+
+- 15-pretend-j1: serial `-j1` replays ppA block then ppB block (~5 s
+  apart, unbuffered in order), both before any `>>> Emerging`, on both
+  managers (rc 0). Pre-Task-8 portuale interleaved pretend per build.
+- 16-pretend-buildpkgonly: `--buildpkgonly -j2` replays both blocks
+  (overlapping ~5 s) before any `>>> Emerging`; both binpkgs land in
+  `$PKGDIR`, on both managers (rc 0). Pre-Task-8 portuale interleaved
+  pretend per entry build.
+- 17-mixed-pretend: `-k --jobs=2` with ppA prebuilt (binary) and ppB
+  source: the binary block (from the binpkg metadata) then the source
+  block, overlapping, before `>>> Emerging binary`, on both managers
+  (rc 0). Pre-Task-8 portuale ran source pretend up front but binary
+  pretend inline at merge time.
+- All three shapes also carry Portage's `>>> Running pre-merge checks
+  for <cpv>` head line per block on both managers (Task-8 addition to
+  the pass output, same text both sides).
+
 ## Pre-fix portuale behaviour (`captures/prefix/`, release binary before #512)
 
 - Shapes 01-08: no barrier — every `Installing` lands while the slow build

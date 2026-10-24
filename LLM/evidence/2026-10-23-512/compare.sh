@@ -15,7 +15,8 @@ summ() { # id, pm
 }
 for id in 01-scope-deep 02-scope-system 03-scope-toolchain 04-scope-none \
     05-default-features 06-deep-closure 07-system-closure 08-toolchain-sysextra \
-    09-cycle 10-pretend 11-bad-scope 12-missing-scope 13-sigint 14-cgroup; do
+    09-cycle 10-pretend 11-bad-scope 12-missing-scope 13-sigint 14-cgroup \
+    15-pretend-j1 16-pretend-buildpkgonly 17-mixed-pretend; do
   summ "$id" portage
   summ "$id" portuale
 done

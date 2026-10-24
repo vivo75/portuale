@@ -421,6 +421,7 @@ pub(crate) fn run_real_commands(
                 // Manual mode runs every phase like `doebuild()`; the
                 // skip is scheduler-path only (backlog #458).
                 skip_noop_src_phases: false,
+                skip_pretend: false,
             })
         } else if ebuild_phases::is_standalone_phase_command(cmd) {
             ebuild_phases::run_single_phase(ebuild_phases::RunSinglePhaseArgs {
@@ -450,6 +451,7 @@ pub(crate) fn run_real_commands(
                 // `doebuild()`; the no-op src-phase skip is merge-path
                 // only (backlog #456).
                 skip_noop_src_phases: false,
+                skip_pretend: false,
             })
         };
         match result {

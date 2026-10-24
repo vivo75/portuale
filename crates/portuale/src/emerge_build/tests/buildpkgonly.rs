@@ -945,3 +945,54 @@ fn merge_binpkg_copies_user_patch_files_into_the_vdb() {
         "VDB user_patch.digests is the NUL-separated rows"
     );
 }
+
+/// Backlog #546 (oracle: `--buildpkgonly -j` of the `10-pretend` oracle
+/// tree, `LLM/evidence/2026-10-23-512/`): the scheduler-driven
+/// `--buildpkgonly` path runs the same up-front `pkg_pretend` pass as the
+/// merge scheduler. A dying pretend aborts before anything builds, with
+/// the already-reported failure -- not a per-entry "build failed".
+#[test]
+fn run_buildpkgonly_pretend_failure_aborts_before_anything_builds() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let pkgdir = tempdir();
+    let new = |p: &str| buildpkgonly_entry("dev-libs", p, "1.0");
+    let entries = vec![new("schedppfail"), new("schedwait")];
+    let err = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
+            debug: false,
+            pkgdir: pkgdir.clone(),
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            shell: PackageOptions::default().shell,
+            binpkg_compress: "bzip2".to_string(),
+            binpkg_format: "xpak".to_string(),
+            ..PackageOptions::default()
+        },
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    })
+    .expect_err("a dying pretend fails the buildpkgonly run");
+    assert!(
+        is_reported_failure(&err),
+        "pretend failure is already reported, like the scheduler pass: {err}"
+    );
+    assert!(
+        !pkgdir.join("dev-libs/schedppfail-1.0.tbz2").exists(),
+        "the failing entry builds nothing"
+    );
+    assert!(
+        !pkgdir.join("dev-libs/schedwait-1.0.tbz2").exists(),
+        "the slow entry never builds"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    let _ = std::fs::remove_dir_all(&pkgdir);
+}

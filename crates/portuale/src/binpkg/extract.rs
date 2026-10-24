@@ -64,6 +64,50 @@ pub fn extract_binpkg(
     Ok(())
 }
 
+/// Unpack a binpkg's *metadata only* (the scalar `<KEY>` files plus the
+/// verbatim `environment.bz2` / `<pf>.ebuild`) into `build_info_dest`,
+/// without touching the image. The up-front pretend pass needs exactly
+/// what Portage's `bintree.dbapi.unpack_metadata` reads: metadata, never
+/// the image (so a binpkg truncated inside the image region still pretends
+/// when its metadata is intact, like Portage -- backlog #544, pmtest
+/// `test_emerge_usepkgonly_fails_a_truncated_binpkg_at_merge_like_portage`).
+/// Deliberately no Manifest digest/signature check here either: that is the
+/// merge-time verifier's job (`merge_one_binary_entry`), exactly as
+/// Portage verifies inside `_run_pkg_pretend_one` only for entries the
+/// pretend filter keeps.
+// Portage: `bintree.dbapi.unpack_metadata`, `tbz2.unpackinfo`
+pub(crate) fn extract_binpkg_metadata_only(
+    binpkg_path: &Path,
+    build_info_dest: &Path,
+) -> Result<(), String> {
+    fs::create_dir_all(build_info_dest)
+        .map_err(|e| format!("{}: {e}", build_info_dest.display()))?;
+
+    let name = binpkg_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if name.ends_with(".gpkg.tar") {
+        // No manifest verification: see the doc comment above.
+        let metadata = load_gpkg_metadata(binpkg_path)?;
+        extract_gpkg_metadata(binpkg_path, build_info_dest, metadata)?;
+        return Ok(());
+    }
+
+    // xpak: every XPAK member written VERBATIM, not parsed + reserialized
+    // (same verbatim rule as `extract_binpkg`).
+    let seg = read_xpak_segment(binpkg_path)?;
+    for (name, bytes) in parse_xpak_members(&seg)? {
+        let Some(dest) = xpak_member_dest(build_info_dest, &name) else {
+            continue;
+        };
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        fs::write(&dest, bytes).map_err(|e| format!("{}: {e}", dest.display()))?;
+    }
+    Ok(())
+}
 /// `unpackinfo`'s target path for one member: the name with leading `/`
 /// stripped, joined under `dest` and normalized. A name whose `..`
 /// components climb out of `dest` is skipped (`None`).

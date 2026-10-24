@@ -127,6 +127,7 @@ pub fn run_merge(
         options,
         buildpkg,
         before_merge: None,
+        skip_pretend: false,
     })
     .map(|outcome| outcome.status)
 }
@@ -139,6 +140,9 @@ pub struct RunMergeWithHookArgs<'a> {
     pub options: &'a MergeOptions,
     pub buildpkg: Option<&'a crate::ebuild_package::PackageOptions>,
     pub before_merge: Option<&'a dyn Fn()>,
+    /// The up-front `pkg_pretend` pass already ran it: start the `install`
+    /// chain at `setup`. Portage: _emerge/Scheduler.py, _run_pkg_pretend
+    pub skip_pretend: bool,
 }
 
 /// What a merge run finished with: the phase-chain exit status, plus
@@ -166,6 +170,7 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<MergeOutcom
         options,
         buildpkg,
         before_merge,
+        skip_pretend,
     } = args;
     // The environment first: `run_commands_async` reads it too, and a
     // metadata failure surfaces before any phase output either way.
@@ -193,6 +198,7 @@ pub fn run_merge_with_hook(args: RunMergeWithHookArgs<'_>) -> Result<MergeOutcom
         // `src_install` (backlog #456).
         // Portage: _emerge/EbuildExecuter.py, _can_skip_source_phases
         skip_noop_src_phases: true,
+        skip_pretend,
     })?;
     if status != 0 {
         return Ok(MergeOutcome {

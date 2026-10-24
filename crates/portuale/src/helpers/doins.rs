@@ -3384,6 +3384,7 @@ mod tests {
             shell: crate::ebuild_phases::ShellBackend::default(),
             log_file: crate::ebuild_phases::PhaseLog::Inherit,
             skip_noop_src_phases: false,
+            skip_pretend: false,
             build_env: &[],
         })
         .expect("run_commands should not itself error");

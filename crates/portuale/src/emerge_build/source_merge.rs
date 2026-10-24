@@ -100,6 +100,46 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<MergePassReport,
         background: mode.background,
         quiet_fail: options.quiet_fail,
     };
+    // The up-front `pkg_pretend` pass runs even at `-j1`, unbuffered in
+    // merge-list order, before any build -- like Portage's `_run_pkg_pretend`
+    // with `max_jobs=1` (backlog #545). A failure aborts before anything
+    // builds, exactly like the `-jN` scheduler above.
+    // Portage: _emerge/Scheduler.py, _run_pkg_pretend
+    {
+        let mut ledger = Ledger::default();
+        let mut unreported: Vec<String> = Vec::new();
+        let mut pretend_failed = false;
+        {
+            let stdout = std::io::stdout();
+            let mut replay = stdout.lock();
+            for (idx, e) in run_pretend_pass(
+                entries,
+                repos,
+                root,
+                portage_tmpdir,
+                options,
+                1,
+                &mut replay,
+            ) {
+                pretend_failed = true;
+                if !ledger.failed(&report, &entries[idx], &e) {
+                    unreported.push(e);
+                }
+            }
+        }
+        if pretend_failed {
+            let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
+            match ledger.finish(&report, keep_going, first) {
+                Ok(()) => return Ok(MergePassReport::default()),
+                Err(message) => {
+                    return Err(MergePassError {
+                        message,
+                        report: MergePassReport::default(),
+                    });
+                }
+            }
+        }
+    }
     run_merge_loop(entries, keep_going, &report, |_, entry, entry_progress| {
         // An `IDEPEND` dep merges into the running root, like Portage.
         let entry_root = entry_merge_root(entry, root);
@@ -112,6 +152,8 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<MergePassReport,
             buildpkg,
             buildpkg_exclude,
             display: &display,
+            // The up-front pass above already replayed `pretend`.
+            skip_pretend: true,
         };
         let bp = buildpkg.filter(|opts| {
             entry_buildpkg_wanted(entry, repos, buildpkg_exclude, opts.buildpkg_live)
@@ -131,9 +173,9 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<MergePassReport,
                 capture_log: true,
                 progress: entry_progress,
                 display: &display,
-                // The serial loop runs the whole chain per entry (no
-                // up-front `pkg_pretend` pass there): `pretend` stays in.
-                skip_pretend: false,
+                // The up-front pass above already replayed `pretend`
+                // (backlog #545): the build starts at `setup`.
+                skip_pretend: true,
             }) {
                 Ok(path) => {
                     display.build_finished();
@@ -321,6 +363,10 @@ pub(crate) struct MergeOneSourceEntryArgs<'a> {
     pub(crate) buildpkg: Option<&'a ebuild_package::PackageOptions>,
     pub(crate) progress: mrg_director::MergeProgress,
     pub(crate) display: &'a StatusDisplay,
+    /// The up-front `pkg_pretend` pass already ran it (serial `-j1` now
+    /// runs the same pass as the `-jN` scheduler): start at `setup`.
+    /// Portage: _emerge/Scheduler.py, _run_pkg_pretend
+    pub(crate) skip_pretend: bool,
 }
 
 /// One entry of `run_source_merge`'s loop, also the `Source`-entry arm of
@@ -336,6 +382,7 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
         buildpkg,
         progress,
         display,
+        skip_pretend,
     } = args;
     let cp = format!("{}/{}", entry.category, entry.package);
     let version = match &entry.outcome {
@@ -423,6 +470,7 @@ pub(crate) fn merge_one_source_entry(args: MergeOneSourceEntryArgs<'_>) -> Resul
         options: &per_entry,
         buildpkg,
         before_merge: Some(&print_installing as &dyn Fn()),
+        skip_pretend,
     })?;
     if outcome.postinst_failed {
         // The merge landed (files and vdb entry are live): `>>> Completed`

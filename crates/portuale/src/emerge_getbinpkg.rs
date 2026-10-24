@@ -847,6 +847,225 @@ fn http_or_summary(failures: &[portage_fetch::QuietFetchError]) -> String {
         })
 }
 
+/// Portage's `_pkg_needs_pretend` EAPI/`DEFINED_PHASES` half for a binary
+/// entry with a local `$PKGDIR` file: EAPI 4+ with `pretend` in the
+/// binpkg's `DEFINED_PHASES`. A binary with no local file is not filtered
+/// here (it stays silent up front and pretends inline at merge time);
+/// unreadable metadata fails open so the pretend itself reports. Without
+/// this gate the pass prints `>>> Running pre-merge checks` for binaries
+/// Portage never pretends.
+// Portage: _emerge/Scheduler.py, `_pkg_needs_pretend`
+fn binary_entry_needs_pretend(entry: &GraphEntry, pkgdir: &Path) -> bool {
+    let version = match &entry.outcome {
+        portage_repo::PretendOutcome::New { version }
+        | portage_repo::PretendOutcome::Reinstall { version, .. } => version.clone(),
+        portage_repo::PretendOutcome::Upgrade { to, .. }
+        | portage_repo::PretendOutcome::Downgrade { to, .. } => to.clone(),
+        _ => return false,
+    };
+    let Some(binpkg_path) = resolve_local_binpkg(
+        pkgdir,
+        &entry.category,
+        &entry.package,
+        &version,
+        entry.build_id.as_deref(),
+    ) else {
+        return false;
+    };
+    // The gate reads the `<pkgdir>/Packages` stanza, never the file: a
+    // truncated archive still filters exactly like Portage (whose
+    // `_pkg_needs_pretend` reads `x.metadata`, the index record), so a
+    // pretend-less truncated binpkg reaches the merge-time verifier with
+    // its `>>> Emerging binary` + digest block instead of dying in the
+    // pass on the unreadable file (pmtest
+    // `test_emerge_usepkgonly_fails_a_truncated_binpkg_at_merge_like_portage`).
+    // No vouching stanza fails open: the merge reports it.
+    let record = local_index_record(LocalIndexRecordArgs {
+        pkgdir,
+        category: &entry.category,
+        package: &entry.package,
+        version: &version,
+        build_id: entry.build_id.as_deref(),
+        binpkg_path: &binpkg_path,
+    });
+    let Some(record) = record else { return true };
+    let get = |key: &str| record.get(key).map(|s| s.trim().to_string());
+    let eapi_ok = !matches!(get("EAPI").as_deref(), Some("0" | "1" | "2" | "3"));
+    let pretend_defined =
+        get("DEFINED_PHASES").is_some_and(|d| d.split_whitespace().any(|p| p == "pretend"));
+    eapi_ok && pretend_defined
+}
+
+/// One mixed-plan entry's up-front `pkg_pretend`, captured to `log_path`.
+/// Source entries pretend from their ebuild (the scheduler's own helper);
+/// binary entries with a local `$PKGDIR` file pretend from the extracted
+/// binpkg metadata. A binary with no local file (remote or missing) stays
+/// silent here and pretends inline at merge time instead: Portage fetches
+/// it inside the pretend pass, which portuale defers to the merge (the
+/// ordering gap for remote binaries is a follow-up, not this slice).
+// Portage: _emerge/Scheduler.py, _run_pkg_pretend_one
+#[allow(clippy::too_many_arguments)]
+fn pretend_one_mixed_entry(
+    entry: &GraphEntry,
+    repos: &[RepoConfig],
+    root: &Path,
+    pkgdir: &Path,
+    portage_tmpdir: &Path,
+    merge_options: &MergeOptions,
+    log_path: &Path,
+) -> Result<(), String> {
+    if entry.source != portage_repo::CandidateSource::Binary {
+        return crate::emerge_build::pretend_one_entry(
+            entry,
+            repos,
+            root,
+            portage_tmpdir,
+            merge_options,
+            log_path,
+        );
+    }
+    let cp = format!("{}/{}", entry.category, entry.package);
+    let version = match &entry.outcome {
+        portage_repo::PretendOutcome::New { version }
+        | portage_repo::PretendOutcome::Reinstall { version, .. } => version.clone(),
+        portage_repo::PretendOutcome::Upgrade { to, .. }
+        | portage_repo::PretendOutcome::Downgrade { to, .. } => to.clone(),
+        _ => return Ok(()),
+    };
+    let Some(binpkg_path) = resolve_local_binpkg(
+        pkgdir,
+        &entry.category,
+        &entry.package,
+        &version,
+        entry.build_id.as_deref(),
+    ) else {
+        // Remote or missing: the merge fetches (or errors) and pretends
+        // inline there, like before this pass existed.
+        return Ok(());
+    };
+    let _ = cp;
+    let entry_tmpdir = crate::emerge_build::binary_entry_portage_tmpdir(
+        merge_options,
+        entry,
+        &version,
+        portage_tmpdir,
+    );
+    let mut pretend_options = merge_options.clone();
+    pretend_options.log_file = Some(log_path.to_path_buf());
+    crate::ebuild_merge::pretend_binary_entry(crate::ebuild_merge::PretendBinaryEntryArgs {
+        binpkg_path: &binpkg_path,
+        root,
+        portage_tmpdir: &entry_tmpdir,
+        options: &pretend_options,
+    })
+}
+
+/// The up-front `pkg_pretend` pass for the mixed source+binary plan: every
+/// merging entry's `pretend` runs (up to `max_jobs` at once, each captured),
+/// then the outputs replay in merge-list order to `replay`. A failure aborts
+/// before anything merges. Remote/missing binaries stay silent here (see
+/// [`pretend_one_mixed_entry`]) and pretend inline at merge time.
+// Portage: _emerge/Scheduler.py, _run_pkg_pretend
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_mixed_pretend_pass(
+    entries: &[GraphEntry],
+    repos: &[RepoConfig],
+    root: &Path,
+    pkgdir: &Path,
+    portage_tmpdir: &Path,
+    merge_options: &MergeOptions,
+    max_jobs: usize,
+    replay: &mut dyn std::io::Write,
+) -> Vec<(usize, String)> {
+    use std::collections::HashMap;
+    let pending: Vec<usize> = (0..entries.len())
+        .filter(|&i| {
+            let e = &entries[i];
+            if !crate::emerge_build::pretend_needs_run(e) {
+                return false;
+            }
+            if e.source == portage_repo::CandidateSource::Binary {
+                binary_entry_needs_pretend(e, pkgdir)
+            } else {
+                crate::emerge_build::source_entry_needs_pretend(e, repos)
+            }
+        })
+        .collect();
+    if pending.is_empty() {
+        return Vec::new();
+    }
+    let max_jobs = max_jobs.min(pending.len()).max(1);
+    let mut failures: Vec<(usize, String)> = Vec::new();
+    let mut logs: HashMap<usize, std::path::PathBuf> = HashMap::new();
+    std::thread::scope(|scope| {
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, Result<(), String>)>();
+        let mut next = 0usize;
+        let mut in_flight = 0usize;
+        while next < pending.len() || in_flight > 0 {
+            while next < pending.len() && in_flight < max_jobs {
+                let idx = pending[next];
+                next += 1;
+                in_flight += 1;
+                let log_path =
+                    portage_tmpdir.join(format!("pretend-{}-{idx}.log", std::process::id()));
+                logs.insert(idx, log_path.clone());
+                let entry = &entries[idx];
+                // Portage's `_status_msg("Running pre-merge checks for ...")`:
+                // buffered with the entry's output and replayed first.
+                // Portage: _emerge/Scheduler.py, _run_pkg_pretend_one
+                if let Ok((cp, version)) = crate::emerge_build::scheduler_cp_version(entry) {
+                    let line = format!(">>> Running pre-merge checks for {cp}-{version}\n");
+                    if let Some(parent) = log_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(&log_path, line);
+                }
+                let tx = tx.clone();
+                scope.spawn(move || {
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        pretend_one_mixed_entry(
+                            entry,
+                            repos,
+                            root,
+                            pkgdir,
+                            portage_tmpdir,
+                            merge_options,
+                            &log_path,
+                        )
+                    }))
+                    .unwrap_or_else(|payload| {
+                        Err(crate::emerge_build::worker_panic_message(entry, payload))
+                    });
+                    let _ = tx.send((idx, r));
+                });
+            }
+            let Ok((idx, result)) = rx.recv() else { break };
+            in_flight -= 1;
+            if let Err(e) = result {
+                failures.push((idx, e));
+            }
+        }
+    });
+    failures.sort_by_key(|(idx, _)| *idx);
+    // Replay in merge-list order, then remove the capture, like Portage
+    // reading and unlinking each buffered pretend log.
+    let mut ordered = pending;
+    ordered.sort_unstable();
+    for idx in ordered {
+        let Some(path) = logs.remove(&idx) else {
+            continue;
+        };
+        if let Ok(bytes) = std::fs::read(&path)
+            && !bytes.is_empty()
+        {
+            let _ = replay.write_all(&bytes);
+            let _ = replay.flush();
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+    failures
+}
+
 /// Arguments of [`run_merge_plan`].
 pub struct RunMergePlanArgs<'a> {
     pub entries: &'a [GraphEntry],
@@ -924,6 +1143,54 @@ pub fn run_merge_plan(
         background: mode.background,
         quiet_fail: merge_options.quiet_fail,
     };
+    // The up-front `pkg_pretend` pass runs before any merge, its outputs
+    // replayed in merge-list order; a failure aborts before anything merges
+    // (backlog #544). Source entries and local binaries pretend here; a
+    // remote/missing binary stays silent and pretends inline at merge time.
+    // Portage: _emerge/Scheduler.py, _run_pkg_pretend
+    //
+    // The pass borrows `merge_options` read-only; the merges below run on a
+    // clone with `skip_pretend` set, so neither the source engine nor the
+    // binary hook replays `pretend` a second time.
+    let mut ledger = crate::emerge_build::Ledger::default();
+    let mut unreported: Vec<String> = Vec::new();
+    let mut pretend_failed = false;
+    {
+        let stdout = std::io::stdout();
+        let mut replay = stdout.lock();
+        for (idx, e) in run_mixed_pretend_pass(
+            entries,
+            repos,
+            root,
+            pkgdir,
+            portage_tmpdir,
+            merge_options,
+            entries.len().max(1),
+            &mut replay,
+        ) {
+            pretend_failed = true;
+            if !ledger.failed(&report, &entries[idx], &e) {
+                unreported.push(e);
+            }
+        }
+    }
+    if pretend_failed {
+        let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
+        match ledger.finish(&report, keep_going, first) {
+            Ok(()) => {
+                return Ok(crate::emerge_build::MergePassReport::default());
+            }
+            Err(message) => {
+                return Err(crate::emerge_build::MergePassError {
+                    message,
+                    report: crate::emerge_build::MergePassReport::default(),
+                });
+            }
+        }
+    }
+    let mut merge_options = merge_options.clone();
+    merge_options.skip_pretend = true;
+    let merge_options = &merge_options;
     crate::emerge_build::run_merge_loop(entries, keep_going, &report, |_, entry, entry_progress| {
         // An `IDEPEND` dep merges into the running root, like Portage.
         let entry_root = crate::emerge_build::entry_merge_root(entry, root);
@@ -959,6 +1226,8 @@ pub fn run_merge_plan(
                     buildpkg: bp,
                     buildpkg_exclude,
                     display: &display,
+                    // The up-front pass above already replayed `pretend`.
+                    skip_pretend: true,
                 }
                 .execute(&unit, &ctx)
             }
@@ -5169,6 +5438,184 @@ mod tests {
         assert!(
             portage_util::read_dir_entries(&pkgdir).unwrap().is_empty(),
             "nothing may be downloaded into $PKGDIR"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+#[cfg(test)]
+mod mixed_pretend_tests {
+    use super::run_mixed_pretend_pass;
+    use super::*;
+    use portage_repo::CandidateSource;
+
+    fn fixtures_root() -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        portage_util::TempDir::new("portuale-mixed-pretend").keep()
+    }
+
+    fn graph_entry(package: &str, source: CandidateSource, version: &str) -> GraphEntry {
+        GraphEntry {
+            discovery: 0,
+            category: "dev-libs".into(),
+            package: package.into(),
+            outcome: PretendOutcome::New {
+                version: version.into(),
+            },
+            blockers: vec![],
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            repo_name: Some("testrepo".into()),
+            oldbest: vec![],
+            use_flags_display: vec![],
+            use_expand_display: vec![],
+            use_expand_display_p: vec![],
+            keyword_mask: None,
+            new_slot: false,
+            interactive: false,
+            fetch_restrict: false,
+            fetch_restrict_satisfied: false,
+            download_files: Vec::new(),
+            required_by: vec![],
+            source,
+            provenance: Default::default(),
+            keyword_suggestion: None,
+            use_suggestion: None,
+            parent_use_suggestion: None,
+            targets_running_root: false,
+            remote_binary: false,
+            build_id: None,
+            build_time: None,
+            deps: Vec::new(),
+        }
+    }
+
+    /// Backlog #544: the mixed plan replays binary pretends up front, in
+    /// merge-list order, before any merge. The `binpkgpretendpkg` local
+    /// `.tbz2` pretends from its extracted metadata; the source `schedppa`
+    /// entry pretends from its ebuild. Both blocks replay, binary first
+    /// (mergelist order), with no vdb entry written by the pass itself.
+    /// Oracle: mixed `-j` run with pretend markers on both sides
+    /// (`LLM/evidence/2026-10-23-512/`, no such shape there yet -- this
+    /// hermetic pin is the oracle until the probe lands).
+    #[test]
+    fn mixed_pretend_pass_replays_binary_and_source_in_merge_list_order() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"),
+            pkgdir.join("dev-libs/binpkgpretendpkg-1.0.tbz2"),
+        )
+        .unwrap();
+
+        let config_root = fixtures_root();
+        let repos = portage_repo::find_repos(&config_root).unwrap();
+        let options = MergeOptions {
+            distdir: tmp.join("distdir"),
+            config_root: config_root.clone(),
+            ..MergeOptions::default()
+        };
+        let entries = vec![
+            graph_entry("binpkgpretendpkg", CandidateSource::Binary, "1.0"),
+            graph_entry("schedppa", CandidateSource::Ebuild, "1.0"),
+        ];
+        let mut replay: Vec<u8> = Vec::new();
+        let failures = run_mixed_pretend_pass(
+            &entries,
+            &repos,
+            &root,
+            &pkgdir,
+            &tmp.join("portage_tmpdir"),
+            &options,
+            2,
+            &mut replay,
+        );
+        assert!(failures.is_empty(), "{failures:?}");
+        // The source pretend replays to stdout (its `einfo` marker); the
+        // binary pretend has no hook stdout of its own (the fixture's hook
+        // only appends to `${EROOT}/var/lib/<pn>.log`), so its run is proven
+        // by the log file -- while both entries' `Running pre-merge checks`
+        // status lines replay in merge-list order (binary first).
+        // Portage: _emerge/Scheduler.py, `_status_msg`.
+        let text = String::from_utf8_lossy(&replay);
+        assert!(
+            text.contains("SCHED-PRETEND schedppa"),
+            "source pretend replays:\n{text}"
+        );
+        let b = text
+            .find(">>> Running pre-merge checks for dev-libs/binpkgpretendpkg-1.0")
+            .expect("binary status line replays");
+        let s = text
+            .find(">>> Running pre-merge checks for dev-libs/schedppa-1.0")
+            .expect("source status line replays");
+        assert!(b < s, "merge-list order, not finish order:\n{text}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/binpkgpretendpkg.log")).unwrap(),
+            "pretend\n",
+            "binary pretend ran up front, from the extracted metadata"
+        );
+        assert!(
+            !root
+                .join("var/db/pkg/dev-libs/binpkgpretendpkg-1.0")
+                .exists(),
+            "the pass pretends without merging"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Backlog #544: a dying binary pretend aborts the mixed pass before
+    /// anything merges. The `binpkgpretendpkg` hook dies when the payload
+    /// is already visible, so pre-creating it makes its pretend fail.
+    #[test]
+    fn mixed_pretend_pass_binary_failure_aborts_before_anything_merges() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(pkgdir.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"),
+            pkgdir.join("dev-libs/binpkgpretendpkg-1.0.tbz2"),
+        )
+        .unwrap();
+        // The fixture's `pkg_pretend` dies when the payload is already
+        // merged: pre-create it to force the failure.
+        let payload = root.join("usr/share/binpkgpretendpkg/payload.txt");
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(&payload, "already here\n").unwrap();
+
+        let config_root = fixtures_root();
+        let repos = portage_repo::find_repos(&config_root).unwrap();
+        let options = MergeOptions {
+            distdir: tmp.join("distdir"),
+            config_root: config_root.clone(),
+            ..MergeOptions::default()
+        };
+        let entries = vec![
+            graph_entry("binpkgpretendpkg", CandidateSource::Binary, "1.0"),
+            graph_entry("schedppa", CandidateSource::Ebuild, "1.0"),
+        ];
+        let mut replay: Vec<u8> = Vec::new();
+        let failures = run_mixed_pretend_pass(
+            &entries,
+            &repos,
+            &root,
+            &pkgdir,
+            &tmp.join("portage_tmpdir"),
+            &options,
+            2,
+            &mut replay,
+        );
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].0, 0);
+        assert!(
+            failures[0].1.contains("pkg_pretend failed"),
+            "{}",
+            failures[0].1
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

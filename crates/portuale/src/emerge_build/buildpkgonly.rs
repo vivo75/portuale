@@ -37,6 +37,62 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
     // One `JobStatusDisplay` per merge run; no Jobs events fire here.
     let total_builds = entries.iter().filter(|e| scheduler_needs_build(e)).count();
     let display = StatusDisplay::new(mode, total_builds, progress_color());
+    // The up-front `pkg_pretend` pass runs before any build, even for
+    // `--buildpkgonly` (Portage's `_merge` gates it on `fetchonly` only,
+    // and `_run_pkg_pretend_one` handles `MERGE_TYPE=buildonly`).
+    // Backlog #546. A failure aborts before anything builds.
+    // Portage: _emerge/Scheduler.py, _run_pkg_pretend
+    {
+        use std::sync::Arc as StdArc;
+        let pretend_options = ebuild_merge::MergeOptions {
+            distdir: options.distdir.clone(),
+            config_root: options.config_root.clone(),
+            shell: options.shell,
+            debug: options.debug,
+            build_env: run_wide.clone(),
+            resolved_config: Some(StdArc::new(config.clone())),
+            package_env_vars: config.package_env_vars.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let source_paths =
+            |entry: &GraphEntry| source_paths_for(&pretend_options, entry, portage_tmpdir);
+        let report = FailReport {
+            root,
+            source_paths: &source_paths,
+            features: resolved_features(&pretend_options),
+            quiet: false,
+            background: mode.background,
+            quiet_fail: false,
+        };
+        let mut ledger = Ledger::default();
+        let mut unreported: Vec<String> = Vec::new();
+        let mut pretend_failed = false;
+        {
+            let stdout = std::io::stdout();
+            let mut replay = stdout.lock();
+            for (idx, e) in run_pretend_pass(
+                entries,
+                repos,
+                root,
+                portage_tmpdir,
+                &pretend_options,
+                entries.len().max(1),
+                &mut replay,
+            ) {
+                pretend_failed = true;
+                if !ledger.failed(&report, &entries[idx], &e) {
+                    unreported.push(e);
+                }
+            }
+        }
+        if pretend_failed {
+            let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
+            match ledger.finish(&report, keep_going, first) {
+                Ok(()) => return Ok(()),
+                Err(message) => return Err(message),
+            }
+        }
+    }
     let mut failures = Vec::new();
     for (idx, entry) in entries.iter().enumerate() {
         if entry.source == CandidateSource::Binary {
@@ -149,6 +205,9 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
                 // fires exactly like on the merge path (backlog #458).
                 // Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
                 skip_noop_src_phases: true,
+                // The up-front pass above already replayed `pretend`
+                // (backlog #546): the build starts at `setup`.
+                skip_pretend: true,
             }) {
                 Ok(0) => clean_failure("post"),
                 Ok(_) => Some(format!(

@@ -682,6 +682,10 @@ pub struct RunPackageArgs<'a> {
     /// and runs every phase (backlog #458).
     /// Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
     pub skip_noop_src_phases: bool,
+    /// The up-front `pkg_pretend` pass already ran it (scheduler /
+    /// `--buildpkgonly` once threaded): start the chain at `setup`.
+    /// Portage: _emerge/Scheduler.py, _run_pkg_pretend
+    pub skip_pretend: bool,
 }
 
 /// Runs the `install` chain, then the packaging tail.
@@ -699,6 +703,7 @@ pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
         build_env,
         use_flags,
         skip_noop_src_phases,
+        skip_pretend,
     } = args;
     require_signing_config(options)?;
     let status = ebuild_phases::run_commands(ebuild_phases::RunCommandsArgs {
@@ -719,6 +724,7 @@ pub fn run_package(args: RunPackageArgs<'_>) -> Result<i32, String> {
         // like a merge (backlog #458); a direct `ebuild <file> package`
         // runs every phase like `doebuild()`.
         skip_noop_src_phases,
+        skip_pretend,
     })?;
     if status != 0 {
         return Ok(status);
@@ -2484,6 +2490,7 @@ mod tests {
             build_env: &[],
             use_flags: "",
             skip_noop_src_phases: false,
+            skip_pretend: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -2571,6 +2578,7 @@ mod tests {
             shell: options.shell,
             log_file: ebuild_phases::PhaseLog::Inherit,
             skip_noop_src_phases: false,
+            skip_pretend: false,
             build_env: &[],
         })
         .expect("install succeeds");
@@ -2625,6 +2633,7 @@ mod tests {
             shell: options.shell,
             log_file: ebuild_phases::PhaseLog::Inherit,
             skip_noop_src_phases: false,
+            skip_pretend: false,
             build_env: &[],
         })
         .expect("install succeeds");
@@ -2761,6 +2770,7 @@ mod tests {
             build_env: &[],
             use_flags: "",
             skip_noop_src_phases: false,
+            skip_pretend: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -2841,6 +2851,7 @@ mod tests {
             build_env: &[],
             use_flags: "",
             skip_noop_src_phases: false,
+            skip_pretend: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -2852,6 +2863,7 @@ mod tests {
             build_env: &[],
             use_flags: "",
             skip_noop_src_phases: false,
+            skip_pretend: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -2953,6 +2965,7 @@ mod tests {
                 build_env: &[],
                 use_flags: "",
                 skip_noop_src_phases: false,
+                skip_pretend: false,
             })
             .expect("run_package succeeds");
             assert_eq!(status, 0);
@@ -3006,6 +3019,7 @@ mod tests {
             build_env: &[],
             use_flags: "",
             skip_noop_src_phases: false,
+            skip_pretend: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -3087,6 +3101,7 @@ mod tests {
             build_env: &[],
             use_flags: "",
             skip_noop_src_phases: false,
+            skip_pretend: false,
         })
         .expect("run_package returns Ok(status)");
         assert_ne!(
@@ -3143,6 +3158,7 @@ mod tests {
             build_env: &[],
             use_flags: "",
             skip_noop_src_phases: true,
+            skip_pretend: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);
@@ -3205,6 +3221,7 @@ mod tests {
             build_env: &[],
             use_flags: "",
             skip_noop_src_phases: true,
+            skip_pretend: false,
         })
         .expect("run_package succeeds");
         assert_eq!(status, 0);

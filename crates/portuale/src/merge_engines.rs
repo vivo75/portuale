@@ -110,6 +110,9 @@ pub struct SourceEngine<'a> {
     pub buildpkg_exclude: &'a [String],
     /// The run's status display for the `Emerging`/`Installing`/`Completed` lines.
     pub display: &'a crate::emerge_build::StatusDisplay,
+    /// The up-front `pkg_pretend` pass already ran it: start at `setup`.
+    /// Portage: _emerge/Scheduler.py, _run_pkg_pretend
+    pub skip_pretend: bool,
 }
 
 impl SourceEngine<'_> {
@@ -137,6 +140,7 @@ impl SourceEngine<'_> {
             buildpkg: bp,
             progress,
             display: self.display,
+            skip_pretend: self.skip_pretend,
         })
     }
 }
@@ -336,6 +340,7 @@ mod tests {
             buildpkg: None,
             buildpkg_exclude: &[],
             display: &display,
+            skip_pretend: false,
         };
         let binary_unit = MergeUnit::binary("dev-libs/example-1.0", Path::new("/root"));
         assert!(matches!(

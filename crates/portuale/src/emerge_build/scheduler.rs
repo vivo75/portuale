@@ -323,7 +323,7 @@ pub(crate) struct RunBuildSchedulerArgs<'a> {
 /// `pretend` chain: the build later starts at `setup`.
 // Portage: _emerge/Scheduler.py, _run_pkg_pretend_one
 #[allow(clippy::too_many_arguments)]
-fn pretend_one_entry(
+pub(crate) fn pretend_one_entry(
     entry: &GraphEntry,
     repos: &[RepoConfig],
     root: &Path,
@@ -381,6 +381,68 @@ fn pretend_one_entry(
     Ok(())
 }
 
+/// Whether the up-front `pkg_pretend` pass must run for this entry: a
+/// `New`/`Upgrade`/`Downgrade`/`Reinstall` from either source or binary.
+/// `AlreadyInstalled`/`Uninstall`/`NoVisibleCandidate` never pretend.
+/// Portage: Scheduler.py, `_pkg_needs_pretend` (the EAPI/`DEFINED_PHASES`
+/// half is evaluated by the phase run itself for the hookless case... see
+/// `source_entry_needs_pretend` for the source gate actually applied).
+pub(crate) fn pretend_needs_run(entry: &GraphEntry) -> bool {
+    matches!(
+        entry.outcome,
+        PretendOutcome::New { .. }
+            | PretendOutcome::Reinstall { .. }
+            | PretendOutcome::Upgrade { .. }
+            | PretendOutcome::Downgrade { .. }
+    )
+}
+
+/// Portage's `_pkg_needs_pretend` EAPI/`DEFINED_PHASES` half for a source
+/// entry: EAPI 4+ with `pretend` in `DEFINED_PHASES` (read from the
+/// md5-cache, the same rung `list_candidates` trusts). Fail-open: an
+/// unlocatable ebuild or unreadable cache keeps the entry in the pass, so
+/// `pretend_one_entry` reports the real error instead of silently
+/// skipping. Without this gate the pass prints `>>> Running pre-merge
+/// checks` (and runs `clean`) for entries Portage never pretends, which
+/// breaks the serial status-line blanks pmtest pins for pretend-less
+/// packages (backlog #197).
+// Portage: _emerge/Scheduler.py, `_pkg_needs_pretend`
+pub(crate) fn source_entry_needs_pretend(entry: &GraphEntry, repos: &[RepoConfig]) -> bool {
+    let version = match &entry.outcome {
+        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+            version.clone()
+        }
+        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
+        _ => return false,
+    };
+    let candidates = match portage_repo::list_candidates(repos, &entry.category, &entry.package) {
+        Ok(c) => c,
+        Err(_) => return true,
+    };
+    let Some(candidate) = candidates
+        .iter()
+        .filter(|c| c.version == version)
+        .max_by_key(|c| c.repo_priority)
+        .cloned()
+    else {
+        return true;
+    };
+    let pf = format!("{}-{version}", entry.package);
+    let meta = match portage_repo::repo_aux_metadata(&candidate.repo_location, &entry.category, &pf)
+    {
+        Ok(m) => m,
+        Err(_) => return true,
+    };
+    let eapi_ok = !matches!(
+        meta.get("EAPI").map(String::as_str),
+        Some("0" | "1" | "2" | "3")
+    );
+    let pretend_defined = meta
+        .get("DEFINED_PHASES")
+        .is_some_and(|d| d.split_whitespace().any(|p| p == "pretend"));
+    eapi_ok && pretend_defined
+}
+
 /// The up-front `pkg_pretend` pass: every build-bound entry's `pretend`
 /// runs (up to `max_jobs` at once, each captured), then the outputs replay
 /// to `replay` in merge-list order (stdout on a real run). A failure aborts
@@ -398,7 +460,9 @@ pub(crate) fn run_pretend_pass(
     replay: &mut dyn std::io::Write,
 ) -> Vec<(usize, String)> {
     let pending: Vec<usize> = (0..entries.len())
-        .filter(|&i| scheduler_needs_build(&entries[i]))
+        .filter(|&i| {
+            scheduler_needs_build(&entries[i]) && source_entry_needs_pretend(&entries[i], repos)
+        })
         .collect();
     if pending.is_empty() {
         return Vec::new();
@@ -418,8 +482,19 @@ pub(crate) fn run_pretend_pass(
                 let log_path =
                     portage_tmpdir.join(format!("pretend-{}-{idx}.log", std::process::id()));
                 logs.insert(idx, log_path.clone());
-                let tx = tx.clone();
                 let entry = &entries[idx];
+                // Portage's `_status_msg("Running pre-merge checks for ...")`:
+                // buffered with the entry's output and replayed first, so the
+                // line heads each entry's block in merge-list order.
+                // Portage: _emerge/Scheduler.py, _run_pkg_pretend_one
+                if let Ok((cp, version)) = scheduler_cp_version(entry) {
+                    let line = format!(">>> Running pre-merge checks for {cp}-{version}\n");
+                    if let Some(parent) = log_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(&log_path, line);
+                }
+                let tx = tx.clone();
                 scope.spawn(move || {
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         pretend_one_entry(entry, repos, root, portage_tmpdir, options, &log_path)
@@ -999,7 +1074,7 @@ pub(crate) fn run_build_scheduler(
 /// Without it the scheduler would wait forever on a result nobody sends (its
 /// own `tx` clone keeps the channel open), so a panic became a silent hang
 /// (backlog #376).
-pub(super) fn worker_panic_message(
+pub(crate) fn worker_panic_message(
     entry: &GraphEntry,
     payload: Box<dyn std::any::Any + Send>,
 ) -> String {

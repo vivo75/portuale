@@ -371,6 +371,12 @@ pub struct RunCommandsArgs<'a> {
     /// sourceless package. The direct `ebuild` and `package` paths run
     /// every phase like `doebuild()`.
     pub skip_noop_src_phases: bool,
+    /// The scheduler's up-front `pkg_pretend` pass already ran it: start
+    /// the chain at `setup`. Only the scheduler (and the serial loop /
+    /// `--buildpkgonly` once they run the same pass) sets this; every
+    /// other caller runs the whole chain from `pretend`.
+    /// Portage: _emerge/Scheduler.py, _run_pkg_pretend
+    pub skip_pretend: bool,
 }
 
 /// Synchronous entry point for `ebuild.rs`: spins up a multi-threaded tokio
@@ -391,6 +397,7 @@ pub fn run_commands(args: RunCommandsArgs<'_>) -> Result<i32, String> {
         log_file,
         build_env,
         skip_noop_src_phases,
+        skip_pretend,
     } = args;
     run_commands_logged(RunCommandsLoggedArgs {
         ebuild_path,
@@ -404,8 +411,7 @@ pub fn run_commands(args: RunCommandsArgs<'_>) -> Result<i32, String> {
         log_file,
         build_env,
         skip_noop_src_phases,
-        // The direct `ebuild` paths never pre-run `pkg_pretend`.
-        skip_pretend: false,
+        skip_pretend,
     })
 }
 

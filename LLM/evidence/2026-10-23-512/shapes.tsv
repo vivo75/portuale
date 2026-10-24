@@ -13,3 +13,6 @@ id	pm-invariant
 12-missing-scope	rc 2, `expected one argument` on stderr
 13-sigint	rc 130, no `>>> Installing` line, empty app-misc VDB
 14-cgroup	`=== Resource usage for {build,install} of {cpv}: ...` in log/stdout, or env premise
+15-pretend-j1	ppA block then ppB block (serial, ~5 s apart), both before any `>>> Emerging`
+16-pretend-buildpkgonly	ppA+ppB blocks overlap, both before any `>>> Emerging`; binpkgs land in $PKGDIR
+17-mixed-pretend	ppA (binary, from binpkg metadata) block then ppB block, both before `>>> Emerging binary`

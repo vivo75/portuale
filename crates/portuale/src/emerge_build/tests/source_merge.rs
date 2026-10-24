@@ -450,6 +450,7 @@ fn source_merge_pre_cleans_a_stale_installed_image() {
         buildpkg: None,
         progress: mrg_director::MergeProgress::single(),
         display: &StatusDisplay::for_tests(),
+        skip_pretend: false,
     })
     .expect("first merge succeeds");
     let builddir = portage_tmpdir.join("portage/dev-libs/packagepkg-1.0");
@@ -480,6 +481,7 @@ fn source_merge_pre_cleans_a_stale_installed_image() {
         buildpkg: None,
         progress: mrg_director::MergeProgress::single(),
         display: &StatusDisplay::for_tests(),
+        skip_pretend: false,
     })
     .expect("second merge succeeds");
     assert!(root.join("usr/share/packagepkg/hello.txt").is_file());
@@ -1214,4 +1216,117 @@ fn run_source_merge_postinst_failure_keep_going_merges_dependents() {
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&portage_tmpdir);
     }
+}
+
+/// Backlog #545 (oracle: `-j1` run of the `10-pretend` tree,
+/// `LLM/evidence/2026-10-23-512/`): the serial loop runs `pkg_pretend`
+/// up front, in order, before any build -- like Portage's `_run_pkg_pretend`
+/// with `max_jobs=1`. A dying pretend aborts with the reported failure
+/// (no `emerge:` line) and nothing builds, exactly like the parallel pass.
+#[test]
+fn serial_pretend_failure_aborts_before_anything_builds() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let new = |p: &str| {
+        source_entry(
+            p,
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )
+    };
+    let entries = vec![new("schedppfail"), new("schedwait")];
+    let options = ebuild_merge::MergeOptions {
+        distdir: tempdir(),
+        config_root: config_root.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    let err = run_source_merge(RunSourceMergeArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        jobs: 1,
+        load_average: None,
+        capture_log: false,
+        mode: StatusMode::for_tests(),
+    })
+    .expect_err("a dying pretend fails the serial run");
+    assert!(
+        is_reported_failure(&err.message),
+        "serial pretend failure is already reported, like the parallel pass: {}",
+        err.message
+    );
+    assert!(
+        !root.join("var/db/pkg/dev-libs/schedppfail-1.0").exists(),
+        "nothing merges after a pretend failure"
+    );
+    assert!(
+        !root.join("var/db/pkg/dev-libs/schedwait-1.0").exists(),
+        "the slow entry never builds"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// Backlog #545: the serial loop runs `pkg_pretend` up front, so the build
+/// starts at `setup`. With `skip_pretend: false` a dying pretend fails the
+/// entry; with `true` the same entry merges fine (the pass already ran).
+#[test]
+fn merge_one_source_entry_skip_pretend_skips_a_dying_pretend() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let entry = source_entry(
+        "schedppfail",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    let options = ebuild_merge::MergeOptions {
+        distdir: tempdir(),
+        config_root: config_root.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    let err = merge_one_source_entry(MergeOneSourceEntryArgs {
+        entry: &entry,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        buildpkg: None,
+        progress: mrg_director::MergeProgress::single(),
+        display: &StatusDisplay::for_tests(),
+        skip_pretend: false,
+    })
+    .expect_err("a dying pretend fails without the up-front pass");
+    assert!(err.contains("merge failed"), "{err}");
+    merge_one_source_entry(MergeOneSourceEntryArgs {
+        entry: &entry,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &tempdir(),
+        options: &options,
+        buildpkg: None,
+        progress: mrg_director::MergeProgress::single(),
+        display: &StatusDisplay::for_tests(),
+        // The up-front pass already replayed `pretend`: the merge skips it
+        // and lands the package.
+        skip_pretend: true,
+    })
+    .expect("skipped pretend merges");
+    assert!(
+        root.join("var/db/pkg/dev-libs/schedppfail-1.0/CONTENTS")
+            .is_file(),
+        "the entry merges once pretend is skipped"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }

@@ -54,3 +54,8 @@ The parallel build scheduler (`--jobs`): concurrent `install` builds, serialized
 ## review follow-ups (read-only review of #512)
 - M3: the pass filters only `scheduler_needs_build`, where Portage's `_pkg_needs_pretend` also requires a non-uninstall op, EAPI 4+ and `pretend` in `DEFINED_PHASES`. Benign today (an empty pretend succeeds and replays nothing), at the cost of one clean+phase spawn per entry; entries carry no EAPI/`DEFINED_PHASES`, so gating would need aux-metadata reads. Revisit if a pretend-strict ebuild ever false-fails a build Portage runs.
 - M7: the postinst arm joins `merged` without `merge_finished` (no `curval` bump), exactly as before — moved verbatim, not an S12 change.
+
+## fn pretend_needs_run, fn pretend_one_entry visibility, `Running pre-merge checks` (#544-#546)
+- `pretend_needs_run` (New/Upgrade/Downgrade/Reinstall, either source) is the shared filter for every up-front pass (scheduler `-jN`, serial `-j1`, `--buildpkgonly`, mixed plan); the EAPI/`DEFINED_PHASES` half stays with the phase run itself (no hook file = no-op), like Portage's `_pkg_needs_pretend` minus its EAPI gate (pre-existing narrowing, unchanged).
+- `pretend_one_entry` and `worker_panic_message` are `pub(crate)` so the mixed-plan pass (`emerge_getbinpkg.rs`) reuses the source half instead of duplicating it.
+- Both passes write Portage's `_status_msg("Running pre-merge checks for {cpv}")` line into each entry's capture log before spawning its pretend, so it heads every block in the replayed output (task-8 ruling: the line is pass output this task owns; 3 lines, no pins broken).

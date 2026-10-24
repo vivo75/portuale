@@ -1,0 +1,61 @@
+21:24:03 Calculating dependencies ... done!
+21:24:03 Dependency resolution took (backtrack: 0/20).
+21:24:03 
+21:24:08 >>> Running pre-merge checks for dev-libs/ppA-1.0
+21:24:08  [32m*[0m PRETEND-BEGIN ppA 1792877043.569795508
+21:24:08  [32m*[0m PRETEND-BODY ppA
+21:24:08  [32m*[0m PRETEND-END ppA 1792877048.573105521
+21:24:08 >>> Running pre-merge checks for dev-libs/ppB-1.0
+21:24:08  [32m*[0m PRETEND-BEGIN ppB 1792877043.570164591
+21:24:08  [32m*[0m PRETEND-BODY ppB
+21:24:08  [32m*[0m PRETEND-END ppB 1792877048.573123644
+21:24:08 >>> Emerging (1 of 2) dev-libs/ppA-1.0::mw512 for /var/tmp/ev512-tree/root
+21:24:08 >>> Unpacking source...
+21:24:08 >>> Source unpacked in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/work
+21:24:08 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/temp/environment': Invalid argument
+21:24:08 >>> Preparing source in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/work/src ...
+21:24:08 >>> Source prepared.
+21:24:08 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/temp/environment': Invalid argument
+21:24:08 >>> Configuring source in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/work/src ...
+21:24:08 >>> Source configured.
+21:24:08 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/temp/environment': Invalid argument
+21:24:08 >>> Compiling source in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/work/src ...
+21:24:10 >>> Source compiled.
+21:24:10 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/temp/environment': Invalid argument
+21:24:10 >>> Test phase [not enabled]: dev-libs/ppA-1.0
+21:24:10 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/temp/environment': Invalid argument
+21:24:10 
+21:24:10 >>> Install dev-libs/ppA-1.0 into /var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/image
+21:24:10 >>> Completed installing dev-libs/ppA-1.0 into /var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/image
+21:24:10 
+21:24:10  [32m*[0m Final size of build directory: 0 KiB
+21:24:10  [32m*[0m Final size of installed tree:  0 KiB
+21:24:10 
+21:24:10 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppA-1.0/temp/environment': Invalid argument
+21:24:10 >>> Creating binpkg
+21:24:10 >>> Done.
+21:24:10 >>> Emerging (2 of 2) dev-libs/ppB-1.0::mw512 for /var/tmp/ev512-tree/root
+21:24:10 >>> Unpacking source...
+21:24:10 >>> Source unpacked in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/work
+21:24:11 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:11 >>> Preparing source in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/work/src ...
+21:24:11 >>> Source prepared.
+21:24:11 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:11 >>> Configuring source in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/work/src ...
+21:24:11 >>> Source configured.
+21:24:11 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:11 >>> Compiling source in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/work/src ...
+21:24:13 >>> Source compiled.
+21:24:13 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:13 >>> Test phase [not enabled]: dev-libs/ppB-1.0
+21:24:13 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:13 
+21:24:13 >>> Install dev-libs/ppB-1.0 into /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/image
+21:24:13 >>> Completed installing dev-libs/ppB-1.0 into /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/image
+21:24:13 
+21:24:13  [32m*[0m Final size of build directory: 0 KiB
+21:24:13  [32m*[0m Final size of installed tree:  0 KiB
+21:24:13 
+21:24:13 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:13 >>> Creating binpkg
+21:24:13 >>> Done.

@@ -29,3 +29,7 @@
 
 ## fn buildpkgonly_entry_build_env (MERGE_TYPE, #348 S2 E3)
 - Threads `MERGE_TYPE=buildonly` (a `--buildpkgonly` build is neither a source merge nor a binary install); `exports_merge_type` is enforced centrally in `apply_eapi_phase_env`. Portage: `_emerge/EbuildBuild.py`.
+
+## up-front pretend pass (#546)
+- `run_buildpkgonly` builds a minimal `MergeOptions` (distdir/config_root/shell/debug from `PackageOptions`, `build_env` = run-wide, `resolved_config` = the run config, `package_env_vars` from the config) and runs `run_pretend_pass` over it before the serial build loop; `run_package` gets `skip_pretend: true` (`RunPackageArgs::skip_pretend`, new). Confirmed against Portage: `_merge` gates the pass on `fetchonly` only, and `_run_pkg_pretend_one` sets `MERGE_TYPE=buildonly` for it -- so the pass covers `--buildpkgonly`. A pretend failure aborts before any build (ledger path, already-reported).
+

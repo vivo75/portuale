@@ -235,30 +235,32 @@ Expected: PASS.
 
 ### Task 8: #543–#546 — scheduler
 
+Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+
 **Files:**
 - Modify: `crates/portuale/src/emerge_build/merge_wait.rs`, `run_build_scheduler`, `run_merge_loop`, `crates/portuale/src/emerge_build/buildpkgonly.rs`, `merge_binpkg` pretend hook
 - Test: oracle `LLM/evidence/2026-10-23-512/` (`10-pretend` tree, mixed source+binpkg `-j`)
 
-- [ ] **Step 1: #543 Tier 3 — cgroup `=== Resource usage…` — o porta `CgroupManager` reale o wontfix documentato (no counter fabbricati)**
+- [x] **Step 1: #543 Tier 3 — cgroup `=== Resource usage…` — o porta `CgroupManager` reale o wontfix documentato (no counter fabbricati)**
 
 Oracle: `captures/14-cgroup.portage.*` (root) e `14-cgroup-degraded.portage.*` (unprivileged silent rc 0) + `test_observability.py`.
 
-- [ ] **Step 2: #544 — `pkg_pretend` binari nel pass parallelo up-front con replay merge-list-order (oggi inline in `merge_binpkg`); probe mixed `-j` con marker su entrambi i lati**
-- [ ] **Step 3: #545 Tier 3 low-value — serial `-j1` pretend up-front unbuffered in-order (oggi dentro ogni build)**
+- [x] **Step 2: #544 — `pkg_pretend` binari nel pass parallelo up-front con replay merge-list-order (oggi inline in `merge_binpkg`); probe mixed `-j` con marker su entrambi i lati**
+- [x] **Step 3: #545 Tier 3 low-value — serial `-j1` pretend up-front unbuffered in-order (oggi dentro ogni build)**
 
 Oracle: `-j1` run del tree `10-pretend` su entrambi.
 
-- [ ] **Step 4: #546 Tier 3 — conferma se `_run_pkg_pretend` copre `--buildpkgonly`; se sì, threading pass in `run_buildpkgonly`**
+- [x] **Step 4: #546 Tier 3 — conferma se `_run_pkg_pretend` copre `--buildpkgonly`; se sì, threading pass in `run_buildpkgonly`**
 
 Oracle: `--buildpkgonly -j` run del tree `10-pretend` su entrambi.
 
-- [ ] **Step 5: Run**
+- [x] **Step 5: Run**
 
 Run: `cargo test --release -p portuale merge_wait`
 Expected: PASS.
 
-- [ ] **Step 6: Merge-path gate (tocco merge-loop/buildpkgonly): reinstall glibc + bash rc 0, findings reviewed**
-- [ ] **Step 7: Commit pair**
+- [x] **Step 6: Merge-path gate (tocco merge-loop/buildpkgonly): reinstall glibc + bash rc 0, findings reviewed**
+- [x] **Step 7: Commit pair**
 
 ### Task 9: #547–#554 — virtuals e dintorni
 

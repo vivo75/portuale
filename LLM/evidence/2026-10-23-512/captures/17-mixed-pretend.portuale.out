@@ -1,0 +1,41 @@
+21:24:30 Calculating dependencies ... done!
+21:24:30 Dependency resolution took (backtrack: 0/20).
+21:24:30 
+21:24:35 >>> Running pre-merge checks for dev-libs/ppA-1.0
+21:24:35  [32m*[0m PRETEND-BEGIN ppA 1792877070.494198640
+21:24:35  [32m*[0m PRETEND-BODY ppA
+21:24:35  [32m*[0m PRETEND-END ppA 1792877075.497204184
+21:24:35 >>> Running pre-merge checks for dev-libs/ppB-1.0
+21:24:35  [32m*[0m PRETEND-BEGIN ppB 1792877070.489339769
+21:24:35  [32m*[0m PRETEND-BODY ppB
+21:24:35  [32m*[0m PRETEND-END ppB 1792877075.492609012
+21:24:35 >>> Emerging binary (1 of 2) dev-libs/ppA-1.0::mw512 for /var/tmp/ev512-tree/root
+21:24:35 >>> Installing (1 of 2) dev-libs/ppA-1.0::mw512 to /var/tmp/ev512-tree/root
+21:24:35 >>> Completed (1 of 2) dev-libs/ppA-1.0::mw512 to /var/tmp/ev512-tree/root
+21:24:35 >>> Emerging (2 of 2) dev-libs/ppB-1.0::mw512 for /var/tmp/ev512-tree/root
+21:24:35 >>> Unpacking source...
+21:24:35 >>> Source unpacked in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/work
+21:24:35 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:35 >>> Preparing source in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/work/src ...
+21:24:35 >>> Source prepared.
+21:24:35 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:35 >>> Configuring source in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/work/src ...
+21:24:35 >>> Source configured.
+21:24:35 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:35 >>> Compiling source in /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/work/src ...
+21:24:37 >>> Source compiled.
+21:24:37 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:37 >>> Test phase [not enabled]: dev-libs/ppB-1.0
+21:24:37 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:37 
+21:24:37 >>> Install dev-libs/ppB-1.0 into /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/image
+21:24:37 >>> Completed installing dev-libs/ppB-1.0 into /var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/image
+21:24:37 
+21:24:37  [32m*[0m Final size of build directory: 0 KiB
+21:24:37  [32m*[0m Final size of installed tree:  0 KiB
+21:24:37 
+21:24:37 chgrp: changing group of '/var/tmp/ev512-tree/tmp/portage/dev-libs/ppB-1.0/temp/environment': Invalid argument
+21:24:37 >>> Installing (2 of 2) dev-libs/ppB-1.0::mw512 to /var/tmp/ev512-tree/root
+21:24:37 >>> Completed (2 of 2) dev-libs/ppB-1.0::mw512 to /var/tmp/ev512-tree/root
+21:24:37 
+21:24:37  * GNU info directory index is up-to-date.

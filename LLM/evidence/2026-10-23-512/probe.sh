@@ -158,3 +158,21 @@ run_shape 09-cycle 150 -- --oneshot --color=n --jobs=2 =dev-libs/cycA-1.0 =dev-l
 run_shape 10-pretend 120 -- --oneshot --color=n --jobs=2 =dev-libs/ppA-1.0 =dev-libs/ppB-1.0
 run_shape 11-bad-scope 60 -- --oneshot --color=n --merge-wait-scope=bogus =app-misc/slow-1.0
 run_shape 12-missing-scope 60 -- --oneshot --color=n --merge-wait-scope
+
+# Shapes 15-17 (Task 8, backlog #544-#546): pretend scheduling. PKGDIR lives
+# under $T so the buildpkgonly/mixed shapes never touch the host store.
+export PKGDIR=$T/pkgdir
+mkdir -p "$T/pkgdir"
+# 15: serial `-j1` pretend runs up front, in order, before any build.
+run_shape 15-pretend-j1 150 -- --oneshot --color=n --jobs=1 =dev-libs/ppA-1.0 =dev-libs/ppB-1.0
+# 16: `--buildpkgonly -j2` replays both pretends up front, then builds.
+run_shape 16-pretend-buildpkgonly 150 -- --oneshot --color=n --buildpkgonly --jobs=2 =dev-libs/ppA-1.0 =dev-libs/ppB-1.0
+# 17: mixed `-k -j2`: ppA prebuilt to $PKGDIR (same-$pm build, ppB stays
+# source-only), then the binary pretend (from the binpkg metadata) and the
+# source pretend replay up front in merge-list order, before either merge.
+if want 17-mixed-pretend; then
+  rm -rf "$T/pkgdir"; mkdir -p "$T/pkgdir"
+  (cd "$T" && env ROOT=$T/root PORTAGE_CONFIGROOT=$T/cfg PORTAGE_TMPDIR=$T/tmp PKGDIR=$T/pkgdir \
+    timeout 120 $bin --oneshot --color=n --buildpkgonly =dev-libs/ppA-1.0 >/dev/null 2>&1)
+fi
+run_shape 17-mixed-pretend 150 -- --oneshot --color=n -k --jobs=2 =dev-libs/ppA-1.0 =dev-libs/ppB-1.0

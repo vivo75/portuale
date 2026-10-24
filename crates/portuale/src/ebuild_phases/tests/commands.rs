@@ -26,6 +26,7 @@ fn install_lands_a_real_file_under_a_real_d() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -79,6 +80,7 @@ fn a_brush_phase_does_not_leak_its_umask_into_the_host_process() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -160,6 +162,7 @@ fn install_writes_the_real_build_time_file() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -210,6 +213,7 @@ fn install_qa_check_docompress_compresses_docs_and_repairs_symlinks() {
         shell: ShellBackend::Bash,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &extra_env,
     })
     .expect("run_commands should not itself error");
@@ -274,6 +278,7 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
         shell: ShellBackend::Bash,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &env_with("-binpkg-docompress"),
     })
     .expect("run_commands should not itself error");
@@ -365,6 +370,7 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         // The merge path runs the post-`install` QA sequence; the direct
         // `ebuild` path never does (backlog #516).
         build_env: &[],
@@ -445,6 +451,7 @@ fn install_qa_spawn_pops_ebuild_phase_so_use_test_does_not_die() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -492,6 +499,7 @@ fn install_lands_a_real_file_under_a_real_d_via_real_bash() {
         shell: ShellBackend::Bash,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -543,6 +551,7 @@ fn install_computes_real_a_from_a_verified_distfile_and_leaves_aa_unset() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -616,6 +625,7 @@ fn features_xattr_routes_phase_installs_through_the_xattr_wrapper() {
             shell: ShellBackend::Brush,
             log_file: PhaseLog::Inherit,
             skip_noop_src_phases: false,
+            skip_pretend: false,
             build_env: &[("FEATURES".to_string(), features.to_string())],
         })
         .expect("run_commands should not itself error");
@@ -657,6 +667,7 @@ fn install_really_inherits_a_real_eclass_and_calls_its_own_function() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -697,6 +708,7 @@ fn a_corrupt_saved_environment_fails_the_next_phase_in_both_backends() {
             shell,
             log_file: PhaseLog::Inherit,
             skip_noop_src_phases: false,
+            skip_pretend: false,
             build_env: &[],
         })
         .expect("run_commands should not itself error");
@@ -851,6 +863,7 @@ fn expanded_name_export_assigns_in_both_backends() {
             shell,
             log_file: PhaseLog::Inherit,
             skip_noop_src_phases: false,
+            skip_pretend: false,
             build_env: &[],
         })
         .expect("run_commands should not itself error");
@@ -946,6 +959,7 @@ fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_re
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -985,6 +999,7 @@ fn debug_flag_exports_portage_debug() {
             shell: ShellBackend::Brush,
             log_file: PhaseLog::Inherit,
             skip_noop_src_phases: false,
+            skip_pretend: false,
             build_env: &[],
         })
         .expect("run_commands should not itself error");
@@ -1025,6 +1040,7 @@ fn phases_export_portage_actual_distdir_so_doins_keeps_absolute_symlinks() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -1074,6 +1090,7 @@ fn phases_see_the_per_package_fake_distdir() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -1127,6 +1144,7 @@ fn fake_distdir_is_prepared_only_when_portage_prepares_it() {
             shell: ShellBackend::Brush,
             log_file: PhaseLog::Inherit,
             skip_noop_src_phases: false,
+            skip_pretend: false,
             build_env: &build_env,
         })
         .expect("run_commands should not itself error");
@@ -1165,6 +1183,7 @@ fn pretend_alone_succeeds_with_no_explicit_phase_functions() {
         shell: ShellBackend::Brush,
         log_file: PhaseLog::Inherit,
         skip_noop_src_phases: false,
+        skip_pretend: false,
         build_env: &[],
     })
     .expect("run_commands should not itself error");

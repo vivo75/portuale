@@ -303,3 +303,28 @@ when a claim turns out false.
   `invalid choice` error (backlog #520), like the sorted `Change USE:`
   flags of Q4 -- deterministic, matching Portage's line set but only
   occasionally its order.
+
+## Q12. `FEATURES=cgroup` resource summaries need kernel cgroup accounting (by design)
+
+- **What it does**: under `FEATURES=cgroup`, Portage's `Scheduler`
+  constructs a `CgroupManager` (`Scheduler.py:244-252`) and, after each
+  build and each install, logs
+  `=== Resource usage for {build,install} of {cpv}: {rendered}`
+  (`Scheduler.py:421-444`, upstream `55beac58c`); in background mode
+  (`-j`) with `--verbose` the line is also echoed to stdout
+  (`a6fca880a`). When the cgroup filesystem is not writable (unprivileged
+  run: `Permission denied`, no leaf created), the manager is never kept
+  and `_cgroup_finish` returns silently -- no line anywhere, rc 0.
+  Oracle: `LLM/evidence/2026-10-23-512/cgroup.sh` (shape 14 as root with
+  both lines on stdout; `14-cgroup-degraded` as vivo silent).
+- **Why it is not a bug**: the text reports measured kernel counters
+  (CPU time, max memory, I/O via cgroupfs); without the accounting there
+  is nothing true to print, and Portage's own degraded path prints
+  nothing rather than zeros.
+- **First seen**: 3.0.83 (only version checked).
+- **Portuale**: `portuale emerge` prints nothing under `FEATURES=cgroup`
+  (backlog #543, Tier 3): no `CgroupManager` is ported, no counters are
+  fabricated -- the output matches Portage's degraded (unprivileged) run
+  exactly, and stays silent as root where Portage prints the two lines.
+  Porting the manager would mean reading cgroupfs for every build; until
+  then the gap is a documented wontfix, not a format to mimic.

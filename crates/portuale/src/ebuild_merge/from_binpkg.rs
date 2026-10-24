@@ -299,16 +299,18 @@ pub fn merge_binpkg(
     };
 
     // `pkg_pretend` runs for every package in the merge list, binary
-    // included; folded into the per-package flow here rather than as a
-    // separate scheduler stage, like the source path runs `pretend`
-    // inline before each build.
+    // included; folded into the per-package flow here when no up-front
+    // pass ran, skipped when the scheduler (or the mixed-plan / `-j1` /
+    // `--buildpkgonly` pass) already replayed it.
     // Portage: Scheduler._run_pkg_pretend
-    let pretend_status = hooks.run_hook("pretend")?;
-    if pretend_status != 0 {
-        return Ok(MergeOutcome {
-            status: pretend_status,
-            postinst_failed: false,
-        });
+    if !options.skip_pretend {
+        let pretend_status = hooks.run_hook("pretend")?;
+        if pretend_status != 0 {
+            return Ok(MergeOutcome {
+                status: pretend_status,
+                postinst_failed: false,
+            });
+        }
     }
 
     // `pkg_setup` runs right after extraction, before the merge.
@@ -998,4 +1000,124 @@ pub(crate) fn user_patch_extract_report(
     }
     stdout.push(String::new());
     Some((stdout, stderr))
+}
+
+/// Arguments of [`pretend_binary_entry`].
+pub(crate) struct PretendBinaryEntryArgs<'a> {
+    pub(crate) binpkg_path: &'a Path,
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    /// Merge options with `log_file` set to this entry's capture log (like
+    /// the scheduler's captured pretend): the hook output lands there, and
+    /// `skip_pretend` must be false here (this *is* the pretend run).
+    pub(crate) options: &'a MergeOptions,
+}
+
+/// Run only the `pkg_pretend` hook of an already-downloaded binary package:
+/// extract exactly like [`merge_binpkg`] (same `${PORTAGE_BUILDDIR}`,
+/// which the later merge re-extracts from scratch after removing it),
+/// then run the `pretend` hook with the capture log. No vdb write, no
+/// image merge. Used by the mixed source+binary up-front pretend pass;
+/// the later merge skips its inline hook via `MergeOptions::skip_pretend`.
+/// A binary whose metadata carries no hook files pretends trivially
+/// (`Ok`, like the merge's own hook gate).
+// Portage: _emerge/Scheduler.py, _run_pkg_pretend_one (the `x.built` arm:
+// fetch, verify, unpack metadata to build-info, `EMERGE_FROM=binary`)
+pub(crate) fn pretend_binary_entry(args: PretendBinaryEntryArgs<'_>) -> Result<(), String> {
+    let PretendBinaryEntryArgs {
+        binpkg_path,
+        root,
+        portage_tmpdir,
+        options,
+    } = args;
+    let name = binpkg_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let meta = if name.ends_with(".gpkg.tar") {
+        crate::binpkg::read_gpkg_metadata(binpkg_path)?
+    } else {
+        crate::binpkg::read_xpak_metadata(binpkg_path)?
+    };
+    let meta_get = |key: &str| -> Option<String> {
+        meta.get(key)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let category = meta_get("CATEGORY")
+        .ok_or_else(|| format!("{}: binpkg has no CATEGORY", binpkg_path.display()))?;
+    let pf =
+        meta_get("PF").ok_or_else(|| format!("{}: binpkg has no PF", binpkg_path.display()))?;
+    let package = portage_dep::parse_candidate(&format!("{category}/{pf}"))
+        .map(|c| c.package)
+        .unwrap_or_else(|| pf.clone());
+    let full_slot = meta_get("SLOT").unwrap_or_else(|| "0".to_string());
+    let main_slot = full_slot.split('/').next().unwrap_or("0").to_string();
+    let repo_name = meta_get("repository").or_else(|| meta_get("REPO"));
+
+    // Portage's `_pkg_needs_pretend` gate: no `pretend` in `DEFINED_PHASES`
+    // (or EAPI 0-3) means the entry never pretends -- the pass skips it
+    // without touching the archive at all. This is what lets a truncated
+    // binpkg without a pretend hook reach the merge-time verifier (with its
+    // `>>> Emerging binary` + digest block) instead of dying in the pass
+    // on the unreadable image region.
+    // Portage: _emerge/Scheduler.py, `_pkg_needs_pretend`
+    let eapi_ok = !matches!(
+        meta_get("EAPI").as_deref().unwrap_or(""),
+        "0" | "1" | "2" | "3"
+    );
+    let defined_phases = meta_get("DEFINED_PHASES").unwrap_or_default();
+    if !eapi_ok || !defined_phases.split_whitespace().any(|d| d == "pretend") {
+        return Ok(());
+    }
+
+    // Same builddir derivation as `merge_binpkg` (metadata only here, never
+    // the image: see `extract_binpkg_metadata_only`); the merge removes the
+    // builddir first, so running pretend here never poisons the later merge.
+    let builddir = portage_tmpdir.join("portage").join(&category).join(&pf);
+    if builddir.exists() {
+        std::fs::remove_dir_all(&builddir).map_err(|e| format!("{}: {e}", builddir.display()))?;
+    }
+    let build_info = builddir.join("build-info");
+    crate::binpkg::extract_binpkg_metadata_only(binpkg_path, &build_info)?;
+
+    let saved_env = build_info.join("environment.bz2");
+    let extracted_ebuild = {
+        let src = build_info.join(format!("{pf}.ebuild"));
+        if src.is_file() && saved_env.is_file() {
+            let pkgdir = builddir.join("ebuild-src").join(&category).join(&package);
+            std::fs::create_dir_all(&pkgdir).map_err(|e| format!("{}: {e}", pkgdir.display()))?;
+            let dst = pkgdir.join(format!("{pf}.ebuild"));
+            std::fs::copy(&src, &dst).map_err(|e| format!("{}: {e}", src.display()))?;
+            Some(dst)
+        } else {
+            None
+        }
+    };
+    let seeded = std::cell::Cell::new(false);
+    let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
+    let replacing_versions =
+        replacing_versions(&package, installed_instance.as_deref()).unwrap_or_default();
+    let hook_env = binary_hook_env(
+        options,
+        meta_get("IUSE").as_deref().unwrap_or_default(),
+        meta_get("USE").as_deref().unwrap_or_default(),
+    );
+    let hooks = HookCtx {
+        extracted_ebuild: &extracted_ebuild,
+        defined_phases: &defined_phases,
+        saved_env: &saved_env,
+        seeded: &seeded,
+        root,
+        portage_tmpdir,
+        options,
+        replacing_versions: &replacing_versions,
+        repo_name: repo_name.as_deref(),
+        build_env: &hook_env,
+    };
+    let status = hooks.run_hook("pretend")?;
+    if status != 0 {
+        return Err(format!("{category}/{pf}: pkg_pretend failed ({status})"));
+    }
+    Ok(())
 }
