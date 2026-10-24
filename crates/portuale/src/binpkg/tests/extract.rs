@@ -445,15 +445,7 @@ fn extract_binpkg_refuses_the_portage_hostile_image_shapes() {
                 inner_symlink("image/opt/link", "../../marker"),
                 inner_hardlink("image/hard", "image/opt/link"),
             ],
-            "symlink escape detected: image/opt/link",
-        ),
-        (
-            "hardlink relocating a relative symlink out of its new place",
-            vec![
-                inner_symlink("image/opt/deep/link", "../x"),
-                inner_hardlink("image/hard", "image/opt/deep/link"),
-            ],
-            "symlink escape detected: image/../x",
+            "symlink escape detected: image/../../marker",
         ),
         (
             "symlink loop",
@@ -493,8 +485,129 @@ fn extract_binpkg_refuses_the_portage_hostile_image_shapes() {
     }
 }
 
+/// #514 (b): Portage 3.0.83-r1's containment root is its temporary
+/// directory, one level above the unpacked `image/` tree (`gpkg.py`,
+/// `tar_safe_extract.extractall`), so a symlink climbing exactly to that
+/// root is accepted there and refused here. Oracle: `tar_safe_extract`
+/// over the crafted tars as root (`LLM/evidence/2026-10-23-500-501/`
+/// `514-oracle-matrix.txt`): rc 0 on both managers for the bare link (the
+/// link lands in the image); `b-link-to-temproot-with-member` is accepted
+/// by the scan but GNU tar 1.35 defers `..`-target symlinks and stops
+/// after a partial unpack, so portuale reports tar's failure (rc 1) with
+/// the image directory left empty — the same GNU-tar boundary as (c).
+#[test]
+fn extract_binpkg_accepts_a_symlink_climbing_to_the_temp_root_like_portage() {
+    let meta = [inner_entry("metadata/SLOT", b"0\n")];
+    // The bare link: accepted before and after, target byte-preserved.
+    let g = build_gpkg_with_inner_tars(
+        "gen-1.0",
+        &meta,
+        &[
+            inner_entry("image/opt/h/hello", b"hi\n"),
+            inner_symlink("image/opt/link", "../.."),
+        ],
+    );
+    let tmp = TempDir::new("binpkg-gpkg-temproot").keep();
+    let image = tmp.join("image");
+    extract_binpkg(
+        &g,
+        &image,
+        &tmp.join("build-info"),
+        &GpgVerify::default(),
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )
+    .expect("a symlink to the temp root is accepted like Portage");
+    let link = image.join("opt/link");
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the temp-root symlink lands in the image"
+    );
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("../.."));
+    assert_eq!(fs::read(image.join("opt/h/hello")).unwrap(), b"hi\n");
+    let _ = fs::remove_dir_all(&tmp);
+    // A member under the link: Portage extracts it into its temp root and
+    // discards it with the temp dir; GNU tar stops after a partial unpack.
+    let g = build_gpkg_with_inner_tars(
+        "gen-1.0",
+        &meta,
+        &[
+            inner_entry("image/opt/h/hello", b"hi\n"),
+            inner_symlink("image/opt/link", "../.."),
+            inner_entry("image/opt/link/tool", b"t\n"),
+        ],
+    );
+    let tmp = TempDir::new("binpkg-gpkg-temproot-member").keep();
+    let image = tmp.join("image");
+    let err = extract_binpkg(
+        &g,
+        &image,
+        &tmp.join("build-info"),
+        &GpgVerify::default(),
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("failed"),
+        "the GNU-tar truncation surfaces as a tar failure, got {err:?}"
+    );
+    assert!(
+        read_dir_sorted(&image).unwrap().is_empty(),
+        "the partial unpack never reaches the image directory"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+/// #514 (c): a hard link of an in-image symlink whose target contains `..`,
+/// with a member under it, extracts in Portage 3.0.83-r1 (rc 0) but makes
+/// GNU tar 1.35 stop after a partial unpack (rc 2): tar defers symlinks
+/// whose target contains `..`, so the member under the hard link has no
+/// directory to land in. Oracle: `tar_safe_extract` as root (rc 0) vs GNU
+/// tar (rc 2, `Cannot open: Not a directory`) over the same tar
+/// (`LLM/evidence/2026-10-23-500-501/` `514-oracle-matrix.txt` row
+/// `c-dotdot-same-depth`). Documented GNU-tar divergence: portuale reports
+/// tar's failure (rc 1) with the image directory left empty.
+#[test]
+fn extract_binpkg_reports_the_gnu_tar_truncation_for_a_dotdot_hardlink_shape() {
+    let g = build_gpkg_with_inner_tars(
+        "gen-1.0",
+        &[inner_entry("metadata/SLOT", b"0\n")],
+        &[
+            inner_entry("image/marker/f", b"m\n"),
+            inner_symlink("image/deep/link", "../marker"),
+            inner_hardlink("image/deep/hard", "image/deep/link"),
+            inner_entry("image/deep/hard/x", b"x\n"),
+        ],
+    );
+    let tmp = TempDir::new("binpkg-gpkg-hardlink-trunc").keep();
+    let image = tmp.join("image");
+    let err = extract_binpkg(
+        &g,
+        &image,
+        &tmp.join("build-info"),
+        &GpgVerify::default(),
+        &crate::ebuild_merge::XattrPolicy::default(),
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("failed"),
+        "the GNU-tar truncation surfaces as a tar failure, got {err:?}"
+    );
+    assert!(
+        read_dir_sorted(&image).unwrap().is_empty(),
+        "the partial unpack never reaches the image directory"
+    );
+    let _ = fs::remove_dir_all(&tmp);
+}
+
 /// `test_contained_symlink_parent` (upstream), plus the hard link of a
 /// symlink that stays inside: Portage accepts both and so does portuale.
+/// A hard link whose relocated symlink target stays inside the temp root
+/// (`image/opt/deep/link -> ../x` relocated to `image/../x`) is accepted
+/// too: Portage 3.0.83-r1 `tar_safe_extract` returns rc 0 on the shape
+/// (`514-oracle-matrix.txt` row `u-relocated-out-of-place`).
 #[test]
 fn extract_binpkg_accepts_contained_symlink_parents() {
     let g = build_gpkg_with_inner_tars(
@@ -506,6 +619,8 @@ fn extract_binpkg_accepts_contained_symlink_parents() {
             inner_entry("image/opt/bin/tool", b"t\n"),
             inner_symlink("image/opt/up", "../opt/real"),
             inner_hardlink("image/opt/hard", "image/opt/up"),
+            inner_symlink("image/opt/deep/link", "../x"),
+            inner_hardlink("image/opt/hard2", "image/opt/deep/link"),
         ],
     );
     let tmp = TempDir::new("binpkg-gpkg-contained").keep();
@@ -521,6 +636,7 @@ fn extract_binpkg_accepts_contained_symlink_parents() {
     assert_eq!(fs::read(image.join("opt/real/tool")).unwrap(), b"t\n");
     // The hard link of an in-image symlink is itself a symlink (`os.link`).
     assert!(fs::symlink_metadata(image.join("opt/hard")).is_ok());
+    assert!(fs::symlink_metadata(image.join("opt/hard2")).is_ok());
     let _ = fs::remove_dir_all(&tmp);
 }
 

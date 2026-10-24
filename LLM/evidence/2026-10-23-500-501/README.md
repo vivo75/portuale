@@ -120,3 +120,23 @@ rows exit 1 with nothing installed and an empty image directory (`PORTAGE_TMPDIR
 `/var/tmp/outside-x` stays empty. Messages: `emerge: <archive>: Danger: <what> detected: <path>` (path as Portage prints it, except
 for the shapes where Portage's root is one level higher than the unpack directory, see #514) and, for metadata rows,
 `!!! Invalid binary package: '<archive>', Metadata member is not a regular file: metadata/<name>`.
+
+## #514 residue rows (2026-10-24, plan `LLM/plan-residui-514-555.md` Task 1)
+
+The containment root is now Portage's temporary directory (was the unpack
+directory, one level too low): a symlink climbing exactly to that root is
+accepted, and every `Danger` path is the one Portage prints
+(`image/../../marker`, not the earlier `image/opt/link`). Oracle:
+`514-oracle-matrix.txt` (real `tar_safe_extract.extractall` as root vs GNU
+tar 1.35 over the same crafted tars). Two composed boundaries stay, both
+pinned (Rust craft tests + pmtest `test_usepkgonly_matches_portage_on_
+temp-root_and_dotdot_hardlink_shapes` + bed L5 cell
+`differential-test-bed/run/l5-hostile-fault.sh`, 27 shapes green):
+
+- A member under a symlink whose target contains `..` (the (b)-with-member
+  and (c)-dotdot shapes): Portage extracts rc 0, GNU tar 1.35 defers the
+  `..` symlink and stops after a partial unpack (rc 2). Portuale reports
+  tar's failure, rc 1, image dir left empty.
+- A data member after a hard link member over the zstd stream breaks the
+  *control too* (`seeking backwards is not allowed`, Q10), so the composed
+  L5 pair is (1, 1) with different texts.

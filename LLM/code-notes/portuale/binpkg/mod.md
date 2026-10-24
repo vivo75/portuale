@@ -21,3 +21,4 @@ The `$PKGDIR` directory-scan fallback: per-format binpkg readers and shared help
 
 ## struct ScratchDir
 - A best-effort temp directory, removed when the guard drops. The `nanos` suffix keeps concurrent reads (e.g. a `$PKGDIR` scan over many files) from colliding -- same shape `ebuild_phases`/`fetch` already use for their own scratch dirs.
+- `#514`: `new_in` stages inside a parent directory (same filesystem, so moving entries out is a rename); the image extraction stages inside `dest` and the guard removes it however the unpack goes, leaving `dest` empty on refusal or truncation.

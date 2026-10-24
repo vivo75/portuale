@@ -151,10 +151,12 @@ pub(crate) fn extract_gpkg_metadata(
 /// itself, and for a hard link its source and (when the source is a
 /// symlink) the relocated symlink target.
 ///
-/// Portage checks against the tree it has extracted so far; here that tree
-/// is modelled by [`ImageLinks`] (every symlink member, and every hard link
-/// to one, which `os.link` turns into a symlink), rooted at the directory
-/// GNU `tar` unpacks into after `--strip-components=1`.
+/// Portage checks against the tree it has already extracted, rooted at
+/// its temporary directory; here that tree is modelled by [`ImageLinks`]
+/// (every symlink member, and every hard link to one, which `os.link`
+/// turns into a symlink), rooted at the staging directory GNU `tar`
+/// unpacks into (see [`extract_gpkg_member`]). A link that climbs exactly
+/// to that root is accepted, like Portage; only a climb above it escapes.
 // Portage: `gpkg.tar_safe_extract._check_member`, `_check_symlink_path`,
 // `_check_hardlink`.
 pub(crate) fn scan_image_tar(image_tar: &Path, gpkg: &Path) -> Result<(), String> {
@@ -230,6 +232,13 @@ pub(crate) fn scan_image_tar(image_tar: &Path, gpkg: &Path) -> Result<(), String
         }
         names.insert(name);
     }
+    // Portage's final `_check_symlink_path(temp_dir, prefix)`: the `image/`
+    // top level itself must resolve inside the staging root (a symlink
+    // member named `image` pointing outside fails its own member check
+    // first, so this only re-states the invariant).
+    links
+        .contained(b"image", true)
+        .map_err(|_| format!("{}: Danger: symlink escape detected: image", gpkg.display()))?;
     Ok(())
 }
 
@@ -243,8 +252,8 @@ fn join_relocated(dirname: &[u8], target: &[u8]) -> Vec<u8> {
 }
 
 /// The symlinks an `image.tar` has created so far, keyed by their resolved
-/// location under the unpack directory (the first name component, which
-/// `--strip-components=1` drops, is not part of the key).
+/// location under the staging root (names keep their `image/` prefix, as
+/// Portage checks them against its temporary directory).
 #[derive(Default)]
 struct ImageLinks {
     links: HashMap<Vec<Vec<u8>>, Vec<u8>>,
@@ -254,22 +263,19 @@ struct ImageLinks {
 /// kernel's own `MAXSYMLINKS`).
 const MAX_IMAGE_SYMLINKS: usize = 40;
 
-/// A path that leaves the unpack directory (or loops).
+/// A path that leaves the staging root (or loops).
 struct Escape;
 
 impl ImageLinks {
     /// `os.path.realpath` of `path` over the modelled tree, relative to the
-    /// unpack directory; the final component is followed only when
-    /// `follow_final`. A leading component that `tar` strips is skipped.
+    /// staging root; the final component is followed only when
+    /// `follow_final`. A `..` above the root, an absolute target (it leaves
+    /// the staging directory) or a chain of more than 40 links is an escape.
     fn resolve(&self, path: &[u8], follow_final: bool) -> Result<Vec<Vec<u8>>, Escape> {
         if path.starts_with(b"/") {
             return Err(Escape);
         }
-        let mut todo: Vec<Vec<u8>> = path
-            .split(|b| *b == b'/')
-            .skip(1)
-            .map(<[u8]>::to_vec)
-            .collect();
+        let mut todo: Vec<Vec<u8>> = path.split(|b| *b == b'/').map(<[u8]>::to_vec).collect();
         todo.reverse();
         let mut current: Vec<Vec<u8>> = Vec::new();
         let mut followed = 0;
@@ -310,8 +316,7 @@ impl ImageLinks {
         self.links.get(&resolved).cloned()
     }
 
-    /// Record a symlink member at `name` (a member that `tar` strips away
-    /// entirely records nothing).
+    /// Record a symlink member at `name`.
     fn add(&mut self, name: &[u8], target: Vec<u8>) {
         if let Ok(resolved) = self.resolve(name, false)
             && !resolved.is_empty()
@@ -452,10 +457,12 @@ pub(crate) fn load_gpkg_metadata(gpkg_path: &Path) -> Result<InnerMetadata, Stri
 /// unpack, the trusted-name regular-file walk and the `gpkg-1` validity
 /// guard with `read_gpkg_metadata`.
 ///
-/// The `image` half keeps GNU `tar` (`-xpf --strip-components=1`) for its
-/// ownership/permission/xattr/sparse semantics, with the member rules
-/// applied by a pre-scan first ([`scan_image_tar`]). The `metadata` half
-/// is resolved in process ([`extract_gpkg_metadata`]).
+/// The `image` half keeps GNU `tar` for its ownership/permission/xattr/
+/// sparse semantics, with the member rules applied by a pre-scan first
+/// ([`scan_image_tar`]): like Portage's `extractall`, `tar` unpacks into a
+/// staging directory inside `dest` and `<stage>/image/*` is then moved into
+/// `dest`. The `metadata` half is resolved in process
+/// ([`extract_gpkg_metadata`]).
 pub(crate) fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> Result<(), String> {
     if want == "metadata" {
         // Written as regular files only (no scratch copy, no `tar -xpf`).
@@ -475,14 +482,20 @@ pub(crate) fn extract_gpkg_member(gpkg_path: &Path, want: &str, dest: &Path) -> 
     // scratch `image.tar` first ([`scan_image_tar`]) so a rejected member
     // never reaches the filesystem, then let GNU `tar` unpack it.
     scan_image_tar(&inner_tar, gpkg_path)?;
-    // The inner tarball's members all live under a single `<want>/`
-    // top-level directory, stripped here; without the strip every merged
-    // path would be recorded as `/image/...`, which breaks unmerge.
-    run_tar(&[
-        "-xpf",
-        &lossy(&inner_tar),
-        "-C",
-        &lossy(dest),
-        "--strip-components=1",
-    ])
+    // The staging directory lives inside `dest` (same filesystem, so the
+    // move below is a rename) and is removed with the guard however the
+    // unpack goes: a refused or truncated archive leaves `dest` empty.
+    // `--strip-components=1` can not express this split: a symlink the
+    // scan accepts may still defeat GNU `tar` (see `#514`), and its
+    // partial unpack must not reach `dest`.
+    let stage = ScratchDir::new_in(dest, "gpkg-image")?;
+    run_tar(&["-xpf", &lossy(&inner_tar), "-C", &lossy(stage.path())])?;
+    for entry in read_dir_sorted(&stage.path().join("image"))? {
+        let name = entry
+            .file_name()
+            .ok_or_else(|| format!("{}: bad image entry name", gpkg_path.display()))?;
+        fs::rename(&entry, dest.join(name))
+            .map_err(|e| format!("{}: {e}", dest.join(name).display()))?;
+    }
+    Ok(())
 }

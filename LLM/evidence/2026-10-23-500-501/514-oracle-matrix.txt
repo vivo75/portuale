@@ -1,0 +1,36 @@
+# #514 oracle matrix: temp-root accept side and hard-link-of-symlink shapes
+
+Portage 3.0.83 is `3a3a119d8` behaviour run as root (userns) through the real
+`gpkg.tar_safe_extract.extractall` (`/usr/lib/python3.14/site-packages/portage/gpkg.py:662-768`;
+root = the temp dir, `prefix="image"`), GNU tar is the 1.35 the merge path shells
+out to. Probe: `/tmp/oracle514.py` (matrix) + `/tmp/sweep514.py` (first sweep);
+minimization probes `/tmp/probe514e.py`, `/tmp/probe514f.py`, `/tmp/probe514g.py`,
+`/tmp/probe514i.py`. Shapes are `(image members)`; verdicts are the composed
+`extractall` rc (Portage) and the GNU-tar-into-staging-dir rc (the portuale
+extraction half after the Task 1 fix).
+
+| shape | members | Portage 3.0.83 | GNU tar 1.35 |
+|---|---|---|---|
+| `b-bare-link-to-temproot` | `image/opt/link -> ../..` | rc 0, link merges | rc 0 |
+| `b-link-to-temproot-with-member` | + `image/opt/link/tool` | rc 0, tool lands in the temp root and is discarded with it | rc 2 `Cannot open: Not a directory` (partial) |
+| `b-link-above-temproot` | `image/opt/link -> ../../..` + member under | rc 1 `Danger: symlink escape detected: image/opt/link` | rc 2 |
+| `c-plain-same-depth` | `image/real/`, `image/link -> real`, `image/hard -link-> image/link`, `image/hard/tool` | rc 0 | rc 0 |
+| `c-dotdot-same-depth` | `image/marker/`, `image/deep/link -> ../marker`, `image/deep/hard -link-> image/deep/link`, `image/deep/hard/x` | rc 0 seekable / **rc 1 `seeking backwards is not allowed` over the zstd stream** (Q10) | rc 2 `Cannot open: Not a directory` (partial) |
+| `c-diff-depth` | `image/deep/link -> ../marker`, `image/hard -link-> image/deep/link`, `image/hard/x` | rc 1 `FileExistsError: .../image/hard` (the hard link's relative target breaks at its new depth) | rc 2 |
+| `u-relocated-rel` | `image/opt/link -> ../../marker`, `image/hard -link-> image/opt/link` | rc 1 `Danger: symlink escape detected: image/../../marker` | rc 0 |
+| `u-relocated-out-of-place` | `image/opt/deep/link -> ../x`, `image/hard -link-> image/opt/deep/link` | rc 0 | rc 0 |
+
+Rules that fall out (all reproduced above):
+
+- A symlink target containing `..` is extracted by Python `tarfile` (follows it)
+  but deferred by GNU tar 1.35: any member under such a link fails with
+  `Cannot open: Not a directory`, tar exits 2 after a partial unpack. Portage
+  accepts the checks, GNU tar cannot do the extraction: the (b)-with-member
+  and (c)-dotdot composed divergences.
+- A data member after a hard link member breaks the *streaming* (zstd pipe)
+  Portage extraction with `StreamError: seeking backwards is not allowed`
+  (Q10); the same members over a seekable tar extract rc 0. The L5 cell pins
+  the composed (1, 1) pair.
+- Checks are all Portage-exact under the fixed root (parent of `image/`):
+  `u-relocated-rel` names `image/../../marker` (was `image/opt/link`),
+  `u-relocated-out-of-place` is accepted (was refused).

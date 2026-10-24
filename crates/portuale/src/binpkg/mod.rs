@@ -137,6 +137,22 @@ impl ScratchDir {
         fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(Self(dir))
     }
+    /// A staging directory inside `parent`: same filesystem, so moving
+    /// entries out of it into `parent` is a rename. The dot prefix keeps
+    /// it out of the moved entries' way; the guard removes it however the
+    /// unpack goes.
+    fn new_in(parent: &Path, tag: &str) -> Result<Self, String> {
+        let dir = parent.join(format!(
+            ".portuale-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        Ok(Self(dir))
+    }
     fn path(&self) -> &Path {
         &self.0
     }

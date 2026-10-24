@@ -8,7 +8,7 @@ Binpkg extraction tests: xpak verbatim writes, gpkg image/metadata handling.
 - Slice #326 S5 (L2 xpak control): ports Portage's `tbz2.unpackinfo` (`xpak.py:486-524`), which writes every XPAK member verbatim. An empty `DEBUGBUILD` stays empty, and the trailing space Portage's `NEEDED` keeps survives. A name that climbs out with `..` is skipped, a leading `/` is stripped, and a `sub/x` member gets its directory.
 
 ## fn extract_binpkg_unpacks_a_real_gpkg_image_and_build_info
-- The inner `image/` and `metadata/` top-level dirs that Portage's `tar_safe_extract` strips are stripped here too; members land directly, not one level deep. A missing strip is what made the merged vdb `CONTENTS` record every path as `/image/...`.
+- The inner `image/` and `metadata/` top-level dirs land directly, not one level deep (the staging move, like Portage's `extractall` move); members land as `usr/...`, not `/image/...`. A missing move is what made the merged vdb `CONTENTS` record every path as `/image/...`.
 - Slice #58 S3: the metadata side writes the resolved member bytes verbatim as regular files with the header mode (0o644 in the fixture), the same bytes and modes the former `tar -xpf` left (captured on `main`).
 
 ## fn extract_binpkg_refuses_an_inner_metadata_symlink_and_writes_nothing
@@ -27,9 +27,17 @@ Binpkg extraction tests: xpak verbatim writes, gpkg image/metadata handling.
 
 ## fn extract_binpkg_refuses_the_portage_hostile_image_shapes
 - `#500`: one case per shape of the 3.0.83-r1 oracle table (`LLM/evidence/2026-10-23-500-501/README.md`): `a/..`, bare `..`, `./..`, directory through a symlink, symlink parent (absolute, relative, to `/`, through a chain, a loop), hard link to an escaping symlink, relocated relative symlink. Each asserts the `Danger:` text and that neither the image nor build-info directory holds anything.
+- `#514`: the relocated-relative-symlink needle is Portage's own `image/../../marker` (was the earlier `image/opt/link`); the relocated-out-of-place pair (accepted by Portage, oracle row `u-relocated-out-of-place`) moved to `extract_binpkg_accepts_contained_symlink_parents`.
+
+## fn extract_binpkg_accepts_a_symlink_climbing_to_the_temp_root_like_portage
+- `#514`: the bare symlink climbing exactly to Portage's temp root merges with its target byte-preserved (was already accepted by accident); a member under it passes the scan but GNU tar truncates it, so the run reports tar's failure with the image dir left empty. Oracle: `LLM/evidence/2026-10-23-500-501/514-oracle-matrix.txt` (`b-*` rows).
+
+## fn extract_binpkg_reports_the_gnu_tar_truncation_for_a_dotdot_hardlink_shape
+- `#514`: the hard link of an in-image `..` symlink with a member under it passes the scan (Portage extracts it, matrix row `c-dotdot-same-depth`) but GNU tar 1.35 defers the link and fails; the run reports tar's failure with the image dir left empty. The composed L5 pair is (1, 1): the control trips over CPython's post-hardlink stream bookkeeping instead (`LLM/portage-quirks.md` Q10).
 
 ## fn extract_binpkg_accepts_contained_symlink_parents
 - `#500`: upstream `test_contained_symlink_parent`; the old lexical rule refused it (the `control-contained-symlink-parent` oracle row). Members of the test have no directory entries because the `tar` crate writes them mode 0644, which GNU `tar` cannot traverse.
+- `#514`: also covers the relocated-out-of-place hard link pair (`image/opt/deep/link -> ../x` + hard link, no member under), which Portage accepts (oracle row `u-relocated-out-of-place`); the old root refused it.
 
 ## fn extract_binpkg_keeps_a_valid_sparse_xattr_image_working
 - S0 cell i19, the regression shape: legitimate symlink, hardlink-to-earlier, GNU sparse file, PAX xattr records must still extract exactly as before S4 (the pre-scan only rejects).

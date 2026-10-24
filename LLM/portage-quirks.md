@@ -235,3 +235,32 @@ when a claim turns out false.
 - **Why it looks wrong**: the frame names the interpreter's install prefix and a line of Portage's own module, which is an implementation detail of the Python warnings machinery and differs by machine. Portage's other deprecation of this kind has the same shape: `KeywordsManager.py:88-92` (`package.keywords`) is also `warnings.warn(... UserWarning)`, so the frame is not specific to `virtuals`. The two user-level notices (`--info` gets the profile frame but not the `/etc/portage/virtuals` block) are also inconsistent with each other.
 - **Portuale**: copies the message and the `  warnings.warn(` line, with the location written as `portage/package/ebuild/_config/VirtualsManager.py:54` (no interpreter prefix; the pins stay hermetic). The user block is copied in the validating actions only. Portuale's `package.keywords` notice (`portage-profile/src/resolve/package_masks.rs`, `atom_lines`) prints the message alone and has no frame; whether Portage prints the frame there too is not yet captured (backlog #547).
 - **First seen**: 3.0.83-r1 (commit `3a3a119d8`, `64e2735c3`).
+
+## Q10. A hard link member breaks the compressed-stream extraction that follows it (suspect)
+
+- **Observed** (2026-10-24, backlog #514, `/tmp/probe514e.py`,
+  `/tmp/probe514f.py`, L5 cell `dotdot-hardlink` control output): Portage
+  3.0.83 `gpkg.tar_safe_extract.extractall` over a zstd stream (`tarfile`
+  `r|` over the decompressor pipe) fails with `StreamError: seeking
+  backwards is not allowed` when a data member follows a hard link member.
+  Minimized: `image/{r,r/f,l -> r,h -> image/l,x}` extracts rc 0 plain or
+  seekable, and rc 0 with no data member after the hard link, but fails
+  exactly when the hard link extraction advances the stream past the next
+  member's blocks (position 3072 to 4608 in the probe). Through
+  `gpkg.decompress` the run reports `!!! Error extracting '<archive>',
+  seeking backwards is not allowed`, rc 1, nothing installed.
+- **Why it looks wrong**: the archive is valid (plain `tar` and GNU `tar`
+  extract it; the uncompressed Portage path extracts it, oracle matrix row
+  `c-dotdot-same-depth`), and genuine `image.tar.zst` binpkgs with a
+  hardlink-before-data layout would fail the same way. The checks all pass;
+  only the extraction half trips, inside CPython's `tarfile` stream
+  bookkeeping around link extraction (the 3.14 `makelink_with_filter`
+  `realpath` + fallback dance, `tarfile.py` `makelink`, `ExFileObject`
+  seek).
+- **First seen**: 3.0.83 (container image `localhost/test-portuale`,
+  CPython 3.14.8, GNU tar 1.35, host kernel refusing hard-link-to-symlink
+  creation, so only Python-written `t=1` members were exercised).
+- **Portuale**: does not copy the failure mode (GNU `tar` truncates the
+  member under the deferred `..` symlink instead, rc 2), but the composed
+  outcome matches: rc 1, nothing installed, empty image dir. The L5 cell
+  pins the pair (1, 1) with this quirk cited.
