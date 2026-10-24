@@ -431,6 +431,7 @@ struct BuiltBinpkgStanza<'a> {
     size: &'a str,
     slot: &'a str,
     use_flags: &'a str,
+    user_patches: &'a str,
     mtime: &'a str,
     repository: &'a str,
 }
@@ -465,6 +466,7 @@ fn built_binpkg_stanza_fields<'a>(
         ("SIZE", stanza.size),
         ("SLOT", omit_stanza_default("SLOT", stanza.slot)),
         ("USE", stanza.use_flags),
+        ("USER_PATCHES", stanza.user_patches),
         ("MTIME", stanza.mtime),
         ("REPO", stanza.repository),
     ];
@@ -914,6 +916,14 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
     let requires = get_bi("REQUIRES");
     let repo_revisions = get_bi("REPO_REVISIONS");
     let repository = build_info_value("repository").unwrap_or_default();
+    // `build-info/USER_PATCHES`, written by the vendored `eapply_user`
+    // (bin/phase-helpers.sh) when patches applied; absent (hence omitted
+    // from the stanza, like every other empty field) when the build ran
+    // patch-free -- the same rule that leaves host-built no-patch stanzas
+    // (oracle `up-d`) without the key.
+    // Portage: bintree.py, inject (`_read_metadata` packs every
+    // build-info file into the gpkg, so the key rides the archive too).
+    let user_patches = build_info_value("USER_PATCHES").unwrap_or_default();
     let stanza = BuiltBinpkgStanza {
         bdepend: &bdepend,
         build_id: &build_id_str,
@@ -939,6 +949,7 @@ pub(crate) fn package_after_install(args: PackageAfterInstallArgs<'_>) -> Result
         size: &size_str,
         slot: &slot,
         use_flags,
+        user_patches: &user_patches,
         mtime: &mtime_str,
         repository: &repository,
     };
@@ -2121,6 +2132,7 @@ mod tests {
             size: "10240",
             slot,
             use_flags: "abi_x86_64 amd64 elibc_glibc kernel_linux",
+            user_patches: "",
             mtime: "1790533434",
             repository: "l32",
         }

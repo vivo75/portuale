@@ -211,25 +211,27 @@ Expected: 12/13→13/13 + nuovi shape.
 
 ### Task 7: #540–#542 — user patches writer/VDB/extraction
 
+Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+
 **Files:**
 - Modify: `crates/portuale/src/helpers/gpkg.rs` (metadata assembly + `Packages` inject), `ebuild_merge/from_binpkg.rs` (VDB copy), merge extraction rendering
 - Test: real `--buildpkgonly` oracle tree `LLM/evidence/2026-10-23-509/`; riusa `containment_root` semantics da Task 1 per PATH/containment.
 
-- [ ] **Step 1: #540 writer — includi `build-info/USER_PATCHES` + `user_patch.digests` in `metadata.tar` e key `USER_PATCHES` in `Packages`; digest byte-identico a host**
+- [x] **Step 1: #540 writer — includi `build-info/USER_PATCHES` + `user_patch.digests` in `metadata.tar` e key `USER_PATCHES` in `Packages`; digest byte-identico a host**
 
 Oracle: `build-info-*.txt`, `gpkg-metadata-patch-members.txt`.
 
-- [ ] **Step 2: #541 VDB — copia entrambi i membri su binary merge (`USER_PATCHES`, `user_patch.digests`); pin con merge `-K` di binario patchato**
+- [x] **Step 2: #541 VDB — copia entrambi i membri su binary merge (`USER_PATCHES`, `user_patch.digests`); pin con merge `-K` di binario patchato**
 
 Oracle: `captures/14-merge-match.*` + VDB listing S10.
 
-- [ ] **Step 3: #542 extraction — tabella `This binary package was built with user patches applied:` (troncata a terminal width) + warning mismatch + warning digest malformato; pin con merge `14-merge-match` e `16-merge-mismatch`**
-- [ ] **Step 4: Run Rust binpkg + pmtest user-patch pins**
+- [x] **Step 3: #542 extraction — tabella `This binary package was built with user patches applied:` (troncata a terminal width) + warning mismatch + warning digest malformato; pin con merge `14-merge-match` e `16-merge-mismatch`**
+- [x] **Step 4: Run Rust binpkg + pmtest user-patch pins**
 
 Run: `cargo test --release -p portuale binpkg::`
 Expected: PASS.
 
-- [ ] **Step 5: Commit pair (merge-path gate: reinstall glibc + bash rc 0, findings reviewed; il merge del binario patchato è solo un caso del gate)**
+- [x] **Step 5: Commit pair (merge-path gate: reinstall glibc + bash rc 0, findings reviewed; il merge del binario patchato è solo un caso del gate)**
 
 ### Task 8: #543–#546 — scheduler
 

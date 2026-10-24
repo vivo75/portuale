@@ -849,3 +849,153 @@ fn write_extract_log(log: &Path, facts: &ExtractLogFacts<'_>) -> Result<(), Stri
         file.write_all(text.as_bytes()).map_err(err)
     }
 }
+
+/// Portage `EOutput.term_columns`: the tty width, else 80. `get_term_size`
+/// returns `(0, 0)` off a terminal (and `COLUMNS` is never consulted), so
+/// every pin and every captured run uses 80; the `stty` query only matters
+/// on a real terminal.
+// Portage: output.py, `EOutput`, `get_term_size`
+pub(crate) fn merge_term_columns() -> usize {
+    use std::io::IsTerminal as _;
+    if std::io::stdout().is_terminal()
+        && let Ok(out) = std::process::Command::new("stty").arg("size").output()
+        && out.status.success()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut words = text.split_whitespace();
+        if let (Some(_rows), Some(cols)) = (words.next(), words.next())
+            && let Ok(columns) = cols.parse::<usize>()
+            && columns > 0
+        {
+            return columns;
+        }
+    }
+    80
+}
+
+/// One validated `user_patch.digests` row: the lowercased sha256 and the
+/// display basename (already `renderPath`-cleaned).
+type UserPatchRow = (String, String);
+
+/// Portage's `renderPath`: lossy-decode, then control characters
+/// (`\x01`–`\x1f`, `\x7f`) become `?`.
+// Portage: output.py, `renderPath`
+fn render_digest_basename(raw: &[u8]) -> String {
+    String::from_utf8_lossy(raw)
+        .chars()
+        .map(|c| {
+            if ('\u{1}'..='\u{1f}').contains(&c) || c == '\u{7f}' {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+/// Parse the binpkg's `user_patch.digests` member (`hash\0basename\0` rows):
+/// `Some` rows on success, `None` when the bytes are malformed. Mirrors
+/// Portage's strip-split-validate triple (`f.read().strip(b"\0").split(b"\0")`,
+/// `^[0-9A-Fa-f]{64}$` hashes, `[^/]+\.(patch|diff)$` basenames, pairwise
+/// count), including its edge semantics: one trailing newline still passes
+/// (`$` matches before it), and a repeated digest keeps the last basename
+/// (dict assignment order).
+// Portage: _emerge/Binpkg.py, `_unpack_metadata`
+pub(crate) fn parse_user_patch_digests(raw: &[u8]) -> Option<Vec<UserPatchRow>> {
+    let mut stripped = raw;
+    while let Some(rest) = stripped.strip_prefix(b"\0") {
+        stripped = rest;
+    }
+    while let Some(rest) = stripped.strip_suffix(b"\0") {
+        stripped = rest;
+    }
+    let tokens: Vec<&[u8]> = stripped.split(|b| *b == 0).collect();
+    if !tokens.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut rows: Vec<UserPatchRow> = Vec::with_capacity(tokens.len() / 2);
+    for pair in tokens.as_chunks::<2>().0 {
+        let (hash_token, base_token) = (pair[0], pair[1]);
+        let hash = hash_token.strip_suffix(b"\n").unwrap_or(hash_token);
+        if hash.len() != 64 || !hash.iter().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let base = base_token.strip_suffix(b"\n").unwrap_or(base_token);
+        let stem_ok = base
+            .strip_suffix(b".patch")
+            .or_else(|| base.strip_suffix(b".diff"))
+            .is_some_and(|stem| !stem.is_empty() && !stem.contains(&b'/'));
+        if !stem_ok {
+            return None;
+        }
+        let row = (
+            String::from_utf8(hash.to_ascii_lowercase()).unwrap_or_default(),
+            render_digest_basename(base),
+        );
+        if let Some(pos) = rows.iter().position(|(h, _)| *h == row.0) {
+            rows[pos] = row;
+        } else {
+            rows.push(row);
+        }
+    }
+    Some(rows)
+}
+
+/// The `>>> Extracting info` user-patch table: stdout lines for the table,
+/// stderr lines for the mismatch/malformed warnings (both without the
+/// ` * ` prefix; the caller colors it). `None` when the binpkg carries no
+/// `user_patch.digests` member at all. Truncation and padding mirror
+/// Portage exactly (character counts, `term_columns - 4` row width, the
+/// `term_columns - 3` bar); the mismatch gate is the same two-sided check
+/// (`no local patch set, or digests differ`) with no
+/// `--binpkg-respect-user-patches` exemption (the flag only gates the
+/// resolve filter, and the oracle `16-merge-mismatch` warns under `=n`).
+// Portage: _emerge/Binpkg.py, `_unpack_metadata` (upstream `3071bc985`)
+pub(crate) fn user_patch_extract_report(
+    digests_raw: Option<&[u8]>,
+    local_has_patches: bool,
+    local_digest: &str,
+    index_digest: &str,
+    columns: usize,
+) -> Option<(Vec<String>, Vec<String>)> {
+    let raw = digests_raw?;
+    let Some(rows) = parse_user_patch_digests(raw) else {
+        return Some((
+            Vec::new(),
+            vec![
+                String::new(),
+                "This binary package has invalid user patch digest metadata!!!".to_string(),
+                String::new(),
+            ],
+        ));
+    };
+    const MIN_DIGEST: usize = 8;
+    const MIN_BASENAME: usize = 25;
+    let max_basename = (columns.saturating_sub(MIN_DIGEST + 6)).max(MIN_BASENAME);
+    let mut stdout = vec!["This binary package was built with user patches applied:".to_string()];
+    stdout.push("=".repeat(columns.saturating_sub(3)));
+    for (digest, basename) in &rows {
+        let max_digest = (columns
+            .saturating_sub(basename.chars().count())
+            .saturating_sub(6))
+        .max(MIN_DIGEST);
+        let basename: String = basename.chars().take(max_basename).collect();
+        let digest: String = digest.chars().take(max_digest).collect();
+        let pad = columns
+            .saturating_sub(basename.chars().count())
+            .saturating_sub(digest.chars().count())
+            .saturating_sub(4);
+        stdout.push(format!("{basename}{}{digest}", " ".repeat(pad)));
+    }
+    stdout.push("=".repeat(columns.saturating_sub(3)));
+    let mut stderr = Vec::new();
+    if !local_has_patches || local_digest != index_digest {
+        stderr.push(String::new());
+        stderr.push(
+            "User patches in binary package different than configured for ebuild!!!".to_string(),
+        );
+        stderr.push(String::new());
+    }
+    stdout.push(String::new());
+    Some((stdout, stderr))
+}

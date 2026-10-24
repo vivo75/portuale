@@ -1,0 +1,21 @@
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging binary (1 of 1) app-misc/up-a-1.0::up509 for /var/tmp/ev509-tree/root-14
+ * up-a-1.0-1.gpkg.tar MD5 SHA1 size ;-) ...                             [ ok ]
+>>> Extracting info
+ * This binary package was built with user patches applied:
+ * =============================================================================
+ * user.patch  813aab24dd88be987aee6db477fa25415712efddf7214ba779b03a715ac32b99
+ * =============================================================================
+ * 
+>>> Extracting app-misc/up-a-1.0
+
+>>> Installing (1 of 1) app-misc/up-a-1.0::up509 to /var/tmp/ev509-tree/root-14
+
+>>> Recording app-misc/up-a in "world" favorites file...
+
+>>> Completed (1 of 1) app-misc/up-a-1.0::up509 to /var/tmp/ev509-tree/root-14
+
+ * GNU info directory index is up-to-date.

@@ -710,3 +710,238 @@ fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
         "packagepkg must still be built with --keep-going, despite fetchpkg's own failure"
     );
 }
+
+/// The scratch `up540` tree for the #540/#541 pins: one trivial ebuild with
+/// real `src_unpack`/`src_install` bodies (so `src_prepare` -- hence the
+/// vendored `eapply_user` -- runs; a `DEFINED_PHASES=install`-only ebuild
+/// would skip it on both managers), plus a `repos.conf` for `find_repos`
+/// and, unless `patches` is empty, a local patch set under the config root.
+/// Returns the config root, the repo dir, and the expected combined patch
+/// digest recomputed the way `eapply_user` does (per-patch sha256, then
+/// sha256 over the concatenated hex).
+fn stage_user_patch_tree(
+    scratch: &std::path::Path,
+    patches: &[(&str, &[u8])],
+) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    use sha2::Digest as _;
+
+    let cfg = scratch.join("cfg");
+    let repo = scratch.join("repo");
+    let ebuild = "EAPI=8\nDESCRIPTION=\"backlog #540 pin\"\nHOMEPAGE=\"https://example.com\"\nS=\"${WORKDIR}/src\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nsrc_unpack() { mkdir -p \"${S}\"; }\nsrc_install() { :; }\n";
+    let ebuild_path = repo.join("app-misc/ppatch/ppatch-1.0.ebuild");
+    fs::create_dir_all(ebuild_path.parent().unwrap()).unwrap();
+    fs::write(&ebuild_path, ebuild).unwrap();
+    // The hand-written md5-cache entry `list_candidates` reads (real MD5,
+    // like every committed fixture entry).
+    let digest = format!("{:x}", md5::Md5::digest(ebuild.as_bytes()));
+    let cache_dir = repo.join("metadata/md5-cache/app-misc");
+    fs::create_dir_all(&cache_dir).unwrap();
+    fs::write(
+        cache_dir.join("ppatch-1.0"),
+        format!("DEFINED_PHASES=install unpack\nDESCRIPTION=backlog #540 pin\nEAPI=8\nKEYWORDS=amd64\nSLOT=0\n_md5_={digest}\n"),
+    )
+    .unwrap();
+    fs::create_dir_all(repo.join("profiles")).unwrap();
+    fs::write(repo.join("profiles/repo_name"), "up540\n").unwrap();
+    fs::write(repo.join("profiles/categories"), "app-misc\n").unwrap();
+    fs::create_dir_all(repo.join("metadata")).unwrap();
+    fs::write(repo.join("metadata/layout.conf"), "masters = testrepo\n").unwrap();
+    fs::create_dir_all(cfg.join("etc/portage/repos.conf")).unwrap();
+    fs::write(
+        cfg.join("etc/portage/repos.conf/r.conf"),
+        format!(
+            "[DEFAULT]\nmain-repo = up540\n\n[testrepo]\nlocation = {}\n\n[up540]\nlocation = {}\n",
+            fixtures_root().display(),
+            repo.display()
+        ),
+    )
+    .unwrap();
+    let mut inner_hex = String::new();
+    let mut sorted: Vec<(&str, &[u8])> = patches.to_vec();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    for (basename, body) in &sorted {
+        let inner = format!("{:x}", sha2::Sha256::digest(body));
+        inner_hex.push_str(&inner);
+        let _ = basename;
+    }
+    if !patches.is_empty() {
+        let patch_dir = cfg.join("etc/portage/patches/app-misc/ppatch");
+        fs::create_dir_all(&patch_dir).unwrap();
+        for (basename, body) in patches {
+            fs::write(patch_dir.join(basename), body).unwrap();
+        }
+    }
+    let outer = format!("{:x}", sha2::Sha256::digest(inner_hex.as_bytes()));
+    (cfg, repo, outer)
+}
+
+/// The expected `user_patch.digests` bytes: the `hash\0basename\0` rows in
+/// sorted-basename order (the shell's `printf '%s\0' hash basename`).
+fn expected_digests_file(patches: &[(&str, &[u8])]) -> Vec<u8> {
+    use sha2::Digest as _;
+
+    let mut sorted: Vec<(&str, &[u8])> = patches.to_vec();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out = Vec::new();
+    for (basename, body) in &sorted {
+        let inner = format!("{:x}", sha2::Sha256::digest(body));
+        out.extend_from_slice(inner.as_bytes());
+        out.push(0);
+        out.extend_from_slice(basename.as_bytes());
+        out.push(0);
+    }
+    out
+}
+
+/// Runs `--buildpkgonly` for `app-misc/ppatch-1.0` from the staged tree and
+/// returns the built multi-instance gpkg path.
+fn build_ppatch_binpkg(cfg: &std::path::Path, pkgdir: &std::path::Path) -> std::path::PathBuf {
+    let repos = find_repos(cfg).unwrap();
+    let entries = vec![GraphEntry {
+        discovery: 0,
+        category: "app-misc".into(),
+        package: "ppatch".into(),
+        outcome: PretendOutcome::New {
+            version: "1.0".into(),
+        },
+        blockers: vec![],
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        repo_name: Some("up540".into()),
+        use_flags_display: vec![],
+        use_expand_display: vec![],
+        use_expand_display_p: vec![],
+        keyword_mask: None,
+        new_slot: false,
+        interactive: false,
+        fetch_restrict: false,
+        fetch_restrict_satisfied: false,
+        download_files: Vec::new(),
+        oldbest: vec![],
+        required_by: vec![],
+        source: CandidateSource::Ebuild,
+        provenance: Default::default(),
+        keyword_suggestion: None,
+        use_suggestion: None,
+        parent_use_suggestion: None,
+        targets_running_root: false,
+        remote_binary: false,
+        build_id: None,
+        build_time: None,
+        deps: Vec::new(),
+    }];
+    let result = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &tempdir(),
+        portage_tmpdir: &tempdir(),
+        options: &PackageOptions {
+            debug: false,
+            pkgdir: pkgdir.to_path_buf(),
+            distdir: tempdir(),
+            config_root: cfg.to_path_buf(),
+            shell: PackageOptions::default().shell,
+            binpkg_multi_instance: true,
+            ..PackageOptions::default()
+        },
+        keep_going: false,
+        mode: StatusMode::for_tests(),
+    });
+    assert!(result.is_ok(), "{result:?}");
+    let gpkg = pkgdir.join("app-misc/ppatch/ppatch-1.0-1.gpkg.tar");
+    assert!(gpkg.is_file(), "multi-instance gpkg layout: {gpkg:?}");
+    gpkg
+}
+
+/// Backlog #540 (oracle: host 3.0.83-r1 `--buildpkgonly` of the `up509`
+/// tree, `LLM/evidence/2026-10-23-509/`): a build with user patches applied
+/// records them exactly like Portage -- `build-info/USER_PATCHES` (sha256
+/// over the concatenated per-patch sha256s) and `build-info/user_patch.digests`
+/// (`hash\0basename\0` per patch) packed into the gpkg `metadata.tar`, plus
+/// the `USER_PATCHES` stanza key on inject -- while a patch-free build
+/// carries neither (host `up-d` stanza has no key). The digests are
+/// byte-identical to the vendored `eapply_user` both managers run, so the
+/// expected value is recomputed here from the patch bytes, not read back
+/// from portuale output.
+#[test]
+fn buildpkgonly_records_user_patches_in_metadata_and_index() {
+    let patch_body = b"--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hello-ppatch\n";
+    let scratch = tempdir();
+    let (cfg, _repo, outer) = stage_user_patch_tree(&scratch, &[("user.patch", patch_body)]);
+    let pkgdir = tempdir();
+    let gpkg = build_ppatch_binpkg(&cfg, &pkgdir);
+    let meta = crate::binpkg::read_gpkg_metadata(&gpkg).expect("gpkg metadata parses");
+    assert_eq!(
+        meta.get("USER_PATCHES").map(String::as_str),
+        Some(outer.as_str()),
+        "metadata USER_PATCHES is the shell-computed digest"
+    );
+    assert_eq!(
+        meta.get("user_patch.digests").map(|s| s.as_bytes()),
+        Some(expected_digests_file(&[("user.patch", patch_body)]).as_slice()),
+        "metadata digests file is the NUL-separated (hash, basename) rows"
+    );
+    let packages = fs::read_to_string(pkgdir.join("Packages")).unwrap();
+    assert!(
+        packages.contains(&format!("USER_PATCHES: {outer}\n")),
+        "inject carries the key, like the host up-a stanza: {packages}"
+    );
+
+    // The patch-free side: without local patches the build records
+    // neither the metadata members nor the stanza key (host `up-d`).
+    fs::remove_dir_all(cfg.join("etc/portage/patches")).unwrap();
+    let pkgdir2 = tempdir();
+    let gpkg2 = build_ppatch_binpkg(&cfg, &pkgdir2);
+    let meta2 = crate::binpkg::read_gpkg_metadata(&gpkg2).expect("gpkg metadata parses");
+    assert!(
+        !meta2.contains_key("USER_PATCHES") && !meta2.contains_key("user_patch.digests"),
+        "no patch members without patches: {:?}",
+        meta2.keys().collect::<Vec<_>>()
+    );
+    let packages2 = fs::read_to_string(pkgdir2.join("Packages")).unwrap();
+    assert!(
+        !packages2.contains("USER_PATCHES"),
+        "no stanza key without patches, like the host up-d stanza"
+    );
+}
+
+/// Backlog #541 (oracle: `LLM/evidence/2026-10-23-509/captures/14-merge-match.*`
+/// plus the VDB listing in the S10 working notes): a binary merge installs
+/// both binpkg metadata members into the VDB (`USER_PATCHES` and
+/// `user_patch.digests`), which is what a later `--usepkg` resolve and the
+/// extraction table read. Pinned end to end: build under patches, merge the
+/// built gpkg with `merge_binpkg`, read the VDB back byte-for-byte.
+#[test]
+fn merge_binpkg_copies_user_patch_files_into_the_vdb() {
+    let patch_body = b"--- /dev/null\n+++ b/hello.txt\n@@ -0,0 +1 @@\n+hello-ppatch\n";
+    let scratch = tempdir();
+    let (cfg, _repo, outer) = stage_user_patch_tree(&scratch, &[("user.patch", patch_body)]);
+    let pkgdir = tempdir();
+    let gpkg = build_ppatch_binpkg(&cfg, &pkgdir);
+
+    let root = tempdir();
+    fs::create_dir_all(&root).unwrap();
+    let outcome = crate::ebuild_merge::merge_binpkg(
+        &gpkg,
+        &root,
+        &tempdir(),
+        &crate::ebuild_merge::MergeOptions::default(),
+    )
+    .expect("merge succeeds");
+    assert_eq!(outcome.status, 0);
+
+    // Both members land in the VDB verbatim (Portage installs every
+    // build-info file; the manual probe agreed byte-for-byte).
+    let vdb = root.join("var/db/pkg/app-misc/ppatch-1.0");
+    assert_eq!(
+        fs::read_to_string(vdb.join("USER_PATCHES")).unwrap().trim(),
+        outer.as_str(),
+        "VDB USER_PATCHES is the shell-computed digest"
+    );
+    assert_eq!(
+        fs::read(vdb.join("user_patch.digests")).unwrap(),
+        expected_digests_file(&[("user.patch", patch_body)]),
+        "VDB user_patch.digests is the NUL-separated rows"
+    );
+}

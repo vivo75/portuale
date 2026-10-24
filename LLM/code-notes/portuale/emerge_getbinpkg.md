@@ -95,6 +95,9 @@
 - Backlog #333: Portage's per-task `config.reload()` refreshes the protect lists its `dblink` reads (`emerge_build::reloaded_config_protect`).
 - The completed line ports `PackageMerge._install_exit`'s per-package line (backlog #177): `Completed (N of M) cpv::repo`.
 
+## fn print_user_patch_table (#542)
+- Called between the foreground `>>> Extracting info` and `>>> Extracting <cpv>` lines: reads the archive's `user_patch.digests` member (`.gpkg.tar` vs xpak dispatch like `from_binpkg`), compares the local set (`UserPatchSet::has` + `digest` over the entry's category/package/version/slot) against the archive's lowercased `USER_PATCHES`, prints the table (stdout, `INFORM`) and warnings (stderr, `WARN`) with the shared progress colorizer (plain off a terminal, like every other merge line). Silent when the member is absent or the archive unreadable (the merge fails just below with its own error). Background mode prints nothing here (like the other foreground lines); the build log keeps only the extract header (accepted narrowing, same as the rest of the foreground merge text).
+
 ## fn missing_binpkg_block
 - Portage `_emerge/BinpkgVerifier._start`'s `os.stat` ENOENT text (`BinpkgVerifier.py:40-60`, backlog #187), as one block (each line `\n`-terminated, no surrounding blanks -- the bed oracle's bytes): the stale-index arm when the cpv is still in the `<pkgdir>/Packages` index (the file was removed without refreshing it), else Portage's `!!! Fetching Binary failed` arm. Pure shaper, for tests and the `build.log` write alike.
 

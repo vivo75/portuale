@@ -1231,6 +1231,15 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
             crate::fetch::print_verified_names(&file, &names);
         }
         println!(">>> Extracting info");
+        print_user_patch_table(PrintUserPatchTableArgs {
+            binpkg_path: &binpkg_path,
+            config,
+            category: &entry.category,
+            package: &entry.package,
+            version: &version,
+            slot: entry.slot.as_deref(),
+            color: &color,
+        });
         println!(">>> Extracting {cp}-{version}");
     }
     // The per-package line between locating/fetching above and the vdb merge
@@ -1628,6 +1637,81 @@ pub(crate) fn checksum_filter_from_config(config: &portage_profile::Config) -> O
         .ok()
         .or_else(|| config.other_vars.get("PORTAGE_CHECKSUM_FILTER").cloned())
         .filter(|s| !s.trim().is_empty())
+}
+
+/// Arguments of [`print_user_patch_table`].
+pub(crate) struct PrintUserPatchTableArgs<'a> {
+    pub(crate) binpkg_path: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    pub(crate) slot: Option<&'a str>,
+    pub(crate) color: &'a crate::color::Colorizer,
+}
+
+/// The merge-time user-patch table on the foreground terminal, between
+/// `>>> Extracting info` and `>>> Extracting <cpv>`: the table from the
+/// binpkg's `user_patch.digests` member (stdout) plus the mismatch /
+/// malformed warnings (stderr). A binpkg without the member prints nothing;
+/// an unreadable archive prints nothing either (the merge itself fails just
+/// below with its own error). The local half mirrors the resolve filter's
+/// (`binary_user_patches_ok`): whether any patch set matches, and the
+/// combined digest -- with no `--binpkg-respect-user-patches` exemption,
+/// like Portage (the oracle `16-merge-mismatch` warns under `=n`).
+// Portage: _emerge/Binpkg.py, `_unpack_metadata` (upstream `3071bc985`)
+pub(crate) fn print_user_patch_table(args: PrintUserPatchTableArgs<'_>) {
+    let PrintUserPatchTableArgs {
+        binpkg_path,
+        config,
+        category,
+        package,
+        version,
+        slot,
+        color,
+    } = args;
+    let name = binpkg_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let meta = if name.ends_with(".gpkg.tar") {
+        crate::binpkg::read_gpkg_metadata(binpkg_path)
+    } else {
+        crate::binpkg::read_xpak_metadata(binpkg_path)
+    };
+    let Ok(meta) = meta else { return };
+    let Some(raw) = meta.get("user_patch.digests") else {
+        return;
+    };
+    let slot = slot.unwrap_or("0");
+    let local_has = config
+        .user_patches
+        .as_ref()
+        .is_some_and(|set| set.has(category, package, version, slot));
+    let local_digest = config
+        .user_patches
+        .as_ref()
+        .map(|set| set.digest(category, package, version, slot))
+        .unwrap_or_default();
+    let index_digest = meta
+        .get("USER_PATCHES")
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    let Some((stdout, stderr)) = crate::ebuild_merge::user_patch_extract_report(
+        Some(raw.as_bytes()),
+        local_has,
+        &local_digest,
+        &index_digest,
+        crate::ebuild_merge::merge_term_columns(),
+    ) else {
+        return;
+    };
+    for line in stdout {
+        println!("{}{line}", color.c("INFORM", " * "));
+    }
+    for line in stderr {
+        eprintln!("{}{line}", color.c("WARN", " * "));
+    }
 }
 
 /// Applies `PORTAGE_CHECKSUM_FILTER` to `hashes`, keeping at least one hash

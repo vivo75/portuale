@@ -104,6 +104,20 @@ impl UserPatchSet {
         ]
     }
 
+    /// Whether any patch set matches the package at all (any of the four
+    /// directory keys present and non-empty, even if every file in it is
+    /// empty): Portage's `pkg in settings._user_patches`
+    /// (`UserPatches.__contains__`), the first half of the merge-time
+    /// mismatch gate (`Binpkg.py`, `_unpack_metadata`). An all-empty set
+    /// still counts, while [`UserPatchSet::digest`] is `""` for it.
+    /// Portage: UserPatches.py, `__contains__`
+    #[must_use]
+    pub fn has(&self, category: &str, package: &str, version: &str, slot: &str) -> bool {
+        Self::keys(category, package, version, slot)
+            .iter()
+            .any(|key| self.dirs.contains_key(key))
+    }
+
     /// Merged `(basename, hash)` rows for the package: the four keyed
     /// directories overlaid least-to-most specific.
     fn merged(

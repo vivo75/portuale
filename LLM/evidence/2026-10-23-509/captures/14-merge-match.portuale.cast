@@ -1,0 +1,12 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792873506,"command":"/var/tmp/ev509-bin/emerge -K --color=n app-misc/up-a","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.009, "o", "Calculating dependencies ... done!\r\nDependency resolution took (backtrack: 0/20).\r\n\r\n"]
+[0.001, "o", "\r\n>>> Emerging binary (\u001b[33;01m1\u001b[39;49;00m of \u001b[33;01m1\u001b[39;49;00m) \u001b[35mapp-misc/up-a-1.0::up509\u001b[39;49;00m for /var/tmp/ev509-tree/root-14\r\n"]
+[0.000, "o", "\u001b[32m * \u001b[39;49;00mup-a-1.0-1.gpkg.tar MD5 SHA1 size ;-) ...                             \u001b[34;01m[ \u001b[39;49;00m\u001b[32;01mok\u001b[39;49;00m\u001b[34;01m ]\u001b[39;49;00m\r\n>>> Extracting info\r\n"]
+[0.001, "o", "\u001b[32m * \u001b[39;49;00mThis binary package was built with user patches applied:\r\n\u001b[32m * \u001b[39;49;00m=============================================================================\r\n\u001b[32m * \u001b[39;49;00muser.patch  813aab24dd88be987aee6db477fa25415712efddf7214ba779b03a715ac32b99\r\n\u001b[32m * \u001b[39;49;00m=============================================================================\r\n\u001b[32m * \u001b[39;49;00m\r\n>>> Extracting app-misc/up-a-1.0\r\n"]
+[0.000, "o", "\r\n"]
+[0.000, "o", ">>> Installing (\u001b[33;01m1\u001b[39;49;00m of \u001b[33;01m1\u001b[39;49;00m) \u001b[35mapp-misc/up-a-1.0::up509\u001b[39;49;00m to /var/tmp/ev509-tree/root-14\r\n"]
+[0.068, "o", "\r\n>>> Completed (\u001b[33;01m1\u001b[39;49;00m of \u001b[33;01m1\u001b[39;49;00m) \u001b[35mapp-misc/up-a-1.0::up509\u001b[39;49;00m to /var/tmp/ev509-tree/root-14\r\n"]
+[0.001, "o", "\r\n * GNU info directory index is up-to-date.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev509-tree\u0007"]
+[0.000, "x", "0"]
