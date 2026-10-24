@@ -18,6 +18,7 @@
 ## portage-dep
 - [crates/portage-dep/src/eapi.rs](portage-dep/eapi.md) — Rust port of Portage's EAPI attribute table. Context moved out of the code comments (#341 S1); the code keeps only the short why.
 - [crates/portage-dep/src/lib.rs](portage-dep/lib.md) — Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, `match_from_list`, USE-dep evaluation, `extract_affecting_use`).
+- [crates/portage-dep/src/tests_grammar.rs](portage-dep/tests_grammar.md) — S2 grammar tests: the oracle battery plus focused EAPI/conditional/build-id pins.
 
 ## portage-fetch
 - [crates/portage-fetch/src/layout.rs](portage-fetch/layout.md) — Portage's distfiles mirror layouts: the path math and `layout.conf` parsing.

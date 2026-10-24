@@ -211,6 +211,9 @@ Rust port of a deliberately narrowed subset of Portage's `portage.dep` (`Atom`, 
 ## tests: extract_affecting_use_tests
 - `matches_portages_test_corpus`: the 23 passing cases from lib/portage/tests/dep/test_extract_affecting_use.py, verbatim; `malformed_syntax_returns_none`: the 15 cases from its `test_cases_xfail` (Portage raises `InvalidDependString`; portuale returns `None`).
 
+## tests: grammar_matches_portage_on_the_oracle_battery (#528)
+- The battery is 86 atoms × 9 modes since #528 appended the three #510 probe atoms (`games-arcade/2048`, `dev-util/timidity--`, `cat/pkg[a(+),-a]`) to `LLM/evidence/2026-10-11-341-oracle/probe_atoms.py`; `LLM/tools/atom_oracle_table.py` regenerated `testdata/atoms-3.0.83.tsv` live against Portage 3.0.83 (775 lines). The reducer half of those rows lives in `portage-use-reduce` and `portage-repo::dep_validate` (#527).
+
 ## fn match_from_list (result memo, backlog #441 S1 / #457)
 - Per-pair verdicts cached thread-locally, keyed `(atom_str, candidate_str, build_id)`: matching is pure in those three strings (every caller parses match-mode via `parse_match_atom`; the two direct `match_atom_matches_candidate` callers do too). `match_from_list_with_build_id` rides the same table instead of re-parsing per pair. The empty-list verdict still tracks the parse (`None` for a bad atom even with no candidates), preserving the old `?`-first shape.
 - Pinned by `cached_match_from_list_matches_fresh_parse_and_is_stable_across_calls` (fresh `parse_match_atom` + `match_atom_matches_candidate` as the oracle, plus the empty-list arms).

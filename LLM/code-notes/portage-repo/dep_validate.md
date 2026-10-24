@@ -10,6 +10,9 @@ Ebuild and binary `*DEPEND` validation (#341 S4).
 - An EAPI Portage itself cannot parse (`3_pre1`, padded) has no validation behaviour (eapi.py:224-229 raises there); reported as the first token's syntax failure with the S1 cut text (`invalid EAPI '<e>'`).
 - No new memo: `is_visible` is already memoised (visibility.rs:236); a `(repo_location, cpv)` key would collide for binaries (all have an empty `repo_location`) and for different configs.
 
+## fn validate_dep_string (visible reducer text, #531)
+- The hook always supplies `is_valid_flag`, so Portage's C fast path is skipped (it requires `is_valid_flag is None`, dep/__init__.py:1079-1086) and a bad use dep surfaces as the Python wrapper `Invalid atom (Invalid use dep: '-a'), token 1` (dep/__init__.py:974), not the C path's `invalid use dep token: '-a'`. That wrapper is what `emerge` prints in `masked by: invalid: <KEY>: …`; capture `LLM/evidence/2026-10-24-531/` (host and portuale byte-identical), pinned by `reducer_rejects_the_510_probe_atom_with_the_visible_wrapper`.
+
 ## fn invalid_dep_reasons
 - Portage `Package._validate_deps` + `_metadata_exception` for a repo/binary candidate, rendered `invalid: <KEY>: <text>`, grouped by category in first-insertion order (Package.py:534-557 files each error under its category; depgraph.py:12560-12563 iterates the buckets in that order — so BDEPEND IUSE.missing + DEPEND syntax + RDEPEND IUSE.missing prints BDEPEND, RDEPEND, DEPEND; S0 cell `t341-mixcat`).
 - Keys visited in `_dep_keys` order (`BDEPEND DEPEND IDEPEND PDEPEND RDEPEND`, Package.py:93); each key's first error files under its category. Categorized errors (IUSE.missing, EAPI.incompatible) print `<KEY>: <message>` without the `Invalid atom (…), token N` wrapper.

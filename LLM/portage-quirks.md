@@ -1,10 +1,15 @@
 # Portage quirks and suspected bugs
 
-Portuale mimics Portage (3.0.82.2) closely, because Portage is the oracle. But
+Portuale mimics Portage (3.0.83) closely, because Portage is the oracle. But
 knowing where Portage itself looks wrong has value: for users who hit the same
 surprise, for upstream reports, and for deciding later whether to copy a quirk
 or fix it. Every place where a Portage behaviour looks unintended gets an entry
 here, whether or not portuale copies it.
+
+**Version wording.** `portage.VERSION` and `emerge --version` read `3.0.83`;
+`3.0.83-r1` is the installed ebuild (`sys-apps/portage-3.0.83-r1`, one
+downstream patch, bug 984255). Entries written before 2026-10-24 used the
+ebuild revision as the version; they now say `3.0.83` (backlog #530).
 
 **Important: which applet follows Portage.** `portuale emerge` is bound to
 Portage's behaviour strictly: it copies every quirk below, because its output
@@ -102,7 +107,7 @@ when a claim turns out false.
 
 - **Observed** (2026-10-23, backlog #506, `LLM/evidence/2026-10-23-506/`): for
   `dev-libs/cddseva` (`doc? ( B ) nls? ( B )`, `--autounmask-use=n`) Portage
-  3.0.83-r1 printed `(Change USE: -nls -doc)` in the recorded run and
+  3.0.83 printed `(Change USE: -nls -doc)` in the recorded run and
   `-doc -nls` under `PYTHONHASHSEED=0..6`, `-nls -doc` under `PYTHONHASHSEED=7`;
   the twelve-flag `PORTAGE_CIRCULAR_MAX_USE_FLAGS=16` suggestion is a random
   permutation as well.
@@ -112,7 +117,7 @@ when a claim turns out false.
   hashing is seeded per process.
 - **Why it looks wrong**: the same resolution prints a different line from run to
   run; the per-edge `USE=` list added in 3.0.83 (`_edge_description`) is sorted.
-- **First seen**: Portage 3.0.83-r1 (the only version checked; the join is older).
+- **First seen**: Portage 3.0.83 (the only version checked; the join is older).
 - **Portuale**: `portuale emerge` prints the flags sorted; compare the line as a
   set (`compare.sh` in the evidence directory does). `portuale mrg`: same.
 
@@ -131,7 +136,7 @@ when a claim turns out false.
 - **Why it looks wrong**: the dead branch says the author meant `-arch` to be a
   distinct, not config-liftable mask; the user is told a keyword is missing when
   the ebuild explicitly marks the arch broken.
-- **First seen**: Portage 3.0.83-r1 (the only version checked).
+- **First seen**: Portage 3.0.83 (the only version checked).
 - **Portuale**: `portuale emerge` copies it (`masked_deps.rs`,
   `candidate_masking_reasons`). `portuale mrg`: same until decided.
 
@@ -157,7 +162,7 @@ when a claim turns out false.
   `test_dep_parents`, `search_truncated`, `solutions` by cpv). The rotations are
   the same cycle reported again, so a consumer counting `len(cycles)` counts
   members, not cycles.
-- **First seen**: Portage 3.0.83-r1 (the option is new in 3.0.83).
+- **First seen**: Portage 3.0.83 (the option is new in 3.0.83).
 - **Portuale**: `portuale emerge` prints `use_changes` objects with their flags
   sorted and the solutions of one package in sorted order (one of Portage's
   possible outputs), and copies the rotations exactly. `portuale mrg`: same until
@@ -188,23 +193,31 @@ when a claim turns out false.
   the removal itself is consistent; the wording is what looks off. The commit's
   own comment ("Only protected because --depclean was given arguments") shows the
   author considered the parent set, and did not mention world.
-- **First seen**: Portage 3.0.83-r1 (`96c320967`, bug 346351).
+- **First seen**: Portage 3.0.83 (`96c320967`, bug 346351).
 - **Portuale**: copies it. `pretend/removal/depclean.rs` and
   `portage-repo/src/depclean.rs` (`cycle_suggestions`) print the notice for a
   world-listed member, because portuale drops `@selected` seeds in `args` mode
   like Portage. Pinned by `test_508_world_listed_member_still_gets_the_notice`.
 
-## Q8. `use_reduce` without `token_class` accepts a use dep that `Atom` rejects, and the reducer's error text changed in 3.0.83 (suspect)
+## Q8. `use_reduce` without `token_class` accepts a use dep that `Atom` rejects, and its two error texts differ (suspect)
 
 - **Observed** (2026-10-23, backlog #510, `LLM/evidence/2026-10-23-510/`,
-  `probe.py` run with `python3 -I` on the host and on the 3.0.82.2 tag built
-  with its C parser): for `cat/pkg[a(+),-a]` in EAPI 8 and in EAPI-less mode,
+  `probe.py` run with `python3 -I` on the host and on the 3.0.82.2 tag, first
+  built by hand and rebuilt with the tag's meson `_parser` target for #529):
+  for `cat/pkg[a(+),-a]` in EAPI 8 and in EAPI-less mode,
   `Atom("cat/pkg[a(+),-a]")` raises `Invalid use dep: '-a'`, while
   `use_reduce("cat/pkg[a(+),-a]", eapi="8")` (no `token_class`) returns
-  `['cat/pkg[a(+),-a]']`. With `token_class=Atom` the reducer raises
-  `InvalidDependString` on both versions, with different text: 3.0.82.2
-  `Invalid atom (Invalid use dep: '-a'), token 1`, 3.0.83-r1 `invalid use dep
-  token: '-a'` (the C fast path, `src/dep_parser.c` `py_classify_use_deps`).
+  `['cat/pkg[a(+),-a]']`. With `token_class=Atom` **and no `is_valid_flag`**
+  the reducer raises `InvalidDependString: invalid use dep token: '-a'` on
+  **both** 3.0.82.2 and 3.0.83 (the C fast path, `src/dep_parser.c`
+  `py_classify_use_deps`); that text did not change in 3.0.83.
+- **The two texts**: `Package._validate_deps` passes `is_valid_flag`, and the
+  C fast path requires `is_valid_flag is None`
+  (`lib/portage/dep/__init__.py:1079-1086`), so `emerge` takes the Python
+  path and prints the wrapper `Invalid atom (%s), token %s` (:974). The
+  capture is `LLM/evidence/2026-10-24-531/`: `emerge -p` masks the package
+  with `invalid: RDEPEND: Invalid atom (Invalid use dep: '-a'), token 1`,
+  identical on the host and on portuale.
 - **Why**: `use_reduce` only builds `Atom`s when `token_class` is given
   (`lib/portage/dep/__init__.py`, the fast-path gate `token_class is Atom`, and
   the regex path that calls `token_class`). Without it the tokens are plain
@@ -218,23 +231,30 @@ when a claim turns out false.
 - **Not reproduced**: the plan (`LLM/02.442-port-portage-3.0.83.opus.md`,
   S10b) said 3.0.82.2 made the two entry points disagree on `games-arcade/2048`,
   `dev-util/timidity--` and `cat/pkg[a(+),-a]`. On the 3.0.82.2 tag, built with
-  its own C parser, all three agree: the C-parser fixes it needs
-  (`6a64fb2f4`, `4f76d9ee5`, `a2206fc32`, equal in 3.0.83 to `450282d84`,
-  `8bf578fd7`, `bdce305cd`) are already in that tag. The disagreement existed
-  only before those commits, not in a released version.
-- **First seen**: 3.0.82.2 (string path, and the message text); 3.0.83-r1 for
-  the new message text.
+  its own C parser (hand-built and meson-built), all three agree: the C-parser
+  fixes it needs (`6a64fb2f4`, `4f76d9ee5`, `a2206fc32`, equal in 3.0.83 to
+  `450282d84`, `8bf578fd7`, `bdce305cd`) are already in that tag. The
+  disagreement existed only before those commits, not in a released version.
+  Erratum: `LLM/02.442-port-portage-3.0.83.errata.md`.
+- **First seen**: 3.0.82.2 (the string path and both error texts).
 - **Portuale**: copies the string path. `portage-use-reduce`'s `use_reduce_flat`
   takes the plain token list and only the `_validated` variant runs an atom hook
-  (`crates/portage-use-reduce/src/lib.rs`). The `Invalid atom (…), token N`
-  wrapper is portuale's, pinned there, and the 3.0.83 text is not copied.
+  (`crates/portage-use-reduce/src/lib.rs`).
+- **Decision (backlog #526): mimic.** `portuale emerge` and `portuale mrg` both
+  reduce dep strings through `portage-repo`'s `validate_dep_string`, which
+  always supplies the Atom hook and the valid-flag closure
+  (`crates/portage-repo/src/dep_validate.rs`), so the loose string path is
+  never the validation path in either applet. It stays loose for the
+  flag-only reductions (collisions, licence/fetch restriction, slot
+  expansion), where Portage is just as loose and an atom's use-dep defaults
+  cannot change the answer.
 
 ## Q9. A deprecated profile `virtuals` file is reported through `warnings.warn`, so the interpreter's install path and a source line of Portage's module are printed (suspect)
 
-- **Observed** (2026-10-24, backlog #513, `LLM/evidence/2026-10-24-513/captures/02-profile-nonempty.portage.err`, host 3.0.83-r1): a non-empty profile `virtuals` file prints, on stderr, `/usr/lib/python3.14/site-packages/portage/package/ebuild/_config/VirtualsManager.py:54: UserWarning: <profile>/virtuals is deprecated, support for PROVIDE virtuals was removed in portage-2.3.25, use GLEP 37 virtual packages instead` and then the line `  warnings.warn(`. It is printed once per run for each such file (chain order, parents first, `/etc/portage/profile` last) and for every action that loads the config (`-p`, `-s`, `--info`, `--version`, merges). The user-level `/etc/portage/virtuals` is different: a plain `writemsg` block with no Python frame, printed only by the validating actions (`config.py:1474-1479`).
+- **Observed** (2026-10-24, backlog #513, `LLM/evidence/2026-10-24-513/captures/02-profile-nonempty.portage.err`, host 3.0.83): a non-empty profile `virtuals` file prints, on stderr, `/usr/lib/python3.14/site-packages/portage/package/ebuild/_config/VirtualsManager.py:54: UserWarning: <profile>/virtuals is deprecated, support for PROVIDE virtuals was removed in portage-2.3.25, use GLEP 37 virtual packages instead` and then the line `  warnings.warn(`. It is printed once per run for each such file (chain order, parents first, `/etc/portage/profile` last) and for every action that loads the config (`-p`, `-s`, `--info`, `--version`, merges). The user-level `/etc/portage/virtuals` is different: a plain `writemsg` block with no Python frame, printed only by the validating actions (`config.py:1474-1479`).
 - **Why it looks wrong**: the frame names the interpreter's install prefix and a line of Portage's own module, which is an implementation detail of the Python warnings machinery and differs by machine. Portage's other deprecation of this kind has the same shape: `KeywordsManager.py:88-92` (`package.keywords`) is also `warnings.warn(... UserWarning)`, so the frame is not specific to `virtuals`. The two user-level notices (`--info` gets the profile frame but not the `/etc/portage/virtuals` block) are also inconsistent with each other.
 - **Portuale**: copies the message and the `  warnings.warn(` line, with the location written as `portage/package/ebuild/_config/VirtualsManager.py:54` (no interpreter prefix; the pins stay hermetic). The user block is copied in the validating actions only. Portuale's `package.keywords` notice (`portage-profile/src/resolve/package_masks.rs`, `atom_lines`) prints the message alone and has no frame; whether Portage prints the frame there too is not yet captured (backlog #547).
-- **First seen**: 3.0.83-r1 (commit `3a3a119d8`, `64e2735c3`).
+- **First seen**: 3.0.83 (commit `3a3a119d8`, `64e2735c3`).
 
 ## Q10. A hard link member breaks the compressed-stream extraction that follows it (suspect)
 
@@ -277,7 +297,7 @@ when a claim turns out false.
 - **Why it looks wrong**: `--help` text is stable, but the error-path
   usage is not -- the same command prints different help in different
   processes.
-- **First seen**: 3.0.83-r1 (host Portage, `LLM/evidence/2026-10-23-507/
+- **First seen**: 3.0.83 (host Portage, `LLM/evidence/2026-10-23-507/
   captures/53-none.portage.err` vs re-runs).
 - **Portuale**: prints the oracle capture's order verbatim on every
   `invalid choice` error (backlog #520), like the sorted `Change USE:`

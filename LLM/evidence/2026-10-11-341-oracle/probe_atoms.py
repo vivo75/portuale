@@ -1,6 +1,12 @@
 import sys, os
 from portage.dep import Atom, _c_dep_parser
 from portage.exception import InvalidAtom
+# The battery is the atom list LLM/tools/atom_oracle_table.py reads. Its
+# tail rows (games-arcade/2048, dev-util/timidity--, cat/pkg[a(+),-a])
+# were added 2026-10-24 by backlog #528 from the #510 probe
+# (LLM/evidence/2026-10-23-510/probe.py): the three atoms the 3.0.83
+# C-parser fixes are about. They belong here, not in a private test list,
+# so the regenerated TSV exercises them in all nine modes.
 cases = """dev-libs/foo
 dev-libs/foo::gentoo
 =dev-libs/foo-1.0-2
@@ -83,7 +89,10 @@ dev-libs/foo::
 dev-libs/foo/bar
 foo
 virtual/foo-1.0:0
-=virtual/foo-1.0:0""".split("\n")
+=virtual/foo-1.0:0
+games-arcade/2048
+dev-util/timidity--
+cat/pkg[a(+),-a]""".split("\n")
 modes = [
  ("None", dict()),
  ("e5", dict(eapi="5")),

@@ -146,6 +146,9 @@ All probe scripts and raw transcripts are in this directory: `probe_atoms.py`/`c
 
 - **Command:** `python3 probe_atoms.py`, once with the default (C) parser and once with `PORTAGE_NATIVE_DEP_PARSER=0`.
 - **Result:** `diff` of the two outputs says **IDENTICAL** (83 strings × 9 flag modes).
+- **Note (2026-10-24, backlog #528):** `probe_atoms.py` was later extended to
+  86 strings (the three #510 probe atoms appended at the end); this run
+  covered the original 83, so its result line is left as recorded.
 - **Modes:**
   - `None` = `Atom(s)`
   - `e5/e7/e8/e9` = `Atom(s, eapi="N")`

@@ -1,6 +1,6 @@
 //! S2 grammar tests: the oracle battery plus focused EAPI/conditional/build-id pins.
 //!
-//! The battery TSV is generated from Portage 3.0.83-r1 by
+//! The battery TSV is generated from Portage 3.0.83 by
 //! `LLM/tools/atom_oracle_table.py` (re-probed live, never hand-copied).
 //! The 3.0.82.2 table is kept beside it (`testdata/atoms-3.0.82.2.tsv`).
 //! Focused tests cite `LLM/evidence/2026-10-11-341-oracle/probe2.py` and the
@@ -130,8 +130,9 @@ fn render_fields(atom: &Atom) -> String {
     )
 }
 
-/// Every row of testdata/atoms-3.0.83.tsv, generated from Portage 3.0.83-r1
-/// by LLM/tools/atom_oracle_table.py (oracle probe battery, 2026-10-23).
+/// Every row of testdata/atoms-3.0.83.tsv, generated from Portage 3.0.83
+/// by LLM/tools/atom_oracle_table.py (oracle probe battery, 2026-10-23; the
+/// tail three atoms are the #510 probe rows added by backlog #528).
 /// The `S3OK` rows need the wildcard branch (S3); rows whose verdict starts
 /// with `S3` but is not `S3OK` stay skipped.
 #[test]
@@ -157,8 +158,8 @@ fn grammar_matches_portage_on_the_oracle_battery() {
             _ => unreachable!("unknown verdict {verdict:?}"),
         }
     }
-    // 83 oracle strings x 9 modes; the generator asserts both counts too.
-    assert_eq!(rows, 83 * 9);
+    // 86 oracle strings x 9 modes; the generator asserts both counts too.
+    assert_eq!(rows, 86 * 9);
 }
 
 // Portage: probe2.py rows 39-44 + dep/__init__.py:2101-2153 (EAPI gates,
@@ -319,50 +320,10 @@ fn eq_build_id_atom_matches_only_equal_build_id_candidate() {
     );
 }
 
-// #510: the three atoms the 3.0.83 C-parser fixes (450282d84, 8bf578fd7,
-// bdce305cd; the same fixes are in the 3.0.82.2 tag as 6a64fb2f4, 4f76d9ee5,
-// a2206fc32) were written against. Oracle: LLM/evidence/2026-10-23-510/
-// probe.py on the host Portage 3.0.83-r1, `python3 -I probe.py`:
-//   games-arcade/2048      Atom(eapi 8 and None): cp=games-arcade/2048, OK;
-//                          use_reduce(token_class=Atom): OK, the same atom.
-//   dev-util/timidity--    Atom: cp=dev-util/timidity--, OK (trailing hyphens
-//                          are name characters); use_reduce: OK.
-//   cat/pkg[a(+),-a]       Atom: ERR `Invalid use dep: '-a'`; use_reduce with
-//                          token_class=Atom: InvalidDependString (`invalid use
-//                          dep token: '-a'`, 3.0.83 C path). Without
-//                          token_class use_reduce returns the plain string
-//                          and does not validate it (quirk Q8).
-// portage-dep has no reducer: the reducer's Atom hook is this constructor, so
-// the reducer rows are asserted through it.
-#[test]
-fn reducer_probe_atoms_match_portage_3_0_83() {
-    let e8 = AtomOptions {
-        eapi: AtomEapi::Known(8),
-        ..AtomOptions::default()
-    };
-    let none = AtomOptions::default();
-    for (s, opts, eapi_str) in [
-        ("games-arcade/2048", &e8, "8"),
-        ("games-arcade/2048", &none, ""),
-        ("dev-util/timidity--", &e8, "8"),
-        ("dev-util/timidity--", &none, ""),
-    ] {
-        let atom = parse_atom_with(s, opts, eapi_str).expect(s);
-        let cp = s.to_string();
-        assert_eq!(
-            render_fields(&atom),
-            format!("cp={cp} op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0"),
-            "{s} [eapi {eapi_str:?}]"
-        );
-    }
-    for (opts, eapi_str) in [(&e8, "8"), (&none, "")] {
-        assert_eq!(
-            parse_atom_with("cat/pkg[a(+),-a]", opts, eapi_str).expect_err("cat/pkg[a(+),-a]"),
-            AtomError {
-                kind: AtomErrorKind::Invalid,
-                message: "Invalid use dep: '-a'".into(),
-            },
-            "[eapi {eapi_str:?}]"
-        );
-    }
-}
+// The three #510 probe atoms (games-arcade/2048, dev-util/timidity--,
+// cat/pkg[a(+),-a]) are the battery's tail rows now (backlog #528), so this
+// file pins the constructor verdicts for every mode. The reducer half of the
+// probe lives where the reducer's Atom hook does: portage-use-reduce's
+// `use_reduce_flat`/`use_reduce_flat_validated` tokenization rows (backlog
+// #527) and portage-repo's `validate_dep_string` rows in
+// crates/portage-repo/src/tests/dep_validate.rs (the wrapper emerge prints).

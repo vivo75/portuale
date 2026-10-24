@@ -219,3 +219,33 @@ fn visibility_memo_distinguishes_an_ebuild_from_its_binary_twin() {
     assert!(is_visible(&ebuild, "app-misc", "t341-good", &config));
     assert!(!is_visible(&binary, "app-misc", "t341-good", &config));
 }
+
+/// Backlog #531: the #510 probe atom through the *reducer* hook, which is the
+/// path `Package._validate_deps` uses. It passes `is_valid_flag`, so
+/// Portage's C fast path (`is_valid_flag is None` is one of its gates,
+/// dep/__init__.py:1079-1086) is skipped and the Python wrapper at :974 is
+/// the visible text: `emerge -p` masks the package with
+/// `invalid: RDEPEND: Invalid atom (Invalid use dep: '-a'), token 1`. The
+/// raw C text (`invalid use dep token: '-a'`) is what a `token_class=Atom`
+/// call *without* `is_valid_flag` raises, and it is not user-visible.
+/// Oracle: LLM/evidence/2026-10-24-531/ (host Portage 3.0.83 vs portuale,
+/// the `masked by:` line byte-identical).
+#[test]
+fn reducer_rejects_the_510_probe_atom_with_the_visible_wrapper() {
+    assert_eq!(
+        validate_dep_string("cat/pkg[a(+),-a]", "8", &|_| true)
+            .expect_err("the probe atom is invalid")
+            .text,
+        "Invalid atom (Invalid use dep: '-a'), token 1"
+    );
+    // The two atoms the same #510 probe shows the reducer accepts.
+    let atoms = validate_dep_string("games-arcade/2048 dev-util/timidity--", "8", &|_| true)
+        .expect("both probe atoms reduce");
+    assert_eq!(
+        atoms
+            .iter()
+            .map(|a| format!("{}/{}", a.category, a.package))
+            .collect::<Vec<_>>(),
+        ["games-arcade/2048", "dev-util/timidity--"]
+    );
+}

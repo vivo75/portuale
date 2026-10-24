@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the S2 oracle TSV from the installed Portage (do not hand-copy).
 
-Re-runs the ``probe_atoms.py`` battery (83 strings x 9 modes) against the
+Re-runs the ``probe_atoms.py`` battery (86 strings x 9 modes) against the
 *installed* Portage (3.0.83, native C parser on by default) and writes
 ``crates/portage-dep/src/testdata/atoms-<version>.tsv`` with columns
 ``atom \\t mode \\t verdict \\t fields-or-message``.
@@ -98,7 +98,7 @@ def main():
             f"{EXPECTED_PORTAGE_VERSION}: refusing to write a misnamed table"
         )
     cases = read_cases()
-    assert len(cases) == 83, len(cases)
+    assert len(cases) == 86, len(cases)
     n_s3 = 0
     with open(OUT, "w") as out:
         out.write("atom\tmode\tverdict\tdetail\n")

@@ -1673,4 +1673,62 @@ mod tests {
             );
         }
     }
+
+    /// Backlog #527 (the #510 probe atoms): the reducer hands each atom
+    /// token to the `token_class` hook whole and in one piece, so an Atom
+    /// hook rejects `cat/pkg[a(+),-a]` exactly where the constructor does.
+    /// Oracle: `LLM/evidence/2026-10-23-510/host-3.0.83.txt`
+    /// (`reduce-Atom` rows) and `p3082-3.0.82.2.meson.txt` (same verdicts).
+    #[test]
+    fn validated_walk_passes_probe_atoms_to_the_hook_whole() {
+        let mut seen: Vec<String> = Vec::new();
+        let mut hook = |tok: &str, _pos: usize| {
+            seen.push(tok.to_string());
+            if tok == "cat/pkg[a(+),-a]" {
+                Err(TokenError {
+                    message: "Invalid use dep: '-a'".to_string(),
+                    category: None,
+                })
+            } else {
+                Ok(())
+            }
+        };
+        let err = use_reduce_flat_validated(
+            &toks("games-arcade/2048 dev-util/timidity-- cat/pkg[a(+),-a]"),
+            &|_| true,
+            &mut hook,
+        )
+        .expect_err("the third atom is refused by the hook");
+        assert_eq!(
+            seen,
+            vec![
+                "games-arcade/2048".to_string(),
+                "dev-util/timidity--".to_string(),
+                "cat/pkg[a(+),-a]".to_string(),
+            ]
+        );
+        assert_eq!(
+            err.to_string(),
+            "Invalid atom (Invalid use dep: '-a'), token 3"
+        );
+    }
+
+    /// Backlog #526/#527: the string path does not parse the atom at all, so
+    /// it returns `cat/pkg[a(+),-a]` unchanged -- Portage's `use_reduce`
+    /// without `token_class` does the same (quirk Q8), and this crate copies
+    /// it deliberately: validation only happens through the hook.
+    ///
+    /// Oracle: `LLM/evidence/2026-10-23-510/host-3.0.83.txt` (`reduce-str`
+    /// rows: `['cat/pkg[a(+),-a]']`).
+    #[test]
+    fn string_path_returns_probe_atoms_unvalidated() {
+        let atoms = [
+            "games-arcade/2048",
+            "dev-util/timidity--",
+            "cat/pkg[a(+),-a]",
+        ];
+        let got = use_reduce_flat(&toks(&atoms.join(" ")), &set(&[]), MatchMode::Normal)
+            .expect("the string path never rejects a use dep");
+        assert_eq!(got, atoms.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    }
 }

@@ -1,0 +1,3 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792862189,"command":"bash LLM/evidence/2026-10-24-531/probe.sh portage /tmp/ev531-cast && bash LLM/evidence/2026-10-24-531/compare.sh /tmp/ev531-cast","env":{"SHELL":"/bin/bash"}}
+[2.082, "o", "01-rdepend-bad-dep     rc 1/  message DIFF\r\n  portage : - dev-libs/r531bad-1.0::testrepo (masked by: invalid: RDEPEND: Invalid atom (Invalid use dep: '-a'), token 1)\r\n  portuale: \r\n"]
+[0.000, "x", "0"]

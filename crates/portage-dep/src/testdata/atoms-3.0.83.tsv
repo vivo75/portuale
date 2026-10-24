@@ -746,3 +746,30 @@ virtual/foo-1.0:0	wild	ERR	virtual/foo-1.0:0
 =virtual/foo-1.0:0	e8+bid	OK	cp=virtual/foo op== ver=1.0 slot=0 sub= sop= repo= bid= use= blocker= ext=0
 =virtual/foo-1.0:0	None-repo	OK	cp=virtual/foo op== ver=1.0 slot=0 sub= sop= repo= bid= use= blocker= ext=0
 =virtual/foo-1.0:0	wild	OK	cp=virtual/foo op== ver=1.0 slot=0 sub= sop= repo= bid= use= blocker= ext=0
+games-arcade/2048	None	OK	cp=games-arcade/2048 op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+games-arcade/2048	e5	OK	cp=games-arcade/2048 op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+games-arcade/2048	e7	OK	cp=games-arcade/2048 op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+games-arcade/2048	e8	OK	cp=games-arcade/2048 op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+games-arcade/2048	e9	OK	cp=games-arcade/2048 op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+games-arcade/2048	eX	OK	cp=games-arcade/2048 op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+games-arcade/2048	e8+bid	OK	cp=games-arcade/2048 op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+games-arcade/2048	None-repo	OK	cp=games-arcade/2048 op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+games-arcade/2048	wild	OK	cp=games-arcade/2048 op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+dev-util/timidity--	None	OK	cp=dev-util/timidity-- op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+dev-util/timidity--	e5	OK	cp=dev-util/timidity-- op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+dev-util/timidity--	e7	OK	cp=dev-util/timidity-- op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+dev-util/timidity--	e8	OK	cp=dev-util/timidity-- op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+dev-util/timidity--	e9	OK	cp=dev-util/timidity-- op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+dev-util/timidity--	eX	OK	cp=dev-util/timidity-- op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+dev-util/timidity--	e8+bid	OK	cp=dev-util/timidity-- op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+dev-util/timidity--	None-repo	OK	cp=dev-util/timidity-- op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+dev-util/timidity--	wild	OK	cp=dev-util/timidity-- op= ver= slot= sub= sop= repo= bid= use= blocker= ext=0
+cat/pkg[a(+),-a]	None	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	e5	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	e7	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	e8	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	e9	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	eX	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	e8+bid	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	None-repo	ERR	Invalid use dep: '-a'
+cat/pkg[a(+),-a]	wild	ERR	Invalid use dep: '-a'

@@ -4,9 +4,9 @@
 
 **Goal:** Chiudere o triage-are tutti i residui OPEN del port a Portage 3.0.83 lasciati dal piano `LLM/02.442-port-portage-3.0.83.opus.md` (#514, #516–#555).
 
-**Architecture:** Un batch di slice indipendenti per area (gpkg, ebuild-merge, circular, depclean, atom/reducer, binhost, user-patches, scheduler, virtuals, test-hygiene), ognuna guidata dall'oracolo host 3.0.83-r1 già catturato in `LLM/evidence/`, con pin hermetic in pmtest + unit Rust qui. Nessuna modifica condivisa tra slice salvo bless corpus.
+**Architecture:** Un batch di slice indipendenti per area (gpkg, ebuild-merge, circular, depclean, atom/reducer, binhost, user-patches, scheduler, virtuals, test-hygiene), ognuna guidata dall'oracolo host 3.0.83 già catturato in `LLM/evidence/`, con pin hermetic in pmtest + unit Rust qui. Nessuna modifica condivisa tra slice salvo bless corpus.
 
-**Tech Stack:** Rust workspace edition 2024 (`portuale`, `portage-repo`, `portage-profile`, `portage-dep`, `portage-use-reduce`), pmtest contract suite (`CASES` + `test_*_pinned`), differential bed L0/L1, host `emerge` 3.0.83-r1.
+**Tech Stack:** Rust workspace edition 2024 (`portuale`, `portage-repo`, `portage-profile`, `portage-dep`, `portage-use-reduce`), pmtest contract suite (`CASES` + `test_*_pinned`), differential bed L0/L1, host `emerge` 3.0.83.
 
 **Spec:** `LLM/backlog-tasks.md` voci #514, #516–#555 OPEN + `LLM/02.442-port-portage-3.0.83.opus.md` S0–S13 + `LLM/portage-quirks.md` Q4–Q9 + oracoli in `LLM/evidence/2026-10-23-{500,505,506,507,508,509,510,511,512}/`, `LLM/evidence/2026-10-24-513/`.
 
@@ -145,31 +145,33 @@ Expected: PASS.
 
 ### Task 5: #525–#532 — S10b atom/reducer parity
 
+Done 2026-10-24 on branch `residui-514-555` (portuale + pmtest pair; ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+
 **Files:**
 - Modify: `LLM/02.442-port-portage-3.0.83.opus.md` (testo S10b), `portage-dep` battery `testdata/atoms-3.0.83.tsv`, `portage-use-reduce` tests, `LLM/tools/atom_oracle_table.py`, `LLM/evidence/2026-10-23-510/build-3.0.82.2.sh`, pmtest `3rdparty/repos.toml:24`
 - Test: `tests_grammar.rs`, `portage-use-reduce` reducer rows
 
-- [ ] **Step 1: #525 — registra errata S10b senza riscrivere il piano chiuso (3.0.82.2 constructor≈reducer sui 3 atomi; cita `diffpaths-3.0.82.2.txt`); in-place edit di `LLM/02.442-port-portage-3.0.83.opus.md` solo con sign-off owner**
-- [ ] **Step 2: #526 — decidi `use_reduce` string-path (`cat/pkg[a(+),-a]` senza `token_class`) — mimic in `mrg` o wontfix con quirk Q8**
+- [x] **Step 1: #525 — registra errata S10b senza riscrivere il piano chiuso (3.0.82.2 constructor≈reducer sui 3 atomi; cita `diffpaths-3.0.82.2.txt`); in-place edit di `LLM/02.442-port-portage-3.0.83.opus.md` solo con sign-off owner**
+- [x] **Step 2: #526 — decidi `use_reduce` string-path (`cat/pkg[a(+),-a]` senza `token_class`) — mimic in `mrg` o wontfix con quirk Q8**
 
 Oracle: `LLM/evidence/2026-10-23-510/host-3.0.83.txt`.
 
-- [ ] **Step 3: #527 — sposta pin reducer-level in `portage-use-reduce` accanto a `use_reduce_flat_validated`**
+- [x] **Step 3: #527 — sposta pin reducer-level in `portage-use-reduce` accanto a `use_reduce_flat_validated`**
 
 Oracle: `probe.py` (`reduce-Atom` rows): `cat/pkg[a(+),-a]` rejected, i due buoni accepted.
 
-- [ ] **Step 4: #528 — aggiungi i 3 atomi probe alla battery 83-row (estendi `probe_atoms.py`, sposta count assert, rigenera)**
+- [x] **Step 4: #528 — aggiungi i 3 atomi probe alla battery 83-row (estendi `probe_atoms.py`, sposta count assert, rigenera)**
 
 Oracle: `LLM/evidence/2026-10-11-341-oracle/probe_atoms.py`.
 
-- [ ] **Step 5: #529 — rebuild parser C 3.0.82.2 via meson `_parser` target, non gcc manuale**
-- [ ] **Step 6: #530 — fissa wording versione `3.0.83` vs `3.0.83-r1` (VERSION vs ebuild rev)**
+- [x] **Step 5: #529 — rebuild parser C 3.0.82.2 via meson `_parser` target, non gcc manuale**
+- [x] **Step 6: #530 — fissa wording versione `3.0.83` vs `3.0.83-r1` (VERSION vs ebuild rev)**
 
 Oracle: `LLM/evidence/2026-10-23-510/emerge-version.txt`.
 
-- [ ] **Step 7: #531 — pinna/decidi testo errore reducer 3.0.83 (`invalid use dep token`) vs wrapper 3.0.82.2**
-- [ ] **Step 8: #532 — pin battery punta a 3.0.83 (pmtest side, owner pmtest agent): CASES/fixture/command come gli altri step; se resta owner esterno, sposta con pointer invece di step vuoto**
-- [ ] **Step 9: Run**
+- [x] **Step 7: #531 — pinna/decidi testo errore reducer 3.0.83 (`invalid use dep token`) vs wrapper 3.0.82.2**
+- [x] **Step 8: #532 — pin battery punta a 3.0.83 (pmtest side, owner pmtest agent): CASES/fixture/command come gli altri step; se resta owner esterno, sposta con pointer invece di step vuoto**
+- [x] **Step 9: Run**
 
 Run: `cargo test --release -p portage-dep` + `cargo test --release -p portage-use-reduce`
 Expected: PASS.

@@ -26,6 +26,10 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 ## fn use_reduce_flat_validated
 - One dep string like `use_reduce(matchall=True, flat=True, token_class=Atom, is_valid_flag=…)`: the flat walk with a per-atom-token hook (`hook(token, pos)`, 0-based position; the caller keeps whatever it parsed). `^^`/`??` need no special case: `^^` is a plain token (the hook rejects it: `Invalid atom (^^)`), `??` is a conditional on flag `?` (checked at its `)`). A hook syntax rejection first runs `missing_whitespace_check`, else wraps as `Invalid atom (…), token N`; categorized rejections stay bare (see `map_hook_error`).
 
+## tests: probe atoms through the reducer (#527)
+- `validated_walk_passes_probe_atoms_to_the_hook_whole`: `games-arcade/2048 dev-util/timidity-- cat/pkg[a(+),-a]` reach the hook as three whole tokens; the hook's rejection of the third renders `Invalid atom (Invalid use dep: '-a'), token 3`. Oracle: `LLM/evidence/2026-10-23-510/host-3.0.83.txt` (`reduce-Atom` rows) and the meson-built 3.0.82.2 capture (same verdicts).
+- `string_path_returns_probe_atoms_unvalidated`: `use_reduce_flat` returns all three unchanged, the deliberate Q8/#526 mimicry (Portage's `use_reduce` without `token_class` does the same).
+
 ## fn is_active_validated
 - Portage `use_reduce`'s `is_active` with `is_valid_flag` (dep:700-715): validity first (the `IUSE.missing` error at the matching `)`), then matchall (every valid conditional active). No `useflag_re` check — Portage checks one or the other.
 
@@ -34,6 +38,9 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 
 ## fn use_reduce_flat
 - `tokens` is equivalent to Python's `depstr.split()`, Portage's own first step. `"("` always satisfies a pending `"||"`/`"flag?"` requirement regardless of `need_bracket`. `is_src_uri` is always false here (SRC_URI arrows out of scope), matching Portage with `is_src_uri=False`.
+
+## fn use_reduce_flat (#526 decision)
+- Keeps Portage's loose string path: no atom parse, so `cat/pkg[a(+),-a]` passes through. Decision recorded in `LLM/portage-quirks.md` Q8: mimic, because every validation path in `emerge`/`mrg` goes through `portage-repo`'s `validate_dep_string` (Atom hook + valid-flag closure), and the flag-only reductions this entry point serves are equally loose in Portage. Pinned by `string_path_returns_probe_atoms_unvalidated`.
 
 ## enum DepNode
 - `['foobar', 'foo?', ['bar', 'baz']]` shape. No redundant-bracket-collapsing at parse time: representation-only, and `select_subset` (the only consumer) doesn't care.
