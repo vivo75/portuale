@@ -101,17 +101,24 @@ pub(crate) fn highest_installed_pvr(root: &Path, category: &str, package: &str) 
         .map(|v| v.strip_suffix("-r0").unwrap_or(&v).to_string())
 }
 
-/// The host-state header printed before `Repositories:`. Everything here is
-/// host state a fixture cannot reproduce; the contract normalizes volatile
-/// values to `XXX` and checks the structure.
-/// Portage: _emerge/actions.py, action_info
-pub(crate) fn print_info_header(
-    config: &portage_profile::Config,
+/// The Portage release portuale implements: `--version` reports the running
+/// implementation, which is this release's behavior contract (like
+/// `portage.VERSION` for real `emerge`). Bumped by the port slices that
+/// move the tree to a new upstream release (see backlog #530 for the
+/// `3.0.83` vs `3.0.83-r1` wording).
+pub(crate) const PORTED_PORTAGE_VERSION: &str = "3.0.83";
+
+/// The host-state `Portage <ver> (...)` header line, shared by `--info`
+/// (where it precedes `Repositories:`) and `--version` (where it is the
+/// whole output, with [`PORTED_PORTAGE_VERSION`]). Factored out so both
+/// print one line from one source.
+// Portage: _emerge/actions.py, getportageversion
+pub(crate) fn portage_version_line(
+    portage_ver: &str,
     repos: &[portage_repo::RepoConfig],
     root: &Path,
     config_root: &Path,
-    has_atoms: bool,
-) {
+) -> String {
     let main_repo_loc = repos
         .iter()
         .find(|r| r.is_main)
@@ -119,8 +126,6 @@ pub(crate) fn print_info_header(
         .unwrap_or_default();
 
     // --- `Portage <ver> (...)` ---
-    let portage_ver =
-        highest_installed_pvr(root, "sys-apps", "portage").unwrap_or_else(|| "unavailable".into());
     let pyver = std::process::Command::new("python3")
         .args([
             "-c",
@@ -144,9 +149,35 @@ pub(crate) fn print_info_header(
         let m = tool_first_line("uname", &["-m"]).unwrap_or_default();
         format!("{r} {m}")
     };
+    format!("Portage {portage_ver} (python {pyver}, {profile_ver}, {gccver}, {libcver}, {kernel})")
+}
+
+/// The host-state header printed before `Repositories:`. Everything here is
+/// host state a fixture cannot reproduce; the contract normalizes volatile
+/// values to `XXX` and checks the structure.
+/// Portage: _emerge/actions.py, action_info
+pub(crate) fn print_info_header(
+    config: &portage_profile::Config,
+    repos: &[portage_repo::RepoConfig],
+    root: &Path,
+    config_root: &Path,
+    has_atoms: bool,
+) {
     println!(
-        "Portage {portage_ver} (python {pyver}, {profile_ver}, {gccver}, {libcver}, {kernel})"
+        "{}",
+        portage_version_line(
+            &highest_installed_pvr(root, "sys-apps", "portage")
+                .unwrap_or_else(|| "unavailable".into()),
+            repos,
+            root,
+            config_root
+        )
     );
+    let main_repo_loc = repos
+        .iter()
+        .find(|r| r.is_main)
+        .map(|r| r.location.clone())
+        .unwrap_or_default();
     if has_atoms {
         // With atoms, a centred `System Settings` title precedes the rule.
         let title = "System Settings";

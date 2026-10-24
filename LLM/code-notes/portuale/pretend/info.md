@@ -64,3 +64,6 @@
 
 ## fn repo_head_commit
 - Backlog #504, `ae78e95a8`/`0ef099992`: `head commit:` is `sync.retrieve_head()` stripped. Only the git module implements it (rsync raises NotImplementedError and prints nothing); portuale runs `git rev-parse HEAD` for `sync-type = git`.
+
+## `--version` (#552)
+- `PORTED_PORTAGE_VERSION = "3.0.83"` (bumped by port slices): `run()` prints `portage_version_line(PORTED_PORTAGE_VERSION, ...)` and exits 0. The line builder is factored out of `--info`'s header (unchanged behavior there, still the installed-vdb version). Ruling (Task 9): `--version` reports the running implementation (= the ported release, like `portage.VERSION`); `--info` keeps its installed-version header (out of scope, normalized to `XXX` in pins).

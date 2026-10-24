@@ -123,6 +123,11 @@ pub enum Error {
     /// run. `Display` already carries the `!!!` framing, so the CLI prints
     /// it verbatim (no `emerge: ` prefix).
     UnsupportedProfileEapi { eapi: String, path: String },
+    /// A profile `virtuals` file exists but cannot be read (`EACCES`):
+    /// Portage's `PermissionDenied`, which `bin/emerge` renders as
+    /// `Permission denied: '<path>'` verbatim and exits 13. `Display`
+    /// already carries the full line, so the CLI prints it verbatim too.
+    VirtualsPermissionDenied { path: String },
 }
 
 impl std::fmt::Display for Error {
@@ -158,6 +163,9 @@ impl std::fmt::Display for Error {
                      !!! Allowed actions are limited to --help, --info, --search, --sync, and\n\
                      !!! --version."
                 )
+            }
+            Error::VirtualsPermissionDenied { path } => {
+                write!(f, "Permission denied: '{path}'")
             }
         }
     }

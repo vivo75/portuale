@@ -546,6 +546,7 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
     let unmerge_rc = run_unmerge_pretend(RunUnmergePretendArgs {
         targets: &cpv_refs,
         action: "unmerge",
+        safety_note: false,
         root,
         config_root,
         config,

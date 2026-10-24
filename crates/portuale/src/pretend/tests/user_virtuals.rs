@@ -22,6 +22,11 @@ fn the_notice_follows_the_validating_actions() {
     assert!(prints(&["-C", "-p", "dev-libs/dccyca"]));
     assert!(prints(&["--prune", "-p", "dev-libs/dccyca"]));
     assert!(prints(&["--rage-clean", "-p"]));
+    // #550: the early-dispatch actions validate too.
+    assert!(prints(&["--regen"]));
+    assert!(prints(&["--config", "dev-libs/dccyca"]));
+    assert!(prints(&["--deselect"]));
+    assert!(prints(&["--resume"]));
 }
 
 #[test]
@@ -31,4 +36,17 @@ fn info_sync_metadata_and_news_stay_silent() {
     assert!(!prints(&["--metadata"]));
     assert!(!prints(&["--check-news"]));
     assert!(!prints(&["--list-sets"]));
+}
+
+/// Backlog #552 (oracle: `LLM/evidence/2026-10-24-513/captures/12-version.*`):
+/// `emerge --version` prints the `Portage ...` line and exits 0. It is a
+/// validating-action exemption like `--info`: no `/etc/portage/virtuals`
+/// block (Portage's `profile_check` returns early for `version` without
+/// running `validate_ebuild_environment`).
+#[test]
+fn version_parses_and_stays_silent_like_info() {
+    let args: Vec<String> = ["--version".to_string()].into();
+    let opts = parse_emerge_args(&args).expect("parses");
+    assert!(opts.version_action);
+    assert!(!prints_user_virtuals_notice(&opts));
 }

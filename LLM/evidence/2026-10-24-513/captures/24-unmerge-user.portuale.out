@@ -1,5 +1,6 @@
->>> These are the packages that would be unmerged:
 
---- Couldn't find 'dev-libs/dccyca' to unmerge.
+>>> Using system located in ROOT tree /var/tmp/ev513-tree/24-unmerge-user/root/
+
+>>> These are the packages that would be unmerged:
 
 >>> No packages selected for removal by unmerge

@@ -264,56 +264,60 @@ Expected: PASS.
 
 ### Task 9: #547–#554 — virtuals e dintorni
 
+Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+
 **Files:**
 - Modify: `crates/portage-profile/src/virtuals.rs`, `crates/portage-profile/src/resolve/package_masks.rs`, `crates/portuale/src/pretend/early_actions.rs`, `pretend::run` action dispatch, news/unmerge/version paths
 - Test: `LLM/evidence/2026-10-24-513/` 29 shapes + nuovi shape per azione
 
-- [ ] **Step 1: #547 — verifica se `package.keywords` stampa frame Python; se sì, mimica come #513**
+- [x] **Step 1: #547 — verifica se `package.keywords` stampa frame Python; se sì, mimica come #513**
 
 Oracle: host `emerge -p` con `/etc/portage/package.keywords` non-empty in hermetic root.
 
-- [ ] **Step 2: #548 — owner decision prefisso warning (`/usr/lib/python3.14/...` host vs `portage/...` hermetic)**
+- [x] **Step 2: #548 — owner decision prefisso warning (`/usr/lib/python3.14/...` host vs `portage/...` hermetic)**
 
 Oracle: `captures/02-profile-nonempty.portage.err`.
 
-- [ ] **Step 3: #549 — `virtuals` illeggibile mode 000 → `PermissionDenied` abort, non empty (run non-root)**
-- [ ] **Step 4: #550 — cattura `--regen/--config/--deselect/--resume` con `/etc/portage/virtuals` (oggi non runnati)**
-- [ ] **Step 5: #551 — decidi doppia stampa invalid profile atom (mimic 2nd read o keep single, owner Q3)**
+- [x] **Step 3: #549 — `virtuals` illeggibile mode 000 → `PermissionDenied` abort, non empty (run non-root)**
+- [x] **Step 4: #550 — cattura `--regen/--config/--deselect/--resume` con `/etc/portage/virtuals` (oggi non runnati)**
+- [x] **Step 5: #551 — decidi doppia stampa invalid profile atom (mimic 2nd read o keep single, owner Q3)**
 
 Oracle: `captures/16-profile-virt-badmask.portage.err`, `17-user-virt-badmask`.
 
-- [ ] **Step 6: #552 — `emerge --version` → `Portage 3.0.83 (…)` rc 0, non usage error 2**
+- [x] **Step 6: #552 — `emerge --version` → `Portage 3.0.83 (…)` rc 0, non usage error 2**
 
 Oracle: `captures/12-version.portage.out`.
 
-- [ ] **Step 7: #553 — `-C` caution + `Couldn't find…to unmerge`; `--rage-clean` senza atomi stampa niente**
+- [x] **Step 7: #553 — `-C` caution + `Couldn't find…to unmerge`; `--rage-clean` senza atomi stampa niente**
 
 Oracle: `captures/24-*`, `27-*`.
 
-- [ ] **Step 8: #554 — `--check-news` righe `!!! Invalid news item:` + `line 7:` detail**
+- [x] **Step 8: #554 — `--check-news` righe `!!! Invalid news item:` + `line 7:` detail**
 
 Oracle: `captures/25-*`.
 
-- [ ] **Step 9: Run**
+- [x] **Step 9: Run**
 
 Run: `cargo test --release -p portage-profile virtuals` + `cargo test --release -p portuale user_virtuals` + pmtest `test_513_*`
 Expected: PASS.
 
-- [ ] **Step 10: Commit pair**
+- [x] **Step 10: Commit pair**
 
-### Task 10: #555 + closeout — test hygiene e verifica finale
+### Task 10: #555 + closeout
+Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+ — test hygiene e verifica finale
 
 **Files:**
 - Modify: pmtest `test_depclean_package_provided_pinned_output` rename (primi 30 char unici)
 - Test: run singolo del test rinominato
 
-- [ ] **Step 1: Rinomina test così i primi 30 char di `tmp_path` non collidono; run isolato PASS**
+- [x] **Step 1: Rinomina test così i primi 30 char di `tmp_path` non collidono; run isolato PASS**
 
 Run (da `../pmtest`): `python3 -m pytest pytests-contract-suite/test_depclean*.py -q -k <nuovo_nome>`
 Expected: PASS da solo e in suite.
 
-- [ ] **Step 2: Full gate qui + `scripts/pytest-parallel.sh` in pmtest; Task 10 NON blessa mai — solo re-run clean (il bless di Task 3 vive già nel commit pmtest di Task 3)**
-- [ ] **Step 3: Aggiorna `LLM/scope-backlog.md` voci chiuse, `LLM/what-this-proves.md` paragrafo per slice con esempio live runnable live-verified, `LLM/backlog-tasks.md` DONE, code-notes + `code_notes_index.py`, `LLM/portage-quirks.md` se nuovi quirk; run `doc_status_check.py` + `cut_registry_check.py` (02.442 §0 regola 22)**
+- [x] **Step 2: Full gate qui + `scripts/pytest-parallel.sh` in pmtest; Task 10 NON blessa mai — solo re-run clean (il bless di Task 3 vive già nel commit pmtest di Task 3)**
+- [x] **Step 3: Aggiorna `LLM/scope-backlog.md` voci chiuse, `LLM/what-this-proves.md` paragrafo per slice con esempio live runnable live-verified, `LLM/backlog-tasks.md` DONE, code-notes + `code_notes_index.py`, `LLM/portage-quirks.md` se nuovi quirk; run `doc_status_check.py` + `cut_registry_check.py` (02.442 §0 regola 22)**
 
 ## Self-Review
 

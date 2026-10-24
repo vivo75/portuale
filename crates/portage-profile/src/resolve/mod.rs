@@ -99,7 +99,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
     // Portage: _config/VirtualsManager.py, `_read_dirVirtuals`
     let mut virtuals_dirs = chain.clone();
     virtuals_dirs.extend(user_node.as_ref().map(|node| node.path.clone()));
-    warnings.extend(crate::virtuals::profile_virtuals_warnings(&virtuals_dirs));
+    warnings.extend(crate::virtuals::profile_virtuals_warnings(&virtuals_dirs)?);
     config.user_virtuals_deprecated = config_root.join("etc/portage/virtuals").exists();
 
     // The process environment's `USE_ORDER` layer, over profile chain + make.conf.

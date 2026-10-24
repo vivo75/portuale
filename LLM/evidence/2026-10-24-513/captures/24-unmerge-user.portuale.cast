@@ -1,6 +1,7 @@
-{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792819357,"command":"env ROOT=/var/tmp/ev513-tree/24-unmerge-user/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/24-unmerge-user/cfg /var/tmp/ev513-bin/emerge -C -p dev-libs/dccyca","env":{"SHELL":"/bin/bash"}}
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792881089,"command":"env ROOT=/var/tmp/ev513-tree/24-unmerge-user/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/24-unmerge-user/cfg /var/tmp/ev513-bin/emerge -C -p dev-libs/dccyca","env":{"SHELL":"/bin/bash"}}
 [0.004, "o", "\u001b]0;portuale: emerge\u0007\r\n!!! /etc/portage/virtuals is deprecated and ignored.\r\n!!! Support for PROVIDE virtuals was removed in\r\n!!! portage-2.3.25; use GLEP 37 virtual packages\r\n!!! instead. Please remove this file.\r\n\r\n"]
-[0.000, "o", "\u001b[32m>>> These are the packages that would be unmerged:\u001b[39;49;00m\r\n"]
+[0.000, "o", " * This action can remove important packages! In order to be safer, use\r\n * `emerge -pv --depclean <atom>` to check for reverse dependencies before\r\n * removing packages.\r\n"]
+[0.000, "o", "\u001b[32m\r\n>>> Using system located in ROOT tree /var/tmp/ev513-tree/24-unmerge-user/root/\u001b[39;49;00m\r\n\u001b[32m\r\n>>> These are the packages that would be unmerged:\u001b[39;49;00m\r\n"]
 [0.000, "o", "\r\n--- Couldn't find 'dev-libs/dccyca' to unmerge.\r\n\r\n>>> No packages selected for removal by unmerge\r\n"]
 [0.000, "o", "\u001b]0;vivo@:/var/tmp/ev513-tree/24-unmerge-user\u0007"]
 [0.000, "x", "1"]

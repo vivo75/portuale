@@ -4,4 +4,3 @@
 !!! portage-2.3.25; use GLEP 37 virtual packages
 !!! instead. Please remove this file.
 
-emerge: no package atoms given to --rage-clean

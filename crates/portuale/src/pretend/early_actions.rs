@@ -5,20 +5,30 @@ use crate::pretend::*;
 /// Whether Portage's `validate_ebuild_environment` runs for this action, so
 /// the `/etc/portage/virtuals` block (backlog #513) is printed. Portage runs
 /// it for build, pretend, search, depclean, clean, unmerge, prune and
-/// regen-style actions; `--info`, `--sync`, `--metadata`, `--check-news` and
-/// `--list-sets` return before it. `--version` and `--help` are not
-/// portuale actions here (`--help` exits earlier; `--version` is a usage
-/// error in portuale).
-// Portage: _emerge/actions.py, run_action (validate calls), main.py, profile_check
+/// regen-style actions; `--info`, `--sync`, `--metadata`, `--check-news`,
+/// `--list-sets` and `--version` return before it. `--help` exits earlier.
+/// Portage: _emerge/actions.py, run_action (validate calls); _emerge/main.py,
+/// profile_check (the `help/info/search/sync/version` early return)
 pub(crate) fn prints_user_virtuals_notice(opts: &EmergeOpts<'_>) -> bool {
     !(opts.info_action
         || opts.sync_action
         || opts.metadata_action
         || opts.check_news
-        || opts.list_sets)
+        || opts.list_sets
+        || opts.version_action)
 }
 
-pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<ExitCode> {
+pub(crate) fn validate_and_early_actions(
+    opts: &mut EmergeOpts<'_>,
+    user_virtuals_deprecated: bool,
+) -> Option<ExitCode> {
+    // The `/etc/portage/virtuals` block for the actions that dispatch
+    // below (Portage prints it in `validate_ebuild_environment`, which runs
+    // for regen and deselect too). Computed up front: the arms return early,
+    // before `mod.rs` reaches its own print.
+    // Portage: _emerge/actions.py, run_action (validate calls)
+    let user_block = user_virtuals_deprecated && prints_user_virtuals_notice(opts);
+
     // `--tree` + `--columns` is a usage error (exit 2, stderr), checked once
     // parsing finishes, order-independent, before any other validation.
     // Portage: actions.py, parse_opts post-pass
@@ -59,6 +69,7 @@ pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<Ex
         clean_action,
         rage_clean,
         fetchonly,
+        version_action,
         ..
     } = opts;
     let mut pretend = *pretend_out;
@@ -98,6 +109,7 @@ pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<Ex
         && !list_sets
         && !check_news
         && !regen_action
+        && !version_action
         && !metadata_action;
     if write_action && !crate::privileges::is_privileged(&root_from_env()) {
         // With `--ask`, offer to add `--pretend` instead of refusing; without
@@ -143,6 +155,9 @@ pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<Ex
     // the run; under `--depclean`/`--prune`/`--unmerge` it is just a modifier.
     // Portage: _emerge/main.py, action selection
     if deselect && !depclean && !prune && !unmerge {
+        if user_block {
+            eprint!("{}", portage_profile::USER_VIRTUALS_NOTICE);
+        }
         return Some(run_deselect(
             atom_args,
             &root_from_env(),
@@ -162,6 +177,9 @@ pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<Ex
     // ebuild's `depend` phase; `--jobs`/`--load-average` thread through.
     // Portage: _emerge/actions.py, action_regen
     if regen_action {
+        if user_block {
+            eprint!("{}", portage_profile::USER_VIRTUALS_NOTICE);
+        }
         return Some(crate::regen::run(
             &config_root_from_env(),
             &root_from_env(),
@@ -189,6 +207,7 @@ pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<Ex
         && !clean_action
         && !rage_clean
         && !info_action
+        && !version_action
     {
         print!("{}", super::help::SHORT_HELP);
         return Some(ExitCode::from(1));

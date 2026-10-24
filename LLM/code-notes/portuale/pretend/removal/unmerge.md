@@ -68,3 +68,17 @@
 
 ## fn execute_unmerge (autoclean flag)
 - Backlog #404 (02.346 S11): `autoclean: bool` skips the post-removal info-dir regen, the preserved-libs notice and the GLEP 42 notice, which the merge's own `show_post_merge_notices` runs right after the auto-clean (Portage runs all three in `post_emerge`, after the auto-clean unmerge returns). The elog batch, the world cleanup and the removal loop itself are unchanged; manual paths pass `false`.
+
+## `-C`/`--rage-clean` stderr and no-atom text (#553)
+- The depclean-safety note (` * This action can remove important packages!...`, Portage's `textwrap.wrap(msg, 72)` rendering hardcoded -- deterministic) prints on stderr for every `-C` run when not `--quiet` (`--quiet-unmerge-warn` is not a parsed flag). `--- Couldn't find '...' to unmerge.` moved stdout -> stderr with Portage's leading blank line (`writemsg noiselevel=-1`).
+- Empty targets for `unmerge`/`rage-clean`: `\nemerge {action} can only be used with specific package names\n\n` on stdout, rc 1. `--clean`/`--prune`/`--depclean` keep the old `emerge: no package atoms...` error (a bare `--clean` cleans globally in Portage -- different path, out of scope).
+
+## `safety_note` gate + WARN-colored ` * ` span (#553 follow-ups)
+- The note and the no-atoms usage are gated on a `safety_note: bool` set
+  only at the two standalone call sites (`-C`, `--rage-clean`): the
+  depclean/prune/clean display reuse passes `action: "unmerge"` for wording
+  and must stay silent (caught by the suite: the first cut leaked the note
+  into `--depclean` stderr).
+- The ` * ` span is `color.c("WARN", " * ")` (yellow under `--color=y`,
+  plain otherwise), matching `EOutput.ewarn` byte-for-byte on host
+  (`--pretend -C --color=y` oracle).

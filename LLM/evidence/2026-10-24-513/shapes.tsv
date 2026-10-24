@@ -28,3 +28,13 @@
 27-rage-clean-user	nonempty	none	--rage-clean -p
 28-prune-user	nonempty	none	--prune -p dev-libs/dccyca
 29-metadata-user	nonempty	none	--metadata
+30-regen-user	nonempty	none	--regen
+31-config-user	nonempty	none	--config dev-libs/dccyca
+32-deselect-user	nonempty	none	--deselect
+33-resume-user	nonempty	none	--resume
+# Shapes 30-33 (Task 9, #550): every action runs validate_ebuild_environment,
+# so the /etc/portage/virtuals block prints on stderr for all four (rc 0 all,
+# both managers). Known stdout gaps, not virtuals ones: the Global Updates
+# block is absent on the portuale side throughout, and --regen lists only
+# stale-cache entries on the portuale side (916 vs 20337 `Processing` lines;
+# residue #561).

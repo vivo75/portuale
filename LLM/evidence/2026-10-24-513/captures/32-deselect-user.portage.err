@@ -1,0 +1,6 @@
+
+!!! /etc/portage/virtuals is deprecated and ignored.
+!!! Support for PROVIDE virtuals was removed in
+!!! portage-2.3.25; use GLEP 37 virtual packages
+!!! instead. Please remove this file.
+

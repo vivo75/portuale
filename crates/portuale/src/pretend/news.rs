@@ -107,7 +107,15 @@ impl FilesystemNews<'_> {
             let Ok(text) = std::fs::read_to_string(&item) else {
                 continue;
             };
-            if !news_item_valid(&text) {
+            // An invalid item is reported (`Invalid news item` + the
+            // offending lines) and skipped: never counted, never `.skip`-ed.
+            // Portage: portage/news.py, NewsManager.updateItems
+            let invalids = news_item_invalid_lines(&text);
+            if !invalids.is_empty() {
+                eprintln!("!!! Invalid news item: {}", item.display());
+                for (lineno, line) in &invalids {
+                    eprintln!("!!!   line {lineno}: {line}");
+                }
                 continue;
             }
             if news_item_relevant(&text, self.root, self.context) {
@@ -556,37 +564,99 @@ pub(crate) fn news_item_format(text: &str) -> Option<bool> {
     None
 }
 
+/// Validity is the absence of reported lines. Kept as the named predicate
+/// (the unit tests pin it directly); the only non-test user is this
+/// delegation.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn news_item_valid(text: &str) -> bool {
-    let Some(is_1x) = news_item_format(text) else {
-        return false;
-    };
-    // A malformed `Display-If-Installed` atom fails the whole item, and a
-    // 1.x item only allows atoms without slot info or use-deps (EAPI 0
-    // lacks both); a 2.x atom keeps the permissive parse-at-all check. A
-    // 1.x `Display-If-Profile` value allows `*` only as a trailing `/*`.
-    // Portage: portage/news.py, NewsItem.isValid
-    let profile_valid = |value: &str| {
-        !is_1x || !value.contains('*') || {
-            let head = value.strip_suffix("/*").unwrap_or(value);
-            !head.is_empty() && !head.contains('*')
+    news_item_invalid_lines(text).is_empty()
+}
+
+/// A 1.x `Display-If-Installed` atom allows no slot info or use-deps (EAPI 0
+/// lacks both); a 2.x atom keeps the permissive parse-at-all check.
+/// Extracted from [`news_item_valid`] so the reporter below reuses the exact
+/// verdict predicate. Portage: portage/news.py, DisplayInstalledRestriction
+fn news_installed_atom_valid(atom: &str, is_1x: bool) -> bool {
+    match parse_atom(atom) {
+        Some(a) => {
+            !is_1x
+                || (a.slot.is_none()
+                    && a.sub_slot.is_none()
+                    && a.slot_operator.is_none()
+                    && a.use_deps.is_none())
         }
-    };
-    text.lines()
-        .filter_map(|l| l.strip_prefix("Display-If-Profile:").map(str::trim))
-        .all(profile_valid)
-        && text
-            .lines()
-            .filter_map(|l| l.strip_prefix("Display-If-Installed:").map(str::trim))
-            .all(|atom| match parse_atom(atom) {
-                Some(a) => {
-                    !is_1x
-                        || (a.slot.is_none()
-                            && a.sub_slot.is_none()
-                            && a.slot_operator.is_none()
-                            && a.use_deps.is_none())
-                }
-                None => false,
-            })
+        None => false,
+    }
+}
+
+/// A 1.x `Display-If-Profile` value allows `*` only as a trailing `/*`.
+/// Extracted from [`news_item_valid`] like the atom check above.
+/// Portage: portage/news.py, DisplayProfileRestriction
+fn news_profile_value_valid(value: &str, is_1x: bool) -> bool {
+    !is_1x || !value.contains('*') || {
+        let head = value.strip_suffix("/*").unwrap_or(value);
+        !head.is_empty() && !head.contains('*')
+    }
+}
+
+/// The `(1-based line number, line)` pairs Portage reports for an invalid
+/// news item (`!!! Invalid news item: {path}`, then one
+/// `!!!   line {n}: {line}` per pair, file order). Empty for a valid item,
+/// so [`news_item_valid`] is `invalid_lines.is_empty()`. Only the
+/// `Display-If-*` kinds portuale validates can appear here (`Installed`,
+/// `Profile`); `Display-If-Keyword` has no portuale validity predicate, so
+/// a bad keyword stays a silent verdict gap, not a reported line.
+/// Portage: portage/news.py, NewsItem.parse
+pub(crate) fn news_item_invalid_lines(text: &str) -> Vec<(usize, String)> {
+    let mut invalids: Vec<(usize, String)> = Vec::new();
+    // The format scan: every `News-Item-Format:` line is checked and a
+    // non-`[12].*` value is recorded; the first matching one stops the
+    // scan and drives restriction validation below. A value with
+    // whitespace never matches (Portage's `([^\s]*)` group).
+    let mut format_seen = false;
+    let mut is_1x = false;
+    for (i, line) in text.lines().enumerate() {
+        let Some(value) = line
+            .strip_prefix("News-Item-Format:")
+            .map(str::trim)
+            .filter(|v| !v.is_empty() && !v.contains(char::is_whitespace))
+        else {
+            continue;
+        };
+        format_seen = true;
+        if value.starts_with("1.") || value == "1" {
+            is_1x = true;
+            break;
+        }
+        if value.starts_with("2.") || value == "2" {
+            break;
+        }
+        invalids.push((i + 1, line.to_string()));
+    }
+    if !format_seen {
+        return vec![(0, "News-Item-Format unspecified".to_string())];
+    }
+    // The restriction scan runs whenever a format line was seen (even an
+    // all-invalid set: then `news_format` is the last value seen, and the
+    // item is invalid either way). Only lines starting with `D` can match,
+    // like Portage's pre-filter.
+    for (i, line) in text.lines().enumerate() {
+        if !line.starts_with('D') {
+            continue;
+        }
+        let bad_installed = line
+            .strip_prefix("Display-If-Installed:")
+            .map(str::trim)
+            .is_some_and(|atom| !news_installed_atom_valid(atom, is_1x));
+        let bad_profile = line
+            .strip_prefix("Display-If-Profile:")
+            .map(str::trim)
+            .is_some_and(|value| !news_profile_value_valid(value, is_1x));
+        if bad_installed || bad_profile {
+            invalids.push((i + 1, line.to_string()));
+        }
+    }
+    invalids
 }
 
 /// No restriction -> relevant; otherwise each `Display-If-*` kind is OR'd

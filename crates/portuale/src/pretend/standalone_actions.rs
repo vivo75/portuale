@@ -378,6 +378,7 @@ pub(crate) fn dispatch_maintenance(args: DispatchMaintenanceArgs<'_>) -> Option<
         return Some(run_unmerge_pretend(RunUnmergePretendArgs {
             targets: atom_args,
             action: "rage-clean",
+            safety_note: true,
             root,
             config_root,
             config,
@@ -468,6 +469,7 @@ pub(crate) fn dispatch_removal(args: DispatchRemovalArgs<'_>) -> Option<ExitCode
         return Some(run_unmerge_pretend(RunUnmergePretendArgs {
             targets: atom_args,
             action: "unmerge",
+            safety_note: true,
             root,
             config_root,
             config,

@@ -2733,7 +2733,7 @@ fn user_profile_accept_keywords_stacks_between_chain_and_user_file() {
 fn user_package_keywords_feeds_the_accept_dict_first_with_a_deprecation_warning() {
     // S0 k01/k05: the user `package.keywords` file merges into the
     // accept-keywords dict before `package.accept_keywords` entries extend
-    // it per atom; the message-only deprecation warning fires on read.
+    // it per atom; the framed deprecation warning fires on read (#547).
     let root = user_profile_test_root("portage-profile-test-user-package-keywords", &[], &[]);
     fs::write(
         root.join("etc/portage/package.keywords"),
@@ -2763,7 +2763,7 @@ fn user_package_keywords_feeds_the_accept_dict_first_with_a_deprecation_warning(
     let accept_path = root.join("etc/portage/package.accept_keywords");
     assert!(config.config_warnings.iter().any(|w| w
         == &format!(
-            "{} is deprecated, use {} instead",
+            "portage/package/ebuild/_config/KeywordsManager.py:89: UserWarning: {} is deprecated, use {} instead\n  warnings.warn(",
             keywords_path.display(),
             accept_path.display()
         )));

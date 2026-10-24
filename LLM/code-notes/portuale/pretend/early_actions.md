@@ -22,3 +22,7 @@ Option checks that end the run early, and the actions that need no resolve.
 - Oracle: `LLM/evidence/2026-10-24-513/` shapes 01 (pretend, printed), 20 (search), 21 (depclean), 22 (info, silent), 23 (`--clean -p`), 24 (`-C -p`), 25 (`--check-news`, silent), 26 (`--list-sets`, silent), 27 (`--rage-clean -p`), 28 (`--prune -p`), 29 (`--metadata`, silent).
 - Not captured: `--regen`, `--config`, `--deselect`, `--resume`; they follow the Portage source (validate calls) but no shape ran them. Backlog #513 residue.
 - Pins: `src/pretend/tests/user_virtuals.rs`; black-box: pmtest `test_513_user_block_*`.
+
+## user-virtuals block for the early-dispatch actions (#550)
+- `validate_and_early_actions` takes `user_virtuals_deprecated` and computes `user_block` up front (before the destructure, so no borrow conflict); the `--regen` and standalone-`--deselect` arms print `USER_VIRTUALS_NOTICE` when set. Those arms return before `mod.rs` reaches its own print, which is why both actions regressed to silence. `--list-sets`/`--metadata`/`--sync`/`--check-news`/`--info`/`--version` stay excluded via `prints_user_virtuals_notice`.
+- `--version` exemption: `version_action` added (with short `-V`); the no-atoms `SHORT_HELP` guard exempts it. Portage: `main.py profile_check` early return for `version`.

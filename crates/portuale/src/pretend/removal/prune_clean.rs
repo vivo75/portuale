@@ -104,6 +104,7 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
     run_unmerge_pretend(RunUnmergePretendArgs {
         targets: &cpv_refs,
         action: "unmerge",
+        safety_note: false,
         root,
         config_root,
         config,

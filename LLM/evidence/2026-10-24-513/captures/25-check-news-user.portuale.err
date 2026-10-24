@@ -1,0 +1,6 @@
+!!! Invalid news item: /var/tmp/ev513-repo/metadata/news/2026-09-08-portuale-malformed/2026-09-08-portuale-malformed.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[[bad
+!!! Invalid news item: /var/tmp/ev513-repo/metadata/news/2026-09-09-portuale-format1-slotatom/2026-09-09-portuale-format1-slotatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/samepkg:1
+!!! Invalid news item: /var/tmp/ev513-repo/metadata/news/2026-09-10-portuale-format1-useatom/2026-09-10-portuale-format1-useatom.en.txt
+!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[alpha]

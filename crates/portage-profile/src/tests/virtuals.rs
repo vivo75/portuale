@@ -22,9 +22,9 @@ fn grabdict_nonempty_needs_a_key_and_a_value() {
     let file = root.join("virtuals");
     let check = |content: &str| {
         write(&file, content);
-        grabdict_nonempty(&file)
+        grabdict_nonempty(&file).expect("readable fixture")
     };
-    assert!(!grabdict_nonempty(&root.join("missing")));
+    assert!(!grabdict_nonempty(&root.join("missing")).expect("missing is empty"));
     assert!(check("virtual/editor app-editors/vim\n"));
     assert!(check("# note\nvirtual/editor app-editors/vim # trailing\n"));
     assert!(check("virtual/editor app-editors/vim\r\n"));
@@ -33,6 +33,28 @@ fn grabdict_nonempty_needs_a_key_and_a_value() {
     assert!(!check("virtual/editor\n"));
     assert!(!check("virtual/editor # no provider\n"));
     assert!(!check("   # indented comment is a key\n"));
+}
+
+/// Backlog #549 (oracle: mode-000 profile `virtuals` under a non-root
+/// host run: `Permission denied: '<path>'` on stderr, rc 13): an unreadable
+/// profile `virtuals` aborts the load. A missing file stays empty.
+#[test]
+fn unreadable_profile_virtuals_aborts_with_permission_denied() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = TempDir::new("portage-profile-test-virtuals-unreadable").keep();
+    let dir = root.join("prof");
+    let file = dir.join("virtuals");
+    write(&file, "virtual/editor app-editors/vim\n");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&file).is_ok() {
+        return; // running as root: mode 000 blocks nothing here.
+    }
+    let err = crate::virtuals::profile_virtuals_warnings(&[dir])
+        .expect_err("unreadable virtuals aborts the load");
+    assert_eq!(
+        err.to_string(),
+        format!("Permission denied: '{}'", file.display())
+    );
 }
 
 /// One warning per non-empty profile, in the order given (parent first).
@@ -46,7 +68,8 @@ fn profile_virtuals_warn_once_per_non_empty_profile_in_chain_order() {
     write(&leaf.join("virtuals"), "virtual/y app-misc/b\n");
     write(&empty.join("virtuals"), "# nothing\n");
     let warnings =
-        crate::virtuals::profile_virtuals_warnings(&[parent.clone(), empty.clone(), leaf.clone()]);
+        crate::virtuals::profile_virtuals_warnings(&[parent.clone(), empty.clone(), leaf.clone()])
+            .expect("readable fixtures");
     let texts: Vec<&str> = warnings.iter().map(|w| w.text.as_str()).collect();
     assert_eq!(texts.len(), 2, "{texts:?}");
     assert!(texts[0].contains(&format!("{}/virtuals", parent.display())));

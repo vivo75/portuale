@@ -1,0 +1,4 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792881089,"command":"env ROOT=/var/tmp/ev513-tree/31-config-user/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/31-config-user/cfg /var/tmp/ev513-bin/emerge --config dev-libs/dccyca","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007\r\n!!! /etc/portage/virtuals is deprecated and ignored.\r\n!!! Support for PROVIDE virtuals was removed in\r\n!!! portage-2.3.25; use GLEP 37 virtual packages\r\n!!! instead. Please remove this file.\r\n\r\n"]
+[0.000, "o", "\r\nNo packages found.\r\n\r\n\u001b]0;vivo@:/var/tmp/ev513-tree/31-config-user\u0007"]
+[0.000, "x", "0"]

@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792881077,"command":"env ROOT=/var/tmp/ev513-tree/33-resume-user/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/33-resume-user/cfg /usr/bin/emerge --resume","env":{"SHELL":"/bin/bash"}}
+[0.205, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.002, "o", "\r\n!!! /etc/portage/virtuals is deprecated and ignored.\r\n!!! Support for PROVIDE virtuals was removed in\r\n!!! portage-2.3.25; use GLEP 37 virtual packages\r\n!!! instead. Please remove this file.\r\n\r\n"]
+[0.003, "o", "\u001b[32memerge: It seems we have nothing to resume...\u001b[39;49;00m\r\n"]
+[0.002, "o", "\u001b]0;vivo@:/var/tmp/ev513-tree/33-resume-user\u0007"]
+[0.032, "x", "0"]

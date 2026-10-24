@@ -51,6 +51,15 @@ pub(crate) struct RunUnmergePretendArgs<'a> {
     /// invisible at `--pretend`), `"depclean"`, `"prune"`. Threaded into the
     /// `Couldn't find ... to <action>` / `removal by <action>` messages.
     pub(crate) action: &'a str,
+    /// Whether this is a genuine top-level `-C`/`--unmerge` or
+    /// `--rage-clean` run (not the shared display path reused by
+    /// `--depclean`/`--prune`/`--clean`, which pass `action: "unmerge"`
+    /// for the wording): only then does Portage print the
+    /// `can only be used with specific package names` no-atoms usage.
+    /// The depclean-safety note is narrower still: `action == "unmerge"`
+    /// only (never `--rage-clean`). Set at the two standalone call
+    /// sites only. Portage: _emerge/actions.py, run_action
+    pub(crate) safety_note: bool,
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
@@ -93,6 +102,7 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
     let RunUnmergePretendArgs {
         targets,
         action,
+        safety_note,
         root,
         config_root,
         config,
@@ -107,8 +117,35 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         noinfo,
     } = args;
     if targets.is_empty() {
+        // Portage prints the no-atoms usage on stdout, naming the action,
+        // for a genuine top-level `unmerge`/`rage-clean` run only (a bare
+        // `--clean` cleans globally instead -- different path, out of scope).
+        // Portage: _emerge/unmerge.py, unmerge
+        if safety_note {
+            println!("\nemerge {action} can only be used with specific package names\n");
+            return ExitCode::from(1);
+        }
         eprintln!("emerge: no package atoms given to --{action}");
         return ExitCode::from(1);
+    }
+
+    // The depclean-safety note prints for every genuine top-level `-C` run
+    // (pretend or real), before anything else: Portage prints it in
+    // `run_action` exactly when `action == "unmerge"` -- never for
+    // `--rage-clean` (or the depclean/prune/clean display reuse).
+    // Each line is Portage's `ewarn` rendering: the ` * ` span in WARN
+    // (yellow under `--color=y`, plain otherwise), the body unstyled.
+    // (`--quiet-unmerge-warn` is not a parsed portuale flag, so `--quiet`
+    // is the only gate.) Portage: _emerge/actions.py, run_action;
+    // lib/portage/output.py, EOutput.ewarn
+    if safety_note && action == "unmerge" && !quiet {
+        for line in [
+            "This action can remove important packages! In order to be safer, use",
+            "`emerge -pv --depclean <atom>` to check for reverse dependencies before",
+            "removing packages.",
+        ] {
+            eprintln!("{}{line}", color.c("WARN", " * "));
+        }
     }
 
     // Expand every `@set` target into member atoms first, so the
@@ -510,7 +547,9 @@ pub(crate) fn select_unmerge_targets(args: SelectUnmergeTargetsArgs<'_>) -> Opti
         };
 
         if matches.is_empty() {
-            println!("\n--- Couldn't find '{atom_str}' to {action}.");
+            // Portage's `writemsg` (`noiselevel=-1`): stderr, with the
+            // leading blank line. Portage: _emerge/unmerge.py, unmerge
+            eprintln!("\n--- Couldn't find '{atom_str}' to {action}.");
             continue;
         }
 

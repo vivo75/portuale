@@ -210,6 +210,13 @@ pub fn run(args: &[String]) -> ExitCode {
             // framing (see `portage_profile::Error`); print those verbatim.
             if message.starts_with("!!!") {
                 eprintln!("{message}");
+            } else if message.starts_with("Permission denied: ") {
+                // Portage's `bin/emerge` `PermissionDenied` arm prints the
+                // line verbatim and exits with the errno (always `EACCES`,
+                // 13, via the exception's class attribute).
+                // Portage: bin/emerge:63-65
+                eprintln!("{message}");
+                return ExitCode::from(13);
             } else {
                 eprintln!("emerge: {message}");
             }
@@ -241,7 +248,7 @@ pub fn run(args: &[String]) -> ExitCode {
 
     apply_process_globals(&opts);
 
-    if let Some(code) = validate_and_early_actions(&mut opts) {
+    if let Some(code) = validate_and_early_actions(&mut opts, config.user_virtuals_deprecated) {
         return code;
     }
 
@@ -250,6 +257,17 @@ pub fn run(args: &[String]) -> ExitCode {
     // Portage: config.py, `validate`; _emerge/actions.py, validate_ebuild_environment
     if config.user_virtuals_deprecated && prints_user_virtuals_notice(&opts) {
         eprint!("{}", portage_profile::USER_VIRTUALS_NOTICE);
+    }
+
+    // `--version` prints the `Portage ...` line and exits 0, with no resolve
+    // and no user-virtuals block (the `profile_check` early return).
+    // Portage: _emerge/actions.py, run_action (`version`); _emerge/main.py
+    if opts.version_action {
+        println!(
+            "{}",
+            portage_version_line(PORTED_PORTAGE_VERSION, &repos, &root, &config_root)
+        );
+        return ExitCode::SUCCESS;
     }
 
     // Colour gate, resolved once so every action path shares one `Colorizer`.

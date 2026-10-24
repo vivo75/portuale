@@ -15,3 +15,8 @@ Deprecated profile and user `virtuals` files: the grabdict gate and the config-l
 ## struct Config (field user_virtuals_deprecated)
 - `/etc/portage/virtuals` exists (any content). Portage's `config.validate` (`config.py:1474-1479`) prints the block for each run that calls `validate_ebuild_environment`, which the CLI decides per action (`pretend/early_actions.rs`, `prints_user_virtuals_notice`). The text is `USER_VIRTUALS_NOTICE` (`src/virtuals.rs`), printed by the CLI, not in `config_warnings`, because it is not config-load output.
 - Backlog #513; oracle shapes 01, 04, 17, 20-24, 27-29 (`LLM/evidence/2026-10-24-513/`).
+
+## unreadable profile `virtuals` (#549)
+- `grabdict_nonempty` returns `Result<bool, io::Error>`: `NotFound` maps to `Ok(false)` (Portage's `grablines` ignores `ENOENT`); every other errno is reported.
+- `profile_virtuals_warnings` returns `Result<_, Error>`: `PermissionDenied` becomes `Error::VirtualsPermissionDenied` (`Display`: `Permission denied: '<path>'`, verbatim at the CLI with exit 13 via `bin/emerge:63-65`); any other read error becomes `Error::ReadFile` (Portage re-raises those; the CLI renders them `emerge: reading ...`, no traceback parity claimed).
+- Scope note: the user `/etc/portage/virtuals` check stays `.exists()`-only -- Portage's `os.path.exists` gate is equally readability-blind (verified live: mode-000 user file still warns).

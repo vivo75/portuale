@@ -310,8 +310,11 @@ pub(crate) fn fold_package_masks_and_keywords(
     // `eapi=None`, wildcards and repo on, build-ids on, use-dep lines
     // dropped. The user `package.keywords` file is read first, into the
     // same dict; `package.accept_keywords` entries then extend each atom.
-    // A non-empty read warns once (message part only, no Python frame).
-    // Portage: KeywordsManager.py:73-104
+    // A non-empty read warns once, with the Python `warnings.warn`
+    // rendering Portage prints (`file:line: UserWarning: msg` and the
+    // source line), interpreter prefix left out like the profile
+    // `virtuals` frame (backlog #547).
+    // Portage: KeywordsManager.py:73-104 (the `warn` call is line 89)
     let user_keywords_path = config_root.join("etc/portage/package.keywords");
     let user_accept_path = config_root.join("etc/portage/package.accept_keywords");
     let user_accept_rules = user_atom_rules(true, true);
@@ -326,7 +329,7 @@ pub(crate) fn fold_package_masks_and_keywords(
         warnings.push(ProfileWarning {
             rank: WARN_RANK_KEYWORDS,
             text: format!(
-                "{} is deprecated, use {} instead",
+                "portage/package/ebuild/_config/KeywordsManager.py:89: UserWarning: {} is deprecated, use {} instead\n  warnings.warn(",
                 user_keywords_path.display(),
                 user_accept_path.display()
             ),

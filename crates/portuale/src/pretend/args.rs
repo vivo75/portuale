@@ -78,6 +78,8 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) clean_action: bool,
     pub(crate) rage_clean: bool,
     pub(crate) info_action: bool,
+    /// `--version`/`-V`: print the `Portage ...` line, exit 0 (backlog #552).
+    pub(crate) version_action: bool,
     pub(crate) with_bdeps: bool,
     pub(crate) with_bdeps_given: bool,
     pub(crate) with_bdeps_auto: bool,
@@ -291,6 +293,7 @@ impl<'a> Default for EmergeOpts<'a> {
             rage_clean: false,
             // --info: a standalone read-only query action.
             info_action: false,
+            version_action: false,
             with_bdeps: true,
             with_bdeps_given: false,
             with_bdeps_auto: true,
@@ -1801,6 +1804,12 @@ fn parse_query_opts<'a>(
         opts.info_action = true;
         *idx += 1;
         Ok(true)
+    } else if arg == "--version" {
+        // Portage: _emerge/main.py, actions (`version`); run_action prints
+        // the `Portage ...` line and exits 0 (backlog #552).
+        opts.version_action = true;
+        *idx += 1;
+        Ok(true)
     } else if arg == "--skipfirst" || arg == "--skip-first" {
         opts.skipfirst = true;
         *idx += 1;
@@ -2620,6 +2629,7 @@ fn apply_short_flag(opts: &mut EmergeOpts<'_>, c: char) -> bool {
             opts.fetchonly = true;
         }
         'b' => opts.buildpkg_opt = Some(true),
+        'V' => opts.version_action = true,
         _ => return false,
     }
     true

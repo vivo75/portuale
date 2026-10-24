@@ -92,3 +92,8 @@ GLEP 42 news.
 
 ## fn run_check_news
 - Ports Portage's `emerge --check-news` (`_emerge/actions.py:3844` -> `portage.news.getUnreadItems` / `NewsManager`): print the `IMPORTANT: N news items need reading` block if any repo's `.unread` count is nonzero, else ` * No news items were found.` (unless `--quiet`).
+
+## invalid-item reporting (#554)
+- `news_item_invalid_lines` mirrors `NewsItem.parse`'s `invalids` list: non-`[12].*` format lines recorded (first valid one stops the scan and drives restriction checks), `(0, "News-Item-Format unspecified")` with no format line at all, then the `Display-If-Installed`/`Display-If-Profile` failures with 1-based line numbers -- using the exact `news_item_valid` predicates, so verdict and report can never disagree. `news_item_valid` delegates to it. `Display-If-Keyword` has no portuale validity predicate: a bad keyword stays a silent verdict gap, not a reported line.
+- `evaluate()` prints `!!! Invalid news item: {path}` + `!!!   line {n}: {line}` per invalid item and skips it (never counted, never `.skip`-ed), like `updateItems`.
+- Out of scope: the probe env's extra `gentoo` repo count (host-only repo config, not a product gap).
