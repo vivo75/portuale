@@ -325,6 +325,11 @@ pub(crate) struct RunPhaseFromSavedEnvArgs<'a> {
     /// Portage: doebuild.py, `doebuild_environment`
     /// (`configdict["pkg"]["PORTAGE_REPO_NAME"] = repo.name`).
     pub(crate) repo_name: Option<&'a str>,
+    /// The merge's whitelisted config environment for a binary-merge hook
+    /// (empty for unmerge hooks): `config.environ()` reaches every phase,
+    /// not only `instprep`.
+    /// Portage: config.py, environ
+    pub(crate) build_env: &'a [(String, String)],
 }
 
 /// Like `run_single_phase`, but seeds `${T}/environment` from a binary
@@ -349,6 +354,7 @@ pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Re
         merge_type,
         replaced_by_version,
         repo_name,
+        build_env,
     } = args;
     let runtime = shared_runtime()?;
     runtime.block_on(async {
@@ -363,7 +369,7 @@ pub(crate) fn run_phase_from_saved_env(args: RunPhaseFromSavedEnvArgs<'_>) -> Re
         // `MERGE_TYPE`); unmerge hooks carry neither. Both
         // `exports_merge_type` and the replace-var phase gates are
         // enforced centrally in `apply_eapi_phase_env`.
-        let mut extra_env = Vec::new();
+        let mut extra_env = build_env.to_vec();
         if merge_type.is_some() {
             extra_env.extend(binary_merge_env());
         }

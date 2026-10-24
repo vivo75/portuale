@@ -1,0 +1,3 @@
+4133,4134d4132
+< declare -x QEMU_SOFTMMU_TARGETS=""
+< declare -x QEMU_USER_TARGETS=""

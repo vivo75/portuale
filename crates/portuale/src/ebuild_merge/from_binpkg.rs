@@ -41,6 +41,9 @@ pub(crate) struct HookCtx<'a> {
     /// `None` when the binpkg carries no usable repo record.
     /// Portage: doebuild.py, `doebuild_environment`.
     pub(crate) repo_name: Option<&'a str>,
+    /// The whitelisted config environment with the binpkg's own
+    /// `USE_EXPAND` values, see [`binary_hook_env`].
+    pub(crate) build_env: &'a [(String, String)],
 }
 
 impl HookCtx<'_> {
@@ -65,6 +68,7 @@ impl HookCtx<'_> {
             options,
             replacing_versions,
             repo_name,
+            build_env,
             ..
         } = self;
         match &extracted_ebuild {
@@ -88,6 +92,7 @@ impl HookCtx<'_> {
                         merge_type: Some("binary"),
                         replaced_by_version: None,
                         repo_name,
+                        build_env,
                     },
                 )
             }
@@ -98,6 +103,40 @@ impl HookCtx<'_> {
     pub(crate) fn run_hook(&self, phase: &str) -> Result<i32, String> {
         self.run_hook_ex(phase, false, None)
     }
+}
+
+/// The calling environment a binary-merge hook sees: the merge's whitelisted
+/// `build_env`, with every `USE_EXPAND` variable recomputed from the binpkg's
+/// own `IUSE`/`USE` (empty when off), so `QEMU_SOFTMMU_TARGETS` is `""` for a
+/// package built without `qemu_softmmu_targets_*` and not the profile value.
+/// Portage: config.py, setcpv/environ (via `doebuild_environment`)
+pub(crate) fn binary_hook_env(
+    options: &MergeOptions,
+    iuse: &str,
+    built_use: &str,
+) -> Vec<(String, String)> {
+    let mut env = options.build_env.clone();
+    let Some(config) = options.resolved_config.as_deref() else {
+        return env;
+    };
+    let words = |s: &str| -> Vec<String> { s.split_whitespace().map(String::from).collect() };
+    let overlay = portage_profile::phase_environ_pkg(
+        config,
+        Some(portage_profile::PhaseUse {
+            iuse: &words(iuse),
+            enabled: &words(built_use),
+        }),
+    );
+    for (key, value) in overlay {
+        if !config.use_expand.contains(&key) || !ebuild_phases::environ_whitelisted(&key) {
+            continue;
+        }
+        match env.iter_mut().find(|(k, _)| *k == key) {
+            Some(slot) => slot.1 = value,
+            None => env.push((key, value)),
+        }
+    }
+    env
 }
 
 /// Portage: _emerge/Binpkg, vartree.py, dblink.treewalk
@@ -238,6 +277,11 @@ pub fn merge_binpkg(
     let installed_instance = installed_instance_pf(root, &category, &package, &main_slot);
     let replacing_versions =
         replacing_versions(&package, installed_instance.as_deref()).unwrap_or_default();
+    let hook_env = binary_hook_env(
+        options,
+        meta_get("IUSE").as_deref().unwrap_or_default(),
+        meta_get("USE").as_deref().unwrap_or_default(),
+    );
     let hooks = HookCtx {
         extracted_ebuild: &extracted_ebuild,
         defined_phases: &defined_phases,
@@ -251,6 +295,7 @@ pub fn merge_binpkg(
         // from the binary record); without a usable record the hooks keep
         // today's behavior. Portage: doebuild.py, doebuild_environment
         repo_name: repo_name.as_deref(),
+        build_env: &hook_env,
     };
 
     // `pkg_pretend` runs for every package in the merge list, binary
@@ -288,7 +333,7 @@ pub fn merge_binpkg(
             seed: seed_instprep,
             root,
             portage_tmpdir,
-            build_env: &options.build_env,
+            build_env: &hook_env,
             debug: options.debug,
             config_root: &options.config_root,
             shell: options.shell,

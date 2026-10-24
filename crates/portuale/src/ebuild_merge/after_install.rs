@@ -838,6 +838,6 @@ pub(crate) fn run_vdb_saved_env_phase(args: RunVdbSavedEnvPhaseArgs<'_>) -> Resu
         // No `MERGE_TYPE`/`EMERGE_FROM` on an unmerge hook either: both
         // stay unset and `ebuild.sh` re-creates them readonly-empty.
         // `PORTAGE_REPO_NAME` likewise keeps today's behavior (no oracle).
-        merge_type: None, replaced_by_version, repo_name: None },
+        merge_type: None, replaced_by_version, repo_name: None, build_env: &[] },
     )
 }
