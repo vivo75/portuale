@@ -31,7 +31,7 @@ pub enum ShellBackend {
 pub(crate) const SANDBOXED_SRC_PHASES: &str = include_str!("sandboxed_src_phases.txt");
 
 /// The calling-env vars Portage's `config.environ()` carries into a phase (plus
-/// `CCACHE_*`/`DISTCC_*`). Phases spawn with the inherited env plus `phase_env_vars`
+/// `CCACHE_*`/`DISTCC_*`/`QEMU_*`). Phases spawn with the inherited env plus `phase_env_vars`
 /// overrides; without this filter CLI-only vars (e.g. `EMERGE_DEFAULT_OPTS`) would
 /// leak into the regenerated vdb `environment`.
 /// Portage: special_env_vars.py. One name per line.
@@ -44,7 +44,10 @@ pub(crate) fn listed(table: &str, name: &str) -> bool {
 
 /// Whether `key` survives Portage's `config.environ()` calling-env filter.
 pub(crate) fn environ_whitelisted(key: &str) -> bool {
-    listed(ENVIRON_WHITELIST, key) || key.starts_with("CCACHE_") || key.starts_with("DISTCC_")
+    listed(ENVIRON_WHITELIST, key)
+        || key.starts_with("CCACHE_")
+        || key.starts_with("DISTCC_")
+        || key.starts_with("QEMU_")
 }
 
 /// Settings the native `gpkg-helper compress` reads from its env. The native helper

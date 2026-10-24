@@ -82,6 +82,23 @@ fn sandbox_name_tables_are_one_plain_name_per_line() {
     assert!(!environ_whitelisted("EMERGE_DEFAULT_OPTS"));
 }
 
+/// Portage 3.0.83 `special_env_vars.py:256` (`f7bfe34de`, bug 978685):
+/// `environ_whitelist_re` is `^(CCACHE_|DISTCC_|QEMU_).*`, so the empty
+/// `USE_EXPAND` variables `QEMU_SOFTMMU_TARGETS`/`QEMU_USER_TARGETS` reach a
+/// binary merge's saved environment. Expected values from the host's source
+/// and the L1 bash merge (`LLM/evidence/2026-10-24-vdb-env/`).
+#[test]
+fn environ_whitelist_keeps_qemu_prefix_like_portage_3_0_83() {
+    for key in [
+        "QEMU_USER_TARGETS",
+        "QEMU_SOFTMMU_TARGETS",
+        "QEMU_LD_PREFIX",
+    ] {
+        assert!(environ_whitelisted(key), "{key}");
+    }
+    assert!(!environ_whitelisted("QEMUX") && !environ_whitelisted("XQEMU_FOO"));
+}
+
 /// Portage 3.0.83 `special_env_vars.py` (`5dc9b552e`, `c15ab2464`, `b7052a33d`,
 /// `1bad86d92`) adds four names to `environ_whitelist`, and the two
 /// descriptors also to `env_blacklist`.
