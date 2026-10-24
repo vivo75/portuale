@@ -1,0 +1,9 @@
+--- Invalid atom in /var/tmp/ev513-tree/17-user-virt-badmask/cfg/etc/portage/package.mask: !!!invalid-atom
+ERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'
+--- Invalid atom in /var/tmp/ev513-tree/17-user-virt-badmask/cfg/etc/portage/package.mask: !!!invalid-atom
+
+!!! /etc/portage/virtuals is deprecated and ignored.
+!!! Support for PROVIDE virtuals was removed in
+!!! portage-2.3.25; use GLEP 37 virtual packages
+!!! instead. Please remove this file.
+

@@ -1,0 +1,3 @@
+--- Invalid atom in /var/tmp/ev513-tree/16-profile-virt-badmask/profile/package.mask: !!!invalid-atom
+portage/package/ebuild/_config/VirtualsManager.py:54: UserWarning: /var/tmp/ev513-tree/16-profile-virt-badmask/profile/virtuals is deprecated, support for PROVIDE virtuals was removed in portage-2.3.25, use GLEP 37 virtual packages instead
+  warnings.warn(

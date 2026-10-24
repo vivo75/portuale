@@ -1,0 +1,12 @@
+ERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'
+
+!!! /etc/portage/virtuals is deprecated and ignored.
+!!! Support for PROVIDE virtuals was removed in
+!!! portage-2.3.25; use GLEP 37 virtual packages
+!!! instead. Please remove this file.
+
+ * This action can remove important packages! In order to be safer, use
+ * `emerge -pv --depclean <atom>` to check for reverse dependencies before
+ * removing packages.
+
+--- Couldn't find 'dev-libs/dccyca' to unmerge.

@@ -233,6 +233,13 @@ pub fn run(args: &[String]) -> ExitCode {
         return code;
     }
 
+    // `/etc/portage/virtuals` is deprecated and ignored (backlog #513): the
+    // block follows the config-load warnings, for the validating actions only.
+    // Portage: config.py, `validate`; _emerge/actions.py, validate_ebuild_environment
+    if config.user_virtuals_deprecated && prints_user_virtuals_notice(&opts) {
+        eprint!("{}", portage_profile::USER_VIRTUALS_NOTICE);
+    }
+
     // Colour gate, resolved once so every action path shares one `Colorizer`.
     // Portage: _emerge/actions.py, adjust_configs
     let color = Colorizer::new(color::resolve_havecolor(opts.color_opt));

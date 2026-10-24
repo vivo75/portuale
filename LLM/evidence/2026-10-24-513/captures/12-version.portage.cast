@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792819147,"command":"env ROOT=/var/tmp/ev513-tree/12-version/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/12-version/cfg /usr/bin/emerge --version","env":{"SHELL":"/bin/bash"}}
+[0.176, "o", "/usr/lib/python3.14/site-packages/portage/package/ebuild/_config/VirtualsManager.py:54: UserWarning: /var/tmp/ev513-tree/12-version/profile/virtuals is deprecated, support for PROVIDE virtuals was removed in portage-2.3.25, use GLEP 37 virtual packages instead\r\n  warnings.warn(\r\n"]
+[0.025, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.002, "o", "Portage 3.0.83 (python 3.14.8-final-0, !/var/tmp/ev513-tree/12-version/profile, gcc-16, unavailable, 6.18.39-serv x86_64)\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev513-tree/12-version\u0007"]
+[0.027, "x", "0"]

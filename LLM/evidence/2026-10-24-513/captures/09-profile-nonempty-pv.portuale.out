@@ -1,0 +1,10 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/dccyca-1.0::testrepo to /var/tmp/ev513-tree/09-profile-nonempty-pv/root 0 KiB
+[ebuild  N     ] dev-libs/dccycb-1.0::testrepo to /var/tmp/ev513-tree/09-profile-nonempty-pv/root 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB

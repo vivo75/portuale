@@ -1,0 +1,55 @@
+Searching...
+
+  
+[ Results for search key : dccyca ]
+*  dev-libs/dccyca
+      Latest version available: 1.0
+      Latest version installed: [ Not Installed ]
+      Homepage:      
+      Description:   fixture package: cycle pair A (A and B require each other; B is the only other member), for --depclean with a cycle argument (#508)
+      License:       
+
+*  dev-libs/dccycb
+      Latest version available: 1.0
+      Latest version installed: [ Not Installed ]
+      Homepage:      
+      Description:   fixture package: cycle pair B (A and B require each other; A is the only other member), for --depclean with a cycle argument (#508)
+      License:       
+
+*  dev-libs/dccycp
+      Latest version available: 1.0
+      Latest version installed: [ Not Installed ]
+      Homepage:      
+      Description:   fixture package: protected package outside the cycle that requires dccyca, for --depclean with a cycle argument (#508)
+      License:       
+
+*  dev-libs/dccycw
+      Latest version available: 1.0
+      Latest version installed: [ Not Installed ]
+      Homepage:      
+      Description:   fixture package: world-selected package with no dependencies, keeps nothing alive, for --depclean with a cycle argument (#508)
+      License:       
+
+*  dev-libs/dccycx
+      Latest version available: 1.0
+      Latest version installed: [ Not Installed ]
+      Homepage:      
+      Description:   fixture package: three-member cycle X -> Y -> Z -> X, for --depclean with a cycle argument (#508)
+      License:       
+
+*  dev-libs/dccycy
+      Latest version available: 1.0
+      Latest version installed: [ Not Installed ]
+      Homepage:      
+      Description:   fixture package: three-member cycle X -> Y -> Z -> X (middle member), for --depclean with a cycle argument (#508)
+      License:       
+
+*  dev-libs/dccycz
+      Latest version available: 1.0
+      Latest version installed: [ Not Installed ]
+      Homepage:      
+      Description:   fixture package: three-member cycle X -> Y -> Z -> X (last member), for --depclean with a cycle argument (#508)
+      License:       
+
+[ Applications found : 7 ]
+

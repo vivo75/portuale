@@ -1,0 +1,30 @@
+# id <TAB> user virtuals (none|empty|nonempty) <TAB> profile virtuals (none|comment|nonempty|parent) <TAB> emerge args
+01-user-nonempty	nonempty	none	-p dev-libs/dccyca
+02-profile-nonempty	none	nonempty	-p dev-libs/dccyca
+03-both-nonempty	nonempty	nonempty	-p dev-libs/dccyca
+04-user-empty	empty	none	-p dev-libs/dccyca
+05-profile-comment	none	comment	-p dev-libs/dccyca
+06-profile-parent	none	parent	-p dev-libs/dccyca
+07-both-info	nonempty	nonempty	--info
+08-profile-search	none	nonempty	-s dccyca
+09-profile-nonempty-pv	none	nonempty	-pv dev-libs/dccyca
+11-two-profiles-nonempty	none	both	-p dev-libs/dccyca
+12-version	nonempty	nonempty	--version
+13-merge-user	nonempty	none	-1 --nodeps dev-libs/dccyca
+14-merge-profile	none	nonempty	-1 --nodeps dev-libs/dccyca
+15-merge-none	none	none	-1 --nodeps dev-libs/dccyca
+10-none	none	none	-p dev-libs/dccyca
+16-profile-virt-badmask	none	nonempty	-p dev-libs/dccyca
+17-user-virt-badmask	nonempty	none	-p dev-libs/dccyca
+18-one-token-line	none	oneword	-p dev-libs/dccyca
+19-user-profile-dir	none	none	-p dev-libs/dccyca
+20-search-user	nonempty	none	-s dccyca
+21-depclean-user	nonempty	none	--depclean -p dev-libs/dccyca
+22-info-user	nonempty	none	--info
+23-clean-user	nonempty	none	--clean -p
+24-unmerge-user	nonempty	none	-C -p dev-libs/dccyca
+25-check-news-user	nonempty	none	--check-news
+26-list-sets-user	nonempty	none	--list-sets
+27-rage-clean-user	nonempty	none	--rage-clean -p
+28-prune-user	nonempty	none	--prune -p dev-libs/dccyca
+29-metadata-user	nonempty	none	--metadata

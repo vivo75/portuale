@@ -1,0 +1,5 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792819357,"command":"env ROOT=/var/tmp/ev513-tree/26-list-sets-user/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/26-list-sets-user/cfg /var/tmp/ev513-bin/emerge --list-sets","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.000, "o", "changed-deps\r\nchanged-subslot\r\ndeprecated-live-rebuild\r\ndowngrade\r\ngolang-rebuild\r\ninstalled\r\nlive-rebuild\r\nmodule-rebuild\r\npreserved-rebuild\r\nprofile\r\nrebuilt-binaries\r\nrust-rebuild\r\nsecurity\r\nselected"]
+[0.000, "o", "\r\nselected-packages\r\nselected-sets\r\nsystem\r\nunavailable\r\nworld\r\nx11-module-rebuild\r\n\u001b]0;vivo@:/var/tmp/ev513-tree/26-list-sets-user\u0007"]
+[0.000, "x", "0"]

@@ -16,3 +16,9 @@ Option checks that end the run early, and the actions that need no resolve.
 - Portage `main.py`: `--deselect` becomes a standalone action only when `myaction is None` -- `--depclean`/`--prune`/`--unmerge` each set their own action first, and then `--deselect=y|n` is just a modifier on it (Portage `action_depclean`'s `deselect` -- see `run_depclean_pretend`).
 - `--list-sets`: a standalone action needing nothing from the resolved config -- dispatch before the "expected a package atom" guard and all the repos.conf/profile machinery.
 - `--jobs` / `--load-average` thread straight through (Portage `action_regen(settings, portdb, max_jobs, max_load)`).
+
+## fn prints_user_virtuals_notice
+- Whether Portage runs `validate_ebuild_environment` for this action, which is when `config.validate` prints the `/etc/portage/virtuals` block (backlog #513). Portage calls it from `run_action` for regen, config, search, the uninstall family (`depclean`, `deselect`, `prune`, `unmerge`, `rage-clean`), clean and the default build/pretend path (`_emerge/actions.py` ~4394-4514), and from `profile_check` (`main.py:1203-1214`). It returns early for `--info`, `--sync`, `--metadata`, `--check-news` and `--list-sets`.
+- Oracle: `LLM/evidence/2026-10-24-513/` shapes 01 (pretend, printed), 20 (search), 21 (depclean), 22 (info, silent), 23 (`--clean -p`), 24 (`-C -p`), 25 (`--check-news`, silent), 26 (`--list-sets`, silent), 27 (`--rage-clean -p`), 28 (`--prune -p`), 29 (`--metadata`, silent).
+- Not captured: `--regen`, `--config`, `--deselect`, `--resume`; they follow the Portage source (validate calls) but no shape ran them. Backlog #513 residue.
+- Pins: `src/pretend/tests/user_virtuals.rs`; black-box: pmtest `test_513_user_block_*`.

@@ -1,0 +1,10 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792819355,"command":"env ROOT=/var/tmp/ev513-tree/09-profile-nonempty-pv/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/09-profile-nonempty-pv/cfg /var/tmp/ev513-bin/emerge -pv dev-libs/dccyca","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "portage/package/ebuild/_config/VirtualsManager.py:54: UserWarning: /var/tmp/ev513-tree/09-profile-nonempty-pv/profile/virtuals is deprecated, support for PROVIDE virtuals was removed in portage-2.3.25, use GLEP 37 virtual packages instead\r\n  warnings.warn(\r\n"]
+[0.000, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.004, "o", "\r\n"]
+[0.000, "o", "\u001b[32mThese are the packages that would be merged, in order:\u001b[39;49;00m\r\n\r\nCalculating dependencies ... done!\r\n"]
+[0.000, "o", "Dependency resolution took \u001b[32m\u001b[39;49;00m s (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[\u001b[32;01mebuild\u001b[39;49;00m  \u001b[32;01mN\u001b[39;49;00m     ] \u001b[32;01mdev-libs/dccyca-1.0::testrepo\u001b[39;49;00m \u001b[32mto /var/tmp/ev513-tree/09-profile-nonempty-pv/root\u001b[39;49;00m 0 KiB\r\n"]
+[0.000, "o", "[\u001b[32mebuild\u001b[39;49;00m  \u001b[32;01mN\u001b[39;49;00m     ] \u001b[32mdev-libs/dccycb-1.0::testrepo\u001b[39;49;00m \u001b[32mto /var/tmp/ev513-tree/09-profile-nonempty-pv/root\u001b[39;49;00m 0 KiB\r\n\r\nTotal: 2 packages (2 new), Size of downloads: 0 KiB\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev513-tree/09-profile-nonempty-pv\u0007"]
+[0.001, "x", "0"]

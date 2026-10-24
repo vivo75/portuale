@@ -2,6 +2,22 @@
 
 use crate::pretend::*;
 
+/// Whether Portage's `validate_ebuild_environment` runs for this action, so
+/// the `/etc/portage/virtuals` block (backlog #513) is printed. Portage runs
+/// it for build, pretend, search, depclean, clean, unmerge, prune and
+/// regen-style actions; `--info`, `--sync`, `--metadata`, `--check-news` and
+/// `--list-sets` return before it. `--version` and `--help` are not
+/// portuale actions here (`--help` exits earlier; `--version` is a usage
+/// error in portuale).
+// Portage: _emerge/actions.py, run_action (validate calls), main.py, profile_check
+pub(crate) fn prints_user_virtuals_notice(opts: &EmergeOpts<'_>) -> bool {
+    !(opts.info_action
+        || opts.sync_action
+        || opts.metadata_action
+        || opts.check_news
+        || opts.list_sets)
+}
+
 pub(crate) fn validate_and_early_actions(opts: &mut EmergeOpts<'_>) -> Option<ExitCode> {
     // `--tree` + `--columns` is a usage error (exit 2, stderr), checked once
     // parsing finishes, order-independent, before any other validation.

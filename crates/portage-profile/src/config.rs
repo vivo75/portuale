@@ -295,6 +295,13 @@ pub struct Config {
     /// by the resolver through `digest`/`files`.
     // Portage: config.py, `_user_patches` (`UserPatches`)
     pub user_patches: Option<UserPatchSet>,
+    /// `/etc/portage/virtuals` exists (any content). Portage's
+    /// `validate_ebuild_environment` prints [`USER_VIRTUALS_NOTICE`] for the
+    /// actions that validate (build, pretend, search, depclean, clean, ...),
+    /// not for `--info`, `--sync`, `--metadata` or `--check-news` (backlog
+    /// #513). Set in `resolve_config`; the CLI decides per action.
+    // Portage: config.py, `validate` (`abs_user_virtuals`)
+    pub user_virtuals_deprecated: bool,
     /// Every non-USE/ACCEPT_KEYWORDS variable's final scalar value
     /// (last-level-wins across profile chain + `make.conf`): the
     /// `scalars` map `resolve_config` builds for `${VAR}` substitution,

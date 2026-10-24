@@ -1,0 +1,9 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792819188,"command":"env ROOT=/var/tmp/ev513-tree/23-clean-user/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/23-clean-user/cfg /usr/bin/emerge --clean -p","env":{"SHELL":"/bin/bash"}}
+[0.197, "o", "\r\nPerforming Global Updates\r\n(Could take a couple of minutes if you have a lot of binary packages.)\r\n  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'\r\n  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'\r\n  p='update /etc/portage/package.*'\r\n"]
+[0.000, "o", "/var/tmp/ev513-repo/profiles/updates/2Q-2024..\r\nERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'\r\n"]
+[0.001, "o", "\r\n\r\n"]
+[0.045, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.001, "o", "\r\n!!! /etc/portage/virtuals is deprecated and ignored.\r\n!!! Support for PROVIDE virtuals was removed in\r\n!!! portage-2.3.25; use GLEP 37 virtual packages\r\n!!! instead. Please remove this file.\r\n\r\n"]
+[0.004, "o", "\u001b[32m\r\n>>> Using system located in ROOT tree /var/tmp/ev513-tree/23-clean-user/root/\r\n\u001b[39;49;00m\u001b[32m\r\n>>> These are the packages that would be unmerged:\r\n\u001b[39;49;00m\r\n>>> No outdated packages were found on your system.\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev513-tree/23-clean-user\u0007"]
+[0.031, "x", "1"]

@@ -1,0 +1,2 @@
+portage/package/ebuild/_config/VirtualsManager.py:54: UserWarning: /var/tmp/ev513-tree/19-user-profile-dir/cfg/etc/portage/profile/virtuals is deprecated, support for PROVIDE virtuals was removed in portage-2.3.25, use GLEP 37 virtual packages instead
+  warnings.warn(

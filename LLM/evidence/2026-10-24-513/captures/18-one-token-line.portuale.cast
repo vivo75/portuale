@@ -1,0 +1,6 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792819357,"command":"env ROOT=/var/tmp/ev513-tree/18-one-token-line/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/18-one-token-line/cfg /var/tmp/ev513-bin/emerge -p dev-libs/dccyca","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.004, "o", "\r\n\u001b[32mThese are the packages that would be merged, in order:\u001b[39;49;00m\r\n\r\nCalculating dependencies ... done!\r\nDependency resolution took \u001b[32m\u001b[39;49;00m s (backtrack: 0/20).\r\n\r\n"]
+[0.000, "o", "[\u001b[32;01mebuild\u001b[39;49;00m  \u001b[32;01mN\u001b[39;49;00m     ] \u001b[32;01mdev-libs/dccyca-1.0\u001b[39;49;00m \u001b[32mto /var/tmp/ev513-tree/18-one-token-line/root\u001b[39;49;00m\r\n[\u001b[32mebuild\u001b[39;49;00m  \u001b[32;01mN\u001b[39;49;00m     ] \u001b[32mdev-libs/dccycb-1.0\u001b[39;49;00m \u001b[32mto /var/tmp/ev513-tree/18-one-token-line/root\u001b[39;49;00m\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev513-tree/18-one-token-line\u0007"]
+[0.000, "x", "0"]

@@ -1,0 +1,11 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792819189,"command":"env ROOT=/var/tmp/ev513-tree/25-check-news-user/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/25-check-news-user/cfg /usr/bin/emerge --check-news","env":{"SHELL":"/bin/bash"}}
+[0.196, "o", "\r\nPerforming Global Updates\r\n(Could take a couple of minutes if you have a lot of binary packages.)\r\n  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'\r\n  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'\r\n  p='update /etc/portage/package.*'\r\n"]
+[0.000, "o", "/var/tmp/ev513-repo/profiles/updates/2Q-2024..\r\nERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'\r\n"]
+[0.001, "o", "\r\n\r\n"]
+[0.043, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.013, "o", "!!! Invalid news item: /var/tmp/ev513-repo/metadata/news/2026-09-10-portuale-format1-useatom/2026-09-10-portuale-format1-useatom.en.txt\r\n!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[alpha]\r\n"]
+[0.001, "o", "!!! Invalid news item: /var/tmp/ev513-repo/metadata/news/2026-09-09-portuale-format1-slotatom/2026-09-09-portuale-format1-slotatom.en.txt\r\n!!!   line 7: Display-If-Installed: dev-libs/samepkg:1\r\n"]
+[0.000, "o", "!!! Invalid news item: /var/tmp/ev513-repo/metadata/news/2026-09-08-portuale-malformed/2026-09-08-portuale-malformed.en.txt\r\n!!!   line 7: Display-If-Installed: dev-libs/infoinstpkg[[bad\r\n"]
+[0.000, "o", "\r\n\u001b[33;01m * IMPORTANT:\u001b[39;49;00m 7 news items need reading for repository 'gentoo'.\r\n\u001b[33;01m * IMPORTANT:\u001b[39;49;00m 1 news items need reading for repository 'testrepo'.\r\n\u001b[33;01m *\u001b[39;49;00m Use \u001b[32;01meselect news read\u001b[39;49;00m to view new items.\r\n\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev513-tree/25-check-news-user\u0007"]
+[0.028, "x", "0"]

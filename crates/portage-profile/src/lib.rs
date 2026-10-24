@@ -67,6 +67,7 @@ mod pkgindex_header;
 mod profile_chain;
 mod resolve;
 mod user_patches;
+mod virtuals;
 
 #[cfg(test)]
 mod tests;
@@ -84,6 +85,7 @@ pub use pkgindex_header::*;
 pub(crate) use profile_chain::*;
 pub use resolve::*;
 pub use user_patches::*;
+pub use virtuals::USER_VIRTUALS_NOTICE;
 
 pub use phase_environ::{
     ENV_BLACKLIST, ENVIRON_FILTER, PORTUALE_COMPUTED, PhaseUse, apply_unprefixed_use_expand_filter,

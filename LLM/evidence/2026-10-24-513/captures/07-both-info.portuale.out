@@ -1,0 +1,30 @@
+Portage unavailable (python 3.14.8-final-0, !/var/tmp/ev513-tree/07-both-info/profile, gcc-16, unavailable, 6.18.39-serv x86_64)
+=================================================================
+System uname: Linux-6.18.39-serv-x86_64-AMD_Ryzen_9_5950X_16-Core_Processor-with-
+KiB Mem:   131806340 total,  78780928 free
+KiB Swap:          0 total,         0 free
+sh: bash
+coreutils: (GNU coreutils) 9.12
+ld: GNU ld (Gentoo 2.47 p1) 2.47.0
+
+Repositories:
+
+testrepo
+    location: /var/tmp/ev513-repo
+    priority: -1000
+    volatile: True
+
+ACCEPT_KEYWORDS="amd64"
+ACCEPT_LICENSE="*"
+CFLAGS=""
+CONFIG_PROTECT="/etc /usr/lib64/libreoffice/program/sofficerc /usr/share/config /usr/share/maven-bin-3.9/conf /var/bind"
+CONFIG_PROTECT_MASK="/etc/ca-certificates.conf /etc/dconf /etc/env.d /etc/fonts/fonts.conf /etc/gentoo-release /etc/php/apache2-php8.5/ext-active/ /etc/php/cgi-php8.5/ext-active/ /etc/php/cli-php8.5/ext-active/ /etc/php/fpm-php8.5/ext-active/ /etc/php/phpdbg-php8.5/ext-active/ /etc/revdep-rebuild /etc/sandbox.d"
+CXXFLAGS=""
+DISTDIR="/var/cache/distfiles"
+FEATURES="assume-digests binpkg-docompress binpkg-dostrip binpkg-logs binpkg-multi-instance buildpkg-live compress-index config-protect-if-modified distlocks ebuild-locks fixlafiles ipc-sandbox merge-sync merge-wait multilib-strict network-sandbox parallel-fetch pid-sandbox pkgdir-index-trusted preserve-libs protect-owned qa-unresolved-soname-deps sandbox strict unknown-features-warn unmerge-logs unmerge-orphans userfetch userpriv usersandbox usersync xattr"
+GENTOO_MIRRORS="http://distfiles.gentoo.org"
+PKGDIR="/var/cache/binpkgs"
+PORTAGE_TMPDIR="/var/tmp"
+USE="amd64 bar foo globalforceflag" CPU_FLAGS_X86="sse2" ELIBC="glibc" LUA_SINGLE_TARGET="lua5-1" VIDEO_CARDS="nvidia"
+Unset:  CHOST, EMERGE_DEFAULT_OPTS, ENV_UNSET, PORTAGE_BINHOST, PORTAGE_BUNZIP2_COMMAND
+

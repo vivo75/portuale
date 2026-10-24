@@ -1,0 +1,16 @@
+
+>>> Emerging (1 of 1) dev-libs/dccyca-1.0::testrepo for /var/tmp/ev513-tree/15-merge-none/root
+
+>>> Install dev-libs/dccyca-1.0 into /var/tmp/portage/dev-libs/dccyca-1.0/image
+>>> Completed installing dev-libs/dccyca-1.0 into /var/tmp/portage/dev-libs/dccyca-1.0/image
+
+ [32m*[0m Final size of build directory: 0 KiB
+ [32m*[0m Final size of installed tree:  0 KiB
+
+chgrp: changing group of '/var/tmp/portage/dev-libs/dccyca-1.0/temp/environment': Invalid argument
+
+>>> Installing (1 of 1) dev-libs/dccyca-1.0::testrepo to /var/tmp/ev513-tree/15-merge-none/root
+
+>>> Completed (1 of 1) dev-libs/dccyca-1.0::testrepo to /var/tmp/ev513-tree/15-merge-none/root
+
+ * GNU info directory index is up-to-date.

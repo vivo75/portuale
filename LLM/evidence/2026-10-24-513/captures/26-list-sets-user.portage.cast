@@ -1,0 +1,7 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792819189,"command":"env ROOT=/var/tmp/ev513-tree/26-list-sets-user/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/26-list-sets-user/cfg /usr/bin/emerge --list-sets","env":{"SHELL":"/bin/bash"}}
+[0.196, "o", "\r\nPerforming Global Updates\r\n(Could take a couple of minutes if you have a lot of binary packages.)\r\n  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'\r\n  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'\r\n  p='update /etc/portage/package.*'\r\n"]
+[0.000, "o", "/var/tmp/ev513-repo/profiles/updates/2Q-2024..\r\nERROR: Update type not recognized '# Quarter 2 2024 package moves (fixture)'\r\n"]
+[0.001, "o", "\r\n\r\n"]
+[0.044, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.002, "o", "changed-deps\r\nchanged-subslot\r\ndeprecated-live-rebuild\r\ndowngrade\r\ngolang-rebuild\r\ninstalled\r\nlive-rebuild\r\nmodule-rebuild\r\nnginx-modules-rebuild\r\npreserved-rebuild\r\nprofile\r\nrebuilt-binaries\r\nrust-rebuild\r\nsecurity\r\nselected\r\nselected-packages\r\nselected-sets\r\nsystem\r\nunavailable\r\nworld\r\nx11-module-rebuild\r\n\u001b]0;vivo@:/var/tmp/ev513-tree/26-list-sets-user\u0007"]
+[0.028, "x", "0"]

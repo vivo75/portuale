@@ -50,6 +50,7 @@
 - [crates/portage-profile/src/tests/incrementals.rs](portage-profile/tests/incrementals.md) — Incremental-variable folding tests (USE token replay, wildcard removal, snapshots).
 - [crates/portage-profile/src/tests/resolve.rs](portage-profile/tests/resolve.md) — `resolve_config` end-to-end and per-file folding tests over hand-built and fixture trees.
 - [crates/portage-profile/src/user_patches.rs](portage-profile/user_patches.md) — 
+- [crates/portage-profile/src/virtuals.rs](portage-profile/virtuals.md) — Deprecated profile and user `virtuals` files: the grabdict gate and the config-load warnings (backlog #513).
 
 ## portage-repo
 - [crates/portage-repo/src/binary_index.rs](portage-repo/binary_index.md) — The binary package index (`Packages`) and binary candidates.

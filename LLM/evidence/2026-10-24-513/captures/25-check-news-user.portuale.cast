@@ -1,0 +1,5 @@
+{"version":3,"term":{"cols":80,"rows":24},"timestamp":1792819357,"command":"env ROOT=/var/tmp/ev513-tree/25-check-news-user/root PORTAGE_CONFIGROOT=/var/tmp/ev513-tree/25-check-news-user/cfg /var/tmp/ev513-bin/emerge --check-news","env":{"SHELL":"/bin/bash"}}
+[0.004, "o", "\u001b]0;portuale: emerge\u0007"]
+[0.000, "o", "\r\n\u001b[33;01m * IMPORTANT:\u001b[39;49;00m 1 news items need reading for repository 'testrepo'.\r\n\u001b[33;01m *\u001b[39;49;00m Use \u001b[32;01meselect news read\u001b[39;49;00m to view new items.\r\n\r\n"]
+[0.000, "o", "\u001b]0;vivo@:/var/tmp/ev513-tree/25-check-news-user\u0007"]
+[0.000, "x", "0"]

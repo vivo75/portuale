@@ -658,4 +658,5 @@ mod prompt;
 mod remote;
 mod resume;
 mod unmerge;
+mod user_virtuals;
 mod world;

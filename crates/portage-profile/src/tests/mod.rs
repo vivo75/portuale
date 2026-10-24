@@ -95,3 +95,4 @@ mod package_files;
 mod profile_chain;
 mod resolve;
 mod user_patches;
+mod virtuals;
