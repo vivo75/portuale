@@ -1,9 +1,9 @@
-//! `/var/cache/edb/mtimedb` persistence for four sections: the `resume`
-//! mergelist (`emerge --resume`), its `resume_backup` rotation, the
-//! `info` dir-mtime memo, and the `updates` per-file mtime record
-//! (`emerge --package-moves` global updates). The file is Portage's JSON
-//! mtimedb shape (hand-rolled, tab-indented); reading extracts each section
-//! with a regex/brace-match rather than a full JSON parse.
+//! `/var/cache/edb/mtimedb` persistence for the `resume` mergelist
+//! (`emerge --resume`), its `resume_backup` rotation, the `info`
+//! dir-mtime memo, and the `updates` per-file mtime record. The file is
+//! Portage's JSON mtimedb shape (hand-rolled, tab-indented); every write
+//! replaces only the sections it owns and splices every other top-level
+//! key back verbatim, so keys portuale never manages survive untouched.
 // Portage: Scheduler.py, _save_resume_list; actions.py (--resume handling); util/mtimedb.py, MtimeDB
 
 use regex::Regex;
@@ -137,10 +137,9 @@ fn format_section_body(root: &Path, section: &Section) -> String {
 }
 
 /// Writes the whole mtimedb file from pre-rendered `\t"key": {...}`
-/// parts (a `BTreeMap`, so sections serialize in `sort_keys` order:
-/// `info` < `resume` < `resume_backup` < `updates`). Removes the file
-/// outright when there is nothing to store.
-fn write_sections(root: &Path, parts: BTreeMap<&str, String>) -> Result<(), String> {
+/// parts (a `BTreeMap`, so keys serialize in `sort_keys` order).
+/// Removes the file outright when there is nothing to store.
+fn write_sections(root: &Path, parts: BTreeMap<String, String>) -> Result<(), String> {
     let path = mtimedb_path(root);
     if parts.is_empty() {
         let _ = std::fs::remove_file(&path);
@@ -154,37 +153,156 @@ fn write_sections(root: &Path, parts: BTreeMap<&str, String>) -> Result<(), Stri
     std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Raw `{...}` object slices for every known top-level section on disk.
-/// Preserved sections splice back verbatim (see `preserved_parts`): a
-/// parse-and-reformat round trip would restamp a foreign mergelist's
-/// stored root with the current one.
-fn read_raw_objects(root: &Path) -> BTreeMap<&'static str, String> {
+/// Raw value slices for every top-level key on disk, in file order.
+/// Keys portuale never writes (`ldpath`, `starttime`, `version`,
+/// anything else Portage stores) splice back verbatim through
+/// `preserved_parts`, so no write drops what it does not own. Values
+/// may be objects, arrays, strings or bare numbers/literals; the scan
+/// is string-aware, so braces inside quoted strings never count.
+// Portage: lib/portage/util/mtimedb.py, MtimeDB
+fn read_raw_objects(root: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     let Ok(content) = std::fs::read_to_string(mtimedb_path(root)) else {
         return out;
     };
-    for key in ["resume", "resume_backup", "info", "updates"] {
-        if let Some(object) = extract_object(&content, key) {
-            out.insert(key, object.to_string());
+    let bytes = content.as_bytes();
+    let mut i = skip_ws(bytes, 0);
+    if bytes.get(i) != Some(&b'{') {
+        return out;
+    }
+    i = skip_ws(bytes, i + 1);
+    loop {
+        i = skip_ws(bytes, i);
+        if bytes.get(i) == Some(&b'}') {
+            return out;
+        }
+        if bytes.get(i) != Some(&b'"') {
+            return out;
+        }
+        let Some(close) = string_end(bytes, i) else {
+            return out;
+        };
+        let Some(key) = content.get(i + 1..close - 1).map(str::to_string) else {
+            return out;
+        };
+        i = skip_ws(bytes, close);
+        if bytes.get(i) != Some(&b':') {
+            return out;
+        }
+        i = skip_ws(bytes, i + 1);
+        let Some(end) = raw_value_end(bytes, i) else {
+            return out;
+        };
+        let Some(value) = content.get(i..end) else {
+            return out;
+        };
+        out.insert(key, value.to_string());
+        i = skip_ws(bytes, end);
+        match bytes.get(i) {
+            Some(b',') => i += 1,
+            Some(b'}') => return out,
+            _ => return out,
         }
     }
-    out
 }
 
-/// Splices one raw object back under `key` (which may rename it, as the
+/// Offset just past the closing quote of the string opening at `open`
+/// (which must itself be a `"`), honouring backslash escapes.
+fn string_end(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// First non-blank offset at or after `i`.
+fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+/// Offset just past the JSON value starting at `start`: an object or
+/// array (brace-matched, string-aware), a quoted string, or a bare
+/// number/literal up to the next delimiter.
+fn raw_value_end(bytes: &[u8], start: usize) -> Option<usize> {
+    match bytes.get(start)? {
+        b'"' => string_end(bytes, start),
+        b'{' | b'[' => {
+            let mut depth = 0i32;
+            let mut i = start;
+            let mut in_string = false;
+            let mut escape = false;
+            while i < bytes.len() {
+                let b = bytes[i];
+                if in_string {
+                    if escape {
+                        escape = false;
+                    } else if b == b'\\' {
+                        escape = true;
+                    } else if b == b'"' {
+                        in_string = false;
+                    }
+                    i += 1;
+                    continue;
+                }
+                match b {
+                    b'"' => {
+                        in_string = true;
+                        i += 1;
+                    }
+                    b'{' | b'[' => {
+                        depth += 1;
+                        i += 1;
+                    }
+                    b'}' | b']' => {
+                        depth -= 1;
+                        i += 1;
+                        if depth == 0 {
+                            return Some(i);
+                        }
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+            None
+        }
+        _ => {
+            let mut i = start;
+            while i < bytes.len() && !matches!(bytes[i], b',' | b'}' | b']') {
+                i += 1;
+            }
+            while i > start && bytes[i - 1].is_ascii_whitespace() {
+                i -= 1;
+            }
+            (i > start).then_some(i)
+        }
+    }
+}
+
+/// Splices one raw value back under `key` (which may rename it, as the
 /// `resume` -> `resume_backup` rotation does).
 fn render_raw_part(key: &str, object: &str) -> String {
     format!("\t\"{key}\": {object}")
 }
 
-/// Fresh `write_sections` parts: every on-disk section carried over
-/// verbatim except `fresh_key`, which the caller renders itself (or
+/// Fresh `write_sections` parts: every on-disk top-level value carried
+/// over verbatim except `fresh_key`, which the caller renders itself (or
 /// leaves absent). One file read.
-fn preserved_parts(root: &Path, fresh_key: &str) -> BTreeMap<&'static str, String> {
+fn preserved_parts(root: &Path, fresh_key: &str) -> BTreeMap<String, String> {
     let mut parts = BTreeMap::new();
     for (key, object) in read_raw_objects(root) {
-        if key != fresh_key {
-            parts.insert(key, render_raw_part(key, &object));
+        if key.as_str() != fresh_key {
+            let rendered = render_raw_part(&key, &object);
+            parts.insert(key, rendered);
         }
     }
     parts
@@ -213,34 +331,9 @@ fn extract_object<'a>(content: &'a str, key: &str) -> Option<&'a str> {
     if !body.starts_with('{') {
         return None;
     }
-    let bytes = body.as_bytes();
-    let mut depth = 0i32;
-    let mut in_string = false;
-    let mut escape = false;
-    for (i, &b) in bytes.iter().enumerate() {
-        if in_string {
-            if escape {
-                escape = false;
-            } else if b == b'\\' {
-                escape = true;
-            } else if b == b'"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match b {
-            b'"' => in_string = true,
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(&body[..=i]);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+    let start = content.len() - body.len();
+    let end = raw_value_end(content.as_bytes(), start)?;
+    body.get(..end - start)
 }
 
 /// Parses one section's object text into a `Section`, or `None` if it is
@@ -402,25 +495,28 @@ pub fn read_updates_mtimes(root: &Path) -> BTreeMap<String, i64> {
 }
 
 /// Stores `mtimedb["info"]`: rewrites the file with `info` replaced,
-/// preserving any existing `resume`/`resume_backup`/`updates` verbatim.
-/// An empty map stores nothing for `info` itself.
+/// preserving every other top-level key verbatim. An empty map stores
+/// nothing for `info` itself.
 pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<(), String> {
     let mut parts = preserved_parts(root, "info");
     if !info.is_empty() {
-        parts.insert("info", format_flat_section("info", info));
+        parts.insert("info".to_string(), format_flat_section("info", info));
     }
     write_sections(root, parts)
 }
 
 /// Stores `mtimedb["updates"]`: rewrites the file with `updates`
-/// replaced, preserving any existing
-/// `resume`/`resume_backup`/`info` untouched. An empty map stores
-/// nothing for `updates` itself.
+/// replaced, preserving every other top-level key verbatim. An empty
+/// map stores nothing for `updates` itself.
 // Portage: lib/portage/_global_updates.py (`prev_mtimes.update` + commit)
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn write_updates_mtimes(root: &Path, updates: &BTreeMap<String, i64>) -> Result<(), String> {
     let mut parts = preserved_parts(root, "updates");
     if !updates.is_empty() {
-        parts.insert("updates", format_flat_section("updates", updates));
+        parts.insert(
+            "updates".to_string(),
+            format_flat_section("updates", updates),
+        );
     }
     write_sections(root, parts)
 }
@@ -444,7 +540,7 @@ pub fn write_resume_list(
         opts: *opts,
     };
     let mut parts = preserved_parts(root, "resume");
-    parts.insert("resume", render_resume_part(root, &resume));
+    parts.insert("resume".to_string(), render_resume_part(root, &resume));
     write_sections(root, parts)
 }
 
@@ -462,7 +558,7 @@ pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
     resume.mergelist.remove(pos);
     let mut parts = preserved_parts(root, "resume");
     if !resume.mergelist.is_empty() {
-        parts.insert("resume", render_resume_part(root, &resume));
+        parts.insert("resume".to_string(), render_resume_part(root, &resume));
     }
     let _ = write_sections(root, parts);
 }
@@ -484,12 +580,12 @@ pub fn rotate_resume_to_backup(root: &Path) {
     }
     let mut parts = BTreeMap::new();
     for (key, object) in &raw {
-        if *key != "resume" && *key != "resume_backup" {
-            parts.insert(*key, render_raw_part(key, object));
+        if key.as_str() != "resume" && key.as_str() != "resume_backup" {
+            parts.insert(key.clone(), render_raw_part(key, object));
         }
     }
     parts.insert(
-        "resume_backup",
+        "resume_backup".to_string(),
         render_raw_part("resume_backup", resume_obj),
     );
     let _ = write_sections(root, parts);
@@ -507,11 +603,11 @@ pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
     let backup = parse_section(backup_obj)?;
     let mut parts = BTreeMap::new();
     for (key, object) in &raw {
-        if *key != "resume" && *key != "resume_backup" {
-            parts.insert(*key, render_raw_part(key, object));
+        if key.as_str() != "resume" && key.as_str() != "resume_backup" {
+            parts.insert(key.clone(), render_raw_part(key, object));
         }
     }
-    parts.insert("resume", render_raw_part("resume", backup_obj));
+    parts.insert("resume".to_string(), render_raw_part("resume", backup_obj));
     let _ = write_sections(root, parts);
     Some((backup.favorites, backup.mergelist, backup.opts))
 }
@@ -626,6 +722,59 @@ mod tests {
         write_updates_mtimes(&root, &BTreeMap::new()).unwrap();
         assert!(read_updates_mtimes(&root).is_empty());
         assert_eq!(read_resume_list(&root).unwrap().0, vec!["dev-libs/a"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn foreign_top_level_keys_survive_every_write() {
+        // Portage's mtimedb carries keys portuale never manages
+        // (`lib/portage/util/mtimedb.py`, `_MTIMEDBKEYS`, with `commit`
+        // persisting the whole dict): an `info` or `resume` write must
+        // splice them back verbatim instead of dropping them.
+        let root = tmproot();
+        std::fs::create_dir_all(mtimedb_path(&root).parent().unwrap()).unwrap();
+        std::fs::write(
+            mtimedb_path(&root),
+            "{\n\t\"info\": {},\n\t\"ldpath\": {\n\t\t\"/lib\": 1700000001\n\t},\n\t\"starttime\": 0,\n\t\"version\": \"3.0.83\"\n}",
+        )
+        .unwrap();
+        let fragments = [
+            "\"ldpath\": {\n\t\t\"/lib\": 1700000001\n\t}",
+            "\"starttime\": 0",
+            "\"version\": \"3.0.83\"",
+        ];
+
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        write_info_mtimes(&root, &mtimes).unwrap();
+        let after_info = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        for fragment in fragments {
+            assert!(
+                after_info.contains(fragment),
+                "an `info` write must keep {fragment}: {after_info}"
+            );
+        }
+        assert_eq!(read_info_mtimes(&root), mtimes);
+
+        write_resume_list(
+            &root,
+            &[],
+            &[(
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "a".to_string(),
+                "1".to_string(),
+            )],
+            &ResumeOpts::default(),
+        )
+        .unwrap();
+        let after_resume = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        for fragment in fragments {
+            assert!(
+                after_resume.contains(fragment),
+                "a `resume` write must keep {fragment}: {after_resume}"
+            );
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

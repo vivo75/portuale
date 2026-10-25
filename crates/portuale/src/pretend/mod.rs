@@ -273,9 +273,9 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     // The applied-updates AUTOCLEAN force, computed pre-resolve like
-    // Portage's own `_global_updates` call: `--pretend` and failed
-    // merges still commit the record, and only the target root's force
-    // reaches the merge gate below.
+    // Portage's own `_global_updates` call. Read-only interim: the scan
+    // commits no record and the force stays false; only the target
+    // root's force reaches the merge gate below.
     // Portage: lib/_emerge/actions.py, run_action
     let updates_force = global_updates_force(&opts, &repos, &root);
 

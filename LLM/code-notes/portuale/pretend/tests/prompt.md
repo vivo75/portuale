@@ -46,6 +46,7 @@ Prompt EOF/SIGINT behavior, the --ask privilege offer, and the prompt line buffe
 ## fn ask_declined_writes_no_resume_list
 - #179: Portage's `_emerge/actions.py:525-536` returns `128 + SIGINT` on a "No" answer before `Scheduler` runs -- a declined run writes nothing (and rotates nothing: the rotation sits after the prompt). `--ask` needs a real TTY (the up-front isatty gate), so the decline is answered through a pty; the stale multi-item list must come back byte-identical.
 - The pty buffers until the child prompts -- no synchronisation needed.
+- Backlog #562 had narrowed the pin (the pre-prompt updates check, `actions.py:3944`, still committed the `updates` record); backlog #575 Task 1 reverted the check to read-only, so the narrowing is gone and the byte-identical pin is back.
 
 ## fn ask_pretend_offer_yes_continues_as_pretend_like_portage
 - Backlog #246, the "Yes" arm: Portage sets `opts["--pretend"] = True`, pops `--ask`, and the run continues as a pretend run (`actions.py:4004-4006`). Host probe 2026-09-29 (`printf 'y\n' | script -qec "/usr/sbin/emerge --ask --depclean"`): after the offer the run prints the depclean notice, `Calculating dependencies ... done!`, and continues -- with no second prompt, since `--ask` is gone. Here answering `y` must resolve the pretend merge list (`dev-libs/schedok-1.0`) with rc 0 and must not prompt again (`Would you like to merge these packages?` stays absent -- `--ask` is no longer in effect).

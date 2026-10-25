@@ -409,7 +409,7 @@
 - [crates/portuale/src/pretend/expand_targets.rs](portuale/pretend/expand_targets.md) — Expanding the command-line arguments (sets, package moves, bare names) into the atoms to resolve.
 - [crates/portuale/src/pretend/final_gates.rs](portuale/pretend/final_gates.md) — The last gates before execution: ABI rebuilds, changed-deps report, buildpkgonly deps, circular dependencies.
 - [crates/portuale/src/pretend/gates.rs](portuale/pretend/gates.md) — Pure predicates for what a run shows: merge-list gating, the empty-plan arms, and resolution-phase display.
-- [crates/portuale/src/pretend/global_updates.rs](portuale/pretend/global_updates.md) — The applied-updates AUTOCLEAN force (backlog #562): whether any repo's `profiles/updates/` holds a changed file with >=1 valid directive, measured against the `updates` mtime record in `<EROOT>/var/cache/edb/mtimedb`.
+- [crates/portuale/src/pretend/global_updates.rs](portuale/pretend/global_updates.md) — The applied-updates AUTOCLEAN force (backlog #562), reverted to read-only pending backlog #576 (backlog #575 Task 1): the scan still parses changed `profiles/updates/` files, but nothing is recorded and no force is ever reported, because portuale never performs the moves on disk -- recording would make Portage's `grab_updates` (`_global_updates.py:91`) skip those files as applied and never move the installed entries.
 - [crates/portuale/src/pretend/info.rs](portuale/pretend/info.md) — `emerge --info`.
 - [crates/portuale/src/pretend/json.rs](portuale/pretend/json.md) — `--json` output.
 - [crates/portuale/src/pretend/merge_list.rs](portuale/pretend/merge_list.md) — The counts and summary lines under the merge list, and the redisplay before a merge.

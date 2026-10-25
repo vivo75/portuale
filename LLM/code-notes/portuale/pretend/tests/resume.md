@@ -10,6 +10,7 @@ Resume news notices, pretend write isolation, and the not-merged tail.
 ## fn pretend_writes_no_resume_list_even_with_a_stale_list_present
 - #179: Portage's `_emerge/actions.py` returns from the `--pretend` branch (`display(...)`, `return os.EX_OK`) before `Scheduler` exists -- and before the `resume_backup` rotation -- so a preview never touches `mtimedb`. A stale list must come back byte-identical, and no fresh list may appear on a bare root.
 - Bare root first: `--pretend` resolves and prints, and leaves no `mtimedb` behind at all. Stale list present: byte-identical afterwards (neither a fresh save nor the rotation may run).
+- Backlog #562 had narrowed both halves (the pre-resolve updates check, `actions.py:3944` with no `--pretend` exemption, still committed the `updates` record); backlog #575 Task 1 reverted the check to read-only, so the narrowing is gone and the byte-identical/absent pins are back.
 
 ## fn entries_not_merged_tags_and_includes_both_source_and_binary_entries
 - Portage's own resume mergelist can hold both a source and a binary entry together -- `source_entries_not_merged` (this function's own former name) used to silently drop every `Binary` entry instead of tagging and including it.

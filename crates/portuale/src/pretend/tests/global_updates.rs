@@ -60,6 +60,7 @@ fn updates_file_key(repo: &std::path::Path, name: &str) -> String {
 }
 
 #[test]
+#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_force_fires_on_a_fresh_root_and_records() {
     // Portage: fresh ROOT means an empty mtimedb["updates"], so every
     // updates file is new; the fixture-style file below yields two
@@ -85,6 +86,7 @@ fn applied_updates_force_fires_on_a_fresh_root_and_records() {
 }
 
 #[test]
+#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_force_is_silent_on_a_repeat_run() {
     // Portage Control 2: a second merge into the same ROOT finds the
     // record current, so no force and no tail.
@@ -177,6 +179,7 @@ fn applied_updates_force_skips_info_sync_and_version() {
 }
 
 #[test]
+#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_error_file_fires_but_stays_unrecorded() {
     // Portage `_global_updates.py:131-135`: a file with parse errors
     // still contributes its valid directives to the force, but its
@@ -227,6 +230,7 @@ fn applied_updates_directiveless_file_stays_silent() {
 }
 
 #[test]
+#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_running_root_record_never_forces_the_tail() {
     // Portage forces AUTOCLEAN on the root_config whose updates fired
     // (`actions.py:3958-3962`) while the tail reads the *target*
@@ -263,6 +267,7 @@ fn applied_updates_running_root_record_never_forces_the_tail() {
 }
 
 #[test]
+#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_force_survives_an_unwritable_root() {
     // Portage's `MtimeDB.__write_to_disk` swallows `OSError`
     // (`util/mtimedb.py`): a non-writable root still forces, and the
@@ -286,6 +291,40 @@ fn applied_updates_force_survives_an_unwritable_root() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&edb, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    let _ = std::fs::remove_dir_all(repo.parent().unwrap());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn applied_updates_check_leaves_a_portage_written_mtimedb_untouched() {
+    // Portage commits the `updates` mtimes only after applying the
+    // moves (`lib/portage/_global_updates.py`, `prev_mtimes.update`
+    // inside `if retupd`); a check that applies nothing must neither
+    // record nor force, so a Portage-written section comes back
+    // byte-identical. `grab_updates` (`lib/portage/update.py`) is what
+    // treats a record-mismatched file as changed.
+    let repo = updates_test_repo("readonly", &[("1Q-2026", "move a/old a/new\n")]);
+    let root = updates_test_root("readonly");
+    // An installed `a/old`: the entry Portage would move (and only
+    // then record for).
+    std::fs::create_dir_all(root.join("var/db/pkg/a/old-1.0")).unwrap();
+    let key = updates_file_key(&repo, "1Q-2026");
+    let mtime = std::fs::metadata(repo.join("profiles").join("updates").join("1Q-2026"))
+        .unwrap()
+        .mtime();
+    // A Portage-shaped file whose stamp for this updates file is stale,
+    // so the file counts as changed with a valid directive in it.
+    let seed = format!(
+        "{{\n\t\"updates\": {{\n\t\t\"{key}\": {}\n\t}}\n}}",
+        mtime - 100
+    );
+    let mtimedb = crate::mtimedb::mtimedb_path(&root);
+    std::fs::create_dir_all(mtimedb.parent().unwrap()).unwrap();
+    std::fs::write(&mtimedb, &seed).unwrap();
+    let before = std::fs::read(&mtimedb).unwrap();
+    let repos = vec![updates_test_repo_config(&repo)];
+    assert!(!global_updates_force(&moves_on_opts(), &repos, &root));
+    assert_eq!(std::fs::read(&mtimedb).unwrap(), before);
     let _ = std::fs::remove_dir_all(repo.parent().unwrap());
     let _ = std::fs::remove_dir_all(&root);
 }

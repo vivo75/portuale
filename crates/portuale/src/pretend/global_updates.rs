@@ -1,6 +1,7 @@
 //! The applied-updates AUTOCLEAN force: whether any repo's
-//! `profiles/updates/` holds a changed file with >=1 valid directive,
-//! measured against the `updates` mtime record in `<EROOT>/var/cache/edb/mtimedb`.
+//! `profiles/updates/` holds a changed file with >=1 valid directive.
+//! Read-only interim: the scan parses but records nothing and the force
+//! stays false until the moves themselves are applied.
 
 use crate::pretend::*;
 use portage_repo::RepoConfig;
@@ -87,15 +88,11 @@ fn parse_updates_file(text: &str) -> (usize, bool) {
 }
 
 /// One root's updates check: true iff a changed updates file yields >=1
-/// valid directive. Error-free mtimes merge into the record and commit
-/// on true only; every I/O error is swallowed, so a non-writable root
-/// never fails the run.
-// Portage: lib/portage/_global_updates.py, _do_global_updates (`retupd`,
-// error files applied but unrecorded); lib/portage/util/mtimedb.py
-// (`MtimeDB.__write_to_disk` swallows `OSError`)
+/// valid directive. Read-only: the record is consulted but never
+/// extended, so a non-writable root never fails the run.
+// Portage: lib/portage/_global_updates.py, _do_global_updates
 fn check_root_updates(repos: &[RepoConfig], root: &Path) -> bool {
-    let mut record = crate::mtimedb::read_updates_mtimes(root);
-    let mut fresh = std::collections::BTreeMap::new();
+    let record = crate::mtimedb::read_updates_mtimes(root);
     let mut valid_total = 0usize;
     // Repos sharing one updates directory scan it once.
     // Portage: _global_updates.py, updpath_map
@@ -134,44 +131,32 @@ fn check_root_updates(repos: &[RepoConfig], root: &Path) -> bool {
             let Ok(bytes) = std::fs::read(&path) else {
                 continue;
             };
-            let (valid, clean) = parse_updates_file(&String::from_utf8_lossy(&bytes));
+            let (valid, _) = parse_updates_file(&String::from_utf8_lossy(&bytes));
             valid_total += valid;
-            if clean {
-                fresh.insert(key, mtime);
-            }
         }
     }
-    if valid_total == 0 {
-        return false;
-    }
-    record.extend(fresh);
-    let _ = crate::mtimedb::write_updates_mtimes(root, &record);
-    true
+    valid_total > 0
 }
 
-/// The two-root core: the target root's force, maintaining the running
-/// root's record as a side effect when it differs. Split out so tests
+/// The two-root core: both roots' updates state is scanned, but no force
+/// is ever reported while the moves stay unapplied. Split out so tests
 /// need no process-global env (`PORTAGE_RUNNING_ROOT` is also written
 /// by unrelated tests running on other threads).
 pub(crate) fn updates_force_for_roots(repos: &[RepoConfig], target: &Path, running: &Path) -> bool {
-    let target_force = check_root_updates(repos, target);
+    // The scan still runs: it keeps the updates parser exercised on real
+    // repos while recording nothing.
+    check_root_updates(repos, target);
     if running != target {
         check_root_updates(repos, running);
     }
-    target_force
+    false
 }
 
-/// The target root's applied-updates force, for the merge gate: true
-/// when this run newly applied updates there. Runs for every action
-/// except help/info/sync/version and `--package-moves=n`, pre-resolve,
-/// so `--pretend` and failed merges still commit the record; the
-/// running root's record is maintained as a side effect when it
-/// differs, but its force never reaches the tail (which reads the
-/// target settings).
-// Portage: lib/_emerge/actions.py, run_action (`_global_updates` over the
-// target root config, then the running one when different; the force
-// sets `AUTOCLEAN` on that root_config's settings while `action_build`
-// reads the target `settings`)
+/// The target root's applied-updates force, for the merge gate. Always
+/// false while the moves stay unapplied: the check scans but neither
+/// records nor forces. Runs for every action except help/info/sync/version
+/// and `--package-moves=n`, pre-resolve.
+// Portage: lib/_emerge/actions.py, run_action
 pub(crate) fn global_updates_force(
     opts: &EmergeOpts<'_>,
     repos: &[RepoConfig],

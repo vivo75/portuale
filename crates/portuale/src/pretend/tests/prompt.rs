@@ -516,14 +516,10 @@ fn pty_watchdog_kills_a_hung_child_and_fails_the_test() {
 #[test]
 #[cfg(unix)]
 fn ask_declined_writes_no_resume_list() {
-    // Portage: actions.py. A declined `--ask` run writes no resume list.
-    // Backlog #562: the pre-resolve updates check (`actions.py:3944`)
-    // runs before the prompt, so the `updates` record is still
-    // committed -- the stale `resume` list itself stays identical.
+    // Portage: actions.py. A declined `--ask` run writes nothing.
     use std::io::Write;
     let portuale_bin = built_portuale_bin();
-    let (root, _before) = stale_resume_root("ask");
-    let before_list = crate::mtimedb::read_resume_list(&root);
+    let (root, before) = stale_resume_root("ask");
     let tmp = TempDir::new("resume_no_write_ask").keep();
 
     let (mut master, slave_stdio) = pty_pair();
@@ -553,13 +549,9 @@ fn ask_declined_writes_no_resume_list() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert_eq!(
-        crate::mtimedb::read_resume_list(&root),
-        before_list,
-        "a declined --ask run must leave a stale resume list identical"
-    );
-    assert!(
-        !crate::mtimedb::read_updates_mtimes(&root).is_empty(),
-        "the pre-prompt updates check still commits its record"
+        std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
+        before,
+        "a declined --ask run must leave a stale resume list byte-identical"
     );
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(&root);
