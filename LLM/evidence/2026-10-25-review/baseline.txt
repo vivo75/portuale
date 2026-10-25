@@ -1,0 +1,5 @@
+# Baseline gate, branch fix/2026-10-25-review at main d6b7b62d (pmtest main 8815828), 2026-10-25
+# cargo fmt --check: clean; cargo clippy --release --all-targets: 0 warnings
+# cargo test --release (after cargo build --release): 3091 passed, 0 failed
+# pmtest scripts/pytest-parallel.sh: 4529 passed, 2 skipped, 2 xfailed
+# Failing test names: none
