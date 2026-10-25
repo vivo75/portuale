@@ -201,6 +201,62 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         &ctx
     };
     let pass = run_pass(rctx, &best, false)?;
+    let config_owned: Option<portage_profile::Config> = best.backtrack_config.clone();
+    let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
+    // The terminal node's accumulators predate the search: re-derive the
+    // pass-local ones (dropped/enforced pins) through the settle path, so
+    // the fallback report matches what the best params settle on their own
+    // pass. Any other decision re-runs untouched, exactly as before.
+    // Portage: _backtrack_depgraph falls back to the best run's own report.
+    let mut probe = pass;
+    let settled: Option<Box<BacktrackParams>> =
+        match collect_feedback(rctx, &best, &mut probe, config) {
+            PassDecision::Settle { params } => Some(params),
+            _ => None,
+        };
+    // The settled params are owned; the untouched path re-runs and clones.
+    let (pass, report): (PassResult, BacktrackParams) = match settled {
+        Some(params) => (probe, *params),
+        None => {
+            // The terminal node's accumulators predate the search, and the
+            // fired-but-unstuck masks live on discarded nodes: re-derive the
+            // pin reports for the fallback, so an unhealable conflict still
+            // aborts loudly instead of assembling silent rc 0. Selection is
+            // already done, so only the report accumulators merge (never
+            // `slot_constraints` or new masks).
+            // Portage: _backtrack_depgraph falls back to the best run's own report.
+            let naked = run_pass(rctx, &best, false)?;
+            let mut report = best.clone();
+            let live_reachable = live_reachable_consumers(rctx, &naked.entries);
+            let (enforced, dropped) =
+                reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+                    repos: &rctx.repos,
+                    root: rctx.root,
+                    entries: &naked.entries,
+                    with_bdeps: rctx.with_bdeps,
+                    excluded: rctx.excluded,
+                    hard_want: &naked.slot_want,
+                    reachable: &live_reachable,
+                    dynamic_deps: rctx.dynamic_deps,
+                    ignore_built_slot_operator_deps: rctx.ignore_built_slot_operator_deps,
+                    top_level_cps: &rctx.top_level_cps,
+                    world_reachable: &rctx.world_reachable,
+                    config,
+                    complete: rctx.complete,
+                });
+            for pin in enforced {
+                if !report.reverse_dep_pins.contains(&pin) {
+                    report.reverse_dep_pins.push(pin);
+                }
+            }
+            for pin in dropped {
+                if !report.dropped_pins.contains(&pin) {
+                    report.dropped_pins.push(pin);
+                }
+            }
+            (naked, report)
+        }
+    };
     // With the search's accumulated changes, a dependency wanting a flag the
     // other way from a needed change means one clean pass instead.
     let mut best_needed = best.autounmask_use_config.clone();
@@ -221,10 +277,8 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
     {
         return run_breakage_clean_pass(&ctx, &initial, restarts);
     }
-    let config_owned: Option<portage_profile::Config> = best.backtrack_config.clone();
-    let config: &portage_profile::Config = config_owned.as_ref().unwrap_or(ctx.config);
-    let prune_unresolved = prune_unresolved_after_backtrack(restarts, &ctx, &best, &pass, config);
-    let mut result = assemble_result(rctx, &best, pass, config, restarts);
+    let prune_unresolved = prune_unresolved_after_backtrack(restarts, &ctx, &report, &pass, config);
+    let mut result = assemble_result(rctx, &report, pass, config, restarts);
     result.prune_unresolved = prune_unresolved;
     result.backtrack_max = ctx.backtrack_max;
     Ok(result)

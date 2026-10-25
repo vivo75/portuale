@@ -19,5 +19,16 @@ The backtracking loop: one pass per node, settle or feed back.
 - The no-search arm: report the root pass with its merged working copy, exactly like the old single pass -- except the #209 feed above, which enforces satisfiable reverse-dep pins in-pass like Portage's ungated `_complete_graph`.
 - Portage `_backtrack_depgraph` breaks when `backtracked >= max_retries` before feeding back; `restarts` is the number of restarts already done (passes-1); breaking falls through to the best-run re-pass after the loop.
 - Exhausted without settling: the best run (deepest terminal node) is reported, never a masked-by-backtracking graph unless nothing better exists (Portage `get_best_run`).
+- Backlog #563: the best-run re-pass re-derives the pass-local settle accumulators (dropped/enforced pins) through `collect_feedback` before assembling, and only assembles with them on `Settle` -- any other decision re-runs untouched, exactly as before. The terminal node's own accumulators predate the search (mask feedback children are non-terminal, so `get_best_run` comes back to the root with empty pins), and the re-pass never ran `collect_feedback`, so without this the fallback silently drops the residual/withhold reports: a pinned-newver `=dev-libs/p563pull-2` fell back to a clean upgrade that breaks the installed pinner with zero notice, where Portage aborts rc 1 with the slot conflict. Portage recomputes the report from the best run's own walk every time, so re-deriving is the faithful shape; the re-pass walk is deterministic, so a settle here reports what the best params settle on their own pass.
 - Portage re-runs the best params with `allow_backtracking=False` once any restart happened (`backtracked`): every `--backtrack=0` gate applies to that last pass (#295).
 - Backlog #244: Portage's post-loop `autounmask_breakage_detected()` (`depgraph.py:12262`): with the changes the search accumulated, a dependency of the best run wants a flag the other way from a needed change -- one clean pass instead.
+- Backlog #563 fix round 1 (residual loss): when the re-pass derivation
+  returns non-`Settle`, the fallback re-runs untouched AND merges a direct
+  `reverse_dependency_constraints` pin scan into the report accumulators
+  (dropped + enforced only -- never `slot_constraints` or new masks, since
+  selection is done). Without this, a fired-but-unstuck mask (keeper: mask
+  strands the explicit arg, retry errors, `restarts==0` exhaustion) fell
+  back to pin-less root params and assembled silent rc 0; now the residual
+  aborts loudly. The Task-3 `std::mem::take(grown)` orphaning suspect was
+  disproven by instrumentation (the masked child IS accepted and explored;
+  its retry errors) -- the loss was purely the pin-less fallback assembly.

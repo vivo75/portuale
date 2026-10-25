@@ -1,0 +1,22 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 2/20).
+
+[ebuild  N     ] dev-libs/p563pull-1::testrepo to /home/vivo/repo/PORTUALE/portuale/fixtures 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/p563prov:0
+
+  (dev-libs/p563prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/home/vivo/repo/PORTUALE/portuale/fixtures') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/p563prov-5.42* required by (dev-libs/p563con-1:0/0::testrepo, installed in '/home/vivo/repo/PORTUALE/portuale/fixtures') USE=""
+    ^                  ^^^^ 
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/p563pull:0

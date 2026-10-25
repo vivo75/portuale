@@ -1,0 +1,10 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 5.93 s (backtrack: 5/20).
+
+[ebuild     U  ] dev-libs/p563prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /home/vivo/repo/PORTUALE/portuale/fixtures/ 0 KiB
+[ebuild  N     ] dev-libs/p563pull-2::testrepo to /home/vivo/repo/PORTUALE/portuale/fixtures/ 0 KiB
+
+Total: 2 packages (1 upgrade, 1 new), Size of downloads: 0 KiB

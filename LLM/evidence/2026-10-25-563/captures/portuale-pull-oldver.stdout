@@ -1,0 +1,9 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/p563pull-1::testrepo to /home/vivo/repo/PORTUALE/portuale/fixtures 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
