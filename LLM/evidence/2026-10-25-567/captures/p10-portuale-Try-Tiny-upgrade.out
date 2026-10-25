@@ -1,0 +1,44 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-lang/perl-5.44.0:0/5.44::gentoo [5.42.2:0/5.42::gentoo] USE="gdbm -berkdb -doc -minimal" PERL_FEATURES="(-debug) -ithreads -quadmath" 14704 KiB
+[ebuild  N     ] dev-perl/Try-Tiny-0.320.0::gentoo  USE="-minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 36 KiB
+
+Total: 2 packages (1 upgrade, 1 new), Size of downloads: 14740 KiB
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-lang/perl:0
+
+  (dev-lang/perl-5.44.0:0/5.44::gentoo, ebuild scheduled for merge) USE="gdbm -berkdb -doc -minimal" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath" pulled in by
+    =dev-lang/perl-5.44.0 (Argument)
+
+  (dev-lang/perl-5.42.2:0/5.42::gentoo, installed) USE="gdbm -berkdb -doc -minimal" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath" pulled in by
+    =dev-lang/perl-5.42* required by (virtual/perl-CPAN-2.380.0-r1:0/0::gentoo, installed) USE="" ABI_X86="(64)"
+    ^              ^^^^^                                                                                         
+    (and 20 more with the same problem)
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+S567_RC=1

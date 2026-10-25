@@ -1,0 +1,14 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.38 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-perl/Encode-Locale-1.50.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+
+Total: 1 package (1 new), Size of downloads: 9 KiB
+
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+S567_RC=0

@@ -1,0 +1,52 @@
+== image ==
+53a68e8e5939fa6b5a00b64560b9a647b73288fb2ca5d28803cea9cab6025e31 [localhost/test-portuale:latest]
+== container tree (new snapshot shape) ==
+/var/db/repos/gentoo/dev-lang/perl/:
+Manifest
+files
+metadata.xml
+perl-5.40.2.ebuild
+perl-5.42.0-r1.ebuild
+perl-5.42.2.ebuild
+perl-5.44.0.ebuild
+
+/var/db/repos/gentoo/dev-perl/Sub-Name/:
+Manifest
+Sub-Name-0.280.0-r1.ebuild
+metadata.xml
+
+/var/db/repos/gentoo/perl-core/Encode/:
+Encode-3.190.0.ebuild
+Encode-3.210.0.ebuild
+Manifest
+files
+metadata.xml
+
+/var/db/repos/gentoo/perl-core/Scalar-List-Utils/:
+Manifest
+Scalar-List-Utils-1.630.0.ebuild
+Scalar-List-Utils-1.680.0.ebuild
+metadata.xml
+
+/var/db/repos/gentoo/virtual/perl-Encode/:
+metadata.xml
+perl-Encode-3.210.0-r2.ebuild
+perl-Encode-3.240.0.ebuild
+
+/var/db/repos/gentoo/virtual/perl-Scalar-List-Utils/:
+metadata.xml
+perl-Scalar-List-Utils-1.630.0-r1.ebuild
+perl-Scalar-List-Utils-1.680.0.ebuild
+perl-Scalar-List-Utils-1.680.100_rc.ebuild
+perl-Scalar-List-Utils-1.700.0.ebuild
+== container vdb (relevant installed set) ==
+/var/db/pkg/dev-lang/perl-5.42.2
+/var/db/pkg/virtual/perl-Encode-3.210.0-r2
+/var/db/pkg/virtual/perl-Scalar-List-Utils-1.680.100_rc
+== portage ==
+Portage 3.0.83 (python 3.14.6-final-0, default/linux/amd64/23.0/systemd, gcc-15, glibc-2.43-r2, 6.18.39-serv x86_64)
+== portuale ==
+855c4e1c3341e925aa9115eb7acc1e52  /home/vivo/repo/PORTUALE/portuale/target/release/portuale
+portuale: a multicall binary -- runs as `emerge`, `ebuild`, `mrg`, `vdb`, or `portageq` depending on how it is invoked
+== old snapshot reachability ==
+fatal: Not a valid object name 11c58b7a

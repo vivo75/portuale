@@ -1,0 +1,15 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] perl-core/Encode-3.210.0::gentoo  PERL_FEATURES="(-debug) -ithreads -quadmath" 2038 KiB
+[ebuild  N     ] dev-perl/Sub-Name-0.280.0-r1::gentoo  USE="-suggested -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 156 KiB
+
+Total: 2 packages (2 new), Size of downloads: 2193 KiB
+
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+
+S567_RC=0
