@@ -822,9 +822,11 @@ pub(crate) fn run_build_scheduler(
             let mut in_flight = 0usize;
             let mut dispatched_this_pass = false;
             loop {
-                // Merge-wait: with no builders running, land one queued
-                // merge, then reschedule (freed dependents may dispatch
-                // before the next queued merge lands).
+                // Merge-wait: with no builders running, land the whole
+                // queued batch in finish order before anything else
+                // dispatches, so a merge freed by one landing never builds
+                // beside a still-queued one.
+                // Portage: _emerge/Scheduler.py, _schedule_tasks
                 while in_flight == 0 && !wait_queue.is_empty() {
                     let (qidx, qpath) = wait_queue.pop_front().expect("non-empty");
                     display.set_merge_wait(wait_queue.len());
@@ -941,9 +943,10 @@ pub(crate) fn run_build_scheduler(
                         // The build slot is free before the serialized
                         // merge starts, queued or not.
                         display.build_finished();
-                        // A gated merge waits for idle builders instead of
-                        // landing beside them.
-                        if (wait_set.contains(&idx) || hold[idx]) && in_flight > 0 {
+                        // A gated merge always queues, landing FIFO once idle
+                        // instead of beside a running build.
+                        // Portage: _emerge/Scheduler.py, _build_exit
+                        if wait_set.contains(&idx) || hold[idx] {
                             wait_queue.push_back((idx, path));
                             display.set_merge_wait(wait_queue.len());
                             (None, true)

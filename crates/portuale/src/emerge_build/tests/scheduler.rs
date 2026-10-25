@@ -449,6 +449,149 @@ fn merge_wait_scope_system_holds_only_system_members() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
+/// Portage queues every finished gated merge and drains the queue in
+/// build-finish order: `_build_exit` appends unconditionally
+/// (`Scheduler.py:1833-1836`) and `_schedule_tasks` moves the whole queue
+/// to the merge queue once no job and no merge runs
+/// (`Scheduler.py:2245-2280`). Two gated entries where the slow one
+/// finishes last must still land second: before the fix the last finisher
+/// skipped the queue (`in_flight == 0`) and landed first.
+#[test]
+fn gated_merges_land_in_finish_order() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let new = |p: &str| {
+        source_entry(
+            p,
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )
+    };
+    // Both gated through the deep-system set; `schedwait` sleeps 8 s so it
+    // always finishes (and, before the fix, lands) last.
+    let entries = vec![new("schedsys"), new("schedwait")];
+    let options = scope_options(
+        &config_root,
+        &["*dev-libs/schedsys", "*dev-libs/schedwait"],
+        crate::pretend::MergeWaitScope::Deep,
+    );
+    let display = scheduler_display(2);
+    let policy = mrg_director::LoadAwarePolicy::new(2, None);
+    run_build_scheduler(RunBuildSchedulerArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        policy: &policy,
+        display: &display,
+    })
+    .expect("both entries merge");
+    assert!(
+        vdb_mtime(&root, "dev-libs/schedsys-1.0") < vdb_mtime(&root, "dev-libs/schedwait-1.0"),
+        "finish order is land order, even for the last finisher"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// Portage moves the whole merge-wait queue to the merge queue in one pass
+/// (`Scheduler.py:2255-2280`) and holds new builds until the moved merges
+/// installed (`_merge_wait_scheduled`, `Scheduler.py:2471`): a build freed
+/// by the first landed merge still waits for the rest of the queue. Three
+/// gated entries (`schedwait` slowest, so it always finishes last) plus a
+/// fourth depending on the first: before the fix the slow finisher skipped
+/// the queue and landed ahead of the earlier two.
+#[test]
+fn queued_merges_land_before_a_freed_dependent_builds() {
+    use portage_repo::{DepEdge, DepPriority};
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let new = |p: &str| {
+        source_entry(
+            p,
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )
+    };
+    let edge = |package: &str| DepEdge {
+        atom: format!("dev-libs/{package}"),
+        evaluated: format!("dev-libs/{package}"),
+        category: "dev-libs".into(),
+        package: package.into(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let mut first = new("schedsys");
+    first.required_by = vec![("dev-libs".into(), "schedleaf-a".into())];
+    let mut leaf = new("schedleaf-a");
+    leaf.deps = vec![edge("schedsys")];
+    let entries = vec![first, new("schedok"), new("schedwait"), leaf];
+    let options = scope_options(
+        &config_root,
+        &[
+            "*dev-libs/schedsys",
+            "*dev-libs/schedok",
+            "*dev-libs/schedwait",
+        ],
+        crate::pretend::MergeWaitScope::Deep,
+    );
+    let display = scheduler_display(4);
+    let policy = mrg_director::LoadAwarePolicy::new(3, None);
+    run_build_scheduler(RunBuildSchedulerArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        policy: &policy,
+        display: &display,
+    })
+    .expect("all entries merge");
+    let slow = vdb_mtime(&root, "dev-libs/schedwait-1.0");
+    assert!(
+        vdb_mtime(&root, "dev-libs/schedsys-1.0") < slow,
+        "the first finisher lands before the slow last finisher"
+    );
+    assert!(
+        vdb_mtime(&root, "dev-libs/schedok-1.0") < slow,
+        "the second finisher lands before the slow last finisher"
+    );
+    // Post-merge clean removes `${T}/build.log`, so the freed dependent's
+    // start is pinned through its merge instead: it lands after the whole
+    // queue it was freed by.
+    let leaf = vdb_mtime(&root, "dev-libs/schedleaf-a-1.0");
+    for cpv in [
+        "dev-libs/schedsys-1.0",
+        "dev-libs/schedok-1.0",
+        "dev-libs/schedwait-1.0",
+    ] {
+        assert!(
+            vdb_mtime(&root, cpv) < leaf,
+            "the freed dependent merges only after the whole queue landed"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
 /// A `package.env` `FEATURES=merge-wait` holds one package's merge even
 /// when the run-wide list (and the scope) would let it through.
 /// Portage: `_build_exit`, `"merge-wait" in build.settings.features`.
