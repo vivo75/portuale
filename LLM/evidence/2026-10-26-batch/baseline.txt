@@ -1,0 +1,8 @@
+pre-batch baseline 2026-10-26, branch batch/2026-10-26-491-570
+portuale main tip 9045b936, pmtest main tip 7e58d2c
+cargo fmt --check: PASS
+cargo clippy --release --all-targets: PASS (0 warnings)
+cargo test --release (workspace): PASS (0 failing; note: needs cargo build --release first for self_exe gate)
+pmtest scripts/pytest-parallel.sh: PASS (4492 passed, 2 skipped, 2 xfailed)
+failing test names: NONE
+corpus drift: none
