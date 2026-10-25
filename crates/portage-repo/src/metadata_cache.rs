@@ -308,6 +308,17 @@ pub(crate) fn metadata_transfer_in_config(config_root: &Path, root: &Path) -> bo
     let Ok(repos) = find_repos_impl(config_root, false) else {
         return false;
     };
+    metadata_transfer_in_repos(config_root, root, &repos)
+}
+
+/// [`metadata_transfer_in_config`] over an injected repo set: unit tests
+/// pin the repos explicitly so the host's absolute global repos.conf
+/// cannot add repos (see `read_repo_sections_impl`).
+pub(crate) fn metadata_transfer_in_repos(
+    config_root: &Path,
+    root: &Path,
+    repos: &[RepoConfig],
+) -> bool {
     let Some(main_repo) = repos.iter().find(|r| r.is_main) else {
         return false;
     };

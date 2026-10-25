@@ -1,0 +1,2 @@
+testrepo
+    location: /var/tmp/ev513-repo

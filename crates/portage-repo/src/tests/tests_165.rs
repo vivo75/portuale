@@ -4,6 +4,8 @@
 use crate::*;
 use portage_util::TempDir;
 
+use super::{hermetic_find_repos, make_repo_dirs};
+
 /// Fresh unique scratch dir per test (vdb + repo live under it, so
 /// the per-root memo caches -- `all_installed_packages`,
 /// `installed_candidates` -- never see a reused path).
@@ -134,7 +136,8 @@ fn find_repos_impl_defaults_the_main_repo_to_priority_minus_1000() {
         "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n\n[overlay]\nlocation = overlay\n",
     )
     .unwrap();
-    let repos = find_repos(&root).expect("repos.conf resolves");
+    make_repo_dirs(&root, &["main", "overlay"]);
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
     assert_eq!(
         repos.iter().find(|r| r.name == "main").unwrap().priority,
         -1000
@@ -152,6 +155,11 @@ fn find_repos_impl_defaults_the_main_repo_to_priority_minus_1000() {
 fn find_repos_impl_computes_volatile_from_location_and_owner() {
     let root = dir_165("repos-volatile");
     std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+    // Since #564 a missing directory drops the repo (Portage's
+    // nonexistent-directory rule), so `main` points at a real tempdir
+    // repo here: still unowned by root/portage, still volatile.
+    std::fs::create_dir_all(root.join("main")).unwrap();
+    let main_location = root.join("main").to_string_lossy().into_owned();
     let sys = ["/usr", "/etc", "/bin", "/"]
         .iter()
         .map(PathBuf::from)
@@ -159,14 +167,13 @@ fn find_repos_impl_computes_volatile_from_location_and_owner() {
         .map(|p| p.to_string_lossy().into_owned());
     let conf = match &sys {
         Some(s) => format!(
-            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = /var/db/repos/foo\n\n[second]\nlocation = {s}\n"
+            "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {main_location}\n\n[second]\nlocation = {s}\n"
         ),
-        None => "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = /var/db/repos/foo\n".to_string(),
+        None => format!("[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = {main_location}\n"),
     };
     std::fs::write(root.join("etc/portage/repos.conf"), conf).unwrap();
-    let repos = find_repos(&root).expect("repos.conf resolves");
-    // `/var/db/repos/foo` is unowned (it does not exist):
-    // `!starts_with || !owned` is true.
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
+    // A tempdir tree is unowned by root/portage: volatile either way.
     assert!(repos.iter().find(|r| r.name == "main").unwrap().volatile);
     match sys {
         Some(_) => {

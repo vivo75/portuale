@@ -107,6 +107,14 @@ fn remote_success_prints_no_post_merge_notice_like_portage() {
         .env("DISTDIR", fixtures.join("distfiles"))
         .env("PORTAGE_TMPDIR", base.join("pt"))
         .env("FEATURES", "news")
+        // #564: pin the child's repo set to the rewritten clientetc text
+        // so the host's installed system repos.conf cannot add its
+        // `gentoo` news items to this exact-output pin (same technique as
+        // `news_resolve_env`).
+        .env(
+            "PORTAGE_REPOSITORIES",
+            repos_conf_dir_text(&clientetc.join("etc/portage/repos.conf")),
+        )
         .output()
         .expect("portuale mrg spawns");
     assert_eq!(

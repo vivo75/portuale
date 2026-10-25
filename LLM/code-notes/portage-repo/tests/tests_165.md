@@ -45,6 +45,7 @@ Graph-input unit tests (mutation cluster 5): walk/installed/vdb, merge-order, bl
 
 ## fn find_repos_impl_computes_volatile_from_location_and_owner
 - An absolute location under `/var/db/repos` (which need not exist -- only the lexical prefix and the failed ownership stat matter) is still volatile for a non-root owner, pinning both the `||` -> `&&` flip and the `!owned` deletion. A second repo at a root-owned absolute location pins the `!starts_with` deletion; where the suite has no root-owned system dir that leg skips loudly instead of passing silently.
+- Since #564 the first leg points at a real tempdir repo instead of the nonexistent `/var/db/repos/foo`: a missing directory now drops the repo (Portage's nonexistent-directory rule), so the `/var/db/repos`-prefixed-but-unowned shape (`!starts_with || !owned` with a nonexistent path) is no longer constructible unprivileged -- the tempdir leg pins the same `volatile` outcome through the not-under-`/var/db/repos` branch.
 - The `&&` and `!owned` deletion both yield false on the unowned path.
 
 ## fn write_pkg_165

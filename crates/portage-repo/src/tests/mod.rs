@@ -24,6 +24,22 @@ fn masters_test_root(name: &str) -> std::path::PathBuf {
     TempDir::new(&format!("portage-repo-masters-test-{name}")).keep()
 }
 
+/// [`find_repos`] with a nonexistent global file and no
+/// `PORTAGE_REPOSITORIES`: the host's absolute global repos.conf must not
+/// leak into unit tests (see `read_repo_sections_impl`).
+fn hermetic_find_repos(root: &std::path::Path) -> Result<Vec<RepoConfig>, Error> {
+    find_repos_impl_with(root, true, &root.join("no-such-global.conf"), None)
+}
+
+/// Create every named repo dir under `root` (relative `location`s): a
+/// missing directory drops the repo since #564 (Portage's
+/// nonexistent-directory rule), so fake repos must exist.
+fn make_repo_dirs(root: &std::path::Path, names: &[&str]) {
+    for name in names {
+        std::fs::create_dir_all(root.join(name)).unwrap();
+    }
+}
+
 fn fixture_binhost() -> portage_profile::BinRepo {
     portage_profile::BinRepo {
         name: "testbinhost".to_string(),

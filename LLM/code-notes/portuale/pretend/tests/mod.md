@@ -15,6 +15,7 @@ Shared fixtures and pty helpers for the pretend tests.
 
 ## fn news_resolve_env
 - `fixture_resolve_env` plus `FEATURES="news"` opted in -- the same layering the contract suite's `_news_env` uses.
+- Since #564 also pins `PORTAGE_REPOSITORIES` to the fixture repos.conf text (`fixture_repos_conf_text`, walked like production): the spawned child would otherwise merge the host's installed system repos.conf and these exact-output pins would depend on the host. Same sections and config-root-relative locations as the on-disk file; on-disk parsing itself stays pinned by the pmtest suite and portage-repo's file-based tests.
 
 ## fn eselect_stub
 - A stub `eselect` on `PATH`: an executable shell script logging its argv to a marker file. Returns the stub dir (to prepend to `PATH`) and the marker path.

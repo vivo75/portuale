@@ -170,6 +170,12 @@ pub(crate) fn read_repo_name_file(repo_location: &Path) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+/// Portage's installed global `repos.conf`: `GLOBAL_CONFIG_PATH`
+/// (`/usr/share/portage/config`) joined to the compile-time `EPREFIX`
+/// (`LocationsManager.py:413-417`) -- no environment variable moves it.
+/// Portuale has no `EPREFIX` build constant, so this is the bare path.
+const GLOBAL_REPOS_CONF: &str = "/usr/share/portage/config/repos.conf";
+
 /// Parses `repos.conf` (a file, or a directory of `*.conf` files merged
 /// in sorted-filename order) and returns every `[reponame]` section with
 /// a `location`, sorted ascending by `(priority, name)` -- so a tie between
@@ -195,21 +201,31 @@ struct SectionInfo {
     repos_conf_aliases: Vec<String>,
 }
 
-/// Every `repos.conf` section as raw `key = value` pairs: the global file
-/// first, then the user's file or directory, later keys overriding.
-fn read_repo_sections(
+/// [`find_repos_impl_with`]/[`repo_usepkg_atoms_impl`] read the global
+/// file from [`GLOBAL_REPOS_CONF`] and `PORTAGE_REPOSITORIES` from the
+/// process environment; unit tests inject both through here instead and
+/// stay hermetic. Unless `PORTAGE_REPOSITORIES` is set -- then exactly
+/// that text replaces both files.
+/// Portage: repository/config.py, load_repository_config.
+pub(crate) fn read_repo_sections_impl(
     config_root: &Path,
+    global_repos_conf: &Path,
+    portage_repositories: Option<String>,
 ) -> Result<HashMap<String, HashMap<String, String>>, Error> {
     let repos_conf_path = config_root.join("etc/portage/repos.conf");
     let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
 
+    if let Some(text) = portage_repositories {
+        parse_ini(&text, &mut sections);
+        return Ok(sections);
+    }
+
     // The global repos.conf is read *before* the user's, so a user
     // `[section]` key overrides the global one and unset keys fall through.
-    // Read `config_root`-relative: a live `PORTAGE_CONFIGROOT=/` run resolves
-    // to the installed path; a test/fixture `config_root` stays absent.
-    let global_repos_conf = config_root.join("usr/share/portage/config/repos.conf");
+    // An absent global file contributes nothing (Portage's installed path;
+    // the `cnf/repos.conf` fallback is only for a non-installed Portage).
     if global_repos_conf.is_file()
-        && let Ok(text) = fs::read_to_string(&global_repos_conf)
+        && let Ok(text) = fs::read_to_string(global_repos_conf)
     {
         parse_ini(&text, &mut sections);
     }
@@ -242,7 +258,24 @@ fn read_repo_sections(
 /// warning; an atom in both lists is dropped from both).
 /// Portage: repository/config.py:253-282; _emerge/depgraph.py:384-392
 pub fn repo_usepkg_atoms(config_root: &Path) -> (Vec<String>, Vec<String>) {
-    let Ok(sections) = read_repo_sections(config_root) else {
+    repo_usepkg_atoms_impl(
+        config_root,
+        Path::new(GLOBAL_REPOS_CONF),
+        std::env::var("PORTAGE_REPOSITORIES").ok(),
+    )
+}
+
+/// [`repo_usepkg_atoms`] with the global-file path and the
+/// `PORTAGE_REPOSITORIES` text injected, so unit tests stay hermetic
+/// (see [`read_repo_sections_impl`]).
+pub(crate) fn repo_usepkg_atoms_impl(
+    config_root: &Path,
+    global_repos_conf: &Path,
+    portage_repositories: Option<String>,
+) -> (Vec<String>, Vec<String>) {
+    let Ok(sections) =
+        read_repo_sections_impl(config_root, global_repos_conf, portage_repositories)
+    else {
         return (Vec::new(), Vec::new());
     };
     let mut names: Vec<&String> = sections.keys().filter(|n| *n != "DEFAULT").collect();
@@ -331,7 +364,24 @@ pub(crate) fn find_repos_impl(
     config_root: &Path,
     report_section_mismatch: bool,
 ) -> Result<Vec<RepoConfig>, Error> {
-    let sections = read_repo_sections(config_root)?;
+    find_repos_impl_with(
+        config_root,
+        report_section_mismatch,
+        Path::new(GLOBAL_REPOS_CONF),
+        std::env::var("PORTAGE_REPOSITORIES").ok(),
+    )
+}
+
+/// [`find_repos_impl`] with the global-file path and the
+/// `PORTAGE_REPOSITORIES` text injected, so unit tests stay hermetic
+/// (see [`read_repo_sections_impl`]).
+pub(crate) fn find_repos_impl_with(
+    config_root: &Path,
+    report_section_mismatch: bool,
+    global_repos_conf: &Path,
+    portage_repositories: Option<String>,
+) -> Result<Vec<RepoConfig>, Error> {
+    let sections = read_repo_sections_impl(config_root, global_repos_conf, portage_repositories)?;
 
     let main_repo = sections
         .get("DEFAULT")
@@ -349,6 +399,8 @@ pub(crate) fn find_repos_impl(
             continue;
         }
         let Some(location) = kv.get("location") else {
+            // Portage: repository/config.py (missing-attribute drop).
+            eprintln!("!!! Section '{name}' in repos.conf is missing location attribute");
             continue;
         };
         let location = PathBuf::from(location);
@@ -359,12 +411,27 @@ pub(crate) fn find_repos_impl(
         } else {
             config_root.join(location)
         };
+        // The resolved name first: the missing-directory rule below keeps
+        // `gentoo` by name, and a missing directory yields no
+        // `profiles/repo_name`, so this is the section name there.
+        let resolved_name = read_repo_name_file(&location).unwrap_or_else(|| name.clone());
+        if !location.is_dir() {
+            // Portage: repository/config.py (nonexistent-directory drop,
+            // except `gentoo`, kept so a first sync is possible).
+            eprintln!(
+                "!!! Section '{name}' in repos.conf has location attribute set to nonexistent directory: '{}'",
+                location.display()
+            );
+            if resolved_name != "gentoo" {
+                continue;
+            }
+        }
         let priority = kv
             .get("priority")
             .and_then(|p| p.parse::<i32>().ok())
             .unwrap_or(if *name == main_repo { -1000 } else { 0 });
-        // `profiles/repo_name` first, else the section name.
-        let resolved_name = read_repo_name_file(&location).unwrap_or_else(|| name.clone());
+        // `profiles/repo_name` first, else the section name (resolved above
+        // for the missing-directory rule).
         let sync_type = kv.get("sync-type").filter(|s| !s.is_empty()).cloned();
         let sync_uri = kv.get("sync-uri").filter(|s| !s.is_empty()).cloned();
         // Explicit `true`/`yes`, else the heuristic: volatile unless under

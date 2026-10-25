@@ -11,8 +11,9 @@ fn find_repos_defaults_masters_to_the_main_repo_alone_when_unset() {
         "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n\n[overlay]\nlocation = overlay\n",
     )
     .unwrap();
+    make_repo_dirs(&root, &["main", "overlay"]);
 
-    let repos = find_repos(&root).expect("repos.conf resolves");
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
     let main = repos.iter().find(|r| r.name == "main").unwrap();
     let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
     assert_eq!(main.masters, Vec::<PathBuf>::new());
@@ -32,8 +33,9 @@ fn find_repos_reads_sync_fields_volatile_and_git_module_options() {
          sync-rsync-verify-jobs = 9\n",
     )
     .unwrap();
+    make_repo_dirs(&root, &["main"]);
 
-    let repos = find_repos(&root).expect("repos.conf resolves");
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
     let main = repos.iter().find(|r| r.name == "main").unwrap();
     assert_eq!(main.sync_type.as_deref(), Some("git"));
     assert_eq!(
@@ -61,7 +63,8 @@ fn find_repos_explicit_volatile_key_wins_over_the_heuristic() {
         "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\nvolatile = no\n",
     )
     .unwrap();
-    let repos = find_repos(&root).expect("repos.conf resolves");
+    make_repo_dirs(&root, &["main"]);
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
     assert!(!repos.iter().find(|r| r.name == "main").unwrap().volatile);
 }
 
@@ -79,8 +82,9 @@ fn find_repos_resolves_an_explicit_masters_key_to_the_named_repos_own_locations(
          [downstream]\nlocation = downstream\nmasters = overlay unknownrepo\n",
     )
     .unwrap();
+    make_repo_dirs(&root, &["main", "overlay", "downstream"]);
 
-    let repos = find_repos(&root).expect("repos.conf resolves");
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
     let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
     let downstream = repos.iter().find(|r| r.name == "downstream").unwrap();
     // An explicit key fully replaces the default (no implicit main).
@@ -99,8 +103,9 @@ fn find_repos_treats_an_explicit_empty_masters_key_as_no_masters_at_all() {
          [overlay]\nlocation = overlay\nmasters = \n",
     )
     .unwrap();
+    make_repo_dirs(&root, &["main", "overlay"]);
 
-    let repos = find_repos(&root).expect("repos.conf resolves");
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
     let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
     assert_eq!(overlay.masters, Vec::<PathBuf>::new());
 }
@@ -130,7 +135,7 @@ fn find_repos_reads_layout_conf_masters_repo_name_and_profile_formats() {
     )
     .unwrap();
 
-    let repos = find_repos(&root).expect("repos.conf resolves");
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
     let overlay = repos.iter().find(|r| r.name == "overlay").unwrap();
     // The section was `[downstream]`; the layout.conf `repo-name`
     // renamed it.
@@ -150,7 +155,7 @@ fn find_repos_reads_layout_conf_masters_repo_name_and_profile_formats() {
          [downstream]\nlocation = downstream\nmasters = \n",
     )
     .unwrap();
-    let repos = find_repos(&root).expect("repos.conf resolves");
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
     let renamed = repos
         .iter()
         .find(|r| r.name == "renamed-downstream")
@@ -191,7 +196,7 @@ fn find_repos_reads_profiles_repo_name_and_drops_a_mismatched_section() {
     // `dropped`: repo_name file mismatches the section, no alias.
     std::fs::write(root.join("dropped/profiles/repo_name"), "dropped-repo\n").unwrap();
 
-    let repos = find_repos(&root).expect("repos.conf resolves");
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
     assert!(repos.iter().any(|r| r.name == "aliased-repo"));
     assert!(
         !repos.iter().any(|r| r.name == "dropped-repo"),
@@ -205,7 +210,7 @@ fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_tim
     // The runtime-key pin enforces as a slot constraint; the
     // build-time-key pin is ignored entirely.
     let root = fixtures_root();
-    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let repos = hermetic_find_repos(&root).expect("fixture repos.conf must resolve");
     let upgrade = |pkg: &str| GraphEntry {
         discovery: 0,
         category: "dev-libs".into(),
@@ -273,7 +278,106 @@ fn repo_usepkg_atoms_append_the_repo_name_and_drop_bad_and_conflicting_atoms() {
          usepkg-include = dev-libs/both dev-libs/c\n",
     )
     .unwrap();
-    let (exclude, include) = repo_usepkg_atoms(&root);
+    let (exclude, include) = repo_usepkg_atoms_impl(&root, &root.join("no-such-global.conf"), None);
     assert_eq!(exclude, vec!["dev-libs/a::main", "dev-libs/b:2::main"]);
     assert_eq!(include, vec!["dev-libs/c::main"]);
+}
+
+#[test]
+fn global_and_user_repos_conf_merge_with_user_keys_winning() {
+    // Portage: `load_repository_config` reads the global file before the
+    // user's, so a user `[section]` key overrides the global one and
+    // unset keys fall through (`repository/config.py:1490-1505`).
+    let root = masters_test_root("global-merge");
+    std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+    let global = root.join("global.conf");
+    std::fs::write(
+        &global,
+        "[DEFAULT]\nmain-repo = main\n\n\
+         [main]\nlocation = main\nsync-uri = https://example.invalid/global\npriority = 7\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("etc/portage/repos.conf"),
+        "[DEFAULT]\nmain-repo = main\n\n\
+         [main]\nlocation = main\nsync-uri = https://example.invalid/user\n",
+    )
+    .unwrap();
+    make_repo_dirs(&root, &["main"]);
+    let repos = find_repos_impl_with(&root, true, &global, None).expect("merge resolves");
+    let main = repos.iter().find(|r| r.name == "main").unwrap();
+    assert_eq!(
+        main.sync_uri.as_deref(),
+        Some("https://example.invalid/user")
+    );
+    assert_eq!(main.priority, 7);
+}
+
+#[test]
+fn absent_global_file_contributes_no_sections() {
+    // Portage's installed path: an absent global file is simply skipped;
+    // the `cnf/repos.conf` fallback is only for a non-installed Portage.
+    let root = masters_test_root("global-absent");
+    std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+    std::fs::write(
+        root.join("etc/portage/repos.conf"),
+        "[DEFAULT]\nmain-repo = main\n\n[main]\nlocation = main\n",
+    )
+    .unwrap();
+    make_repo_dirs(&root, &["main"]);
+    let repos = find_repos_impl_with(&root, true, &root.join("no-such-global.conf"), None)
+        .expect("user file alone resolves");
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[0].name, "main");
+}
+
+#[test]
+fn portage_repositories_replaces_both_files() {
+    // Portage: when `PORTAGE_REPOSITORIES` is set, exactly that text is
+    // parsed and neither file is read (`repository/config.py:1490-1505`).
+    let root = masters_test_root("repositories-var");
+    std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+    let global = root.join("global.conf");
+    std::fs::write(&global, "[DEFAULT]\nmain-repo = global-only\n").unwrap();
+    std::fs::write(
+        root.join("etc/portage/repos.conf"),
+        "[DEFAULT]\nmain-repo = user-only\n\n[user-only]\nlocation = user-only\n",
+    )
+    .unwrap();
+    make_repo_dirs(&root, &["var-only"]);
+    let var_text =
+        "[DEFAULT]\nmain-repo = var-only\n\n[var-only]\nlocation = var-only\n".to_string();
+    let repos =
+        find_repos_impl_with(&root, true, &global, Some(var_text)).expect("variable text resolves");
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[0].name, "var-only");
+}
+
+#[test]
+fn missing_repo_directory_drops_the_repo_but_keeps_gentoo() {
+    // Portage: a `location` that is not a directory drops the repo with
+    // a `!!!` line, except `gentoo`, which is kept so a first sync is
+    // possible (`repository/config.py:1088-1106`). A section without a
+    // `location` attribute is dropped too.
+    let root = masters_test_root("missing-dir");
+    std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+    std::fs::write(
+        root.join("etc/portage/repos.conf"),
+        "[DEFAULT]\nmain-repo = main\n\n\
+         [main]\nlocation = main\n\n\
+         [gone]\nlocation = gone\n\n\
+         [gentoo]\nlocation = vanished\n\n\
+         [locless]\npriority = 5\n",
+    )
+    .unwrap();
+    make_repo_dirs(&root, &["main"]);
+    let repos = hermetic_find_repos(&root).expect("resolves with drops");
+    assert!(repos.iter().any(|r| r.name == "main"));
+    assert!(repos.iter().all(|r| r.name != "gone"));
+    assert!(repos.iter().all(|r| r.name != "locless"));
+    let gentoo = repos
+        .iter()
+        .find(|r| r.name == "gentoo")
+        .expect("gentoo is kept despite its missing directory");
+    assert!(gentoo.location.ends_with("vanished"));
 }

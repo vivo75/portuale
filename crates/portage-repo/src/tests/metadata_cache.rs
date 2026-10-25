@@ -49,7 +49,7 @@ fn pregen_md5_cache_follows_the_first_known_cache_format() {
     std::fs::create_dir_all(root.join("main/metadata")).unwrap();
     let layout = root.join("main/metadata/layout.conf");
     let formats = || {
-        let repos = find_repos(&root).expect("repos.conf resolves");
+        let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
         let main = repos.iter().find(|r| r.is_main).unwrap();
         (main.cache_formats.clone(), pregen_md5_cache_enabled(main))
     };
@@ -110,13 +110,18 @@ fn metadata_transfer_is_read_from_the_resolved_features() {
         "FEATURES=\"metadata-transfer -parallel-fetch\"\n",
     )
     .unwrap();
-    assert!(metadata_transfer_in_config(&root, &root));
+    // Since #564 a missing directory drops the repo, so `main` must
+    // exist; the repos are injected (not discovered) so the host's
+    // absolute global repos.conf cannot add repos to the resolution.
+    std::fs::create_dir_all(root.join("main")).unwrap();
+    let repos = hermetic_find_repos(&root).expect("repos.conf resolves");
+    assert!(metadata_transfer_in_repos(&root, &root, &repos));
     std::fs::write(
         root.join("etc/portage/make.conf"),
         "FEATURES=\"parallel-fetch\"\n",
     )
     .unwrap();
-    assert!(!metadata_transfer_in_config(&root, &root));
+    assert!(!metadata_transfer_in_repos(&root, &root, &repos));
 }
 
 /// `--regen` writes the md5-cache half exactly when `md5-dict` is resolved.
@@ -132,7 +137,7 @@ fn regen_writes_md5_cache_when_md5_dict_is_among_the_resolved_formats() {
     std::fs::create_dir_all(root.join("main/metadata")).unwrap();
     let layout = root.join("main/metadata/layout.conf");
     let writes = |root: &Path| {
-        let repos = find_repos(root).expect("repos.conf resolves");
+        let repos = hermetic_find_repos(root).expect("repos.conf resolves");
         let main = repos.iter().find(|r| r.is_main).unwrap();
         regen_writes_md5_cache(main)
     };

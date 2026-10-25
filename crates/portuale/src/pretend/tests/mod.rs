@@ -106,7 +106,41 @@ fn news_resolve_env(
 ) -> Vec<(String, String)> {
     let mut env = fixture_resolve_env(root, portage_tmpdir);
     env.push(("FEATURES".to_string(), "news".to_string()));
+    // #564: the spawned child would otherwise merge the host's installed
+    // system repos.conf (Portage `load_repository_config`; portuale reads
+    // the absolute path too now), so its repo set -- and these
+    // exact-output pins -- would depend on the host. Pin the child's repo
+    // set to the fixture text: same sections and (config-root-relative)
+    // locations as the on-disk file. On-disk repos.conf parsing itself is
+    // pinned by the pmtest contract suite (filtered) and by
+    // portage-repo's file-based unit tests.
+    env.push((
+        "PORTAGE_REPOSITORIES".to_string(),
+        fixture_repos_conf_text(),
+    ));
     env
+}
+
+/// The merged text of a `repos.conf` dir, walked exactly like
+/// production (`recursive_config_files`), for `PORTAGE_REPOSITORIES`
+/// pinning in spawned test children.
+fn repos_conf_dir_text(dir: &std::path::Path) -> String {
+    let mut text = String::new();
+    if let Ok(files) = portage_util::recursive_config_files(dir) {
+        for path in files {
+            if let Ok(chunk) = std::fs::read_to_string(&path) {
+                text.push_str(&chunk);
+                text.push('\n');
+            }
+        }
+    }
+    text
+}
+
+/// The merged text of the fixture `repos.conf` dir, for
+/// `PORTAGE_REPOSITORIES` pinning in [`news_resolve_env`].
+fn fixture_repos_conf_text() -> String {
+    repos_conf_dir_text(&fixtures_root().join("etc/portage/repos.conf"))
 }
 
 /// A stub `eselect` on `PATH`, logging its argv to a marker file. Returns the

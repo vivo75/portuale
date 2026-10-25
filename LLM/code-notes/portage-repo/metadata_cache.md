@@ -39,5 +39,8 @@ md5-cache reading, the aux-metadata provider and pregen/regen switches.
 ## fn metadata_transfer_in_config
 - Builds the same `repos.conf` + profile / `make.conf` / `env`-layer stack the CLI layers pass to `portage_profile::resolve_config` (the `env` layer includes a `FEATURES=… emerge` override, which Portage treats as incremental -- `const.INCREMENTALS`).
 
+## fn metadata_transfer_in_repos
+- #564 seam: the same resolution over an injected repo set, so unit tests stay hermetic (the host's absolute global repos.conf cannot add repos); production passes the discovered list unchanged.
+
 ## fn has_usable_md5_cache
 - Backlog #55. Grounding: Portage's auxdb/cache-format selection (`repository/config.py::iter_pregenerated_caches`, driven by `porttree.py:392`'s `_create_pregen_cache`) treats the md5-cache as one cache format among several (`pms`'s `metadata/cache`, `md5-dict`'s `metadata/md5-cache`); when the first known format is not `md5-dict`, or `FEATURES=metadata-transfer` removed the rung (`porttree.py:322`), `aux_get` falls back to the writable depcachedir and then to generating metadata from the ebuild via the depend phase. Backlog #46 S3 rejects some written entries; this flag only says the rung is in use.

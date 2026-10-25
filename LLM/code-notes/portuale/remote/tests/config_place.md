@@ -8,6 +8,7 @@ Config-placement resolve tests: both placements, profile remap, repos.conf seedi
 ## tests: remote_client_make_profile_resolves_against_same_named_server_repo
 - Backlog #171 follow-up 4, step 2: a dangling absolute `make.profile` plus a client `repos.conf` naming that repo. A pure main-first scan would pick the wrong profile when the main repo provides the same relative profile with different content.
 - Portage's stacking order holds: server `make.globals` + profile + client `make.conf` (`config.py:446-499`, `const.INCREMENTALS`).
+- Since #564 the client's repo path lives under the test tmpdir, created: discovery keeps a repo only when its location exists (Portage drops a missing directory), while the remap still matches on the path text alone.
 
 ## tests: remote_client_make_profile_resolves_without_client_repos_conf
 - Backlog #171 follow-up 4, step 3: the owner Q10 client holds no repo at all.
@@ -27,3 +28,4 @@ Config-placement resolve tests: both placements, profile remap, repos.conf seedi
 ## tests: remote_client_without_repos_conf_resolves_on_the_production_path
 - Backlog #171 follow-up 5 (l171f; review of l171e): the owner Q10 client holds no `repos.conf` at all. The shared chain `run_remote_resolve` / `pretend::run` and `run_bundle_stage` both resolve through; not just the test-only `l171e_resolve_with_server_repos` helper.
 - The server root carries its repos *only* in the global `usr/share/portage/config/repos.conf` slot (Portage's `repository/config.py:1488-1508` reads the global file before the user's). Like a genuine server, which always has `/etc/portage/repos.conf`, `find_repos` on the server root itself keeps working. The resolved `FEATURES` stack server globals + profile + client `make.conf` in Portage's order (`config.py:446-499`, `const.INCREMENTALS`).
+- Since #564 the server user slot also repeats the global `[gentoo]`: discovery merges the host's installed global file too, with a user key winning over a global one, so this keeps the section pinned at the server tree on any host. The seed-source pin is unaffected (the placed tree still receives global-slot content only, and the overlay still must not leak).
