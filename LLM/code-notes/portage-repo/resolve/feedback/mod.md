@@ -24,3 +24,6 @@ Feedback hub: one pass's problems packaged into the next pass's backtrack input.
 
 ## fn fill_non_use_change_chains
 - Backlog #248: keyword/license/mask twin of `fill_use_change_chains`. Re-derive from the change's own atom: its left-hand `=<cpv>` / `>=<cpv>` names the package the change is on, whose requirer chain is what Portage `_get_dep_chain_as_comment` prints (Portage renders those without the unsatisfied filter, so no `trigger` narrowing here). Same no-start-node rule: a change on an argument package (no requirers) passes `None`, yielding just the `(argument)` line.
+
+## gate threading (#571)
+- The `ReverseDependencyConstraintsArgs` site uses `ctx.gate()`.

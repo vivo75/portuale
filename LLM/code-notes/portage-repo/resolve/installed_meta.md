@@ -29,3 +29,6 @@ Installed packages' metadata as the resolver sees it: raw vdb records vs the dyn
 - `ignore_built_slot_operator_deps` (Portage `--ignore-built-slot-operator-deps`, `:166-168`), or an installed EAPI without `:=` support (`_get_eapi_attrs(pkg.eapi).slot_operator`, `:168-169`): the live ebuild string stands alone.
 - `IDEPEND` from a live EAPI without `idepend` support (backlog #194; Portage `bin/ebuild.sh` unsets it, `portage/eapi.py:135`): `""`. The vdb's own record needs no gate (an EAPI-7 build never wrote an `IDEPEND` file); only the live-ebuild overlay does.
 - otherwise the vdb's own built `:=` atoms for this key are appended to the live string (`:175-180`); when the live EAPI itself lacks `:=` support the whole overlay is void (`:176-178`, raw fallback).
+
+## no gate (#571, deliberate)
+- Vdb-anchored addressed read of an installed package's own metadata (`aux_get` analog); installed categories come from vdb contents, never the file.

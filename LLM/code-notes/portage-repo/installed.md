@@ -105,3 +105,6 @@ Installed packages read from the VDB.
 
 ## fn libc_provider_cps (memo, backlog #441 S1 / #457)
 - Memoised per (root, VDB generation) like `all_installed_packages`: the provider set was re-derived from the VDB on every binary-pool build and every merge-order closure. A stale read can't outlive the generation that produced it; under a freeze scope the generation itself is a memo lookup.
+
+## fn all_cp (allow-list, #571)
+- Now `all_cp(repos, categories)`: walks only listed category dirs (Portage `cp_all(categories=settings.categories)`, `porttree.py:1097-1128`), so the hard-coded non-category deny-list is gone — an unlisted dir is never visited. Consumed by short-name expansion, `--search`, the similar-names pools, and (via `regen_cps`) `--regen`.

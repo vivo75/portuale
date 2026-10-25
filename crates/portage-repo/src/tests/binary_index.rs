@@ -258,10 +258,10 @@ fn exclude_prevents_a_not_yet_installed_package_from_being_offered() {
     assert_eq!(
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &test_config(),
-                local_binpkg: &build_local_binpkg_index(&test_config())
+                local_binpkg: &build_local_binpkg_index(&test_config()),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/newpkg",
             &SelectOptions {
@@ -293,10 +293,10 @@ fn changed_slot_does_not_fire_for_a_package_with_no_recorded_difference() {
     assert_eq!(
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &config,
-                local_binpkg: &build_local_binpkg_index(&config)
+                local_binpkg: &build_local_binpkg_index(&config),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/samepkg",
             &SelectOptions {
@@ -331,10 +331,10 @@ fn changed_deps_and_changed_slot_combine_in_one_reinstall_outcome() {
     assert_eq!(
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &config,
-                local_binpkg: &build_local_binpkg_index(&config)
+                local_binpkg: &build_local_binpkg_index(&config),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/changedslotpkg",
             &SelectOptions {
@@ -375,10 +375,10 @@ fn fixture_repo_constrained_atom_finds_the_named_repo_only() {
     assert_eq!(
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &config,
-                local_binpkg: &build_local_binpkg_index(&config)
+                local_binpkg: &build_local_binpkg_index(&config),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/overlayonlypkg::overlay",
             &SelectOptions {
@@ -394,10 +394,10 @@ fn fixture_repo_constrained_atom_finds_the_named_repo_only() {
     assert_eq!(
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &config,
-                local_binpkg: &build_local_binpkg_index(&config)
+                local_binpkg: &build_local_binpkg_index(&config),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/overlayonlypkg::testrepo",
             &SelectOptions {

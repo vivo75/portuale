@@ -109,3 +109,6 @@ Masked-dependency reports.
 
 ## fn is_all_masked_abort_report (binary header, backlog #509)
 - Accepts both headers, matched at a line start: the user-patches abort prepends the ignored block ahead of the header. Only used for the abort-path resolution notice (`pretend/gates.rs`); success paths never carry the text.
+
+## gate threading (#571)
+- `atom_currently_satisfiable`, `HighestAvailableCandidateIgnoringUseArgs`, `masked_candidates_for_atom`, `all_masked_report`, `MaskedRowsForDepArgs`, `BinaryChangedDepsGate` and `atom_all_use_unmasked` carry the gate.

@@ -55,14 +55,14 @@ pub enum AlnumKey {
 /// (used to reflect an accumulated `package.use` change the loop did
 /// not re-walk); a no-op for entries with no matching candidate.
 pub(crate) fn refresh_entry_use_display(
+    gate: CategoryGate<'_>,
     entries: &mut [GraphEntry],
-    repos: &[RepoConfig],
     root: &Path,
     cp: &(String, String),
     config: &portage_profile::Config,
 ) {
     let (cat, pkg) = (cp.0.as_str(), cp.1.as_str());
-    let Ok(cands) = list_candidates(repos, cat, pkg) else {
+    let Ok(cands) = gate.repo_candidates(cat, pkg) else {
         return;
     };
     for e in entries.iter_mut() {
@@ -155,8 +155,8 @@ pub(crate) fn fill_uninstall_displays(
 /// A no-op for entries the candidate lookup misses.
 /// Portage: output.py, _display_use (per-root config)
 pub fn repaint_running_root_entry_displays(
+    gate: CategoryGate<'_>,
     entries: &mut [GraphEntry],
-    repos: &[RepoConfig],
     running_root: &Path,
     running_config: &portage_profile::Config,
 ) {
@@ -168,7 +168,7 @@ pub fn repaint_running_root_entry_displays(
     cps.sort();
     cps.dedup();
     for (cat, pkg) in &cps {
-        let Ok(cands) = list_candidates(repos, cat, pkg) else {
+        let Ok(cands) = gate.repo_candidates(cat, pkg) else {
             continue;
         };
         for e in entries.iter_mut() {

@@ -97,3 +97,6 @@ A resolve request: the atoms and the emerge options.
 ## field ResolveRequest::complete_reuse
 - Backlog #394: phase-1 merge picks (`cat/pkg` to outcome) for the complete walk to reuse (see `resolve_initial_outcome`). Empty on every non-complete pass. Carried as request state, not `Config`, so the phase layer can pass a different map per pass.
 - The phase layer fills only `New`/`Upgrade`/`Downgrade` picks: every `Reinstall` re-derives through the complete walk's own machinery (slot-operator scan + eliminate, the `--rebuild-if-*` restart step, the `--reinstall-atoms`/USE/argument flips), so a reused record can neither freeze a dropped `r` nor skip the eliminate latch (oracle `soc` cell: top-level consumer stays a plain argument `R`).
+
+## field local_config
+- Whether `/etc/portage` participates in the category allow-list (`false` skips `<config_root>/etc/portage/categories`). Portage `LocationsManager._user_config`; the CLI always resolves under a full user config (`true`).

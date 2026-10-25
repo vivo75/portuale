@@ -81,8 +81,8 @@ fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
         if_new_ver: true,
         if_new_slot: true,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &up.entries,
@@ -90,8 +90,8 @@ fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
         if_new_ver: true,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &up.entries,
@@ -99,8 +99,8 @@ fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
         if_new_ver: false,
         if_new_slot: true,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &up.entries,
@@ -108,8 +108,8 @@ fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
         if_new_ver: false,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     // The re-walk still merges nothing new (only `completegraphpkg` locked).
     assert!(!has_newpkg(&resolve_cfg(
@@ -128,8 +128,8 @@ fn complete_graph_never_merges_a_missing_deep_dep_of_an_installed_pkg() {
         if_new_ver: true,
         if_new_slot: true,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
 }
 
@@ -161,8 +161,8 @@ fn complete_graph_auto_enable_reasonless_reinstall_with_use_drift() {
         if_new_ver: false,
         if_new_slot: false,
         root: &root,
-        repos: &repos,
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&repos),
     }));
     assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: std::slice::from_ref(&reasonless),
@@ -170,7 +170,7 @@ fn complete_graph_auto_enable_reasonless_reinstall_with_use_drift() {
         if_new_ver: false,
         if_new_slot: false,
         root: &root,
-        repos: &repos,
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&repos),
     }));
 }

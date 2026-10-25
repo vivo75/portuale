@@ -25,7 +25,7 @@ pub(crate) fn installed_version_with_build_id(
 /// (no slot conflict forms: the re-resolve picks installed up front).
 // Portage: depgraph.py, _conflict_missed_update
 pub(crate) fn constraint_withheld_updates(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     root: &Path,
     config: &portage_profile::Config,
     entries: &[GraphEntry],
@@ -65,7 +65,7 @@ pub(crate) fn constraint_withheld_updates(
             None => continue,
         };
         let mut withheld: Vec<(String, String, String)> = Vec::new();
-        if let Ok(cands) = list_candidates(repos, &pin.cp.0, &pin.cp.1) {
+        if let Ok(cands) = gate.repo_candidates(&pin.cp.0, &pin.cp.1) {
             for cand in cands.iter() {
                 if cand.slot != settled_slot {
                     continue;
@@ -146,7 +146,7 @@ pub(crate) fn constraint_withheld_updates(
                 skipped_repo: wrepo.clone(),
                 skipped_build_id: None,
                 skipped_use: skipped_update_use_display_for(
-                    repos, config, &pin.cp.0, &pin.cp.1, &wver,
+                    gate, config, &pin.cp.0, &pin.cp.1, &wver,
                 ),
                 atom: pin.raw_atom.clone(),
                 consumer_cpv: format!(
@@ -205,7 +205,6 @@ pub(crate) type SkippedUpdateKey = (
 
 /// Arguments of [`backtrack_missed_updates`].
 pub(crate) struct BacktrackMissedUpdatesArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) entries: &'a [GraphEntry],
@@ -214,6 +213,7 @@ pub(crate) struct BacktrackMissedUpdatesArgs<'a> {
     /// fallback in [`missing_dep_full_row`]). Empty at the prune-rebuilds
     /// probe site, where the row must not materialize.
     pub(crate) missing_args: &'a [String],
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Missed updates over the settled backtrack trial state: the accumulated
@@ -230,12 +230,12 @@ pub(crate) fn backtrack_missed_updates(
     Vec<SkippedMissingDepFull>,
 ) {
     let BacktrackMissedUpdatesArgs {
-        repos,
         root,
         config,
         entries,
         params,
         missing_args,
+        gate,
     } = args;
     // First-seen position per negative (dict insertion order).
     let order_of = |cp: &(String, String), neg: &str| -> usize {
@@ -271,7 +271,7 @@ pub(crate) fn backtrack_missed_updates(
             {
                 continue;
             }
-            let (sub, repo, slot) = slot_conflict_meta(repos, cat, pkg, &ver);
+            let (sub, repo, slot) = slot_conflict_meta(gate, cat, pkg, &ver);
             if slot.is_empty() {
                 continue;
             }
@@ -298,7 +298,7 @@ pub(crate) fn backtrack_missed_updates(
                     let s = if chosen_installed {
                         read_vdb_slot(root, cat, pkg, chosen_ver).0
                     } else {
-                        slot_conflict_meta(repos, cat, pkg, chosen_ver).2
+                        slot_conflict_meta(gate, cat, pkg, chosen_ver).2
                     };
                     if s.is_empty() { None } else { Some(s) }
                 });
@@ -396,9 +396,9 @@ pub(crate) fn backtrack_missed_updates(
                             skipped_update_installed_use_display_for(root, config, &pc, &pp, &pv),
                         ),
                         None => (
-                            slot_conflict_puller_cpv(repos, &pc, &pp, &pv),
+                            slot_conflict_puller_cpv(gate, &pc, &pp, &pv),
                             false,
-                            skipped_update_use_display_for(repos, config, &pc, &pp, &pv),
+                            skipped_update_use_display_for(gate, config, &pc, &pp, &pv),
                         ),
                     };
                     // Per-node roots: the missed instance rides the rejecting
@@ -417,9 +417,7 @@ pub(crate) fn backtrack_missed_updates(
                         skipped_sub_slot: sub.clone(),
                         skipped_repo: repo.clone(),
                         skipped_build_id: None,
-                        skipped_use: skipped_update_use_display_for(
-                            repos, config, &cat, &pkg, &ver,
-                        ),
+                        skipped_use: skipped_update_use_display_for(gate, config, &cat, &pkg, &ver),
                         atom,
                         consumer_cpv,
                         consumer_build_id: None,
@@ -431,14 +429,13 @@ pub(crate) fn backtrack_missed_updates(
                 }
             }
             MaskReason::MissingDependency { atom, .. } => {
-                if backtrack_masked_match(repos, params, &atom) {
+                if backtrack_masked_match(gate, params, &atom) {
                     missing.push(SkippedMissingDep {
                         category: cat.clone(),
                         package: pkg.clone(),
                         slot: slot.clone(),
                     });
                 } else if let Some(row) = missing_dep_full_row(MissingDepFullRowArgs {
-                    repos,
                     root,
                     config,
                     entries,
@@ -449,6 +446,7 @@ pub(crate) fn backtrack_missed_updates(
                     sub: &sub,
                     repo: &repo,
                     atom: &atom,
+                    gate,
                 }) {
                     full.push(row);
                 }

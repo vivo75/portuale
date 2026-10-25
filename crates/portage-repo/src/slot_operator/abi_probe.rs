@@ -156,7 +156,6 @@ pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, Str
 /// Arguments of [`slot_conflict_abi_probe`].
 pub(crate) struct SlotConflictAbiProbeArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) conflicts: &'a [SlotConflict],
     pub(crate) already: &'a BTreeSet<(String, String)>,
@@ -166,6 +165,7 @@ pub(crate) struct SlotConflictAbiProbeArgs<'a> {
     pub(crate) excluded: &'a [String],
     pub(crate) probe_parents: &'a HashMap<(String, String), Vec<ProbeParent>>,
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Portage's slot-conflict-fired half of the update probe: for every recorded
@@ -181,7 +181,6 @@ pub(crate) fn slot_conflict_abi_probe(
 ) -> BTreeSet<(String, String)> {
     let SlotConflictAbiProbeArgs {
         root,
-        repos,
         entries,
         conflicts,
         already,
@@ -191,6 +190,7 @@ pub(crate) fn slot_conflict_abi_probe(
         excluded,
         probe_parents,
         config,
+        gate,
     } = args;
     // cp -> () for every merge-bound entry: only installed parents probe.
     let merge_bound: HashSet<(String, String)> = entries
@@ -267,7 +267,8 @@ pub(crate) fn slot_conflict_abi_probe(
                     }
                     // The same-version reinstall Portage forces: its live
                     // atoms must accept C.
-                    let Some(live) = live_metadata_for_installed(repos, root, &pcat, &ppkg, &pver)
+                    let Some(live) =
+                        live_metadata_for_installed(gate.repos, root, &pcat, &ppkg, &pver)
                     else {
                         continue;
                     };
@@ -280,7 +281,7 @@ pub(crate) fn slot_conflict_abi_probe(
                     // The replacement's USE conditionals are evaluated against
                     // its effective USE: an atom under a disabled `flag?`
                     // group is never selected, so it cannot accept C.
-                    let Some(rep_use) = list_candidates(repos, &pcat, &ppkg).ok().and_then(|cs| {
+                    let Some(rep_use) = gate.repo_candidates(&pcat, &ppkg).ok().and_then(|cs| {
                         let c = cs
                             .iter()
                             .filter(|c| c.version == pver && c.source == CandidateSource::Ebuild)
@@ -422,10 +423,10 @@ pub(crate) fn slot_conflict_abi_display_pairs(
 /// Highest visible `(slot, version)` for a cp: the slot a `--update` request
 /// keeps unpinned while every lower installed slot gains a `cat/pkg:S` pin.
 pub(crate) fn highest_visible_slot(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     cp: &(String, String),
 ) -> Option<(String, String)> {
-    list_candidates(repos, &cp.0, &cp.1)
+    gate.repo_candidates(&cp.0, &cp.1)
         .ok()?
         .iter()
         .max_by(|a, b| vercmp_ordering(&a.version, &b.version))
@@ -438,8 +439,8 @@ pub(crate) fn highest_visible_slot(
 /// pins nothing). Visibility/masking is unfiltered here.
 // Portage: _emerge/depgraph.py, _greedy_slots
 pub(crate) fn greedy_pinned_cps(
+    gate: CategoryGate<'_>,
     atoms: &HashSet<String>,
-    repos: &[RepoConfig],
     installed_by_cp: &HashMap<(String, String), Vec<(String, String)>>,
 ) -> HashSet<(String, String)> {
     let mut out = HashSet::new();
@@ -463,7 +464,7 @@ pub(crate) fn greedy_pinned_cps(
                 }
             }
         }
-        if let Ok(tree) = list_candidates(repos, &atom.category, &atom.package) {
+        if let Ok(tree) = gate.repo_candidates(&atom.category, &atom.package) {
             let best = tree
                 .iter()
                 .filter(|c| {
@@ -494,12 +495,12 @@ pub(crate) fn greedy_pinned_cps(
 /// string drops it.
 // Portage: _emerge/depgraph.py, _greedy_slots
 pub(crate) fn greedy_pin_survives_revision(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     config: &portage_profile::Config,
     provider_cp: &(String, String),
     bound_slot: &str,
 ) -> bool {
-    let Ok(tree) = list_candidates(repos, &provider_cp.0, &provider_cp.1) else {
+    let Ok(tree) = gate.repo_candidates(&provider_cp.0, &provider_cp.1) else {
         return true;
     };
     let ebuilds: Vec<&Candidate> = tree
@@ -571,12 +572,12 @@ pub(crate) fn greedy_pin_survives_revision(
 
 /// Arguments of [`replacement_parent_accepts`].
 pub(crate) struct ReplacementParentAcceptsArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) consumer: (&'a str, &'a str, &'a str),
     pub(crate) dep_keys: &'a [&'a str],
     pub(crate) provider: (&'a str, &'a str),
     pub(crate) candidate: &'a str,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Portage's update probe only reports a new-slot update when some replacement
@@ -587,15 +588,15 @@ pub(crate) struct ReplacementParentAcceptsArgs<'a> {
 // Portage: _emerge/depgraph.py, _slot_operator_update_probe
 pub(crate) fn replacement_parent_accepts(args: ReplacementParentAcceptsArgs<'_>) -> bool {
     let ReplacementParentAcceptsArgs {
-        repos,
         config,
         consumer,
         dep_keys,
         provider,
         candidate,
+        gate,
     } = args;
     let (cat, pkg, slot) = consumer;
-    let Ok(cands) = list_candidates(repos, cat, pkg) else {
+    let Ok(cands) = gate.repo_candidates(cat, pkg) else {
         return true;
     };
     let mut names_provider = false;

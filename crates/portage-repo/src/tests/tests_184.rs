@@ -104,6 +104,7 @@ fn iu_input_184<'a>(
         root,
         repos,
         config,
+        gate: crate::test_gate(repos),
     }
 }
 

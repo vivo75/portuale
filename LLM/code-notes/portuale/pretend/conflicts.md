@@ -36,3 +36,6 @@ Slot-conflict text helpers. Context moved out of the code comments (#336 Phase 7
 - Backlog #90 (S2), extended by #230: Portage's `format_unmatched_atom` (`_emerge/resolver/output.py:892`) marks the leading operator chars plus the version token (`~` + `1.0` in `~dev-libs/whblocker-1.0`, staged oracle), plus a `:slot[/sub-slot][op]` span when the atom carries one that mismatches the missed package (`:967-975`). Spans are computed on the raw atom text with no color realignment -- the same deliberate divergence as the slot block's markers. No grounded case carries USE-deps on a skipped row, so USE-token spans stay cut. `highlight_version` is Portage's `highlight_version` (#270).
 - A trailing `-rN` revision is left out of the version span (no oracle covers it).
 - Portage's `highlight_slot`: the atom names a slot (or sub-slot) the missed package does not have. The span covers `:slot`, the `/sub-slot` half when present, and the trailing slot operator (`=`/`*`), anchored on its occurrence in the raw atom text.
+
+## struct SlotConflictNeedRebuildArgs (allow-list, #571)
+- Carries `config_root`; the `ebuild_visible_at` check builds its gate once per report.

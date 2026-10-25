@@ -11,3 +11,6 @@ Binary-candidate pool memo for the passes of one resolve (backlog #441 S1 / #457
 ## fn collect_memoized (third step, backlog #441 S1 / #457)
 - The starting ebuild pool is compared by `Arc` identity, not deep `Vec<Candidate>` equality: the only producers (`resolve_pretend`, `greedy_pool`) hand over `list_candidates`' process-memoised allocation (or `None` for the by-construction empty pool), so the same question on a later pass carries the same pointer. `list_candidates` is keyed per repo set and cp with immutable trees, and the scope pins the repos, so identity implies identical input.
 - The parsed-`Atom` and atom-string comparisons are gone: the bucket key already pins `(cp, atom_str)` and both producers parse with `parse_atom`, so equal strings imply equal atoms. The `added` slice still splits at the starting pool length (single clone now, not two).
+
+## gate threading (#571)
+- `CollectBinaryCandidatesArgs` carries the gate through the memo forward.

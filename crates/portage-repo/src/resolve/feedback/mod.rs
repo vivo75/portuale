@@ -283,7 +283,6 @@ fn collect_feedback_inner(
     if !pass.slot_conflicts.is_empty() {
         let live_reachable = live_reachable_consumers(ctx, &pass.entries);
         let (_, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-            repos: &ctx.repos,
             root: ctx.root,
             entries: &pass.entries,
             with_bdeps: ctx.with_bdeps,
@@ -296,6 +295,7 @@ fn collect_feedback_inner(
             world_reachable: &ctx.world_reachable,
             config: ctx.config,
             complete: ctx.complete,
+            gate: ctx.gate(),
         });
         for pin in dropped {
             if !grown.dropped_pins.contains(&pin) {

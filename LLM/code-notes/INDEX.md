@@ -226,6 +226,7 @@
 - [crates/portage-repo/src/tests/tests_166.rs](portage-repo/tests/tests_166.md) — Direct predicate-result legs for rebuild/circular/instance-use residue.
 - [crates/portage-repo/src/tests/tests_184.rs](portage-repo/tests/tests_184.md) — Shadowed-arm order legs for `direct_solve_instance_use` / `direct_solve_atom_matches`.
 - [crates/portage-repo/src/tests/tests_195d.rs](portage-repo/tests/tests_195d.md) — Operator-level pins for `violated_parent_flags` against Portage's `Atom.violated_conditionals`.
+- [crates/portage-repo/src/tests/tests_571.rs](portage-repo/tests/tests_571.md) — Task 12 (#571): the category allow-list at every consumer.
 - [crates/portage-repo/src/tests/unsat_probe.rs](portage-repo/tests/unsat_probe.md) — Dead-end pass seeding a replacement parent for an unsatisfiable built `:=` dep.
 - [crates/portage-repo/src/tests/updates.rs](portage-repo/tests/updates.md) — Update-command parsing and dep-string rewrite tests.
 - [crates/portage-repo/src/tests/use_display.rs](portage-repo/tests/use_display.md) — `build_use_expand_display` grouping, diff-marker and force-wrap tests.
@@ -432,6 +433,7 @@
 - [crates/portuale/src/pretend/tests/blockers.rs](portuale/pretend/tests/blockers.md) — Replacement-satisfied blocker rows: hidden, inline, and counted.
 - [crates/portuale/src/pretend/tests/conflicts.rs](portuale/pretend/tests/conflicts.md) — Slot-conflict reasons, caret spans, and colorized-marker alignment.
 - [crates/portuale/src/pretend/tests/env_config.rs](portuale/pretend/tests/env_config.md) — Config-derived pretend gates: buildpkg, pkgdir trust, shell splitting, default opts, compressor, root-deps.
+- [crates/portuale/src/pretend/tests/expand.rs](portuale/pretend/tests/expand.md) — Short-name expansion against the allow-list.
 - [crates/portuale/src/pretend/tests/flag_spellings.rs](portuale/pretend/tests/flag_spellings.md) — `=True` spellings of eleven options behave exactly like the bare flags.
 - [crates/portuale/src/pretend/tests/gates.rs](portuale/pretend/tests/gates.md) — Display and early-return gates for non-pretend runs.
 - [crates/portuale/src/pretend/tests/mod.rs](portuale/pretend/tests/mod.md) — Shared fixtures and pty helpers for the pretend tests.

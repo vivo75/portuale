@@ -145,7 +145,6 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
     // Not reachable and not a graph entry: skipped (Portage never
     // walks to it either).
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &[],
         root: &dir,
         entries: &entries,
         with_bdeps: false,
@@ -158,6 +157,7 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        gate: crate::test_gate(&[]),
     });
     assert!(
         enforced.is_empty() && dropped.is_empty(),
@@ -169,7 +169,6 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
     let reachable: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "pinner".to_string())]);
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &[],
         root: &dir,
         entries: &entries,
         with_bdeps: false,
@@ -182,6 +181,7 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        gate: crate::test_gate(&[]),
     });
     assert_eq!(
         enforced.len() + dropped.len(),
@@ -234,7 +234,6 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
     ]);
 
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &[],
         root: &dir,
         entries: &[reinstall(true)],
         with_bdeps: false,
@@ -247,6 +246,7 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        gate: crate::test_gate(&[]),
     });
     let mut atoms: Vec<String> = enforced
         .iter()
@@ -264,7 +264,6 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
     );
 
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &[],
         root: &dir,
         entries: &[reinstall(false)],
         with_bdeps: false,
@@ -277,6 +276,7 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        gate: crate::test_gate(&[]),
     });
     assert!(
         enforced.is_empty() && dropped.is_empty(),
@@ -339,7 +339,6 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
     // Requested but not world-reached: the pin is skipped (Portage
     // reinstalls silently here).
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &[],
         root: &dir,
         entries: &entries,
         with_bdeps: false,
@@ -352,6 +351,7 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        gate: crate::test_gate(&[]),
     });
     assert!(
         enforced.is_empty() && dropped.is_empty(),
@@ -363,7 +363,6 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
     let world: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "consumer".to_string())]);
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &[],
         root: &dir,
         entries: &entries,
         with_bdeps: false,
@@ -376,6 +375,7 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
         world_reachable: &world,
         config: &portage_profile::Config::default(),
         complete: false,
+        gate: crate::test_gate(&[]),
     });
     assert_eq!(
         enforced.len() + dropped.len(),
@@ -416,7 +416,6 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
 
     // Complete mode off: no pin at all.
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &repos,
         root: &root,
         entries: std::slice::from_ref(&entry),
         with_bdeps: false,
@@ -429,6 +428,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         world_reachable: &reachable,
         config: &portage_profile::Config::default(),
         complete: false,
+        gate: crate::test_gate(&repos),
     });
     assert!(
         enforced.is_empty() && dropped.is_empty(),
@@ -437,7 +437,6 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
 
     // Complete mode on: the broken pin drops for the residual report.
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &repos,
         root: &root,
         entries: &[entry],
         with_bdeps: false,
@@ -450,6 +449,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         world_reachable: &reachable,
         config: &portage_profile::Config::default(),
         complete: true,
+        gate: crate::test_gate(&repos),
     });
     assert!(
         enforced.is_empty(),
@@ -467,7 +467,6 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
 
     // Unreachable consumer: still nothing.
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &repos,
         root: &root,
         entries: &[GraphEntry {
             outcome: PretendOutcome::Reinstall {
@@ -493,6 +492,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: true,
+        gate: crate::test_gate(&repos),
     });
     assert!(
         enforced.is_empty() && dropped.is_empty(),

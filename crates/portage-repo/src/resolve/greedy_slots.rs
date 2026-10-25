@@ -191,7 +191,7 @@ fn greedy_pool(
         if ctx.usepkgonly || crate::globals::ebuild_db_dropped() {
             None
         } else {
-            list_candidates(&ctx.repos, &atom.category, &atom.package).ok()
+            ctx.repo_candidates(&atom.category, &atom.package).ok()
         };
     let mut candidates = ebuilds_shared.as_deref().cloned().unwrap_or_default();
     crate::resolve::pool_memo::collect_memoized(
@@ -208,12 +208,12 @@ fn greedy_pool(
             newuse: ctx.newuse,
             changed_use: ctx.changed_use,
             candidates: &mut candidates,
-            repos: &ctx.repos,
             with_bdeps: ctx.with_bdeps,
             atom_str,
             extra_constraints: extra,
             usepkg_exclude: ctx.usepkg_exclude,
             usepkg_include: ctx.usepkg_include,
+            gate: ctx.gate(),
         },
         ebuilds_shared.as_ref(),
     );

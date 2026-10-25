@@ -8,3 +8,6 @@ Dead-end-pass trigger seeding an installed parent's unsatisfiable built `:=` dep
 
 ## fn step_installed_parent_update_probe
 - Backlog #491 (Task 6): the clean-pass half of `_slot_operator_trigger_reinstalls` (`depgraph.py:3104`) — see `slot_operator/installed_parent_update_probe.md`. Called last in `collect_feedback_inner` (after `step_rebuild_if_restart`, gated on `!has_nvc` and no slot conflicts): every earlier arm keeps priority, so the seed can only fire where the old chain settled or dead-ended cleanly. An early position cost @world a preempted MissingDep mask per cycle (4/20 branch baseline vs Portage 4/20 became 5/20 with identical rows); last position restores 4/20.
+
+## gate threading (#571)
+- Both probe arg structs use `ctx.gate()`.

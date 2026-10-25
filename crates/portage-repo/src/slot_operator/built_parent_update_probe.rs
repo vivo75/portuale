@@ -5,7 +5,6 @@ use crate::*;
 /// Arguments of [`built_parent_update_probe`].
 pub(crate) struct BuiltParentUpdateProbeArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) local_binpkg: &'a BinaryIndex,
     pub(crate) entries: &'a [GraphEntry],
@@ -20,6 +19,7 @@ pub(crate) struct BuiltParentUpdateProbeArgs<'a> {
     /// The installed packages the request's own walk reaches: their dependencies
     /// have edges in Portage's digraph, which exempts them from the check.
     pub(crate) walked: &'a HashSet<(String, String)>,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// [`built_parent_update_probe`]'s result: the installed children joining the
@@ -41,7 +41,6 @@ pub(crate) fn built_parent_update_probe(
 ) -> BuiltParentUpdateProbe {
     let BuiltParentUpdateProbeArgs {
         root,
-        repos,
         config,
         local_binpkg,
         entries,
@@ -51,6 +50,7 @@ pub(crate) fn built_parent_update_probe(
         installed,
         live,
         walked,
+        gate,
     } = args;
     const DEP_KEYS: [&str; 5] = ["RDEPEND", "PDEPEND", "IDEPEND", "DEPEND", "BDEPEND"];
     let dep_keys: &[&str] = if with_bdeps {
@@ -94,7 +94,7 @@ pub(crate) fn built_parent_update_probe(
             .filter(|(_, on)| *on)
             .map(|(f, _)| f.clone())
             .collect();
-        let Ok(tree) = list_candidates(repos, &parent.0, &parent.1) else {
+        let Ok(tree) = gate.repo_candidates(&parent.0, &parent.1) else {
             continue;
         };
         // The ebuild replacements in the binary's slot, not older than it.
@@ -132,7 +132,6 @@ pub(crate) fn built_parent_update_probe(
             let bound_slot = atom.slot.clone().unwrap_or_default();
             if child_has_slot_update(ChildUpdateArgs {
                 root,
-                repos,
                 config,
                 entries,
                 parent: &parent,
@@ -146,6 +145,7 @@ pub(crate) fn built_parent_update_probe(
                 installed,
                 live,
                 walked,
+                gate,
             }) {
                 hit = Some(child.clone());
                 break;
@@ -162,7 +162,6 @@ pub(crate) fn built_parent_update_probe(
 /// Arguments of [`child_has_slot_update`].
 pub(crate) struct ChildUpdateArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) parent: &'a (String, String),
@@ -176,6 +175,7 @@ pub(crate) struct ChildUpdateArgs<'a> {
     pub(crate) installed: &'a InstalledReachability,
     pub(crate) live: &'a HashSet<(String, String)>,
     pub(crate) walked: &'a HashSet<(String, String)>,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Whether the installed `child` in `bound_slot` has a tree instance with another
@@ -186,7 +186,6 @@ pub(crate) struct ChildUpdateArgs<'a> {
 pub(crate) fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
     let ChildUpdateArgs {
         root,
-        repos,
         config,
         entries,
         parent,
@@ -200,6 +199,7 @@ pub(crate) fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
         installed,
         live,
         walked,
+        gate,
     } = args;
     let (child_cat, child_pkg) = (child.0.as_str(), child.1.as_str());
     if entries.iter().any(|e| {
@@ -229,7 +229,7 @@ pub(crate) fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
     } else {
         child_sub
     };
-    let Ok(child_cands) = list_candidates(repos, child_cat, child_pkg) else {
+    let Ok(child_cands) = gate.repo_candidates(child_cat, child_pkg) else {
         return false;
     };
     for replacement in replacements {
@@ -294,11 +294,11 @@ pub(crate) fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
                 live,
                 walked,
                 entries,
-                repos,
                 config,
                 parent,
                 child,
                 cpv: &cpv,
+                gate,
             }) {
                 return true;
             }
@@ -314,11 +314,11 @@ struct OtherConsumers<'a> {
     live: &'a HashSet<(String, String)>,
     walked: &'a HashSet<(String, String)>,
     entries: &'a [GraphEntry],
-    repos: &'a [RepoConfig],
     config: &'a portage_profile::Config,
     parent: &'a (String, String),
     child: &'a (String, String),
     cpv: &'a str,
+    gate: CategoryGate<'a>,
 }
 
 /// Whether every installed consumer of the child that the graph keeps accepts
@@ -341,7 +341,7 @@ fn other_consumers_accept(args: &OtherConsumers<'_>) -> bool {
         .cloned()
         .collect();
     for (consumer, atom) in args.installed.atoms_on(&consumers, args.child) {
-        if has_visible_upgrade(args.root, args.repos, args.config, &consumer) {
+        if has_visible_upgrade(args.gate, args.root, args.config, &consumer) {
             continue;
         }
         // A built `:slot/sub=` atom is judged without its slot/sub-slot part.
@@ -367,15 +367,15 @@ fn strip_slot_part(atom: &str) -> String {
 
 /// Whether the tree offers a visible ebuild above the installed `cp`.
 fn has_visible_upgrade(
+    gate: CategoryGate<'_>,
     root: &Path,
-    repos: &[RepoConfig],
     config: &portage_profile::Config,
     cp: &(String, String),
 ) -> bool {
     let Some(inst) = installed_candidates(root, &cp.0, &cp.1).into_iter().next() else {
         return false;
     };
-    let Ok(tree) = list_candidates(repos, &cp.0, &cp.1) else {
+    let Ok(tree) = gate.repo_candidates(&cp.0, &cp.1) else {
         return false;
     };
     tree.iter().any(|c| {

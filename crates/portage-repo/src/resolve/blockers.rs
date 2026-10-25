@@ -347,7 +347,6 @@ pub(crate) fn file_blocker_conflicts(
 
 /// Arguments of [`collect_unwalked_installed_blockers`].
 pub(crate) struct CollectUnwalkedInstalledBlockersArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) dynamic_deps: bool,
@@ -361,6 +360,7 @@ pub(crate) struct CollectUnwalkedInstalledBlockersArgs<'a> {
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) pending_blockers: &'a mut Vec<PendingBlocker>,
     pub(crate) installed_meta_memo: &'a mut HashMap<(String, String, String, String), String>,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Pulls in blockers from every installed instance the walk never reached,
@@ -370,7 +370,6 @@ pub(crate) struct CollectUnwalkedInstalledBlockersArgs<'a> {
 // Portage: depgraph.py, _validate_blockers (installed collection)
 pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalledBlockersArgs<'_>) {
     let CollectUnwalkedInstalledBlockersArgs {
-        repos,
         root,
         config,
         dynamic_deps,
@@ -380,6 +379,7 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
         entries,
         pending_blockers,
         installed_meta_memo,
+        gate,
     } = args;
     // With nothing merge-bound the scan cannot contribute a row, so it is
     // skipped: every blocker it produces resolves against merge-bound
@@ -403,8 +403,13 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
             continue;
         }
         // The live view comes from the vdb-recorded repo, never a priority search.
-        let live =
-            live_metadata_for_installed(repos, root, &pkg.category, &pkg.package, &pkg.version);
+        let live = live_metadata_for_installed(
+            gate.repos,
+            root,
+            &pkg.category,
+            &pkg.package,
+            &pkg.version,
+        );
         let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
         let mut depstr = String::new();
         for key in ["IDEPEND", "PDEPEND", "RDEPEND"] {
@@ -444,19 +449,18 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
                 empty_groups_always_true: false,
                 tie_break: &mut |alts: &[Vec<String>]| {
                     promote_tied_alternative(PromoteTiedAlternativeArgs {
-                        repos,
                         config,
                         root,
                         entries,
                         constraints: disj_constraints,
                         alts,
                         queued: &[],
+                        gate,
                     })
                 },
             },
             &mut |atoms: &[String]| {
                 disjunction_preference(DisjunctionPreferenceArgs {
-                    repos,
                     config,
                     root,
                     entries,
@@ -467,6 +471,7 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
                     atoms,
                     queued: &[],
                     update: false,
+                    gate,
                     gate_entries: entries,
                     gate_queued: &[],
                 })

@@ -1,0 +1,1 @@
+portuale emerge -p --ignore-default-opts --getbinpkg=n --usepkg=n --color=n p571-hidden/p571-hidden

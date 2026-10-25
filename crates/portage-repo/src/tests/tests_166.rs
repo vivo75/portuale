@@ -260,6 +260,7 @@ fn arg_input_166<'a>(args: ArgInput166Args<'a>) -> DirectSolveInput<'a> {
         root,
         repos,
         config,
+        gate: crate::test_gate(repos),
     }
 }
 
@@ -507,6 +508,7 @@ fn iu_input_166<'a>(
         root,
         repos,
         config,
+        gate: crate::test_gate(repos),
     }
 }
 
@@ -580,9 +582,9 @@ fn synthesize_166_files_the_instance_beside_its_siblings() {
         entries: &mut entries,
         conflicts: &[synth_conflict_166()],
         required_by_map: &synth_owners_166(),
-        repos: &repos,
         root: &root,
         config: &config,
+        gate: crate::test_gate(&repos),
     });
     let order: Vec<(&str, &str, &str)> = entries
         .iter()
@@ -627,9 +629,9 @@ fn synthesize_166_new_slot_tracks_the_installed_set() {
             entries: &mut entries,
             conflicts: &[synth_conflict_166()],
             required_by_map: &owners,
-            repos: &repos,
             root,
             config: &config,
+            gate: crate::test_gate(&repos),
         });
         assert_eq!(entries.len(), 1);
         entries.pop().expect("filed").new_slot

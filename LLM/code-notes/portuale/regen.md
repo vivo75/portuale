@@ -93,3 +93,6 @@
 
 ## tests: render_entry_writes_the_eclass_shape_of_each_rung
 - S0 cell (a): the two rungs serialize `_eclasses_` differently -- the repo cache (`md5_database`) as `name\tmd5` pairs, the depcachedir (`mtime_md5_database`, `store_eclass_paths = True`) as `name\tdir\tmd5` triples -- and `render_entry` serves both. The phase-env `INHERITED` is never written (Portage `EbuildMetadataPhase._async_start` pops it and records `_eclasses_` instead).
+
+## fn regen_cps (allow-list, #571)
+- Now just `all_cp(repos, categories)`: with `all_cp` itself gated, the extra filter was redundant. Traversal behaviour unchanged (Task 11's gate).

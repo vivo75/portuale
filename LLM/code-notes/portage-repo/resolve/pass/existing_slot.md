@@ -18,3 +18,6 @@ Keeps, replaces or conflicts the already-resolved slot.
 - Backlog #244: oracle `aubreaktop`, evidence 2026-09-28-244. Unlike the parent-flip site, the flip lands while the package is still stacked, so Portage needs no re-drive (see `expand_resolved_slot_with_flipped_use`); backlog #218.
 - Portage `_backtrack_depgraph` finishes the attempt, then restarts with the grown config -- the driver at the bottom of `'backtrack` does the `continue`, not here. Only with `--autounmask-backtrack=y`; off (the default), the change is recorded and displayed but the graph is not re-driven.
 - A post-loop pass refreshes the flipped package's own USE line when backtrack is off.
+
+## gate threading (#571)
+- `slot_conflict_meta` and the three `BuildSlotConflictArgs` sites use `ctx.gate()`.

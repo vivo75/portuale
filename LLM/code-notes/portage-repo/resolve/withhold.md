@@ -30,3 +30,6 @@ Updates withheld by constraints, and missed updates to backtrack on.
 - Backlog #205: an installed enforcing consumer (the world-reachable bound behind an enforced pin) renders vdb-based -- `(<cpv>, installed ...)` with the vdb repo (`__unknown__` fallback), like Portage `str(Package)` for an installed node and like the withhold rows' established shape -- instead of the merge-scheduled tree form. A graph puller keeps the tree form.
 - Backlog #242 Slice D: per-node roots -- the missed instance rides the rejecting parent's edge, a merge parent rides its entry; an installed parent rides the walk root's own vdb (always the target walk here, so target).
 - `SlotOperatorBuilt`: unreachable -- the collection loop above skips those entries, so none ever reach `kept`.
+
+## gate threading (#571)
+- `constraint_withheld_updates` and `BacktrackMissedUpdatesArgs` carry the gate into the withheld-candidate scan, `slot_conflict_meta`, the puller cpv, the skipped-USE displays and `backtrack_masked_match`.

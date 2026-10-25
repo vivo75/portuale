@@ -13,13 +13,13 @@ pub(crate) fn finish_slot_conflicts(
     state.slot_conflicts = merge_same_slot_conflicts(MergeSameSlotConflictsArgs {
         conflicts: &state.slot_conflicts,
         pullers: &state.slot_pullers,
-        repos: &ctx.repos,
         config,
         root: ctx.root,
         // A lone record misses parents walked later; at `--backtrack=0` re-file
         // them from the live pullers, like the merged ones (Portage reads the
         // final parent atoms).
         refile_singletons: ctx.backtrack_max == 0,
+        gate: ctx.gate(),
     });
     solve_pass_slot_conflicts(&mut *state, ctx, bp, config);
 
@@ -29,8 +29,8 @@ pub(crate) fn finish_slot_conflicts(
         entries: &mut state.entries,
         conflicts: &state.slot_conflicts,
         required_by_map: &state.required_by_map,
-        repos: &ctx.repos,
         root: ctx.root,
         config,
+        gate: ctx.gate(),
     });
 }

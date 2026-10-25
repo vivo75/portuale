@@ -91,8 +91,8 @@ pub(crate) fn onlydeps_runtime_keys(args: OnlydepsRuntimeKeysArgs) -> &'static [
 /// removal) pass through untouched.
 // Portage: _emerge/depgraph.py, _minimize_children; _pkg_use_enabled
 pub(crate) fn minimize_children(
+    gate: CategoryGate<'_>,
     root: &Path,
-    repos: &[RepoConfig],
     config: &portage_profile::Config,
     key: &(String, String),
     picks: Vec<(String, PretendOutcome)>,
@@ -127,7 +127,7 @@ pub(crate) fn minimize_children(
             let (slot, sub) = read_vdb_slot(root, &key.0, &key.1, version);
             (slot, sub, installed_pkg_repo(root, &key.0, &key.1, version))
         } else {
-            let (sub, repo, slot) = slot_conflict_meta(repos, &key.0, &key.1, version);
+            let (sub, repo, slot) = slot_conflict_meta(gate, &key.0, &key.1, version);
             (slot, sub, repo)
         };
         let sub = if sub.is_empty() { slot.clone() } else { sub };
@@ -145,7 +145,7 @@ pub(crate) fn minimize_children(
     // check below. A same-version tie goes to the highest `repo_priority`; versions
     // with no ebuild candidate stay absent (binary-only picks keep the old
     // own-selection-only match).
-    let ebuilds = list_candidates(repos, &key.0, &key.1).unwrap_or_default();
+    let ebuilds = gate.repo_candidates(&key.0, &key.1).unwrap_or_default();
     let mut ebuild_by_version: HashMap<&str, &Candidate> = HashMap::new();
     for c in ebuilds.iter() {
         match ebuild_by_version.get(c.version.as_str()) {
@@ -271,7 +271,8 @@ pub(crate) fn graph_installed_reuse(args: GraphInstalledReuseArgs<'_>) -> Option
         fresh_version,
         item_targets_running_root,
     } = args;
-    let fresh_slot = list_candidates(&ctx.repos, &key.0, &key.1)
+    let fresh_slot = ctx
+        .repo_candidates(&key.0, &key.1)
         .ok()?
         .iter()
         .filter(|c| c.version == fresh_version)
@@ -379,7 +380,8 @@ pub(crate) fn arg_pinned_installed_reuse(args: ArgPinnedInstalledReuseArgs<'_>) 
     } = args;
     // The fresh pick's own main slot: the reuse target must sit in it. Same winner
     // rule as the pop site's own `resolved` pick.
-    let fresh_slot = list_candidates(&ctx.repos, &key.0, &key.1)
+    let fresh_slot = ctx
+        .repo_candidates(&key.0, &key.1)
         .ok()?
         .iter()
         .filter(|c| c.version == fresh_version)
@@ -410,10 +412,10 @@ pub(crate) fn arg_pinned_installed_reuse(args: ArgPinnedInstalledReuseArgs<'_>) 
             }
             let Ok(outcome) = resolve_pretend(
                 &SelectSource {
-                    repos: &ctx.repos,
                     root: atom_root,
                     config,
                     local_binpkg: &ctx.local_binpkg,
+                    gate: ctx.gate(),
                 },
                 t,
                 &SelectOptions {

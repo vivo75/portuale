@@ -18,15 +18,15 @@ pub(crate) fn bind_slot_operator_deps(depstr: &str, entries: &[GraphEntry], root
 /// installed version, or `None` when there is none.
 pub(crate) fn built_equals_binding(
     root: &Path,
-    repos: &[RepoConfig],
     category: &str,
     package: &str,
+    gate: CategoryGate<'_>,
 ) -> Option<(String, String)> {
     let inst_ver = installed_candidates(root, category, package)
         .into_iter()
         .map(|(v, _, _)| v)
         .max_by(|x, y| vercmp_ordering(x, y))?;
-    let (bound_sub, _, _) = slot_conflict_meta(repos, category, package, &inst_ver);
+    let (bound_sub, _, _) = slot_conflict_meta(gate, category, package, &inst_ver);
     if bound_sub.is_empty() {
         return None;
     }
@@ -34,25 +34,25 @@ pub(crate) fn built_equals_binding(
 }
 
 pub(crate) fn built_equals_shifted_slot(
+    gate: CategoryGate<'_>,
     root: &Path,
-    repos: &[RepoConfig],
     category: &str,
     package: &str,
     existing_sub: &str,
 ) -> bool {
-    built_equals_binding(root, repos, category, package)
+    built_equals_binding(root, category, package, gate)
         .is_some_and(|(_, bound_sub)| bound_sub != existing_sub)
 }
 
 /// Arguments of [`built_equals_shift_unrebuildable`].
 pub(crate) struct BuiltEqualsShiftUnrebuildableArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) existing_sub: &'a str,
     pub(crate) pullers: &'a SlotPullers,
     pub(crate) excluded: &'a [String],
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// A `:=` shift is only a conflict when the bound consumer cannot be
@@ -63,14 +63,14 @@ pub(crate) fn built_equals_shift_unrebuildable(
 ) -> bool {
     let BuiltEqualsShiftUnrebuildableArgs {
         root,
-        repos,
         category,
         package,
         existing_sub,
         pullers,
         excluded,
+        gate,
     } = args;
-    if !built_equals_shifted_slot(root, repos, category, package, existing_sub) {
+    if !built_equals_shifted_slot(gate, root, category, package, existing_sub) {
         return false;
     }
     pullers
@@ -168,11 +168,11 @@ pub(crate) fn strip_libc_atoms(
 /// The tree ebuild's md5-cache metadata for `cp` at `version`.
 /// `None` when it cannot be read: the rebuild is kept (conservative).
 pub(crate) fn tree_metadata_for(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     cp: &(String, String),
     version: &str,
 ) -> Option<std::sync::Arc<HashMap<String, String>>> {
-    let candidates = list_candidates(repos, &cp.0, &cp.1).ok()?;
+    let candidates = gate.repo_candidates(&cp.0, &cp.1).ok()?;
     let resolved = candidates
         .iter()
         .filter(|c| c.version == version)

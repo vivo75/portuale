@@ -118,7 +118,7 @@ pub(crate) fn apply_outcome_fallbacks(
         && !ctx.empty
         && (atom.slot.is_some()
             || atom.slot_operator.is_some()
-            || !cp_has_tree_or_binary_candidate(&ctx.repos, &ctx.local_binpkg, &key.0, &key.1))
+            || !cp_has_tree_or_binary_candidate(ctx.gate(), &ctx.local_binpkg, &key.0, &key.1))
         && let Some(version) = best_installed_matching(atom_root, current_atom, config)
             .filter(|v| !installed_version_masked(&bp.masked_negatives_for(key), &key.0, &key.1, v))
     {
@@ -137,7 +137,7 @@ pub(crate) fn apply_outcome_fallbacks(
         && ctx.update
         && ctx.selective
         && !ctx.empty
-        && !cp_has_tree_or_binary_candidate(&ctx.repos, &ctx.local_binpkg, &key.0, &key.1)
+        && !cp_has_tree_or_binary_candidate(ctx.gate(), &ctx.local_binpkg, &key.0, &key.1)
         && let Some(version) = best_installed_matching(atom_root, current_atom, config)
             .filter(|v| !installed_version_masked(&bp.masked_negatives_for(key), &key.0, &key.1, v))
     {

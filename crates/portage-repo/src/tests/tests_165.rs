@@ -348,7 +348,7 @@ fn parent_use_state_resolves_a_new_parent_to_its_tree_version() {
     let repos = repo_165(&dir, &[("test/pkg", "1.0", "0", "foo", "", "", "")]);
     let entries = vec![new_165("test", "pkg", "1.0")];
     let (resolved, full_iuse, _use_flags, required_use) = parent_use_state(
-        &repos,
+        crate::test_gate(&repos),
         &entries,
         &("test".to_string(), "pkg".to_string()),
         &cfg_165(),
@@ -394,8 +394,9 @@ fn parent_use_state_resolves_upgrade_downgrade_and_reinstall_parents() {
         },
     ] {
         let entries = vec![entry_165("test", "pkg", outcome.clone(), Some("0"))];
-        let (resolved, _, _, _) = parent_use_state(&repos, &entries, &owner, &config)
-            .expect("every merge-bound outcome resolves");
+        let (resolved, _, _, _) =
+            parent_use_state(crate::test_gate(&repos), &entries, &owner, &config)
+                .expect("every merge-bound outcome resolves");
         let want = match &outcome {
             PretendOutcome::Upgrade { to, .. } => to,
             PretendOutcome::Downgrade { to, .. } => to,
@@ -419,10 +420,10 @@ fn parent_use_state_ignores_same_category_and_same_package_decoys() {
     ];
     assert!(
         parent_use_state(
-            &repos,
+            crate::test_gate(&repos),
             &entries,
             &("test".to_string(), "pkg".to_string()),
-            &cfg_165(),
+            &cfg_165()
         )
         .is_none()
     );
@@ -443,7 +444,7 @@ fn parent_use_state_picks_the_parents_own_version_from_the_tree() {
     );
     let entries = vec![new_165("test", "pkg", "1.0")];
     let (resolved, _, _, _) = parent_use_state(
-        &repos,
+        crate::test_gate(&repos),
         &entries,
         &("test".to_string(), "pkg".to_string()),
         &cfg_165(),
@@ -1498,7 +1499,6 @@ fn collect_unwalked_installed_blockers_files_an_unwalked_strong_blocker() {
     let mut pending = Vec::new();
     let mut memo = HashMap::new();
     collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
-        repos: &[],
         root: &root,
         config: &cfg_165(),
         dynamic_deps: false,
@@ -1508,6 +1508,7 @@ fn collect_unwalked_installed_blockers_files_an_unwalked_strong_blocker() {
         entries: &entries,
         pending_blockers: &mut pending,
         installed_meta_memo: &mut memo,
+        gate: crate::test_gate(&[]),
     });
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].atom_str, "!!dev-libs/victim");
@@ -1545,7 +1546,6 @@ fn collect_unwalked_installed_blockers_skips_walked_cps_and_nomerge_runs() {
     let mut pending = Vec::new();
     let mut memo = HashMap::new();
     collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
-        repos: &[],
         root: &root,
         config: &cfg_165(),
         dynamic_deps: false,
@@ -1555,6 +1555,7 @@ fn collect_unwalked_installed_blockers_skips_walked_cps_and_nomerge_runs() {
         entries: &entries,
         pending_blockers: &mut pending,
         installed_meta_memo: &mut memo,
+        gate: crate::test_gate(&[]),
     });
     assert!(pending.is_empty());
     let _ = std::fs::remove_dir_all(&root);
@@ -1587,7 +1588,6 @@ fn collect_unwalked_installed_blockers_dedups_exact_rows_only() {
     let mut pending = vec![seed];
     let mut memo = HashMap::new();
     collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
-        repos: &[],
         root: &root,
         config: &cfg_165(),
         dynamic_deps: false,
@@ -1597,6 +1597,7 @@ fn collect_unwalked_installed_blockers_dedups_exact_rows_only() {
         entries: &entries,
         pending_blockers: &mut pending,
         installed_meta_memo: &mut memo,
+        gate: crate::test_gate(&[]),
     });
     assert_eq!(pending.len(), 2);
     assert_eq!(pending[1].atom_str, "!!dev-libs/other");
@@ -1637,10 +1638,10 @@ fn enqueue_165(args: Enqueue165Args<'_>) -> (SlotPullers, Vec<DeferredDisjunctio
     let mut disjunctive_stack = Vec::new();
     enqueue_dependencies(
         &SelectSource {
-            repos,
             root,
             config,
             local_binpkg: &std::sync::Arc::new(BinaryIndex::default()),
+            gate: crate::test_gate(repos),
         },
         &DepOwner {
             // Same-root test walk: no cross-root routing here.

@@ -6,7 +6,6 @@ use crate::*;
 #[cfg(test)]
 pub(crate) struct SlotOperatorUnsatisfiedProbeArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) slot_want: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) pullers: &'a SlotPullers,
@@ -14,6 +13,7 @@ pub(crate) struct SlotOperatorUnsatisfiedProbeArgs<'a> {
     pub(crate) with_bdeps: bool,
     pub(crate) excluded: &'a [String],
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Post-pass trigger for an unsatisfied built slot-operator dep: each
@@ -27,7 +27,6 @@ pub(crate) fn slot_operator_unsatisfied_probe(
 ) -> BTreeSet<(String, String)> {
     let SlotOperatorUnsatisfiedProbeArgs {
         root,
-        repos,
         entries,
         slot_want,
         pullers,
@@ -35,10 +34,10 @@ pub(crate) fn slot_operator_unsatisfied_probe(
         with_bdeps,
         excluded,
         config,
+        gate,
     } = args;
     slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
         root,
-        repos,
         entries,
         slot_want,
         pullers,
@@ -46,6 +45,7 @@ pub(crate) fn slot_operator_unsatisfied_probe(
         with_bdeps,
         excluded,
         config,
+        gate,
     })
     .0
 }
@@ -61,7 +61,6 @@ pub(crate) type SlotOpUnsatProbe = (
 /// Arguments of [`slot_operator_unsatisfied_probe_full`].
 pub(crate) struct SlotOperatorUnsatisfiedProbeFullArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) slot_want: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) pullers: &'a SlotPullers,
@@ -69,6 +68,7 @@ pub(crate) struct SlotOperatorUnsatisfiedProbeFullArgs<'a> {
     pub(crate) with_bdeps: bool,
     pub(crate) excluded: &'a [String],
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// [`slot_operator_unsatisfied_probe`] plus the binary arm: a merge-bound
@@ -79,7 +79,6 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
 ) -> SlotOpUnsatProbe {
     let SlotOperatorUnsatisfiedProbeFullArgs {
         root,
-        repos,
         entries,
         slot_want,
         pullers,
@@ -87,6 +86,7 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
         with_bdeps,
         excluded,
         config,
+        gate,
     } = args;
     const RUNTIME_KEYS: [&str; 3] = ["RDEPEND", "IDEPEND", "PDEPEND"];
     const BUILD_KEYS: [&str; 2] = ["DEPEND", "BDEPEND"];
@@ -207,7 +207,7 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
                 {
                     continue;
                 }
-                let Ok(tree) = list_candidates(repos, &owner.0, &owner.1) else {
+                let Ok(tree) = gate.repo_candidates(&owner.0, &owner.1) else {
                     continue;
                 };
                 let mut hit = false;
@@ -266,7 +266,7 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
                             let stripped = portage_dep::without_use(&token).to_string();
                             // Portage: `_select_package` honours `runtime_pkg_mask`,
                             // for the tree and the installed instance alike.
-                            if !visible_tree_matches(repos, &stripped, config, &dep_negs).is_empty()
+                            if !visible_tree_matches(gate, &stripped, config, &dep_negs).is_empty()
                                 || best_installed_for_atom(root, &stripped, &dep_cp.0, &dep_cp.1)
                                     .is_some_and(|v| {
                                         !installed_version_masked(

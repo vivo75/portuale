@@ -19,7 +19,6 @@ pub(crate) fn step_slot_operator_probe(
         let (fresh, binary_masks) =
             slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
                 root: ctx.root,
-                repos: &ctx.repos,
                 entries: &pass.entries,
                 slot_want: &pass.slot_want,
                 pullers: &pass.slot_pullers,
@@ -27,6 +26,7 @@ pub(crate) fn step_slot_operator_probe(
                 with_bdeps: ctx.with_bdeps,
                 excluded: ctx.excluded,
                 config,
+                gate: ctx.gate(),
             });
         // A non-installed built (binary) parent is masked, not seeded; filed
         // through the shared helper with the missing-dep trigger arm.
@@ -64,7 +64,6 @@ pub(crate) fn step_built_parent_update_probe(
     let walked = request_walk_consumers(ctx, &pass.entries);
     let (fresh, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
         root: ctx.root,
-        repos: &ctx.repos,
         config,
         local_binpkg: &ctx.local_binpkg,
         entries: &pass.entries,
@@ -74,6 +73,7 @@ pub(crate) fn step_built_parent_update_probe(
         installed: &ctx.installed_graph,
         live: &live,
         walked: &walked,
+        gate: ctx.gate(),
     });
     let probed = fresh.clone();
     if !file_unsat_probe_results(&mut *grown, fresh, masks, ctx.usepkgonly, ctx.root) {
@@ -123,7 +123,6 @@ pub(crate) fn step_installed_parent_update_probe(
     let top_atoms: HashSet<String> = ctx.top_level.iter().map(|s| (*s).to_string()).collect();
     let fresh = installed_parent_update_probe(InstalledParentUpdateProbeArgs {
         root: ctx.root,
-        repos: &ctx.repos,
         config,
         entries: &pass.entries,
         with_bdeps: ctx.with_bdeps,
@@ -134,6 +133,7 @@ pub(crate) fn step_installed_parent_update_probe(
         walked: &walked,
         top_level_atoms: &top_atoms,
         update: ctx.update,
+        gate: ctx.gate(),
     });
     let probed = fresh.clone();
     // No binary masks here: both filings name installed packages (a stale

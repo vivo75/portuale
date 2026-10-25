@@ -21,3 +21,6 @@ The installed fallbacks and reinstall flips applied to a resolved outcome.
 
 ## apply_outcome_fallbacks (#394 restart flip)
 - Backlog #394: a `rebuild_if_replace_installed` seed flips a kept node to a reasonless `Reinstall` (`slot_operator_rebuild: false`, after the `--reinstall-atoms` and slot-operator arms). Keyed on `cat/pkg` so whichever visit comes first flips. Portage: `_gen_reinstall_sets` (`__auto_rebuild__`, `depgraph.py:5460-5480`).
+
+## gate threading (#571)
+- Both `cp_has_tree_or_binary_candidate` sites use `ctx.gate()`.

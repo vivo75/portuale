@@ -33,3 +33,6 @@ Skipped-update records (withheld upgrades, backtrack-mask rows) and their groupi
 
 ## fn backtrack_masked_match
 - Backlog #129 (S1): Portage `_show_unsatisfied_dep(..., check_backtrack=True)` (`depgraph.py:6471-6484`) -- no output, just the verdict: `true` when the atom matches a version the settled backtrack state still masks (Portage raises `_backtrack_mask`, and the missed update renders in the abbreviated tail). USE-deps are stripped for the match, exactly like the missed-update recording's plain-match form (`direct_solve_atom_matches`' `for_skipped` arm, `:2083-2094`).
+
+## gate threading (#571)
+- `MissingDepFullRowArgs` and `backtrack_masked_match` carry the gate into the masked-candidate disclosure.

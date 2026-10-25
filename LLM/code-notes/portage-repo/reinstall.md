@@ -55,3 +55,6 @@ When an installed package needs a reinstall (changed deps, slot, repo, USE).
 
 ## fn binary_deps_changed (key slimming, backlog #441 S1 / #457)
 - The memo key no longer carries the libc provider set or dep-string clones: `vdb_generation` (cheap under the freeze scope, `generation()` is epoch-memoised) stands in for the provider set (a pure function of VDB state, same discipline as `installed_candidates_by_cp`), and the built-USE set and five recorded dep strings ride as order-independent/len-prefixed `u64` fingerprints (`fingerprints.rs` shape). Key build per call is small clones plus string walks, no VDB scan, no sorts, no big clones.
+
+## gate threading (#571)
+- `BinaryDepsChangedArgs` (the memo key gains a categories fingerprint), `DepsChangedArgs`, `BinaryReinstallWarrantedArgs`, `slot_changed` and `ebuild_visible_at` carry the gate.

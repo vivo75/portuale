@@ -35,3 +35,6 @@ Handles a dependency with no version to merge: backtracking feedback and its uns
 
 ## fn push_unresolved_entry
 - Track X Slice B (#242): the node carries its resolving root -- Portage `Package.root_config` / `pkg.root`.
+
+## gate threading (#571)
+- Pool, `atom_currently_satisfiable`, `BuildSlotConflictArgs`, dependency `SelectSource`, `MaskedRowsForDepArgs`, `suggested_keyword/use_candidate`, `suggested_parent_use_candidate` and `use_unsat_candidates_for_atom` use `ctx.gate()`.

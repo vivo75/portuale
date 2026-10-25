@@ -81,7 +81,7 @@ fn memo_for(args: &CollectBinaryCandidatesArgs<'_>) -> Option<Rc<PoolMemo>> {
     SCOPE.with(|s| {
         s.borrow().as_ref().and_then(|sc| {
             (std::ptr::eq(args.config, sc.config)
-                && (args.repos.as_ptr(), args.repos.len()) == sc.repos
+                && (args.gate.repos.as_ptr(), args.gate.repos.len()) == sc.repos
                 && Arc::as_ptr(args.local_binpkg) == sc.local)
                 .then(|| Rc::clone(&sc.memo))
         })
@@ -149,12 +149,12 @@ pub(crate) fn collect_memoized(
         binpkg_respect_user_patches: args.binpkg_respect_user_patches,
         newuse: args.newuse,
         changed_use: args.changed_use,
-        repos: args.repos,
         with_bdeps: args.with_bdeps,
         atom_str: args.atom_str,
         extra_constraints: args.extra_constraints,
         usepkg_exclude: args.usepkg_exclude,
         usepkg_include: args.usepkg_include,
+        gate: args.gate,
     });
     let added = work[start..].to_vec();
     args.candidates.extend(added.iter().cloned());
@@ -198,12 +198,17 @@ mod tests {
             newuse: false,
             changed_use: false,
             candidates: out,
-            repos: &[],
             with_bdeps: false,
             atom_str: "dev-libs/a",
             extra_constraints: extra,
             usepkg_exclude: &[],
             usepkg_include: &[],
+            gate: CategoryGate {
+                repos: Box::leak(Box::new(Vec::<RepoConfig>::new())),
+                categories: Box::leak(Box::new(BTreeSet::new())),
+                config_root: Path::new("/"),
+                warned: Box::leak(Box::new(RefCell::new(HashSet::new()))),
+            },
         }
     }
 

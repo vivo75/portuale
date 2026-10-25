@@ -118,10 +118,10 @@ fn resolve(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -140,10 +140,10 @@ fn resolve_dep_update(atom_str: &str) -> PretendOutcome {
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         atom_str,
         &SelectOptions {
@@ -162,10 +162,10 @@ fn resolve_empty(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -239,10 +239,10 @@ fn resolve_update(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -262,10 +262,10 @@ fn resolve_as_dependency(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions::default(),
@@ -281,10 +281,10 @@ fn resolve_not_selective(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -303,10 +303,10 @@ fn resolve_update_excluded(category: &str, package: &str, excluded: &[String]) -
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -338,10 +338,10 @@ fn resolve_real(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &config,
             local_binpkg: &build_local_binpkg_index(&config),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -370,10 +370,10 @@ fn resolve_real_newuse(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &config,
             local_binpkg: &build_local_binpkg_index(&config),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -402,10 +402,10 @@ fn resolve_real_changed_use(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &config,
             local_binpkg: &build_local_binpkg_index(&config),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -433,10 +433,10 @@ fn resolve_real_changed_deps(category: &str, package: &str, with_bdeps: bool) ->
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &config,
             local_binpkg: &build_local_binpkg_index(&config),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -486,10 +486,10 @@ fn resolve_real_changed_slot(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &config,
             local_binpkg: &build_local_binpkg_index(&config),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -517,10 +517,10 @@ fn resolve_real_newrepo(category: &str, package: &str) -> PretendOutcome {
     let atom_str = format!("{category}/{package}");
     resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &config,
             local_binpkg: &build_local_binpkg_index(&config),
+            gate: crate::test_gate(&repos),
         },
         &atom_str,
         &SelectOptions {
@@ -618,6 +618,7 @@ fn s2_input<'a>(args: S2InputArgs<'a>) -> DirectSolveInput<'a> {
         root,
         repos,
         config,
+        gate: crate::test_gate(repos),
     }
 }
 
@@ -719,6 +720,7 @@ fn graph_onlydeps(
         complete: false,
         complete_reuse: HashMap::new(),
         set_args: std::collections::HashSet::new(),
+        local_config: true,
         solver: SolverKind::Portage,
     };
     active_resolver()
@@ -1677,6 +1679,7 @@ fn ctx_161<'a>(
         implicit_system_deps: false,
         complete: o.complete,
         set_args: o.set_args.clone(),
+        categories: test_categories(&repos),
         repos,
         slot_op_reachable: o.reachable.clone(),
         slot_op_seeds: o
@@ -1691,6 +1694,8 @@ fn ctx_161<'a>(
         complete_reuse: HashMap::new(),
         top_level: o.top_level.iter().map(|s| s.as_str()).collect(),
         top_level_cps: HashSet::new(),
+        config_root: root.to_path_buf(),
+        category_warned: Default::default(),
         // Like production's `ResolveCtx::new`: the binary pool
         // derives from the config's scanned binpkgs (empty here
         // unless a leg stages some).
@@ -1790,6 +1795,7 @@ fn ds_input_161<'a>(args: DsInput161Args<'a>) -> DirectSolveInput<'a> {
         root,
         repos,
         config,
+        gate: crate::test_gate(repos),
     }
 }
 
@@ -2869,7 +2875,7 @@ mod tests_164 {
         // under test is orthogonal).
         let mut config = test_config();
         config.accept_license = vec!["*".to_string()];
-        let got = visible_tree_matches(&repos, "dev-libs/vtm", &config, &[]);
+        let got = visible_tree_matches(crate::test_gate(&repos), "dev-libs/vtm", &config, &[]);
         assert_eq!(got, vec![("1.0".to_string(), "0".to_string())]);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2893,15 +2899,30 @@ mod tests_164 {
         // PMS-ambiguous (mirroring Portage's `Atom`), which
         // would make the constraint vacuously pass.
         let neg_one = ["!=dev-libs/vtmneg-1.0".to_string()];
-        let got_none = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &neg_one);
+        let got_none = visible_tree_matches(
+            crate::test_gate(&repos),
+            "dev-libs/vtmneg",
+            &config,
+            &neg_one,
+        );
         assert_eq!(got_none, Vec::new());
         // A negation naming nothing keeps the visible match ...
         let neg_idle = ["!=dev-libs/vtmneg-9.0".to_string()];
-        let got_one = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &neg_idle);
+        let got_one = visible_tree_matches(
+            crate::test_gate(&repos),
+            "dev-libs/vtmneg",
+            &config,
+            &neg_idle,
+        );
         assert_eq!(got_one, vec![("1.0".to_string(), "0".to_string())]);
         // ... and so does a positive constraint it satisfies.
         let pos_one = ["=dev-libs/vtmneg-1.0".to_string()];
-        let got_pos = visible_tree_matches(&repos, "dev-libs/vtmneg", &config, &pos_one);
+        let got_pos = visible_tree_matches(
+            crate::test_gate(&repos),
+            "dev-libs/vtmneg",
+            &config,
+            &pos_one,
+        );
         assert_eq!(got_pos, vec![("1.0".to_string(), "0".to_string())]);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2917,13 +2938,18 @@ mod tests_164 {
         // A plain negative hides the ebuild ...
         let plain = ["!=dev-libs/vtmbin-1.0".to_string()];
         assert_eq!(
-            visible_tree_matches(&repos, "dev-libs/vtmbin", &config, &plain),
+            visible_tree_matches(crate::test_gate(&repos), "dev-libs/vtmbin", &config, &plain),
             Vec::new()
         );
         // ... while the binary-marked form leaves it visible.
         let marked = ["!=dev-libs/vtmbin-1.0[binary]".to_string()];
         assert_eq!(
-            visible_tree_matches(&repos, "dev-libs/vtmbin", &config, &marked),
+            visible_tree_matches(
+                crate::test_gate(&repos),
+                "dev-libs/vtmbin",
+                &config,
+                &marked
+            ),
             vec![("1.0".to_string(), "0".to_string())]
         );
         let _ = fs::remove_dir_all(&dir);
@@ -2943,7 +2969,12 @@ mod tests_164 {
         );
         let mut config = test_config();
         config.accept_license = vec!["*".to_string()];
-        let got = visible_tree_matches(&repos, "=dev-libs/vtmsel-1.0", &config, &[]);
+        let got = visible_tree_matches(
+            crate::test_gate(&repos),
+            "=dev-libs/vtmsel-1.0",
+            &config,
+            &[],
+        );
         assert_eq!(got, vec![("1.0".to_string(), "0".to_string())]);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2966,7 +2997,7 @@ mod tests_164 {
             accept_license: vec!["MIT".to_string()],
             ..Default::default()
         };
-        let got = visible_tree_matches(&repos, "dev-libs/vtmlic", &config, &[]);
+        let got = visible_tree_matches(crate::test_gate(&repos), "dev-libs/vtmlic", &config, &[]);
         assert_eq!(got, vec![("2.0".to_string(), "0".to_string())]);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2976,9 +3007,10 @@ mod tests_164 {
         let dir = slotundo_temp_dir("164-vtm-empty");
         let repos = repo_164(&dir, &[("dev-libs/vtmempty", "1.0", "0", "amd64", "MIT")]);
         let config = test_config();
-        let got_bad = visible_tree_matches(&repos, "][", &config, &[]);
+        let got_bad = visible_tree_matches(crate::test_gate(&repos), "][", &config, &[]);
         assert_eq!(got_bad, Vec::new());
-        let got_missing = visible_tree_matches(&repos, "dev-libs/nosuchpkg", &config, &[]);
+        let got_missing =
+            visible_tree_matches(crate::test_gate(&repos), "dev-libs/nosuchpkg", &config, &[]);
         assert_eq!(got_missing, Vec::new());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3694,6 +3726,8 @@ mod tests_163;
 mod tests_165;
 
 mod tests_166;
+
+mod tests_571;
 
 mod tests_184;
 

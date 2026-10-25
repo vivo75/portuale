@@ -74,10 +74,10 @@ pub(crate) fn enqueue_dependencies(
     disj_constraints: &HashMap<(String, String), Vec<String>>,
 ) {
     let SelectSource {
-        repos,
         root,
         config,
         local_binpkg,
+        gate,
     } = *source;
     let DepOwner {
         target_root,
@@ -107,7 +107,7 @@ pub(crate) fn enqueue_dependencies(
     // The installed package's own dependency metadata: the live ebuild view
     // while the version still has an ebuild, else the vdb-recorded snapshot
     // for an installed-only package (never a priority search, never absent).
-    let metadata = installed_walk_metadata(repos, root, category, package, version);
+    let metadata = installed_walk_metadata(gate.repos, root, category, package, version);
 
     let dep_keys: &[&str] = if with_bdeps {
         &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
@@ -185,11 +185,11 @@ pub(crate) fn enqueue_dependencies(
         root_deps_running_root,
         root,
         entries,
-        repos,
         config,
         disj_constraints,
         self_node: &self_node,
         update,
+        gate,
     }) {
         ControlFlow::Continue(out) => out,
         ControlFlow::Break(()) => return,
@@ -201,11 +201,11 @@ pub(crate) fn enqueue_dependencies(
                 root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
                     metadata: &metadata,
                     use_flags: &use_flags,
-                    repos,
                     config,
                     running_root: root,
                     dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"], // Installed-walk defaults.
                     empty_groups_always_true: false,
+                    gate,
                 })
             })
             .unwrap_or_default()
@@ -222,11 +222,11 @@ pub(crate) fn enqueue_dependencies(
                 unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
                     metadata: &metadata,
                     use_flags: &use_flags,
-                    repos,
                     config,
                     running_root: root,
                     dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
                     empty_groups_always_true: false,
+                    gate,
                 })
             })
             .unwrap_or_default()
@@ -237,13 +237,13 @@ pub(crate) fn enqueue_dependencies(
         for atom_str in &root_deps_unsatisfied {
             entries.extend(resolve_root_deps_build_entries(
                 ResolveRootDepsBuildEntriesArgs {
-                    repos,
                     running_root,
                     atom_str,
                     config,
                     owner: owner_key.clone(),
                     seen: root_deps_build_seen,
                     local_binpkg,
+                    gate,
                 },
             ));
         }
@@ -505,11 +505,11 @@ pub(crate) struct FlattenDepsForEnqueueArgs<'a> {
     pub(crate) root_deps_running_root: Option<&'a Path>,
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a mut Vec<GraphEntry>,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a Config,
     pub(crate) disj_constraints: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) self_node: &'a (bool, String, String),
     pub(crate) update: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Flatten the installed dependency strings, choosing one branch of each disjunction as the walk does.
@@ -525,11 +525,11 @@ pub(crate) fn flatten_deps_for_enqueue(
         root_deps_running_root,
         root,
         entries,
-        repos,
         config,
         disj_constraints,
         self_node,
         update,
+        gate,
     } = args;
     let queued: Vec<QueueItem> = queue.iter().cloned().collect();
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
@@ -567,13 +567,13 @@ pub(crate) fn flatten_deps_for_enqueue(
                 });
                 let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
                 promote_tied_alternative(PromoteTiedAlternativeArgs {
-                    repos,
                     config,
                     root: grp_root,
                     entries: entries_view,
                     constraints: disj_constraints,
                     alts,
                     queued: queued_view,
+                    gate,
                 })
             },
         },
@@ -602,7 +602,6 @@ pub(crate) fn flatten_deps_for_enqueue(
             });
             let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
             disjunction_preference(DisjunctionPreferenceArgs {
-                repos,
                 config,
                 root: grp_root,
                 entries: entries_view,
@@ -613,6 +612,7 @@ pub(crate) fn flatten_deps_for_enqueue(
                 atoms,
                 queued: queued_view,
                 update,
+                gate,
                 gate_entries: entries,
                 gate_queued: &queued,
             })

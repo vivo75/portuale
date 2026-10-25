@@ -14,7 +14,6 @@ pub(crate) type SlotOpRebuildScan = (
 /// Arguments of [`slot_operator_rebuild_scan`].
 pub(crate) struct SlotOperatorRebuildScanArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) reachable: &'a HashSet<(String, String)>,
     /// Narrower consumer scope (`ResolveCtx::scan_reachable`); `None` is `reachable`.
@@ -28,6 +27,7 @@ pub(crate) struct SlotOperatorRebuildScanArgs<'a> {
     pub(crate) top_level_atoms: &'a HashSet<String>,
     pub(crate) excluded: &'a [String],
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Post-walk scan for consumers needing a slot-operator rebuild: the same-slot
@@ -40,7 +40,6 @@ pub(crate) fn slot_operator_rebuild_scan(
 ) -> SlotOpRebuildScan {
     let SlotOperatorRebuildScanArgs {
         root,
-        repos,
         entries,
         reachable,
         scope,
@@ -52,6 +51,7 @@ pub(crate) fn slot_operator_rebuild_scan(
         top_level_atoms,
         excluded,
         config,
+        gate,
     } = args;
     // cp -> (new version, new slot, new sub-slot) for every entry that
     // replaces an installed version in that slot.
@@ -138,7 +138,7 @@ pub(crate) fn slot_operator_rebuild_scan(
     add_argument_probe_parents(&mut probe_parents, top_level_atoms);
     // The requested cps the `--update` greedy expansion actually pins.
     let greedy_cps: HashSet<(String, String)> = if update {
-        greedy_pinned_cps(top_level_atoms, repos, &installed_by_cp)
+        greedy_pinned_cps(gate, top_level_atoms, &installed_by_cp)
     } else {
         HashSet::new()
     };
@@ -191,7 +191,6 @@ pub(crate) fn slot_operator_rebuild_scan(
                             new_slot_fresh: &new_slot_fresh,
                             update,
                             greedy_cps: &greedy_cps,
-                            repos,
                             installed_by_cp: &installed_by_cp,
                             revision_memo: &mut revision_memo,
                             config,
@@ -203,6 +202,7 @@ pub(crate) fn slot_operator_rebuild_scan(
                             probe_parents: &probe_parents,
                             scheduled: &scheduled,
                             cp: &cp,
+                            gate,
                         },
                     )
                 })
@@ -223,13 +223,13 @@ pub(crate) fn slot_operator_rebuild_scan(
                 // candidate, or the probe finds no new child for it.
                 // Portage: depgraph.py, _slot_operator_update_probe (replacement_parent atoms)
                 if !replacement_accepts(ReplacementAcceptsArgs {
-                    repos,
                     root,
                     config,
                     pkg,
                     dep_keys,
                     provider_cp: &provider_cp,
                     cand: &cand,
+                    gate,
                 }) {
                     continue;
                 }
@@ -254,13 +254,13 @@ pub(crate) fn slot_operator_rebuild_scan(
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root,
-        repos,
         entries,
         undone,
         scheduled: &mut scheduled,
         excluded,
         masked: &mut masked,
         config,
+        gate,
     });
 
     abi_rebuilds.sort();
@@ -276,7 +276,6 @@ struct SlotOpEdgeCtx<'a> {
     new_slot_fresh: &'a HashMap<(String, String), (String, String, String)>,
     update: bool,
     greedy_cps: &'a HashSet<(String, String)>,
-    repos: &'a [RepoConfig],
     installed_by_cp: &'a HashMap<(String, String), Vec<(String, String)>>,
     revision_memo: &'a mut HashMap<((String, String), String), bool>,
     config: &'a portage_profile::Config,
@@ -288,6 +287,7 @@ struct SlotOpEdgeCtx<'a> {
     probe_parents: &'a HashMap<(String, String), Vec<ProbeParent>>,
     scheduled: &'a BTreeSet<(String, String)>,
     cp: &'a (String, String),
+    gate: CategoryGate<'a>,
 }
 
 /// The slot-operator edge one dependency atom of an installed consumer gives:
@@ -303,7 +303,6 @@ fn slot_op_edge_for_atom(
         new_slot_fresh,
         update,
         greedy_cps,
-        repos,
         installed_by_cp,
         revision_memo,
         config,
@@ -315,6 +314,7 @@ fn slot_op_edge_for_atom(
         probe_parents,
         scheduled,
         cp,
+        gate,
     } = ctx;
     if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
         return None;
@@ -345,7 +345,7 @@ fn slot_op_edge_for_atom(
         // blocker lookahead.
         if update
             && greedy_cps.contains(&provider_cp)
-            && let Some((high_slot, high_ver)) = highest_visible_slot(repos, &provider_cp)
+            && let Some((high_slot, high_ver)) = highest_visible_slot(gate, &provider_cp)
             && high_slot.as_str() != a_slot
             && installed_by_cp.get(&provider_cp).is_some_and(|insts| {
                 insts
@@ -357,9 +357,7 @@ fn slot_op_edge_for_atom(
             })
             && *revision_memo
                 .entry((provider_cp.clone(), a_slot.to_string()))
-                .or_insert_with(|| {
-                    greedy_pin_survives_revision(repos, config, &provider_cp, a_slot)
-                })
+                .or_insert_with(|| greedy_pin_survives_revision(gate, config, &provider_cp, a_slot))
         {
             return None;
         }
@@ -397,7 +395,7 @@ fn slot_op_edge_for_atom(
         // not just scheduled entries. Ebuilds only, visible
         // ones only, highest first; already-installed
         // versions are not updates.
-        let tree = list_candidates(repos, &provider_cp.0, &provider_cp.1).ok();
+        let tree = gate.repo_candidates(&provider_cp.0, &provider_cp.1).ok();
         if let Some(tree) = tree.as_deref() {
             let installed_versions: HashSet<&String> = installed_by_cp
                 .get(&provider_cp)
@@ -408,7 +406,7 @@ fn slot_op_edge_for_atom(
                 .filter(|c| c.source == CandidateSource::Ebuild)
                 .filter(|c| !installed_versions.contains(&c.version))
                 .filter(|c| {
-                    ebuild_visible_at(repos, &provider_cp.0, &provider_cp.1, &c.version, config)
+                    ebuild_visible_at(gate, &provider_cp.0, &provider_cp.1, &c.version, config)
                 })
                 .map(|c| (&c.version, &c.slot, &c.sub_slot))
                 .collect();
@@ -445,7 +443,8 @@ fn slot_op_edge_for_atom(
             }
             // With no visible tree candidate the forced reinstall
             // would dead-end.
-            if list_candidates(repos, &pkg.category, &pkg.package)
+            if gate
+                .repo_candidates(&pkg.category, &pkg.package)
                 .ok()
                 .is_none_or(|cands| cands.is_empty())
             {
@@ -460,7 +459,7 @@ fn slot_op_edge_for_atom(
             // A replacement parent whose own atom accepts the
             // new slot must exist.
             if !replacement_parent_accepts(ReplacementParentAcceptsArgs {
-                repos,
+                gate,
                 config,
                 consumer: (&pkg.category, &pkg.package, &pkg.slot),
                 dep_keys,

@@ -49,3 +49,6 @@ Re-expanding a resolved slot when USE changes.
 - `or_universe` still folds over the full token list (groups included), and
   the root-deps satisfied/unsatisfied sets are computed once and shared
   between the plains filter and the Flip site.
+
+## gate threading (#571)
+- Selection pools, `root_deps_satisfied_atoms`, the `DisjunctionPreferenceArgs`/`PromoteTiedAlternativeArgs` sites and the `BuiltEqualsShiftUnrebuildableArgs` chain carry `ctx.gate()`.

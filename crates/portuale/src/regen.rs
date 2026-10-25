@@ -125,7 +125,10 @@ pub fn run(
     let mut valid_per_repo: HashMap<PathBuf, HashSet<(String, String)>> = HashMap::new();
     let mut work: Vec<RegenWorkItem> = Vec::new();
     let mut cps_in_order: Vec<String> = Vec::new();
-    for cp in regen_cps(&repos, &portage_repo::repo_categories(&repos, config_root)) {
+    for cp in regen_cps(
+        &repos,
+        &portage_repo::repo_categories(&repos, config_root, true),
+    ) {
         let (category, package) = match cp.split_once('/') {
             Some(x) => x,
             None => continue,
@@ -240,19 +243,12 @@ pub fn run(
     }
 }
 
-/// Every cp the traversal visits: the on-disk `all_cp` walk gated on
-/// `settings.categories` (on-disk cps in unlisted categories are never
-/// yielded).
+/// Every cp the traversal visits: the allow-listed `all_cp` walk (on-disk
+/// cps in unlisted categories are never yielded).
 /// Portage: MetadataRegen._iter_every_cp over cp_all(categories=...),
 /// porttree.py:1097-1128.
 fn regen_cps(repos: &[portage_repo::RepoConfig], categories: &BTreeSet<String>) -> Vec<String> {
-    portage_repo::all_cp(repos)
-        .into_iter()
-        .filter(|cp| {
-            cp.split_once('/')
-                .is_some_and(|(category, _)| categories.contains(category))
-        })
-        .collect()
+    portage_repo::all_cp(repos, categories)
 }
 
 /// One item's `depend` phase plus cache write.
@@ -602,7 +598,7 @@ mod tests {
             volatile: false,
             module_specific_options: Vec::new(),
         }];
-        let cps = regen_cps(&repos, &portage_repo::repo_categories(&repos, &cfg));
+        let cps = regen_cps(&repos, &portage_repo::repo_categories(&repos, &cfg, true));
         assert_eq!(cps, vec!["dev-libs/listedpkg".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }

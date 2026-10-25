@@ -16,6 +16,7 @@ pub(crate) struct DirectSolveInput<'a> {
     pub root: &'a Path,
     pub repos: &'a [RepoConfig],
     pub config: &'a portage_profile::Config,
+    pub gate: CategoryGate<'a>,
 }
 
 pub(crate) struct DirectSolveOutput {
@@ -82,7 +83,7 @@ pub(crate) fn direct_solve_atom_matches(
         probe_atom = stripped.to_string();
     }
     let (sub, repo, slot_of_ver) =
-        slot_conflict_meta(input.repos, &c.category, &c.package, &inst.version);
+        slot_conflict_meta(input.gate, &c.category, &c.package, &inst.version);
     let probe = format!(
         // match-str-ok: installed record plus slot_conflict_meta, not a Candidate
         "{}/{}-{}:{}/{}::{}",
@@ -147,7 +148,7 @@ pub(crate) fn direct_solve_instance_use(
         return (enabled, declared);
     }
     let (declared, enabled) =
-        slot_conflict_flag_sets(input.repos, input.config, category, package, &inst.version);
+        slot_conflict_flag_sets(input.gate, input.config, category, package, &inst.version);
     (enabled, declared)
 }
 
@@ -552,7 +553,7 @@ pub(crate) fn pair_instance_with_others(args: PairInstanceWithOthersArgs<'_>) {
                 // The skipped block renders the full display; the notice
                 // keeps its own IUSE-only rendering.
                 let skipped_use = skipped_update_use_display_for(
-                    input.repos,
+                    input.gate,
                     input.config,
                     &c.category,
                     &c.package,
@@ -583,7 +584,7 @@ pub(crate) fn pair_instance_with_others(args: PairInstanceWithOthersArgs<'_>) {
                     (p.parent_cpv.clone(), false)
                 };
                 let consumer_use = skipped_consumer_use_display(
-                    input.repos,
+                    input.gate,
                     input.root,
                     input.config,
                     &parent_cpv_disp,

@@ -3,12 +3,12 @@
 use crate::*;
 
 pub(crate) struct UseUnsatParentRowArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) display_atom: &'a str,
     pub(crate) owner: Option<&'a (String, String)>,
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// The parent-conditional row: when a `[use]`-dep is `opt?`-conditional
@@ -21,12 +21,12 @@ pub(crate) fn use_unsat_parent_row(
     args: UseUnsatParentRowArgs<'_>,
 ) -> Option<(String, Vec<String>)> {
     let UseUnsatParentRowArgs {
-        repos,
         root,
         entries,
         display_atom,
         owner,
         config,
+        gate,
     } = args;
     let owner = owner?;
     let unevaluated = portage_dep::parse_atom(display_atom)?;
@@ -34,12 +34,12 @@ pub(crate) fn use_unsat_parent_row(
     // ones through the vdb-backed twin (display-only; the repair path
     // keeps the merge-bound shape).
     let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
-        parent_use_state(repos, entries, owner, config)
-            .or_else(|| installed_parent_use_state(repos, root, entries, owner, config))?;
+        parent_use_state(gate, entries, owner, config)
+            .or_else(|| installed_parent_use_state(gate, root, entries, owner, config))?;
     let evaluated_atom = portage_dep::evaluate_atom_conditionals(display_atom, &parent_use)?;
     let evaluated = portage_dep::parse_atom(&evaluated_atom)?;
     let (_child, involved) = viable_parent_flip_targets(ViableParentFlipTargetsArgs {
-        repos,
+        gate,
         unevaluated: &unevaluated,
         evaluated: &evaluated,
         unevaluated_atom: display_atom,
@@ -103,13 +103,13 @@ pub(crate) fn use_unsat_parent_row(
 }
 
 pub(crate) struct UseUnsatCandidatesForAtomArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) display_atom: &'a str,
     pub(crate) evaluated_atom: &'a str,
     pub(crate) owner: Option<&'a (String, String)>,
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// The "no ebuilds built with USE flags to satisfy" candidate scan:
@@ -130,18 +130,20 @@ pub(crate) fn use_unsat_candidates_for_atom(
     args: UseUnsatCandidatesForAtomArgs<'_>,
 ) -> Option<Vec<(String, Vec<String>)>> {
     let UseUnsatCandidatesForAtomArgs {
-        repos,
         root,
         entries,
         display_atom,
         evaluated_atom,
         owner,
         config,
+        gate,
     } = args;
     let display = portage_dep::parse_atom(display_atom)?;
     display.use_deps.as_deref().filter(|d| !d.is_empty())?;
     let evaluated = portage_dep::parse_atom(evaluated_atom)?;
-    let candidates = list_candidates(repos, &display.category, &display.package).ok()?;
+    let candidates = gate
+        .repo_candidates(&display.category, &display.package)
+        .ok()?;
 
     let strs: Vec<String> = candidates
         .iter()
@@ -302,12 +304,12 @@ pub(crate) fn use_unsat_candidates_for_atom(
         // `Change USE:` candidate, then the requirer's row when conditional.
         let mut rows = vec![change_rows.remove(0)];
         if let Some(parent_row) = use_unsat_parent_row(UseUnsatParentRowArgs {
-            repos,
             root,
             entries,
             display_atom,
             owner,
             config,
+            gate,
         }) {
             rows.push(parent_row);
         }

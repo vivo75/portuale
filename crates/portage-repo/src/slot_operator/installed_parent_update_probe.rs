@@ -7,7 +7,6 @@ use crate::*;
 /// Arguments of [`installed_parent_update_probe`].
 pub(crate) struct InstalledParentUpdateProbeArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) with_bdeps: bool,
@@ -26,6 +25,7 @@ pub(crate) struct InstalledParentUpdateProbeArgs<'a> {
     pub(crate) top_level_atoms: &'a HashSet<String>,
     /// Update mode: without it an installed parent's dep wants no update.
     pub(crate) update: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// The installed `(category, package)` consumers and children joining the
@@ -45,7 +45,6 @@ pub(crate) fn installed_parent_update_probe(
 ) -> InstalledParentUpdateProbe {
     let InstalledParentUpdateProbeArgs {
         root,
-        repos,
         config,
         entries,
         with_bdeps,
@@ -56,6 +55,7 @@ pub(crate) fn installed_parent_update_probe(
         walked,
         top_level_atoms,
         update,
+        gate,
     } = args;
     // Portage: `want_update_probe = dep.want_update or not dep.parent.installed`.
     if !update {
@@ -84,7 +84,7 @@ pub(crate) fn installed_parent_update_probe(
         if parent_slot.is_empty() {
             continue;
         }
-        let Ok(tree) = list_candidates(repos, &parent.0, &parent.1) else {
+        let Ok(tree) = gate.repo_candidates(&parent.0, &parent.1) else {
             continue;
         };
         // The ebuild replacements in the installed slot, not older than it.
@@ -152,7 +152,6 @@ pub(crate) fn installed_parent_update_probe(
             }
             if child_has_slot_update(ChildUpdateArgs {
                 root,
-                repos,
                 config,
                 entries,
                 parent: &parent,
@@ -166,6 +165,7 @@ pub(crate) fn installed_parent_update_probe(
                 installed,
                 live,
                 walked,
+                gate,
             }) {
                 // Portage files both filings: the installed parent's
                 // replacement atom and the installed child's.

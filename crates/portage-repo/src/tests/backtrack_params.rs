@@ -40,12 +40,12 @@ fn slot_conflict_mask_choices_groups_missed_update_siblings() {
         instances: vec![instance("2"), instance("1")],
     };
     let choices = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
-        repos: &repos,
         excluded: &[],
         params: &BacktrackParams::default(),
         slot_pullers: &pullers,
         sc: &sc,
         config: &config,
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(choices.len(), 2);
     assert_eq!(
@@ -156,12 +156,12 @@ fn slot_conflict_mask_choices_skips_an_already_masked_sibling() {
         }],
     );
     let choices = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
-        repos: &repos,
         excluded: &[],
         params: &params,
         slot_pullers: &pullers,
         sc: &sc,
         config: &config,
+        gate: crate::test_gate(&repos),
     });
     assert!(!choices.is_empty());
     assert!(

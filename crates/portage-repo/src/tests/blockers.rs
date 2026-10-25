@@ -1021,7 +1021,6 @@ fn unwalked_scan_skips_without_merge_bound_entries_and_blocker_free_owners() {
     };
     let mut pending = Vec::new();
     collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
-        repos: &[],
         root: &dir,
         config: &config,
         dynamic_deps: false,
@@ -1031,6 +1030,7 @@ fn unwalked_scan_skips_without_merge_bound_entries_and_blocker_free_owners() {
         entries: &[installed],
         pending_blockers: &mut pending,
         installed_meta_memo: &mut memo,
+        gate: crate::test_gate(&[]),
     });
     assert!(
         pending.is_empty(),
@@ -1045,7 +1045,6 @@ fn unwalked_scan_skips_without_merge_bound_entries_and_blocker_free_owners() {
     };
     let mut pending = Vec::new();
     collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
-        repos: &[],
         root: &dir,
         config: &config,
         dynamic_deps: false,
@@ -1055,6 +1054,7 @@ fn unwalked_scan_skips_without_merge_bound_entries_and_blocker_free_owners() {
         entries: &[upgrade],
         pending_blockers: &mut pending,
         installed_meta_memo: &mut memo,
+        gate: crate::test_gate(&[]),
     });
     assert_eq!(
         pending.len(),

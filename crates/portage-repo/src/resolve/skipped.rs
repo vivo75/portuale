@@ -68,7 +68,6 @@ pub enum SkippedDepDisclosure {
 
 /// Arguments of [`missing_dep_full_row`].
 pub(crate) struct MissingDepFullRowArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) entries: &'a [GraphEntry],
@@ -79,6 +78,7 @@ pub(crate) struct MissingDepFullRowArgs<'a> {
     pub(crate) sub: &'a str,
     pub(crate) repo: &'a str,
     pub(crate) atom: &'a str,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Builds the full-form row for the masked higher version `ver` of `cat/pkg`
@@ -87,7 +87,6 @@ pub(crate) fn missing_dep_full_row(
     args: MissingDepFullRowArgs<'_>,
 ) -> Option<SkippedMissingDepFull> {
     let MissingDepFullRowArgs {
-        repos,
         root,
         config,
         entries,
@@ -98,6 +97,7 @@ pub(crate) fn missing_dep_full_row(
         sub,
         repo,
         atom,
+        gate,
     } = args;
     // The tracker's slot match: merge-bound entry first, else installed.
     let mut selected_merge: Option<(&str, &str, &str, &str)> = None;
@@ -163,7 +163,7 @@ pub(crate) fn missing_dep_full_row(
         format!("({cat}/{pkg}-{ver}:{slot}/{sub}::{repo}, ebuild scheduled for merge)");
     // The chain is the single skipped node (not in the settled graph).
     let chain = vec![(format!("{cat}/{pkg}-{ver}::{repo}"), "ebuild".to_string())];
-    let dep = match masked_candidates_for_atom(repos, atom, config) {
+    let dep = match masked_candidates_for_atom(gate, atom, config) {
         Some(masked) => {
             // drop-ok: fallback to known cat/pkg, not dropped
             let (acat, apkg) = portage_dep::parse_atom(atom)
@@ -295,7 +295,7 @@ pub fn group_skipped_updates(rows: &[SkippedUpdate]) -> Vec<Vec<&SkippedUpdate>>
 /// state still masks: then the missed update renders in the abbreviated tail.
 // Portage: depgraph.py, _show_unsatisfied_dep (check_backtrack probe)
 pub(crate) fn backtrack_masked_match(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     params: &BacktrackParams,
     atom: &str,
 ) -> bool {
@@ -311,7 +311,7 @@ pub(crate) fn backtrack_masked_match(
             if c != *cat || p != *pkg {
                 continue;
             }
-            let (_, _, slot) = slot_conflict_meta(repos, &c, &p, &ver);
+            let (_, _, slot) = slot_conflict_meta(gate, &c, &p, &ver);
             let probe = if slot.is_empty() {
                 format!("{c}/{p}-{ver}")
             } else {

@@ -433,13 +433,13 @@ pub(crate) fn flatten_dep_string(args: FlattenDepStringArgs<'_>) -> ControlFlow<
                 });
                 let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(queued);
                 promote_tied_alternative(PromoteTiedAlternativeArgs {
-                    repos: &ctx.repos,
                     config,
                     root: grp_root,
                     entries: entries_view,
                     constraints: union_constraints,
                     alts,
                     queued: queued_view,
+                    gate: ctx.gate(),
                 })
             },
         },
@@ -478,7 +478,6 @@ pub(crate) fn flatten_dep_string(args: FlattenDepStringArgs<'_>) -> ControlFlow<
             });
             let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(queued);
             disjunction_preference(DisjunctionPreferenceArgs {
-                repos: &ctx.repos,
                 config,
                 root: grp_root,
                 entries: entries_view,
@@ -489,6 +488,7 @@ pub(crate) fn flatten_dep_string(args: FlattenDepStringArgs<'_>) -> ControlFlow<
                 atoms,
                 queued: queued_view,
                 update: ctx.update,
+                gate: ctx.gate(),
                 gate_entries: entries,
                 gate_queued: queued,
             })
@@ -538,13 +538,13 @@ pub(crate) fn filter_root_deps(args: FilterRootDepsArgs<'_>) -> FilterRootDepsOu
             root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
                 metadata,
                 use_flags,
-                repos: &ctx.repos,
                 config,
                 running_root: root,
                 dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
                 empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                     metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
                 ),
+                gate: ctx.gate(),
             })
         })
         .unwrap_or_default();
@@ -557,13 +557,13 @@ pub(crate) fn filter_root_deps(args: FilterRootDepsArgs<'_>) -> FilterRootDepsOu
             unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
                 metadata,
                 use_flags,
-                repos: &ctx.repos,
                 config,
                 running_root: root,
                 dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
                 empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                     metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
                 ),
+                gate: ctx.gate(),
             })
         })
         .unwrap_or_default();
@@ -587,13 +587,13 @@ pub(crate) fn filter_root_deps(args: FilterRootDepsArgs<'_>) -> FilterRootDepsOu
         for atom_str in &root_deps_unsatisfied {
             state.entries.extend(resolve_root_deps_build_entries(
                 ResolveRootDepsBuildEntriesArgs {
-                    repos: &ctx.repos,
                     running_root,
                     atom_str,
                     config,
                     owner: (*key).clone(),
                     seen: &mut state.root_deps_build_seen,
                     local_binpkg: &ctx.local_binpkg,
+                    gate: ctx.gate(),
                 },
             ));
         }

@@ -101,12 +101,12 @@ pub(crate) struct RevDepPin {
 /// Arguments of [`rev_dep_pin_holdable`].
 pub(crate) struct RevDepPinHoldableArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) cp: &'a (String, String),
     pub(crate) pin: &'a str,
     pub(crate) pin_slot: Option<&'a str>,
     pub(crate) upgraded_slots: &'a std::collections::HashSet<String>,
     pub(crate) hard_atoms: &'a [String],
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Whether `pin` on `cp` still holds alongside every hard requirement. A
@@ -116,12 +116,12 @@ pub(crate) struct RevDepPinHoldableArgs<'a> {
 pub(crate) fn rev_dep_pin_holdable(args: RevDepPinHoldableArgs<'_>) -> bool {
     let RevDepPinHoldableArgs {
         root,
-        repos,
         cp,
         pin,
         pin_slot,
         upgraded_slots,
         hard_atoms,
+        gate,
     } = args;
     // drop-ok: enforce
     if portage_dep::parse_atom(pin).is_none() {
@@ -136,7 +136,7 @@ pub(crate) fn rev_dep_pin_holdable(args: RevDepPinHoldableArgs<'_>) -> bool {
             None => return true,
         }
     }
-    let Ok(cands) = list_candidates(repos, &cp.0, &cp.1) else {
+    let Ok(cands) = gate.repo_candidates(&cp.0, &cp.1) else {
         return true;
     };
     let constrained: Vec<&String> = upgraded_slots
@@ -220,13 +220,13 @@ pub(crate) struct UseBreakSource {
 /// The decided merge USE/IUSE for `category/package-version`. `None` when no
 /// readable candidate exists; callers fall back to ignoring USE.
 pub(crate) fn merge_use_state(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     config: &portage_profile::Config,
     category: &str,
     package: &str,
     version: &str,
 ) -> Option<(HashSet<String>, HashSet<String>)> {
-    let cands = list_candidates(repos, category, package).ok()?;
+    let cands = gate.repo_candidates(category, package).ok()?;
     let cand = cands.iter().find(|c| c.version == version)?;
     let (iuse, use_flags) = candidate_iuse_and_use(cand, category, package, config)?;
     Some(((*use_flags).clone(), iuse))
@@ -235,11 +235,11 @@ pub(crate) fn merge_use_state(
 /// Arguments of [`merge_use_changed_vs_installed`].
 pub(crate) struct MergeUseChangedVsInstalledArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) version: &'a str,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Portage's USE-change trigger: merge IUSE or enabled-USE∩IUSE differs from
@@ -250,13 +250,13 @@ pub(crate) fn merge_use_changed_vs_installed(
 ) -> Option<bool> {
     let MergeUseChangedVsInstalledArgs {
         root,
-        repos,
         config,
         category,
         package,
         version,
+        gate,
     } = args;
-    let (merge_use, merge_iuse) = merge_use_state(repos, config, category, package, version)?;
+    let (merge_use, merge_iuse) = merge_use_state(gate, config, category, package, version)?;
     let inst_use = read_vdb_flag_set(root, category, package, version, "USE");
     let inst_iuse = read_vdb_flag_set(root, category, package, version, "IUSE");
     if merge_iuse != inst_iuse {
@@ -268,7 +268,6 @@ pub(crate) fn merge_use_changed_vs_installed(
 }
 /// Arguments of [`reverse_dependency_constraints`].
 pub(crate) struct ReverseDependencyConstraintsArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) with_bdeps: bool,
@@ -281,6 +280,7 @@ pub(crate) struct ReverseDependencyConstraintsArgs<'a> {
     pub(crate) world_reachable: &'a HashSet<(String, String)>,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) complete: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// (constrained cp, pin atom, pinning consumer) already emitted this pass.
@@ -300,7 +300,6 @@ pub(crate) fn reverse_dependency_constraints(
     args: ReverseDependencyConstraintsArgs<'_>,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
     let ReverseDependencyConstraintsArgs {
-        repos,
         root,
         entries,
         with_bdeps,
@@ -313,6 +312,7 @@ pub(crate) fn reverse_dependency_constraints(
         world_reachable,
         config,
         complete,
+        gate,
     } = args;
     // (`cat/pkg`, slot) -> candidate string this run would install.
     let mut upgrading: HashMap<((String, String), String), (String, bool)> = HashMap::new();
@@ -346,14 +346,14 @@ pub(crate) fn reverse_dependency_constraints(
                 ..
             } = &e.outcome
             && let Some((merge_use, merge_iuse)) =
-                merge_use_state(repos, config, &e.category, &e.package, version)
+                merge_use_state(gate, config, &e.category, &e.package, version)
             && merge_use_changed_vs_installed(MergeUseChangedVsInstalledArgs {
                 root,
-                repos,
                 config,
                 category: &e.category,
                 package: &e.package,
                 version,
+                gate,
             })
             .unwrap_or(false)
         {
@@ -429,7 +429,6 @@ pub(crate) fn reverse_dependency_constraints(
             world_reachable,
             excluded,
             root,
-            repos,
             dep_keys,
             dynamic_deps,
             ignore_built_slot_operator_deps,
@@ -441,6 +440,7 @@ pub(crate) fn reverse_dependency_constraints(
             dropped: &mut dropped,
             hard_want,
             enforced: &mut enforced,
+            gate,
         })
         .is_break()
         {
@@ -475,7 +475,6 @@ pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     pub(crate) world_reachable: &'a HashSet<(String, String)>,
     pub(crate) excluded: &'a [String],
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) dep_keys: &'a [&'a str],
     pub(crate) dynamic_deps: bool,
     pub(crate) ignore_built_slot_operator_deps: bool,
@@ -487,6 +486,7 @@ pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     pub(crate) dropped: &'a mut Vec<RevDepPin>,
     pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) enforced: &'a mut Vec<RevDepPin>,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Collect the reverse-dependency pins one installed consumer places on the packages being upgraded.
@@ -501,7 +501,6 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         world_reachable,
         excluded,
         root,
-        repos,
         dep_keys,
         dynamic_deps,
         ignore_built_slot_operator_deps,
@@ -513,6 +512,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         dropped,
         hard_want,
         enforced,
+        gate,
     } = args;
     let consumer_cp = (consumer.category.clone(), consumer.package.clone());
     if being_replaced.contains(&consumer_cp) || being_removed.contains(&consumer_cp) {
@@ -547,7 +547,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
     // An installed consumer's *effective* deps: live metadata when still in
     // the tree, the raw vdb record otherwise.
     let live = live_metadata_for_installed(
-        repos,
+        gate.repos,
         root,
         &consumer.category,
         &consumer.package,
@@ -594,8 +594,8 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
                 dropped,
                 hard_want,
                 root,
-                repos,
                 enforced,
+                gate,
             })
             .is_break()
             {
@@ -622,8 +622,8 @@ pub(crate) struct ConstraintsFromAtomArgs<'a> {
     pub(crate) dropped: &'a mut Vec<RevDepPin>,
     pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) enforced: &'a mut Vec<RevDepPin>,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Collect the reverse-dependency pins one dependency atom of a consumer places on the packages being upgraded.
@@ -641,8 +641,8 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         dropped,
         hard_want,
         root,
-        repos,
         enforced,
+        gate,
     } = args;
     let Some(atom) = parse_dep_atom(atom_str, "rev_dep") else {
         return ControlFlow::Break(());
@@ -786,12 +786,12 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         slots.insert(slot.clone());
         rev_dep_pin_holdable(RevDepPinHoldableArgs {
             root,
-            repos,
             cp: &cp,
             pin: &pin.atom,
             pin_slot,
             upgraded_slots: &slots,
             hard_atoms: hard,
+            gate,
         })
     });
     // A holdable plain pin from a build-time key is ignored (optional

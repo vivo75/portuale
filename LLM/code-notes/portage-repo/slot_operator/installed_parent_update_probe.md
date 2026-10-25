@@ -10,3 +10,6 @@ The update probe for an installed parent (the `_slot_operator_replace_installed`
 
 ## fn arg_pins_installed
 - Stands in for Portage's per-dep `want_update`: `=dev-libs/p491con-1` matches the installed instance but no strictly newer replacement, so the subtree wants no update. Same-version ebuild replacements do not count (a pin on the installed version still allows a reinstall).
+
+## gate threading (#571)
+- `InstalledParentUpdateProbeArgs` and the `ChildUpdateArgs` site carry the gate.

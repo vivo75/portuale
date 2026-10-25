@@ -390,19 +390,18 @@ fn resolve_target_scope_group(
             empty_groups_always_true,
             tie_break: &mut |alts: &[Vec<String>]| {
                 promote_tied_alternative(PromoteTiedAlternativeArgs {
-                    repos: &ctx.repos,
                     config,
                     root: grp_root,
                     entries: entries_view,
                     constraints: union_constraints,
                     alts,
                     queued: queued_view,
+                    gate: ctx.gate(),
                 })
             },
         },
         &mut |atoms: &[String]| {
             disjunction_preference(DisjunctionPreferenceArgs {
-                repos: &ctx.repos,
                 config,
                 root: grp_root,
                 entries: entries_view,
@@ -413,6 +412,7 @@ fn resolve_target_scope_group(
                 atoms,
                 queued: queued_view,
                 update: ctx.update,
+                gate: ctx.gate(),
                 gate_entries: &state.entries,
                 gate_queued: queued,
             })
@@ -579,13 +579,13 @@ fn resolve_installed_group(args: ResolveInstalledGroupArgs<'_>) -> ControlFlow<(
                 });
                 let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(queued);
                 promote_tied_alternative(PromoteTiedAlternativeArgs {
-                    repos: &ctx.repos,
                     config,
                     root: grp_root,
                     entries: entries_view,
                     constraints: disj_constraints,
                     alts,
                     queued: queued_view,
+                    gate: ctx.gate(),
                 })
             },
         },
@@ -614,7 +614,6 @@ fn resolve_installed_group(args: ResolveInstalledGroupArgs<'_>) -> ControlFlow<(
             });
             let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(queued);
             disjunction_preference(DisjunctionPreferenceArgs {
-                repos: &ctx.repos,
                 config,
                 root: grp_root,
                 entries: entries_view,
@@ -625,6 +624,7 @@ fn resolve_installed_group(args: ResolveInstalledGroupArgs<'_>) -> ControlFlow<(
                 atoms,
                 queued: queued_view,
                 update: ctx.update,
+                gate: ctx.gate(),
                 gate_entries: &state.entries,
                 gate_queued: queued,
             })
@@ -689,13 +689,13 @@ fn enqueue_chosen_atoms(args: EnqueueChosenAtomsArgs<'_>) {
                 for atom_str in root_deps_unsatisfied {
                     state.entries.extend(resolve_root_deps_build_entries(
                         ResolveRootDepsBuildEntriesArgs {
-                            repos: &ctx.repos,
                             running_root,
                             atom_str,
                             config,
                             owner: entry.owner.clone(),
                             seen: &mut state.root_deps_build_seen,
                             local_binpkg: &ctx.local_binpkg,
+                            gate: ctx.gate(),
                         },
                     ));
                 }
@@ -768,13 +768,13 @@ fn enqueue_chosen_atoms(args: EnqueueChosenAtomsArgs<'_>) {
                 for atom_str in root_deps_unsatisfied {
                     state.entries.extend(resolve_root_deps_build_entries(
                         ResolveRootDepsBuildEntriesArgs {
-                            repos: &ctx.repos,
                             running_root,
                             atom_str,
                             config,
                             owner: entry.owner.clone(),
                             seen: &mut state.root_deps_build_seen,
                             local_binpkg: &ctx.local_binpkg,
+                            gate: ctx.gate(),
                         },
                     ));
                 }

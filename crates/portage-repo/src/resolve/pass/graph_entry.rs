@@ -110,7 +110,7 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
     if bp.autounmask_suggest_license {
         let missing = missing_licenses(resolved, &key.0, &key.1, &resolved_cpv_str, config);
         if !missing.is_empty() {
-            let all = list_candidates(&ctx.repos, &key.0, &key.1).unwrap_or_default();
+            let all = ctx.repo_candidates(&key.0, &key.1).unwrap_or_default();
             state.autounmask_license_changes.push(AutounmaskChange {
                 atom: check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
                     resolved,

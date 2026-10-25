@@ -23,3 +23,6 @@ Slot-operator update-force and slot-change probes.
 
 ## struct SlotOperatorSlotChangeProbeArgs::masked
 - #212 (v2 `#24c`): every merge-bound binary the arm finds stale -- `(category, package, version)` triples for `collect_feedback`'s `slot_operator_mask_built` records (Portage `_slot_change_backtrack`, `depgraph.py:2381-2398`).
+
+## gate threading (#571)
+- All three arg structs carry the gate into `ebuild_visible_at`, `slot_changed` and `tree_metadata_for`.

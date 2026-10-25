@@ -16,8 +16,9 @@ fn masked_candidates_for_atom_reports_masked_only_matches() {
     })
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("repos");
-    let masked = masked_candidates_for_atom(&repos, "dev-libs/maskeddep", &config)
-        .expect("package.mask'd dep discloses");
+    let masked =
+        masked_candidates_for_atom(crate::test_gate(&repos), "dev-libs/maskeddep", &config)
+            .expect("package.mask'd dep discloses");
     assert_eq!(
         masked,
         vec![(
@@ -25,7 +26,7 @@ fn masked_candidates_for_atom_reports_masked_only_matches() {
             vec!["package.mask".to_string()]
         )]
     );
-    let kw = masked_candidates_for_atom(&repos, "dev-libs/kwmaskeddep", &config)
+    let kw = masked_candidates_for_atom(crate::test_gate(&repos), "dev-libs/kwmaskeddep", &config)
         .expect("keyword-masked dep discloses");
     assert_eq!(
         kw,
@@ -37,13 +38,17 @@ fn masked_candidates_for_atom_reports_masked_only_matches() {
     // A visible candidate silences the report (USE-mismatch takes Portage's
     // other paths).
     assert_eq!(
-        masked_candidates_for_atom(&repos, "dev-libs/newpkg", &config),
+        masked_candidates_for_atom(crate::test_gate(&repos), "dev-libs/newpkg", &config),
         None
     );
     // Nothing matching by version at all is also silent (Portage's plain
     // "no ebuilds" case).
     assert_eq!(
-        masked_candidates_for_atom(&repos, "dev-libs/doesnotexist-anywhere", &config),
+        masked_candidates_for_atom(
+            crate::test_gate(&repos),
+            "dev-libs/doesnotexist-anywhere",
+            &config
+        ),
         None
     );
 }
@@ -102,7 +107,7 @@ fn invalid_use_conditional_mask_matches_portage_on_all_three_fixture_cases() {
     assert!(invalid_dep_reasons(g, "dev-libs", "gpcyclea", &config).is_empty());
     assert!(is_visible(g, "dev-libs", "gpcyclea", &config));
     // End to end: the masked-candidates disclosure carries the reason.
-    let masked = masked_candidates_for_atom(&repos, "dev-libs/fucyclec", &config)
+    let masked = masked_candidates_for_atom(crate::test_gate(&repos), "dev-libs/fucyclec", &config)
         .expect("invalid dep discloses");
     assert_eq!(
         masked,
@@ -382,10 +387,10 @@ fn atom_all_use_unmasked_is_true_for_the_unsatuseor_alternative() {
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
     assert!(atom_all_use_unmasked(
-        &repos,
         "dev-libs/unsatusealt[unsatuseorflag]",
         &config,
-        &[]
+        &[],
+        crate::test_gate(&repos),
     ));
 }
 
@@ -406,8 +411,18 @@ fn atom_all_use_unmasked_is_false_when_the_violated_flag_is_in_use_mask() {
     .expect("fixture config resolves");
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
     // Only the masked 2.0 probes false; 1.0 keeps its +x default.
-    let masked = atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-2.0[x]", &config, &[]);
-    let unmasked = atom_all_use_unmasked(&repos, "=dev-libs/slotusetarget-1.0[x]", &config, &[]);
+    let masked = atom_all_use_unmasked(
+        "=dev-libs/slotusetarget-2.0[x]",
+        &config,
+        &[],
+        crate::test_gate(&repos),
+    );
+    let unmasked = atom_all_use_unmasked(
+        "=dev-libs/slotusetarget-1.0[x]",
+        &config,
+        &[],
+        crate::test_gate(&repos),
+    );
     assert!(!masked, "mask-affected x on 2.0 must demote to other");
     assert!(unmasked, "x default-enabled on 1.0 stays selectable");
 }
@@ -430,12 +445,12 @@ fn highest_available_candidate_ignoring_use_picks_the_use_unsatisfiable_ebuild()
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
     let (candidate_str, keywords, iuse, use_flags, slot) =
         highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
-            repos: &repos,
             atom_str: "dev-libs/unsatusealt[unsatuseorflag]",
             category: "dev-libs",
             package: "unsatusealt",
             config: &config,
             extra_constraints: &[],
+            gate: crate::test_gate(&repos),
         })
         .expect("an ignoring-use candidate exists");
     assert_eq!(
@@ -449,12 +464,12 @@ fn highest_available_candidate_ignoring_use_picks_the_use_unsatisfiable_ebuild()
 
     assert!(
         highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
-            repos: &repos,
             atom_str: "dev-libs/doesnotexist-unsatuseor",
             category: "dev-libs",
             package: "doesnotexist-unsatuseor",
             config: &config,
-            extra_constraints: &[]
+            extra_constraints: &[],
+            gate: crate::test_gate(&repos),
         })
         .is_none()
     );
@@ -478,12 +493,12 @@ fn highest_available_candidate_ignoring_use_honours_extra_constraints() {
     let repos = find_repos(&root).expect("fixture repos.conf resolves");
     let (unconstrained, ..) =
         highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
-            repos: &repos,
             atom_str: "dev-libs/slotusetarget[x]",
             category: "dev-libs",
             package: "slotusetarget",
             config: &config,
             extra_constraints: &[],
+            gate: crate::test_gate(&repos),
         })
         .expect("an ignoring-use candidate exists");
     assert_eq!(unconstrained, "dev-libs/slotusetarget-2.0:0/0::testrepo");
@@ -491,12 +506,12 @@ fn highest_available_candidate_ignoring_use_honours_extra_constraints() {
     let constraints = vec!["!=dev-libs/slotusetarget-2.0".to_string()];
     let (constrained, ..) =
         highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
-            repos: &repos,
             atom_str: "dev-libs/slotusetarget[x]",
             category: "dev-libs",
             package: "slotusetarget",
             config: &config,
             extra_constraints: &constraints,
+            gate: crate::test_gate(&repos),
         })
         .expect("an ignoring-use candidate exists under the constraint");
     assert_eq!(
@@ -555,8 +570,8 @@ fn binary_masked_rows_report_changed_deps_rejections() {
         gate: BinaryRespectUseGate {
             changed_deps: Some(BinaryChangedDepsGate {
                 root: &root,
-                repos: &repos,
                 with_bdeps: false,
+                gate: crate::test_gate(&repos),
             }),
             ..no_gate()
         },
@@ -605,8 +620,8 @@ fn binary_masked_rows_prefer_respect_use_over_changed_deps() {
             ebuilds: &[],
             changed_deps: Some(BinaryChangedDepsGate {
                 root: &root,
-                repos: &repos,
                 with_bdeps: false,
+                gate: crate::test_gate(&repos),
             }),
         },
     })

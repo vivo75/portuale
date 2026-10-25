@@ -51,7 +51,7 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
         // Match with the resolved version's own sub-slot: a built slot-operator
         // atom (`cat/pkg:0/2=`) carries an explicit sub-slot and rejects a
         // `:slot`-only string even when the sub-slots agree.
-        let existing_sub = slot_conflict_meta(&ctx.repos, &key.0, &key.1, &existing_version).0;
+        let existing_sub = slot_conflict_meta(ctx.gate(), &key.0, &key.1, &existing_version).0;
         let existing_str = if existing_sub.is_empty() {
             // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
             format!("{}/{}-{existing_version}:{slot}", key.0, key.1)
@@ -69,12 +69,12 @@ pub(crate) fn step_existing_slot(args: StepExistingSlotArgs<'_>) -> ControlFlow<
                 && atom.sub_slot.is_none()
                 && built_equals_shift_unrebuildable(BuiltEqualsShiftUnrebuildableArgs {
                     root: ctx.root,
-                    repos: &ctx.repos,
                     category: &key.0,
                     package: &key.1,
                     existing_sub: &existing_sub,
                     pullers: &state.slot_pullers,
                     excluded: ctx.excluded,
+                    gate: ctx.gate(),
                 }));
         if existing_slot_unsatisfied(ExistingSlotUnsatisfiedArgs {
             satisfied,
@@ -186,7 +186,6 @@ pub(crate) fn existing_slot_unsatisfied(args: ExistingSlotUnsatisfiedArgs<'_>) -
             record_slot_conflict(
                 &mut state.slot_conflicts,
                 build_slot_conflict(BuildSlotConflictArgs {
-                    repos: &ctx.repos,
                     config,
                     root: ctx.root,
                     category: &key.0,
@@ -197,6 +196,7 @@ pub(crate) fn existing_slot_unsatisfied(args: ExistingSlotUnsatisfiedArgs<'_>) -
                     current_version: version,
                     slot_pullers: &state.slot_pullers,
                     installed_side: None,
+                    gate: ctx.gate(),
                 }),
             );
         }
@@ -237,22 +237,21 @@ pub(crate) fn existing_slot_slot_operator_bind(args: ExistingSlotSlotOperatorBin
     if atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
         && atom.slot.is_none()
         && atom.sub_slot.is_none()
-        && let Some((inst_ver, _)) = built_equals_binding(ctx.root, &ctx.repos, &key.0, &key.1)
+        && let Some((inst_ver, _)) = built_equals_binding(ctx.root, &key.0, &key.1, ctx.gate())
         && inst_ver != existing_version
         && built_equals_shift_unrebuildable(BuiltEqualsShiftUnrebuildableArgs {
             root: ctx.root,
-            repos: &ctx.repos,
             category: &key.0,
             package: &key.1,
             existing_sub,
             pullers: &state.slot_pullers,
             excluded: ctx.excluded,
+            gate: ctx.gate(),
         })
     {
         record_slot_conflict(
             &mut state.slot_conflicts,
             build_slot_conflict(BuildSlotConflictArgs {
-                repos: &ctx.repos,
                 config,
                 root: ctx.root,
                 category: &key.0,
@@ -263,6 +262,7 @@ pub(crate) fn existing_slot_slot_operator_bind(args: ExistingSlotSlotOperatorBin
                 current_version: &inst_ver,
                 slot_pullers: &state.slot_pullers,
                 installed_side: Some(InstalledSide::Current),
+                gate: ctx.gate(),
             }),
         );
     }
@@ -303,7 +303,7 @@ pub(crate) fn existing_slot_version_mismatch(args: ExistingSlotVersionMismatchAr
     if version != existing_version
         && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
     {
-        let all_cands = list_candidates(&ctx.repos, &key.0, &key.1).unwrap_or_default();
+        let all_cands = ctx.repo_candidates(&key.0, &key.1).unwrap_or_default();
         if let Some(existing_cand) = all_cands.iter().find(|c| c.version == existing_version) {
             let declared: HashSet<String> = existing_cand
                 .iuse
@@ -329,7 +329,6 @@ pub(crate) fn existing_slot_version_mismatch(args: ExistingSlotVersionMismatchAr
                 record_slot_conflict(
                     &mut state.slot_conflicts,
                     build_slot_conflict(BuildSlotConflictArgs {
-                        repos: &ctx.repos,
                         config,
                         root: ctx.root,
                         category: &key.0,
@@ -340,6 +339,7 @@ pub(crate) fn existing_slot_version_mismatch(args: ExistingSlotVersionMismatchAr
                         current_version: version,
                         slot_pullers: &state.slot_pullers,
                         installed_side: None,
+                        gate: ctx.gate(),
                     }),
                 );
             }
@@ -378,7 +378,7 @@ pub(crate) fn existing_slot_use_flip_suggestion(args: ExistingSlotUseFlipSuggest
     if bp.autounmask_suggest_use
         && let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty())
     {
-        let all_ebuild_cands = list_candidates(&ctx.repos, &key.0, &key.1).unwrap_or_default();
+        let all_ebuild_cands = ctx.repo_candidates(&key.0, &key.1).unwrap_or_default();
         if let Some(existing_cand) = all_ebuild_cands
             .iter()
             .find(|c| c.version == existing_version)

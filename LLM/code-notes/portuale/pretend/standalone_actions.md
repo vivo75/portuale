@@ -15,3 +15,6 @@ The standalone actions: --resume, --config, --search, --check-news, --info, --cl
 ## fn dispatch_maintenance
 - `--clean`: a standalone removal action -- keep only the newest version per slot.
 - `--rage-clean`: a fast `--unmerge` (identical `--pretend` display).
+
+## `--search` dispatch (#571)
+- Forwards `config_root` into `RunSearchArgs` for the allow-list.

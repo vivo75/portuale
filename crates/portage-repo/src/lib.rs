@@ -44,6 +44,69 @@ mod user_patches;
 mod visibility;
 mod visibility_use_flip;
 
+/// A [`CategoryGate`](crate::CategoryGate) over `repos` for unit tests: the allow-list is the
+/// union of their ebuild-bearing category dirs. That matches what their
+/// `profiles/categories` files list everywhere except the deliberate
+/// #571 omissions (`repo-p571` leaves `p571-hidden`/`p571-shared`
+/// unlisted), so gating changes nothing for existing tests — and tests
+/// that pin unlisted-category behaviour build their own gate from
+/// [`repo_categories`](crate::repo_categories) instead. Backing is
+/// leaked: one tiny allocation per call site, freed at process exit.
+#[cfg(test)]
+pub(crate) fn test_gate(repos: &[crate::RepoConfig]) -> crate::CategoryGate<'static> {
+    crate::CategoryGate {
+        repos: Box::leak(Box::new(repos.to_vec())),
+        categories: Box::leak(Box::new(test_categories(repos))),
+        config_root: Box::leak(Box::new(std::path::PathBuf::from("/"))),
+        warned: Box::leak(Box::new(std::cell::RefCell::new(
+            std::collections::HashSet::new(),
+        ))),
+    }
+}
+
+/// The allow-list a [`test_gate`] gates on, as an owned set: the union of
+/// `repos`' ebuild-bearing category dirs.
+#[cfg(test)]
+pub(crate) fn test_categories(repos: &[crate::RepoConfig]) -> std::collections::BTreeSet<String> {
+    fn has_ebuild(pkg_dir: &std::path::Path) -> bool {
+        let Ok(entries) = portage_util::read_dir_entries(pkg_dir) else {
+            return false;
+        };
+        entries.into_iter().any(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.ends_with(".ebuild"))
+        })
+    }
+    let mut categories = std::collections::BTreeSet::new();
+    for repo in repos {
+        let Ok(cats) = portage_util::read_dir_entries(&repo.location) else {
+            continue;
+        };
+        for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
+            let name = cat.file_name().to_string_lossy().to_string();
+            if name.starts_with('.')
+                || matches!(
+                    name.as_str(),
+                    "eclass" | "profiles" | "metadata" | "licenses" | "scripts" | "distfiles"
+                )
+            {
+                continue;
+            }
+            let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
+                continue;
+            };
+            if pkgs
+                .into_iter()
+                .filter(|e| e.path().is_dir())
+                .any(|p| has_ebuild(&p.path()))
+            {
+                categories.insert(name);
+            }
+        }
+    }
+    categories
+}
 #[cfg(test)]
 mod tests;
 

@@ -37,7 +37,6 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
     let entries = [mbabicons_binary()];
     let (replace, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
         root: &root,
-        repos: &repos,
         config: &test_config(),
         local_binpkg: &local,
         entries: &entries,
@@ -47,6 +46,7 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         installed: &InstalledReachability::new(&root),
         live: &HashSet::new(),
         walked: &HashSet::new(),
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(
         replace,
@@ -67,7 +67,6 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
     let root_same = mbabilib_vdb("0/2");
     let (replace, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
         root: &root_same,
-        repos: &repos,
         config: &test_config(),
         local_binpkg: &local,
         entries: &entries,
@@ -77,6 +76,7 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         installed: &InstalledReachability::new(&root_same),
         live: &HashSet::new(),
         walked: &HashSet::new(),
+        gate: crate::test_gate(&repos),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
@@ -95,7 +95,6 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
     });
     let (replace, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
         root: &root,
-        repos: &repos,
         config: &test_config(),
         local_binpkg: &local,
         entries: &merged,
@@ -105,6 +104,7 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         installed: &InstalledReachability::new(&root),
         live: &HashSet::new(),
         walked: &HashSet::new(),
+        gate: crate::test_gate(&repos),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
@@ -115,7 +115,6 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
     let excluded = ["dev-libs/mbabilib".to_string()];
     let (replace, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
         root: &root,
-        repos: &repos,
         config: &test_config(),
         local_binpkg: &local,
         entries: &entries,
@@ -125,6 +124,7 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         installed: &InstalledReachability::new(&root),
         live: &HashSet::new(),
         walked: &HashSet::new(),
+        gate: crate::test_gate(&repos),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
@@ -149,7 +149,6 @@ fn built_parent_update_probe_ignores_a_tree_update_the_search_has_masked() {
     )]);
     let (replace, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
         root: &root,
-        repos: &repos,
         config: &test_config(),
         local_binpkg: &local,
         entries: &entries,
@@ -159,6 +158,7 @@ fn built_parent_update_probe_ignores_a_tree_update_the_search_has_masked() {
         installed: &InstalledReachability::new(&root),
         live: &HashSet::new(),
         walked: &HashSet::new(),
+        gate: crate::test_gate(&repos),
     });
     assert!(
         replace.is_empty() && masks.is_empty(),
@@ -184,7 +184,6 @@ fn built_parent_update_probe_leaves_a_child_another_installed_consumer_restricts
     let run = |live: HashSet<(String, String)>, walked: HashSet<(String, String)>| {
         built_parent_update_probe(BuiltParentUpdateProbeArgs {
             root: &root,
-            repos: &repos,
             config: &test_config(),
             local_binpkg: &local,
             entries: &entries,
@@ -194,6 +193,7 @@ fn built_parent_update_probe_leaves_a_child_another_installed_consumer_restricts
             installed: &installed,
             live: &live,
             walked: &walked,
+            gate: crate::test_gate(&repos),
         })
     };
     let restrictor = ("dev-libs".to_string(), "mbabirestrict".to_string());

@@ -41,3 +41,6 @@ Solves slot conflicts directly, without backtracking.
 - #270: a parent no merge entry replaces, whose installed instance carries the atom, is Portage's installed (nomerge) node -- `installed in '<root>'`, vdb slot/repo, like the #205 rows of `backtrack_missed_updates` -- not a merge-scheduled one. A merge-scheduled parent keeps the tree form.
 - Backlog #242 Slice D: per-node roots (the missed instance rides the rejecting parent's edge; a merge parent rides its entry; installed parents ride the walk root — always the target walk here).
 - #270: blocks in the order their missed package was first recorded (Portage renders its `_conflict_missed_update` dict in insertion order, `depgraph.py:1529-1565`); only the parents inside one block are sorted -- Portage iterates a set there, so any fixed order is as good, and a stable one keeps the output deterministic.
+
+## gate threading (#571)
+- `DirectSolveInput` carries the gate into the skipped-block displays; `direct_solve_instance_use` stays raw (installed-anchored addressed read of the instance's own version).

@@ -32,7 +32,7 @@
 //!   depth).
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::Write;
 
@@ -46,12 +46,13 @@ use super::{
     Resolver as PortualeResolver, TopLevel, UseUnsatCandidatesForAtomArgs, UseUnsatDepReport,
     abort_outcome, all_installed_packages, autounmask_use_atom_form, effective_use_flags,
     fill_use_change_chains, find_repos, implicit_iuse_set, installed_candidates,
-    installed_dep_string, installed_pkg_iuse_and_use, is_visible, list_candidates,
-    live_metadata_for_installed, masked_candidates_for_atom, masked_dep_chain, pkg_use_display_for,
-    read_vdb_flag_set, read_vdb_string, reinstall_flags_for_use_change, render_required_use_block,
-    repo_aux_metadata, required_use_dep_chain, split_slot, suggested_parent_use_candidate,
+    installed_dep_string, installed_pkg_iuse_and_use, is_visible, live_metadata_for_installed,
+    masked_candidates_for_atom, masked_dep_chain, pkg_use_display_for, read_vdb_flag_set,
+    read_vdb_string, reinstall_flags_for_use_change, render_required_use_block, repo_aux_metadata,
+    repo_categories, required_use_dep_chain, split_slot, suggested_parent_use_candidate,
     suggested_use_flip, use_unsat_candidates_for_atom,
 };
+use crate::CategoryGate;
 
 // --- Lazy fact loading -----------------------------------------------------
 
@@ -105,10 +106,13 @@ fn referenced_cpns(entries: &[portage_solver::DepEntry], out: &mut Vec<String>) 
 
 /// Whether `cat/pkg` names a repo directory: the closure admits only resolvable
 /// names, so a dropped dependency stays genuinely absent downstream.
-fn cp_exists(repos: &[RepoConfig], cp: &str) -> bool {
+fn cp_exists(repos: &[RepoConfig], categories: &BTreeSet<String>, cp: &str) -> bool {
     let Some((category, package)) = cp.split_once('/') else {
         return false;
     };
+    if !categories.contains(category) {
+        return false;
+    }
     repos
         .iter()
         .any(|repo| repo.location.join(category).join(package).is_dir())
@@ -127,6 +131,14 @@ struct LazyRepo {
     root: std::path::PathBuf,
     dynamic_deps: bool,
     ignore_built_slot_operator_deps: bool,
+    /// Portage's `settings.categories` for this resolve (built once in
+    /// [`LazyRepo::build`]): every ebuild lookup below gates on it, like
+    /// the default walk's [`CategoryGate`](crate::CategoryGate).
+    categories: BTreeSet<String>,
+    /// The config root the unlisted-category `!!!` line's path renders from.
+    config_root: std::path::PathBuf,
+    /// `(category, package)` pairs the `!!!` already fired for this resolve.
+    warned: RefCell<HashSet<(String, String)>>,
     /// The closure: every CPN the solver may see (`all_packages`).
     closure: HashSet<String>,
     /// The expanded cone inside it: seeds plus everything reached by expanding
@@ -156,12 +168,16 @@ impl LazyRepo {
         shallow: &[String],
         seeds_first: bool,
     ) -> Result<Self, super::Error> {
+        let categories = repo_categories(&repos, &req.config_root, req.local_config);
         let mut repo = Self {
             repos,
             config: req.config.clone(),
             root: req.root.clone(),
             dynamic_deps: req.dynamic_deps,
             ignore_built_slot_operator_deps: req.ignore_built_slot_operator_deps,
+            categories,
+            config_root: req.config_root.clone(),
+            warned: RefCell::new(HashSet::new()),
             closure: HashSet::new(),
             expanded: HashSet::new(),
             loaded: RefCell::new(HashMap::new()),
@@ -218,7 +234,7 @@ impl LazyRepo {
                             referenced_cpns(&parsed, &mut refs);
                             for dep_cp in refs {
                                 if !repo.closure.contains(&dep_cp)
-                                    && cp_exists(&repo.repos, &dep_cp)
+                                    && cp_exists(&repo.repos, &repo.categories, &dep_cp)
                                 {
                                     queue.push((dep_cp, true));
                                 }
@@ -236,12 +252,24 @@ impl LazyRepo {
                 }
             }
             for dep_cp in refs {
-                if !repo.closure.contains(&dep_cp) && cp_exists(&repo.repos, &dep_cp) {
+                if !repo.closure.contains(&dep_cp)
+                    && cp_exists(&repo.repos, &repo.categories, &dep_cp)
+                {
                     queue.push((dep_cp, true));
                 }
             }
         }
         Ok(repo)
+    }
+
+    /// Read + parse every version of one `cat/pkg` (no USE), memoized.
+    fn gate(&self) -> CategoryGate<'_> {
+        CategoryGate {
+            repos: &self.repos,
+            categories: &self.categories,
+            config_root: &self.config_root,
+            warned: &self.warned,
+        }
     }
 
     /// Read + parse every version of one `cat/pkg` (no USE), memoized.
@@ -251,7 +279,7 @@ impl LazyRepo {
         }
         let mut versions = Vec::new();
         if let Some((category, package)) = cp.split_once('/') {
-            let candidates = list_candidates(&self.repos, category, package)?;
+            let candidates = self.gate().repo_candidates(category, package)?;
             for candidate in candidates.iter() {
                 // Same visibility-filtered pool as the walk: invisible versions are
                 // never offered to either engine.
@@ -612,7 +640,7 @@ fn graph_result_from_order(
     }
     let orphan_blockers =
         file_bridge_blocker_conflicts(req, repo, &mut entries, kept, &pending_blockers);
-    let (slot_op_rebuilds, abi_rebuilds) = bridge_slot_operator_rebuilds(req, repos, &entries);
+    let (slot_op_rebuilds, abi_rebuilds) = bridge_slot_operator_rebuilds(req, &entries, repo);
     entries.extend(slot_op_rebuilds);
     // Same merge-order sort the walk applies: engine order only seeds positions.
     let (entries, _) = super::topological_merge_order(super::TopologicalMergeOrderArgs {
@@ -1078,8 +1106,8 @@ fn file_bridge_blocker_conflicts(
 /// sort so rebuilds land dependency-first.
 fn bridge_slot_operator_rebuilds(
     req: &ResolveRequest,
-    repos: &[RepoConfig],
     entries: &[GraphEntry],
+    lazy: &LazyRepo,
 ) -> (Vec<GraphEntry>, Vec<(String, String)>) {
     let slot_op_reachable: HashSet<(String, String)> = if req.config.complete_seed_atoms.is_empty()
     {
@@ -1102,7 +1130,6 @@ fn bridge_slot_operator_rebuilds(
         let top_level_atoms: HashSet<String> = req.atoms.iter().cloned().collect();
         super::slot_operator_rebuild_entries(super::SlotOperatorRebuildEntriesArgs {
             root: &req.root,
-            repos,
             entries,
             reachable: &slot_op_reachable,
             with_bdeps: req.with_bdeps,
@@ -1111,6 +1138,7 @@ fn bridge_slot_operator_rebuilds(
             top_level_cps: &top_level_cps,
             top_level_atoms: &top_level_atoms,
             config: &req.config,
+            gate: lazy.gate(),
         })
     }
 }
@@ -1266,7 +1294,7 @@ fn greedy_blocker_lookahead(
     let Some((category, package)) = cp.split_once('/') else {
         return slots;
     };
-    let Ok(candidates) = list_candidates(&lazy.repos, category, package) else {
+    let Ok(candidates) = lazy.gate().repo_candidates(category, package) else {
         return slots;
     };
     let visible: HashSet<(&str, &str)> = loaded
@@ -1677,7 +1705,9 @@ fn deep_bounded_depths(
             if depths.contains_key(&dep_cp) {
                 continue;
             }
-            if portage_solver::Cpn::parse(&dep_cp).is_err() || !cp_exists(&lazy.repos, &dep_cp) {
+            if portage_solver::Cpn::parse(&dep_cp).is_err()
+                || !cp_exists(&lazy.repos, &lazy.categories, &dep_cp)
+            {
                 continue;
             }
             depths.insert(dep_cp.clone(), depth + 1);
@@ -1828,7 +1858,7 @@ impl KeptInstalled {
                 if rebuild.contains(&cpv) {
                     continue;
                 }
-                let Ok(candidates) = list_candidates(&lazy.repos, &inst.category, &inst.package)
+                let Ok(candidates) = lazy.gate().repo_candidates(&inst.category, &inst.package)
                 else {
                     continue;
                 };
@@ -2314,7 +2344,9 @@ fn parent_use_reinstalls(
                         continue;
                     }
                     let plain = evaluated_plain_use_deps(uds, parent_use);
-                    let Some(flip) = list_candidates(&lazy.repos, &inst.category, &inst.package)
+                    let Some(flip) = lazy
+                        .gate()
+                        .repo_candidates(&inst.category, &inst.package)
                         .ok()
                         .and_then(|candidates| {
                             candidates
@@ -4049,7 +4081,7 @@ fn bridge_validate_aborts(
         };
         let full = portage_required_use::human_readable(&normalized);
         let use_display =
-            pkg_use_display_for(&lazy.repos, &req.config, category, package, &member.version);
+            pkg_use_display_for(lazy.gate(), &req.config, category, package, &member.version);
         let cpv_repo = if member.record.repo_name.is_empty() {
             format!("{}/{package}-{}", category, member.version)
         } else {
@@ -4220,7 +4252,9 @@ fn bridge_validate_aborts(
                 // The `entry_use_flags` predicate verbatim: an unsatisfied
                 // plain USE-dep with a settable flip becomes a `package.use`
                 // change (the need_config_change gate); otherwise a miss.
-                let flip = list_candidates(&lazy.repos, &parsed.category, &parsed.package)
+                let flip = lazy
+                    .gate()
+                    .repo_candidates(&parsed.category, &parsed.package)
                     .ok()
                     .and_then(|candidates| {
                         candidates
@@ -4251,10 +4285,11 @@ fn bridge_validate_aborts(
                         })
                         .collect::<Vec<_>>()
                         .join(" ");
-                    let candidates =
-                        list_candidates(&lazy.repos, &parsed.category, &parsed.package)
-                            .map(|arc| arc.as_ref().clone())
-                            .unwrap_or_default();
+                    let candidates = lazy
+                        .gate()
+                        .repo_candidates(&parsed.category, &parsed.package)
+                        .map(|arc| arc.as_ref().clone())
+                        .unwrap_or_default();
                     changes.push(AutounmaskChange {
                         atom: autounmask_use_atom_form(
                             &candidate,
@@ -4372,7 +4407,7 @@ fn bridge_validate_aborts(
         validation.nvc_dep_atoms.insert((category, package), atom);
     }
     for miss in &misses {
-        if let Some(masked) = masked_candidates_for_atom(&lazy.repos, &miss.display, &req.config) {
+        if let Some(masked) = masked_candidates_for_atom(lazy.gate(), &miss.display, &req.config) {
             validation.masked_deps.push(MaskedDepReport {
                 category: miss.category.clone(),
                 package: miss.package.clone(),
@@ -4381,13 +4416,13 @@ fn bridge_validate_aborts(
                 chain: Vec::new(),
             });
         } else if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
-            repos: &lazy.repos,
             root: &req.root,
             entries,
             display_atom: &miss.display,
             evaluated_atom: &miss.evaluated,
             owner: miss.owners.first(),
             config: &req.config,
+            gate: lazy.gate(),
         }) {
             validation.use_unsat_deps.push(UseUnsatDepReport {
                 category: miss.category.clone(),
@@ -4484,10 +4519,10 @@ fn parent_flip_rescue(args: ParentFlipRescueArgs<'_>) -> Option<ParentFlipRescue
         child_use,
     } = args;
     let suggestion =
-        suggested_parent_use_candidate(&lazy.repos, entries, unevaluated, owner, &req.config)?;
+        suggested_parent_use_candidate(lazy.gate(), entries, unevaluated, owner, &req.config)?;
     let (pc, pp, _pv, target_use) = suggestion.clone();
     let (parent_cand, _iuse, parent_use, _required_use) =
-        super::parent_use_state(&lazy.repos, entries, owner, &req.config)?;
+        super::parent_use_state(lazy.gate(), entries, owner, &req.config)?;
     let mut new_use = parent_use.as_ref().clone();
     for (flag, want) in &target_use {
         if *want {
@@ -4507,7 +4542,9 @@ fn parent_flip_rescue(args: ParentFlipRescueArgs<'_>) -> Option<ParentFlipRescue
     ) {
         return None;
     }
-    let parent_all = list_candidates(&lazy.repos, &pc, &pp)
+    let parent_all = lazy
+        .gate()
+        .repo_candidates(&pc, &pp)
         .map(|arc| arc.as_ref().clone())
         .unwrap_or_default();
     let token = target_use
@@ -5084,6 +5121,7 @@ mod tests {
             complete: false,
             complete_reuse: HashMap::new(),
             set_args: std::collections::HashSet::new(),
+            local_config: true,
             solver: SolverKind::Portage,
         }
     }

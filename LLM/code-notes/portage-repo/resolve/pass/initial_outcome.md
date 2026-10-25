@@ -10,3 +10,6 @@ The initial outcome for one queued atom: complete-mode pin, sibling collapse, re
 ## fn resolve_initial_outcome (#394 locked-merge reuse)
 - Backlog #394: in complete mode a locked merge keeps its phase-1 node instead of re-resolving from installed (which never wants an update -- `want_update = !complete_mode` -- and would demote it to kept). The pick is verified against the pulling atom (`match_from_list` on `cpv:slot/sub`) and the pass constraints (`satisfies_extra_constraints`) first; a masked or conflicting pick falls through. Top-level atoms always resolve. Portage: `_complete_graph` (`depgraph.py:8661`, `_select_pkg_from_graph`).
 - Only `New`/`Upgrade`/`Downgrade` picks ever enter the map (see `ResolveRequest::complete_reuse`); `Reinstall` outcomes always take the normal path, so the reinstall machinery (slot-op scan + eliminate, restart step, flips) runs identically in both phases.
+
+## gate threading (#571)
+- `cp_has_tree_or_binary_candidate` and the `minimize_children` site use `ctx.gate()`.

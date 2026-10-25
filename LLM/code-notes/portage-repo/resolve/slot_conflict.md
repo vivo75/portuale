@@ -57,3 +57,6 @@ Slot conflicts: records, merging and rendering.
 - Backlog #222: a `[use]`-carrying pin (a USE-break dropped pin) version-matches the merge by construction -- `match_from_list` never reads use-deps, same as Portage's -- so the holds check must also evaluate the pin's use-deps against the merge's own decided USE (Portage `violated_conditionals`, the same check that fired the pin). A merge whose USE still breaks the pin stays reported; an uncomputable merge USE falls back to the version-only check, today's behaviour. A pin the final version satisfies after all reconciles silently too (Portage reconciles silently).
 - The installed version the pin preserves: the highest installed one it matches (Portage's `matches[-1]`).
 - Merge parents: this pass's hard pullers matching the merged version (plus every top-level Argument puller -- Portage files an `(Argument)` parent under a reason exactly when the other side is installed, which a residual always is).
+
+## gate threading (#571)
+- `slot_conflict_meta`, `slot_conflict_puller_cpv`, the display fns (`slot_conflict_flag_sets`, `skipped_update_use_display_for`, `pkg_use_display_for`, `skipped_consumer_use_display`) and every `*Args` struct carrying `repos` (`Build`, `MergeSameSlot`, `Residual*`, `Synthesize*`) carry the gate. Installed instances keep their vdb branch.

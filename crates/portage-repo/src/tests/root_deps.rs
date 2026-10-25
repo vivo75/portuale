@@ -124,11 +124,11 @@ fn unsatisfied_root_deps_counts_an_unparseable_token_as_dropped() {
     let got = unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
         metadata: &metadata,
         use_flags: &HashSet::new(),
-        repos: &[],
         config: &test_config(),
         running_root: Path::new("/nonexistent-root-for-this-test"),
         dep_keys: &["RDEPEND"],
         empty_groups_always_true: false,
+        gate: crate::test_gate(&[]),
     });
     assert!(!got.iter().any(|t| t.contains("bad")), "got {got:?}");
     assert!(site_count("root_deps") > before);

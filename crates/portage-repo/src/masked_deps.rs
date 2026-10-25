@@ -12,7 +12,7 @@ use crate::*;
 /// `--exclude`/reinstall refinements only matter once an alternative is chosen.
 // Portage: dep_check.py, dep_zapdeps all_available
 pub(crate) fn atom_currently_satisfiable(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     atom_str: &str,
     config: &portage_profile::Config,
     // The `'backtrack` loop's accumulated per-`cat/pkg` constraints for this atom's
@@ -27,7 +27,7 @@ pub(crate) fn atom_currently_satisfiable(
     if atom.blocker != portage_dep::Blocker::None {
         return true;
     }
-    let Ok(candidates) = list_candidates(repos, &atom.category, &atom.package) else {
+    let Ok(candidates) = gate.repo_candidates(&atom.category, &atom.package) else {
         return false;
     };
     let visible: Vec<&Candidate> = candidates
@@ -105,10 +105,10 @@ pub(crate) fn atom_currently_satisfiable(
 /// use-dep so default-marker/missing-IUSE semantics match exactly.
 // Portage: Atom.violated_conditionals; dep_zapdeps all_use_unmasked
 pub(crate) fn atom_all_use_unmasked(
-    repos: &[RepoConfig],
     atom_str: &str,
     config: &portage_profile::Config,
     extra_constraints: &[String],
+    gate: CategoryGate<'_>,
 ) -> bool {
     let Some(atom) = portage_dep::parse_atom(atom_str) else {
         return true;
@@ -121,12 +121,12 @@ pub(crate) fn atom_all_use_unmasked(
     };
     let Some((candidate_str, keywords, iuse, enabled, _slot)) =
         highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
-            repos,
             atom_str,
             category: &atom.category,
             package: &atom.package,
             config,
             extra_constraints,
+            gate,
         })
     else {
         // Nothing to evaluate once the whole choice is `Unsatisfiable`.
@@ -211,12 +211,12 @@ pub(crate) type CandidateUseProbe = (
 
 /// Arguments of [`highest_available_candidate_ignoring_use`].
 pub(crate) struct HighestAvailableCandidateIgnoringUseArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) atom_str: &'a str,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) extra_constraints: &'a [String],
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// `extra_constraints` is the same backtrack-loop filter
@@ -226,15 +226,15 @@ pub(crate) fn highest_available_candidate_ignoring_use(
     args: HighestAvailableCandidateIgnoringUseArgs<'_>,
 ) -> Option<CandidateUseProbe> {
     let HighestAvailableCandidateIgnoringUseArgs {
-        repos,
         atom_str,
         category,
         package,
         config,
         extra_constraints,
+        gate,
     } = args;
     let stripped = portage_dep::without_use(atom_str);
-    let Ok(candidates) = list_candidates(repos, category, package) else {
+    let Ok(candidates) = gate.repo_candidates(category, package) else {
         return None;
     };
     let visible: Vec<&Candidate> = candidates
@@ -471,12 +471,12 @@ pub struct PlainMissDepReport {
 /// ebuild is actually visible (the `[use]`-mismatch path handles that instead).
 // Portage: _show_unsatisfied_dep via db.match(atom.without_use)
 pub(crate) fn masked_candidates_for_atom(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     atom_str: &str,
     config: &portage_profile::Config,
 ) -> Option<Vec<(String, Vec<String>)>> {
     let atom = portage_dep::parse_atom(atom_str)?;
-    let candidates = list_candidates(repos, &atom.category, &atom.package).ok()?;
+    let candidates = gate.repo_candidates(&atom.category, &atom.package).ok()?;
     masked_rows_for_pool(&candidates, atom_str, &atom, config)
 }
 
@@ -517,8 +517,8 @@ pub(crate) struct BinaryRespectUseGate<'a> {
 /// with, so the report re-derives the identical rejection.
 pub(crate) struct BinaryChangedDepsGate<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) with_bdeps: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// The `- <cpv>` text of a masked row: bare when EAPI-masked or the
@@ -622,11 +622,11 @@ fn masked_rows_for_pool_inner(
                 g.changed_deps.as_ref().is_some_and(|d| {
                     binary_deps_changed(BinaryDepsChangedArgs {
                         root: d.root,
-                        repos: d.repos,
                         candidate: c,
                         category: &atom.category,
                         package: &atom.package,
                         with_bdeps: d.with_bdeps,
+                        gate: d.gate,
                     })
                 })
             });
@@ -674,7 +674,7 @@ fn masked_rows_for_pool_inner(
 /// members with a `(dependency required by …)` line, while a direct
 /// top-level atom reports no chain.
 pub(crate) fn all_masked_report(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     atom_str: &str,
     config: &portage_profile::Config,
     xinfo: &str,
@@ -682,7 +682,7 @@ pub(crate) fn all_masked_report(
 ) -> Option<String> {
     // The header/footer live here; the masked list is shared with the
     // dependency disclosure.
-    let masked = masked_candidates_for_atom(repos, atom_str, config)?;
+    let masked = masked_candidates_for_atom(gate, atom_str, config)?;
 
     render_all_masked_block(xinfo, masked, set_member_of, false)
 }
@@ -800,7 +800,6 @@ pub(crate) fn merge_masked_rows(
 
 /// The values [`masked_rows_for_dep`] reads from its caller.
 pub(crate) struct MaskedRowsForDepArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) local_binpkg: &'a BinaryIndex,
     pub(crate) binrepos: &'a [portage_profile::BinRepo],
@@ -816,6 +815,7 @@ pub(crate) struct MaskedRowsForDepArgs<'a> {
     pub(crate) package: &'a str,
     pub(crate) atom_str: &'a str,
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// The version-matching masked rows for a dependency atom across the ebuild
@@ -829,7 +829,6 @@ pub(crate) struct MaskedRowsForDepArgs<'a> {
 // Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep
 pub(crate) fn masked_rows_for_dep(args: MaskedRowsForDepArgs<'_>) -> Vec<(String, Vec<String>)> {
     let MaskedRowsForDepArgs {
-        repos,
         root,
         local_binpkg,
         binrepos,
@@ -845,22 +844,23 @@ pub(crate) fn masked_rows_for_dep(args: MaskedRowsForDepArgs<'_>) -> Vec<(String
         package,
         atom_str,
         config,
+        gate,
     } = args;
-    let mut merged = masked_candidates_for_atom(repos, atom_str, config).unwrap_or_default();
+    let mut merged = masked_candidates_for_atom(gate, atom_str, config).unwrap_or_default();
     if !(usepkg || usepkgonly) && !getbinpkg {
         return merged;
     }
     let ebuilds: Vec<Candidate> = if usepkgonly || crate::globals::ebuild_db_dropped() {
         Vec::new()
     } else {
-        list_candidates(repos, category, package)
+        gate.repo_candidates(category, package)
             .map(|c| c.to_vec())
             .unwrap_or_default()
     };
     let changed_deps = binpkg_changed_deps_active(usepkgonly).then_some(BinaryChangedDepsGate {
         root,
-        repos,
         with_bdeps,
+        gate,
     });
     let mut binaries = if usepkg || usepkgonly {
         list_binary_candidates(local_binpkg, category, package)

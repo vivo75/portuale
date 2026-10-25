@@ -61,11 +61,11 @@ pub(crate) fn canonical_dep_key(
 /// Arguments of [`binary_deps_changed`].
 pub(crate) struct BinaryDepsChangedArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) candidate: &'a Candidate,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) with_bdeps: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// `--binpkg-changed-deps` (auto-enabled whenever `--usepkgonly` is not
@@ -107,6 +107,7 @@ struct BinaryDepsKey {
     root: PathBuf,
     vdb_generation: u64,
     repos: Vec<(PathBuf, i32)>,
+    categories_fp: u64,
     category: String,
     package: String,
     version: String,
@@ -135,10 +136,16 @@ impl BinaryDepsKey {
                 .unwrap_or_default()
                 .hash(&mut hasher);
         }
+        let mut cat_hasher = std::collections::hash_map::DefaultHasher::new();
+        for cat in args.gate.categories.iter() {
+            cat.hash(&mut cat_hasher);
+        }
         Self {
             root: args.root.to_path_buf(),
             vdb_generation: portage_vdb::for_root(args.root).generation().unwrap_or(0),
+            categories_fp: cat_hasher.finish(),
             repos: args
+                .gate
                 .repos
                 .iter()
                 .map(|r| (r.location.clone(), r.priority))
@@ -156,11 +163,11 @@ impl BinaryDepsKey {
 fn binary_deps_changed_uncached(args: BinaryDepsChangedArgs<'_>) -> bool {
     let BinaryDepsChangedArgs {
         root,
-        repos,
         candidate,
         category,
         package,
         with_bdeps,
+        gate,
     } = args;
     let dep_keys: &[&str] = if with_bdeps {
         &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
@@ -169,7 +176,7 @@ fn binary_deps_changed_uncached(args: BinaryDepsChangedArgs<'_>) -> bool {
     };
     let built_use = candidate.binary_use.clone().unwrap_or_default();
     let binary_metadata = &candidate.binary_deps;
-    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
+    let Ok(repo_candidates) = gate.repo_candidates(category, package) else {
         return false;
     };
     let Some(resolved) = repo_candidates
@@ -218,21 +225,21 @@ fn binary_deps_changed_uncached(args: BinaryDepsChangedArgs<'_>) -> bool {
 /// Arguments of [`deps_changed`].
 pub(crate) struct DepsChangedArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) version: &'a str,
     pub(crate) with_bdeps: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 pub(crate) fn deps_changed(args: DepsChangedArgs<'_>) -> bool {
     let DepsChangedArgs {
         root,
-        repos,
         category,
         package,
         version,
         with_bdeps,
+        gate,
     } = args;
     let dep_keys: &[&str] = if with_bdeps {
         &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
@@ -242,7 +249,7 @@ pub(crate) fn deps_changed(args: DepsChangedArgs<'_>) -> bool {
 
     let installed_use = read_vdb_flag_set(root, category, package, version, "USE");
 
-    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
+    let Ok(repo_candidates) = gate.repo_candidates(category, package) else {
         return false;
     };
     let Some(resolved) = repo_candidates
@@ -323,15 +330,15 @@ pub(crate) fn read_vdb_slot(
 /// A repo-side lookup that fails reports "unchanged" (`false`), matching
 /// Portage's `_equiv_ebuild(pkg) is None` -> `False`.
 pub(crate) fn slot_changed(
+    gate: CategoryGate<'_>,
     root: &Path,
-    repos: &[RepoConfig],
     category: &str,
     package: &str,
     version: &str,
 ) -> bool {
     let vdb_slot = read_vdb_slot(root, category, package, version);
 
-    let Ok(repo_candidates) = list_candidates(repos, category, package) else {
+    let Ok(repo_candidates) = gate.repo_candidates(category, package) else {
         return false;
     };
     let Some(resolved) = repo_candidates
@@ -441,13 +448,13 @@ pub(crate) fn best_binary_build_time(candidates: &[Candidate], version: &str) ->
 /// resolver's candidate pool, so it stays meaningful under `--usepkgonly`.
 /// Portage: depgraph.py, _equiv_ebuild_visible.
 pub fn ebuild_visible_at(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     category: &str,
     package: &str,
     version: &str,
     config: &portage_profile::Config,
 ) -> bool {
-    list_candidates(repos, category, package)
+    gate.repo_candidates(category, package)
         .map(|tree| {
             tree.iter()
                 .any(|c| c.version == version && is_visible(c, category, package, config))
@@ -458,7 +465,6 @@ pub fn ebuild_visible_at(
 /// Arguments of [`binary_reinstall_warranted`].
 pub(crate) struct BinaryReinstallWarrantedArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
@@ -467,6 +473,7 @@ pub(crate) struct BinaryReinstallWarrantedArgs<'a> {
     pub(crate) rebuilt_binaries: bool,
     pub(crate) rebuilt_binaries_timestamp: Option<u64>,
     pub(crate) update: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Whether a binary at the installed `version` warrants a reinstall:
@@ -481,7 +488,6 @@ pub(crate) struct BinaryReinstallWarrantedArgs<'a> {
 pub(crate) fn binary_reinstall_warranted(args: BinaryReinstallWarrantedArgs<'_>) -> bool {
     let BinaryReinstallWarrantedArgs {
         root,
-        repos,
         config,
         category,
         package,
@@ -490,6 +496,7 @@ pub(crate) fn binary_reinstall_warranted(args: BinaryReinstallWarrantedArgs<'_>)
         rebuilt_binaries,
         rebuilt_binaries_timestamp,
         update,
+        gate,
     } = args;
     if rebuilt_binaries {
         return rebuilt_binary_changed(RebuiltBinaryChangedArgs {
@@ -502,7 +509,7 @@ pub(crate) fn binary_reinstall_warranted(args: BinaryReinstallWarrantedArgs<'_>)
         });
     }
     update
-        && !ebuild_visible_at(repos, category, package, version, config)
+        && !ebuild_visible_at(gate, category, package, version, config)
         && rebuilt_binary_changed(RebuiltBinaryChangedArgs {
             root,
             binary_build_time,

@@ -13,3 +13,6 @@ Repo/metadata/vdb access for the `emerge --pretend` port.
 
 ## re-export METADATA_FILE_FIELDS, METADATA_FILE_FORMAT_VERSION, in_metadata_file
 - One copy only: the `metadata` format (the 23-field set, the format version, `_in_metadata_file`) lives in `portage-vdb`, next to the code that reads it (feat#157 S1.2).
+
+## fn test_gate / fn test_categories (#571)
+- `#[cfg(test)]` helpers: `test_gate` is a leaked scan-built `CategoryGate` for synthetic repos without `profiles/categories` files; `test_categories` is the owned-set half reused by the hand-built test contexts.

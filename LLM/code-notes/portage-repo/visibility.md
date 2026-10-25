@@ -80,3 +80,6 @@ Keyword, mask and license visibility of a candidate.
 
 ## fn effective_keywords (#346 S2)
 - Portage `KeywordsManager.getKeywords`: own KEYWORDS minus `-*`, then each matching profile-node `package.keywords` entry folded in order (`-*` clears, `-tok` discards, else appends once — `stack_lists` incremental). Every `keywords_accepted`/`is_stable`/reason/marker call site passes this, never the raw metadata. The match carries no build-id (Portage builds a build-less `_pkg_str` there; an `=`+build-id line matches nothing, the #341 S2 rule). Source order, not `ordered_by_atom_specificity`: the established portuale equivalent for per-file folds.
+
+## gate threading (#571)
+- The autounmask suggestion helpers (`suggested_mask/keyword/license_candidate`) carry the gate.

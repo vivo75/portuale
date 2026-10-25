@@ -114,3 +114,6 @@ Constraints that installed reverse dependencies put on an upgrade.
 
 ## fn merge_use_changed_vs_installed
 - Portage `_complete_graph`'s own USE-change trigger (`depgraph.py:8620-8637`). This is a node-vs-vdb comparison Portage makes unconditionally -- it does NOT go through `--newuse`/`--changed-use` (a bare, reasonless `[ebuild R]` for an explicitly-requested installed package carries no `changed_flags` yet still flips USE and still enables complete mode). `None` when the merge side is unreadable (no md5-cache entry); callers fall back to the entry's own `changed_flags`, today's behaviour.
+
+## gate threading (#571)
+- `RevDepPinHoldableArgs`, `MergeUseChangedVsInstalledArgs`, `ReverseDependencyConstraintsArgs`, `ConstraintsFromConsumerArgs` and `ConstraintsFromAtomArgs` carry the gate; `merge_use_state` reads through it.

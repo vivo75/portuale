@@ -246,14 +246,14 @@ fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
     })
     .expect("fixture config resolves");
     assert_eq!(
-        skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "3"),
+        skipped_update_use_display_for(crate::test_gate(&repos), &config, "dev-libs", "blk0x", "3"),
         vec![
             ("USE".to_string(), String::new()),
             ("ELIBC".to_string(), "glibc".to_string()),
         ],
     );
     assert_eq!(
-        skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0b", "1"),
+        skipped_update_use_display_for(crate::test_gate(&repos), &config, "dev-libs", "blk0b", "1"),
         vec![
             ("USE".to_string(), String::new()),
             ("ELIBC".to_string(), "glibc".to_string()),
@@ -261,13 +261,16 @@ fn skipped_update_use_display_for_renders_the_fixture_blk0_shape() {
     );
     // EAPI 8, no IUSE: only the implicit group survives.
     assert_eq!(
-        skipped_update_use_display_for(&repos, &config, "dev-libs", "mgxc", "2"),
+        skipped_update_use_display_for(crate::test_gate(&repos), &config, "dev-libs", "mgxc", "2"),
         vec![
             ("USE".to_string(), String::new()),
             ("ELIBC".to_string(), "glibc".to_string()),
         ],
     );
-    assert!(skipped_update_use_display_for(&repos, &config, "dev-libs", "blk0x", "9").is_empty());
+    assert!(
+        skipped_update_use_display_for(crate::test_gate(&repos), &config, "dev-libs", "blk0x", "9")
+            .is_empty()
+    );
 }
 
 /// The slot-conflict display carries the same USE_EXPAND groups (Portage's
@@ -287,14 +290,14 @@ fn slot_conflict_use_display_renders_use_expand_groups() {
     })
     .expect("fixture config resolves");
     assert_eq!(
-        pkg_use_display_for(&repos, &config, "dev-libs", "aub0d", "0"),
+        pkg_use_display_for(crate::test_gate(&repos), &config, "dev-libs", "aub0d", "0"),
         vec![
             ("USE".to_string(), "foo".to_string()),
             ("ELIBC".to_string(), "glibc".to_string()),
         ],
     );
     assert_eq!(
-        pkg_use_display_for(&repos, &config, "dev-libs", "aub0d", "1"),
+        pkg_use_display_for(crate::test_gate(&repos), &config, "dev-libs", "aub0d", "1"),
         vec![
             ("USE".to_string(), "-bar".to_string()),
             ("ELIBC".to_string(), "glibc".to_string()),
@@ -302,11 +305,13 @@ fn slot_conflict_use_display_renders_use_expand_groups() {
     );
     // EAPI 8, no IUSE: the bare display gains the implicit group.
     assert_eq!(
-        pkg_use_display_for(&repos, &config, "dev-libs", "aub0b", "0"),
+        pkg_use_display_for(crate::test_gate(&repos), &config, "dev-libs", "aub0b", "0"),
         vec![
             ("USE".to_string(), String::new()),
             ("ELIBC".to_string(), "glibc".to_string()),
         ],
     );
-    assert!(pkg_use_display_for(&repos, &config, "dev-libs", "aub0d", "9").is_empty());
+    assert!(
+        pkg_use_display_for(crate::test_gate(&repos), &config, "dev-libs", "aub0d", "9").is_empty()
+    );
 }

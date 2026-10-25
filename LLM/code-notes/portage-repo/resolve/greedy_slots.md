@@ -53,3 +53,6 @@ Greedy installed-slot arguments for the default solver (backlog #359 S3).
 
 ## fn greedy_pool (shared ebuild pool, backlog #441 S1 / #457)
 - Same `Arc`-identity handoff to the pool memo as `resolve_pretend` (was `.map(|c| c.to_vec())`, now `.ok()` on the shared allocation plus a local clone for mutation).
+
+## gate threading (#571)
+- The selection pool and the `CollectBinaryCandidatesArgs` site use `ctx.gate()`.

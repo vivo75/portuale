@@ -126,14 +126,14 @@ pub(crate) fn suggested_use_flip(
 /// USE-deps alone, the highest-versioned one with its `suggested_use_flip`.
 /// Mirrors `suggested_keyword_candidate`'s "best near-miss" shape.
 pub(crate) fn suggested_use_candidate(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     category: &str,
     package: &str,
     use_deps: Option<&[portage_dep::UseDep]>,
     config: &portage_profile::Config,
 ) -> Option<(String, Vec<(String, bool)>)> {
     let use_deps = use_deps.filter(|ud| !ud.is_empty())?;
-    let candidates = list_candidates(repos, category, package).ok()?;
+    let candidates = gate.repo_candidates(category, package).ok()?;
     candidates
         .iter()
         .filter(|c| use_masked_only(c, category, package, use_deps, config))
@@ -182,7 +182,7 @@ pub(crate) type ParentUseState = (
 );
 
 pub(crate) fn parent_use_state(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     entries: &[GraphEntry],
     owner: &(String, String),
     config: &portage_profile::Config,
@@ -198,7 +198,7 @@ pub(crate) fn parent_use_state(
         _ => return None,
     }
     .clone();
-    let candidates = list_candidates(repos, &owner.0, &owner.1).ok()?;
+    let candidates = gate.repo_candidates(&owner.0, &owner.1).ok()?;
     let resolved = candidates
         .iter()
         .filter(|c| c.version == version)
@@ -225,7 +225,7 @@ pub(crate) fn parent_use_state(
 /// `REQUIRED_USE`. The repair path keeps the merge-bound-only shape.
 /// Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep
 pub(crate) fn installed_parent_use_state(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     root: &Path,
     entries: &[GraphEntry],
     owner: &(String, String),
@@ -240,7 +240,7 @@ pub(crate) fn installed_parent_use_state(
     if !vdb_entry_is_dir(root, &owner.0, &owner.1, version) {
         return None;
     }
-    let candidates = list_candidates(repos, &owner.0, &owner.1).ok()?;
+    let candidates = gate.repo_candidates(&owner.0, &owner.1).ok()?;
     let resolved = candidates
         .iter()
         .filter(|c| c.version == *version)
@@ -384,7 +384,7 @@ pub(crate) fn violated_parent_flags(
 }
 
 pub(crate) struct ViableParentFlipTargetsArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) gate: CategoryGate<'a>,
     pub(crate) unevaluated: &'a portage_dep::Atom,
     pub(crate) evaluated: &'a portage_dep::Atom,
     pub(crate) unevaluated_atom: &'a str,
@@ -403,7 +403,7 @@ pub(crate) fn viable_parent_flip_targets(
     args: ViableParentFlipTargetsArgs<'_>,
 ) -> Vec<(Candidate, Vec<String>)> {
     let ViableParentFlipTargetsArgs {
-        repos,
+        gate,
         unevaluated,
         evaluated,
         unevaluated_atom,
@@ -412,7 +412,7 @@ pub(crate) fn viable_parent_flip_targets(
     } = args;
     let category = unevaluated.category.clone();
     let package = unevaluated.package.clone();
-    let Ok(candidates) = list_candidates(repos, &category, &package) else {
+    let Ok(candidates) = gate.repo_candidates(&category, &package) else {
         return Vec::new();
     };
     let strs: Vec<String> = candidates
@@ -547,7 +547,7 @@ pub(crate) fn viable_parent_flip_targets(
 pub type ParentUseSuggestion = (String, String, String, Vec<(String, bool)>);
 
 pub(crate) fn suggested_parent_use_candidate(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     entries: &[GraphEntry],
     unevaluated_atom: &str,
     owner: &(String, String),
@@ -555,11 +555,11 @@ pub(crate) fn suggested_parent_use_candidate(
 ) -> Option<ParentUseSuggestion> {
     let unevaluated = portage_dep::parse_atom(unevaluated_atom)?;
     let (parent_candidate, parent_iuse, parent_use, parent_required_use) =
-        parent_use_state(repos, entries, owner, config)?;
+        parent_use_state(gate, entries, owner, config)?;
     let evaluated_atom = portage_dep::evaluate_atom_conditionals(unevaluated_atom, &parent_use)?;
     let evaluated = portage_dep::parse_atom(&evaluated_atom)?;
     for (_child, involved) in viable_parent_flip_targets(ViableParentFlipTargetsArgs {
-        repos,
+        gate,
         unevaluated: &unevaluated,
         evaluated: &evaluated,
         unevaluated_atom,
@@ -598,7 +598,7 @@ pub(crate) fn suggested_parent_use_candidate(
 
         let re_evaluated =
             portage_dep::evaluate_atom_conditionals(unevaluated_atom, &hypothetical_use)?;
-        if !atom_currently_satisfiable(repos, &re_evaluated, config, &[]) {
+        if !atom_currently_satisfiable(gate, &re_evaluated, config, &[]) {
             continue;
         }
 

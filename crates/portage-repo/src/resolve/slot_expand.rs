@@ -68,10 +68,10 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
     };
     let Ok(outcome) = resolve_pretend(
         &SelectSource {
-            repos: &ctx.repos,
             root: select_root,
             config,
             local_binpkg: &ctx.local_binpkg,
+            gate: ctx.gate(),
         },
         evaluated,
         &SelectOptions {
@@ -91,7 +91,7 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
         _ => return false,
     };
     // The same winning-candidate pick as the pop site.
-    let repo_candidates = list_candidates(&ctx.repos, &key2.0, &key2.1).unwrap_or_default();
+    let repo_candidates = ctx.repo_candidates(&key2.0, &key2.1).unwrap_or_default();
     let Some(resolved) = repo_candidates
         .iter()
         .filter(|c| c.version == version)
@@ -128,7 +128,7 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
         return false;
     }
     // Include the already-resolved version's own sub-slot, like the pop site.
-    let existing_sub = slot_conflict_meta(&ctx.repos, &key2.0, &key2.1, &existing_version2).0;
+    let existing_sub = slot_conflict_meta(ctx.gate(), &key2.0, &key2.1, &existing_version2).0;
     let existing_match_str = if existing_sub.is_empty() {
         format!(
             // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
@@ -150,27 +150,27 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
         || (bare_equals
             && built_equals_shift_unrebuildable(BuiltEqualsShiftUnrebuildableArgs {
                 root: ctx.root,
-                repos: &ctx.repos,
                 category: &key2.0,
                 package: &key2.1,
                 existing_sub: &existing_sub,
                 pullers: &state.slot_pullers,
                 excluded: ctx.excluded,
+                gate: ctx.gate(),
             }))
     {
         return false;
     }
     if bare_equals
-        && let Some((inst_ver, _)) = built_equals_binding(ctx.root, &ctx.repos, &key2.0, &key2.1)
+        && let Some((inst_ver, _)) = built_equals_binding(ctx.root, &key2.0, &key2.1, ctx.gate())
         && inst_ver != existing_version2
         && built_equals_shift_unrebuildable(BuiltEqualsShiftUnrebuildableArgs {
             root: ctx.root,
-            repos: &ctx.repos,
             category: &key2.0,
             package: &key2.1,
             existing_sub: &existing_sub,
             pullers: &state.slot_pullers,
             excluded: ctx.excluded,
+            gate: ctx.gate(),
         })
     {
         return false;
@@ -178,7 +178,7 @@ pub(crate) fn delta_atom_cleanly_reuses_resolved_slot(
     // Version + slot matched; the `[flag]` use-deps must also hold against the
     // settled package, else the pop site folds a flip. Only then a clean reuse.
     if let Some(use_deps) = atom.use_deps.as_deref().filter(|d| !d.is_empty()) {
-        let all_cands = list_candidates(&ctx.repos, &key2.0, &key2.1).unwrap_or_default();
+        let all_cands = ctx.repo_candidates(&key2.0, &key2.1).unwrap_or_default();
         let Some(existing_cand) = all_cands.iter().find(|c| c.version == existing_version2) else {
             return false;
         };
@@ -336,13 +336,13 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
             root_deps_satisfied_atoms(RootDepsSatisfiedAtomsArgs {
                 metadata: &delta_meta,
                 use_flags: new_use,
-                repos: &ctx.repos,
                 config,
                 running_root: root,
                 dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
                 empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                     delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
                 ),
+                gate: ctx.gate(),
             })
         })
         .unwrap_or_default();
@@ -351,13 +351,13 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
             unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
                 metadata: &delta_meta,
                 use_flags: new_use,
-                repos: &ctx.repos,
                 config,
                 running_root: root,
                 dep_keys: &["DEPEND", "BDEPEND", "IDEPEND"],
                 empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                     delta_meta.get("EAPI").map(String::as_str).unwrap_or("0"),
                 ),
+                gate: ctx.gate(),
             })
         })
         .unwrap_or_default();
@@ -378,13 +378,13 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
         for atom_str in &root_deps_unsatisfied {
             state.entries.extend(resolve_root_deps_build_entries(
                 ResolveRootDepsBuildEntriesArgs {
-                    repos: &ctx.repos,
                     running_root,
                     atom_str,
                     config,
                     owner: key.clone(),
                     seen: &mut state.root_deps_build_seen,
                     local_binpkg: &ctx.local_binpkg,
+                    gate: ctx.gate(),
                 },
             ));
         }
@@ -530,13 +530,13 @@ pub(crate) fn flatten_deps_for_flip(
                 });
                 let queued_view: &[QueueItem] = scoped_queued.as_deref().unwrap_or(&queued);
                 promote_tied_alternative(PromoteTiedAlternativeArgs {
-                    repos: &ctx.repos,
                     config,
                     root: grp_root,
                     entries: entries_view,
                     constraints: union_constraints,
                     alts,
                     queued: queued_view,
+                    gate: ctx.gate(),
                 })
             },
         },
@@ -572,7 +572,6 @@ pub(crate) fn flatten_deps_for_flip(
                 key.1.clone(),
             );
             disjunction_preference(DisjunctionPreferenceArgs {
-                repos: &ctx.repos,
                 config,
                 root: grp_root,
                 entries: entries_view,
@@ -583,6 +582,7 @@ pub(crate) fn flatten_deps_for_flip(
                 atoms,
                 queued: queued_view,
                 update: ctx.update,
+                gate: ctx.gate(),
                 gate_entries: &state.entries,
                 gate_queued: &queued,
             })

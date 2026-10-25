@@ -14,12 +14,12 @@ pub(crate) fn step_slot_conflict_backtrack(
     // happens only through a later pass's own missing-dep feedback, never pre-masked.
     if !pass.slot_conflicts.is_empty() {
         let choices = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
-            repos: &ctx.repos,
             excluded: ctx.excluded,
             params: grown,
             slot_pullers: &pass.slot_pullers,
             sc: &pass.slot_conflicts[0],
             config,
+            gate: ctx.gate(),
         });
         // Novelty is compared on the full entry (neg + reason): at least one group
         // member new to the search state. A repeat with recomputed parents is a
@@ -80,7 +80,6 @@ pub(crate) fn fold_rebuild_scan(
     let scan_scope = ctx.scan_reachable(&pass.entries);
     let (mut scheduled, _abi, _masked) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: ctx.root,
-        repos: &ctx.repos,
         entries: &pass.entries,
         reachable: &ctx.slot_op_reachable,
         scope: Some(&scan_scope),
@@ -92,11 +91,11 @@ pub(crate) fn fold_rebuild_scan(
         top_level_atoms: &top_atoms,
         excluded: ctx.excluded,
         config,
+        gate: ctx.gate(),
     });
     let (force_consumers, forced) =
         slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
             root: ctx.root,
-            repos: &ctx.repos,
             config,
             entries: &pass.entries,
             reachable: &ctx.slot_op_reachable,
@@ -106,6 +105,7 @@ pub(crate) fn fold_rebuild_scan(
             update: ctx.update,
             top_level_cps: &ctx.top_level_cps,
             excluded: ctx.excluded,
+            gate: ctx.gate(),
         });
     scheduled.extend(force_consumers);
     grown.slot_operator_forced_upgrade.extend(forced);

@@ -67,3 +67,6 @@
 
 ## `--version` (#552)
 - `PORTED_PORTAGE_VERSION = "3.0.83"` (bumped by port slices): `run()` prints `portage_version_line(PORTED_PORTAGE_VERSION, ...)` and exits 0. The line builder is factored out of `--info`'s header (unchanged behavior there, still the installed-vdb version). Ruling (Task 9): `--version` reports the running implementation (= the ported release, like `portage.VERSION`); `--info` keeps its installed-version header (out of scope, normalized to `XXX` in pins).
+
+## `--info` existence probe (allow-list, #571)
+- The ebuild-exists half reads through the gate (`repo_candidates`, which prints the `!!!` on this standalone path): `emerge --info` on an unlisted cp reports it missing like Portage.

@@ -25,12 +25,12 @@ pub(crate) struct SimilarMask {
 
 /// Arguments of [`slot_conflict_mask_choices`].
 pub(crate) struct SlotConflictMaskChoicesArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) excluded: &'a [String],
     pub(crate) params: &'a BacktrackParams,
     pub(crate) slot_pullers: &'a SlotPullers,
     pub(crate) sc: &'a SlotConflict,
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Ranked mask choices for a slot conflict: each choice masks its target plus
@@ -46,12 +46,12 @@ pub(crate) struct SlotConflictMaskChoicesArgs<'a> {
 /// only.
 pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) -> Vec<MaskChoice> {
     let SlotConflictMaskChoicesArgs {
-        repos,
         excluded,
         params,
         slot_pullers,
         sc,
         config,
+        gate,
     } = args;
     // Every pulled version is a candidate, highest first.
     let mut versions: Vec<String> = sc.instances.iter().map(|i| i.version.clone()).collect();
@@ -98,7 +98,7 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
             if !parents.is_empty() {
                 let party_versions: Vec<&str> =
                     sc.instances.iter().map(|i| i.version.as_str()).collect();
-                if let Ok(cands) = list_candidates(repos, &sc.category, &sc.package) {
+                if let Ok(cands) = gate.repo_candidates(&sc.category, &sc.package) {
                     let mut sibs: Vec<&Candidate> = Vec::new();
                     for c in cands.iter() {
                         if c.slot != sc.slot || party_versions.contains(&c.version.as_str()) {

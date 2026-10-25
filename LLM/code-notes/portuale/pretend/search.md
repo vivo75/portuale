@@ -23,3 +23,6 @@
 
 ## fn render_ambiguous_search_output
 - Ports Portage's `ambiguous_package_name` non-`--quiet` branch (`depgraph.py:12063-12083`): builds a `search` object seeded via `addCP(cp)` for each ambiguous `cp` (not a free-text query -- so, per Portage's `_results_specified`, `output()` skips straight to rendering the given list, no `_iter_search()`/`"Searching...\n\n"` line at all), then calls `s.output()`. Portage's own `verbose` here is always `True` (`search(..., "--quiet" not in myopts, ...)`, and this branch is only reached when `"--quiet" not in myopts` already) -- so the full metadata block always renders, unlike `run_search`'s own `--quiet`-gated `verbose` toggle. Reuses `run_search`'s `search_best_candidate`/`search_candidate_visible`/render shape; same v1 cut that function's doc comment already documents (`Size of files`, the `bestmatch-visible` mask/keyword filter approximation) -- not re-derived here, this is the identical renderer Portage's own single `search.output()` is, just fed a `addCP`-built list instead of a query match.
+
+## fn run_search (allow-list, #571)
+- Takes `config_root` and walks `all_cp(repos, &repo_categories(...))`: unlisted categories are invisible to `--search` (Portage `cp_all(categories=settings.categories)`), with no `!!!` anywhere on this path.

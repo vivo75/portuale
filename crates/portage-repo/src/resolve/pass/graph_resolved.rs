@@ -133,7 +133,6 @@ pub(crate) fn graph_resolved_entry<'a, 's>(
             record_slot_conflict(
                 &mut state.slot_conflicts,
                 build_slot_conflict(BuildSlotConflictArgs {
-                    repos: &ctx.repos,
                     config,
                     root: ctx.root,
                     category: &key.0,
@@ -144,6 +143,7 @@ pub(crate) fn graph_resolved_entry<'a, 's>(
                     current_version: version,
                     slot_pullers: &state.slot_pullers,
                     installed_side: Some(InstalledSide::Existing),
+                    gate: ctx.gate(),
                 }),
             );
         }

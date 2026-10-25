@@ -7,3 +7,6 @@ Re-derives the source (ebuild, PKGDIR or binhost binary) of the resolved version
 - The `--binpkg-respect-use` / `--binpkg-changed-deps` gates are the same ones `resolve_pretend` applied when it chose the version.
 - `_equiv_ebuild_visible` (see `resolve_pretend`): `--use-ebuild-visibility` enforces the visible-ebuild requirement even under `--usepkgonly` / a `--useoldpkg-atoms` match.
 - Backlog #212 (v2 `#24c`): only the `[binary]`-marked masked form filters here; plain (`!=cpv`) negatives are ignored.
+
+## gate threading (#571)
+- The re-derived ebuild pool uses `ctx.repo_candidates`; the `BinaryDepsChangedArgs` site uses `ctx.gate()`.

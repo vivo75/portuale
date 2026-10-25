@@ -237,7 +237,6 @@ fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_tim
         ("dev-libs".to_string(), "rdctarget".to_string()),
     ]);
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &repos,
         root: &root,
         entries: &entries,
         with_bdeps: true,
@@ -250,6 +249,7 @@ fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_tim
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(
         enforced.len(),

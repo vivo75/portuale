@@ -64,3 +64,6 @@ Package rows for `emerge --info`.
 - A `DEFINED_PHASES` of `"-"` (the modern "no phases" marker) is truthy and does not name `info`, so it does *not* fire.
 - Unlike the ebuild-candidate path, an installed package is listed in `mypkgs` regardless; the phase step is gated on Portage's `if metadata["DEFINED_PHASES"]: if "info" not in ...split(): continue` (`actions.py:2350-2356`). Fires on empty because the check is falsy-based.
 - The ebuild lookup is Portage's `vardb.findname(pkg.cpv)` locating `<pf>.ebuild`; portuale runs it via `ebuild_merge::run_vdb_saved_env_phase`.
+
+## no gate (#571, deliberate)
+- Post-existence-check display (`--info` gates the probe itself). Verified: no call in this file changed.

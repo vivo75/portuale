@@ -63,3 +63,6 @@ The slot-conflict ABI probe.
 
 ## fn parse_conflict_parent_cpv
 - `cat/pkg-ver` for a slot-conflict parent edge: [`slot_conflict_puller_cpv`] renders `` `cat/pkg-ver:slot/sub::repo` `` (empty for a top-level `(Argument)` parent). Strips the display suffixes back to the triple.
+
+## gate threading (#571)
+- `SlotConflictAbiProbeArgs`, `ReplacementParentAcceptsArgs` and the positional helpers (`highest_visible_slot`, `greedy_pinned_cps`, `greedy_pin_survives_revision`) carry the gate. `collect_probe_parents` is vdb-only and needs none.

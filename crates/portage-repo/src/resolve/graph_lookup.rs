@@ -41,12 +41,12 @@ pub(crate) fn atom_matches_installed(
 /// whose ebuilds are all masked keeps its masked-package diagnostics.
 /// Portage: depgraph.py, _iter_match_pkgs_any (the vardb half of `dbs`).
 pub(crate) fn cp_has_tree_or_binary_candidate(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     local_binpkg: &BinaryIndex,
     category: &str,
     package: &str,
 ) -> bool {
-    list_candidates(repos, category, package)
+    gate.repo_candidates(category, package)
         .map(|c| !c.is_empty())
         .unwrap_or(false)
         || !list_binary_candidates(local_binpkg, category, package).is_empty()
@@ -133,8 +133,8 @@ pub fn best_installed_match(
 /// blocker is vacuously satisfied; no candidate at all counts as not installed.
 /// Portage: dep_check.py, dep_zapdeps (all_installed_slots).
 pub(crate) fn atom_installed_in_slot_of(
+    gate: CategoryGate<'_>,
     root: &Path,
-    repos: &[RepoConfig],
     config: &portage_profile::Config,
     atom_str: &str,
     extra_constraints: &[String],
@@ -147,12 +147,12 @@ pub(crate) fn atom_installed_in_slot_of(
     }
     let Some((.., slot)) =
         highest_available_candidate_ignoring_use(HighestAvailableCandidateIgnoringUseArgs {
-            repos,
             atom_str,
             category: &atom.category,
             package: &atom.package,
             config,
             extra_constraints,
+            gate,
         })
     else {
         return false;
@@ -299,7 +299,7 @@ pub(crate) fn atoms_all_in_graph(
 /// half of `atom_currently_satisfiable`, returned rather than collapsed to a bool so
 /// the downgrade guards can compare versions.
 pub(crate) fn visible_tree_matches(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     atom_str: &str,
     config: &portage_profile::Config,
     extra_constraints: &[String],
@@ -307,7 +307,7 @@ pub(crate) fn visible_tree_matches(
     let Some(atom) = parse_dep_atom(atom_str, "graph_lookup") else {
         return Vec::new();
     };
-    let Ok(candidates) = list_candidates(repos, &atom.category, &atom.package) else {
+    let Ok(candidates) = gate.repo_candidates(&atom.category, &atom.package) else {
         return Vec::new();
     };
     let visible: Vec<&Candidate> = candidates
@@ -346,13 +346,13 @@ pub(crate) fn visible_tree_matches(
 /// `runtime_pkg_mask` the similar-available iteration skips.
 /// Portage: depgraph.py, _downgrade_probe.
 pub(crate) fn downgrade_probe(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     config: &portage_profile::Config,
     slot_atom: &str,
     version: &str,
     extra_constraints: &[String],
 ) -> bool {
-    let similar = visible_tree_matches(repos, slot_atom, config, extra_constraints);
+    let similar = visible_tree_matches(gate, slot_atom, config, extra_constraints);
     !similar.is_empty()
         && !similar
             .iter()

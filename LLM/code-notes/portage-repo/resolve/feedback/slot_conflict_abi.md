@@ -6,3 +6,6 @@ ABI backtrack arm: rebuild a built parent whose soname/`:=` conflict atom the up
 - Gated on a live search like the scan's own call site (`backtrack_max > 0` is Portage's `_allow_backtracking`; `ignore_built_slot_operator_deps` drops the built atoms the probe reads; no unsatisfiable dependency outstanding, like the `has_nvc` dead-end arm below -- Portage never reaches conflict processing with a failed `_create_graph`).
 - Deliberately NOT gated on `rebuild_if_new_slot` (Portage's conflict path never is -- the scan's call-site gate is the pre-existing narrowing for its own arms, not this one).
 - Same inputs the scan builds for its own refusal map: every cp this pass walked, the merge-bound set, and the R2 parents.
+
+## gate threading (#571)
+- `SlotConflictAbiProbeArgs` uses `ctx.gate()`.

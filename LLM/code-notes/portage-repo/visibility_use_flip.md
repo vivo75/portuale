@@ -62,3 +62,6 @@ USE-flip suggestions for autounmask.
 
 ## fn violated_parent_flags (split validity domain, backlog #441 S1 / #457)
 - `child_valid: &HashSet` became `&dyn Fn(&str) -> bool`: every use is a `contains` check, and the call site no longer builds the `declared ∪ IUSE_EFFECTIVE` union. Production passes a closure over the declared set plus `config.iuse_effective`; tests wrap their sets the same way.
+
+## gate threading (#571)
+- `suggested_use_candidate`, `installed_parent_use_state`, `ViableParentFlipTargetsArgs`, `suggested_parent_use_candidate` and `parent_use_state` carry the gate.

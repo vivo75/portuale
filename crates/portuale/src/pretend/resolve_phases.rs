@@ -253,6 +253,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         set_args: set_args.clone(),
         argument_sets: argument_sets.clone(),
         solver,
+        local_config: true,
     };
     let _span = portage_util::profile::span(format!("resolve_once complete={complete}"));
     active_resolver_for(solver).resolve(&req)
@@ -363,9 +364,20 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
                     &[]
                 },
             };
-            if let Some(extra) =
-                misspell_suggestion_block(&msg, repos, root, misspell_suggestions, dbs)
-            {
+            let categories = portage_repo::repo_categories(repos, config_root, true);
+            let warned = std::cell::RefCell::new(std::collections::HashSet::new());
+            if let Some(extra) = misspell_suggestion_block(
+                &msg,
+                portage_repo::CategoryGate {
+                    repos,
+                    categories: &categories,
+                    config_root,
+                    warned: &warned,
+                },
+                root,
+                misspell_suggestions,
+                dbs,
+            ) {
                 eprint!("{extra}");
             }
             eprintln!();
@@ -456,16 +468,27 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     // merge list (the locked set gates it); it only widens `--json` /
     // `--changed-deps-report` / slot-op accounting.
     // Portage: depgraph.py, _complete_graph
-    let auto_enable = !nodeps
-        && portage_repo::complete_graph_auto_enable(portage_repo::CompleteGraphAutoEnableArgs {
+    let auto_enable = !nodeps && {
+        // The allow-list for the complete-graph decision: entries are
+        // merge-bound (listed), so this gate never fires its `!!!`.
+        let categories = portage_repo::repo_categories(repos, config_root, true);
+        let warned = std::cell::RefCell::new(std::collections::HashSet::new());
+        let gate = portage_repo::CategoryGate {
+            repos,
+            categories: &categories,
+            config_root,
+            warned: &warned,
+        };
+        portage_repo::complete_graph_auto_enable(portage_repo::CompleteGraphAutoEnableArgs {
             entries: &result.entries,
             if_new_use: complete_if_new_use,
             if_new_ver: complete_if_new_ver,
             if_new_slot: rebuild_if_new_slot,
             root,
-            repos,
             config,
-        });
+            gate,
+        })
+    };
     let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
     // A first walk that already aborted (a masked or flip-only dependency) keeps its
     // report: Portage reaches `_complete_graph` only after `_create_graph()` succeeded.
@@ -519,14 +542,23 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     if let (Some(running), Some(running_cfg)) =
         (root_deps_running_root.as_deref(), running_config.as_ref())
     {
-        portage_repo::repaint_running_root_entry_displays(
-            &mut result.entries,
+        // Display-time allow-list (built once per report, never per lookup).
+        let categories = portage_repo::repo_categories(repos, config_root, true);
+        let warned = std::cell::RefCell::new(std::collections::HashSet::new());
+        let gate = portage_repo::CategoryGate {
             repos,
+            categories: &categories,
+            config_root,
+            warned: &warned,
+        };
+        portage_repo::repaint_running_root_entry_displays(
+            gate,
+            &mut result.entries,
             running,
             running_cfg,
         );
         if let portage_repo::ResolveOutcome::Aborted { partial, .. } = &mut result.outcome {
-            portage_repo::repaint_running_root_entry_displays(partial, repos, running, running_cfg);
+            portage_repo::repaint_running_root_entry_displays(gate, partial, running, running_cfg);
         }
     }
     Ok(result)

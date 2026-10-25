@@ -493,12 +493,12 @@ fn use_unsat_parent_row_suggests_enabling_an_off_flag() {
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            repos: &repos,
             root: dir.as_path(),
             entries: &entries,
             display_atom: "dev-libs/child[flipme=]",
             owner: Some(&owner_163("dev-libs", "parent")),
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
@@ -524,12 +524,12 @@ fn use_unsat_parent_row_suggests_disabling_an_on_flag() {
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            repos: &repos,
             root: dir.as_path(),
             entries: &entries,
             display_atom: "dev-libs/child[keepoff?]",
             owner: Some(&owner_163("dev-libs", "parent")),
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
@@ -559,12 +559,12 @@ fn use_unsat_parent_row_suggests_enabling_an_installed_parents_off_flag() {
     let entries = vec![entry_163("dev-libs", "parent", installed_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            repos: &repos,
             root: dir.as_path(),
             entries: &entries,
             display_atom: "dev-libs/child[flip=]",
             owner: Some(&owner_163("dev-libs", "parent")),
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
@@ -737,23 +737,23 @@ fn use_unsat_parent_row_returns_none_without_an_owner_or_conditional_flags() {
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            repos: &repos,
             root: dir.as_path(),
             entries: &entries,
             display_atom: "dev-libs/child[flipme?]",
             owner: None,
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         }),
         None
     );
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            repos: &repos,
             root: dir.as_path(),
             entries: &entries,
             display_atom: "dev-libs/child[flipme]",
             owner: Some(&owner_163("dev-libs", "parent")),
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         }),
         None
     );
@@ -781,7 +781,7 @@ fn use_unsat_parent_row_notes_a_newly_violated_required_use() {
     let config = cfg_163();
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
-        use_unsat_parent_row(UseUnsatParentRowArgs { repos: &repos, root: dir.as_path(), entries: &entries, display_atom: "dev-libs/child[flipme=]", owner: Some(&owner_163("dev-libs", "parent")), config: &config }),
+        use_unsat_parent_row(UseUnsatParentRowArgs { root: dir.as_path(), entries: &entries, display_atom: "dev-libs/child[flipme=]", owner: Some(&owner_163("dev-libs", "parent")), config: &config, gate: crate::test_gate(&repos) }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
             vec!["Change USE: +flipme, this change violates use flag constraints defined by dev-libs/parent-1.0: 'flipme? ( other )'".to_string()],
@@ -812,12 +812,12 @@ fn use_unsat_parent_row_omits_the_note_when_required_use_stays_satisfied() {
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            repos: &repos,
             root: dir.as_path(),
             entries: &entries,
             display_atom: "dev-libs/child[flipme=]",
             owner: Some(&owner_163("dev-libs", "parent")),
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
@@ -936,8 +936,8 @@ fn refresh_entry_use_display_renders_a_new_entry_from_the_candidate() {
     let config = cfg_163();
     let mut entries = vec![entry_163("dev-libs", "rdisp", new_163("2.0"), &[])];
     refresh_entry_use_display(
+        crate::test_gate(&repos),
         &mut entries,
-        &repos,
         &dir,
         &owner_163("dev-libs", "rdisp"),
         &config,
@@ -980,8 +980,8 @@ fn refresh_entry_use_display_renders_upgrade_and_downgrade_against_the_installed
         &[],
     )];
     refresh_entry_use_display(
+        crate::test_gate(&repos),
         &mut entries,
-        &repos,
         &dir,
         &owner_163("dev-libs", "rdisp"),
         &config,
@@ -1023,8 +1023,8 @@ fn refresh_entry_use_display_renders_upgrade_and_downgrade_against_the_installed
         &[],
     )];
     refresh_entry_use_display(
+        crate::test_gate(&repos),
         &mut entries,
-        &repos,
         &dir,
         &owner_163("dev-libs", "rdisp"),
         &config,
@@ -1072,8 +1072,8 @@ fn refresh_entry_use_display_force_shows_a_dropped_reinstall_trigger_flag() {
         &[],
     )];
     refresh_entry_use_display(
+        crate::test_gate(&repos),
         &mut entries,
-        &repos,
         &dir,
         &owner_163("dev-libs", "rdisp"),
         &config,
@@ -1106,8 +1106,8 @@ fn refresh_entry_use_display_skips_entries_for_another_cp() {
         entry_163("sys-libs", "rdisp", new_163("1.0"), &[]),
     ];
     refresh_entry_use_display(
+        crate::test_gate(&repos),
         &mut entries,
-        &repos,
         &dir,
         &owner_163("dev-libs", "rdisp"),
         &config,
@@ -1137,8 +1137,8 @@ fn refresh_entry_use_display_picks_the_candidate_at_the_entry_version() {
     let config = cfg_163();
     let mut entries = vec![entry_163("dev-libs", "rdisp", new_163("2.0"), &[])];
     refresh_entry_use_display(
+        crate::test_gate(&repos),
         &mut entries,
-        &repos,
         &dir,
         &owner_163("dev-libs", "rdisp"),
         &config,
@@ -1162,8 +1162,8 @@ fn refresh_entry_use_display_skips_settled_entries() {
     let config = cfg_163();
     let mut entries = vec![entry_163("dev-libs", "rdisp", installed_163("1.0"), &[])];
     refresh_entry_use_display(
+        crate::test_gate(&repos),
         &mut entries,
-        &repos,
         &dir,
         &owner_163("dev-libs", "rdisp"),
         &config,
@@ -1234,10 +1234,10 @@ fn resolve_163(
 ) -> PretendOutcome {
     resolve_pretend(
         &SelectSource {
-            repos,
             root,
             config,
             local_binpkg: &build_local_binpkg_index(config),
+            gate: crate::test_gate(repos),
         },
         atom,
         &SelectOptions {
@@ -2679,6 +2679,7 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         implicit_system_deps: false,
         complete: false,
         set_args: HashSet::new(),
+        categories: test_categories(&repos),
         repos,
         slot_op_reachable: reachable.clone(),
         slot_op_seeds: reachable.iter().map(|(c, p)| format!("{c}/{p}")).collect(),
@@ -2689,6 +2690,8 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         complete_reuse: HashMap::new(),
         top_level: TopLevel::from_iter([]),
         top_level_cps: HashSet::new(),
+        config_root: root.to_path_buf(),
+        category_warned: Default::default(),
         local_binpkg: build_local_binpkg_index(config),
         tree_sim_memo: Default::default(),
         pool_memo: Default::default(),

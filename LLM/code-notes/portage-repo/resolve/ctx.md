@@ -64,3 +64,9 @@ The per-run resolver context: BFS request fields plus the derived required-set c
 
 ## field ResolveCtx::installed_meta_memo
 - Backlog #441 S1 / #457 (third step): `installed_dep_string`'s `Effective` layer, walked-long instead of per-pass. Portage applies the overlay once per installed instance and keeps it for every pass (`FakeVartree.dynamic_deps_applied`); `run_pass` swaps the ctx map into the pass state at pass start and back at every exit (normal and `?`, since a failed pass retries on the same ctx), so all passes share one memo with no signature churn. Sound: no reader takes config (only VDB content under the freeze scope, live repo metadata fixed per walk, CLI-constant flags), and every reader derives the layer from `dynamic_deps`, which is fixed for one ctx.
+
+## fields categories/config_root/category_warned (#571)
+- `categories` is `repo_categories(&repos, &req.config_root, req.local_config)`, built once in `ResolveCtx::new` (Portage builds `settings.categories` once per config). `config_root` renders the `!!!` path; `category_warned` dedups it to once per cp per walk.
+
+## fn gate / fn repo_candidates (#571)
+- `gate()` borrows the three fields as a `CategoryGate`; `repo_candidates` is the walk's ebuild lookup, replacing every `list_candidates(&ctx.repos, …)` call.

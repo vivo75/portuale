@@ -32,3 +32,6 @@ The backtracking loop: one pass per node, settle or feed back.
   aborts loudly. The Task-3 `std::mem::take(grown)` orphaning suspect was
   disproven by instrumentation (the masked child IS accepted and explored;
   its retry errors) -- the loss was purely the pin-less fallback assembly.
+
+## gate threading (#571)
+- The naked re-run's `ReverseDependencyConstraintsArgs` and the `BacktrackMissedUpdatesArgs` sites use the owning ctx's gate.

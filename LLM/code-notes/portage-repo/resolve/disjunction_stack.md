@@ -69,3 +69,6 @@ Deferred `||` resolution for the default solver (02.359 S5, backlog #369).
   shift them mid-pass).
 - Malformed input falls back to today's path: the splitter returns its input
   unsplit, so there are no groups and everything flattens in-walk as before.
+
+## gate threading (#571)
+- `DisjunctionPreferenceArgs` carries the gate into `alternative_downgrade_demoted` / `downgrade_probe` / `visible_tree_matches`.

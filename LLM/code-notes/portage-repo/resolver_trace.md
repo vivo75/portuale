@@ -69,3 +69,6 @@
 - #138: Portage's `--debug` prints `Depstring:` raw and `Candidates:` evaluated (`logs/l111-s0-20260921/real-rest-debug.log`) -- the evaluated form rides `DepEdge` beside the (already reduced-raw) token. Portage's true-raw first stanza has no counterpart here (see `DepEdge::evaluated`'s doc).
 - #277 detail: the compact `Child:`/`Parent Dep:` pair Portage's live walk prints when it re-visits an already-graphed node (each slot-conflict node's innermost chain). Only back edges were scheduled (forward edges are covered by the child's own later stanza), in walk order.
 - Portage adds both instances for shadowed children (the installed one and the merge); this block reproduces the one portuale's `entries` lost.
+
+## no gate (#571, deliberate)
+- Debug-only traces and resolved-entry enrichment read raw; cycle members are walk entries like `dep_chain`. Verified: no call in this file changed.

@@ -7,3 +7,6 @@ Solves the pass's slot conflicts directly where one instance can go, and drops t
 - The removed version's own walked deps stay attached: all S2 oracle removals are leaves; a non-leaf removal keeps stale deps (see `direct_solve_slot_conflicts`' repoint arm).
 - An installed keeper becomes `AlreadyInstalled` like Portage's kept installed node.
 - History (#142 S2 F3): the F2 owner-version gate files exactly the keeper's blockers and drops the losers'.
+
+## gate threading (#571)
+- `DirectSolveInput`, both `slot_conflict_flag_sets` sites and the pool use `ctx.gate()`.

@@ -110,14 +110,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert_eq!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base,
-            repos: &repos,
             entries: &entries,
             slot_want: &slot_want,
             pullers: &pullers,
             masked: &masked,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         }),
         BTreeSet::from([par.clone()]),
         "installed owner with an unsatisfiable built dep and a live replacement seeds"
@@ -134,14 +134,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert_eq!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base_x,
-            repos: &repos_x,
             entries: &entries_x,
             slot_want: &slot_want_x,
             pullers: &pullers_x,
             masked: &masked,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos_x),
         }),
         BTreeSet::from([par.clone()]),
         "only the owner whose own want is the built atom seeds"
@@ -156,14 +156,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base,
-            repos: &repos,
             entries: &entries,
             slot_want: &plain_want,
             pullers: &pullers_plain,
             masked: &masked,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         })
         .is_empty(),
         "unbuilt atoms are not probe fuel"
@@ -181,14 +181,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base,
-            repos: &repos,
             entries: &entries,
             slot_want: &slot_want,
             pullers: &pullers,
             masked: &masked_owner,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         })
         .is_empty(),
         "masked owners never re-seed"
@@ -211,14 +211,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert_eq!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base_m,
-            repos: &repos_m,
             entries: &entries,
             slot_want: &slot_want,
             pullers: &pullers,
             masked: &masked_cand,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos_m),
         }),
         BTreeSet::from([par.clone()]),
         "masking one candidate version still seeds through the other"
@@ -233,14 +233,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base_m2,
-            repos: &repos_m2,
             entries: &entries,
             slot_want: &slot_want,
             pullers: &pullers,
             masked: &masked_cand,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos_m2),
         })
         .is_empty(),
         "a masked replacement yields no seed"
@@ -249,14 +249,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base,
-            repos: &repos,
             entries: &entries,
             slot_want: &slot_want,
             pullers: &pullers,
             masked: &masked,
             with_bdeps: false,
             excluded: &["app-misc/unsatpar".to_string()],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos),
         })
         .is_empty(),
         "excluded owners refuse the probe"
@@ -266,14 +266,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base_n,
-            repos: &repos_n,
             entries: &entries,
             slot_want: &slot_want,
             pullers: &pullers,
             masked: &masked,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos_n),
         })
         .is_empty(),
         "no replacement stays a dead end"
@@ -287,14 +287,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base_s,
-            repos: &repos_s,
             entries: &entries,
             slot_want: &slot_want,
             pullers: &pullers,
             masked: &masked,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos_s),
         })
         .is_empty(),
         "a different-slot replacement stays a dead end"
@@ -304,14 +304,14 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert!(
         slot_operator_unsatisfied_probe(SlotOperatorUnsatisfiedProbeArgs {
             root: &base_u,
-            repos: &repos_u,
             entries: &entries,
             slot_want: &slot_want,
             pullers: &pullers,
             masked: &masked,
             with_bdeps: false,
             excluded: &[],
-            config: &config
+            config: &config,
+            gate: crate::test_gate(&repos_u),
         })
         .is_empty(),
         "uninstalled owners never seed"
@@ -327,7 +327,6 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     let (seeds_b, masks_b) =
         slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
             root: &base_b,
-            repos: &repos_b,
             entries: &entries_b,
             slot_want: &slot_want_b,
             pullers: &pullers_b,
@@ -335,6 +334,7 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
             with_bdeps: false,
             excluded: &[],
             config: &config,
+            gate: crate::test_gate(&repos_b),
         });
     assert!(
         seeds_b.is_empty(),
@@ -361,7 +361,6 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
     assert_eq!(
         slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
             root: &base_b,
-            repos: &repos_b,
             entries: &entries_b,
             slot_want: &slot_want_b,
             pullers: &pullers_b,
@@ -369,13 +368,13 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
             with_bdeps: false,
             excluded: &[],
             config: &config,
+            gate: crate::test_gate(&repos_b),
         }),
         (BTreeSet::new(), BTreeSet::new())
     );
     let only = |_unused: Option<&(String, String)>, masked| {
         slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
             root: &base,
-            repos: &repos,
             entries: &entries,
             slot_want: &slot_want,
             pullers: &pullers,
@@ -383,6 +382,7 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
             with_bdeps: false,
             excluded: &[],
             config: &config,
+            gate: crate::test_gate(&repos),
         })
         .0
     };

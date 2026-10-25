@@ -183,7 +183,7 @@ pub(crate) struct SimilarNameDbs<'a> {
 // called from depgraph.py `_show_unsatisfied_dep` and actions.py
 pub(crate) fn misspell_suggestion_block(
     message: &str,
-    repos: &[portage_repo::RepoConfig],
+    gate: portage_repo::CategoryGate<'_>,
     root: &Path,
     enabled: bool,
     dbs: SimilarNameDbs<'_>,
@@ -200,7 +200,7 @@ pub(crate) fn misspell_suggestion_block(
     // other than the running root), so cut at the closing quote.
     let atom_str = rest.split_once('"')?.0;
     if !atom_str.contains('/') && !atom_str.is_empty() {
-        return bare_name_suggestion_block(atom_str, repos, root, dbs);
+        return bare_name_suggestion_block(atom_str, gate.repos, gate.categories, root, dbs);
     }
     let atom = parse_atom(atom_str)?;
     let binary = dbs.pkgdir.map(|pkgdir| {
@@ -211,11 +211,11 @@ pub(crate) fn misspell_suggestion_block(
     let target = format!("{}/{}", atom.category, atom.package);
     // Only when no database that is read has the `cat/pkg` (`cp_exists`): an installed
     // one reports no similar-names block (the S0-backed `360-gone-pv` capture).
-    // Portage: depgraph.py, _show_unsatisfied_dep.
-    let ebuild_has = dbs.ebuild
-        && !portage_repo::list_candidates(repos, &atom.category, &atom.package)
-            .map(|c| c.is_empty())
-            .unwrap_or(true);
+    // Portage: depgraph.py, _show_unsatisfied_dep. The ebuild half reads the
+    // allow-listed tree silently: the walk already fired the `!!!` for a cp
+    // the miss names (backlog #571 oracle), and this display gate must not
+    // re-print it.
+    let ebuild_has = dbs.ebuild && gate.has_ebuilds(&atom.category, &atom.package);
     let installed_has =
         !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty();
     let binary_has = binary.as_ref().is_some_and(|cps| cps.contains(&target));
@@ -228,7 +228,7 @@ pub(crate) fn misspell_suggestion_block(
         .map(|p| format!("{}/{}", p.category, p.package))
         .chain(
             dbs.ebuild
-                .then(|| portage_repo::all_cp(repos))
+                .then(|| portage_repo::all_cp(gate.repos, gate.categories))
                 .into_iter()
                 .flatten(),
         )
@@ -318,6 +318,7 @@ fn bare_name_matches(
 fn bare_name_suggestion_block(
     name: &str,
     repos: &[portage_repo::RepoConfig],
+    categories: &std::collections::BTreeSet<String>,
     root: &Path,
     dbs: SimilarNameDbs<'_>,
 ) -> Option<String> {
@@ -326,7 +327,7 @@ fn bare_name_suggestion_block(
         .map(|p| format!("{}/{}", p.category, p.package))
         .collect();
     if dbs.ebuild {
-        all_cp.extend(portage_repo::all_cp(repos));
+        all_cp.extend(portage_repo::all_cp(repos, categories));
     }
     // Group by lowered `cat/pkg` first: a lowered package name equal to the
     // typed one is dropped only when every original-case owner is

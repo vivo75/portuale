@@ -13,7 +13,6 @@ pub(crate) type SlotOpForceScan = (
 /// Arguments of [`slot_operator_update_force_scan`].
 pub(crate) struct SlotOperatorUpdateForceScanArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) reachable: &'a HashSet<(String, String)>,
@@ -23,6 +22,7 @@ pub(crate) struct SlotOperatorUpdateForceScanArgs<'a> {
     pub(crate) update: bool,
     pub(crate) top_level_cps: &'a HashSet<(String, String)>,
     pub(crate) excluded: &'a [String],
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// The forcing half of Portage's slot-operator update probe: the walk bound
@@ -37,7 +37,6 @@ pub(crate) fn slot_operator_update_force_scan(
 ) -> SlotOpForceScan {
     let SlotOperatorUpdateForceScanArgs {
         root,
-        repos,
         config,
         entries,
         reachable,
@@ -47,6 +46,7 @@ pub(crate) fn slot_operator_update_force_scan(
         update,
         top_level_cps,
         excluded,
+        gate,
     } = args;
     let mut consumers: BTreeSet<(String, String)> = BTreeSet::new();
     let mut forced: BTreeSet<(String, String, String)> = BTreeSet::new();
@@ -97,10 +97,11 @@ pub(crate) fn slot_operator_update_force_scan(
             if is_excluded(&cp.0, &cp.1, version) {
                 continue;
             }
-            let Some(live) = live_metadata_for_installed(repos, root, &cp.0, &cp.1, version) else {
+            let Some(live) = live_metadata_for_installed(gate.repos, root, &cp.0, &cp.1, version)
+            else {
                 continue;
             };
-            if !ebuild_visible_at(repos, &cp.0, &cp.1, version, config) {
+            if !ebuild_visible_at(gate, &cp.0, &cp.1, version, config) {
                 continue;
             }
             let dep_keys: &[&str] = if with_bdeps {
@@ -178,7 +179,7 @@ pub(crate) fn slot_operator_update_force_scan(
                 if parent_atoms.is_empty() {
                     continue;
                 }
-                let Ok(cands) = list_candidates(repos, &child_cp.0, &child_cp.1) else {
+                let Ok(cands) = gate.repo_candidates(&child_cp.0, &child_cp.1) else {
                     continue;
                 };
                 let mut best: Option<(&Candidate, String)> = None;
@@ -230,7 +231,6 @@ pub(crate) fn slot_operator_update_force_scan(
 /// Arguments of [`slot_operator_slot_change_probe`].
 pub(crate) struct SlotOperatorSlotChangeProbeArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) undone: &'a BTreeSet<(String, String)>,
     pub(crate) scheduled: &'a mut BTreeSet<(String, String)>,
@@ -239,6 +239,7 @@ pub(crate) struct SlotOperatorSlotChangeProbeArgs<'a> {
     /// `collect_feedback`'s `slot_operator_mask_built` records.
     pub(crate) masked: &'a mut BTreeSet<(String, String, String)>,
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Portage's `_slot_change_probe`: a slot move without a revbump. For an
@@ -251,13 +252,13 @@ pub(crate) struct SlotOperatorSlotChangeProbeArgs<'a> {
 pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeArgs<'_>) {
     let SlotOperatorSlotChangeProbeArgs {
         root,
-        repos,
         entries,
         undone,
         scheduled,
         excluded,
         masked,
         config,
+        gate,
     } = args;
     const DEP_KEYS: [&str; 5] = ["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
     for e in entries {
@@ -271,7 +272,7 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
             _ => continue,
         };
         let cp = (e.category.clone(), e.package.clone());
-        let Some(metadata) = tree_metadata_for(repos, &cp, version) else {
+        let Some(metadata) = tree_metadata_for(gate, &cp, version) else {
             continue;
         };
         let use_flags: HashSet<String> = e
@@ -319,8 +320,8 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                     // cpv moved (slot, sub_slot) vs the installed instance.
                     if resolved_installed
                         && slot_changed(
+                            gate,
                             root,
-                            repos,
                             &atom.category,
                             &atom.package,
                             &installed_version,
@@ -361,8 +362,7 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                     // The replacement gate and the slot compare read one
                     // tree lookup: the highest-priority repo's candidate
                     // at the binary's own version.
-                    let Ok(tree_cands) = list_candidates(repos, &atom.category, &atom.package)
-                    else {
+                    let Ok(tree_cands) = gate.repo_candidates(&atom.category, &atom.package) else {
                         continue;
                     };
                     let Some(tree) = tree_cands
@@ -400,7 +400,6 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
 
 /// Arguments of [`replacement_accepts`].
 pub(crate) struct ReplacementAcceptsArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) pkg: &'a InstalledPackage,
@@ -408,6 +407,7 @@ pub(crate) struct ReplacementAcceptsArgs<'a> {
     pub(crate) provider_cp: &'a (String, String),
     /// `cat/pkg-ver:slot/sub` of the candidate child.
     pub(crate) cand: &'a str,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Whether the tree ebuild that would replace an installed consumer accepts
@@ -417,20 +417,20 @@ pub(crate) struct ReplacementAcceptsArgs<'a> {
 // Portage: depgraph.py, _slot_operator_update_probe (replacement_parent atoms)
 pub(crate) fn replacement_accepts(args: ReplacementAcceptsArgs<'_>) -> bool {
     let ReplacementAcceptsArgs {
-        repos,
         root,
         config,
         pkg,
         dep_keys,
         provider_cp,
         cand,
+        gate,
     } = args;
     let Some(live) =
-        live_metadata_for_installed(repos, root, &pkg.category, &pkg.package, &pkg.version)
+        live_metadata_for_installed(gate.repos, root, &pkg.category, &pkg.package, &pkg.version)
     else {
         return true;
     };
-    if !ebuild_visible_at(repos, &pkg.category, &pkg.package, &pkg.version, config) {
+    if !ebuild_visible_at(gate, &pkg.category, &pkg.package, &pkg.version, config) {
         return true;
     }
     let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");

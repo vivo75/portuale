@@ -141,6 +141,12 @@ pub fn split_pf(pf: &str) -> Option<(String, String)> {
 /// unreadable cache entry is silently skipped; a repo without the directory
 /// contributes nothing. Memoised per `(repo set, cp)` as a shared `Arc`
 /// (ebuild trees are immutable for the life of a run).
+///
+/// This is the RAW discovery read: it does not know the category
+/// allow-list. Resolution paths use [`CategoryGate::repo_candidates`]
+/// instead; addressed metadata reads (an installed package's own ebuild,
+/// a resolved entry's display) keep this one, like Portage's `aux_get`,
+/// which reads the cache file by path without consulting `cp_list`.
 pub fn list_candidates(
     repos: &[RepoConfig],
     category: &str,
@@ -266,4 +272,67 @@ pub(crate) fn list_candidates_uncached(
         }
     }
     Ok(candidates)
+}
+
+/// Portage's `settings.categories` gate for repo ebuild discovery: the
+/// allow-listed half of `portdbapi.cp_list` (`porttree.py:1156,1216-1225`).
+/// Built once per config (never re-read per lookup); `Copy` so resolve
+/// helpers and [`SelectSource`](crate::resolve::pretend::SelectSource)
+/// take it by value.
+#[derive(Clone, Copy)]
+pub struct CategoryGate<'a> {
+    /// The repos whose ebuilds are discovered.
+    pub repos: &'a [RepoConfig],
+    /// The resolved allow-list (repo files stacked, then the user file).
+    pub categories: &'a BTreeSet<String>,
+    /// The config root the unlisted-category `!!!` line's path renders from.
+    pub config_root: &'a Path,
+    /// `(category, package)` pairs the `!!!` already fired for: Portage's
+    /// `cp_list` cache prints once per cp per process; one walk prints
+    /// once per cp per walk.
+    pub warned: &'a RefCell<HashSet<(String, String)>>,
+}
+
+impl CategoryGate<'_> {
+    /// The repo ebuilds for `category/package`, or nothing when the
+    /// category is unlisted (printing Portage's `!!! ... not listed ...`
+    /// line once per cp when ebuilds exist on disk; a plain miss with no
+    /// notice otherwise).
+    // Portage: portdbapi.cp_list, porttree.py:1156,1216-1225.
+    pub fn repo_candidates(
+        &self,
+        category: &str,
+        package: &str,
+    ) -> Result<std::sync::Arc<Vec<Candidate>>, Error> {
+        if self.categories.contains(category) {
+            return list_candidates(self.repos, category, package);
+        }
+        let has_ebuilds = list_candidates(self.repos, category, package)
+            .map(|c| !c.is_empty())
+            .unwrap_or(false);
+        if has_ebuilds
+            && self
+                .warned
+                .borrow_mut()
+                .insert((category.to_string(), package.to_string()))
+        {
+            eprintln!(
+                "\n!!! '{category}/{package}' has a category that is not listed in {}/etc/portage/categories",
+                self.config_root.display()
+            );
+        }
+        Ok(std::sync::Arc::new(Vec::new()))
+    }
+
+    /// Silent half of the `cp_exists` check displays use: whether any repo
+    /// carries an ebuild for `category/package` *within the allow-list*.
+    /// Never prints: the walk's own lookup already fired the `!!!` for a
+    /// cp the miss report names, and a display-only re-print would double
+    /// it (each display phase builds its own gate).
+    pub fn has_ebuilds(&self, category: &str, package: &str) -> bool {
+        self.categories.contains(category)
+            && list_candidates(self.repos, category, package)
+                .map(|c| !c.is_empty())
+                .unwrap_or(false)
+    }
 }

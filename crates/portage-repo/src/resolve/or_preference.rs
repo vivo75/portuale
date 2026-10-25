@@ -4,7 +4,6 @@ use crate::*;
 
 /// Arguments of [`alternative_downgrade_demoted`].
 pub(crate) struct AlternativeDowngradeDemotedArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) entries: &'a [GraphEntry],
@@ -13,6 +12,7 @@ pub(crate) struct AlternativeDowngradeDemotedArgs<'a> {
     pub(crate) atoms: &'a [String],
     pub(crate) queued: &'a [QueueItem],
     pub(crate) update: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// An otherwise-available `||` alternative is demoted when one of its atoms would pull
@@ -25,7 +25,6 @@ pub(crate) struct AlternativeDowngradeDemotedArgs<'a> {
 /// a graph node holding the slot; an atom of the entry's own `cat/pkg` never demotes.
 pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArgs<'_>) -> bool {
     let AlternativeDowngradeDemotedArgs {
-        repos,
         root,
         config,
         entries,
@@ -34,6 +33,7 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
         atoms,
         queued,
         update,
+        gate,
     } = args;
     atoms.iter().any(|a| {
         let Some(at) = parse_dep_atom(a, "or_preference") else {
@@ -47,7 +47,7 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
         let extra = constraints
             .get(&(at.category.clone(), at.package.clone()))
             .map_or(&[][..], Vec::as_slice);
-        let Some((avail_version, avail_slot)) = visible_tree_matches(repos, a, config, extra)
+        let Some((avail_version, avail_slot)) = visible_tree_matches(gate, a, config, extra)
             .into_iter()
             .max_by(|x, y| vercmp_ordering(&x.0, &y.0))
         else {
@@ -90,7 +90,7 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
                     .map_or(&[][..], Vec::as_slice);
                 if update {
                     hypothetical.extend(
-                        visible_tree_matches(repos, &q.atom, config, qextra)
+                        visible_tree_matches(gate, &q.atom, config, qextra)
                             .into_iter()
                             .map(|(v, _)| v),
                     );
@@ -122,13 +122,12 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
         let slot_atom = format!("{}/{}:{avail_slot}", at.category, at.package);
         // Both downgrade guards share one test once `highest_in_slot` is a graph node:
         // lower than what the graph holds, and not a desirable downgrade.
-        !downgrade_probe(repos, config, &slot_atom, &avail_version, extra)
+        !downgrade_probe(gate, config, &slot_atom, &avail_version, extra)
     })
 }
 
 /// Arguments of [`disjunction_preference`].
 pub(crate) struct DisjunctionPreferenceArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
@@ -139,6 +138,8 @@ pub(crate) struct DisjunctionPreferenceArgs<'a> {
     pub(crate) atoms: &'a [String],
     pub(crate) queued: &'a [QueueItem],
     pub(crate) update: bool,
+    /// The category allow-list gate for the downgrade guard's tree lookups.
+    pub(crate) gate: CategoryGate<'a>,
     /// The whole-graph views for the circular-self-dep gate below. `entries`/`queued`
     /// above are the group's own root scope; the gate asks whether the owner's cp is in
     /// play *at all*, so it reads these unscoped views instead. Same slices on every
@@ -168,7 +169,6 @@ pub(crate) fn disjunction_preference(
     args: DisjunctionPreferenceArgs<'_>,
 ) -> portage_use_reduce::AltPreference {
     let DisjunctionPreferenceArgs {
-        repos,
         config,
         root,
         entries,
@@ -179,6 +179,7 @@ pub(crate) fn disjunction_preference(
         atoms,
         queued,
         update,
+        gate,
         gate_entries,
         gate_queued,
     } = args;
@@ -230,7 +231,7 @@ pub(crate) fn disjunction_preference(
         let stripped = portage_dep::without_use(a);
         let extra_constraints = constraints_for(a);
         // USE settings never affect `||` preference evaluation at this stage.
-        let avail = atom_currently_satisfiable(repos, stripped, config, extra_constraints)
+        let avail = atom_currently_satisfiable(gate, stripped, config, extra_constraints)
             || root_deps_running_root
                 .is_some_and(|running_root| running_root_satisfies_atom(a, running_root, config));
         if !avail {
@@ -242,7 +243,7 @@ pub(crate) fn disjunction_preference(
         let use_ok = if stripped.len() == a.len() {
             true
         } else {
-            atom_currently_satisfiable(repos, a, config, extra_constraints)
+            atom_currently_satisfiable(gate, a, config, extra_constraints)
                 // A *built* package's `[use]` deps match its recorded vdb USE, not the
                 // tree candidate's profile USE; without this, installed-satisfied
                 // alternatives are wrongly demoted.
@@ -253,7 +254,7 @@ pub(crate) fn disjunction_preference(
         if !use_ok {
             all_use_satisfied = false;
             // Only evaluated for an atom whose own USE-match actually failed.
-            if !atom_all_use_unmasked(repos, a, config, extra_constraints) {
+            if !atom_all_use_unmasked(a, config, extra_constraints, gate) {
                 all_use_unmasked = false;
             }
         }
@@ -298,7 +299,6 @@ pub(crate) fn disjunction_preference(
     // An otherwise-`all_available` choice demoted straight to `other` on a downgrade
     // guard (see `alternative_downgrade_demoted`).
     if alternative_downgrade_demoted(AlternativeDowngradeDemotedArgs {
-        repos,
         root,
         config,
         entries,
@@ -307,6 +307,7 @@ pub(crate) fn disjunction_preference(
         atoms,
         queued,
         update,
+        gate,
     }) {
         return portage_use_reduce::AltPreference::Other;
     }
@@ -362,7 +363,7 @@ pub(crate) fn disjunction_preference(
     if atoms.iter().all(|a| atom_cp_installed(root, a))
         && atoms
             .iter()
-            .all(|a| atom_installed_in_slot_of(root, repos, config, a, constraints_for(a)))
+            .all(|a| atom_installed_in_slot_of(gate, root, config, a, constraints_for(a)))
     {
         portage_use_reduce::AltPreference::UnsatUseInstalled
     } else {
@@ -383,13 +384,13 @@ pub(crate) fn candidate_version(
 
 /// Arguments of [`promote_tied_alternative`].
 pub(crate) struct PromoteTiedAlternativeArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) constraints: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) alts: &'a [Vec<String>],
     pub(crate) queued: &'a [QueueItem],
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Portage's in-bin upgrade-preference pass as `use_reduce_flat_disjunctive`'s
@@ -402,13 +403,13 @@ pub(crate) struct PromoteTiedAlternativeArgs<'a> {
 /// alternative always just keeps the higher version (see notes).
 pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> usize {
     let PromoteTiedAlternativeArgs {
-        repos,
         config,
         root,
         entries,
         constraints,
         alts,
         queued,
+        gate,
     } = args;
     struct Choice {
         id: usize,
@@ -436,12 +437,12 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
                 let cp = format!("{}/{}", atom.category, atom.package);
                 if let Some((candidate_str, .., _slot)) = highest_available_candidate_ignoring_use(
                     HighestAvailableCandidateIgnoringUseArgs {
-                        repos,
                         atom_str: a,
                         category: &atom.category,
                         package: &atom.package,
                         config,
                         extra_constraints: constraints_for(a),
+                        gate,
                     },
                 ) && let Some(version) =
                     candidate_version(&candidate_str, &atom.category, &atom.package)
@@ -458,7 +459,7 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
                 id,
                 all_installed_slots: atoms.iter().all(|a| atom_cp_installed(root, a))
                     && atoms.iter().all(|a| {
-                        atom_installed_in_slot_of(root, repos, config, a, constraints_for(a))
+                        atom_installed_in_slot_of(gate, root, config, a, constraints_for(a))
                     }),
                 all_in_graph: atoms_all_in_graph(atoms, entries, config, queued),
                 cp_map,

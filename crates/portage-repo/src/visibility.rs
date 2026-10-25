@@ -637,12 +637,12 @@ pub(crate) fn mask_masked_only(
 /// `category/package`, if any: the highest-versioned one masked by
 /// `package.mask` alone.
 pub(crate) fn suggested_mask_candidate(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     category: &str,
     package: &str,
     config: &portage_profile::Config,
 ) -> Option<String> {
-    list_candidates(repos, category, package)
+    gate.repo_candidates(category, package)
         .ok()?
         .iter()
         .filter(|c| mask_masked_only(c, category, package, config))
@@ -755,12 +755,12 @@ pub(crate) fn suggested_keyword(candidate: &Candidate) -> Option<&str> {
 /// `suggested_keyword`. Shared by the top-level and dependency
 /// `NoVisibleCandidate` call sites.
 pub(crate) fn suggested_keyword_candidate(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     category: &str,
     package: &str,
     config: &portage_profile::Config,
 ) -> Option<(String, String)> {
-    let candidates = list_candidates(repos, category, package).ok()?;
+    let candidates = gate.repo_candidates(category, package).ok()?;
     candidates
         .iter()
         .filter(|c| keyword_masked_only(c, category, package, config))
@@ -775,12 +775,12 @@ pub(crate) fn suggested_keyword_candidate(
 /// by LICENSE alone, the highest-versioned one with its missing
 /// licenses.
 pub(crate) fn suggested_license_candidate(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     category: &str,
     package: &str,
     config: &portage_profile::Config,
 ) -> Option<(String, String)> {
-    let candidates = list_candidates(repos, category, package).ok()?;
+    let candidates = gate.repo_candidates(category, package).ok()?;
     candidates
         .iter()
         .filter(|c| license_masked_only(c, category, package, config))

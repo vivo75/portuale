@@ -58,7 +58,7 @@ fn top_level_atom_excluded(
             any_excluded = any_excluded || excluded;
         }
     };
-    for c in list_candidates(&ctx.repos, &atom.category, &atom.package)?.iter() {
+    for c in ctx.repo_candidates(&atom.category, &atom.package)?.iter() {
         fold(c.match_str(&atom.category, &atom.package));
     }
     for c in list_binary_candidates(&ctx.local_binpkg, &atom.category, &atom.package) {
@@ -214,8 +214,8 @@ pub(crate) fn step_top_level_unsatisfied(
                             changed_deps: binpkg_changed_deps_active(ctx.usepkgonly).then_some(
                                 BinaryChangedDepsGate {
                                     root: ctx.root,
-                                    repos: &ctx.repos,
                                     with_bdeps: ctx.with_bdeps,
+                                    gate: ctx.gate(),
                                 },
                             ),
                         },
@@ -231,7 +231,7 @@ pub(crate) fn step_top_level_unsatisfied(
             // names its set (`(dependency required by "@set" [argument])`).
             // Portage: _show_unsatisfied_dep
             if let Some(report) = all_masked_report(
-                &ctx.repos,
+                ctx.gate(),
                 current_atom,
                 config,
                 &format!("{current_atom:?}"),
@@ -280,7 +280,8 @@ pub(crate) fn step_top_level_unsatisfied(
                     if ctx.usepkgonly || crate::globals::ebuild_db_dropped() {
                         &[]
                     } else {
-                        ebuilds = list_candidates(&ctx.repos, &key.0, &key.1)
+                        ebuilds = ctx
+                            .repo_candidates(&key.0, &key.1)
                             .map(|c| c.to_vec())
                             .unwrap_or_default();
                         &ebuilds
@@ -300,8 +301,8 @@ pub(crate) fn step_top_level_unsatisfied(
                             changed_deps: binpkg_changed_deps_active(ctx.usepkgonly).then_some(
                                 BinaryChangedDepsGate {
                                     root: ctx.root,
-                                    repos: &ctx.repos,
                                     with_bdeps: ctx.with_bdeps,
+                                    gate: ctx.gate(),
                                 },
                             ),
                         },
@@ -317,13 +318,13 @@ pub(crate) fn step_top_level_unsatisfied(
             // an argument parent), ordered after the masked block like Portage.
             // Portage: depgraph.py (_show_unsatisfied_dep, show_missing_use first)
             if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
-                repos: &ctx.repos,
                 root: ctx.root,
                 entries: &state.entries,
                 display_atom: unevaluated_atom.as_deref().unwrap_or(current_atom),
                 evaluated_atom: current_atom,
                 owner: None,
                 config,
+                gate: ctx.gate(),
             }) {
                 let mut block = format!(
                     "there are no ebuilds built with USE flags to satisfy {current_atom:?}{}.\n\
@@ -348,7 +349,7 @@ pub(crate) fn step_top_level_unsatisfied(
             // Portage's "only suggest a working change" spirit.
             if bp.autounmask_suggest_keywords
                 && let Some((version, keyword)) =
-                    suggested_keyword_candidate(&ctx.repos, &atom.category, &atom.package, config)
+                    suggested_keyword_candidate(ctx.gate(), &atom.category, &atom.package, config)
             {
                 message.push_str(&format!(
                     "\nnote: {}/{}-{version} exists but is masked by KEYWORDS; \
@@ -361,7 +362,7 @@ pub(crate) fn step_top_level_unsatisfied(
             // flag -flag` suggestion syntax).
             if bp.autounmask_suggest_use
                 && let Some((version, flip)) = suggested_use_candidate(
-                    &ctx.repos,
+                    ctx.gate(),
                     &atom.category,
                     &atom.package,
                     atom.use_deps.as_deref(),
@@ -392,7 +393,7 @@ pub(crate) fn step_top_level_unsatisfied(
             // Same gating for `package.license`.
             if bp.autounmask_suggest_license
                 && let Some((version, licenses)) =
-                    suggested_license_candidate(&ctx.repos, &atom.category, &atom.package, config)
+                    suggested_license_candidate(ctx.gate(), &atom.category, &atom.package, config)
             {
                 message.push_str(&format!(
                     "\nnote: {}/{}-{version} exists but its LICENSE is not accepted; \
@@ -404,7 +405,7 @@ pub(crate) fn step_top_level_unsatisfied(
             // Same gating for `package.unmask`.
             if bp.autounmask_suggest_masks
                 && let Some(version) =
-                    suggested_mask_candidate(&ctx.repos, &atom.category, &atom.package, config)
+                    suggested_mask_candidate(ctx.gate(), &atom.category, &atom.package, config)
             {
                 message.push_str(&format!(
                     "\nnote: {}/{}-{version} exists but is package.mask'd; \

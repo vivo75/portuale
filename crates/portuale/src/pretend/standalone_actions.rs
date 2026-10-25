@@ -224,6 +224,7 @@ pub(crate) fn dispatch_queries(args: DispatchQueriesArgs<'_>) -> Option<ExitCode
             terms: atom_args,
             repos,
             root,
+            config_root,
             searchdesc,
             verbose: !quiet,
             fuzzy: fuzzy_search,

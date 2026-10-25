@@ -416,12 +416,12 @@ fn collect_feedback_collects_a_dropped_pin_once() {
     assert_eq!(base_b.dropped_pins, vec![pin.clone()]);
     let sc = souprov_conflict_161();
     let probe = slot_conflict_mask_choices(SlotConflictMaskChoicesArgs {
-        repos: &ctx.repos,
         excluded: &[],
         params: &BacktrackParams::default(),
         slot_pullers: &HashMap::new(),
         sc: &sc,
         config: &config,
+        gate: crate::test_gate(&ctx.repos),
     });
     let mut grown_c = BacktrackParams::default();
     for c in &probe {

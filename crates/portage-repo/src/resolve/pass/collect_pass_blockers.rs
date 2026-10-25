@@ -13,7 +13,6 @@ pub(crate) fn collect_pass_blockers(
 ) -> Vec<OrphanBlocker> {
     if !ctx.nodeps {
         collect_unwalked_installed_blockers(CollectUnwalkedInstalledBlockersArgs {
-            repos: &ctx.repos,
             root: ctx.root,
             config,
             dynamic_deps: ctx.dynamic_deps,
@@ -23,6 +22,7 @@ pub(crate) fn collect_pass_blockers(
             entries: &state.entries,
             pending_blockers: &mut state.pending_blockers,
             installed_meta_memo: &mut state.installed_meta_memo,
+            gate: ctx.gate(),
         });
     }
 

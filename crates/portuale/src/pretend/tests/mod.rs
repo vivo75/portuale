@@ -681,6 +681,7 @@ mod circular;
 mod conflicts;
 mod env_config;
 mod error_lines;
+mod expand;
 mod flag_spellings;
 mod gates;
 mod global_updates;

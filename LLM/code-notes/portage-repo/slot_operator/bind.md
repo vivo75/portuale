@@ -31,3 +31,6 @@ Binding `:=` dependencies to the selected slot.
 - Backlog #213 (v2 `#24d`): Portage `resolver/backtracking.py::_feedback_config` `:247-257`. Portage pops that reason off the runtime masks of the recorded packages and clears its own `slot_operator_mask_built` set; portuale keeps no parallel set -- the `MaskReason::SlotOperatorBuilt` negatives in `runtime_pkg_mask` ARE the record, so removing them plus their `mask_order` slots is the whole equivalent.
 - The caller fires this once (the latch guards the re-entry); the re-walk re-masks any still-stale binary through the probe above, exactly like Portage's re-probe.
 - The #236 A forcing half is Portage's replace-set probe upgrade (backlog #295): it goes with the set.
+
+## gate threading (#571)
+- `tree_metadata_for`, `built_equals_binding`, `built_equals_shifted_slot` and `BuiltEqualsShiftUnrebuildableArgs` carry the gate.

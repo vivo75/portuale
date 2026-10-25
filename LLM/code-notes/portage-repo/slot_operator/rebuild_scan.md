@@ -39,3 +39,6 @@ Rebuilds triggered by slot-operator dependencies.
 
 ## type SlotOpRebuildScan
 - The consumer `(cat, pkg)` replace set is Portage `_slot_operator_replace_installed`; the display pairs are Portage `_forced_rebuilds` (what `_show_abi_rebuild_info` renders); the stale-binary triples feed `collect_feedback`'s `slot_operator_mask_built` records (Portage `_slot_change_backtrack`, backlog #212 v2 `#24c`).
+
+## gate threading (#571)
+- `SlotOperatorRebuildScanArgs`, `SlotOpEdgeCtx`, `ReplacementAcceptsArgs` and the `highest_visible_slot`/`greedy_*`/`replacement_parent_accepts` sites carry the gate.

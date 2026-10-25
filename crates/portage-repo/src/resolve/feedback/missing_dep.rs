@@ -26,7 +26,6 @@ pub(crate) fn step_missing_dep(
             let (fresh, binary_masks) =
                 slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
                     root: ctx.root,
-                    repos: &ctx.repos,
                     entries: &pass.entries,
                     slot_want: &pass.slot_want,
                     pullers: &pass.slot_pullers,
@@ -34,6 +33,7 @@ pub(crate) fn step_missing_dep(
                     with_bdeps: ctx.with_bdeps,
                     excluded: ctx.excluded,
                     config,
+                    gate: ctx.gate(),
                 });
             // Portage stops the pass at the first unsatisfied dep its probe
             // cannot heal (`return 0` after recording the missing dependency),

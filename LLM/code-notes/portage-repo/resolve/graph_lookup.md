@@ -36,3 +36,6 @@ Whether an atom is installed or already in the graph: the `||`-preference predic
 
 ## fn downgrade_probe
 - Portage `depgraph._downgrade_probe` (`depgraph.py:2946`): a downgrade to `version` is *desirable* only when no visible, not-installed candidate in its slot is at the same or a higher version (the current one is masked or gone). `slot_atom` is `cat/pkg:slot`; `extra_constraints` is the `runtime_pkg_mask` Portage's `_iter_similar_available` skips.
+
+## gate threading (#571)
+- `cp_has_tree_or_binary_candidate`, `visible_tree_matches` and `downgrade_probe` take the gate (binary half unchanged).

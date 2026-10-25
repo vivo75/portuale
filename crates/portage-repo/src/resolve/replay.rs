@@ -18,7 +18,7 @@ pub(crate) fn replay_use_of(
         PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
         _ => return None,
     };
-    let cands = list_candidates(&ctx.repos, &e.category, &e.package).ok()?;
+    let cands = ctx.repo_candidates(&e.category, &e.package).ok()?;
     let cand = cands.iter().find(|c| {
         &c.version == version && e.repo_name.as_deref().is_none_or(|r| r == c.repo_name)
     })?;
@@ -234,7 +234,7 @@ pub(crate) fn replay_conflict_use_display(
     entry: &GraphEntry,
     version: &str,
 ) -> Option<Vec<(String, String)>> {
-    let candidates = list_candidates(&ctx.repos, &entry.category, &entry.package).ok()?;
+    let candidates = ctx.repo_candidates(&entry.category, &entry.package).ok()?;
     let cand = candidates
         .iter()
         .filter(|c| c.version == version)
@@ -308,7 +308,7 @@ pub(crate) fn replay_slot_conflicts(
                     let pe = &entries[p];
                     let v = merge_bound_version(&pe.outcome)?;
                     let (sub, repo, slot) =
-                        slot_conflict_meta(&ctx.repos, &pe.category, &pe.package, v);
+                        slot_conflict_meta(ctx.gate(), &pe.category, &pe.package, v);
                     Some(SlotConflictParent {
                         parent_cpv: format!(
                             // match-str-ok: slot_conflict_meta tuple of an entry, not a Candidate
@@ -376,7 +376,7 @@ pub(crate) fn apply_replay_flips(
             continue;
         }
         new.sort();
-        let Ok(cands) = list_candidates(&ctx.repos, &cp.0, &cp.1) else {
+        let Ok(cands) = ctx.repo_candidates(&cp.0, &cp.1) else {
             continue;
         };
         for e in entries.iter_mut().filter(|e| {

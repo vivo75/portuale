@@ -60,3 +60,6 @@ Circular dependencies: hard-cycle detection, restart triggers, virtual cycles an
 
 ## fn grandparent_use_conflict
 - Portage `_find_suggestions` step 9: does a grandparent's own atom on `parent`'s `cat/pkg` constrain a flag in `solution`? A hard `[flag]` / `[-flag]` clash disqualifies the solution; a conditional (`flag?`/`flag=`) clash only flags `followup_change`. Grandparents are re-derived by scanning each puller entry's raw dep strings (see `circular_dep_solutions`).
+
+## no gate (#571, deliberate)
+- Cycle members are walk entries, so the report reads them raw like `dep_chain` does; the allow-list needs no threading here. Verified: no `list_candidates` call in this file changed.

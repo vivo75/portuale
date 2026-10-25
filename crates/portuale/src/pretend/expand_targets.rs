@@ -209,13 +209,22 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         expanded_set_name = kept_names;
     }
 
-    // A bare name (`emerge eix`) is qualified against the repo tree: exactly
-    // one match is used silently; zero or several are fatal (exit 1).
+    // A bare name (`emerge eix`) is qualified against the allow-listed repo
+    // tree: exactly one match is used silently; zero or several are fatal
+    // (exit 1).
     // Portage: lib/portage/dbapi, dep_expand
+    let categories = portage_repo::repo_categories(repos, config_root, true);
+    let warned_categories = std::cell::RefCell::new(std::collections::HashSet::new());
+    let gate = portage_repo::CategoryGate {
+        repos,
+        categories: &categories,
+        config_root,
+        warned: &warned_categories,
+    };
     {
         let mut all_cp: Option<Vec<String>> = None;
         for atom in &mut expanded_atoms {
-            let cps = all_cp.get_or_insert_with(|| portage_repo::all_cp(repos));
+            let cps = all_cp.get_or_insert_with(|| portage_repo::all_cp(repos, &categories));
             match dep_expand_token(atom, cps) {
                 DepExpand::Unchanged => {}
                 DepExpand::Qualified(q) => *atom = q,
@@ -254,7 +263,7 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
                     eprintln!("\nemerge: {msg}");
                     if let Some(extra) = misspell_suggestion_block(
                         &msg,
-                        repos,
+                        gate,
                         root,
                         opts.misspell_suggestions,
                         SimilarNameDbs {
@@ -278,7 +287,9 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
     // Portage: _emerge/depgraph.py, _select_files (`update_if_installed`)
     if opts.update_if_installed {
         let installed = portage_repo::all_installed_packages(root);
-        let cps: HashSet<String> = portage_repo::all_cp(repos).into_iter().collect();
+        let cps: HashSet<String> = portage_repo::all_cp(repos, &categories)
+            .into_iter()
+            .collect();
         let keep: Vec<bool> = expanded_atoms
             .iter()
             .map(|a| {

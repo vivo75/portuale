@@ -73,7 +73,6 @@ fn p491_probe(
     let live = HashSet::from([("dev-libs".to_string(), "p491keep".to_string())]);
     installed_parent_update_probe(InstalledParentUpdateProbeArgs {
         root,
-        repos: &repos,
         config: &test_config(),
         entries,
         with_bdeps: false,
@@ -84,6 +83,7 @@ fn p491_probe(
         walked: &HashSet::new(),
         top_level_atoms: &top_level_atoms,
         update,
+        gate: crate::test_gate(&repos),
     })
 }
 

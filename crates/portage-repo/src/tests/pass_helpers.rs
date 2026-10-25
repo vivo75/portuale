@@ -151,8 +151,8 @@ fn minimize_children_collapses_like_portage() {
     };
     // (1) dynamic deps of an installed parent.
     let out = minimize_children(
+        crate::test_gate(&repos),
         &base,
-        &repos,
         &config,
         &key,
         vec![
@@ -170,8 +170,8 @@ fn minimize_children_collapses_like_portage() {
     // (2) an ebuild parent's version range: ascending, the lower pick
     // is the only match of `<3` and stays; `3.0` is eliminated.
     let out = minimize_children(
+        crate::test_gate(&repos),
         &base,
-        &repos,
         &config,
         &key,
         vec![
@@ -190,8 +190,8 @@ fn minimize_children_collapses_like_portage() {
     // the tree pick is eliminated.
     // Portage: depgraph.py, findAtomForPackage
     let out = minimize_children(
+        crate::test_gate(&repos),
         &base,
-        &repos,
         &config,
         &key,
         vec![
@@ -213,7 +213,13 @@ fn minimize_children_collapses_like_portage() {
         (">=dev-libs/minlib-3".to_string(), up("3.0")),
     ];
     assert_eq!(
-        minimize_children(&base, &repos, &config, &key, disjoint.clone()),
+        minimize_children(
+            crate::test_gate(&repos),
+            &base,
+            &config,
+            &key,
+            disjoint.clone()
+        ),
         disjoint
     );
     let used = vec![
@@ -221,7 +227,7 @@ fn minimize_children_collapses_like_portage() {
         (">=dev-libs/minlib-1.0:0/1=".to_string(), installed.clone()),
     ];
     assert_eq!(
-        minimize_children(&base, &repos, &config, &key, used.clone()),
+        minimize_children(crate::test_gate(&repos), &base, &config, &key, used.clone()),
         used
     );
     let _ = fs::remove_dir_all(&base);
@@ -286,7 +292,13 @@ fn minimize_children_matches_use_deps_against_candidate_use() {
     // only 3.0 and the pair stays split.
     let config = test_config();
     assert_eq!(
-        minimize_children(&base, &repos, &config, &key, picks.clone()),
+        minimize_children(
+            crate::test_gate(&repos),
+            &base,
+            &config,
+            &key,
+            picks.clone()
+        ),
         picks
     );
     // With `bar` enabled the lower pick satisfies both atoms, so the
@@ -294,7 +306,13 @@ fn minimize_children_matches_use_deps_against_candidate_use() {
     let mut bar_config = test_config();
     bar_config.use_tokens.push("bar".to_string());
     assert_eq!(
-        minimize_children(&base, &repos, &bar_config, &key, picks.clone()),
+        minimize_children(
+            crate::test_gate(&repos),
+            &base,
+            &bar_config,
+            &key,
+            picks.clone()
+        ),
         vec![
             (">=dev-libs/minlib2-1[bar]".to_string(), up("2.0")),
             ("<dev-libs/minlib2-3".to_string(), up("2.0")),

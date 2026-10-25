@@ -75,3 +75,6 @@ Assembling the final result.
 
 ## fn assemble_result (#394 restart record)
 - Backlog #394: `rebuild_if_reinstalls` is the seeded parents that settled as merges (any of the four merge outcomes), sorted and deduped -- the `__auto_rebuild__` record behind the red `r`.
+
+## gate threading (#571)
+- `BuildResidualSlotConflictsArgs`, `BacktrackMissedUpdatesArgs`, `constraint_withheld_updates` and the entry-USE refresh use `ctx.gate()`.

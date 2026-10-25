@@ -74,3 +74,6 @@
 
 ## abi_rebuild_force_reinstall_cps (#394 restart `r`)
 - Backlog #394: the red `r` set is the ABI pair's both sides *plus* the `--rebuild-if-*` restart parents (`GraphResult::rebuild_if_reinstalls`, consumer-only). Portage tags the rebuilt parent `force_reinstall` via the `__auto_rebuild__` set arg (`output.py:815-816`) while the merged dep stays untagged.
+
+## allow-list wiring (#571)
+- `ShowResolutionReportArgs` carries `config_root` through to the slot-conflict display; `show_skipped_updates` takes it for the similar-names pools.

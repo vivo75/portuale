@@ -42,7 +42,6 @@ pub(crate) fn step_unsatisfied_dead_end(
         let (scheduled, abi_rebuilds, masked_binaries) =
             slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
                 root: ctx.root,
-                repos: &ctx.repos,
                 entries: &pass.entries,
                 reachable: &ctx.slot_op_reachable,
                 scope: Some(&scan_scope),
@@ -54,13 +53,13 @@ pub(crate) fn step_unsatisfied_dead_end(
                 top_level_atoms: &top_atoms,
                 excluded: ctx.excluded,
                 config,
+                gate: ctx.gate(),
             });
         // The update probe's forcing half, for a child the walk left installed.
         let mut scheduled = scheduled;
         let (force_consumers, forced) =
             slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
                 root: ctx.root,
-                repos: &ctx.repos,
                 config,
                 entries: &pass.entries,
                 reachable: &ctx.slot_op_reachable,
@@ -70,6 +69,7 @@ pub(crate) fn step_unsatisfied_dead_end(
                 update: ctx.update,
                 top_level_cps: &ctx.top_level_cps,
                 excluded: ctx.excluded,
+                gate: ctx.gate(),
             });
         scheduled.extend(force_consumers);
         let before = grown.slot_operator_replace_installed.clone();
@@ -116,12 +116,12 @@ pub(crate) fn step_unsatisfied_dead_end(
             && pass.slot_conflicts.is_empty()
         {
             let (skipped, missing, full) = backtrack_missed_updates(BacktrackMissedUpdatesArgs {
-                repos: &ctx.repos,
                 root: ctx.root,
                 config,
                 entries: &pass.entries,
                 params: grown,
                 missing_args: &[],
+                gate: ctx.gate(),
             });
             if !skipped.is_empty()
                 || !missing.is_empty()
@@ -142,7 +142,6 @@ pub(crate) fn step_unsatisfied_dead_end(
         if pass.slot_conflicts.is_empty() {
             let demoted = slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
                 root: ctx.root,
-                repos: &ctx.repos,
                 entries: &pass.entries,
                 replace: &grown.slot_operator_replace_installed,
                 slot_want: &pass.slot_want,
@@ -151,6 +150,7 @@ pub(crate) fn step_unsatisfied_dead_end(
                 changed_slot: ctx.changed_slot,
                 top_level_cps: &ctx.top_level_cps,
                 empty: ctx.empty,
+                gate: ctx.gate(),
             });
             if !demoted.is_empty() {
                 for cp in &demoted {

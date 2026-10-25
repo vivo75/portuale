@@ -9,3 +9,6 @@ Merge, solve and synthesize the pass slot conflicts.
 - Backlogs #90 (S2), #142 (S2 F1): one joint record per slot, so the solver keeps the jointly-satisfying version; removals ride `skipped_updates` to the renderer.
 - Backlog #148: display-complete, walk-light rows.
 
+
+## gate threading (#571)
+- `MergeSameSlotConflictsArgs` and `SynthesizeSurvivingConflictEntriesArgs` use `ctx.gate()`.

@@ -25,7 +25,6 @@ pub(crate) fn assemble_result(
             let scan_scope = ctx.scan_reachable(&pass.entries);
             slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
                 root: ctx.root,
-                repos: &ctx.repos,
                 entries: &pass.entries,
                 reachable: &ctx.slot_op_reachable,
                 scope: Some(&scan_scope),
@@ -37,6 +36,7 @@ pub(crate) fn assemble_result(
                 top_level_atoms: &top_atoms,
                 excluded: ctx.excluded,
                 config,
+                gate: ctx.gate(),
             })
             .1
         }
@@ -164,12 +164,12 @@ pub(crate) fn assemble_result(
     {
         let (mask_skipped, mask_missing, mask_full) =
             backtrack_missed_updates(BacktrackMissedUpdatesArgs {
-                repos: &ctx.repos,
                 root: ctx.root,
                 config,
                 entries: &pass.entries,
                 params,
                 missing_args: &pass.missing_args,
+                gate: ctx.gate(),
             });
         // Mask rows lead in first-seen order; both sources collapse per
         // `(root, slot_atom)` keeping the highest missed pkg. No re-sort:
@@ -506,7 +506,7 @@ pub(crate) fn collect_autounmask_and_conflicts(
         let mut tier_config = ctx.config.clone();
         tier_config.autounmask_use = tier;
         for cp in params.autounmask_use_config.keys() {
-            refresh_entry_use_display(&mut pass.entries, &ctx.repos, ctx.root, cp, &tier_config);
+            refresh_entry_use_display(ctx.gate(), &mut pass.entries, ctx.root, cp, &tier_config);
         }
     }
 
@@ -520,12 +520,12 @@ pub(crate) fn collect_autounmask_and_conflicts(
     // the walker's own check already produced for the same triple keeps the
     // union and the single block.
     for sc in build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &ctx.repos,
         config,
         root: ctx.root,
         entries: &pass.entries,
         slot_pullers: &pass.slot_pullers,
         dropped: &params.dropped_pins,
+        gate: ctx.gate(),
     }) {
         record_slot_conflict(&mut pass.slot_conflicts, sc);
     }
@@ -569,7 +569,7 @@ pub(crate) fn collect_withheld_updates(
     // The withhold rows keep alphabetical order; the direct solve's rows
     // ahead of them keep Portage's first-seen block order.
     let mut withheld =
-        constraint_withheld_updates(&ctx.repos, ctx.root, config, &pass.entries, enforced_pins);
+        constraint_withheld_updates(ctx.gate(), ctx.root, config, &pass.entries, enforced_pins);
     withheld.sort_by(|a, b| {
         (
             &a.category,

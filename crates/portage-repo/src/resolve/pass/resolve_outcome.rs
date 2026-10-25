@@ -42,10 +42,10 @@ pub(crate) fn resolve_queue_atom(args: ResolveQueueAtomArgs<'_>) -> Result<Prete
     };
     resolve_pretend(
         &SelectSource {
-            repos: &ctx.repos,
             root: select_root,
             config,
             local_binpkg: &ctx.local_binpkg,
+            gate: ctx.gate(),
         },
         atom_text,
         &SelectOptions {

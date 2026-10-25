@@ -416,11 +416,20 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
     // A target with no ebuild anywhere and nothing installed is fatal (exit 1),
     // printed before the config block.
     // Portage: _emerge/actions.py, action_info
+    let categories = portage_repo::repo_categories(repos, config_root, true);
+    let warned = std::cell::RefCell::new(std::collections::HashSet::new());
+    let gate = portage_repo::CategoryGate {
+        repos,
+        categories: &categories,
+        config_root,
+        warned: &warned,
+    };
     for atom_str in atom_args {
         let Some(atom) = parse_atom(atom_str) else {
             continue;
         };
-        let exists = portage_repo::list_candidates(repos, &atom.category, &atom.package)
+        let exists = gate
+            .repo_candidates(&atom.category, &atom.package)
             .map(|c| !c.is_empty())
             .unwrap_or(false)
             || !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty()
@@ -447,7 +456,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
                 binrepos: &[],
             };
             if let Some(extra) =
-                misspell_suggestion_block(&msg, repos, root, misspell_suggestions, dbs)
+                misspell_suggestion_block(&msg, gate, root, misspell_suggestions, dbs)
             {
                 eprintln!("{extra}");
             }

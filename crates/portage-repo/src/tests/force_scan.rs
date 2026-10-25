@@ -45,13 +45,13 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &dir,
-        repos: &repos,
         entries: &[parent.clone(), child.clone()],
         undone: &empty,
         scheduled: &mut scheduled,
         excluded: &[],
         masked: &mut masked,
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(
         scheduled,
@@ -77,13 +77,13 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     let mut scheduled = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &dir,
-        repos: &repos,
         entries: &[parent.clone(), merged_child],
         undone: &empty,
         scheduled: &mut scheduled,
         excluded: &[],
         masked: &mut BTreeSet::new(),
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert!(scheduled.is_empty());
 
@@ -91,13 +91,13 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     let mut scheduled = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &dir,
-        repos: &repos,
         entries: &[parent, child],
         undone: &BTreeSet::from([child_cp]),
         scheduled: &mut scheduled,
         excluded: &[],
         masked: &mut BTreeSet::new(),
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert!(scheduled.is_empty());
 
@@ -137,13 +137,13 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     let mut scheduled = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &dir,
-        repos: &repos,
         entries: &[parent_souprov, child_souprov],
         undone: &empty,
         scheduled: &mut scheduled,
         excluded: &[],
         masked: &mut BTreeSet::new(),
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert!(scheduled.is_empty());
 
@@ -228,13 +228,13 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
-        repos: &repos,
         entries: &[upgrade_a, child.clone()],
         undone: &empty,
         scheduled: &mut scheduled,
         excluded: &[],
         masked: &mut masked,
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(
         scheduled,
@@ -247,13 +247,13 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
     let mut scheduled_b = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
-        repos: &repos,
         entries: &[new_b, child],
         undone: &empty,
         scheduled: &mut scheduled_b,
         excluded: &[],
         masked: &mut BTreeSet::new(),
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert!(
         scheduled_b.is_empty(),
@@ -341,13 +341,13 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
-        repos: &repos,
         entries: &entries,
         undone: &empty,
         scheduled: &mut scheduled,
         excluded: &[],
         masked: &mut masked,
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(
         masked,
@@ -443,13 +443,13 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
-        repos: &repos,
         entries: &entries,
         undone: &empty,
         scheduled: &mut scheduled,
         excluded: &[],
         masked: &mut masked,
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert!(scheduled.is_empty());
     assert_eq!(
@@ -468,13 +468,13 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     let mut scheduled_excl = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
-        repos: &repos,
         entries: &entries,
         undone: &empty,
         scheduled: &mut scheduled_excl,
         excluded: &["dev-libs/maskchild".to_string()],
         masked: &mut masked_excl,
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert!(
         masked_excl.is_empty(),
@@ -490,13 +490,13 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     let mut scheduled_bpar = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
-        repos: &repos,
         entries: &[binary_parent, binary_child("maskchild", "0", "1")],
         undone: &empty,
         scheduled: &mut scheduled_bpar,
         excluded: &[],
         masked: &mut masked_bpar,
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert!(masked_bpar.is_empty(), "a binary parent never probes");
     let _ = fs::remove_dir_all(&base);
@@ -582,7 +582,6 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
     let scan = |entries: &[GraphEntry], reachable: &HashSet<(String, String)>, update: bool| {
         slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
             root: &base,
-            repos: &repos,
             config: &config,
             entries,
             reachable,
@@ -592,6 +591,7 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
             update,
             top_level_cps: &HashSet::new(),
             excluded: &[],
+            gate: crate::test_gate(&repos),
         })
     };
     let (consumers, forced) = scan(&entries, &HashSet::new(), true);
@@ -699,13 +699,13 @@ fn replacement_accepts_follows_the_consumers_tree_atoms() {
     let provider = ("dev-libs".to_string(), "accprov".to_string());
     let accepts = |cand: &str| {
         replacement_accepts(ReplacementAcceptsArgs {
-            repos: &repos,
             root: &base,
             config: &config,
             pkg: &pkg,
             dep_keys: &["RDEPEND"],
             provider_cp: &provider,
             cand,
+            gate: crate::test_gate(&repos),
         })
     };
     assert!(!accepts("dev-libs/accprov-2.0:0/2"));

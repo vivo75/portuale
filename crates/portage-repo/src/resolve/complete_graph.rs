@@ -9,8 +9,8 @@ pub struct CompleteGraphAutoEnableArgs<'a> {
     pub if_new_ver: bool,
     pub if_new_slot: bool,
     pub root: &'a Path,
-    pub repos: &'a [RepoConfig],
     pub config: &'a portage_profile::Config,
+    pub gate: CategoryGate<'a>,
 }
 
 /// Whether a first pass that merged or reinstalled anything installed
@@ -23,8 +23,8 @@ pub fn complete_graph_auto_enable(args: CompleteGraphAutoEnableArgs<'_>) -> bool
         if_new_ver,
         if_new_slot,
         root,
-        repos,
         config,
+        gate,
     } = args;
     entries.iter().any(|e| match &e.outcome {
         PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. } => if_new_ver,
@@ -40,11 +40,11 @@ pub fn complete_graph_auto_enable(args: CompleteGraphAutoEnableArgs<'_>) -> bool
                     && (!changed_flags.is_empty()
                         || merge_use_changed_vs_installed(MergeUseChangedVsInstalledArgs {
                             root,
-                            repos,
                             config,
                             category: &e.category,
                             package: &e.package,
                             version,
+                            gate,
                         })
                         .unwrap_or(false)))
         }

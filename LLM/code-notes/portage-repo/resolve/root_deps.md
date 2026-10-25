@@ -28,3 +28,6 @@
 - Non-interactions: `--emptytree` deliberately does not reach `--root-deps` running-root build entries (this resolver is its own path, and `-e --root-deps` is an exotic combination); likewise `--getbinpkg` (a `--root-deps` build entry is always an ebuild built against the running root); `--autounmask` keyword / USE resolution is a target-`ROOT` concern (`resolve_pretend_graph`).
 - #72 B3: a removal is never walked (it has no deps). `usepkg`/`usepkgonly` are both `false` above, so the outcome can only ever have come from an ebuild candidate (Portage `dbs` never grows a binary entry in that case).
 - #141: the slot/repo identity and the USE-display fields the renderer's `USE="…"` column reads. `refresh_entry_use_display` diffs the tree candidate's effective USE against the *running* root's vdb record (the root `resolve_pretend` just resolved against), so a Reinstall whose flag flipped renders Portage's `-flag*` marker exactly like the non-`--root-deps` rebuild row.
+
+## gate threading (#571)
+- `RootDepsSatisfiedAtomsArgs`, `UnsatisfiedRootDepsAtomsArgs`, `FlattenRootDepsAtomsArgs` and `ResolveRootDepsBuildEntriesArgs` carry the gate; the running-root selection sees the same allow-list. `resolved_version_meta_and_use` stays raw (addressed single-version read, `aux_get` analog).

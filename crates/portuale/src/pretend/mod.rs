@@ -477,6 +477,7 @@ pub fn run(args: &[String]) -> ExitCode {
         force_reinstall_cps: &force_reinstall_cps,
         columnwidth,
         display_list_suppressed,
+        config_root: &config_root,
     });
 
     finish_run(FinishRunArgs {
@@ -540,7 +541,23 @@ pub(crate) fn finish_run(args: FinishRunArgs<'_>) -> ExitCode {
         system_atoms,
         updates_force,
     } = args;
-    show_skipped_updates(plan, opts, result, root, repos);
+    // Display-time allow-list for the skipped-updates report (built once
+    // per report, never per lookup; surviving entries are listed, so the
+    // gate passes everything through).
+    let skipped_categories = portage_repo::repo_categories(repos, config_root, true);
+    let skipped_warned = std::cell::RefCell::new(std::collections::HashSet::new());
+    show_skipped_updates(
+        plan,
+        opts,
+        result,
+        root,
+        portage_repo::CategoryGate {
+            repos,
+            categories: &skipped_categories,
+            config_root,
+            warned: &skipped_warned,
+        },
+    );
 
     show_skipped_missing_deps(opts.quiet, opts.debug, result, &color);
 
@@ -645,6 +662,7 @@ pub(crate) struct ShowResolutionReportArgs<'a> {
     pub(crate) force_reinstall_cps: &'a HashSet<(String, String)>,
     pub(crate) columnwidth: i64,
     pub(crate) display_list_suppressed: bool,
+    pub(crate) config_root: &'a Path,
 }
 
 /// The resolution report: merge list, summary, cycle re-display, conflicts.
@@ -667,6 +685,7 @@ pub(crate) fn show_resolution_report(args: ShowResolutionReportArgs<'_>) {
         force_reinstall_cps,
         columnwidth,
         display_list_suppressed,
+        config_root,
     } = args;
     // Blocker lines collect while walking and print as one group afterwards.
     let mut blocker_lines: Vec<String> = Vec::new();
@@ -791,6 +810,7 @@ pub(crate) fn show_resolution_report(args: ShowResolutionReportArgs<'_>) {
         config,
         useoldpkg_atoms_render: &opts.useoldpkg_atoms,
         color: &color,
+        config_root,
     });
     show_deferred_unsat(ShowDeferredUnsatArgs {
         plan,

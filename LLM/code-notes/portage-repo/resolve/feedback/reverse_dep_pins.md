@@ -109,3 +109,6 @@ Backlog #490. Portage's `_complete_graph` pulls in an installed package only thr
 ## fn or_member_flat_atoms
 - See `or_branch_vdb_deselected_set`: flattens a demoted member
   (through conjunctions) to the atom texts the scan would otherwise pin.
+
+## gate threading (#571)
+- The `ReverseDependencyConstraintsArgs` site uses `ctx.gate()`.

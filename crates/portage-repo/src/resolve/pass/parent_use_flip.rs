@@ -48,12 +48,12 @@ pub(crate) fn parent_use_flip(
         return Ok(ControlFlow::Continue((current_atom, atom)));
     };
     let Some((pc, pp, _pv, target_use)) =
-        suggested_parent_use_candidate(&ctx.repos, &state.entries, unevaluated, owner_key, config)
+        suggested_parent_use_candidate(ctx.gate(), &state.entries, unevaluated, owner_key, config)
     else {
         return Ok(ControlFlow::Continue((current_atom, atom)));
     };
     let Some((parent_cand, _piuse, parent_use, _pru)) =
-        parent_use_state(&ctx.repos, &state.entries, owner_key, config)
+        parent_use_state(ctx.gate(), &state.entries, owner_key, config)
     else {
         return Ok(ControlFlow::Continue((current_atom, atom)));
     };
@@ -74,10 +74,10 @@ pub(crate) fn parent_use_flip(
     };
     let re_outcome = resolve_pretend(
         &SelectSource {
-            repos: &ctx.repos,
             root: ctx.root,
             config,
             local_binpkg: &ctx.local_binpkg,
+            gate: ctx.gate(),
         },
         &re_atom,
         &SelectOptions {
@@ -98,7 +98,7 @@ pub(crate) fn parent_use_flip(
     // suggestions into changes (bed `l0-fixture-oracle-438.txt`). The rescued
     // dep's key latches so its miss is suppressed.
     // Portage: depgraph.py, _apply_parent_use_changes
-    let parent_all = list_candidates(&ctx.repos, &pc, &pp).unwrap_or_default();
+    let parent_all = ctx.repo_candidates(&pc, &pp).unwrap_or_default();
     let token = target_use
         .iter()
         .map(|(f, e)| if *e { f.clone() } else { format!("-{f}") })

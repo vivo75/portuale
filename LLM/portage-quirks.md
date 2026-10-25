@@ -328,3 +328,17 @@ when a claim turns out false.
   exactly, and stays silent as root where Portage prints the two lines.
   Porting the manager would mean reading cgroupfs for every build; until
   then the gap is a documented wontfix, not a format to mimic.
+
+## Q13. A `categories` line with two names lists neither (grabfile rejoins lines)
+
+- **What it does**: `grabfile` (`util/__init__.py:171-200`) splits each line on whitespace, cuts `#` comments, then rejoins the survivors with single spaces into ONE token per line. A `profiles/categories` line reading `dev-libs dev-python` becomes the single token `"dev-libs dev-python"`, which never matches `dbapi._category_re` (`^\w[-.+\w]*$`) and is dropped — so neither category is listed. One-category-per-line is not just convention; it is load-bearing.
+- **Why it looks wrong**: a whitespace-separated list file that silently drops multi-token lines instead of splitting them contradicts every other stacked-list file's reading. portuale's `read_categories_file` splits on whitespace (both names list), which is the lenient reading.
+- **First seen**: Portage 3.0.83 (source `3rdparty/portage`, Task 12 S0).
+- **Portuale**: copies the file locations, stacking and regex, but not the line-join quirk. A fixture with two categories on one line would diverge (Portage lists neither, portuale both); no shipped file does this.
+
+## Q14. The unlisted-category `!!!` names `etc/portage/categories` for a union set
+
+- **What it does**: `porttree.py:1216-1225` prints `!!! '<cp>' has a category that is not listed in <PORTAGE_CONFIGROOT>etc/portage/categories` even though `settings.categories` is the incremental union of every repo's `profiles/categories` plus that file (`config.py:948-960`). A category missing only from the user file but present in a repo file is listed (no notice); the message still names the user file.
+- **Why it looks wrong**: the message points at one member file of a union, sending the reader to edit the wrong file when the omission is in a repo's `profiles/categories`.
+- **First seen**: Portage 3.0.83 (source `3rdparty/portage`, Task 12 S0).
+- **Portuale**: prints the line verbatim (same path rendering), quirks and all.

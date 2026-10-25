@@ -72,11 +72,23 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
     let repos = find_repos(&fixtures_root()).expect("fixture repos.conf resolves");
     let config = test_config();
     assert!(
-        ebuild_visible_at(&repos, "dev-libs", "newpkg", "1.0", &config),
+        ebuild_visible_at(
+            crate::test_gate(&repos),
+            "dev-libs",
+            "newpkg",
+            "1.0",
+            &config
+        ),
         "newpkg's ebuild is visible"
     );
     assert!(
-        !ebuild_visible_at(&repos, "dev-libs", "rebuiltbinarypkg", "1.0", &config),
+        !ebuild_visible_at(
+            crate::test_gate(&repos),
+            "dev-libs",
+            "rebuiltbinarypkg",
+            "1.0",
+            &config
+        ),
         "rebuiltbinarypkg has no ebuild"
     );
 
@@ -94,7 +106,6 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
     assert!(
         !binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
             root: &root,
-            repos: &repos,
             config: &config,
             category: "dev-libs",
             package: "rebuiltbinarypkg",
@@ -102,7 +113,8 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
             binary_build_time: Some(1000),
             rebuilt_binaries: false,
             rebuilt_binaries_timestamp: None,
-            update: true
+            update: true,
+            gate: crate::test_gate(&repos),
         }),
         "identical BUILD_TIME is identical_binary"
     );
@@ -111,7 +123,6 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
     assert!(
         !binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
             root: &root,
-            repos: &repos,
             config: &config,
             category: "dev-libs",
             package: "rebuiltbinarypkg",
@@ -119,7 +130,8 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
             binary_build_time: Some(2000),
             rebuilt_binaries: false,
             rebuilt_binaries_timestamp: None,
-            update: false
+            update: false,
+            gate: crate::test_gate(&repos),
         }),
         "without --update the installed instance is kept"
     );
@@ -127,7 +139,6 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
     assert!(
         binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
             root: &root,
-            repos: &repos,
             config: &config,
             category: "dev-libs",
             package: "rebuiltbinarypkg",
@@ -135,7 +146,8 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
             binary_build_time: Some(2000),
             rebuilt_binaries: false,
             rebuilt_binaries_timestamp: None,
-            update: true
+            update: true,
+            gate: crate::test_gate(&repos),
         }),
         "differing BUILD_TIME + ebuild gone + --update reinstalls"
     );
@@ -144,7 +156,6 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
     assert!(
         !binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
             root: &root,
-            repos: &repos,
             config: &config,
             category: "dev-libs",
             package: "newpkg",
@@ -152,7 +163,8 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
             binary_build_time: Some(2000),
             rebuilt_binaries: false,
             rebuilt_binaries_timestamp: None,
-            update: true
+            update: true,
+            gate: crate::test_gate(&repos),
         }),
         "a visible ebuild keeps the installed instance"
     );
@@ -161,7 +173,6 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
     assert!(
         binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
             root: &root,
-            repos: &repos,
             config: &config,
             category: "dev-libs",
             package: "newpkg",
@@ -169,7 +180,8 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
             binary_build_time: Some(2000),
             rebuilt_binaries: true,
             rebuilt_binaries_timestamp: None,
-            update: true
+            update: true,
+            gate: crate::test_gate(&repos),
         }),
         "--rebuilt-binaries reinstalls regardless of ebuild visibility"
     );
@@ -775,11 +787,11 @@ fn binary_deps_changed_answers_per_recorded_deps_even_when_asked_repeatedly() {
     let ask = |c: &Candidate| {
         binary_deps_changed(BinaryDepsChangedArgs {
             root: &root,
-            repos: &repos,
             candidate: c,
             category: "dev-libs",
             package: "schedok",
             with_bdeps: false,
+            gate: crate::test_gate(&repos),
         })
     };
     let same = binary("");

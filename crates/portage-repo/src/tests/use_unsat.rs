@@ -18,13 +18,13 @@ fn use_unsat_candidates_classify_change_use_and_missing_iuse() {
     let repos = find_repos(&root).expect("repos");
     let one = |atom: &str| {
         use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
-            repos: &repos,
             root: &root,
             entries: &[],
             display_atom: atom,
             evaluated_atom: atom,
             owner: None,
             config: &config,
+            gate: crate::test_gate(&repos),
         })
     };
     assert_eq!(
@@ -74,13 +74,13 @@ fn use_unsat_candidates_count_conditional_flags_toward_missing_iuse() {
     let repos = find_repos(&root).expect("repos");
     let scan = |display: &str, evaluated: &str| {
         use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
-            repos: &repos,
             root: &root,
             entries: &[],
             display_atom: display,
             evaluated_atom: evaluated,
             owner: None,
             config: &config,
+            gate: crate::test_gate(&repos),
         })
     };
     // `foo?` alone: no unconditional flag at all, yet Missing IUSE.

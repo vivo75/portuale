@@ -68,12 +68,12 @@ fn dropped_pin_mask_restart(
     // The gate is the assembly report itself: only a pin combination the
     // settle path would abort on restarts, so clean resolves never mask.
     let records = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &ctx.repos,
         config: ctx.config,
         root: ctx.root,
         entries: &pass.entries,
         slot_pullers: &pass.slot_pullers,
         dropped: &grown.dropped_pins,
+        gate: ctx.gate(),
     });
     // `dropped` accumulates across passes: a replaced consumer names no
     // conflict (mirrors the builder's own filter).
@@ -538,7 +538,6 @@ pub(crate) fn step_reverse_dep_pins(
     let mut added = false;
     let live_reachable = live_reachable_consumers(ctx, &pass.entries);
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        repos: &ctx.repos,
         root: ctx.root,
         entries: &pass.entries,
         with_bdeps: ctx.with_bdeps,
@@ -551,6 +550,7 @@ pub(crate) fn step_reverse_dep_pins(
         world_reachable: &ctx.world_reachable,
         config: ctx.config,
         complete: ctx.complete,
+        gate: ctx.gate(),
     });
     // Rule 4 of `_eliminate_rebuilds` reads every parent atom of the rebuilt pkg, and
     // the complete-graph nomerge consumers are part of `_parent_atoms`; these pins

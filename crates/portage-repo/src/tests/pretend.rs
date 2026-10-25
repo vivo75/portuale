@@ -10,10 +10,10 @@ fn usepkgonly_dependency_satisfied_by_an_installed_version_with_no_binpkg() {
     let call = |usepkgonly: bool, is_top_level: bool| {
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &test_config(),
                 local_binpkg: &build_local_binpkg_index(&test_config()),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/samepkg",
             &SelectOptions {
@@ -51,10 +51,10 @@ fn installed_dep_missing_a_use_flag_reinstalls_not_already_installed() {
     let call = |autounmask_use: bool| {
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &test_config(),
                 local_binpkg: &build_local_binpkg_index(&test_config()),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/flipinstdep[wantflag]",
             &SelectOptions {
@@ -111,10 +111,10 @@ fn resolve_pretend_matches_a_sub_slot_restricted_atom_against_the_real_sub_slot(
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let outcome = resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         "dev-libs/subslotpkg:0/2",
         &SelectOptions {
@@ -139,10 +139,10 @@ fn resolve_pretend_rejects_a_sub_slot_restricted_atom_that_does_not_match() {
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let outcome = resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         "dev-libs/subslotpkg:0/3",
         &SelectOptions {
@@ -203,10 +203,10 @@ fn stale_built_slot_operator_dep_with_no_ebuild_reports_at_this_level() {
     let call = |is_top_level: bool| {
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &test_config(),
                 local_binpkg: &build_local_binpkg_index(&test_config()),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/reinstslottarget:0/1=",
             &SelectOptions {
@@ -372,10 +372,10 @@ fn an_argument_names_its_dependency_wanted_for_update() {
     assert_eq!(
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &test_config(),
                 local_binpkg: &build_local_binpkg_index(&test_config()),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/pg34-dlib",
             &SelectOptions {
@@ -403,10 +403,10 @@ fn deep_one_reaches_a_depth_one_dependency() {
     assert_eq!(
         resolve_pretend(
             &SelectSource {
-                repos: &repos,
                 root: &root,
                 config: &test_config(),
                 local_binpkg: &build_local_binpkg_index(&test_config()),
+                gate: crate::test_gate(&repos),
             },
             "dev-libs/pg34-dlib",
             &SelectOptions {
@@ -448,10 +448,10 @@ fn update_keeps_an_installed_use_dep_satisfier_the_tree_version_lacks() {
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let outcome = resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         "dev-libs/instusedep[iflag]",
         &SelectOptions {
@@ -471,15 +471,16 @@ fn update_keeps_an_installed_use_dep_satisfier_the_tree_version_lacks() {
 }
 
 /// The installed-only fallback keys on the cp having no tree or binary
-/// candidate at all (masked or not): `pg34-gone` is installed-only, while
+/// candidate at all (masked or not, crate::test_gate(masked or not)): `pg34-gone` is installed-only, while
 /// `pg34-gapp` and the keyword-masked `keywordmaskedpkg` both have ebuilds.
 #[test]
 fn tree_or_binary_candidate_probe_sees_ebuilds_but_not_installed_only() {
     let root = fixtures_root();
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let index = build_local_binpkg_index(&test_config());
-    let probe =
-        |package: &str| cp_has_tree_or_binary_candidate(&repos, &index, "dev-libs", package);
+    let probe = |package: &str| {
+        cp_has_tree_or_binary_candidate(crate::test_gate(&repos), &index, "dev-libs", package)
+    };
     assert!(!probe("pg34-gone"));
     assert!(probe("pg34-gapp"));
     assert!(probe("keywordmaskedpkg"));
@@ -495,10 +496,10 @@ fn update_without_deep_keeps_an_installed_only_build_time_dependency() {
     let repos = find_repos(&root).expect("fixture repos.conf must resolve");
     let outcome = resolve_pretend(
         &SelectSource {
-            repos: &repos,
             root: &root,
             config: &test_config(),
             local_binpkg: &build_local_binpkg_index(&test_config()),
+            gate: crate::test_gate(&repos),
         },
         "dev-libs/pg34-gone",
         &SelectOptions {

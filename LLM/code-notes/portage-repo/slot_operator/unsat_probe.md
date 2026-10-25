@@ -26,3 +26,6 @@ The unsatisfied slot-operator dependency probe.
 - Parent source: Portage `dep.parent.installed`; #257: otherwise a merge-bound binary parent (Portage's `not parent.installed` mask arm).
 - The replacement's live atoms are Portage's `replacement_parent.validated_atoms` (`_emerge/Package.py:329-359`): `use_reduce(..., matchall=True)`, every conditional branch kept regardless of the replacement's USE (#254's conditional shape heals only through this).
 - Portage `:2843-2845`: USE discarded, then `_select_package` -- visible tree or installed.
+
+## gate threading (#571)
+- Both probe arg structs (the `_full` one and the test-only wrapper) carry the gate.

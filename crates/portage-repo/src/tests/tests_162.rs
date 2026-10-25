@@ -197,8 +197,8 @@ fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
         if_new_ver: true,
         if_new_slot: true,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &entries,
@@ -206,8 +206,8 @@ fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
         if_new_ver: true,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &entries,
@@ -215,8 +215,8 @@ fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
         if_new_ver: false,
         if_new_slot: true,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &entries,
@@ -224,8 +224,8 @@ fn complete_graph_auto_enable_upgrade_and_downgrade_follow_if_new_ver() {
         if_new_ver: false,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
 }
 
@@ -248,8 +248,8 @@ fn complete_graph_auto_enable_new_only_for_a_new_slot() {
         if_new_ver: false,
         if_new_slot: true,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &new_slot,
@@ -257,8 +257,8 @@ fn complete_graph_auto_enable_new_only_for_a_new_slot() {
         if_new_ver: true,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &new_slot,
@@ -266,8 +266,8 @@ fn complete_graph_auto_enable_new_only_for_a_new_slot() {
         if_new_ver: false,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     let same_slot = vec![entry_162(
         "dev-libs",
@@ -284,8 +284,8 @@ fn complete_graph_auto_enable_new_only_for_a_new_slot() {
         if_new_ver: true,
         if_new_slot: true,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
 }
 
@@ -316,8 +316,8 @@ fn complete_graph_auto_enable_reinstall_needs_churn() {
         if_new_ver: false,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &[use_churn(vec!["flip".to_string()])],
@@ -325,8 +325,8 @@ fn complete_graph_auto_enable_reinstall_needs_churn() {
         if_new_ver: false,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &[use_churn(Vec::new())],
@@ -334,8 +334,8 @@ fn complete_graph_auto_enable_reinstall_needs_churn() {
         if_new_ver: false,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
 }
 
@@ -364,8 +364,8 @@ fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
         if_new_ver: false,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: std::slice::from_ref(&slot_churn),
@@ -373,8 +373,8 @@ fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
         if_new_ver: true,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     assert!(!complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
         entries: &[slot_churn],
@@ -382,8 +382,8 @@ fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
         if_new_ver: false,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
     let crossed = entry_162(
         "dev-libs",
@@ -406,8 +406,8 @@ fn complete_graph_auto_enable_reinstall_slot_change_needs_if_new_ver() {
         if_new_ver: true,
         if_new_slot: false,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
 }
 
@@ -438,8 +438,8 @@ fn complete_graph_auto_enable_settled_entries_stay_off() {
         if_new_ver: true,
         if_new_slot: true,
         root: std::path::Path::new(""),
-        repos: &[],
-        config: &portage_profile::Config::default()
+        config: &portage_profile::Config::default(),
+        gate: crate::test_gate(&[]),
     }));
 }
 
@@ -725,7 +725,6 @@ fn disj_162_circ(args: Disj162CircArgs<'_>) -> portage_use_reduce::AltPreference
         circular_dependency,
     } = args;
     disjunction_preference(DisjunctionPreferenceArgs {
-        repos,
         config,
         root,
         entries,
@@ -738,6 +737,7 @@ fn disj_162_circ(args: Disj162CircArgs<'_>) -> portage_use_reduce::AltPreference
         update: false,
         gate_entries: entries,
         gate_queued: queued,
+        gate: crate::test_gate(repos),
     })
 }
 
@@ -1278,7 +1278,6 @@ fn disj_circ_162(args: DisjCirc162Args<'_>) -> portage_use_reduce::AltPreference
         circular,
     } = args;
     disjunction_preference(DisjunctionPreferenceArgs {
-        repos,
         config,
         root,
         entries,
@@ -1291,6 +1290,7 @@ fn disj_circ_162(args: DisjCirc162Args<'_>) -> portage_use_reduce::AltPreference
         update: false,
         gate_entries: entries,
         gate_queued: queued,
+        gate: crate::test_gate(repos),
     })
 }
 
@@ -1475,13 +1475,13 @@ fn promote_162(args: Promote162Args<'_>) -> usize {
         .map(|a| a.iter().map(|s| s.to_string()).collect())
         .collect();
     promote_tied_alternative(PromoteTiedAlternativeArgs {
-        repos,
         config,
         root,
         entries,
         constraints: &HashMap::new(),
         alts: &owned,
         queued,
+        gate: crate::test_gate(repos),
     })
 }
 
@@ -1810,7 +1810,6 @@ fn demote_162(args: Demote162Args<'_>) -> bool {
         update,
     } = args;
     alternative_downgrade_demoted(AlternativeDowngradeDemotedArgs {
-        repos,
         root,
         config,
         entries,
@@ -1819,6 +1818,7 @@ fn demote_162(args: Demote162Args<'_>) -> bool {
         atoms: &atoms_162(atoms),
         queued,
         update,
+        gate: crate::test_gate(repos),
     })
 }
 

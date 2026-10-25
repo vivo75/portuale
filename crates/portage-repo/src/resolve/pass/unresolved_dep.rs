@@ -72,7 +72,7 @@ pub(crate) fn maybe_missing_dep_backtrack(args: MaybeMissingDepBacktrackArgs<'_>
     if matches!(outcome, PretendOutcome::NoVisibleCandidate)
         && ctx.backtrack_max > 0
         && state.missing_dep_trigger.is_none()
-        && !atom_currently_satisfiable(&ctx.repos, bare_atom, config, &masked_probe)
+        && !atom_currently_satisfiable(ctx.gate(), bare_atom, config, &masked_probe)
         && let Some((pc, pp)) = owner.clone()
     {
         // The failing dependency's own parent: the expanding item's version when
@@ -219,7 +219,7 @@ pub(crate) fn record_installed_slot_collision(
         {
             // Same sub-slot-carrying match string as the merge-outcome check
             // (a built `cat/pkg:0/2=` puller matches no `:slot`-only string).
-            let existing_sub = slot_conflict_meta(&ctx.repos, &key.0, &key.1, &existing_version).0;
+            let existing_sub = slot_conflict_meta(ctx.gate(), &key.0, &key.1, &existing_version).0;
             let existing_str = if existing_sub.is_empty() {
                 // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
                 format!("{}/{}-{existing_version}:{inst_slot}", key.0, key.1)
@@ -247,7 +247,6 @@ pub(crate) fn record_installed_slot_collision(
                 record_slot_conflict(
                     &mut state.slot_conflicts,
                     build_slot_conflict(BuildSlotConflictArgs {
-                        repos: &ctx.repos,
                         config,
                         root: ctx.root,
                         category: &key.0,
@@ -258,6 +257,7 @@ pub(crate) fn record_installed_slot_collision(
                         current_version: version,
                         slot_pullers: &state.slot_pullers,
                         installed_side: Some(InstalledSide::Current),
+                        gate: ctx.gate(),
                     }),
                 );
             }
@@ -330,13 +330,13 @@ pub(crate) fn dedup_repeat_visit(args: DedupRepeatVisitArgs<'_>) -> ControlFlow<
             {
                 let masked_rows = dep_masked_rows(ctx, config, key, display_atom);
                 let use_rows = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
-                    repos: &ctx.repos,
                     root: ctx.root,
                     entries: &state.entries,
                     display_atom,
                     evaluated_atom: current_atom,
                     owner,
                     config,
+                    gate: ctx.gate(),
                 });
                 state.nvc_dep_atoms.entry((*key).clone()).and_modify(|old| {
                     if live_miss_atom_supersedes(old, display_atom) {
@@ -460,10 +460,10 @@ pub(crate) fn enqueue_installed_deps(args: EnqueueInstalledDepsArgs<'_>) -> Vec<
             merge_order::dep_edges_from_metadata(&effective, &use_flags, portage_order_keys, true);
         enqueue_dependencies(
             &SelectSource {
-                repos: &ctx.repos,
                 root: atom_root,
                 config,
                 local_binpkg: &ctx.local_binpkg,
+                gate: ctx.gate(),
             },
             &DepOwner {
                 target_root: ctx.root,
@@ -527,7 +527,7 @@ pub(crate) fn compute_nvc_suggestions(args: ComputeNvcSuggestionsArgs<'_>) -> Nv
     let keyword_suggestion = if matches!(outcome, PretendOutcome::NoVisibleCandidate)
         && bp.autounmask_suggest_keywords
     {
-        suggested_keyword_candidate(&ctx.repos, &key.0, &key.1, config)
+        suggested_keyword_candidate(ctx.gate(), &key.0, &key.1, config)
     } else {
         None
     };
@@ -535,7 +535,7 @@ pub(crate) fn compute_nvc_suggestions(args: ComputeNvcSuggestionsArgs<'_>) -> Nv
     // `-flag` forms survive). See `GraphEntry::use_suggestion`.
     let use_suggestion =
         if matches!(outcome, PretendOutcome::NoVisibleCandidate) && bp.autounmask_suggest_use {
-            suggested_use_candidate(&ctx.repos, &key.0, &key.1, atom.use_deps.as_deref(), config)
+            suggested_use_candidate(ctx.gate(), &key.0, &key.1, atom.use_deps.as_deref(), config)
         } else {
             None
         };
@@ -547,7 +547,7 @@ pub(crate) fn compute_nvc_suggestions(args: ComputeNvcSuggestionsArgs<'_>) -> Nv
             owner
                 .zip(unevaluated_atom.as_deref())
                 .and_then(|(owner, unevaluated)| {
-                    suggested_parent_use_candidate(&ctx.repos, entries, unevaluated, owner, config)
+                    suggested_parent_use_candidate(ctx.gate(), entries, unevaluated, owner, config)
                 })
         } else {
             None
@@ -569,7 +569,6 @@ fn dep_masked_rows(
     display_atom: &str,
 ) -> Vec<(String, Vec<String>)> {
     masked_rows_for_dep(MaskedRowsForDepArgs {
-        repos: &ctx.repos,
         root: ctx.root,
         local_binpkg: &ctx.local_binpkg,
         binrepos: &config.binrepos,
@@ -585,6 +584,7 @@ fn dep_masked_rows(
         package: &key.1,
         atom_str: display_atom,
         config,
+        gate: ctx.gate(),
     })
 }
 
@@ -667,13 +667,13 @@ pub(crate) fn record_miss_disclosure(args: RecordMissDisclosureArgs<'_>) {
             // atom's `[use]` deps. Portage renders this block before the masked
             // one (`show_missing_use` wins).
             if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
-                repos: &ctx.repos,
                 root: ctx.root,
                 entries: &state.entries,
                 display_atom,
                 evaluated_atom: current_atom,
                 owner,
                 config,
+                gate: ctx.gate(),
             }) {
                 // A supersede refreshes the just-computed rows too.
                 match state

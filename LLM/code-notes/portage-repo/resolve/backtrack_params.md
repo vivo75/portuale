@@ -101,3 +101,6 @@ Parameters a backtracking pass runs with.
 
 ## field BacktrackParams::rebuild_if_replace_installed
 - Backlog #394: the `--rebuild-if-*` twin of `slot_operator_replace_installed` -- installed parents the post-walk scan named behind a merged build dep. Seeded and flipped exactly like the slot-operator set (see `seed_queue`, `outcome_fallbacks`), but the flip is a reasonless `Reinstall` (`slot_operator_rebuild: false`; the red `r` comes from `GraphResult::rebuild_if_reinstalls`). Portage: `_rebuild_config.rebuild_list` + `__auto_rebuild__` (`depgraph.py:5460-5480`, `force_reinstall=True`, `reset_depth=False`). Monotone; participates in `params_equal` like the slot-operator set.
+
+## gate threading (#571)
+- `SlotConflictMaskChoicesArgs` carries the gate; missed-update sibling enumeration skips unlisted categories.

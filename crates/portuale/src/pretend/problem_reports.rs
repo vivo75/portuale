@@ -209,7 +209,7 @@ pub(crate) fn show_skipped_updates(
     opts: &EmergeOpts<'_>,
     result: &GraphResult,
     root: &Path,
-    repos: &[RepoConfig],
+    gate: portage_repo::CategoryGate<'_>,
 ) {
     let ResolvePlan {
         root_deps_running_root,
@@ -247,7 +247,7 @@ pub(crate) fn show_skipped_updates(
                 && let Some(cfg) = running_config.as_ref()
             {
                 portage_repo::skipped_update_use_display_for(
-                    repos,
+                    gate,
                     cfg,
                     &header.category,
                     &header.package,
@@ -313,7 +313,7 @@ pub(crate) fn show_skipped_updates(
                             .next()
                             .and_then(portage_repo::split_cpv)
                     {
-                        portage_repo::skipped_update_use_display_for(repos, cfg, &cc, &cp2, &cv)
+                        portage_repo::skipped_update_use_display_for(gate, cfg, &cc, &cp2, &cv)
                     } else {
                         s.consumer_use.clone()
                     };
@@ -454,6 +454,7 @@ pub(crate) struct ShowSlotConflictsArgs<'a> {
     pub(crate) config: &'a Config,
     pub(crate) useoldpkg_atoms_render: &'a [String],
     pub(crate) color: &'a Colorizer,
+    pub(crate) config_root: &'a Path,
 }
 
 /// The slot-conflict notice.
@@ -467,6 +468,7 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
         config,
         useoldpkg_atoms_render,
         color,
+        config_root,
     } = args;
     let &ResolvePlan { usepkgonly, .. } = plan;
     let &EmergeOpts {
@@ -505,6 +507,7 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                     root,
                     repos,
                     config,
+                    config_root,
                     verbose_conflicts,
                     excluded,
                     useoldpkg_atoms_render,
@@ -575,6 +578,7 @@ pub(crate) struct ShowConflictInstanceArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a Config,
+    pub(crate) config_root: &'a Path,
     pub(crate) verbose_conflicts: bool,
     pub(crate) excluded: &'a Vec<String>,
     pub(crate) useoldpkg_atoms_render: &'a [String],
@@ -593,6 +597,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         root,
         repos,
         config,
+        config_root,
         verbose_conflicts,
         excluded,
         useoldpkg_atoms_render,
@@ -602,6 +607,14 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         color,
         any_omitted: any_omitted_out,
     } = args;
+    let categories = portage_repo::repo_categories(repos, config_root, true);
+    let warned = std::cell::RefCell::new(std::collections::HashSet::new());
+    let gate = portage_repo::CategoryGate {
+        repos,
+        categories: &categories,
+        config_root,
+        warned: &warned,
+    };
     let mut any_omitted = *any_omitted_out;
     println!();
     if inst.installed {
@@ -651,7 +664,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
             let (iuse, use_flags) = if o.installed {
                 portage_repo::installed_pkg_iuse_and_use(root, &c.category, &c.package, &o.version)
             } else {
-                slot_conflict_flag_sets(repos, config, &c.category, &c.package, &o.version)
+                slot_conflict_flag_sets(gate, config, &c.category, &c.package, &o.version)
             };
             ConflictOther {
                 cpv: format!(
@@ -719,6 +732,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         config,
         installed_pkgs,
         need_rebuild,
+        config_root,
     });
     show_selected_parents(
         &mut selected,
@@ -752,6 +766,7 @@ pub(crate) struct SelectConflictParentsArgs<'a> {
     pub(crate) config: &'a Config,
     pub(crate) installed_pkgs: &'a HashSet<(String, String, String)>,
     pub(crate) need_rebuild: &'a mut Vec<(String, String)>,
+    pub(crate) config_root: &'a Path,
 }
 
 /// Choose the parents of a conflict instance to show, per reason group, and note the unrebuildable ones.
@@ -767,6 +782,7 @@ pub(crate) fn select_conflict_parents(args: SelectConflictParentsArgs<'_>) -> Ve
         config,
         installed_pkgs,
         need_rebuild,
+        config_root,
     } = args;
     // Representative selection: farthest version per `cp` for a
     // `version` group, the first member for a `slot` group, every
@@ -835,6 +851,7 @@ pub(crate) fn select_conflict_parents(args: SelectConflictParentsArgs<'_>) -> Ve
                 repos,
                 config,
                 installed: installed_pkgs,
+                config_root,
             }) {
                 if !selected.contains(&m) {
                     selected.push(m);

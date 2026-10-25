@@ -5,3 +5,6 @@ Collect the pass blockers and flag tree-solved replacements.
 - Backlog #77 (A1): Portage `depgraph.py:8919-9078`, early exit at `:8908-8910`.
 - Backlog #81: everything but `--tree` display ignores the flags.
 
+
+## gate threading (#571)
+- `CollectUnwalkedInstalledBlockersArgs` uses `ctx.gate()`.

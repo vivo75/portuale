@@ -65,7 +65,6 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     // With `--update` the bridge synthesises the consumer rebuild.
     let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
         root: &dir,
-        repos: &repos,
         entries: &entries,
         reachable: &HashSet::new(),
         with_bdeps: true,
@@ -74,6 +73,7 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
         top_level_cps: &HashSet::new(),
         top_level_atoms: &HashSet::new(),
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     let names: Vec<&str> = out.iter().map(|e| e.package.as_str()).collect();
     assert_eq!(names, vec!["massc"]);
@@ -87,7 +87,6 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     // Without `--update` the arm stays off.
     let (off, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
         root: &dir,
-        repos: &repos,
         entries: &entries,
         reachable: &HashSet::new(),
         with_bdeps: true,
@@ -96,6 +95,7 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
         top_level_cps: &HashSet::new(),
         top_level_atoms: &HashSet::new(),
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert!(off.is_empty(), "no want_update, no schedule");
     let _ = fs::remove_dir_all(&dir);
@@ -144,7 +144,6 @@ fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
     };
     let demoted = slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
         root: &dir,
-        repos: &repos,
         entries: &[provider, entry],
         replace: &BTreeSet::from([sounneed.clone()]),
         slot_want: &HashMap::from([(sounneed.clone(), vec!["dev-libs/sounneed".to_string()])]),
@@ -153,6 +152,7 @@ fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
         changed_slot: false,
         top_level_cps: &HashSet::new(),
         empty: false,
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(
         demoted,
@@ -190,7 +190,6 @@ fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
         HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
     let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
         root: &dir,
-        repos: &repos,
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
         with_bdeps: true,
@@ -199,6 +198,7 @@ fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
         top_level_cps: &HashSet::new(),
         top_level_atoms: &HashSet::new(),
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].slot.as_deref(), Some("0"));
@@ -236,7 +236,6 @@ fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
         HashSet::from([("dev-libs".to_string(), "souprov".to_string())]);
     let (out, _) = slot_operator_rebuild_entries(SlotOperatorRebuildEntriesArgs {
         root: &dir,
-        repos: &repos,
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
         with_bdeps: true,
@@ -245,6 +244,7 @@ fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
         top_level_cps: &HashSet::new(),
         top_level_atoms: &HashSet::new(),
         config: &test_config(),
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].slot.as_deref(), Some("0"));
@@ -298,7 +298,6 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
                 empty: bool| {
         slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
             root: &dir,
-            repos: &repos,
             entries,
             replace: &replace,
             slot_want: &slot_want,
@@ -307,6 +306,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
             changed_slot,
             top_level_cps: top,
             empty,
+            gate: crate::test_gate(&repos),
         })
     };
 
@@ -356,7 +356,6 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
     let rule3 = |changed_slot: bool| {
         slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
             root: &dir,
-            repos: &repos,
             entries: &[provider.clone(), entry_slotmove.clone()],
             replace: &replace_slotmove,
             slot_want: &want_slotmove,
@@ -365,6 +364,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
             changed_slot,
             top_level_cps: &no_top,
             empty: false,
+            gate: crate::test_gate(&repos),
         })
     };
     assert!(
@@ -402,7 +402,6 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
     let bad_want = HashMap::from([(sounneed.clone(), vec!["=dev-libs/sounneed-2.0".to_string()])]);
     let demoted = slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
         root: &dir,
-        repos: &repos,
         entries: &[provider.clone(), entry.clone()],
         replace: &replace,
         slot_want: &bad_want,
@@ -411,6 +410,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         changed_slot: false,
         top_level_cps: &no_top,
         empty: false,
+        gate: crate::test_gate(&repos),
     });
     assert!(demoted.is_empty());
 
@@ -492,7 +492,6 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
     assert_eq!(latched, replace);
     let (rescheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &dir,
-        repos: &[],
         entries: &[provider, entry],
         reachable: &reach,
         scope: None,
@@ -504,6 +503,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         top_level_atoms: &HashSet::new(),
         excluded: &[],
         config: &test_config(),
+        gate: crate::test_gate(&[]),
     });
     assert!(
         rescheduled.is_empty(),

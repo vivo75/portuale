@@ -53,3 +53,6 @@ entry and no `InstalledUseState` is passed: the instance is its own previous
 package, hence no `*`/`%` markers. Forced/masked flags still get their
 parentheses. Called after `file_blocker_conflicts` in `collect_pass_blockers`
 and in the solver bridge, the only places that create `Uninstall` entries.
+
+## gate threading (#571)
+- `refresh_entry_use_display` and `repaint_running_root_entry_displays` carry the gate (display of surviving entries; the gate passes everything listed through).

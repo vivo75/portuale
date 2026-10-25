@@ -35,3 +35,6 @@ Folds the entry's dependency keys and queues the atoms they name.
 
 ## fn enqueue_test_deps
 - `--with-test-deps` gating (depth == 0, "test" a valid, not-already-enabled, not-masked IUSE flag) and the reason for `use_reduce_flat_subset` over a plain pass: see `resolve_pretend_graph`. The subset filter drops the group structure, so `test?`-gated deps are plain atoms (empty universe); `DepPriority.optional` never contributes to hard cycles.
+
+## gate threading (#571)
+- `DisjunctionPreferenceArgs`, `PromoteTiedAlternativeArgs`, `RootDepsSatisfiedAtomsArgs` and `UnsatisfiedRootDepsAtomsArgs` use `ctx.gate()`.

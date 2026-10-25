@@ -5,26 +5,26 @@ use crate::*;
 /// Full per-package display for a scheduled-for-merge package.
 // Portage: _emerge/UseFlagDisplay.py, pkg_use_display
 pub(crate) fn pkg_use_display_for(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     config: &portage_profile::Config,
     category: &str,
     package: &str,
     version: &str,
 ) -> Vec<(String, String)> {
-    skipped_update_use_display_for(repos, config, category, package, version)
+    skipped_update_use_display_for(gate, config, category, package, version)
 }
 
 /// Full per-package display for the skipped-update block; the
 /// slot-collision notice shares this implementation.
 // Portage: _emerge/UseFlagDisplay.py, pkg_use_display
 pub fn skipped_update_use_display_for(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     config: &portage_profile::Config,
     category: &str,
     package: &str,
     version: &str,
 ) -> Vec<(String, String)> {
-    let candidates = match list_candidates(repos, category, package) {
+    let candidates = match gate.repo_candidates(category, package) {
         Ok(cs) => cs,
         Err(_) => return Vec::new(),
     };
@@ -143,7 +143,7 @@ pub fn skipped_update_installed_use_display_for(
 /// One consumer's full display for a `SkippedUpdate` row. An empty
 /// `parent_cpv` (a top-level argument) renders bare.
 pub(crate) fn skipped_consumer_use_display(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     root: &Path,
     config: &portage_profile::Config,
     parent_cpv: &str,
@@ -156,7 +156,7 @@ pub(crate) fn skipped_consumer_use_display(
     if installed {
         skipped_update_installed_use_display_for(root, config, &cc, &cp2, &cv)
     } else {
-        skipped_update_use_display_for(repos, config, &cc, &cp2, &cv)
+        skipped_update_use_display_for(gate, config, &cc, &cp2, &cv)
     }
 }
 
@@ -341,21 +341,18 @@ pub fn installed_use_display_for(
 /// Declared IUSE plus resolved USE for one version (highest-priority
 /// candidate). Empty when the version is gone or unreadable.
 pub fn slot_conflict_flag_sets(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     config: &portage_profile::Config,
     category: &str,
     package: &str,
     version: &str,
 ) -> (HashSet<String>, HashSet<String>) {
-    let Some(cand) = list_candidates(repos, category, package)
-        .ok()
-        .and_then(|cs| {
-            cs.iter()
-                .filter(|c| c.version == version)
-                .max_by_key(|c| c.repo_priority)
-                .cloned()
-        })
-    else {
+    let Some(cand) = gate.repo_candidates(category, package).ok().and_then(|cs| {
+        cs.iter()
+            .filter(|c| c.version == version)
+            .max_by_key(|c| c.repo_priority)
+            .cloned()
+    }) else {
         return (HashSet::new(), HashSet::new());
     };
     match candidate_iuse_and_use(&cand, category, package, config) {

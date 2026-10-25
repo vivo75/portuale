@@ -19,3 +19,6 @@ Reports for dependencies whose USE requirements no candidate meets.
 
 ## missing-flag filter (union-free check, backlog #441 S1 / #457)
 - The `missing`/`need_enable`/`need_disable` filters test `declared ∪ IUSE_EFFECTIVE` membership inline (`is_valid` closure) instead of building the union set per candidate.
+
+## gate threading (#571)
+- Both arg structs carry the gate into the flip-target scan and the candidate scan.

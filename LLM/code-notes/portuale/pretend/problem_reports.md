@@ -56,3 +56,6 @@ Missing arguments, and the abort reports for cycles and unsatisfied dependencies
 
 ## skipped-missing masked branch
 - #348 S5: when any masked row is EAPI-masked, the shared `eapi_mask_upgrade_notice` paragraph follows the rows (same rule as the top-level block). Portage: `_show_unsatisfied_dep` (`have_eapi_mask`).
+
+## allow-list wiring (#571)
+- `ShowSlotConflictsArgs`, `ShowConflictInstanceArgs` and `SelectConflictParentsArgs` carry `config_root`; each report builds its gate once. Displayed entries are merge-bound (listed), so these gates pass everything through.

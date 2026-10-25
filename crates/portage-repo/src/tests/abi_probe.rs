@@ -50,7 +50,6 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         });
         slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
             root: &base,
-            repos: &repos,
             entries,
             conflicts,
             already,
@@ -60,6 +59,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
             excluded,
             probe_parents: &parents,
             config: &test_config(),
+            gate: crate::test_gate(&repos),
         })
     };
     let abicons = ("app-misc".to_string(), "abicons".to_string());
@@ -168,7 +168,6 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
     assert!(
         slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
             root: &bare_base,
-            repos: &bare_repos,
             entries: &entries,
             conflicts: std::slice::from_ref(&record),
             already: &BTreeSet::new(),
@@ -177,7 +176,8 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
             walked: &walked,
             excluded: &[],
             probe_parents: &bare_parents,
-            config: &test_config()
+            config: &test_config(),
+            gate: crate::test_gate(&bare_repos),
         })
         .is_empty(),
         "without a visible replacement the probe does nothing"
@@ -242,7 +242,6 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         assert!(
             slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
                 root: &cond_base,
-                repos: &cond_repos,
                 entries: &cond_entries,
                 conflicts: std::slice::from_ref(&record),
                 already: &BTreeSet::new(),
@@ -251,7 +250,8 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
                 walked: &walked,
                 excluded: &[],
                 probe_parents: &parents,
-                config: &test_config()
+                config: &test_config(),
+                gate: crate::test_gate(&cond_repos),
             })
             .is_empty(),
             "a conditional `:=` whose flag is off is not selected"

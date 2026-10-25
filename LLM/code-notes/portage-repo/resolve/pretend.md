@@ -119,3 +119,6 @@ Selecting one atom's candidate (`resolve_pretend`).
 
 ## fn resolve_pretend (shared ebuild pool, backlog #441 S1 / #457)
 - Keeps `list_candidates`' `Arc` alongside the mutable pool and hands it to the pool memo as the starting-pool identity (pointer comparison instead of deep `Vec<Candidate>` equality). The owned `to_vec` copy stays: binaries are extended and retained in place.
+
+## struct SelectSource (gate, #571)
+- New `gate` field: `resolve_pretend`'s ebuild pool (`ebuilds_shared`), `classify_best_against_installed`'s reinstall probes and `collect_binary_candidates`' `changed_deps`/`slot_changed` checks all read through it. Test `SelectSource` literals use `crate::test_gate`.

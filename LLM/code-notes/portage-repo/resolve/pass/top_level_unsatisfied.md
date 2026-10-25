@@ -16,3 +16,6 @@ Drops or aborts a top-level atom with no visible candidate, Portage's argument h
 - `--autounmask-use`'s own suggestion sub-feature: same gating/"only suggest a fix that would actually work" spirit. Message format mirrors Portage `package.use` suggestion syntax (`=category/package-version flag -flag`).
 - `--autounmask-license` suggestion: same "only suggest a fix that would actually work" gating. `--autounmask-keep-masks=n` has its own suggestion sub-feature.
 - Keyword suggestion: see `keyword_masked_only`; portuale does not yet combine multiple simultaneous suggestion kinds the way Portage can. The on/off default-resolution logic lives in this function's caller config.
+
+## gate threading (#571)
+- Pool, `all_masked_report`, `BinaryChangedDepsGate` (x2), `suggested_mask/keyword/license/use_candidate` and `use_unsat_candidates_for_atom` use `ctx.gate()`.

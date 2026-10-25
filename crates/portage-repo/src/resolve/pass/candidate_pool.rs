@@ -30,7 +30,7 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
     let mut repo_candidates = if ctx.usepkgonly || crate::globals::ebuild_db_dropped() {
         Vec::new()
     } else {
-        let Ok(c) = list_candidates(&ctx.repos, &key.0, &key.1) else {
+        let Ok(c) = ctx.repo_candidates(&key.0, &key.1) else {
             return ControlFlow::Break(());
         };
         c.to_vec()
@@ -81,11 +81,11 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
             binary_candidates.retain(|c| {
                 !binary_deps_changed(BinaryDepsChangedArgs {
                     root: ctx.root,
-                    repos: &ctx.repos,
                     candidate: c,
                     category: &key.0,
                     package: &key.1,
                     with_bdeps: ctx.with_bdeps,
+                    gate: ctx.gate(),
                 })
             });
         }

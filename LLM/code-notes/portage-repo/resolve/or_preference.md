@@ -45,3 +45,6 @@ Which alternative of an `||` group to prefer: Portage `dep_zapdeps`'s choice bin
 - Portage `for choice_1 in choices[1:]:` -- a snapshot of every choice BUT the first, by identity, taken before any mutation.
 - Reached choice_1's own current position without a promotion firing -- Portage's `if choice_1 is choice_2: break`.
 - `pos2 < pos1` always (the scan breaks the moment it would reach `pos1`), so removing `pos1` first never shifts `pos2`.
+
+## gate threading (#571)
+- `AlternativeDowngradeDemotedArgs`, `DisjunctionPreferenceArgs` and `PromoteTiedAlternativeArgs` carry the gate; the `||`-preference tree lookups gate with it.

@@ -5,7 +5,6 @@ use crate::*;
 /// Arguments of [`slot_operator_eliminate_rebuilds`].
 pub(crate) struct SlotOperatorEliminateRebuildsArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) replace: &'a BTreeSet<(String, String)>,
     pub(crate) slot_want: &'a HashMap<(String, String), Vec<String>>,
@@ -14,6 +13,7 @@ pub(crate) struct SlotOperatorEliminateRebuildsArgs<'a> {
     pub(crate) changed_slot: bool,
     pub(crate) top_level_cps: &'a HashSet<(String, String)>,
     pub(crate) empty: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Portage's `_eliminate_rebuilds`: the undo path. For every cp in the replace
@@ -27,7 +27,6 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
 ) -> BTreeSet<(String, String)> {
     let SlotOperatorEliminateRebuildsArgs {
         root,
-        repos,
         entries,
         replace,
         slot_want,
@@ -36,6 +35,7 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
         changed_slot,
         top_level_cps,
         empty,
+        gate,
     } = args;
     let mut demoted: BTreeSet<(String, String)> = BTreeSet::new();
     if empty || replace.is_empty() {
@@ -86,7 +86,7 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
         }
         // Rule 3: `--changed-slot` keeps a rebuild whose tree ebuild at the
         // same cpv moved (slot, sub_slot) vs the installed instance.
-        if changed_slot && slot_changed(root, repos, &cp.0, &cp.1, version) {
+        if changed_slot && slot_changed(gate, root, &cp.0, &cp.1, version) {
             continue;
         }
         let (i_slot, i_sub) = read_vdb_slot(root, &cp.0, &cp.1, version);
@@ -115,7 +115,7 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
             continue;
         }
         // Rule 8.
-        let Some(metadata) = tree_metadata_for(repos, cp, version) else {
+        let Some(metadata) = tree_metadata_for(gate, cp, version) else {
             continue;
         };
         let new_use: HashSet<String> = entry
@@ -158,7 +158,6 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
 /// Arguments of [`slot_operator_rebuild_entries`].
 pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) reachable: &'a HashSet<(String, String)>,
     pub(crate) with_bdeps: bool,
@@ -167,6 +166,7 @@ pub(crate) struct SlotOperatorRebuildEntriesArgs<'a> {
     pub(crate) top_level_cps: &'a HashSet<(String, String)>,
     pub(crate) top_level_atoms: &'a HashSet<String>,
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Legacy path for the `--solver=pubgrub` / `--solver=resolvo` bridges only:
@@ -179,7 +179,6 @@ pub(crate) fn slot_operator_rebuild_entries(
 ) -> (Vec<GraphEntry>, Vec<(String, String)>) {
     let SlotOperatorRebuildEntriesArgs {
         root,
-        repos,
         entries,
         reachable,
         with_bdeps,
@@ -188,6 +187,7 @@ pub(crate) fn slot_operator_rebuild_entries(
         top_level_cps,
         top_level_atoms,
         config,
+        gate,
     } = args;
     let installed = all_installed_packages(root);
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
@@ -198,7 +198,6 @@ pub(crate) fn slot_operator_rebuild_entries(
         combined.extend(out.iter().cloned());
         let (next, pairs, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
             root,
-            repos,
             entries: &combined,
             reachable,
             scope: None,
@@ -210,6 +209,7 @@ pub(crate) fn slot_operator_rebuild_entries(
             top_level_atoms,
             excluded,
             config,
+            gate,
         });
         abi_rebuilds = pairs;
         if next == scheduled {
@@ -236,17 +236,17 @@ pub(crate) fn slot_operator_rebuild_entries(
                 // The rebuild lands at the tree ebuild's SLOT, not the vdb's.
                 let (v_slot, v_sub) =
                     read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
-                let (slot, sub_slot, tree_repo) =
-                    list_candidates(repos, &pkg.category, &pkg.package)
-                        .ok()
-                        .and_then(|cands| {
-                            cands
-                                .iter()
-                                .find(|c| c.version == pkg.version)
-                                .map(|c| (c.slot.clone(), c.sub_slot.clone(), c.repo_name.clone()))
-                        })
-                        .map(|(slot, sub_slot, repo)| (slot, sub_slot, Some(repo)))
-                        .unwrap_or_else(|| (v_slot.clone(), v_sub.clone(), None));
+                let (slot, sub_slot, tree_repo) = gate
+                    .repo_candidates(&pkg.category, &pkg.package)
+                    .ok()
+                    .and_then(|cands| {
+                        cands
+                            .iter()
+                            .find(|c| c.version == pkg.version)
+                            .map(|c| (c.slot.clone(), c.sub_slot.clone(), c.repo_name.clone()))
+                    })
+                    .map(|(slot, sub_slot, repo)| (slot, sub_slot, Some(repo)))
+                    .unwrap_or_else(|| (v_slot.clone(), v_sub.clone(), None));
                 // The installed repo, `__unknown__` when the vdb records none.
                 let installed_repo =
                     installed_pkg_repo(root, &pkg.category, &pkg.package, &pkg.version);

@@ -21,6 +21,7 @@ pub(crate) fn solve_pass_slot_conflicts(
             root: ctx.root,
             repos: &ctx.repos,
             config,
+            gate: ctx.gate(),
         });
         if !solved.removed.is_empty() {
             // The kept instance takes over the removed row (one row per cp);
@@ -50,7 +51,7 @@ pub(crate) fn solve_pass_slot_conflicts(
                         (s.clone(), ss.clone(), repo)
                     }
                     None => {
-                        let (sub, repo, slot) = slot_conflict_meta(&ctx.repos, c, p, k);
+                        let (sub, repo, slot) = slot_conflict_meta(ctx.gate(), c, p, k);
                         (slot, sub, repo)
                     }
                 };
@@ -71,7 +72,7 @@ pub(crate) fn solve_pass_slot_conflicts(
                         .collect();
                     entry.outcome = PretendOutcome::AlreadyInstalled { version: k.clone() };
                 } else {
-                    let (declared, enabled) = slot_conflict_flag_sets(&ctx.repos, config, c, p, k);
+                    let (declared, enabled) = slot_conflict_flag_sets(ctx.gate(), config, c, p, k);
                     entry.use_flags_display = declared
                         .into_iter()
                         .map(|f| {
@@ -97,7 +98,7 @@ pub(crate) fn solve_pass_slot_conflicts(
             {
                 continue;
             }
-            let Some(keeper_cand) = list_candidates(&ctx.repos, c, p).ok().and_then(|cs| {
+            let Some(keeper_cand) = ctx.repo_candidates(c, p).ok().and_then(|cs| {
                 cs.iter()
                     .filter(|cand| cand.version == *k && cand.source == CandidateSource::Ebuild)
                     .max_by_key(|cand| cand.repo_priority)
@@ -109,7 +110,7 @@ pub(crate) fn solve_pass_slot_conflicts(
             let Ok(meta) = repo_aux_metadata(&keeper_cand.repo_location, c, &pf) else {
                 continue;
             };
-            let (_declared, enabled) = slot_conflict_flag_sets(&ctx.repos, config, c, p, k);
+            let (_declared, enabled) = slot_conflict_flag_sets(ctx.gate(), config, c, p, k);
             let owner_key = (c.clone(), p.clone());
             for dep_key in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"] {
                 let Some(dep_str) = meta.get(dep_key) else {

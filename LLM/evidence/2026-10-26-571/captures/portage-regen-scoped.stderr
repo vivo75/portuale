@@ -1,0 +1,17 @@
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Unable to parse profile: '/etc/portage/make.profile'
+!!! ParseError: Parent 'gentoo:default/linux/amd64/23.0/desktop/plasma/systemd' not found: '/.gentoo/repos/buildovl/profiles/vivo/desktop/parent'
+
+
+!!! /etc/portage/make.profile is not a symlink and will probably prevent most merges.
+!!! It should point into a profile within /home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/
+!!! (You can safely ignore this message when syncing. It's harmless.)
+
+
+!!! Your current profile is invalid. If you have just changed your profile
+!!! configuration, you should revert back to the previous configuration.
+!!! Allowed actions are limited to --help, --info, --search, --sync, and
+!!! --version.

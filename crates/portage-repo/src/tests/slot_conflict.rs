@@ -44,12 +44,12 @@ fn build_residual_forms_a_record_for_a_broken_pin() {
     let dir = slotundo_temp_dir("161-resid");
     let (repos, config, upgrade) = residual_161_setup(&dir);
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[upgrade],
         slot_pullers: &HashMap::new(),
         dropped: &[residual_161_pin()],
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 1);
     let r = &out[0];
@@ -76,12 +76,12 @@ fn build_residual_reads_the_merge_version_from_a_new_entry() {
     let (repos, config, _) = residual_161_setup(&dir);
     let new_entry = graph_entry("dev-libs", "souprov", "2.0");
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[new_entry],
         slot_pullers: &HashMap::new(),
         dropped: &[residual_161_pin()],
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].resolved_version, "2.0");
@@ -106,12 +106,12 @@ fn build_residual_skips_a_consumer_being_replaced() {
         ..graph_entry("dev-libs", "conpkg", "1.0")
     };
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[upgrade, consumer_merge],
         slot_pullers: &HashMap::new(),
         dropped: &[residual_161_pin()],
+        gate: crate::test_gate(&repos),
     });
     assert!(out.is_empty(), "a replaced consumer is not reported");
     let _ = fs::remove_dir_all(&dir);
@@ -125,12 +125,12 @@ fn build_residual_reconciles_a_pin_the_merge_satisfies() {
     let mut pin = residual_161_pin();
     pin.atom = "=dev-libs/souprov-2.0:0/2".to_string();
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[upgrade],
         slot_pullers: &HashMap::new(),
         dropped: &[pin],
+        gate: crate::test_gate(&repos),
     });
     assert!(out.is_empty(), "a satisfied pin reconciles silently");
     let _ = fs::remove_dir_all(&dir);
@@ -144,12 +144,12 @@ fn build_residual_reads_the_merge_version_from_the_target_entry() {
     let (repos, config, upgrade) = residual_161_setup(&dir);
     let neighbour = graph_entry("dev-libs", "otherpkg", "9.9");
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[upgrade, neighbour],
         slot_pullers: &HashMap::new(),
         dropped: &[residual_161_pin()],
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].resolved_version, "2.0");
@@ -170,12 +170,12 @@ fn build_residual_keeps_the_highest_matching_installed() {
     fs::write(d2.join("SLOT"), "0/1\n").unwrap();
     fs::write(d2.join("repository"), "testrepo\n").unwrap();
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[upgrade],
         slot_pullers: &HashMap::new(),
         dropped: &[residual_161_pin()],
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].instances[1].version, "1.0");
@@ -197,12 +197,12 @@ fn build_residual_prefers_the_greatest_matching_installed() {
     pin.atom = ">=dev-libs/souprov-1.0:0/1".to_string();
     pin.raw_atom = pin.atom.clone();
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[upgrade],
         slot_pullers: &HashMap::new(),
         dropped: &[pin],
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].instances[1].version, "1.0-r1");
@@ -236,12 +236,12 @@ fn build_residual_files_puller_parents_by_version_and_use() {
         ],
     )]);
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[upgrade],
         slot_pullers: &pullers,
         dropped: &[residual_161_pin()],
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 1);
     let merge_atoms: Vec<&str> = out[0].instances[0]
@@ -304,12 +304,12 @@ fn build_residual_folds_each_pin_into_its_own_record() {
         consumer: ("dev-libs".to_string(), "zzz".to_string(), "9.9".to_string()),
     };
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[upgrade, sounneed_merge],
         slot_pullers: &HashMap::new(),
         dropped: &[residual_161_pin(), pin_b, pin_stray],
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 2);
     for r in &out {
@@ -337,12 +337,12 @@ fn build_residual_dedups_identical_pins() {
     let (repos, config, upgrade) = residual_161_setup(&dir);
     let pin = residual_161_pin();
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        repos: &repos,
         config: &config,
         root: &dir,
         entries: &[upgrade],
         slot_pullers: &HashMap::new(),
         dropped: &[pin.clone(), pin],
+        gate: crate::test_gate(&repos),
     });
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].instances[1].parents.len(), 1);
@@ -406,10 +406,10 @@ fn merge_same_slot_conflicts_refiles_a_built_puller_under_the_installed_sub_slot
     let out = merge_same_slot_conflicts(MergeSameSlotConflictsArgs {
         conflicts: &[conflict],
         pullers: &pullers,
-        repos: &repos,
         config: &test_config(),
         root: &base,
         refile_singletons: true,
+        gate: crate::test_gate(&repos),
     });
     let installed = out[0].instances.iter().find(|i| i.installed).unwrap();
     assert_eq!(

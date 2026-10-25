@@ -12,3 +12,6 @@ Records a parent USE flip that alone can satisfy a failed dependency, then re-wa
 - Already folded on an earlier pass yet the dep still failed this one: the ordinary NoVisibleCandidate path (with `parent_use_suggestion`) renders it.
 - Backtrack arm: without the `newly`-against-effective check the same flip would re-fire every pass and eat the backtrack budget. The driver at the bottom of `'backtrack` does the `continue`, not here; with `--autounmask-backtrack` off the change is recorded and displayed but the graph is not re-driven (a post-loop pass refreshes the package's own USE line).
 - Backward-cascade overlay: the flip serves an already-resolved slot and the current dep's owner is often not the forcing parent (e.g. the bare-depending top package) -- no single forcing parent, legacy fill (backlog #205).
+
+## gate threading (#571)
+- `suggested_parent_use_candidate` and `parent_use_state` use `ctx.gate()`.

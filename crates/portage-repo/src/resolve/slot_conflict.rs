@@ -55,19 +55,17 @@ pub struct SlotConflictParent {
 /// `(sub_slot, repo_name, slot)` for `cat/pkg`'s `version`: the highest-priority
 /// candidate with that version; all-empty when versionless.
 pub(crate) fn slot_conflict_meta(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     category: &str,
     package: &str,
     version: &str,
 ) -> (String, String, String) {
-    match list_candidates(repos, category, package)
-        .ok()
-        .and_then(|cs| {
-            cs.iter()
-                .filter(|c| c.version == version)
-                .max_by_key(|c| c.repo_priority)
-                .cloned()
-        }) {
+    match gate.repo_candidates(category, package).ok().and_then(|cs| {
+        cs.iter()
+            .filter(|c| c.version == version)
+            .max_by_key(|c| c.repo_priority)
+            .cloned()
+    }) {
         Some(c) => (c.sub_slot, c.repo_name, c.slot),
         None => (String::new(), String::new(), String::new()),
     }
@@ -83,7 +81,6 @@ pub(crate) enum InstalledSide {
 
 /// Arguments of [`build_slot_conflict`].
 pub(crate) struct BuildSlotConflictArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) root: &'a Path,
     pub(crate) category: &'a str,
@@ -94,6 +91,7 @@ pub(crate) struct BuildSlotConflictArgs<'a> {
     pub(crate) current_version: &'a str,
     pub(crate) slot_pullers: &'a SlotPullers,
     pub(crate) installed_side: Option<InstalledSide>,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Assembles a `SlotConflict`: instance A is `existing_version` (already in the
@@ -104,7 +102,6 @@ pub(crate) struct BuildSlotConflictArgs<'a> {
 // Portage: depgraph.py, slot_collision_handler
 pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConflict {
     let BuildSlotConflictArgs {
-        repos,
         config,
         root,
         category,
@@ -115,6 +112,7 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
         current_version,
         slot_pullers,
         installed_side,
+        gate,
     } = args;
     let a_installed = installed_side == Some(InstalledSide::Existing);
     let b_installed = installed_side == Some(InstalledSide::Current);
@@ -129,13 +127,13 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
     let (a_sub, a_repo) = if a_installed {
         vdb_meta(existing_version)
     } else {
-        let (s, r, _) = slot_conflict_meta(repos, category, package, existing_version);
+        let (s, r, _) = slot_conflict_meta(gate, category, package, existing_version);
         (s, r)
     };
     let (b_sub, b_repo) = if b_installed {
         vdb_meta(current_version)
     } else {
-        let (s, r, _) = slot_conflict_meta(repos, category, package, current_version);
+        let (s, r, _) = slot_conflict_meta(gate, category, package, current_version);
         (s, r)
     };
     // Match strings carry the sub-slot, or built slot-operator pullers vanish.
@@ -154,12 +152,12 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
     let (a_iuse, a_use) = if a_installed {
         installed_pkg_iuse_and_use(root, category, package, existing_version)
     } else {
-        slot_conflict_flag_sets(repos, config, category, package, existing_version)
+        slot_conflict_flag_sets(gate, config, category, package, existing_version)
     };
     let (b_iuse, b_use) = if b_installed {
         installed_pkg_iuse_and_use(root, category, package, current_version)
     } else {
-        slot_conflict_flag_sets(repos, config, category, package, current_version)
+        slot_conflict_flag_sets(gate, config, category, package, current_version)
     };
     let mut parents_a: Vec<SlotConflictParent> = Vec::new();
     let mut parents_b: Vec<SlotConflictParent> = Vec::new();
@@ -181,12 +179,12 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
                 .is_some_and(|m| !m.is_empty())
                 && use_ok(&b_iuse, &b_use);
             let entry = SlotConflictParent {
-                parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
+                parent_cpv: slot_conflict_puller_cpv(gate, pc, pp, pv),
                 atom: atom.clone(),
                 use_display: if pc.is_empty() {
                     Vec::new()
                 } else {
-                    pkg_use_display_for(repos, config, pc, pp, pv)
+                    pkg_use_display_for(gate, config, pc, pp, pv)
                 },
                 installed: false,
             };
@@ -213,7 +211,7 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
                 use_display: if a_installed {
                     installed_use_display_for(root, config, category, package, existing_version)
                 } else {
-                    pkg_use_display_for(repos, config, category, package, existing_version)
+                    pkg_use_display_for(gate, config, category, package, existing_version)
                 },
                 parents: parents_a,
                 installed: a_installed,
@@ -225,7 +223,7 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
                 use_display: if b_installed {
                     installed_use_display_for(root, config, category, package, current_version)
                 } else {
-                    pkg_use_display_for(repos, config, category, package, current_version)
+                    pkg_use_display_for(gate, config, category, package, current_version)
                 },
                 parents: parents_b,
                 installed: b_installed,
@@ -237,7 +235,7 @@ pub(crate) fn build_slot_conflict(args: BuildSlotConflictArgs<'_>) -> SlotConfli
 /// `` `cat/pkg-ver:slot/sub_slot::repo` `` for a conflicting parent; empty for
 /// a top-level parent. Shared by both conflict report builders.
 pub(crate) fn slot_conflict_puller_cpv(
-    repos: &[RepoConfig],
+    gate: CategoryGate<'_>,
     pc: &str,
     pp: &str,
     pv: &str,
@@ -245,7 +243,7 @@ pub(crate) fn slot_conflict_puller_cpv(
     if pc.is_empty() {
         return String::new();
     }
-    let (psub, prepo, pslot) = slot_conflict_meta(repos, pc, pp, pv);
+    let (psub, prepo, pslot) = slot_conflict_meta(gate, pc, pp, pv);
     // match-str-ok: slot_conflict_meta/installed ref fields, not a Candidate
     format!("{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}")
 }
@@ -270,10 +268,10 @@ pub(crate) fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: S
 pub(crate) struct MergeSameSlotConflictsArgs<'a> {
     pub(crate) conflicts: &'a [SlotConflict],
     pub(crate) pullers: &'a SlotPullers,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) root: &'a Path,
     pub(crate) refile_singletons: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Merges records sharing one `(category, package, slot)` into a single joint
@@ -287,10 +285,10 @@ pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) ->
     let MergeSameSlotConflictsArgs {
         conflicts,
         pullers,
-        repos,
         config,
         root,
         refile_singletons,
+        gate,
     } = args;
     let mut order: Vec<(String, String, String)> = Vec::new();
     let mut groups: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
@@ -335,7 +333,7 @@ pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) ->
                     let sub = if inst.installed {
                         inst.sub_slot.clone()
                     } else {
-                        slot_conflict_meta(repos, category, package, &inst.version).0
+                        slot_conflict_meta(gate, category, package, &inst.version).0
                     };
                     let match_str = if sub.is_empty() {
                         // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
@@ -347,7 +345,7 @@ pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) ->
                     let (iuse, use_) = if inst.installed {
                         installed_pkg_iuse_and_use(root, category, package, &inst.version)
                     } else {
-                        slot_conflict_flag_sets(repos, config, category, package, &inst.version)
+                        slot_conflict_flag_sets(gate, config, category, package, &inst.version)
                     };
                     // A puller files under the instance its atom *fully* satisfies.
                     let use_ok = match &parsed {
@@ -364,12 +362,12 @@ pub(crate) fn merge_same_slot_conflicts(args: MergeSameSlotConflictsArgs<'_>) ->
                         .is_some_and(|m| !m.is_empty())
                     {
                         let entry = SlotConflictParent {
-                            parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
+                            parent_cpv: slot_conflict_puller_cpv(gate, pc, pp, pv),
                             atom: atom.clone(),
                             use_display: if pc.is_empty() {
                                 Vec::new()
                             } else {
-                                pkg_use_display_for(repos, config, pc, pp, pv)
+                                pkg_use_display_for(gate, config, pc, pp, pv)
                             },
                             installed: false,
                         };
@@ -400,9 +398,9 @@ pub(crate) struct SynthesizeSurvivingConflictEntriesArgs<'a> {
     pub(crate) entries: &'a mut Vec<GraphEntry>,
     pub(crate) conflicts: &'a [SlotConflict],
     pub(crate) required_by_map: &'a HashMap<(String, String), HashSet<(String, String)>>,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Graphs the shadowed second instances of *surviving* slot conflicts beside
@@ -419,9 +417,9 @@ pub(crate) fn synthesize_surviving_conflict_entries(
         entries,
         conflicts,
         required_by_map,
-        repos,
         root,
         config,
+        gate,
     } = args;
     for sc in conflicts {
         for inst in &sc.instances {
@@ -478,8 +476,8 @@ pub(crate) fn synthesize_surviving_conflict_entries(
                 deps: Vec::new(),
             };
             refresh_entry_use_display(
+                gate,
                 std::slice::from_mut(&mut entry),
-                repos,
                 root,
                 &(sc.category.clone(), sc.package.clone()),
                 config,
@@ -502,12 +500,12 @@ pub(crate) fn synthesize_surviving_conflict_entries(
 
 /// Arguments of [`build_residual_slot_conflicts`].
 pub(crate) struct BuildResidualSlotConflictsArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) slot_pullers: &'a SlotPullers,
     pub(crate) dropped: &'a [RevDepPin],
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Residual installed-instance slot conflicts for dropped reverse-dep pins:
@@ -524,12 +522,12 @@ pub(crate) fn build_residual_slot_conflicts(
     args: BuildResidualSlotConflictsArgs<'_>,
 ) -> Vec<SlotConflict> {
     let BuildResidualSlotConflictsArgs {
-        repos,
         config,
         root,
         entries,
         slot_pullers,
         dropped,
+        gate,
     } = args;
     let mut grouped: HashMap<(String, String, String, String, String), SlotConflict> =
         HashMap::new();
@@ -549,12 +547,12 @@ pub(crate) fn build_residual_slot_conflicts(
         if residual_conflict_for_pin(ResidualConflictForPinArgs {
             pin,
             entries,
-            repos,
             config,
             root,
             grouped: &mut grouped,
             slot_pullers,
             order: &mut order,
+            gate,
         })
         .is_break()
         {
@@ -616,12 +614,12 @@ pub(crate) fn build_residual_slot_conflicts(
 pub(crate) struct ResidualConflictForPinArgs<'a> {
     pub(crate) pin: &'a RevDepPin,
     pub(crate) entries: &'a [GraphEntry],
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a Config,
     pub(crate) root: &'a Path,
     pub(crate) grouped: &'a mut HashMap<(String, String, String, String, String), SlotConflict>,
     pub(crate) slot_pullers: &'a SlotPullers,
     pub(crate) order: &'a mut Vec<(String, String, String, String, String)>,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Record the residual installed-instance slot conflict one dropped reverse-dependency pin leaves.
@@ -629,12 +627,12 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
     let ResidualConflictForPinArgs {
         pin,
         entries,
-        repos,
         config,
         root,
         grouped,
         slot_pullers,
         order,
+        gate,
     } = args;
     let ResidualPinMergeInstanceOut {
         category,
@@ -656,7 +654,7 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
         .and_then(|parsed| parsed.use_deps)
         .filter(|deps| !deps.is_empty())
         .is_some_and(|deps| {
-            merge_use_state(repos, config, &category, &package, &merge_ver).is_some_and(
+            merge_use_state(gate, config, &category, &package, &merge_ver).is_some_and(
                 |(merge_use, merge_iuse)| {
                     let parent_use = read_vdb_flag_set(
                         root,
@@ -713,7 +711,7 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
     // Merge parents: hard pullers matching the merged version. Installed
     // parents: hard pullers matching the installed version, plus the
     // dropped consumer pins below.
-    let (m_sub, _m_repo, _) = slot_conflict_meta(repos, &category, &package, &merge_ver);
+    let (m_sub, _m_repo, _) = slot_conflict_meta(gate, &category, &package, &merge_ver);
     // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
     let merge_match = format!("{category}/{package}-{merge_ver}:{slot}/{m_sub}");
     let inst_match = format!(
@@ -721,7 +719,7 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
         "{category}/{package}-{}:{}/{}",
         inst.version, inst.slot, inst.sub_slot
     );
-    let (m_iuse, m_use) = slot_conflict_flag_sets(repos, config, &category, &package, &merge_ver);
+    let (m_iuse, m_use) = slot_conflict_flag_sets(gate, config, &category, &package, &merge_ver);
     let (i_iuse, i_use) = installed_pkg_iuse_and_use(root, &category, &package, &inst.version);
     let use_ok_for = |atom_str: &str, iuse: &HashSet<String>, use_: &HashSet<String>| -> bool {
         match parse_dep_atom(atom_str, "slot_conflict") {
@@ -743,12 +741,12 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
                 .is_some_and(|m| !m.is_empty())
                 && use_ok_for(atom, &i_iuse, &i_use);
             let entry = SlotConflictParent {
-                parent_cpv: slot_conflict_puller_cpv(repos, pc, pp, pv),
+                parent_cpv: slot_conflict_puller_cpv(gate, pc, pp, pv),
                 atom: atom.clone(),
                 use_display: if pc.is_empty() {
                     Vec::new()
                 } else {
-                    pkg_use_display_for(repos, config, pc, pp, pv)
+                    pkg_use_display_for(gate, config, pc, pp, pv)
                 },
                 installed: false,
             };
@@ -769,12 +767,12 @@ pub(crate) fn residual_conflict_for_pin(args: ResidualConflictForPinArgs<'_>) ->
         pin,
         merge_sub: &merge_sub,
         merge_repo: &merge_repo,
-        repos,
         config,
         merge_parents,
         inst,
         root,
         inst_parents,
+        gate,
     });
     order.push(key.clone());
     grouped.insert(key, record);
@@ -843,12 +841,12 @@ pub(crate) struct ResidualSlotConflictRecordArgs<'a> {
     pub(crate) pin: &'a RevDepPin,
     pub(crate) merge_sub: &'a str,
     pub(crate) merge_repo: &'a str,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a Config,
     pub(crate) merge_parents: Vec<SlotConflictParent>,
     pub(crate) inst: &'a InstalledRef,
     pub(crate) root: &'a Path,
     pub(crate) inst_parents: Vec<SlotConflictParent>,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Build the residual slot-conflict record for the installed instance and its merge-bound partner.
@@ -863,12 +861,12 @@ pub(crate) fn residual_slot_conflict_record(
         pin,
         merge_sub,
         merge_repo,
-        repos,
         config,
         merge_parents,
         inst,
         root,
         inst_parents,
+        gate,
     } = args;
 
     SlotConflict {
@@ -882,7 +880,7 @@ pub(crate) fn residual_slot_conflict_record(
                 version: merge_ver.to_string(),
                 sub_slot: merge_sub.to_string(),
                 repo_name: merge_repo.to_string(),
-                use_display: pkg_use_display_for(repos, config, category, package, merge_ver),
+                use_display: pkg_use_display_for(gate, config, category, package, merge_ver),
                 parents: merge_parents,
                 installed: false,
             },

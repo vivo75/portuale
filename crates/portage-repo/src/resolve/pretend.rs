@@ -96,10 +96,7 @@ pub(crate) fn already_installed_or_reinstall(
     binary_build_time: Option<i64>,
 ) -> Result<PretendOutcome, Error> {
     let SelectSource {
-        repos,
-        root,
-        config,
-        ..
+        root, config, gate, ..
     } = *source;
     let SelectOptions {
         newuse,
@@ -136,16 +133,16 @@ pub(crate) fn already_installed_or_reinstall(
     let deps_changed_flag = changed_deps
         && deps_changed(DepsChangedArgs {
             root,
-            repos,
             category: &atom.category,
             package: &atom.package,
             version: &installed_best.version,
             with_bdeps,
+            gate,
         });
     let slot_changed_flag = changed_slot
         && slot_changed(
+            gate,
             root,
-            repos,
             &atom.category,
             &atom.package,
             &installed_best.version,
@@ -403,16 +400,16 @@ pub(crate) fn avoid_update_outcome(
     let deps_changed_fires = changed_deps
         && deps_changed(DepsChangedArgs {
             root: source.root,
-            repos: source.repos,
             category: &atom.category,
             package: &atom.package,
             version: &installed_best.version,
             with_bdeps,
+            gate: source.gate,
         });
     let slot_changed_fires = changed_slot
         && slot_changed(
+            source.gate,
             source.root,
-            source.repos,
             &atom.category,
             &atom.package,
             &installed_best.version,
@@ -533,11 +530,13 @@ pub(crate) fn is_instance_only_mask(constraint: &str) -> bool {
 /// its config and the local binary-package index.
 #[derive(Clone, Copy)]
 pub struct SelectSource<'a> {
-    pub repos: &'a [RepoConfig],
     pub root: &'a Path,
     pub config: &'a portage_profile::Config,
     /// The run's already-built local `$PKGDIR` binary index.
     pub local_binpkg: &'a std::sync::Arc<BinaryIndex>,
+    /// The category allow-list gate: ebuild selection sees only listed
+    /// categories (Portage `portdbapi.cp_list`).
+    pub gate: CategoryGate<'a>,
 }
 
 /// The emerge options that shape one [`resolve_pretend`] selection.
@@ -685,10 +684,10 @@ pub fn resolve_pretend(
     opts: &SelectOptions,
 ) -> Result<PretendOutcome, Error> {
     let SelectSource {
-        repos,
         root,
         config,
         local_binpkg,
+        gate,
     } = *source;
     let SelectOptions {
         newuse,
@@ -744,7 +743,7 @@ pub fn resolve_pretend(
         if usepkgonly || crate::globals::ebuild_db_dropped() {
             None
         } else {
-            Some(list_candidates(repos, &atom.category, &atom.package)?)
+            Some(gate.repo_candidates(&atom.category, &atom.package)?)
         };
     let mut candidates = ebuilds_shared.as_deref().cloned().unwrap_or_default();
     crate::resolve::pool_memo::collect_memoized(
@@ -761,12 +760,12 @@ pub fn resolve_pretend(
             newuse,
             changed_use,
             candidates: &mut candidates,
-            repos,
             with_bdeps,
             atom_str,
             extra_constraints,
             usepkg_exclude,
             usepkg_include,
+            gate,
         },
         ebuilds_shared.as_ref(),
     );
@@ -971,7 +970,6 @@ pub fn resolve_pretend(
         extra_constraints,
         atom: &atom,
         is_top_level,
-        repos,
         atom_str,
         config,
         root,
@@ -996,7 +994,6 @@ pub fn resolve_pretend(
         root,
         config,
         changed_deps,
-        repos,
         with_bdeps,
         changed_slot,
         usepkg,
@@ -1009,6 +1006,7 @@ pub fn resolve_pretend(
         empty,
         is_top_level,
         selective,
+        gate,
     })
 }
 
@@ -1288,12 +1286,12 @@ pub(crate) struct CollectBinaryCandidatesArgs<'a> {
     pub(crate) newuse: bool,
     pub(crate) changed_use: bool,
     pub(crate) candidates: &'a mut Vec<Candidate>,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) with_bdeps: bool,
     pub(crate) atom_str: &'a str,
     pub(crate) extra_constraints: &'a [String],
     pub(crate) usepkg_exclude: &'a [String],
     pub(crate) usepkg_include: &'a [String],
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Add the usable binary packages to the candidate pool (--usepkg, --usepkgonly, --getbinpkg).
@@ -1311,12 +1309,12 @@ pub(crate) fn collect_binary_candidates(args: CollectBinaryCandidatesArgs<'_>) {
         newuse,
         changed_use,
         candidates,
-        repos,
         with_bdeps,
         atom_str,
         extra_constraints,
         usepkg_exclude,
         usepkg_include,
+        gate,
     } = args;
     if usepkg || usepkgonly {
         let mut binary_candidates =
@@ -1378,11 +1376,11 @@ pub(crate) fn collect_binary_candidates(args: CollectBinaryCandidatesArgs<'_>) {
             binary_candidates.retain(|c| {
                 !binary_deps_changed(BinaryDepsChangedArgs {
                     root,
-                    repos,
                     candidate: c,
                     category: &atom.category,
                     package: &atom.package,
                     with_bdeps,
+                    gate,
                 })
             });
         }
@@ -1456,7 +1454,6 @@ pub(crate) struct SelectBestCandidateArgs<'a> {
     pub(crate) extra_constraints: &'a [String],
     pub(crate) atom: &'a Atom,
     pub(crate) is_top_level: bool,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) atom_str: &'a str,
     pub(crate) config: &'a Config,
     pub(crate) root: &'a Path,
@@ -1480,7 +1477,6 @@ pub(crate) fn select_best_candidate(
         extra_constraints,
         atom,
         is_top_level,
-        repos,
         atom_str,
         config,
         root,
@@ -1522,7 +1518,7 @@ pub(crate) fn select_best_candidate(
     // _iter_match_pkgs pkg.with_use(_pkg_use_enabled(pkg)); _want_installed_pkg
     if !is_top_level
         && atom.use_deps.as_ref().is_some_and(|d| !d.is_empty())
-        && !atom_currently_satisfiable(repos, atom_str, config, extra_constraints)
+        && !atom_currently_satisfiable(source.gate, atom_str, config, extra_constraints)
         && let Some(version) = best_installed_matching(root, atom_str, config).filter(|v| {
             !installed_version_masked(extra_constraints, &atom.category, &atom.package, v)
         })
@@ -1623,7 +1619,6 @@ pub(crate) struct ClassifyBestAgainstInstalledArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a Config,
     pub(crate) changed_deps: bool,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) with_bdeps: bool,
     pub(crate) changed_slot: bool,
     pub(crate) usepkg: bool,
@@ -1636,6 +1631,7 @@ pub(crate) struct ClassifyBestAgainstInstalledArgs<'a> {
     pub(crate) empty: bool,
     pub(crate) is_top_level: bool,
     pub(crate) selective: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Classify the chosen best candidate against what is installed: reinstall, already installed, upgrade, downgrade or new.
@@ -1652,7 +1648,6 @@ pub(crate) fn classify_best_against_installed(
         root,
         config,
         changed_deps,
-        repos,
         with_bdeps,
         changed_slot,
         usepkg,
@@ -1665,6 +1660,7 @@ pub(crate) fn classify_best_against_installed(
         empty,
         is_top_level,
         selective,
+        gate,
     } = args;
     if candidate_is_installed(best, installed_pairs, extra_constraints, atom) {
         let changed_flags = if newuse || changed_use {
@@ -1705,18 +1701,17 @@ pub(crate) fn classify_best_against_installed(
         let deps_changed_flag = changed_deps
             && deps_changed(DepsChangedArgs {
                 root,
-                repos,
                 category: &atom.category,
                 package: &atom.package,
                 version: &best.version,
                 with_bdeps,
+                gate,
             });
         let slot_changed_flag =
-            changed_slot && slot_changed(root, repos, &atom.category, &atom.package, &best.version);
+            changed_slot && slot_changed(gate, root, &atom.category, &atom.package, &best.version);
         let rebuilt_binary_flag = (usepkg || usepkgonly)
             && binary_reinstall_warranted(BinaryReinstallWarrantedArgs {
                 root,
-                repos,
                 config,
                 category: &atom.category,
                 package: &atom.package,
@@ -1725,6 +1720,7 @@ pub(crate) fn classify_best_against_installed(
                 rebuilt_binaries,
                 rebuilt_binaries_timestamp,
                 update,
+                gate,
             });
         let new_repo_flag = newrepo
             && new_repo_changed(

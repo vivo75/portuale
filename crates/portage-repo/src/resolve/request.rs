@@ -132,6 +132,13 @@ pub struct ResolveRequest {
     /// keeps the fatal top-level miss everywhere.
     // Portage: SetArg world/selected; depgraph.py
     pub set_args: std::collections::HashSet<String>,
+    /// Whether the user config (`/etc/portage`) participates in the
+    /// category allow-list: `false` skips `<config_root>/etc/portage/categories`
+    /// (Portage `local_config=False`, which drops the user dir from
+    /// `profile_and_user_locations`). The CLI always resolves under a full
+    /// user config (`true`); `false` is exercised by unit test only.
+    // Portage: LocationsManager.py, `self._user_config = local_config`
+    pub local_config: bool,
     /// Portuale-only `--solver=` selection (see [`SolverKind`]).
     pub solver: SolverKind,
 }
@@ -207,6 +214,7 @@ impl ResolveRequest {
             complete: false,
             complete_reuse: HashMap::new(),
             set_args: std::collections::HashSet::new(),
+            local_config: true,
             solver: SolverKind::Portage,
         }
     }

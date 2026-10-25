@@ -230,7 +230,6 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
             let live_reachable = live_reachable_consumers(rctx, &naked.entries);
             let (enforced, dropped) =
                 reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-                    repos: &rctx.repos,
                     root: rctx.root,
                     entries: &naked.entries,
                     with_bdeps: rctx.with_bdeps,
@@ -243,6 +242,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                     world_reachable: &rctx.world_reachable,
                     config,
                     complete: rctx.complete,
+                    gate: rctx.gate(),
                 });
             for pin in enforced {
                 if !report.reverse_dep_pins.contains(&pin) {
@@ -299,12 +299,12 @@ pub(crate) fn prune_unresolved_after_backtrack(
         && pass.slot_conflicts.is_empty()
         && {
             let (skipped, missing, full) = backtrack_missed_updates(BacktrackMissedUpdatesArgs {
-                repos: &ctx.repos,
                 root: ctx.root,
                 config,
                 entries: &pass.entries,
                 params: best,
                 missing_args: &[],
+                gate: ctx.gate(),
             });
             !skipped.is_empty()
                 || !missing.is_empty()

@@ -6,11 +6,11 @@ use crate::*;
 pub(crate) struct RootDepsSatisfiedAtomsArgs<'a> {
     pub(crate) metadata: &'a HashMap<String, String>,
     pub(crate) use_flags: &'a HashSet<String>,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) running_root: &'a Path,
     pub(crate) dep_keys: &'a [&'a str],
     pub(crate) empty_groups_always_true: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Arguments of [`flatten_evaluated_root_deps_atoms`]: the inputs both
@@ -18,11 +18,11 @@ pub(crate) struct RootDepsSatisfiedAtomsArgs<'a> {
 pub(crate) struct FlattenRootDepsAtomsArgs<'a> {
     pub(crate) metadata: &'a HashMap<String, String>,
     pub(crate) use_flags: &'a HashSet<String>,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) running_root: &'a Path,
     pub(crate) dep_keys: &'a [&'a str],
     pub(crate) empty_groups_always_true: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// The evaluated flat build-depstring both `--root-deps` halves filter:
@@ -33,11 +33,11 @@ fn flatten_evaluated_root_deps_atoms(args: FlattenRootDepsAtomsArgs<'_>) -> Vec<
     let FlattenRootDepsAtomsArgs {
         metadata,
         use_flags,
-        repos,
         config,
         running_root,
         dep_keys,
         empty_groups_always_true,
+        gate,
     } = args;
     let mut build_depstr = String::new();
     for dep_key in dep_keys {
@@ -57,7 +57,7 @@ fn flatten_evaluated_root_deps_atoms(args: FlattenRootDepsAtomsArgs<'_>) -> Vec<
         },
         &mut |atoms: &[String]| {
             if atoms.iter().all(|a| {
-                atom_currently_satisfiable(repos, a, config, &[])
+                atom_currently_satisfiable(gate, a, config, &[])
                     || running_root_satisfies_atom(a, running_root, config)
             }) {
                 portage_use_reduce::AltPreference::Available
@@ -86,20 +86,20 @@ pub(crate) fn root_deps_satisfied_atoms(args: RootDepsSatisfiedAtomsArgs<'_>) ->
     let RootDepsSatisfiedAtomsArgs {
         metadata,
         use_flags,
-        repos,
         config,
         running_root,
         dep_keys,
         empty_groups_always_true,
+        gate,
     } = args;
     flatten_evaluated_root_deps_atoms(FlattenRootDepsAtomsArgs {
         metadata,
         use_flags,
-        repos,
         config,
         running_root,
         dep_keys,
         empty_groups_always_true,
+        gate,
     })
     .into_iter()
     .filter(|t| running_root_satisfies_atom(t, running_root, config))
@@ -110,11 +110,11 @@ pub(crate) fn root_deps_satisfied_atoms(args: RootDepsSatisfiedAtomsArgs<'_>) ->
 pub(crate) struct UnsatisfiedRootDepsAtomsArgs<'a> {
     pub(crate) metadata: &'a HashMap<String, String>,
     pub(crate) use_flags: &'a HashSet<String>,
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) running_root: &'a Path,
     pub(crate) dep_keys: &'a [&'a str],
     pub(crate) empty_groups_always_true: bool,
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// The complement of `root_deps_satisfied_atoms`: flattened atoms *not* already
@@ -127,20 +127,20 @@ pub(crate) fn unsatisfied_root_deps_atoms(args: UnsatisfiedRootDepsAtomsArgs<'_>
     let UnsatisfiedRootDepsAtomsArgs {
         metadata,
         use_flags,
-        repos,
         config,
         running_root,
         dep_keys,
         empty_groups_always_true,
+        gate,
     } = args;
     flatten_evaluated_root_deps_atoms(FlattenRootDepsAtomsArgs {
         metadata,
         use_flags,
-        repos,
         config,
         running_root,
         dep_keys,
         empty_groups_always_true,
+        gate,
     })
     .into_iter()
     // Same producer-side evaluation, so this set is evaluated-keyed too.
@@ -175,13 +175,14 @@ pub(crate) fn resolved_version_meta_and_use(
 
 /// Arguments of [`resolve_root_deps_build_entries`].
 pub(crate) struct ResolveRootDepsBuildEntriesArgs<'a> {
-    pub(crate) repos: &'a [RepoConfig],
     pub(crate) running_root: &'a Path,
     pub(crate) atom_str: &'a str,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) owner: (String, String),
     pub(crate) seen: &'a mut HashSet<(String, String)>,
     pub(crate) local_binpkg: &'a std::sync::Arc<BinaryIndex>,
+    /// The category allow-list gate for the running-root selection.
+    pub(crate) gate: CategoryGate<'a>,
 }
 
 /// Resolves `atom_str` against the running root and walks the resolved
@@ -199,13 +200,13 @@ pub(crate) fn resolve_root_deps_build_entries(
     args: ResolveRootDepsBuildEntriesArgs<'_>,
 ) -> Vec<GraphEntry> {
     let ResolveRootDepsBuildEntriesArgs {
-        repos,
         running_root,
         atom_str,
         config,
         owner,
         seen,
         local_binpkg,
+        gate,
     } = args;
     let Some(atom) = parse_dep_atom(atom_str, "root_deps") else {
         return Vec::new();
@@ -216,10 +217,10 @@ pub(crate) fn resolve_root_deps_build_entries(
     }
     let Ok(outcome) = resolve_pretend(
         &SelectSource {
-            repos,
             root: running_root,
             config,
             local_binpkg,
+            gate,
         },
         atom_str,
         &SelectOptions {
@@ -284,14 +285,14 @@ pub(crate) fn resolve_root_deps_build_entries(
     };
     // Slot/repo identity plus USE display, diffed against the running vdb.
     if let Some(version) = recurse_version.as_ref() {
-        let (sub, repo, slot) = slot_conflict_meta(repos, &atom.category, &atom.package, version);
+        let (sub, repo, slot) = slot_conflict_meta(gate, &atom.category, &atom.package, version);
         entry.slot = Some(slot);
         entry.sub_slot = Some(sub);
         entry.repo_name = Some(repo);
     }
     refresh_entry_use_display(
+        gate,
         std::slice::from_mut(&mut entry),
-        repos,
         running_root,
         &key,
         config,
@@ -299,29 +300,34 @@ pub(crate) fn resolve_root_deps_build_entries(
     let mut result = vec![entry];
 
     if let Some(version) = recurse_version
-        && let Some((metadata, use_flags)) =
-            resolved_version_meta_and_use(repos, &atom.category, &atom.package, &version, config)
+        && let Some((metadata, use_flags)) = resolved_version_meta_and_use(
+            gate.repos,
+            &atom.category,
+            &atom.package,
+            &version,
+            config,
+        )
     {
         for dep_atom in unsatisfied_root_deps_atoms(UnsatisfiedRootDepsAtomsArgs {
             metadata: &metadata,
             use_flags: &use_flags,
-            repos,
             config,
             running_root,
             dep_keys: &["DEPEND", "BDEPEND", "RDEPEND", "IDEPEND"],
             empty_groups_always_true: md5_dict::eapi_empty_groups_always_true(
                 metadata.get("EAPI").map(String::as_str).unwrap_or("0"),
             ),
+            gate,
         }) {
             result.extend(resolve_root_deps_build_entries(
                 ResolveRootDepsBuildEntriesArgs {
-                    repos,
                     running_root,
                     atom_str: &dep_atom,
                     config,
                     owner: key.clone(),
                     seen,
                     local_binpkg,
+                    gate,
                 },
             ));
         }

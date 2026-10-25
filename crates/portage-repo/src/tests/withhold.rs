@@ -31,7 +31,13 @@ fn reverse_pin_withhold_reports_a_skip_notice() {
             "1.0".to_string(),
         ),
     }];
-    let skipped = constraint_withheld_updates(&repos, &root, &config, &entries, &enforced);
+    let skipped = constraint_withheld_updates(
+        crate::test_gate(&repos),
+        &root,
+        &config,
+        &entries,
+        &enforced,
+    );
     assert_eq!(skipped.len(), 1);
     let s = &skipped[0];
     assert_eq!(

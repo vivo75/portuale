@@ -4,10 +4,15 @@ use crate::*;
 
 /// Portage's `settings.categories`: the incremental union of every repo's
 /// `profiles/categories` (main repo first, then overlays) plus
-/// `<config_root>/etc/portage/categories`, keeping only names matching
-/// Portage's `_category_re`. Regen traversal drops on-disk cps outside it.
+/// `<config_root>/etc/portage/categories` (skipped when `local_config`
+/// is false), keeping only names matching Portage's `_category_re`.
+/// Regen traversal drops on-disk cps outside it.
 // Portage: config.py (settings.categories), LocationsManager.py (profile_and_user_locations).
-pub fn repo_categories(repos: &[RepoConfig], config_root: &Path) -> BTreeSet<String> {
+pub fn repo_categories(
+    repos: &[RepoConfig],
+    config_root: &Path,
+    local_config: bool,
+) -> BTreeSet<String> {
     let mains_first = repos
         .iter()
         .filter(|r| r.is_main)
@@ -18,9 +23,11 @@ pub fn repo_categories(repos: &[RepoConfig], config_root: &Path) -> BTreeSet<Str
             &repo.location.join("profiles").join("categories"),
         ));
     }
-    sources.push(read_categories_file(
-        &config_root.join("etc").join("portage").join("categories"),
-    ));
+    if local_config {
+        sources.push(read_categories_file(
+            &config_root.join("etc").join("portage").join("categories"),
+        ));
+    }
     stack_categories(&sources)
 }
 
@@ -119,7 +126,7 @@ mod tests {
             repo_config("aaa-overlay", overlay, false),
             repo_config("testrepo", main, true),
         ];
-        let got = repo_categories(&repos, &cfg);
+        let got = repo_categories(&repos, &cfg, true);
         assert_eq!(
             got,
             ["dev-libs", "dev-python", "kde-base", "media-libs"]
@@ -147,7 +154,7 @@ mod tests {
             repo_config("testrepo", main, true),
             repo_config("overlay", overlay, false),
         ];
-        let got = repo_categories(&repos, &cfg);
+        let got = repo_categories(&repos, &cfg, true);
         assert_eq!(got, ["net-nds".to_string()].into_iter().collect());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -163,17 +170,46 @@ mod tests {
         // No profiles/categories under main, no user file either.
         std::fs::create_dir_all(main.join("profiles")).unwrap();
         let repos = vec![repo_config("testrepo", main.clone(), true)];
-        assert!(repo_categories(&repos, &cfg).is_empty());
+        assert!(repo_categories(&repos, &cfg, true).is_empty());
         // Names: leading alnum/underscore ok (digits included); a leading
         // dot never matches; inline comments cut the line.
         write_categories(&main, "9lives\n_under\n.dot\nok+plus # trailing\n");
-        let got = repo_categories(&repos, &cfg);
+        let got = repo_categories(&repos, &cfg, true);
         assert_eq!(
             got,
             ["9lives", "_under", "ok+plus"]
                 .into_iter()
                 .map(str::to_string)
                 .collect()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without `local_config` the user file is skipped: only the repos'
+    /// own files stack. Portage: `LocationsManager._user_config` gates
+    /// appending the user dir to `profile_and_user_locations`, so a
+    /// `local_config=False` settings object (repoman/emirrordist-style)
+    /// never reads `/etc/portage/categories`.
+    #[test]
+    fn repo_categories_skips_the_user_file_without_local_config() {
+        let dir = TempDir::new("portuale-repo-categories-local").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        let main = dir.join("main");
+        let cfg = dir.join("cfg");
+        write_categories(&main, "dev-libs\n");
+        std::fs::create_dir_all(cfg.join("etc/portage")).unwrap();
+        std::fs::write(cfg.join("etc/portage/categories"), "media-libs\n").unwrap();
+        let repos = vec![repo_config("testrepo", main, true)];
+        assert_eq!(
+            repo_categories(&repos, &cfg, true),
+            ["dev-libs", "media-libs"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        );
+        assert_eq!(
+            repo_categories(&repos, &cfg, false),
+            ["dev-libs".to_string()].into_iter().collect()
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

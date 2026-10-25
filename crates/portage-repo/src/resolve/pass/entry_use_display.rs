@@ -81,7 +81,7 @@ pub(crate) fn record_entry_use_display(
                     _ => portage_required_use::human_readable(&normalized),
                 };
                 let full = portage_required_use::human_readable(&normalized);
-                let use_display = pkg_use_display_for(&ctx.repos, config, &key.0, &key.1, version);
+                let use_display = pkg_use_display_for(ctx.gate(), config, &key.0, &key.1, version);
                 let cpv_repo = match &resolved.repo_name {
                     repo if !repo.is_empty() => {
                         format!("{}/{}-{version}::{repo}", key.0, key.1)

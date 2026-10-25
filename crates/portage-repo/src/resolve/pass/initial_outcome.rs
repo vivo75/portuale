@@ -72,7 +72,7 @@ pub(crate) fn resolve_initial_outcome(
             _ => None,
         };
         if let Some(version) = reused_version
-            && let Ok(candidates) = crate::list_candidates(&ctx.repos, &key.0, &key.1)
+            && let Ok(candidates) = ctx.repo_candidates(&key.0, &key.1)
             && let Some(candidate) = candidates.iter().find(|c| &c.version == version)
             && let Some(parsed) = parse_dep_atom(current_atom, "pass_initial_outcome")
         {
@@ -152,7 +152,7 @@ pub(crate) fn resolve_initial_outcome(
                     && (parse_dep_atom(a, "pass_initial_outcome")
                         .is_some_and(|p| p.slot.is_some() || p.slot_operator.is_some())
                         || !cp_has_tree_or_binary_candidate(
-                            &ctx.repos,
+                            ctx.gate(),
                             &ctx.local_binpkg,
                             &key.0,
                             &key.1,
@@ -177,7 +177,7 @@ pub(crate) fn resolve_initial_outcome(
             }
             // `minimize_children` reads installed slots out of the group's own
             // resolving root.
-            for (a, out) in minimize_children(atom_root, &ctx.repos, config, key, picks) {
+            for (a, out) in minimize_children(ctx.gate(), atom_root, config, key, picks) {
                 state.minimize_pins.insert((o.clone(), a), out);
             }
         }

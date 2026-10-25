@@ -784,26 +784,17 @@ pub(crate) fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPacka
     out
 }
 
-/// Every `category/package` present in any of `repos`, for `emerge --search`.
-/// Sorted, deduplicated; a directory counts when it holds at least one
-/// `<package>-<version>.ebuild`.
-// Portage: portdbapi.cp_all, porttree.py
-pub fn all_cp(repos: &[RepoConfig]) -> Vec<String> {
+/// Every `category/package` in `categories` present in any of `repos`, for
+/// `emerge --search` and short-name expansion. Only listed category dirs
+/// are walked; a directory counts when it holds at least one
+/// `<package>-<version>.ebuild`. Sorted, deduplicated.
+// Portage: portdbapi.cp_all(categories=settings.categories), porttree.py
+pub fn all_cp(repos: &[RepoConfig], categories: &BTreeSet<String>) -> Vec<String> {
     let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for repo in repos {
-        let Ok(cats) = portage_util::read_dir_entries(&repo.location) else {
-            continue;
-        };
-        for cat in cats.into_iter().filter(|e| e.path().is_dir()) {
-            let category = cat.file_name().to_string_lossy().to_string();
-            // Skip the non-category top-level dirs of a repo checkout.
-            if matches!(
-                category.as_str(),
-                "eclass" | "profiles" | "metadata" | "licenses" | "scripts" | "distfiles" | ".git"
-            ) {
-                continue;
-            }
-            let Ok(pkgs) = portage_util::read_dir_entries(&cat.path()) else {
+        for category in categories {
+            let cat_dir = repo.location.join(category);
+            let Ok(pkgs) = portage_util::read_dir_entries(&cat_dir) else {
                 continue;
             };
             for pkg in pkgs.into_iter().filter(|e| e.path().is_dir()) {

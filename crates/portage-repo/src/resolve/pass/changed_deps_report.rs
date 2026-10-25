@@ -20,13 +20,13 @@ pub(crate) fn record_changed_deps_report(
             if state.changed_deps_report_seen.insert(dedup_key)
                 && deps_changed(DepsChangedArgs {
                     root: ctx.root,
-                    repos: &ctx.repos,
                     category: &key.0,
                     package: &key.1,
                     version: &version,
                     with_bdeps: ctx.with_bdeps,
+                    gate: ctx.gate(),
                 })
-                && let Ok(repo_candidates) = list_candidates(&ctx.repos, &key.0, &key.1)
+                && let Ok(repo_candidates) = ctx.repo_candidates(&key.0, &key.1)
                 && let Some(c) = repo_candidates.iter().find(|c| c.version == version)
             {
                 state

@@ -35,3 +35,6 @@ Small helpers of the resolver pass.
 
 ## fn onlydeps_walk_dep_key
 - #348 S5: the resolve-time `eapi_has_idepend` gate is removed — `IDEPEND` reads presence-based (see `enqueue_deps.md`). Only the `--onlydeps` blanking remains here.
+
+## gate threading (#571)
+- `minimize_children` carries the gate into the conflict-version display strings and the ebuild-by-version map.

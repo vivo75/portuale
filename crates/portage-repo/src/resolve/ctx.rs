@@ -171,6 +171,16 @@ pub(crate) struct ResolveCtx<'a> {
     pub(crate) top_level_cps: HashSet<(String, String)>,
     /// The local `$PKGDIR` binary index, built once for the whole walk.
     pub(crate) local_binpkg: std::sync::Arc<BinaryIndex>,
+    /// Portage's `settings.categories`, built once per resolve (never re-read
+    /// per lookup): every repo ebuild lookup below goes through
+    /// [`ResolveCtx::repo_candidates`], which yields nothing outside it.
+    pub(crate) categories: BTreeSet<String>,
+    /// The config root the [`ResolveCtx::categories`] user file and the
+    /// unlisted-category `!!!` line's path render from.
+    pub(crate) config_root: PathBuf,
+    /// `(category, package)` pairs the unlisted-category `!!!` already
+    /// fired for this walk: Portage's `cp_list` cache prints once per cp.
+    pub(crate) category_warned: std::cell::RefCell<HashSet<(String, String)>>,
     /// Tree-mode blocker verdicts already computed this walk.
     pub(crate) tree_sim_memo: TreeSimMemo,
     /// Binary-candidate answers shared by the passes of this walk.
@@ -207,6 +217,28 @@ impl<'a> ResolveCtx<'a> {
     pub(crate) fn cross_root(&self) -> Option<&'a Path> {
         self.root_deps_running_root
             .filter(|r| r.as_os_str() != self.root.as_os_str())
+    }
+
+    /// This walk's [`CategoryGate`]: the allow-list, the config root its
+    /// `!!!` line renders from, and the per-walk once-per-cp record.
+    pub(crate) fn gate(&self) -> CategoryGate<'_> {
+        CategoryGate {
+            repos: &self.repos,
+            categories: &self.categories,
+            config_root: &self.config_root,
+            warned: &self.category_warned,
+        }
+    }
+
+    /// The repo ebuilds for `category/package`, gated on the walk's
+    /// allow-list (see [`CategoryGate::repo_candidates`]).
+    /// Portage: portdbapi.cp_list, porttree.py:1156,1216-1225.
+    pub(crate) fn repo_candidates(
+        &self,
+        category: &str,
+        package: &str,
+    ) -> Result<std::sync::Arc<Vec<Candidate>>, Error> {
+        self.gate().repo_candidates(category, package)
     }
 
     pub(crate) fn new(req: &'a ResolveRequest) -> Result<Self, Error> {
@@ -252,6 +284,11 @@ impl<'a> ResolveCtx<'a> {
             let system = req.config.system_packages.clone();
             installed_graph.reachable(&seeds, &system)
         };
+        // The category allow-list, resolved once from the discovered repos
+        // (Portage builds `settings.categories` once per config): every
+        // repo ebuild lookup in the walk gates on it.
+        let repos = find_repos(&req.config_root)?;
+        let categories = repo_categories(&repos, &req.config_root, req.local_config);
         Ok(ResolveCtx {
             root: &req.root,
             atoms: &req.atoms,
@@ -301,7 +338,10 @@ impl<'a> ResolveCtx<'a> {
             implicit_system_deps: req.implicit_system_deps,
             complete: req.complete,
             set_args: req.set_args.clone(),
-            repos: find_repos(&req.config_root)?,
+            repos,
+            categories,
+            config_root: req.config_root.clone(),
+            category_warned: std::cell::RefCell::default(),
             slot_op_reachable,
             slot_op_seeds,
             installed_graph,
