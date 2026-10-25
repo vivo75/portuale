@@ -35,6 +35,7 @@ mod env_config;
 mod expand_targets;
 mod final_gates;
 mod gates;
+mod global_updates;
 mod help;
 mod info;
 mod json;
@@ -71,6 +72,7 @@ pub(crate) use env_config::*;
 pub(crate) use expand_targets::*;
 pub(crate) use final_gates::*;
 pub(crate) use gates::*;
+pub(crate) use global_updates::*;
 pub(crate) use help::*;
 pub(crate) use info::*;
 pub(crate) use json::*;
@@ -269,6 +271,13 @@ pub fn run(args: &[String]) -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
+
+    // The applied-updates AUTOCLEAN force, computed pre-resolve like
+    // Portage's own `_global_updates` call: `--pretend` and failed
+    // merges still commit the record, and only the target root's force
+    // reaches the merge gate below.
+    // Portage: lib/_emerge/actions.py, run_action
+    let updates_force = global_updates_force(&opts, &repos, &root);
 
     // Colour gate, resolved once so every action path shares one `Colorizer`.
     // Portage: _emerge/actions.py, adjust_configs
@@ -486,6 +495,7 @@ pub fn run(args: &[String]) -> ExitCode {
         config_root: &config_root,
         selected_set_args: &selected_set_args,
         system_atoms,
+        updates_force,
     })
 }
 
@@ -506,6 +516,8 @@ pub(crate) struct FinishRunArgs<'a> {
     pub(crate) config_root: &'a Path,
     pub(crate) selected_set_args: &'a [String],
     pub(crate) system_atoms: &'a Vec<String>,
+    /// This run's applied-updates force (target root only).
+    pub(crate) updates_force: bool,
 }
 
 /// After the report: the skipped-update notices, the failure gates and the merge.
@@ -526,6 +538,7 @@ pub(crate) fn finish_run(args: FinishRunArgs<'_>) -> ExitCode {
         config_root,
         selected_set_args,
         system_atoms,
+        updates_force,
     } = args;
     show_skipped_updates(plan, opts, result, root, repos);
 
@@ -601,6 +614,7 @@ pub(crate) fn finish_run(args: FinishRunArgs<'_>) -> ExitCode {
         repos,
         color,
         config,
+        updates_force,
     }) {
         return code;
     }
@@ -849,6 +863,8 @@ pub(crate) struct RunAfterDisplayArgs<'a> {
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) color: Colorizer,
     pub(crate) config: &'a Config,
+    /// This run's applied-updates force (target root only).
+    pub(crate) updates_force: bool,
 }
 
 /// Runs the `--fetchonly`/`--fetch-all-uri` job over `entries`; the exit code.
@@ -916,6 +932,7 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
         repos,
         color,
         config,
+        updates_force,
     } = args;
     // `--pretend --fetchonly`: the URIs, no merge list. Portage runs the Scheduler in
     // listing mode after an optional prompt (actions.py:541-543, EbuildFetchonly.py).
@@ -1093,12 +1110,14 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
             return Some(code);
         }
 
-        // With a user-set `AUTOCLEAN=yes`, a successful merge is followed
-        // by the `--clean` selection system-wide (a `--buildpkgonly` run
-        // builds without merging, so it never cleans). `--pretend` cannot
-        // reach here, and a failed merge returns above.
-        // Portage: _emerge/actions.py, action_build
-        if !opts.buildpkgonly && autoclean_enabled(config) {
+        // With a user-set `AUTOCLEAN=yes` -- or the applied-updates
+        // force from this run's fresh `profiles/updates/` files -- a
+        // successful merge is followed by the `--clean` selection
+        // system-wide (a `--buildpkgonly` run builds without merging,
+        // so it never cleans). `--pretend` cannot reach here, and a
+        // failed merge returns above.
+        // Portage: _emerge/actions.py, action_build; run_action (force)
+        if !opts.buildpkgonly && (autoclean_enabled(config) || updates_force) {
             run_autoclean_after_merge(RunAutocleanAfterMergeArgs {
                 root,
                 config_root,

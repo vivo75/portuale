@@ -1,8 +1,9 @@
-//! `/var/cache/edb/mtimedb` persistence for three sections: the `resume`
-//! mergelist (`emerge --resume`), its `resume_backup` rotation, and the
-//! `info` dir-mtime memo. The file is Portage's JSON mtimedb shape
-//! (hand-rolled, tab-indented); reading extracts each section with a
-//! regex/brace-match rather than a full JSON parse.
+//! `/var/cache/edb/mtimedb` persistence for four sections: the `resume`
+//! mergelist (`emerge --resume`), its `resume_backup` rotation, the
+//! `info` dir-mtime memo, and the `updates` per-file mtime record
+//! (`emerge --package-moves` global updates). The file is Portage's JSON
+//! mtimedb shape (hand-rolled, tab-indented); reading extracts each section
+//! with a regex/brace-match rather than a full JSON parse.
 // Portage: Scheduler.py, _save_resume_list; actions.py (--resume handling); util/mtimedb.py, MtimeDB
 
 use regex::Regex;
@@ -135,38 +136,12 @@ fn format_section_body(root: &Path, section: &Section) -> String {
     )
 }
 
-/// Writes the whole mtimedb file from scratch with the given sections (`None`
-/// omits a section). Removes the file outright when there is nothing to store.
-fn write_sections(
-    root: &Path,
-    resume: Option<&Section>,
-    resume_backup: Option<&Section>,
-    info: Option<&BTreeMap<String, i64>>,
-) -> Result<(), String> {
+/// Writes the whole mtimedb file from pre-rendered `\t"key": {...}`
+/// parts (a `BTreeMap`, so sections serialize in `sort_keys` order:
+/// `info` < `resume` < `resume_backup` < `updates`). Removes the file
+/// outright when there is nothing to store.
+fn write_sections(root: &Path, parts: BTreeMap<&str, String>) -> Result<(), String> {
     let path = mtimedb_path(root);
-    let mut parts = Vec::new();
-    if let Some(s) = resume {
-        parts.push(format!(
-            "\t\"resume\": {{\n{}\n\t}}",
-            format_section_body(root, s)
-        ));
-    }
-    if let Some(s) = resume_backup {
-        parts.push(format!(
-            "\t\"resume_backup\": {{\n{}\n\t}}",
-            format_section_body(root, s)
-        ));
-    }
-    if let Some(mtimes) = info
-        && !mtimes.is_empty()
-    {
-        // The flat `{path: mtime}` map, keys sorted.
-        let entries: Vec<String> = mtimes
-            .iter()
-            .map(|(k, v)| format!("\t\t{}: {v}", json_str(k)))
-            .collect();
-        parts.push(format!("\t\"info\": {{\n{}\n\t}}", entries.join(",\n")));
-    }
     if parts.is_empty() {
         let _ = std::fs::remove_file(&path);
         return Ok(());
@@ -174,10 +149,55 @@ fn write_sections(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    // Top-level sections ordered `info` < `resume` < `resume_backup`;
-    // the pushes above already append in that order.
-    let content = format!("{{\n{}\n}}\n", parts.join(",\n"));
+    let body: Vec<&str> = parts.values().map(String::as_str).collect();
+    let content = format!("{{\n{}\n}}\n", body.join(",\n"));
     std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Raw `{...}` object slices for every known top-level section on disk.
+/// Preserved sections splice back verbatim (see `preserved_parts`): a
+/// parse-and-reformat round trip would restamp a foreign mergelist's
+/// stored root with the current one.
+fn read_raw_objects(root: &Path) -> BTreeMap<&'static str, String> {
+    let mut out = BTreeMap::new();
+    let Ok(content) = std::fs::read_to_string(mtimedb_path(root)) else {
+        return out;
+    };
+    for key in ["resume", "resume_backup", "info", "updates"] {
+        if let Some(object) = extract_object(&content, key) {
+            out.insert(key, object.to_string());
+        }
+    }
+    out
+}
+
+/// Splices one raw object back under `key` (which may rename it, as the
+/// `resume` -> `resume_backup` rotation does).
+fn render_raw_part(key: &str, object: &str) -> String {
+    format!("\t\"{key}\": {object}")
+}
+
+/// Fresh `write_sections` parts: every on-disk section carried over
+/// verbatim except `fresh_key`, which the caller renders itself (or
+/// leaves absent). One file read.
+fn preserved_parts(root: &Path, fresh_key: &str) -> BTreeMap<&'static str, String> {
+    let mut parts = BTreeMap::new();
+    for (key, object) in read_raw_objects(root) {
+        if key != fresh_key {
+            parts.insert(key, render_raw_part(key, &object));
+        }
+    }
+    parts
+}
+
+/// Fresh `\t"resume": {...}` part from a parsed section (stamps the
+/// current root into the mergelist entries -- only used for lists this
+/// run itself wrote; preserved ones splice back verbatim).
+fn render_resume_part(root: &Path, section: &Section) -> String {
+    format!(
+        "\t\"resume\": {{\n{}\n\t}}",
+        format_section_body(root, section)
+    )
 }
 
 /// The `{...}` object immediately following `"<key>":` in `content`,
@@ -306,16 +326,21 @@ fn read_section(root: &Path, key: &str) -> Option<Section> {
     parse_section(extract_object(&content, key)?)
 }
 
-/// `mtimedb["info"]`: absolute GNU-info directory -> that directory's
-/// `st_mtime` (whole seconds) as `chk_updated_info_files` last left it.
-/// Empty when the file is absent or carries no `info` section.
-pub fn read_info_mtimes(root: &Path) -> BTreeMap<String, i64> {
-    let Ok(content) = std::fs::read_to_string(mtimedb_path(root)) else {
-        return BTreeMap::new();
-    };
-    let Some(object) = extract_object(&content, "info") else {
-        return BTreeMap::new();
-    };
+/// One flat `{path: mtime}` section body in `json.dumps(sort_keys=True)`
+/// shape (keys sorted via the `BTreeMap` iteration order). Shared by the
+/// `info` and `updates` sections.
+fn format_flat_section(key: &str, mtimes: &BTreeMap<String, i64>) -> String {
+    let entries: Vec<String> = mtimes
+        .iter()
+        .map(|(k, v)| format!("\t\t{}: {v}", json_str(k)))
+        .collect();
+    format!("\t\"{key}\": {{\n{}\n\t}}", entries.join(",\n"))
+}
+
+/// `"path": 123` pairs from a flat section object; a foreign-written
+/// float (`123.0`) is accepted and truncated, while what portuale
+/// writes back is always an integer.
+fn parse_flat_mtime_map(object: &str) -> BTreeMap<String, i64> {
     // `"path": 123` pairs; a foreign-written float (`123.0`) is accepted
     // and truncated, while what portuale writes back is always an integer.
     let pair_re = Regex::new(r#""((?:[^"\\]|\\.)*)"\s*:\s*(-?\d+(?:\.\d+)?)"#).ok();
@@ -348,13 +373,56 @@ pub fn read_info_mtimes(root: &Path) -> BTreeMap<String, i64> {
     mtimes
 }
 
+/// Reads one flat `{path: mtime}` top-level section (`"info"` or
+/// `"updates"`) from the mtimedb file on disk. Empty when the file is
+/// absent or carries no such section.
+fn read_flat_mtimes(root: &Path, key: &str) -> BTreeMap<String, i64> {
+    let Ok(content) = std::fs::read_to_string(mtimedb_path(root)) else {
+        return BTreeMap::new();
+    };
+    let Some(object) = extract_object(&content, key) else {
+        return BTreeMap::new();
+    };
+    parse_flat_mtime_map(object)
+}
+
+/// `mtimedb["info"]`: absolute GNU-info directory -> that directory's
+/// `st_mtime` (whole seconds) as `chk_updated_info_files` last left it.
+/// Empty when the file is absent or carries no `info` section.
+pub fn read_info_mtimes(root: &Path) -> BTreeMap<String, i64> {
+    read_flat_mtimes(root, "info")
+}
+
+/// `mtimedb["updates"]`: updates-file path -> that file's `st_mtime`
+/// (whole seconds) as the last global-updates run left it. Empty when
+/// the file is absent or carries no `updates` section.
+// Portage: lib/portage/_global_updates.py (`prev_mtimes`); util/mtimedb.py
+pub fn read_updates_mtimes(root: &Path) -> BTreeMap<String, i64> {
+    read_flat_mtimes(root, "updates")
+}
+
 /// Stores `mtimedb["info"]`: rewrites the file with `info` replaced,
-/// preserving any existing `resume`/`resume_backup` untouched. An empty map
-/// stores nothing for `info` itself.
+/// preserving any existing `resume`/`resume_backup`/`updates` verbatim.
+/// An empty map stores nothing for `info` itself.
 pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<(), String> {
-    let resume = read_section(root, "resume");
-    let backup = read_section(root, "resume_backup");
-    write_sections(root, resume.as_ref(), backup.as_ref(), Some(info))
+    let mut parts = preserved_parts(root, "info");
+    if !info.is_empty() {
+        parts.insert("info", format_flat_section("info", info));
+    }
+    write_sections(root, parts)
+}
+
+/// Stores `mtimedb["updates"]`: rewrites the file with `updates`
+/// replaced, preserving any existing
+/// `resume`/`resume_backup`/`info` untouched. An empty map stores
+/// nothing for `updates` itself.
+// Portage: lib/portage/_global_updates.py (`prev_mtimes.update` + commit)
+pub fn write_updates_mtimes(root: &Path, updates: &BTreeMap<String, i64>) -> Result<(), String> {
+    let mut parts = preserved_parts(root, "updates");
+    if !updates.is_empty() {
+        parts.insert("updates", format_flat_section("updates", updates));
+    }
+    write_sections(root, parts)
 }
 
 /// Writes `mtimedb["resume"]` from the atom args, one merge item per package
@@ -375,9 +443,9 @@ pub fn write_resume_list(
         mergelist: mergelist.to_vec(),
         opts: *opts,
     };
-    let backup = read_section(root, "resume_backup");
-    let info = read_info_mtimes(root);
-    write_sections(root, Some(&resume), backup.as_ref(), Some(&info))
+    let mut parts = preserved_parts(root, "resume");
+    parts.insert("resume", render_resume_part(root, &resume));
+    write_sections(root, parts)
 }
 
 /// After each successful merge the merged package leaves
@@ -392,18 +460,11 @@ pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
         return;
     };
     resume.mergelist.remove(pos);
-    let backup = read_section(root, "resume_backup");
-    let resume_opt = if resume.mergelist.is_empty() {
-        None
-    } else {
-        Some(&resume)
-    };
-    let _ = write_sections(
-        root,
-        resume_opt,
-        backup.as_ref(),
-        Some(&read_info_mtimes(root)),
-    );
+    let mut parts = preserved_parts(root, "resume");
+    if !resume.mergelist.is_empty() {
+        parts.insert("resume", render_resume_part(root, &resume));
+    }
+    let _ = write_sections(root, parts);
 }
 
 /// Right before a fresh, non-`--resume` merge starts, an existing `resume`
@@ -411,13 +472,27 @@ pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
 /// whatever backup existed) and `resume` itself is cleared. A single-item
 /// list, or no `resume` entry, is a no-op.
 pub fn rotate_resume_to_backup(root: &Path) {
-    let Some(resume) = read_section(root, "resume") else {
+    let raw = read_raw_objects(root);
+    let Some(resume_obj) = raw.get("resume") else {
+        return;
+    };
+    let Some(resume) = parse_section(resume_obj) else {
         return;
     };
     if resume.mergelist.len() <= 1 {
         return;
     }
-    let _ = write_sections(root, None, Some(&resume), Some(&read_info_mtimes(root)));
+    let mut parts = BTreeMap::new();
+    for (key, object) in &raw {
+        if *key != "resume" && *key != "resume_backup" {
+            parts.insert(*key, render_raw_part(key, object));
+        }
+    }
+    parts.insert(
+        "resume_backup",
+        render_raw_part("resume_backup", resume_obj),
+    );
+    let _ = write_sections(root, parts);
 }
 
 /// Reads back `(favorites, mergelist-cpvs, myopts)` from `mtimedb["resume"]`,
@@ -427,8 +502,17 @@ pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
     if let Some(s) = read_section(root, "resume") {
         return Some((s.favorites, s.mergelist, s.opts));
     }
-    let backup = read_section(root, "resume_backup")?;
-    let _ = write_sections(root, Some(&backup), None, Some(&read_info_mtimes(root)));
+    let raw = read_raw_objects(root);
+    let backup_obj = raw.get("resume_backup")?;
+    let backup = parse_section(backup_obj)?;
+    let mut parts = BTreeMap::new();
+    for (key, object) in &raw {
+        if *key != "resume" && *key != "resume_backup" {
+            parts.insert(*key, render_raw_part(key, object));
+        }
+    }
+    parts.insert("resume", render_raw_part("resume", backup_obj));
+    let _ = write_sections(root, parts);
     Some((backup.favorites, backup.mergelist, backup.opts))
 }
 
@@ -447,8 +531,7 @@ fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
 /// Clears `mtimedb["resume"]` after a successful `--resume` run. Only ever
 /// removes `resume` itself, leaving `resume_backup` (if any) untouched.
 pub fn clear_resume_list(root: &Path) {
-    let backup = read_section(root, "resume_backup");
-    let _ = write_sections(root, None, backup.as_ref(), Some(&read_info_mtimes(root)));
+    let _ = write_sections(root, preserved_parts(root, "resume"));
 }
 
 #[cfg(test)]
@@ -501,6 +584,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_info_mtimes(&root), mtimes);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn updates_mtimes_round_trip_without_disturbing_other_sections() {
+        // Backlog #562: the `updates` record shares the file with
+        // `resume` and `info`; every writer preserves the others.
+        let root = tmproot();
+        let mut updates = BTreeMap::new();
+        updates.insert("/repo/profiles/updates/2Q-2024".to_string(), 1_700_000_002);
+        write_updates_mtimes(&root, &updates).unwrap();
+        assert_eq!(read_updates_mtimes(&root), updates);
+
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        write_info_mtimes(&root, &mtimes).unwrap();
+        assert_eq!(read_updates_mtimes(&root), updates);
+
+        write_resume_list(
+            &root,
+            &["dev-libs/a"],
+            &[(
+                ResumeEntryKind::Ebuild,
+                "dev-libs".to_string(),
+                "a".to_string(),
+                "1".to_string(),
+            )],
+            &ResumeOpts::default(),
+        )
+        .unwrap();
+        assert_eq!(read_updates_mtimes(&root), updates);
+        assert_eq!(read_info_mtimes(&root), mtimes);
+
+        // Sections serialize in `sort_keys` order.
+        let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        let at = |k: &str| text.find(k).unwrap();
+        assert!(at("\"info\"") < at("\"resume\"") && at("\"resume\"") < at("\"updates\""));
+
+        // Clearing the record stores nothing for `updates` itself.
+        write_updates_mtimes(&root, &BTreeMap::new()).unwrap();
+        assert!(read_updates_mtimes(&root).is_empty());
+        assert_eq!(read_resume_list(&root).unwrap().0, vec!["dev-libs/a"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 

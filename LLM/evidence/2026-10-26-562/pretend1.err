@@ -1,0 +1,15 @@
+!!! Unable to parse profile: '/tmp/live562/cfg/etc/portage/make.profile'
+!!! ParseError: Parent 'overlay:crossrepo-parent' not found: '/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/default/parent'
+!!! Unable to parse profile: '/tmp/live562/cfg/etc/portage/make.profile'
+!!! ParseError: Parent 'overlay:crossrepo-parent' not found: '/home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/default/parent'
+
+
+!!! /tmp/live562/cfg/etc/portage/make.profile is not a symlink and will probably prevent most merges.
+!!! It should point into a profile within /home/vivo/repo/PORTUALE/pmtest/fixtures/repo/profiles/
+!!! (You can safely ignore this message when syncing. It's harmless.)
+
+
+!!! Your current profile is invalid. If you have just changed your profile
+!!! configuration, you should revert back to the previous configuration.
+!!! Allowed actions are limited to --help, --info, --search, --sync, and
+!!! --version.

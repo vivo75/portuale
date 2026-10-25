@@ -1,13 +1,13 @@
 # crates/portuale/src/mtimedb.rs
-`/var/cache/edb/mtimedb` persistence for the `resume` mergelist, its `resume_backup` rotation, and the `info` dir-mtime memo.
+`/var/cache/edb/mtimedb` persistence for the `resume` mergelist, its `resume_backup` rotation, the `info` dir-mtime memo, and the `updates` per-file mtime record.
 
 ## module
 - Ports Portage's `resume` support: `_emerge/Scheduler.py::_save_resume_list` + `_emerge/actions.py`'s `--resume` handling (backlog #168). The resolved plan's mergelist is saved to `mtimedb["resume"]` **before the first merge runs** (Portage `Scheduler.merge()`'s own `_save_resume_list` call), so a SIGKILL mid-merge still leaves a list for `emerge --resume`. Each successful merge then removes its own entry (`remove_merged_entry`, Scheduler.py:1595-1602), deleting the key once the list empties; a clean failure re-saves the still-unmerged tail. Each entry is `[type, root, cpv, operation]` along with the original atom args (`mtimedb["resume"]["favorites"]`). `emerge --resume` reads them back and merges them in order; `emerge --resume --skipfirst` drops the first (the one that failed) before continuing.
-- Portuale writes a Portage-compatible `{"resume": {...}, "resume_backup": {...}}` (hand-rolled, tab-indented like Portage `json.dumps(indent="\t", sort_keys=True)`); it does NOT preserve any other top-level keys an existing file had (`info`/`ldpath`/`updates` are `--sync`/`env-update` state portuale never manages). Tolerant of a Portage-written file with the same shape.
+- Portuale writes a Portage-compatible `{"resume": {...}, "resume_backup": {...}, ...}` (hand-rolled, tab-indented like Portage `json.dumps(indent="\t", sort_keys=True)`); every writer carries the other managed sections over verbatim (raw-object splice, never parse-and-reformat -- reformatting a `resume` section would restamp a foreign mergelist's stored root with the current one). Unknown top-level keys an existing file had (`ldpath`, `starttime`, `version`) are still dropped on rewrite. Tolerant of a Portage-written file with the same shape.
 - `resume_backup` rotation (`rotate_resume_to_backup`, actions.py:664-672): right before a fresh, non-`--resume` merge starts, an existing `resume` entry whose mergelist has more than one item is preserved as `resume_backup` (replacing whatever backup existed) rather than just being overwritten -- `emerge --resume` later promotes `resume_backup` back to `resume` when `resume` itself is absent (actions.py:222-224, `read_resume_list`'s own fallback), so an accidental fresh `emerge <atom>` doesn't destroy a still-recoverable resume point. `clear_resume_list` only ever removes `resume` itself (Scheduler.py:1599-1601's own `del mtimedb["resume"]` once the mergelist empties), leaving `resume_backup` untouched.
 - `mtimedb["info"]`: Portage's `MtimeDB` (util/mtimedb.py) carries an `"info"` key mapping each absolute GNU-info directory to that directory's `st_mtime` (whole seconds) the last time Portage's `chk_updated_info_files` (util/_info_files.py) regenerated its `dir` index -- or skipped regenerating because the mtime already matched. `read_info_mtimes`/`write_info_mtimes` round-trip that map through the same file without disturbing `resume`/`resume_backup` (Portage `commit()` persists the whole dict at once).
 - Two deliberate narrowings:
-  - Portage's file always carries every `_MTIMEDBKEYS` key (`info`, `ldpath`, `resume`, `resume_backup`, `starttime`, `updates`, `version`); portuale only ever writes the sections it manages (`resume`, `resume_backup`, `info`) and still drops the rest -- `ldpath`/`updates` are `--sync`/`env-update` state portuale never manages, `starttime`/`version` Portage bookkeeping with no reader here. An empty `info` map is omitted outright (Portage would write `"info": {}`); the file is removed when nothing at all is stored, as before.
+  - Portage's file always carries every `_MTIMEDBKEYS` key (`info`, `ldpath`, `resume`, `resume_backup`, `starttime`, `updates`, `version`); portuale only ever writes the sections it manages (`resume`, `resume_backup`, `info`, `updates` since backlog #562) and still drops the rest -- `ldpath` is `--sync`/`env-update` state portuale never manages, `starttime`/`version` Portage bookkeeping with no reader here. An empty `info`/`updates` map is omitted outright (Portage would write `"info": {}`); the file is removed when nothing at all is stored, as before.
   - Values are whole-second `i64`s (Portage `os.stat(...)[stat.ST_MTIME]` is already an int). A foreign-written float (`123.0`) is accepted on read and truncated; what portuale writes back is always an integer, matching Portage's steady state.
 - Binary-entry replay: each mergelist item carries Portage's own `type` tag (`"ebuild"` or `"binary"`), so `emerge --resume` can dispatch a resumed binary package through `emerge_getbinpkg::run_merge_plan` the same way `--getbinpkg` itself does, rather than only ever replaying source entries. This also closes the "build-time flags (`--usepkg` etc.)" gap `myopts` used to have no room for: Portage re-derives usepkg/getbinpkg preference from `myopts` and re-decides binary-vs-source at resume time, but portuale's own mergelist already records that *decision* directly (each entry's own `ResumeEntryKind`, fixed at the point the original run resolved it) -- arguably more robust than re-deciding from restored flags, so `myopts` itself still only carries `--oneshot`/`--onlydeps` (the two flags that govern *world*-recording, unrelated to which entries are binary). Cut: a resumed binary entry always resolves from the local `$PKGDIR` (`ResumeEntryKind::Binary` maps to `GraphEntry::remote_binary: false`) -- Portage re-fetches from a remote binhost too if the original run would have; portuale doesn't try to re-derive "was this fetched remotely" from the failed run's own state.
 
@@ -22,6 +22,13 @@
 
 ## fn write_sections
 - An empty object has nothing Portage or portuale itself would ever read back, hence file removal.
+- Takes pre-rendered parts in a `BTreeMap` (sections serialize in `sort_keys` order); preserved sections splice back as raw object text under `render_raw_part` (see the module note on the restamp hazard). The `resume` -> `resume_backup` rotation re-keys the same raw object rather than re-rendering it.
+
+## fn read_updates_mtimes
+- `mtimedb["updates"]` (backlog #562): updates-file path -> that file's `st_mtime` whole seconds, Portage `_global_updates`' `prev_mtimes`. Shares the flat-map reader with `info` (`read_flat_mtimes`/`parse_flat_mtime_map`).
+
+## fn write_updates_mtimes
+- Replaces only the `updates` section, preserving the rest verbatim; an empty map stores nothing for `updates` itself. Write errors are swallowed by the caller (`global_updates::check_root_updates`), matching Portage's `MtimeDB.__write_to_disk` (`except OSError`).
 
 ## fn extract_object
 - Only whitespace and a single `:` may separate the key from its own value -- JSON's own `"key": {...}` shape.
@@ -51,6 +58,9 @@
 
 ## tests: info_mtimes_round_trip_without_disturbing_the_resume_list
 - Ports `MtimeDB.commit()` semantics: one file, every key at once.
+
+## tests: updates_mtimes_round_trip_without_disturbing_other_sections
+- Backlog #562: the `updates` record shares the file with `resume` and `info`; every writer preserves the others, sections serialize in `sort_keys` order, and clearing the record leaves the other sections alone.
 
 ## tests: info_mtimes_accepts_a_foreign_float_and_reads_empty_as_empty
 - Absent file -> empty memo (Portage's own `setdefault("info", {})` shape).

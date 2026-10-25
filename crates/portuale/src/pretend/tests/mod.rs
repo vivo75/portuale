@@ -649,6 +649,7 @@ mod env_config;
 mod error_lines;
 mod flag_spellings;
 mod gates;
+mod global_updates;
 mod help;
 mod info;
 mod json;

@@ -383,7 +383,7 @@
 - [crates/portuale/src/main.rs](portuale/main.md) — Multicall binary dispatch (`emerge`, `ebuild`, `mrg`, `vdb`, `portageq`).
 - [crates/portuale/src/merge_engines.rs](portuale/merge_engines.md) — `MergeEngine` adapters executing the actual source/binary merges.
 - [crates/portuale/src/mrg.rs](portuale/mrg.md) — `mrg`: a portuale-only clap front end over portuale's own emerge codepath.
-- [crates/portuale/src/mtimedb.rs](portuale/mtimedb.md) — `/var/cache/edb/mtimedb` persistence for the `resume` mergelist, its `resume_backup` rotation, and the `info` dir-mtime memo.
+- [crates/portuale/src/mtimedb.rs](portuale/mtimedb.md) — `/var/cache/edb/mtimedb` persistence for the `resume` mergelist, its `resume_backup` rotation, the `info` dir-mtime memo, and the `updates` per-file mtime record.
 - [crates/portuale/src/needed_elf.rs](portuale/needed_elf.md) — `NEEDED.ELF.2` parsing and linkage-map computation for preserve-libs decisions.
 - [crates/portuale/src/portage_lock.rs](portuale/portage_lock.md) — Advisory file lock in the shape of Portage's `lockfile` primitive.
 - [crates/portuale/src/portageq.rs](portuale/portageq.md) — Native `has_version` / `best_version` over the installed-package database.
@@ -407,6 +407,7 @@
 - [crates/portuale/src/pretend/expand_targets.rs](portuale/pretend/expand_targets.md) — Expanding the command-line arguments (sets, package moves, bare names) into the atoms to resolve.
 - [crates/portuale/src/pretend/final_gates.rs](portuale/pretend/final_gates.md) — The last gates before execution: ABI rebuilds, changed-deps report, buildpkgonly deps, circular dependencies.
 - [crates/portuale/src/pretend/gates.rs](portuale/pretend/gates.md) — Pure predicates for what a run shows: merge-list gating, the empty-plan arms, and resolution-phase display.
+- [crates/portuale/src/pretend/global_updates.rs](portuale/pretend/global_updates.md) — The applied-updates AUTOCLEAN force (backlog #562): whether any repo's `profiles/updates/` holds a changed file with >=1 valid directive, measured against the `updates` mtime record in `<EROOT>/var/cache/edb/mtimedb`.
 - [crates/portuale/src/pretend/info.rs](portuale/pretend/info.md) — `emerge --info`.
 - [crates/portuale/src/pretend/json.rs](portuale/pretend/json.md) — `--json` output.
 - [crates/portuale/src/pretend/merge_list.rs](portuale/pretend/merge_list.md) — The counts and summary lines under the merge list, and the redisplay before a merge.

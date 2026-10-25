@@ -66,7 +66,10 @@ fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_portage() {
 #[test]
 fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
     // Portage: actions.py. `--pretend` returns before the scheduler, so it
-    // never touches the resume list.
+    // never touches the resume list. Backlog #562 narrows the file-level
+    // halves: the pre-resolve updates check (`actions.py:3944`, no
+    // `--pretend` exemption) still commits the `updates` record -- just
+    // never a `resume` section.
     let portuale_bin = built_portuale_bin();
     let tmp = TempDir::new("resume_no_write_pretend").keep();
 
@@ -91,11 +94,16 @@ fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert!(
-        !crate::mtimedb::mtimedb_path(&bare).exists(),
-        "--pretend must not create an mtimedb"
+        crate::mtimedb::read_resume_list(&bare).is_none(),
+        "--pretend must not create a resume list"
+    );
+    assert!(
+        !crate::mtimedb::read_updates_mtimes(&bare).is_empty(),
+        "--pretend still commits the updates record"
     );
 
-    let (root, before) = stale_resume_root("pretend");
+    let (root, _before) = stale_resume_root("pretend");
+    let before_list = crate::mtimedb::read_resume_list(&root);
     let output = std::process::Command::new(&portuale_bin)
         .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
         .stdin(std::process::Stdio::null())
@@ -111,9 +119,13 @@ fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
-        before,
-        "--pretend must leave a stale resume list byte-identical"
+        crate::mtimedb::read_resume_list(&root),
+        before_list,
+        "--pretend must leave a stale resume list identical"
+    );
+    assert!(
+        !crate::mtimedb::read_updates_mtimes(&root).is_empty(),
+        "--pretend still commits the updates record"
     );
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(&root);
