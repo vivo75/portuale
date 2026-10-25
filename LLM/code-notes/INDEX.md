@@ -57,6 +57,7 @@
 - [crates/portage-repo/src/binary_index.rs](portage-repo/binary_index.md) — The binary package index (`Packages`) and binary candidates.
 - [crates/portage-repo/src/binpkg_use.rs](portage-repo/binpkg_use.md) — `--binpkg-respect-use` checks and binary metadata readers.
 - [crates/portage-repo/src/candidates.rs](portage-repo/candidates.md) — Ebuild candidates for a package.
+- [crates/portage-repo/src/categories.rs](portage-repo/categories.md) — The repo-traversal category allow-list (`settings.categories`).
 - [crates/portage-repo/src/config_match.rs](portage-repo/config_match.md) — Per-package index over `package.*` config atoms.
 - [crates/portage-repo/src/dep_chain.rs](portage-repo/dep_chain.md) — The "required by" chain printed under a masked dependency.
 - [crates/portage-repo/src/dep_validate.rs](portage-repo/dep_validate.md) — Ebuild and binary `*DEPEND` validation (#341 S4).

@@ -12,7 +12,7 @@
 
 use crate::ebuild_phases;
 use md5::{Digest as _, Md5};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -125,12 +125,12 @@ pub fn run(
     let mut valid_per_repo: HashMap<PathBuf, HashSet<(String, String)>> = HashMap::new();
     let mut work: Vec<RegenWorkItem> = Vec::new();
     let mut cps_in_order: Vec<String> = Vec::new();
-    for cp in portage_repo::all_cp(&repos) {
-        cps_in_order.push(cp.clone());
+    for cp in regen_cps(&repos, &portage_repo::repo_categories(&repos, config_root)) {
         let (category, package) = match cp.split_once('/') {
             Some(x) => x,
             None => continue,
         };
+        cps_in_order.push(cp.clone());
         for repo in &repos {
             let pkg_dir = repo.location.join(category).join(package);
             let Ok(entries) = portage_util::read_dir_entries(&pkg_dir) else {
@@ -238,6 +238,21 @@ pub fn run(
     } else {
         ExitCode::from(1)
     }
+}
+
+/// Every cp the traversal visits: the on-disk `all_cp` walk gated on
+/// `settings.categories` (on-disk cps in unlisted categories are never
+/// yielded).
+/// Portage: MetadataRegen._iter_every_cp over cp_all(categories=...),
+/// porttree.py:1097-1128.
+fn regen_cps(repos: &[portage_repo::RepoConfig], categories: &BTreeSet<String>) -> Vec<String> {
+    portage_repo::all_cp(repos)
+        .into_iter()
+        .filter(|cp| {
+            cp.split_once('/')
+                .is_some_and(|(category, _)| categories.contains(category))
+        })
+        .collect()
 }
 
 /// One item's `depend` phase plus cache write.
@@ -548,6 +563,48 @@ mod tests {
 
     fn key(category: &str, pf: &str) -> (String, String) {
         (category.to_string(), pf.to_string())
+    }
+
+    /// Traversal drops on-disk cps whose category is absent from
+    /// `settings.categories`: a valid ebuild under an unlisted category is
+    /// never visited (the `kde-base/ark` shape; live pair: portuale printed
+    /// `Processing zz-unlisted/minipkg` where host Portage 3.0.83 drops it).
+    /// Portage: MetadataRegen._iter_every_cp over
+    /// cp_all(categories=settings.categories), porttree.py:1097-1128.
+    #[test]
+    fn regen_traversal_drops_cps_in_unlisted_categories() {
+        let dir = TempDir::new("portuale-regen-categories").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        for (category, package) in [("dev-libs", "listedpkg"), ("zz-unlisted", "droppedpkg")] {
+            let ebuild = repo
+                .join(category)
+                .join(package)
+                .join(format!("{package}-1.0.ebuild"));
+            std::fs::create_dir_all(ebuild.parent().unwrap()).unwrap();
+            std::fs::write(&ebuild, "EAPI=8\n").unwrap();
+        }
+        std::fs::create_dir_all(repo.join("profiles")).unwrap();
+        std::fs::write(repo.join("profiles").join("repo_name"), "regentest\n").unwrap();
+        std::fs::write(repo.join("profiles").join("categories"), "dev-libs\n").unwrap();
+        let cfg = dir.join("cfg");
+        let repos = vec![portage_repo::RepoConfig {
+            name: "regentest".to_string(),
+            location: repo,
+            priority: -1000,
+            is_main: true,
+            masters: Vec::new(),
+            profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
+            aliases: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: Vec::new(),
+        }];
+        let cps = regen_cps(&repos, &portage_repo::repo_categories(&repos, &cfg));
+        assert_eq!(cps, vec!["dev-libs/listedpkg".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Dispatch order skips only keys already running.
