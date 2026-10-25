@@ -102,7 +102,7 @@ pub(crate) fn source_paths_for(
     entry: &GraphEntry,
     portage_tmpdir: &Path,
 ) -> Option<SourcePaths> {
-    let version = entry_version(&entry.outcome)?;
+    let version = entry_version(entry)?;
     let tmp = if entry.source == portage_repo::CandidateSource::Binary {
         binary_entry_portage_tmpdir(options, entry, version, portage_tmpdir)
     } else {
@@ -297,7 +297,7 @@ impl Ledger {
         entry: &GraphEntry,
         err: &str,
     ) -> bool {
-        let Some(version) = entry_version(&entry.outcome) else {
+        let Some(version) = entry_version(entry) else {
             return false;
         };
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);
@@ -405,7 +405,7 @@ impl Ledger {
         entry: &GraphEntry,
         atoms: &[String],
     ) {
-        let Some(version) = entry_version(&entry.outcome) else {
+        let Some(version) = entry_version(entry) else {
             return;
         };
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);

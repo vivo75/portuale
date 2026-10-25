@@ -408,12 +408,8 @@ pub(crate) fn pretend_needs_run(entry: &GraphEntry) -> bool {
 /// packages (backlog #197).
 // Portage: _emerge/Scheduler.py, `_pkg_needs_pretend`
 pub(crate) fn source_entry_needs_pretend(entry: &GraphEntry, repos: &[RepoConfig]) -> bool {
-    let version = match &entry.outcome {
-        PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
-            version.clone()
-        }
-        PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to.clone(),
-        _ => return false,
+    let Some(version) = entry_version(entry) else {
+        return false;
     };
     let candidates = match portage_repo::list_candidates(repos, &entry.category, &entry.package) {
         Ok(c) => c,
@@ -443,91 +439,70 @@ pub(crate) fn source_entry_needs_pretend(entry: &GraphEntry, repos: &[RepoConfig
     eapi_ok && pretend_defined
 }
 
-/// The up-front `pkg_pretend` pass: every build-bound entry's `pretend`
-/// runs (up to `max_jobs` at once, each captured), then the outputs replay
-/// to `replay` in merge-list order (stdout on a real run). A failure aborts
-/// before any build starts.
-/// Returns the failing entry indices with their messages.
-// Portage: _emerge/Scheduler.py, _run_pkg_pretend
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn run_pretend_pass(
-    entries: &[GraphEntry],
-    repos: &[RepoConfig],
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &ebuild_merge::MergeOptions,
-    max_jobs: usize,
-    replay: &mut dyn std::io::Write,
-) -> Vec<(usize, String)> {
-    let pending: Vec<usize> = (0..entries.len())
-        .filter(|&i| {
-            scheduler_needs_build(&entries[i]) && source_entry_needs_pretend(&entries[i], repos)
-        })
-        .collect();
-    if pending.is_empty() {
-        return Vec::new();
+/// One source entry plus everything the pretend pass needs for it: the
+/// gate's repos, the run's roots and the merge options.
+pub(crate) struct SourcePretendEntry<'a> {
+    pub entry: &'a GraphEntry,
+    pub repos: &'a [RepoConfig],
+    pub root: &'a Path,
+    pub portage_tmpdir: &'a Path,
+    pub options: &'a ebuild_merge::MergeOptions,
+}
+
+impl PretendEntry for SourcePretendEntry<'_> {
+    fn entry(&self) -> &GraphEntry {
+        self.entry
     }
-    let max_jobs = max_jobs.min(pending.len()).max(1);
-    let mut failures: Vec<(usize, String)> = Vec::new();
-    let mut logs: HashMap<usize, PathBuf> = HashMap::new();
-    std::thread::scope(|scope| {
-        let (tx, rx) = std::sync::mpsc::channel::<(usize, Result<(), String>)>();
-        let mut next = 0usize;
-        let mut in_flight = 0usize;
-        while next < pending.len() || in_flight > 0 {
-            while next < pending.len() && in_flight < max_jobs {
-                let idx = pending[next];
-                next += 1;
-                in_flight += 1;
-                let log_path =
-                    portage_tmpdir.join(format!("pretend-{}-{idx}.log", std::process::id()));
-                logs.insert(idx, log_path.clone());
-                let entry = &entries[idx];
-                // Portage's `_status_msg("Running pre-merge checks for ...")`:
-                // buffered with the entry's output and replayed first, so the
-                // line heads each entry's block in merge-list order.
-                // Portage: _emerge/Scheduler.py, _run_pkg_pretend_one
-                if let Ok((cp, version)) = scheduler_cp_version(entry) {
-                    let line = format!(">>> Running pre-merge checks for {cp}-{version}\n");
-                    if let Some(parent) = log_path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    let _ = std::fs::write(&log_path, line);
-                }
-                let tx = tx.clone();
-                scope.spawn(move || {
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        pretend_one_entry(entry, repos, root, portage_tmpdir, options, &log_path)
-                    }))
-                    .unwrap_or_else(|payload| Err(worker_panic_message(entry, payload)));
-                    let _ = tx.send((idx, r));
-                });
-            }
-            let Ok((idx, result)) = rx.recv() else { break };
-            in_flight -= 1;
-            if let Err(e) = result {
-                failures.push((idx, e));
-            }
-        }
-    });
-    failures.sort_by_key(|(idx, _)| *idx);
-    // Replay in merge-list order, then remove the capture, like Portage
-    // reading and unlinking each buffered pretend log.
-    let mut ordered = pending;
-    ordered.sort_unstable();
-    for idx in ordered {
-        let Some(path) = logs.remove(&idx) else {
-            continue;
+    fn needs_pretend(&self) -> bool {
+        scheduler_needs_build(self.entry) && source_entry_needs_pretend(self.entry, self.repos)
+    }
+    fn entry_tmpdir(&self) -> Result<PathBuf, String> {
+        let Some(version) = self.version() else {
+            return Err(format!(
+                "{}/{}: no version to pretend",
+                self.entry.category, self.entry.package
+            ));
         };
-        if let Ok(bytes) = std::fs::read(&path)
-            && !bytes.is_empty()
-        {
-            let _ = replay.write_all(&bytes);
-            let _ = replay.flush();
-        }
-        let _ = std::fs::remove_file(&path);
+        entry_portage_tmpdir(self.options, self.entry, version, self.portage_tmpdir)
     }
-    failures
+
+    fn run_pretend(&self) -> PretendRun {
+        let (cp, version) = match scheduler_cp_version(self.entry) {
+            Ok(found) => found,
+            Err(e) => {
+                return PretendRun {
+                    log: None,
+                    result: Err(e),
+                };
+            }
+        };
+        let t_base = match self.entry_tmpdir() {
+            Ok(t_base) => t_base,
+            Err(e) => {
+                return PretendRun {
+                    log: None,
+                    result: Err(e),
+                };
+            }
+        };
+        run_staged_pretend(RunStagedPretendArgs {
+            entry: self.entry,
+            cp: &cp,
+            version: &version,
+            portage_tmpdir: self.portage_tmpdir,
+            t_base: &t_base,
+            run: &|staging| {
+                pretend_one_entry(
+                    self.entry,
+                    self.repos,
+                    self.root,
+                    self.portage_tmpdir,
+                    self.options,
+                    staging,
+                )
+            },
+        })
+    }
 }
 
 /// What [`note_landed`] tells the dispatch loop after one built entry lands.
@@ -779,40 +754,36 @@ pub(crate) fn run_build_scheduler(
 
     // The up-front `pkg_pretend` pass runs before any build, its outputs
     // replayed in merge-list order; a failure aborts before anything builds.
-    // Portage: _emerge/Scheduler.py, _run_pkg_pretend (1c8b75d73)
-    let mut pretend_failed = false;
-    {
+    // Portage: _emerge/Scheduler.py, _run_pkg_pretend
+    let failures = {
         // The replay sink is stdout: `pkg_pretend` output is important
         // enough to bypass `--quiet`/`--jobs`, like Portage. The lock
         // must drop before the loop below prints anything itself.
         let stdout = std::io::stdout();
         let mut replay = stdout.lock();
-        for (idx, e) in run_pretend_pass(
-            entries,
-            repos,
-            root,
-            portage_tmpdir,
-            options,
-            policy.max_jobs(),
-            &mut replay,
-        ) {
-            pretend_failed = true;
-            if !ledger.failed(&report, &entries[idx], &e) {
-                unreported.push(e);
-            }
-        }
-    }
-    if pretend_failed {
-        let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
-        match ledger.finish(&report, keep_going, first) {
-            Ok(()) => return Ok(pass_report),
-            Err(message) => {
-                return Err(MergePassError {
-                    message,
-                    report: pass_report,
-                });
-            }
-        }
+        let wrapped: Vec<SourcePretendEntry<'_>> = entries
+            .iter()
+            .map(|entry| SourcePretendEntry {
+                entry,
+                repos,
+                root,
+                portage_tmpdir,
+                options,
+            })
+            .collect();
+        run_pretend_pass(RunPretendPassArgs {
+            entries: &wrapped,
+            jobs: policy.max_jobs(),
+            replay: &mut replay,
+        })
+    };
+    if finish_failed_pretend(FinishFailedPretendArgs {
+        report: &report,
+        entries,
+        failures,
+        keep_going,
+    })? {
+        return Ok(pass_report);
     }
 
     let loop_result = std::thread::scope(|scope| -> Result<(), String> {

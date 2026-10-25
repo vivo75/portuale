@@ -35,7 +35,19 @@ The source-merge loop: build, then merge, one entry at a time (serial), or via t
 - Prints Portage's `PackageMerge._install_exit` `Completed (N of M) cpv::repo` line (backlog #177) where portuale used to print its own `merged.` line.
 - A postinst failure (#444) prints `Completed` anyway (Portage's `_install_exit` runs because `EbuildMerge` returns before setting `postinst_failure`) and returns the `postinst failed` marker instead of `merge failed`, skipping the world record below. The post-merge clean was already skipped by the merge itself (never after a postinst failure).
 
-## serial `-j1` up-front pretend pass (#545)
-- `run_source_merge` with `jobs == 1` runs `run_pretend_pass(..., max_jobs=1)` before `run_merge_loop` and threads `skip_pretend: true` through both serial branches (`build_one_source_entry` captured split and `SourceEngine::merge_entry`, the latter via the new `SourceEngine::skip_pretend` field into `merge_one_source_entry` -> `run_merge_with_hook` -> `run_commands`). A pretend failure aborts via the same `Ledger`/`finish` path as the scheduler (already-reported failure, nothing builds). Portage: `Scheduler._run_pkg_pretend` with `max_jobs=1` (unbuffered in-order; ours captures-then-replays, same bytes before any build).
+## serial `-j1` up-front pretend pass (#545, #577)
+- `run_source_merge` with `jobs == 1` runs the shared pass with
+  `jobs = 1` before `run_merge_loop` and threads `skip_pretend: true`
+  through both serial branches (`build_one_source_entry` captured split
+  and `SourceEngine::merge_entry`, the latter via the
+  `SourceEngine::skip_pretend` field into `merge_one_source_entry` ->
+  `run_merge_with_hook` -> `run_commands`). A pretend failure aborts via
+  `finish_failed_pretend` (already-reported failure, nothing builds).
+  Portage: `Scheduler._run_pkg_pretend` with `max_jobs=1`, whose
+  `buffered = max_jobs > 1` gate takes the unbuffered path -- since #577
+  each entry's block replays before the next starts (the phases still
+  capture to a file; only the replay timing is live).
+  Same bytes either way; see `pretend_pass.md`.
+- `MergeOneSourceEntryArgs::skip_pretend` and `RunMergeWithHookArgs::skip_pretend` (new) thread into `RunCommandsArgs::skip_pretend` (new; every other caller passes `false`, preserving `doebuild()` full-chain behavior). `run_merge` (the direct path) passes `false`.
 - `MergeOneSourceEntryArgs::skip_pretend` and `RunMergeWithHookArgs::skip_pretend` (new) thread into `RunCommandsArgs::skip_pretend` (new; every other caller passes `false`, preserving `doebuild()` full-chain behavior). `run_merge` (the direct path) passes `false`.
 

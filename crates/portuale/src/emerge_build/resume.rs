@@ -8,7 +8,7 @@ use crate::emerge_build::*;
 /// writes on the failure path.
 // Portage: Scheduler.py, _save_resume_list
 pub(crate) fn resume_cpv(entry: &GraphEntry) -> Option<crate::mtimedb::ResumeCpv> {
-    let version = entry_version(&entry.outcome)?;
+    let version = entry_version(entry)?;
     let kind = match entry.source {
         CandidateSource::Ebuild => crate::mtimedb::ResumeEntryKind::Ebuild,
         CandidateSource::Binary => crate::mtimedb::ResumeEntryKind::Binary,

@@ -11,6 +11,9 @@ pub struct RunBuildpkgonlyArgs<'a> {
     pub portage_tmpdir: &'a Path,
     pub options: &'a PackageOptions,
     pub keep_going: bool,
+    /// `--jobs` after the interactive-package fallback; the up-front
+    /// `pkg_pretend` pass runs up to this many pretends at once.
+    pub jobs: usize,
     /// Scheduler-display mode (background + Jobs visibility only).
     pub mode: StatusMode,
 }
@@ -29,6 +32,7 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
         portage_tmpdir,
         options,
         keep_going,
+        jobs,
         mode,
     } = args;
     // The run-wide half of `config.environ()`, once for the whole run.
@@ -40,7 +44,7 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
     // The up-front `pkg_pretend` pass runs before any build, even for
     // `--buildpkgonly` (Portage's `_merge` gates it on `fetchonly` only,
     // and `_run_pkg_pretend_one` handles `MERGE_TYPE=buildonly`).
-    // Backlog #546. A failure aborts before anything builds.
+    // A failure aborts before anything builds.
     // Portage: _emerge/Scheduler.py, _run_pkg_pretend
     {
         use std::sync::Arc as StdArc;
@@ -64,33 +68,32 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
             background: mode.background,
             quiet_fail: false,
         };
-        let mut ledger = Ledger::default();
-        let mut unreported: Vec<String> = Vec::new();
-        let mut pretend_failed = false;
-        {
+        let failures = {
             let stdout = std::io::stdout();
             let mut replay = stdout.lock();
-            for (idx, e) in run_pretend_pass(
-                entries,
-                repos,
-                root,
-                portage_tmpdir,
-                &pretend_options,
-                entries.len().max(1),
-                &mut replay,
-            ) {
-                pretend_failed = true;
-                if !ledger.failed(&report, &entries[idx], &e) {
-                    unreported.push(e);
-                }
-            }
-        }
-        if pretend_failed {
-            let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
-            match ledger.finish(&report, keep_going, first) {
-                Ok(()) => return Ok(()),
-                Err(message) => return Err(message),
-            }
+            let wrapped: Vec<SourcePretendEntry<'_>> = entries
+                .iter()
+                .map(|entry| SourcePretendEntry {
+                    entry,
+                    repos,
+                    root,
+                    portage_tmpdir,
+                    options: &pretend_options,
+                })
+                .collect();
+            run_pretend_pass(RunPretendPassArgs {
+                entries: &wrapped,
+                jobs,
+                replay: &mut replay,
+            })
+        };
+        if finish_failed_pretend(FinishFailedPretendArgs {
+            report: &report,
+            entries,
+            failures,
+            keep_going,
+        })? {
+            return Ok(());
         }
     }
     let mut failures = Vec::new();
@@ -98,7 +101,7 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
         if entry.source == CandidateSource::Binary {
             continue;
         }
-        let Some(version) = entry_version(&entry.outcome) else {
+        let Some(version) = entry_version(entry) else {
             continue;
         };
         let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, version)

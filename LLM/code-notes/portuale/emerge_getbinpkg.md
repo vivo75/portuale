@@ -99,8 +99,33 @@
 - Called between the foreground `>>> Extracting info` and `>>> Extracting <cpv>` lines: reads the archive's `user_patch.digests` member (`.gpkg.tar` vs xpak dispatch like `from_binpkg`), compares the local set (`UserPatchSet::has` + `digest` over the entry's category/package/version/slot) against the archive's lowercased `USER_PATCHES`, prints the table (stdout, `INFORM`) and warnings (stderr, `WARN`) with the shared progress colorizer (plain off a terminal, like every other merge line). Silent when the member is absent or the archive unreadable (the merge fails just below with its own error). Background mode prints nothing here (like the other foreground lines); the build log keeps only the extract header (accepted narrowing, same as the rest of the foreground merge text).
 
 ## fn run_mixed_pretend_pass / pretend_one_mixed_entry (#544)
-- The mixed source+binary plan runs `run_mixed_pretend_pass` before `run_merge_loop`: unified parallel pass (threads + merge-list-order replay, same shape as `run_pretend_pass`) over `pretend_needs_run` entries; source entries via the scheduler helper, local binaries via `pretend_binary_entry` (capture log on a cloned options). A binary with no local file (remote/missing) stays silent here and pretends inline at merge time -- Portage fetches it in the pass instead (deferred follow-up, documented in the helper). Failures abort via `Ledger`/`finish` before any merge; on success the merges run on a cloned `merge_options` with `skip_pretend: true` (source engine flag + binary hook flag), so no pretend runs twice.
+
+Superseded by `emerge_build/pretend_pass.md` (#577): the mixed pass is
+the shared generic pass over `MixedPretendEntry` now, and the old
+`entries.len().max(1)` became the `--jobs` clamp. The contract below is
+unchanged: source entries via the scheduler helper, local binaries via
+`pretend_binary_entry` on a cloned options, remote/missing binaries
+silent up front (the #579 gap). Pre-#577 shape kept for provenance:
+unified parallel pass (threads + merge-list-order replay, same shape as
+`run_pretend_pass`) over `pretend_needs_run` entries; failures abort via
+`Ledger`/`finish` before any merge; on success the merges run on a
+cloned `merge_options` with `skip_pretend: true` (source engine flag +
+binary hook flag), so no pretend runs twice. The pass's `max_jobs` clamp
+and the `>>> Running pre-merge checks for <cpv>` line (Portage's
+`_status_msg("Running pre-merge checks for ...")`) moved with the pass;
+see `emerge_build/pretend_pass.md`.
 - Pins: `mixed_pretend_pass_replays_binary_and_source_in_merge_list_order` (local `.tbz2` + ebuild, both ran, no vdb written), `mixed_pretend_pass_binary_failure_aborts_before_anything_merges` (forced hook death aborts the pass).
+
+## remote-binary pretend gap (#579)
+- Portage fetches a remote binary *inside* the pretend pass
+  (`_run_pkg_pretend_one`, `Scheduler.py:1147-1180`: `download_required`
+  gates a `BinpkgFetcher` + `BinpkgVerifier`, then the metadata unpacks
+  to `build-info` before the `pretend` phase runs), so a remote binary
+  pretends up front in merge-list order like everything else. portuale
+  stays silent for entries with no local file and pretends them inline
+  at merge time instead (the fetch-then-pretend ordering for remote
+  binaries is not ported). No suite shape covers it; porting it is a
+  separate slice, not this one.
 
 ## fn missing_binpkg_block
 - Portage `_emerge/BinpkgVerifier._start`'s `os.stat` ENOENT text (`BinpkgVerifier.py:40-60`, backlog #187), as one block (each line `\n`-terminated, no surrounding blanks -- the bed oracle's bytes): the stale-index arm when the cpv is still in the `<pkgdir>/Packages` index (the file was removed without refreshing it), else Portage's `!!! Fetching Binary failed` arm. Pure shaper, for tests and the `build.log` write alike.

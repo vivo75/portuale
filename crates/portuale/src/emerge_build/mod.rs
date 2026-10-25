@@ -11,6 +11,7 @@ mod failure;
 mod fetchonly;
 mod logs;
 mod merge_wait;
+mod pretend_pass;
 mod resume;
 mod scheduler;
 mod source_merge;
@@ -25,6 +26,7 @@ pub(crate) use failure::*;
 pub use fetchonly::*;
 pub(crate) use logs::*;
 pub(crate) use merge_wait::*;
+pub(crate) use pretend_pass::*;
 pub(crate) use resume::*;
 pub(crate) use scheduler::*;
 pub use source_merge::*;
@@ -40,8 +42,8 @@ use std::path::{Path, PathBuf};
 
 /// The version this entry would actually build at, or `None` for an
 /// outcome `--buildpkgonly` never builds anything for.
-fn entry_version(outcome: &PretendOutcome) -> Option<&str> {
-    match outcome {
+pub(crate) fn entry_version(entry: &GraphEntry) -> Option<&str> {
+    match &entry.outcome {
         PretendOutcome::New { version } => Some(version),
         PretendOutcome::Upgrade { to, .. } => Some(to),
         PretendOutcome::Downgrade { to, .. } => Some(to),
@@ -86,7 +88,7 @@ pub(crate) fn entry_matches_any(entry: &GraphEntry, atoms: &[String]) -> bool {
     if atoms.is_empty() {
         return false;
     }
-    let Some(version) = entry_version(&entry.outcome) else {
+    let Some(version) = entry_version(entry) else {
         return false;
     };
     let slot = entry.slot.as_deref().unwrap_or("0");
@@ -140,7 +142,7 @@ pub(crate) fn entry_buildpkg_wanted(
     if buildpkg_live {
         return true;
     }
-    let Some(version) = entry_version(&entry.outcome) else {
+    let Some(version) = entry_version(entry) else {
         return true;
     };
     match locate_candidate(repos, &entry.category, &entry.package, version) {

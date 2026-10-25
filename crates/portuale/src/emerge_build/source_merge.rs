@@ -100,44 +100,38 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<MergePassReport,
         background: mode.background,
         quiet_fail: options.quiet_fail,
     };
-    // The up-front `pkg_pretend` pass runs even at `-j1`, unbuffered in
-    // merge-list order, before any build -- like Portage's `_run_pkg_pretend`
-    // with `max_jobs=1` (backlog #545). A failure aborts before anything
-    // builds, exactly like the `-jN` scheduler above.
+    // The up-front `pkg_pretend` pass runs even at `-j1`, one entry at a
+    // time with each block replayed before the next starts, before any
+    // build -- like the `-jN` scheduler above. A failure aborts before
+    // anything builds, exactly like the scheduler.
     // Portage: _emerge/Scheduler.py, _run_pkg_pretend
     {
-        let mut ledger = Ledger::default();
-        let mut unreported: Vec<String> = Vec::new();
-        let mut pretend_failed = false;
-        {
+        let failures = {
             let stdout = std::io::stdout();
             let mut replay = stdout.lock();
-            for (idx, e) in run_pretend_pass(
-                entries,
-                repos,
-                root,
-                portage_tmpdir,
-                options,
-                1,
-                &mut replay,
-            ) {
-                pretend_failed = true;
-                if !ledger.failed(&report, &entries[idx], &e) {
-                    unreported.push(e);
-                }
-            }
-        }
-        if pretend_failed {
-            let first = (!unreported.is_empty()).then(|| unreported.join("\n"));
-            match ledger.finish(&report, keep_going, first) {
-                Ok(()) => return Ok(MergePassReport::default()),
-                Err(message) => {
-                    return Err(MergePassError {
-                        message,
-                        report: MergePassReport::default(),
-                    });
-                }
-            }
+            let wrapped: Vec<SourcePretendEntry<'_>> = entries
+                .iter()
+                .map(|entry| SourcePretendEntry {
+                    entry,
+                    repos,
+                    root,
+                    portage_tmpdir,
+                    options,
+                })
+                .collect();
+            run_pretend_pass(RunPretendPassArgs {
+                entries: &wrapped,
+                jobs,
+                replay: &mut replay,
+            })
+        };
+        if finish_failed_pretend(FinishFailedPretendArgs {
+            report: &report,
+            entries,
+            failures,
+            keep_going,
+        })? {
+            return Ok(MergePassReport::default());
         }
     }
     run_merge_loop(entries, keep_going, &report, |_, entry, entry_progress| {

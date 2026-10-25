@@ -315,22 +315,28 @@ fn pkg_pretend_replays_in_merge_list_order() {
             },
         )
     };
-    let entries = vec![new("schedppa"), new("schedppb")];
+    let entries = [new("schedppa"), new("schedppb")];
     let options = ebuild_merge::MergeOptions {
         distdir: tempdir(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
     let mut replay: Vec<u8> = Vec::new();
-    let failures = super::scheduler::run_pretend_pass(
-        &entries,
-        &repos,
-        &root,
-        &portage_tmpdir,
-        &options,
-        2,
-        &mut replay,
-    );
+    let wrapped: Vec<SourcePretendEntry<'_>> = entries
+        .iter()
+        .map(|entry| SourcePretendEntry {
+            entry,
+            repos: &repos,
+            root: &root,
+            portage_tmpdir: &portage_tmpdir,
+            options: &options,
+        })
+        .collect();
+    let failures = run_pretend_pass(RunPretendPassArgs {
+        entries: &wrapped,
+        jobs: 2,
+        replay: &mut replay,
+    });
     assert!(failures.is_empty(), "{failures:?}");
     let text = String::from_utf8_lossy(&replay);
     let a = text
@@ -637,4 +643,557 @@ fn package_env_merge_wait_holds_one_packages_merge() {
     );
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// A pass entry that runs no ebuild: the runner's scheduling, logging
+/// and replay are pinned without phases.
+struct FakePretendEntry<'a> {
+    entry: GraphEntry,
+    log_dir: PathBuf,
+    shared: &'a FakeShared,
+    /// When set, the pretend fails unless the replay sink already holds
+    /// this marker: pins live replay at one job (seen) and buffering
+    /// above one job (never seen mid-run).
+    need: Option<&'static str>,
+    /// When set, the pretend writes its log and then fails: pins that a
+    /// failing entry's output still replays before the failure records.
+    fail: bool,
+    /// How long the pretend waits for a second entry to be in flight.
+    delay: std::time::Duration,
+}
+
+/// The knobs every fake entry of one pass shares: the event record, the
+/// live-concurrency counters and the replay sink a later entry can read.
+#[derive(Default)]
+struct FakeShared {
+    events: std::sync::Mutex<Vec<String>>,
+    in_flight: std::sync::atomic::AtomicUsize,
+    max_concurrent: std::sync::atomic::AtomicUsize,
+    sink: FakeSink,
+}
+
+/// A replay sink a fake entry can read back mid-pass.
+#[derive(Clone, Default)]
+struct FakeSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for FakeSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl PretendEntry for FakePretendEntry<'_> {
+    fn entry(&self) -> &GraphEntry {
+        &self.entry
+    }
+    fn needs_pretend(&self) -> bool {
+        true
+    }
+    fn entry_tmpdir(&self) -> Result<PathBuf, String> {
+        Ok(self.log_dir.clone())
+    }
+    fn run_pretend(&self) -> PretendRun {
+        use std::sync::atomic::Ordering;
+        let name = self.entry.package.clone();
+        self.shared
+            .events
+            .lock()
+            .unwrap()
+            .push(format!("start-{name}"));
+        let running = self.shared.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.shared
+            .max_concurrent
+            .fetch_max(running, Ordering::SeqCst);
+        if let Some(need) = self.need {
+            let sink = self.shared.sink.0.lock().unwrap();
+            let seen = String::from_utf8_lossy(&sink);
+            if !seen.contains(need) {
+                self.shared.in_flight.fetch_sub(1, Ordering::SeqCst);
+                return PretendRun {
+                    log: None,
+                    result: Err(format!(
+                        "{name}: started before the previous output replayed"
+                    )),
+                };
+            }
+        }
+        // Wait (up to `delay`) until a second entry has been in flight, so an
+        // overlap shows up however loaded the machine is.
+        let deadline = std::time::Instant::now() + self.delay;
+        while self.shared.max_concurrent.load(Ordering::SeqCst) < 2
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let log = self.log_dir.join(format!("{name}.pretend.log"));
+        fs::create_dir_all(&self.log_dir).unwrap();
+        fs::write(
+            &log,
+            format!(">>> Running pre-merge checks for dev-libs/{name}-1.0\noutput-{name}\n"),
+        )
+        .unwrap();
+        self.shared
+            .events
+            .lock()
+            .unwrap()
+            .push(format!("logged-{name}:{}", log.display()));
+        self.shared
+            .events
+            .lock()
+            .unwrap()
+            .push(format!("finish-{name}"));
+        self.shared.in_flight.fetch_sub(1, Ordering::SeqCst);
+        // A failing pretend still hands back its log: the runner replays
+        // the buffered output before recording the failure.
+        if self.fail {
+            return PretendRun {
+                log: Some(log),
+                result: Err(format!("{name}: pkg_pretend failed (1)")),
+            };
+        }
+        PretendRun {
+            log: Some(log),
+            result: Ok(()),
+        }
+    }
+}
+
+fn fake_entries<'a>(
+    names: &[&str],
+    log_root: &Path,
+    shared: &'a FakeShared,
+    delay_first: std::time::Duration,
+) -> Vec<FakePretendEntry<'a>> {
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| FakePretendEntry {
+            entry: source_entry(
+                name,
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            ),
+            // The `${T}` mirror the real run composes into.
+            log_dir: log_root.join(format!("portage/dev-libs/{name}-1.0/temp")),
+            shared,
+            need: None,
+            fail: false,
+            delay: if i == 0 {
+                delay_first
+            } else {
+                std::time::Duration::ZERO
+            },
+        })
+        .collect()
+}
+
+/// Portage creates each buffered pretend log with `tempfile.mkstemp` in
+/// the package's `${T}` (`Scheduler.py:1290`), never at a predictable
+/// path: the old `$PORTAGE_TMPDIR/pretend-<pid>-<idx>.log` file (written
+/// with a truncating, symlink-following `fs::write` as root in a
+/// world-writable directory) let a planted symlink redirect the write.
+/// After the pass the sentinel is unchanged, every log is a fresh file
+/// under its entry's `${T}` with Portage's `.pretend.log` suffix, and no
+/// regular file appears at an old predictable path.
+#[test]
+fn pretend_pass_ignores_a_planted_symlink_and_logs_o_excl_under_t() {
+    let portage_tmpdir = tempdir();
+    let sentinel = portage_tmpdir.join("sentinel.txt");
+    fs::write(&sentinel, "untouched\n").unwrap();
+    let pid = std::process::id();
+    for idx in 0..2 {
+        std::os::unix::fs::symlink(
+            &sentinel,
+            portage_tmpdir.join(format!("pretend-{pid}-{idx}.log")),
+        )
+        .unwrap();
+    }
+    let shared = FakeShared::default();
+    let entries = fake_entries(
+        &["ppfa", "ppfb"],
+        &portage_tmpdir,
+        &shared,
+        std::time::Duration::ZERO,
+    );
+    let mut replay: Vec<u8> = Vec::new();
+    let failures = run_pretend_pass(RunPretendPassArgs {
+        entries: &entries,
+        jobs: 2,
+        replay: &mut replay,
+    });
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(
+        fs::read_to_string(&sentinel).unwrap(),
+        "untouched\n",
+        "the planted link was never followed"
+    );
+    for idx in 0..2 {
+        let link = portage_tmpdir.join(format!("pretend-{pid}-{idx}.log"));
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the old predictable path is still the planted link: {}",
+            link.display()
+        );
+    }
+    let events = shared.events.lock().unwrap();
+    for name in ["ppfa", "ppfb"] {
+        let logged = events
+            .iter()
+            .find_map(|e| e.strip_prefix(&format!("logged-{name}:")))
+            .unwrap_or_else(|| panic!("{name} logged to a capture file"));
+        let logged = PathBuf::from(logged);
+        let t_dir = portage_tmpdir.join(format!("portage/dev-libs/{name}-1.0/temp"));
+        assert!(
+            logged.starts_with(&t_dir),
+            "{name} logged under its ${{T}}: {}",
+            logged.display()
+        );
+        assert!(
+            logged
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".pretend.log")),
+            "{name} log carries Portage's suffix: {}",
+            logged.display()
+        );
+        assert!(
+            logged.parent() != Some(portage_tmpdir.as_path()),
+            "{name} log is not at the old predictable path: {}",
+            logged.display()
+        );
+        assert!(!logged.exists(), "the replayed log is removed");
+    }
+    // Nothing but the two planted links matches the old name shape.
+    for dir_entry in fs::read_dir(&portage_tmpdir).unwrap() {
+        let dir_entry = dir_entry.unwrap();
+        let file_name = dir_entry.file_name();
+        let file_name = file_name.to_str().unwrap();
+        if file_name.starts_with("pretend-") {
+            assert!(
+                dir_entry.file_type().unwrap().is_symlink(),
+                "no new regular pretend log: {file_name}"
+            );
+        }
+    }
+    let text = String::from_utf8_lossy(&replay);
+    let fa = text
+        .find(">>> Running pre-merge checks for dev-libs/ppfa-1.0\noutput-ppfa\n")
+        .expect("ppfa's block replays whole");
+    let fb = text
+        .find(">>> Running pre-merge checks for dev-libs/ppfb-1.0\noutput-ppfb\n")
+        .expect("ppfb's block replays whole");
+    assert!(fa < fb, "merge-list order, not finish order:\n{text}");
+    let _removed = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// Portage creates the buffered pretend log with `tempfile.mkstemp` in
+/// the package's `${T}` (`Scheduler.py:1290`): `O_EXCL` with Portage's
+/// `.pretend.log` suffix, never the old predictable path. The per-entry
+/// run composes exactly that file (status line first, then the staged
+/// capture) and hands it back for the pass to replay and remove, so the
+/// final text matches the always-buffered run byte for byte.
+#[test]
+fn pretend_log_is_created_o_excl_under_the_entry_t_dir() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let entry = source_entry(
+        "schedppa",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    let options = ebuild_merge::MergeOptions {
+        distdir: tempdir(),
+        config_root: config_root.clone(),
+        ..ebuild_merge::MergeOptions::default()
+    };
+    let wrapped = SourcePretendEntry {
+        entry: &entry,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+    };
+    let run = wrapped.run_pretend();
+    assert!(run.result.is_ok(), "{:?}", run.result);
+    let log = run.log.expect("a source entry always logs");
+    let t_dir = portage_tmpdir.join("portage/dev-libs/schedppa-1.0/temp");
+    assert_eq!(
+        log.parent(),
+        Some(t_dir.as_path()),
+        "the log lives in the entry's ${{T}}: {}",
+        log.display()
+    );
+    assert!(
+        log.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".pretend.log")),
+        "the log carries Portage's suffix: {}",
+        log.display()
+    );
+    assert!(log.is_file(), "the log is a fresh file: {}", log.display());
+    let text = fs::read_to_string(&log).unwrap();
+    assert!(
+        text.starts_with(">>> Running pre-merge checks for dev-libs/schedppa-1.0\n"),
+        "the status line heads the block: {text}"
+    );
+    assert!(
+        text.contains("SCHED-PRETEND schedppa"),
+        "the capture follows: {text}"
+    );
+    let _removed = std::fs::remove_file(&log);
+    let _removed = std::fs::remove_dir_all(&root);
+    let _removed = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// Portage clamps the pass to `max(1, min(max_jobs, len))`
+/// (`Scheduler.py:961-964`, where a bare `--jobs` counts as the entry
+/// count), and one job runs strictly sequentially: no entry starts before
+/// the previous one finishes. The buffered run still completes every
+/// entry with merge-list-order replay.
+#[test]
+fn pretend_pass_is_sequential_at_one_job_and_clamps_max_jobs() {
+    assert_eq!(pretend_max_jobs(3, 2), 2);
+    assert_eq!(pretend_max_jobs(1, 5), 1);
+    assert_eq!(pretend_max_jobs(usize::MAX, 4), 4);
+    // One job: strict start/finish sequencing, never two at once.
+    let shared = FakeShared::default();
+    let tmp_root = tempdir();
+    let entries = fake_entries(
+        &["pseqa", "pseqb"],
+        &tmp_root,
+        &shared,
+        std::time::Duration::ZERO,
+    );
+    let mut replay: Vec<u8> = Vec::new();
+    let failures = run_pretend_pass(RunPretendPassArgs {
+        entries: &entries,
+        jobs: 1,
+        replay: &mut replay,
+    });
+    assert!(failures.is_empty(), "{failures:?}");
+    let events = shared.events.lock().unwrap();
+    let pos = |marker: &str| {
+        events
+            .iter()
+            .position(|e| e == marker)
+            .unwrap_or_else(|| panic!("{marker} recorded: {events:?}"))
+    };
+    assert!(
+        pos("start-pseqa") < pos("finish-pseqa") && pos("finish-pseqa") < pos("start-pseqb"),
+        "at one job nothing interleaves: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| e.starts_with("logged-pseqa:")),
+        "the first entry logged: {events:?}"
+    );
+    assert_eq!(
+        shared
+            .max_concurrent
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "one job never overlaps"
+    );
+    // Three jobs with two entries: both run at once, replayed in
+    // merge-list order.
+    let shared = FakeShared::default();
+    let tmp_root = tempdir();
+    let entries = fake_entries(
+        &["pseqa", "pseqb"],
+        &tmp_root,
+        &shared,
+        std::time::Duration::from_secs(30),
+    );
+    let mut replay: Vec<u8> = Vec::new();
+    let failures = run_pretend_pass(RunPretendPassArgs {
+        entries: &entries,
+        jobs: 3,
+        replay: &mut replay,
+    });
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(
+        shared
+            .max_concurrent
+            .load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "two entries overlap at three jobs: {:?}",
+        shared.events.lock().unwrap()
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&replay),
+        ">>> Running pre-merge checks for dev-libs/pseqa-1.0\noutput-pseqa\n\
+         >>> Running pre-merge checks for dev-libs/pseqb-1.0\noutput-pseqb\n",
+        "buffered output replays whole, in merge-list order"
+    );
+    let _removed = std::fs::remove_dir_all(&tmp_root);
+}
+
+/// At one job each package's output is written before the next pretend
+/// starts (Portage's unbuffered path: `buffered = max_jobs > 1`,
+/// `Scheduler.py:974`). The second entry fails unless the shared sink
+/// already holds the first entry's output; above one job the same entry
+/// fails, pinning that buffering is preserved there. Either way the
+/// final text is the same status line plus phase output per entry in
+/// merge-list order, so the contract suite pins no new output shape here.
+#[test]
+fn pretend_pass_writes_each_output_before_the_next_starts_at_one_job() {
+    let shared = FakeShared::default();
+    let tmp_root = tempdir();
+    let mut entries = fake_entries(
+        &["psteama", "psteamb"],
+        &tmp_root,
+        &shared,
+        std::time::Duration::ZERO,
+    );
+    entries[1].need = Some("output-psteama");
+    let mut replay = shared.sink.clone();
+    let failures = run_pretend_pass(RunPretendPassArgs {
+        entries: &entries,
+        jobs: 1,
+        replay: &mut replay,
+    });
+    assert!(failures.is_empty(), "{failures:?}");
+    let sink = shared.sink.0.lock().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&sink),
+        ">>> Running pre-merge checks for dev-libs/psteama-1.0\noutput-psteama\n\
+         >>> Running pre-merge checks for dev-libs/psteamb-1.0\noutput-psteamb\n",
+        "at one job each block replays before the next starts"
+    );
+    // Above one job the replay is still pending mid-run, so the same
+    // entry fails: buffering is preserved.
+    let shared = FakeShared::default();
+    let tmp_root = tempdir();
+    let mut entries = fake_entries(
+        &["psteama", "psteamb"],
+        &tmp_root,
+        &shared,
+        std::time::Duration::ZERO,
+    );
+    entries[1].need = Some("output-psteama");
+    let mut replay = shared.sink.clone();
+    let failures = run_pretend_pass(RunPretendPassArgs {
+        entries: &entries,
+        jobs: 2,
+        replay: &mut replay,
+    });
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0].0, 1);
+    assert!(
+        failures[0]
+            .1
+            .contains("before the previous output replayed"),
+        "{}",
+        failures[0].1
+    );
+    let _removed = std::fs::remove_dir_all(&tmp_root);
+}
+
+/// Portage replays a failing entry's buffered output and then records
+/// the failure (`Scheduler.py:1008`, `_emit_pkg_pretend_result`; the
+/// capture is read whatever the return code, `Scheduler.py:1316-1325`).
+/// The pass replays the failing block in merge-list order at one job
+/// and above one job, and still reports the failure.
+#[test]
+fn pretend_pass_replays_a_failing_entry_output_before_recording_the_failure() {
+    for jobs in [1, 2] {
+        let shared = FakeShared::default();
+        let tmp_root = tempdir();
+        let mut entries = fake_entries(
+            &["pfailok", "pfailbad"],
+            &tmp_root,
+            &shared,
+            std::time::Duration::ZERO,
+        );
+        entries[1].fail = true;
+        let mut replay: Vec<u8> = Vec::new();
+        let failures = run_pretend_pass(RunPretendPassArgs {
+            entries: &entries,
+            jobs,
+            replay: &mut replay,
+        });
+        assert_eq!(failures.len(), 1, "jobs={jobs}: {failures:?}");
+        assert_eq!(failures[0].0, 1, "jobs={jobs}: {failures:?}");
+        let text = String::from_utf8_lossy(&replay);
+        let ok = text
+            .find("output-pfailok")
+            .unwrap_or_else(|| panic!("jobs={jobs}: the passing block replays:\n{text}"));
+        let bad = text
+            .find("output-pfailbad")
+            .unwrap_or_else(|| panic!("jobs={jobs}: the failing block replays:\n{text}"));
+        assert!(ok < bad, "jobs={jobs}: merge-list order:\n{text}");
+        let _removed = std::fs::remove_dir_all(&tmp_root);
+    }
+}
+
+/// The same pin through real phases: `schedppfail`'s `pkg_pretend`
+/// dies after an `eerror`, and its staged capture still replays, after
+/// the passing entry's block, in merge-list order, at one job and
+/// above one job. Portage: `Scheduler.py:1008`
+/// (`_emit_pkg_pretend_result`) and `Scheduler.py:1316-1325`.
+#[test]
+fn pretend_pass_replays_a_real_failing_pretend_output() {
+    for jobs in [1, 2] {
+        let config_root = fixtures_root();
+        let repos = find_repos(&config_root).unwrap();
+        let root = tempdir();
+        let portage_tmpdir = tempdir();
+        let new = |p: &str| {
+            source_entry(
+                p,
+                PretendOutcome::New {
+                    version: "1.0".into(),
+                },
+            )
+        };
+        let entries = [new("schedppseqa"), new("schedppfail")];
+        let options = ebuild_merge::MergeOptions {
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            ..ebuild_merge::MergeOptions::default()
+        };
+        let wrapped: Vec<SourcePretendEntry<'_>> = entries
+            .iter()
+            .map(|entry| SourcePretendEntry {
+                entry,
+                repos: &repos,
+                root: &root,
+                portage_tmpdir: &portage_tmpdir,
+                options: &options,
+            })
+            .collect();
+        let mut replay: Vec<u8> = Vec::new();
+        let failures = run_pretend_pass(RunPretendPassArgs {
+            entries: &wrapped,
+            jobs,
+            replay: &mut replay,
+        });
+        assert_eq!(failures.len(), 1, "jobs={jobs}: {failures:?}");
+        assert_eq!(failures[0].0, 1, "jobs={jobs}: {failures:?}");
+        assert!(
+            failures[0].1.contains("pkg_pretend failed"),
+            "jobs={jobs}: {}",
+            failures[0].1
+        );
+        let text = String::from_utf8_lossy(&replay);
+        let ok = text
+            .find("SEQA-MARKER")
+            .unwrap_or_else(|| panic!("jobs={jobs}: the passing block replays:\n{text}"));
+        let bad = text
+            .find("SCHED-PRETEND-FAIL schedppfail")
+            .unwrap_or_else(|| panic!("jobs={jobs}: the failing block replays:\n{text}"));
+        assert!(ok < bad, "jobs={jobs}: merge-list order:\n{text}");
+        let _removed = std::fs::remove_dir_all(&root);
+        let _removed = std::fs::remove_dir_all(&portage_tmpdir);
+    }
 }

@@ -141,6 +141,12 @@ tar = { version = "0.4", default-features = false }
 # (portage-fetch depends on it at this version, and the gpkg Manifest
 # tests used it as a dev-dependency) -- no new fetch.
 blake2 = "0.10"
+# The up-front `pkg_pretend` pass's capture logs: `tempfile::Builder`
+# creates each log `O_EXCL` with a random name under the package's own
+# `${T}`, so a planted symlink at the old predictable path can neither
+# be followed nor truncated. Pure Rust, no C linkage, so the
+# musl-static story is untouched.
+tempfile = "3"
 # The `mrg` applet (module mrg.rs) is deliberately allowed to use major,
 # mainstream crates -- its requirements are NOT the tight emerge/ebuild
 # ones (see mrg.rs's own module doc comment for the full waiver): clap

@@ -357,6 +357,7 @@
 - [crates/portuale/src/emerge_build/logs.rs](portuale/emerge_build/logs.md) — Build logs: per-package `build.log` placement, `PORTAGE_LOGDIR` symlinks, and failure tails.
 - [crates/portuale/src/emerge_build/merge_wait.rs](portuale/emerge_build/merge_wait.md) — Merge-wait barriers and cycle-aware build readiness for the `-j` scheduler (backlog #512).
 - [crates/portuale/src/emerge_build/mod.rs](portuale/emerge_build/mod.md) — `--buildpkgonly` execution without `--pretend`: builds a binary package per entry the pretend gate proved safe.
+- [crates/portuale/src/emerge_build/pretend_pass.rs](portuale/emerge_build/pretend_pass.md) — The up-front `pkg_pretend` pass shared by every merge plan (scheduler
 - [crates/portuale/src/emerge_build/resume.rs](portuale/emerge_build/resume.md) — `--resume` entries and their repositories.
 - [crates/portuale/src/emerge_build/scheduler.rs](portuale/emerge_build/scheduler.md) — The parallel build scheduler (`--jobs`): concurrent `install` builds, serialized vdb merges.
 - [crates/portuale/src/emerge_build/source_merge.rs](portuale/emerge_build/source_merge.md) — The source-merge loop: build, then merge, one entry at a time (serial), or via the parallel scheduler.

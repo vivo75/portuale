@@ -261,6 +261,7 @@ pub(crate) fn run_binary_merge_plan(args: RunBinaryMergePlanArgs<'_>) -> Option<
         keep_going,
         buildpkg,
         buildpkg_exclude,
+        jobs: opts.jobs,
         mode: status_mode,
     }) {
         // A merge-time binpkg digest/missing-file failure already printed

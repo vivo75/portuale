@@ -63,7 +63,7 @@ impl RemoteBinaryJob<'_> {
     // Portage: _emerge/Binpkg.py (fetchonly arm), BinpkgFetcher.py, BinpkgVerifier.py
     fn run(&self, first_job: &mut bool) -> bool {
         let entry = self.entry;
-        let Some(version) = entry_version(&entry.outcome) else {
+        let Some(version) = entry_version(entry) else {
             return true;
         };
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);
@@ -213,7 +213,7 @@ pub fn run_fetchonly(args: RunFetchonlyArgs<'_>) -> i32 {
         if !scheduler_needs_build(entry) {
             continue;
         }
-        let Some(version) = entry_version(&entry.outcome) else {
+        let Some(version) = entry_version(entry) else {
             continue;
         };
         let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, version)

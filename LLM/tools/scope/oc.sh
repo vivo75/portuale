@@ -7,5 +7,5 @@ set -u
 export XDG_RUNTIME_DIR=/run/user/$(id -u) DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
 slug=$1; agent=$2; dir=$3; brief=$4; log=$5
 cd "$dir" || exit 1   # opencode no longer has --dir (checked 2026-10-02)
-exec systemd-run --user --scope --quiet --collect --unit="oc-$slug" -p Delegate=yes \
+exec systemd-run --user --scope --quiet --collect --expand-environment=no --unit="oc-$slug" -p Delegate=yes \
   opencode run --agent "$agent" "$(cat "$brief")" > "$log" 2>&1

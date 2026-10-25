@@ -1064,6 +1064,7 @@ pub(crate) fn run_after_display(args: RunAfterDisplayArgs<'_>) -> Option<ExitCod
                 portage_tmpdir: &portage_tmpdir,
                 options: &package_options,
                 keep_going: opts.keep_going,
+                jobs,
                 mode: status_mode,
             }) {
                 eprintln!("emerge: {e}");

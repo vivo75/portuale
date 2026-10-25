@@ -88,6 +88,7 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     });
     assert!(result.is_ok());
@@ -155,6 +156,7 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     });
     assert!(result.is_ok(), "{result:?}");
@@ -225,6 +227,7 @@ fn run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_m
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     });
     let err = result.expect_err("a missing matched PORTAGE_TMPDIR must fail the entry");
@@ -301,6 +304,7 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() 
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     });
     assert!(result.is_ok(), "{result:?}");
@@ -392,6 +396,7 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     });
     assert!(result.is_ok(), "{result:?}");
@@ -462,6 +467,7 @@ fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     })
     .expect("--buildpkgonly succeeds");
@@ -533,6 +539,7 @@ fn buildpkgonly_post_cleans_the_builddir() {
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     })
     .expect("--buildpkgonly succeeds");
@@ -614,6 +621,7 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     });
     // `fetchpkg`'s fixture has a nonempty SRC_URI but no Manifest entry --
@@ -658,6 +666,7 @@ fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     });
     let err = result.expect_err("fetchpkg must still fail");
@@ -666,6 +675,99 @@ fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
         !pkgdir.join("dev-libs/packagepkg-1.0.tbz2").exists(),
         "packagepkg must never be attempted once fetchpkg fails without --keep-going"
     );
+}
+
+/// At `--jobs 1` the up-front pass replays each entry before the next
+/// starts, so the probe entry finds no buffered log and both packages
+/// build. Portage runs the pass with `--jobs` (`Scheduler.py:961-964`),
+/// clamped to the entry count -- not the entry count itself.
+#[test]
+fn run_buildpkgonly_pretend_pass_uses_jobs_not_the_entry_count() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let pkgdir = tempdir();
+    let new = |p: &str| buildpkgonly_entry("dev-libs", p, "1.0");
+    let entries = vec![new("schedppseqa"), new("schedppseqb")];
+    run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
+            debug: false,
+            pkgdir: pkgdir.clone(),
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            shell: PackageOptions::default().shell,
+            binpkg_compress: "bzip2".to_string(),
+            binpkg_format: "xpak".to_string(),
+            ..PackageOptions::default()
+        },
+        keep_going: false,
+        jobs: 1,
+        mode: StatusMode::for_tests(),
+    })
+    .expect("--buildpkgonly succeeds: the probe saw live replay");
+    for p in ["schedppseqa", "schedppseqb"] {
+        assert!(
+            pkgdir.join(format!("dev-libs/{p}-1.0.tbz2")).is_file(),
+            "{p} built"
+        );
+    }
+    let _removed = std::fs::remove_dir_all(&root);
+    let _removed = std::fs::remove_dir_all(&portage_tmpdir);
+    let _removed = std::fs::remove_dir_all(&pkgdir);
+}
+
+/// Above one job the same up-front pass stays buffered: the probe entry
+/// finds the first entry's still-buffered log and aborts before anything
+/// builds.
+#[test]
+fn run_buildpkgonly_pretend_pass_stays_buffered_above_one_job() {
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let pkgdir = tempdir();
+    let new = |p: &str| buildpkgonly_entry("dev-libs", p, "1.0");
+    let entries = vec![new("schedppseqa"), new("schedppseqb")];
+    let err = run_buildpkgonly(RunBuildpkgonlyArgs {
+        entries: &entries,
+        config: &portage_profile::Config::default(),
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &PackageOptions {
+            debug: false,
+            pkgdir: pkgdir.clone(),
+            distdir: tempdir(),
+            config_root: config_root.clone(),
+            shell: PackageOptions::default().shell,
+            binpkg_compress: "bzip2".to_string(),
+            binpkg_format: "xpak".to_string(),
+            ..PackageOptions::default()
+        },
+        keep_going: false,
+        jobs: 3,
+        mode: StatusMode::for_tests(),
+    })
+    .expect_err("the probe fails on the buffered log");
+    assert!(
+        is_reported_failure(&err),
+        "pretend failure is already reported: {err}"
+    );
+    for p in ["schedppseqa", "schedppseqb"] {
+        assert!(
+            !pkgdir.join(format!("dev-libs/{p}-1.0.tbz2")).exists(),
+            "{p} never builds after the pretend failure"
+        );
+    }
+    let _removed = std::fs::remove_dir_all(&root);
+    let _removed = std::fs::remove_dir_all(&portage_tmpdir);
+    let _removed = std::fs::remove_dir_all(&pkgdir);
 }
 
 /// With `--keep-going`, a failing entry does *not* stop the run: the rest
@@ -698,6 +800,7 @@ fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
             ..PackageOptions::default()
         },
         keep_going: true,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     });
     let err = result.expect_err("fetchpkg still fails overall");
@@ -846,6 +949,7 @@ fn build_ppatch_binpkg(cfg: &std::path::Path, pkgdir: &std::path::Path) -> std::
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     });
     assert!(result.is_ok(), "{result:?}");
@@ -977,6 +1081,7 @@ fn run_buildpkgonly_pretend_failure_aborts_before_anything_builds() {
             ..PackageOptions::default()
         },
         keep_going: false,
+        jobs: 1,
         mode: StatusMode::for_tests(),
     })
     .expect_err("a dying pretend fails the buildpkgonly run");

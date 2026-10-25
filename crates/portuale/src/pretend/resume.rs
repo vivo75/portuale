@@ -600,6 +600,7 @@ pub(crate) fn resume_merge(args: ResumeMergeArgs<'_>) -> Option<ExitCode> {
             keep_going: false,
             buildpkg: None,
             buildpkg_exclude: &[],
+            jobs,
             mode: resume_mode,
         })
     };

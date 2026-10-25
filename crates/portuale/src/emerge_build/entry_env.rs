@@ -79,7 +79,7 @@ pub(crate) fn entry_resolved_features(
     entry: &GraphEntry,
     calling_features: &str,
 ) -> Option<String> {
-    let version = entry_version(&entry.outcome)?;
+    let version = entry_version(entry)?;
     let cpv_slot = entry_cpv_slot(entry, version);
     resolved_features_for(
         &options.package_env_vars,
@@ -146,7 +146,7 @@ pub(crate) fn entry_package_env_vars(
     options: &ebuild_merge::MergeOptions,
     entry: &GraphEntry,
 ) -> Vec<(String, String)> {
-    let Some(version) = entry_version(&entry.outcome) else {
+    let Some(version) = entry_version(entry) else {
         return Vec::new();
     };
     let cpv_slot = entry_cpv_slot(entry, version);
@@ -300,7 +300,7 @@ pub(crate) fn entry_build_env(
     entry: &GraphEntry,
     repos: &[RepoConfig],
 ) -> Vec<(String, String)> {
-    let candidate = entry_version(&entry.outcome)
+    let candidate = entry_version(entry)
         .and_then(|version| locate_candidate(repos, &entry.category, &entry.package, version));
     // A package task re-reads env.d; unchanged `profile.env` keeps the
     // old path.
@@ -312,7 +312,7 @@ pub(crate) fn entry_build_env(
     env.extend(entry_package_env_vars(options, entry));
     if let (Some(config), Some(version)) = (
         reloaded.as_ref().or(options.resolved_config.as_deref()),
-        entry_version(&entry.outcome),
+        entry_version(entry),
     ) {
         env.extend(crate::ebuild_phases::package_bashrc_env(
             config,
