@@ -399,8 +399,21 @@ pub(crate) fn jobs_line(args: JobsLineArgs<'_>) -> String {
     format!(">>> {styled}")
 }
 
+/// Portage's normalised ROOT for display: exactly one trailing slash
+/// (`/` stays `/`). Every non-`/` ROOT is normalised this way at config
+/// load, so `pkg.root`/`settings['ROOT']` always carry it.
+// Portage: _config/LocationsManager.py, set_root_override
+pub(crate) fn root_with_trailing_slash(root: &Path) -> String {
+    let shown = root.display().to_string();
+    if shown.ends_with('/') {
+        shown
+    } else {
+        format!("{shown}/")
+    }
+}
+
 /// `{Emerging|Emerging binary} ({cur} of {max}) {cpv}::{repo}`, plus
-/// ` for {root}` when `ROOT != "/"`. The counters wear
+/// ` for {root}/` when `ROOT != "/"`. The counters wear
 /// `MERGE_LIST_PROGRESS`, the `cpv::repo` wears `PKG_MERGE` (source) or
 /// `PKG_BINARY_MERGE` (binary). `version` is the entry's merge version.
 // Portage: MergeListItem.py, _start
@@ -426,7 +439,7 @@ pub(crate) fn emerging_line(
     })
 }
 
-/// `Fetching ({cur} of {max}) {cpv}::{repo}[ for {root}]`, the `--fetchonly` job's status line.
+/// `Fetching ({cur} of {max}) {cpv}::{repo}[ for {root}/]`, the `--fetchonly` job's status line.
 // Portage: _emerge/EbuildBuild.py, _start (the fetchonly arm)
 pub(crate) fn fetching_line(
     entry: &GraphEntry,
@@ -485,12 +498,12 @@ fn progress_line(args: ProgressLine<'_>) -> String {
         ),
     );
     if root.as_os_str() != "/" {
-        line.push_str(&format!(" for {}", root.display()));
+        line.push_str(&format!(" for {}", root_with_trailing_slash(root)));
     }
     line
 }
 
-/// `Installing ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}` when
+/// `Installing ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}/` when
 /// `ROOT != "/"` (note: `to`, not the `for` the Emerging line uses).
 /// Same colours as [`emerging_line`].
 // Portage: PackageMerge.py, _start
@@ -522,12 +535,12 @@ pub(crate) fn installing_line(
         ),
     );
     if root.as_os_str() != "/" {
-        line.push_str(&format!(" to {}", root.display()));
+        line.push_str(&format!(" to {}", root_with_trailing_slash(root)));
     }
     line
 }
 
-/// `Completed ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}` when
+/// `Completed ({cur} of {max}) {cpv}::{repo}`, plus ` to {root}/` when
 /// `ROOT != "/"`. Same colours and suppression as [`installing_line`].
 // Portage: PackageMerge.py, _install_exit
 pub(crate) fn completed_line(
@@ -558,7 +571,7 @@ pub(crate) fn completed_line(
         ),
     );
     if root.as_os_str() != "/" {
-        line.push_str(&format!(" to {}", root.display()));
+        line.push_str(&format!(" to {}", root_with_trailing_slash(root)));
     }
     line
 }

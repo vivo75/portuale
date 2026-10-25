@@ -104,15 +104,15 @@ fn merge_progress_lines_match_portage_exact_text() {
     let alt = Path::new("/altroot");
     assert_eq!(
         emerging_line(&a, "1.0", two_of_three, alt, &plain),
-        ">>> Emerging (2 of 3) dev-libs/a-pkg-1.0::testrepo for /altroot"
+        ">>> Emerging (2 of 3) dev-libs/a-pkg-1.0::testrepo for /altroot/"
     );
     assert_eq!(
         installing_line(&a, "1.0", two_of_three, alt, &plain),
-        ">>> Installing (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot"
+        ">>> Installing (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot/"
     );
     assert_eq!(
         completed_line(&a, "1.0", two_of_three, alt, &plain),
-        ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot"
+        ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot/"
     );
 
     // Colour on: only the two counters and the `cpv::repo` wear escapes; the
@@ -129,6 +129,53 @@ fn merge_progress_lines_match_portage_exact_text() {
     assert_eq!(
         installing_line(&a, "1.0", two_of_three, root, &live),
         ">>> Installing (\x1b[33;01m2\x1b[39;49;00m of \x1b[33;01m3\x1b[39;49;00m) \x1b[32mdev-libs/a-pkg-1.0::testrepo\x1b[39;49;00m"
+    );
+}
+
+/// Backlog #566: Portage prints its normalised ROOT (exactly one
+/// trailing slash; `LocationsManager.set_root_override`) on the merge
+/// progress lines, via `pkg.root` on every merge path. Oracle: the
+/// `probe-merge.sh` `14-merge-match` Portage output
+/// (`LLM/evidence/2026-10-23-509/probe-merge.sh`): `>>> Emerging binary
+/// ... for <root>/`, `>>> Installing ... to <root>/`, `>>> Completed
+/// ... to <root>/`.
+/// Portage: PackageMerge.py, _make_msg; MergeListItem.py:77-78.
+#[test]
+fn merge_progress_roots_carry_portages_trailing_slash() {
+    use std::path::Path;
+    let plain = crate::color::Colorizer::new(false);
+    let alt = Path::new("/altroot");
+    let two_of_three = mrg_director::MergeProgress { cur: 2, max: 3 };
+    let a = source_entry(
+        "a-pkg",
+        PretendOutcome::New {
+            version: "1.0".into(),
+        },
+    );
+    let mut b = source_entry(
+        "b-pkg",
+        PretendOutcome::New {
+            version: "2.0".into(),
+        },
+    );
+    b.source = CandidateSource::Binary;
+    assert_eq!(
+        emerging_line(&b, "2.0", two_of_three, alt, &plain),
+        ">>> Emerging binary (2 of 3) dev-libs/b-pkg-2.0::testrepo for /altroot/"
+    );
+    assert_eq!(
+        installing_line(&a, "1.0", two_of_three, alt, &plain),
+        ">>> Installing (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot/"
+    );
+    assert_eq!(
+        completed_line(&a, "1.0", two_of_three, alt, &plain),
+        ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot/"
+    );
+    // A root that already carries the slash never doubles it.
+    let slashed = Path::new("/altroot/");
+    assert_eq!(
+        completed_line(&a, "1.0", two_of_three, slashed, &plain),
+        ">>> Completed (2 of 3) dev-libs/a-pkg-1.0::testrepo to /altroot/"
     );
 }
 

@@ -28,7 +28,7 @@
 
 ## fn unmerge_display_header_text (#521)
 - `_unmerge_display`'s two opening lines, as text so the unit test can pin them: for a non-`/` ROOT, `newline + ">>> Using system located in ROOT tree <ROOT>/"` (Portage's `settings["ROOT"]` already carries the trailing slash); under `--pretend`/`--ask`, `newline + ">>> These are the packages that would be unmerged:"`. `newline` is `"\n"` unless `--quiet`, hence the leading blank line on both. Shared by `-C`, `--clean`/`--rage-clean`, `--prune` and `--depclean`; `print_unmerge_display_header` is the printing wrapper. The legend block closes with a blank line (`unmerge.py:563-569` prints `...will not be removed.\n\n`).
-
+- Backlog #566: the header renders through the shared `emerge_build::root_with_trailing_slash` now (byte-identical output for slash-less roots; a root that already ends in `/` no longer doubles it, matching Portage's normalised form). Behaviour-preserving by construction; the existing `ROOT tree /tmp/some-root/` pins stayed green untouched.
 ## fn print_unmerge_selection
 - System warning: Portage's `_unmerge_display` `if not (protected or omitted) and cp in syslist`, to stderr (Portage's `writemsg_level(..., level=logging.WARNING)`).
 - `syslist = root_config.sets["system"].getAtoms()`.

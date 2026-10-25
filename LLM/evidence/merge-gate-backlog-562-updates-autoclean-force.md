@@ -25,3 +25,13 @@ sides, `app-shells/bash-5.3_p20` merge_rc 0 both sides; hard findings
 diffs 0). No movement vs the #556 gate-cell run (still 0/0/0).
 
 Verdict: PASSED, no regressions.
+
+## Addendum: Task 8 (#566) needs no re-run
+
+Task 8 changed string formatting only (`root_with_trailing_slash`
+in `emerge_build/status.rs` for the Emerging/Fetching/Installing/
+Completed display lines; a byte-identical-except-`//` hunk in
+`pretend/removal/unmerge.rs` display text). No file operations, no
+merge ordering, no `ebuild_merge/`, no unmerge-half behavior changed —
+so this gate's 0/0/0 verdict stands for the combined Tasks 7+8 tree.
+Full suite re-gated green after Task 8 (4498 passed, zero drift).

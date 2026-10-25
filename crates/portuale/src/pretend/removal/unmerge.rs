@@ -1,5 +1,6 @@
 //! `--unmerge`: listing and removing installed packages.
 
+use crate::emerge_build::root_with_trailing_slash;
 use crate::pretend::*;
 
 /// The "still listed in the following package sets" check for one selected
@@ -379,8 +380,8 @@ pub(crate) fn unmerge_display_header_text(
         out.push_str(&color.c(
             "darkgreen",
             &format!(
-                "{newline}>>> Using system located in ROOT tree {}/",
-                root.display()
+                "{newline}>>> Using system located in ROOT tree {}",
+                root_with_trailing_slash(root)
             ),
         ));
         out.push('\n');
