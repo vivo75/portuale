@@ -261,6 +261,8 @@ pub(crate) fn run_one_phase_bash(args: RunOnePhaseBashArgs<'_>) -> Result<i32, S
         argv_word: phase,
         vars,
         iso,
+        category: &env.category,
+        pf: &env.split.pf,
         log_file,
         context: &format!("phase {phase}"),
         interactive: properties_name_interactive(env),

@@ -646,4 +646,40 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A valid on-disk entry skips the `depend` phase entirely: the ebuild
+    /// below cannot be sourced, so `Ok` plus an untouched cache file proves
+    /// no phase ran.
+    /// Portage: MetadataRegen._iter_metadata_processes (MetadataRegen.py:114-120).
+    #[test]
+    fn regen_one_skips_the_depend_phase_for_a_valid_cache_entry() {
+        let dir = TempDir::new("portuale-regen-skip").keep();
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        let ebuild = repo.join("dev-libs/pkg/pkg-1.0.ebuild");
+        std::fs::create_dir_all(ebuild.parent().unwrap()).unwrap();
+        // Unsourcable on purpose: reaching the phase is the failure.
+        let ebuild_bytes = b"EAPI=8\nthis is not valid bash (((\n";
+        std::fs::write(&ebuild, ebuild_bytes).unwrap();
+        let cache_file = repo.join("metadata/md5-cache/dev-libs/pkg-1.0");
+        std::fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
+        let entry = format!("EAPI=8\n_md5_={:x}\n", Md5::digest(ebuild_bytes));
+        std::fs::write(&cache_file, &entry).unwrap();
+
+        let tmp = dir.join("tmp");
+        let r = regen_one(RegenOneArgs {
+            ebuild_path: &ebuild,
+            repo_location: &repo,
+            masters: &[],
+            category: "dev-libs",
+            pf: "pkg-1.0",
+            root: &tmp,
+            config_root: &tmp,
+            portage_tmpdir: &tmp,
+            debug: false,
+        });
+        assert!(r.is_ok());
+        assert_eq!(std::fs::read_to_string(&cache_file).unwrap(), entry);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

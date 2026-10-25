@@ -108,6 +108,8 @@ fn run_script(dir: &Path, phase: &str, body: &str, interactive: bool) -> i32 {
         argv_word: phase,
         vars: Vec::new(),
         iso: Isolation::default(),
+        category: "test-cat",
+        pf: "test-pf-1.0",
         log_file: PhaseLog::Capture(&dir.join("phase.log")),
         context: phase,
         interactive,

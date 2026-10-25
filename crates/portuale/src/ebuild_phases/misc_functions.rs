@@ -219,6 +219,8 @@ pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Res
         argv_word: dyn_command,
         vars,
         iso,
+        category: &env.category,
+        pf: &env.split.pf,
         log_file,
         context: dyn_command,
         interactive: false,

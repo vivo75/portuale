@@ -94,19 +94,10 @@ pub(crate) fn run_autoclean_after_merge(args: RunAutocleanAfterMergeArgs<'_>) {
         color,
     } = args;
     println!(">>> Auto-cleaning packages...");
-    // Only for a non-`/` ROOT, like the manual removal paths do in
-    // Portage (this line is an auto-clean-only addition: the manual
-    // `--clean` path still does not print it).
-    // Portage: _emerge/unmerge.py, _unmerge_display
-    if root != Path::new("/") {
-        println!(
-            "\n{}",
-            color.c(
-                "darkgreen",
-                &format!(">>> Using system located in ROOT tree {}/", root.display())
-            )
-        );
-    }
+    // The `>>> Using system located in ROOT tree <root>/` notice for a
+    // non-`/` ROOT comes from the shared clean path's display header
+    // (`print_unmerge_display_header`), exactly once, as in Portage.
+    // Portage: _emerge/actions.py, action_build; _emerge/unmerge.py, _unmerge_display
     let _ = run_prune_nodeps_or_clean(RunPruneNodepsOrCleanArgs {
         targets: &[],
         root,

@@ -96,3 +96,78 @@ fn autoclean_no_outdated_arm_changes_nothing() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Backlog #560 (fix round): with a user-set `AUTOCLEAN=yes`, the
+/// post-merge tail prints `>>> Using system located in ROOT tree
+/// <root>/` exactly once. Portage prints it inside `_unmerge_display`
+/// (`unmerge.py:187-193`, no action gate); portuale's
+/// `run_autoclean_after_merge` wrapper printed it too, doubling the
+/// line (live `AUTOCLEAN=yes` merge proof in the task report; the
+/// shared `run_prune_nodeps_or_clean` header is the single Portage
+/// source). AUTOCLEAN=no/default silence needs no new pin: the gate
+/// stays off by `autoclean_gate_reads_the_resolved_autoclean_value`
+/// and the wrapper is only reachable through it (`mod.rs`, both
+/// untouched). Re-exec pattern per
+/// `vdb_fuse::tests::a_detached_daemon_writes_its_stderr_to_the_log_file`:
+/// the child runs the printing scenario, the parent counts the lines.
+#[test]
+fn autoclean_tail_prints_the_using_system_header_exactly_once() {
+    if std::env::var_os("PORTUALE_AUTOCLEAN_TAIL_CHILD").is_some() {
+        let color = crate::color::Colorizer::new(false);
+        let root = TempDir::new("autoclean_tail_once").keep();
+        let entry = root.join("var/db/pkg/dev-libs/solo-1");
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("SLOT"), "0\n").unwrap();
+        std::fs::write(entry.join("COUNTER"), "1\n").unwrap();
+        std::fs::write(entry.join("CONTENTS"), "").unwrap();
+        let config = portage_profile::Config::default();
+        run_autoclean_after_merge(RunAutocleanAfterMergeArgs {
+            root: &root,
+            config_root: &root,
+            config: &config,
+            repos: &[],
+            shell: crate::ebuild_phases::ShellBackend::default(),
+            debug: false,
+            ask: false,
+            quiet: false,
+            noinfo: true,
+            color: &color,
+        });
+        let _ = std::fs::remove_dir_all(&root);
+        return;
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--test-threads=1",
+            "--exact",
+            "pretend::tests::autoclean::autoclean_tail_prints_the_using_system_header_exactly_once",
+            "--nocapture",
+        ])
+        .env("PORTUALE_AUTOCLEAN_TAIL_CHILD", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "child scenario run failed");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|l| l.contains(">>> Using system located in ROOT tree"))
+            .count(),
+        1,
+        "the header must print exactly once; full child stdout:\n{stdout}"
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|l| l.contains(">>> Auto-cleaning packages..."))
+            .count(),
+        1,
+        "the opening line must print exactly once; full child stdout:\n{stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l == ">>> No outdated packages were found on your system."),
+        "the empty-clean line must survive the fix; full child stdout:\n{stdout}"
+    );
+}

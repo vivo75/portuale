@@ -660,6 +660,10 @@ pub(crate) struct SpawnBashScriptArgs<'a> {
     pub(crate) argv_word: &'a str,
     pub(crate) vars: Vec<(String, String)>,
     pub(crate) iso: Isolation,
+    /// The phase's `CATEGORY` and `PF`: the spawn names itself
+    /// `[<cat>/<pf>] bash|sandbox` after Portage's `spawn` `opt_name`.
+    pub(crate) category: &'a str,
+    pub(crate) pf: &'a str,
     pub(crate) log_file: PhaseLog<'a>,
     /// Names the spawn in its failure message (`"phase setup"` reads
     /// `spawning real bash for phase setup failed: …`).
@@ -682,6 +686,8 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
         argv_word,
         vars,
         iso,
+        category,
+        pf,
         log_file,
         context,
         interactive,
@@ -690,7 +696,13 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
     // drop order destroys them after `cmd`, on every path.
     let mut pump_guard: Option<LogPump> = None;
     let mut tee_guard: Option<TeePump> = None;
-    let mut cmd = sandbox_wrapped_command(script, argv_word, iso);
+    // Portage: doebuild.py, spawn (:2243-2261) — ` bash` when free
+    // (no sandbox wrapper here) or already inside one (`SANDBOX_ACTIVE`
+    // in the parent env), ` sandbox` otherwise. No fakeroot wrapper,
+    // so no third suffix.
+    let sandboxed = iso.fs_sandbox && std::env::var_os("SANDBOX_ACTIVE").is_none();
+    let opt_name = phase_opt_name(category, pf, sandboxed);
+    let mut cmd = sandbox_wrapped_command(script, argv_word, iso, &opt_name);
     // Curated env only, like Portage: only whitelisted calling-env vars pass through;
     // the caller-computed `vars` set the rest on top.
     cmd.env_clear();

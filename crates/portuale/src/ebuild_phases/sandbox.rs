@@ -291,19 +291,44 @@ pub(crate) fn phase_isolation(env: &Environment, phase: &str, features: &str) ->
     iso
 }
 
+/// Portage's `spawn` `opt_name`: `[<cat>/<pf>]` plus ` bash` when the
+/// phase runs free, ` sandbox` when sandboxed. Portage emits ` fakeroot`
+/// under its fakeroot wrapper; portuale has none, so it never appears.
+/// Empty `CATEGORY`/`PF` stays empty, like Portage's `mycpv is None`
+/// `[{CATEGORY}/{PF}]` fallback.
+/// Portage: doebuild.py, spawn (:2243-2261)
+pub(crate) fn phase_opt_name(category: &str, pf: &str, sandboxed: bool) -> String {
+    let suffix = if sandboxed { " sandbox" } else { " bash" };
+    format!("[{category}/{pf}]{suffix}")
+}
+
+/// Single-quote `s` for embedding in the shell shim below.
+fn sh_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// A blocking `Command` running `bash <script> <arg>` (Portage's `EBUILD_SH_BINARY`
-/// shape) wrapped per `iso`:
-/// `unshare <flags> -- sh -c '<config>; exec "$@"' _ [sandbox] bash <script> <arg>`.
-/// The `sh` shim configures inside each namespace what Portage's `_exec2` does
+/// shape) wrapped per `iso`, running under `opt_name` (Portage's `spawn`
+/// `opt_name`, via [`phase_opt_name`]):
+/// `unshare <flags> -- bash -c '<config>; exec -a '<opt>' "$@"' portuale-sandbox [sandbox] bash <script> <arg>`.
+/// The `bash -c` shim configures inside each namespace what Portage's `_exec2` does
 /// (loopback + workaround addresses for `--net`, `--make-rslave` for `--mount`);
 /// `bin/*.sh` itself does the `SANDBOX_ON`/`addread`/`addwrite` setup from the env.
-/// Portage: doebuild.py, process.py
+/// `bash` (not `sh`) interprets the shim because only it provides `exec -a`;
+/// `sh` may be dash. The outer `unshare` keeps its own name: Portage has no
+/// such wrapper process (it unshares via `unshare(2)` in the child). The
+/// in-process `--shell brush` backend has no child at all (a cut, not a
+/// divergence). `arg0` renames only `argv[0]`; `get_args` still starts at
+/// the real binary.
+/// Portage: doebuild.py, spawn (:2243-2261); process.py, _exec (:1027-1036)
 pub(crate) fn sandbox_wrapped_command(
     script: &Path,
     arg: &str,
     iso: Isolation,
+    opt_name: &str,
 ) -> std::process::Command {
     use std::ffi::OsString;
+    use std::os::unix::process::CommandExt as _;
 
     let mut argv: Vec<OsString> = Vec::new();
     if iso.fs_sandbox {
@@ -319,6 +344,7 @@ pub(crate) fn sandbox_wrapped_command(
     if !iso.any_unshare() {
         let mut c = std::process::Command::new(&argv[0]);
         c.args(&argv[1..]);
+        c.arg0(opt_name);
         return c;
     }
 
@@ -333,12 +359,12 @@ pub(crate) fn sandbox_wrapped_command(
     if iso.mount {
         shim.push_str("mount --make-rslave / 2>/dev/null; ");
     }
-    shim.push_str("exec \"$@\"");
+    shim.push_str(&format!("exec -a {} \"$@\"", sh_single_quote(opt_name)));
 
     let mut c = std::process::Command::new("unshare");
     c.args(iso.unshare_flags())
         .arg("--")
-        .arg("sh")
+        .arg("bash")
         .arg("-c")
         .arg(shim)
         .arg("portuale-sandbox")
