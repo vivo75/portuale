@@ -90,6 +90,10 @@ pub(crate) struct RevDepPin {
     pub(crate) atom: String,
     /// Verbatim text (with `[use]` deps), for notices only.
     pub(crate) raw_atom: String,
+    /// Built `:S/SS=` atoms the consumer recorded against `cp`, verbatim.
+    /// Never constrains (the stripped `atom` does that); only the
+    /// skip-block printer renders them, one extra parent row each.
+    pub(crate) built_render: Vec<String>,
     /// The installed consumer `(category, package, version)`.
     pub(crate) consumer: (String, String, String),
 }
@@ -282,6 +286,10 @@ pub(crate) struct ReverseDependencyConstraintsArgs<'a> {
 /// (constrained cp, pin atom, pinning consumer) already emitted this pass.
 type SeenPin = ((String, String), String, (String, String, String));
 
+/// (upgraded `cat/pkg`, pinning consumer) -> verbatim built `:S/SS=` atoms
+/// that consumer recorded against it, seen while scanning this pass.
+type BuiltSeenMap = HashMap<((String, String), (String, String, String)), Vec<String>>;
+
 /// (`cat/pkg`, slot) -> the candidate string this run would install, and whether it changes the slot.
 type UpgradingMap = HashMap<((String, String), String), (String, bool)>;
 
@@ -407,6 +415,7 @@ pub(crate) fn reverse_dependency_constraints(
     let mut enforced: Vec<RevDepPin> = Vec::new();
     let mut dropped: Vec<RevDepPin> = Vec::new();
     let mut seen: HashSet<SeenPin> = HashSet::new();
+    let mut built_seen: BuiltSeenMap = HashMap::new();
     // Per-pass `Effective`-layer cache (one overlay per instance).
     let mut meta_memo: HashMap<(String, String, String, String), String> = HashMap::new();
     'consumer: for consumer in all_installed_packages(root).iter() {
@@ -428,6 +437,7 @@ pub(crate) fn reverse_dependency_constraints(
             upgrading: &upgrading,
             use_breaks: &use_breaks,
             seen: &mut seen,
+            built_seen: &mut built_seen,
             dropped: &mut dropped,
             hard_want,
             enforced: &mut enforced,
@@ -435,6 +445,18 @@ pub(crate) fn reverse_dependency_constraints(
         .is_break()
         {
             continue 'consumer;
+        }
+    }
+    // The built atoms rode along untouched by every mask/restart decision
+    // above; attach them to their consumer's pins for the printer only.
+    for pin in enforced.iter_mut().chain(dropped.iter_mut()) {
+        if let Some(raws) = built_seen.remove(&(pin.cp.clone(), pin.consumer.clone())) {
+            raws.into_iter().for_each(|raw| {
+                if !pin.built_render.contains(&raw) {
+                    pin.built_render.push(raw);
+                }
+            });
+            pin.built_render.sort();
         }
     }
     enforced.sort();
@@ -461,6 +483,7 @@ pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     pub(crate) upgrading: &'a UpgradingMap,
     pub(crate) use_breaks: &'a HashMap<((String, String), String), UseBreakSource>,
     pub(crate) seen: &'a mut HashSet<SeenPin>,
+    pub(crate) built_seen: &'a mut BuiltSeenMap,
     pub(crate) dropped: &'a mut Vec<RevDepPin>,
     pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) enforced: &'a mut Vec<RevDepPin>,
@@ -486,6 +509,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         upgrading,
         use_breaks,
         seen,
+        built_seen,
         dropped,
         hard_want,
         enforced,
@@ -553,15 +577,20 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
             continue;
         };
+        // A `||` branch Portage's `dep_zapdeps` demotes (not the
+        // vdb-selected arm) is no parent atom at all: it never pins.
+        let demoted = or_branch_vdb_deselected_set(root, &depstr, &use_flags);
         'atom: for atom_str in atoms {
             if constraints_from_atom(ConstraintsFromAtomArgs {
                 atom_str: &atom_str,
+                demoted: &demoted,
                 upgrading,
                 dep_key,
                 use_breaks,
                 use_flags: &use_flags,
                 consumer,
                 seen,
+                built_seen,
                 dropped,
                 hard_want,
                 root,
@@ -580,12 +609,16 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
 /// The values [`constraints_from_atom`] reads from its caller.
 pub(crate) struct ConstraintsFromAtomArgs<'a> {
     pub(crate) atom_str: &'a str,
+    /// `||`-branch texts (verbatim and constraint-normalised) demoted by
+    /// `or_branch_vdb_deselected_set`: never parent atoms, never pins.
+    pub(crate) demoted: &'a HashSet<String>,
     pub(crate) upgrading: &'a UpgradingMap,
     pub(crate) dep_key: &'a &'a str,
     pub(crate) use_breaks: &'a HashMap<((String, String), String), UseBreakSource>,
     pub(crate) use_flags: &'a HashSet<String>,
     pub(crate) consumer: &'a InstalledPackage,
     pub(crate) seen: &'a mut HashSet<SeenPin>,
+    pub(crate) built_seen: &'a mut BuiltSeenMap,
     pub(crate) dropped: &'a mut Vec<RevDepPin>,
     pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) root: &'a Path,
@@ -597,12 +630,14 @@ pub(crate) struct ConstraintsFromAtomArgs<'a> {
 pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> ControlFlow<()> {
     let ConstraintsFromAtomArgs {
         atom_str,
+        demoted,
         upgrading,
         dep_key,
         use_breaks,
         use_flags,
         consumer,
         seen,
+        built_seen,
         dropped,
         hard_want,
         root,
@@ -618,6 +653,26 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     let cp = (atom.category.clone(), atom.package.clone());
     let built_slot_op = is_built_slot_op(&atom);
     let constraint = reverse_dep_constraint_atom(atom_str, &atom);
+    // Demoted `||` branches are no parent atoms: neither constraint nor
+    // rendering may see them.
+    if demoted.contains(atom_str) || demoted.contains(constraint.as_str()) {
+        return ControlFlow::Break(());
+    }
+    // The built atom rides to the printer verbatim; the stripped constraint
+    // below still drives every mask/restart decision, exactly as before.
+    if built_slot_op && upgrading.keys().any(|(ucp, _)| *ucp == cp) {
+        built_seen
+            .entry((
+                cp.clone(),
+                (
+                    consumer.category.clone(),
+                    consumer.package.clone(),
+                    consumer.version.clone(),
+                ),
+            ))
+            .or_default()
+            .push(atom_str.split('[').next().unwrap_or(atom_str).to_string());
+    }
     // Collect every slot whose upgrade breaks the pin. Slot-change
     // reinstalls probe the verbatim atom; Upgrade/Downgrade the
     // stripped constraint (built bindings are rebuild triggers).
@@ -681,6 +736,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
                     cp: cp.clone(),
                     atom: evaluated,
                     raw_atom: atom_str.to_string(),
+                    built_render: Vec::new(),
                     consumer: (
                         consumer.category.clone(),
                         consumer.package.clone(),
@@ -708,6 +764,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         cp: cp.clone(),
         atom: pin_atom,
         raw_atom: atom_str.to_string(),
+        built_render: Vec::new(),
         consumer: (
             consumer.category.clone(),
             consumer.package.clone(),

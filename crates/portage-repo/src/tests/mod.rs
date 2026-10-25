@@ -1560,6 +1560,7 @@ fn residual_161_pin() -> RevDepPin {
         cp: ("dev-libs".to_string(), "souprov".to_string()),
         atom: "=dev-libs/souprov-1.0:0/1".to_string(),
         raw_atom: "=dev-libs/souprov-1.0:0/1".to_string(),
+        built_render: Vec::new(),
         consumer: (
             "dev-libs".to_string(),
             "conpkg".to_string(),

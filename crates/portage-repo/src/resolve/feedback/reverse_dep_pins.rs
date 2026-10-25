@@ -144,6 +144,14 @@ fn dropped_pin_mask_restart(
             if or_branch_superseded(ctx, pass, pin) {
                 continue;
             }
+            // The consumer's recorded built `:S/SS=` atoms render alongside
+            // the pin (Portage prints both forms); they never constrained.
+            for built in &pin.built_render {
+                let built_parent = (pin.consumer.clone(), built.clone());
+                if !parents.contains(&built_parent) {
+                    parents.push(built_parent);
+                }
+            }
             let parent = (pin.consumer.clone(), pin.atom.clone());
             if !parents.contains(&parent) {
                 parents.push(parent);
@@ -326,6 +334,90 @@ fn or_member_alternate_route(
             .iter()
             .any(|m| or_member_alternate_route(m, pin_cp, merge_candidates)),
     }
+}
+
+/// Whether the member is satisfied by what is installed right now: a plain
+/// atom matching an installed instance of its own package, a conjunction
+/// only when every leg is, a nested `||` when any leg is. Blockers and
+/// unparseable text never match.
+fn or_member_matches_installed(member: &DepItem, root: &Path) -> bool {
+    match member {
+        DepItem::Atom(text) => {
+            let probe = portage_dep::without_use(text).to_string();
+            parse_dep_atom(text, "dropped_pin_vdb_select").is_some_and(|a| {
+                a.blocker == portage_dep::Blocker::None
+                    && installed_refs(root, &a.category, &a.package)
+                        .iter()
+                        .any(|r| {
+                            let cand = format!(
+                                // match-str-ok: installed ref row (r.repo), not a Candidate
+                                "{}/{}-{}:{}/{}::{}",
+                                a.category, a.package, r.version, r.slot, r.sub_slot, r.repo
+                            );
+                            let candidates = [cand.as_str()];
+                            portage_dep::match_from_list(&probe, &candidates)
+                                .is_some_and(|m| !m.is_empty())
+                        })
+            })
+        }
+        DepItem::All(members) => members.iter().all(|m| or_member_matches_installed(m, root)),
+        DepItem::Any(members) => members.iter().any(|m| or_member_matches_installed(m, root)),
+    }
+}
+
+/// Every flat atom text inside the member (through conjunctions).
+fn or_member_flat_atoms(member: &DepItem) -> Vec<&String> {
+    match member {
+        DepItem::Atom(text) => vec![text],
+        DepItem::All(members) | DepItem::Any(members) => {
+            members.iter().flat_map(or_member_flat_atoms).collect()
+        }
+    }
+}
+
+/// `||`-branch texts of `depstr` that Portage's `dep_zapdeps` demotes: a
+/// member that does not match its own installed instance while a sibling
+/// member does (the installed-preferred arm wins, and only it ever becomes
+/// a parent atom). Returned verbatim plus constraint-normalised, so both
+/// the flat token and the stripped pin text compare equal. Empty when
+/// `depstr` holds no `||` group, fails to parse, or selects nothing (then
+/// every arm stays, today's behaviour).
+// Portage: dep_check.py, dep_zapdeps (installed-preference bins)
+pub(crate) fn or_branch_vdb_deselected_set(
+    root: &Path,
+    depstr: &str,
+    use_flags: &HashSet<String>,
+) -> HashSet<String> {
+    let mut demoted = HashSet::new();
+    if !depstr.contains("||") {
+        return demoted;
+    }
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    let Some((items, pos)) = parse_dep_level(&tokens, 0, use_flags) else {
+        return demoted;
+    };
+    if pos != tokens.len() {
+        return demoted;
+    }
+    let mut groups: Vec<&Vec<DepItem>> = Vec::new();
+    collect_any_groups(&items, &mut groups);
+    for group in groups {
+        if !group.iter().any(|m| or_member_matches_installed(m, root)) {
+            continue;
+        }
+        for member in group {
+            if or_member_matches_installed(member, root) {
+                continue;
+            }
+            for text in or_member_flat_atoms(member) {
+                demoted.insert(text.clone());
+                if let Some(a) = parse_dep_atom(text, "dropped_pin_vdb_select") {
+                    demoted.insert(reverse_dep_constraint_atom(text, &a));
+                }
+            }
+        }
+    }
+    demoted
 }
 
 /// Whether the pin comes from a `||` branch the merge satisfies elsewhere:
@@ -516,8 +608,18 @@ pub(crate) fn step_reverse_dep_pins(
                     if !bucket.iter().any(|m| m.neg == neg) {
                         bucket.push(MaskEntry {
                             neg: neg.clone(),
+                            // The built `:S/SS=` form renders first, like
+                            // Portage's missed-update parents.
                             reason: MaskReason::SlotConflict {
-                                parents: vec![(pin.consumer.clone(), pin.atom.clone())],
+                                parents: pin
+                                    .built_render
+                                    .iter()
+                                    .map(|built| (pin.consumer.clone(), built.clone()))
+                                    .chain(std::iter::once((
+                                        pin.consumer.clone(),
+                                        pin.atom.clone(),
+                                    )))
+                                    .collect(),
                             },
                         });
                         grown.mask_order.push((pin.cp.clone(), neg));

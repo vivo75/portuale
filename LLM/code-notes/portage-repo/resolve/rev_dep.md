@@ -11,6 +11,22 @@ Constraints that installed reverse dependencies put on an upgrade.
 - A live slot-operator atom is the `:=` family without a built `:S/SS=` binding.
 - The bare slot-operator suffix form (`<cat/pkg-2:=`: an operator with no slot) never parses in `portage_dep` (its slot part hangs off a `:`), but Portage `Atom` accepts it -- and it is always live (no `:S/SS` binding to be built).
 
+## fn reverse_dep_constraint_atom
+- Portage `_slot_operator_check_reverse_dependencies`' own constraint
+  normalisation (`lib/_emerge/depgraph.py:2494-2502`): a **built**
+  slot-operator atom (`cat/pkg:S/SS=`) strips to the bare cp for
+  *matching* (textually equivalent to `with_slot("=")` here, since the
+  matcher ignores a bare `:=` either way). `[use-dep]` components are
+  dropped too (allow-only; see `is_built_slot_op`'s notes).
+- Backlog #568 deliberately does NOT change this function: its result is
+  the constraint the resolver records (`constraints_from_atom`) and the
+  key `or_member_matches_pin` / `dropped_pin_mask_restart` match pins by.
+  The built atom survives for *rendering* only, as `RevDepPin.built_render`
+  (attached post-scan in `reverse_dependency_constraints`), so every
+  mask/restart decision is byte-identical with the field present or
+  absent. If the strip ever looks wrong for constraints too, that is a
+  separate bed-wide change — stop and re-open instead of touching it.
+
 ## fn relax_built_slot_operator_atom
 - Portage `Atom.with_slot("=")` as `_slot_operator_check_reverse_dependencies` applies it (`lib/_emerge/depgraph.py:2494-2502`): a parent whose atom is a **built** slot-operator atom "may need to be rebuilt, therefore discard its soname and built slot operator dependency components" -- the recorded `:S/SS=` binding is relaxed to bare `:=`, keeping the version operator, any `[use]` deps and any `::repo`. The relaxed atom schedules a consumer rebuild, never a withhold: `>=dev-libs/provpkg-1.0:0/1=` still accepts the `0/2`-slot `provpkg-2.0` candidate, while `<dev-libs/r25lib-2.0:0/1=` still rejects `r25lib-2.0`.
 - Unlike `reverse_dep_constraint_atom` (which drops the `=` as well as the slot, equivalently, for *matching*), this keeps the operator so the result stays a faithful `with_slot("=")` rendering.
@@ -23,6 +39,18 @@ Constraints that installed reverse dependencies put on an upgrade.
 ## struct RevDepPin
 - Portage's complete graph carries the consumer as a nomerge node (`_add_pkg` of the installed package); portuale carries the `(cp, atom, consumer)` triple instead, which is everything the backtrack loop and the residual-conflict report need from the node.
 - `raw_atom`: matching always uses `atom`; the skip-conflict notice renders what Portage renders -- the consumer's own recorded text (S2/#92 oracle: qemu's `~...-202408[qemu_softmmu_targets_x86_64(+)]`).
+- `built_render` (backlog #568): built `:S/SS=` atoms the consumer
+  recorded against `cp`, verbatim. Never constrains — collected into a
+  per-pass side table (`BuiltSeenMap`) while scanning (even when the
+  stripped constraint matches everything and yields no pin of its own)
+  and attached to the consumer's pins post-scan, so the skip-block
+  printer renders Portage's both-forms block (`_show_missed_update`
+  prints every non-matching `_parent_atoms` entry verbatim). Sorted and
+  deduped; not part of the `seen` dedup key, so mask/restart matching is
+  untouched. Ordering note: Portage collects those parents into a `set`
+  (`depgraph.py:2116-2121`), so its intra-block order is hash order and
+  varies run to run — portuale renders the built form first,
+  deterministically.
 
 ## fn rev_dep_pin_holdable
 - Portage's `_select_pkg_highest_available` seeing "the whole atom set for a package, not just the first" (`depgraph.py`), with the installed consumer's own atom among them.
@@ -65,6 +93,17 @@ Constraints that installed reverse dependencies put on an upgrade.
 - The enforced/dropped atom text: verbatim when a built slot-operator binding fired through a slot-change reinstall (withholding the reinstall keeps the recorded binding satisfied); the stripped constraint otherwise.
 - Enforce when some failing slot can still hold the pin alongside the hard requirements; otherwise drop it for the residual report (the hard-required upgrade merges anyway). `hard_want` is every atom text that targeted the package this pass, top-level arguments included -- Portage's whole-atom-set selection. A slot-stripped (built-`:=`) pin constrains no slot in particular, like its normalised form; a plain slot pin stays scoped.
 - Backlog #79 (D0 + the shared S0 with #78): Portage only ever consults such a pin from the slot-operator update probe (`_slot_operator_check_reverse_dependencies`, `depgraph.py:2472-2538` -- which parents that probe visits, which it skips). A holdable *plain* pin (no built `:=`) from a *build-time* key (`DEPEND`/`BDEPEND`) is therefore ignored entirely: a built package's build-time deps are `optional` edges (Portage `depgraph.py:4194-4247`, `optional=(pkg.built or ...)` at `:4277-4287`), emptied outright when `bdeps` is off, and never withhold an upgrade -- Portage merges without filtering on the pin and without reporting it (D1: `rdctarget-1.0`'s recorded `~rdcblocker-1.0` neither drops `rdcblocker-2.0` nor leaves a residual row -- the only `B` is the new version's own `RDEPEND` blocker). Enforcing it here is what silently settled the old version (D0's trace).
+- Backlog #569: demoted `||` arms (see `or_branch_vdb_deselected_set`'s
+  notes — computed once per depstring in `constraints_from_consumer`)
+  return before any probe runs: they are no parent atoms, so neither the
+  version check, the USE-break check, nor any pin may see them. The check
+  compares the flat token and the stripped constraint, covering verbatim
+  and normalised members alike.
+- Backlog #568: a built atom on an upgrading cp is recorded into
+  `built_seen` (verbatim, `[use]` stripped like the verbatim pin path)
+  unconditionally — even when the stripped constraint matches everything
+  and no pin of its own results. The post-scan attach in
+  `reverse_dependency_constraints` is the only reader.
 - Backlog #91 (S1) narrows that ignore to build-time keys: a holdable plain pin from a *runtime* key (`RDEPEND`/`IDEPEND`/`PDEPEND`, never emptied as a class) IS a slot-conflict parent edge once its consumer is in the graph, and Portage's direct solve keeps the installed instance (host qemu/edk2: `Slot conflict ... remove: ...-202608 / keep: ...-202408-5`; hermetic oracle: the `whblocker`/`whtarget`/`whpuller` fixtures -- runtime `~` pin from a non-replaced consumer withholds `whblocker-2.0`, while the unreachable-consumer twin merges with the uninstall/`b` rows). Enforcing it here as an ordinary slot constraint settles the same answer through the re-resolve. The three rejections of #91 §1 stand: no use-dep gating (qemu's own pin carries use-deps and withholds), no operator narrowing (any operator holds when runtime + in-graph), only the key axis moves. Still enforced: built slot-operator pins (the probe's own domain, #24's rebuilds) and every not-holdable pin (dropped for the residual report, keeper's shape).
 
 ## struct UseBreakSource

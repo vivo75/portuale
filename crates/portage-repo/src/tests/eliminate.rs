@@ -135,6 +135,7 @@ fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
         cp: ("app-arch".to_string(), "aadecoy".to_string()),
         atom: "=app-arch/aadecoy-1.0".to_string(),
         raw_atom: "=app-arch/aadecoy-1.0".to_string(),
+        built_render: Vec::new(),
         consumer: (
             "app-arch".to_string(),
             "aadecoy".to_string(),

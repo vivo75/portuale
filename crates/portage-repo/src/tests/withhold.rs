@@ -24,6 +24,7 @@ fn reverse_pin_withhold_reports_a_skip_notice() {
         cp: ("dev-libs".to_string(), "whblocker".to_string()),
         atom: "~dev-libs/whblocker-1.0".to_string(),
         raw_atom: "~dev-libs/whblocker-1.0".to_string(),
+        built_render: Vec::new(),
         consumer: (
             "dev-libs".to_string(),
             "whtarget".to_string(),

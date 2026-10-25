@@ -14,6 +14,11 @@
 //! `LLM/evidence/2026-10-25-563/captures/`; L0 log
 //! `../pmtest/differential-test-bed/logs/l0-20261025T084209Z`
 //! (`dev-perl_XML-Parser` probe; `dev-lang_perl` is the bare-provider twin).
+//!
+//! Skip-block pin forms (#568/#569): the `p569*` family (installed
+//! `p569virt-1` with a version-menu `||` lacking the new branch, plus a
+//! built `:0/5.42=` dep) pins the exact C1 rendering divergence — oracle
+//! `LLM/evidence/2026-10-26-568/` (`probe-p569.sh` + `NOTES.md`).
 
 use super::*;
 
@@ -23,6 +28,9 @@ fn p563_pull_heals_with_skip_block_and_backtrack_notice() {
     // merges `p563pull-1` (N); stderr carries the WARNING skip-block for
     // `dev-libs/p563prov:0` (5.44 skipped over the installed pinner) plus the
     // `triggered by backtracking` notice for `dev-libs/p563pull:0`.
+    // The skip block prints the pinner's recorded atoms verbatim — the
+    // built `dev-libs/p563prov:0/5.42=` first, then `=dev-libs/p563prov-5.42*`
+    // (#568; hermetic oracle `LLM/evidence/2026-10-26-568/NOTES.md`).
     // Portage: depgraph.py, _slot_confict_backtrack + _get_missed_updates.
     let result = graph_result_real("dev-libs/p563pull");
     assert!(
@@ -72,8 +80,9 @@ fn p563_pull_heals_with_skip_block_and_backtrack_notice() {
     );
     assert_eq!(
         result.skipped_updates.len(),
-        1,
-        "the WARNING skip-block names the skipped provider update: {:?}",
+        2,
+        "the WARNING skip-block names the skipped provider update twice, once
+        per recorded pin form: {:?}",
         result.skipped_updates
     );
     let row = &result.skipped_updates[0];
@@ -88,14 +97,25 @@ fn p563_pull_heals_with_skip_block_and_backtrack_notice() {
         "5.44 skipped over the installed pinner"
     );
     assert_eq!(
-        row.atom, "=dev-libs/p563prov-5.42*",
-        "the conflicting pin: {:?}",
+        row.atom, "dev-libs/p563prov:0/5.42=",
+        "the built subslot pin renders first, verbatim: {:?}",
         row.atom
     );
     assert!(
         row.consumer_cpv.starts_with("dev-libs/p563con-1:") && row.consumer_installed,
         "the pinner is the installed consumer: {:?}",
         row.consumer_cpv
+    );
+    let bare = &result.skipped_updates[1];
+    assert_eq!(
+        bare.atom, "=dev-libs/p563prov-5.42*",
+        "the bare pin renders second: {:?}",
+        bare.atom
+    );
+    assert_eq!(
+        (bare.consumer_cpv.as_str(), bare.consumer_installed,),
+        (row.consumer_cpv.as_str(), true),
+        "both rows name the same installed pinner"
     );
     assert_eq!(
         result.skipped_missing_deps,
@@ -224,5 +244,63 @@ fn p563_pinned_oldver_still_resolves_clean() {
             "{}/{} {:?}",
             e.category, e.package, e.outcome
         )).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn skip_block_pins_keep_the_built_subslot_atom() {
+    // Portage oracle (`_show_missed_update` over the bintree+vdb): the
+    // skip block prints the consumer's recorded atom verbatim, so a built
+    // `:S/SS=` pin renders alongside the bare pin — hermetic capture
+    // `LLM/evidence/2026-10-26-568/captures/portage-p569pull.stderr`
+    // (`dev-libs/p569prov:0/5.42=` first, then `=dev-libs/p569prov-5.42*`;
+    // bed `l0-20261025T111515Z` Portage side, XML-Parser probe: 48
+    // real-only `:0/5.42=` lines). Today portuale prints only `=5.42*`.
+    // Portage: depgraph.py, _show_missed_update_slot_conflicts (both forms
+    // are `_parent_atoms` of the kept instance; the `with_slot("=")` strip
+    // at :2509-2517 is constraint-only).
+    let result = graph_result_real("dev-libs/p563pull");
+    assert!(
+        matches!(result.outcome, ResolveOutcome::Complete),
+        "the pull shape heals clean, got {:?}",
+        result.outcome
+    );
+    let atoms: Vec<&str> = result
+        .skipped_updates
+        .iter()
+        .map(|row| row.atom.as_str())
+        .collect();
+    assert_eq!(
+        atoms,
+        vec!["dev-libs/p563prov:0/5.42=", "=dev-libs/p563prov-5.42*"],
+        "the skip block keeps the built subslot atom first: {:?}",
+        result.skipped_updates
+    );
+}
+
+#[test]
+fn skip_block_pins_skip_non_selected_or_branches() {
+    // Same oracle, the `||` half: the installed virtual's version menu
+    // contributes only its vdb-selected branch (`=5.42*`, the arm matching
+    // installed 5.42) — Portage `dep_zapdeps` demotes the rest, so the 15
+    // portuale-only `=5.38*`/`=5.40*` lines on the bed XML-Parser probe
+    // must go. Hermetic oracle: `LLM/evidence/2026-10-26-568/NOTES.md`.
+    // Portage: dep_check.py, dep_zapdeps (installed-preferred arm wins).
+    let result = graph_result_real("dev-libs/p569pull");
+    assert!(
+        matches!(result.outcome, ResolveOutcome::Complete),
+        "the pull shape heals clean, got {:?}",
+        result.outcome
+    );
+    let atoms: Vec<&str> = result
+        .skipped_updates
+        .iter()
+        .map(|row| row.atom.as_str())
+        .collect();
+    assert_eq!(
+        atoms,
+        vec!["dev-libs/p569prov:0/5.42=", "=dev-libs/p569prov-5.42*"],
+        "only the built atom and the selected || branch render: {:?}",
+        result.skipped_updates
     );
 }
