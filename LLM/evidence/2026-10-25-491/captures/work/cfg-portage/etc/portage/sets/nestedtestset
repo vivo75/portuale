@@ -1,0 +1,5 @@
+# fixture custom set: a plain atom plus a nested "@" reference to
+# another custom set, proving real StaticFileSet's own recursive
+# set-of-sets expansion (SetConfig.getSetAtoms).
+dev-libs/nestedsetpkg
+@innernestedset

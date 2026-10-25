@@ -1,0 +1,15 @@
+# fixture env file: per-package build-var override (non-USE half of package.env).
+# CFLAGS/MAKEOPTS are the original pair; CC/CXX/AR/RUSTFLAGS are real's
+# toolchain selectors (backlog #95: real `_grab_pkg_env` accepts them,
+# the old BUILD_VARS filter dropped them), ENV_UNSET is an incremental
+# (appended, then folded onto the run-wide list by regenerate()).
+CFLAGS="-Os -march=fixturepkgenv"
+MAKEOPTS="-j7"
+CC="fixture-cc"
+CXX="fixture-cxx"
+AR="fixture-ar"
+# RUSTFLAGS continues over a line break (backlog #409): Portage getconfig
+# drops the backslash-newline pair, so the value is unchanged.
+RUSTFLAGS="-C \
+target-cpu=fixturepkg"
+ENV_UNSET="PENV_UNSET"

@@ -95,6 +95,67 @@ pub(crate) fn step_built_parent_update_probe(
     }
 }
 
+/// Clean-pass trigger: an installed parent whose built `:S/SS=` dep a tree
+/// replacement re-binds to a new child sub-slot. Runs last, so it never
+/// preempts a mask, heal, or disclosure: that is exactly the pass-0 gap
+/// (Portage's end-of-pass trigger on a clean pass); conflicted passes seed
+/// through `fold_rebuild_scan` instead.
+pub(crate) fn step_installed_parent_update_probe(
+    ctx: &ResolveCtx<'_>,
+    pass: &PassResult,
+    grown: &mut BacktrackParams,
+    config: &Config,
+) -> Option<PassDecision> {
+    // Portage: depgraph.py, _slot_operator_trigger_reinstalls (the installed-parent
+    // update-probe half). Backtrack- and update-gated; the seed set only ever
+    // grows, and seeded parents never re-fire, so the search terminates.
+    if ctx.backtrack_max == 0 || !ctx.update {
+        return None;
+    }
+    // Portage runs this probe after `_complete_graph`, so the installed consumers
+    // are known; a plain pass stands in with the blocker-retry closure.
+    let live = if ctx.slot_op_reachable.is_empty() {
+        ctx.blocker_retry_closure.clone()
+    } else {
+        live_reachable_consumers(ctx, &pass.entries)
+    };
+    let walked = request_walk_consumers(ctx, &pass.entries);
+    let top_atoms: HashSet<String> = ctx.top_level.iter().map(|s| (*s).to_string()).collect();
+    let fresh = installed_parent_update_probe(InstalledParentUpdateProbeArgs {
+        root: ctx.root,
+        repos: &ctx.repos,
+        config,
+        entries: &pass.entries,
+        with_bdeps: ctx.with_bdeps,
+        excluded: ctx.excluded,
+        masked: &grown.runtime_pkg_mask,
+        installed: &ctx.installed_graph,
+        live: &live,
+        walked: &walked,
+        top_level_atoms: &top_atoms,
+        update: ctx.update,
+    });
+    let probed = fresh.clone();
+    // No binary masks here: both filings name installed packages (a stale
+    // binary parent is the built-parent probe's case, filed just above).
+    if !file_unsat_probe_results(
+        &mut *grown,
+        fresh,
+        BTreeSet::new(),
+        ctx.usepkgonly,
+        ctx.root,
+    ) {
+        return None;
+    }
+    // Portage: depgraph.py, _slot_operator_update_backtrack (the replace set that
+    // becomes `__auto_slot_operator_replace_installed__`, rendered as `r`).
+    grown.probe_replaced.extend(probed);
+    fold_rebuild_scan(pass, ctx, grown, config);
+    Some(PassDecision::Feedback(BacktrackFeedback::Config {
+        params: Box::new(std::mem::take(grown)),
+    }))
+}
+
 /// What [`step_built_parent_update_probe`] found.
 pub(crate) enum BuiltParentProbe {
     /// Nothing new was filed.

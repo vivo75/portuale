@@ -1,0 +1,29 @@
+--- line 95839:
+slot_operator_update_probe:
+   existing child package:  (kde-plasma/libplasma-6.7.5-1:6/7::gentoo, installed)
+   existing parent package: (kde-plasma/plasma-pa-6.7.5-1:6/6::gentoo, installed)
+   new child package:  (kde-plasma/libplasma-6.8.1:6/8::gentoo, ebuild scheduled for merge)
+   new parent package: (kde-plasma/plasma-pa-6.8.1:6/6::gentoo, ebuild scheduled for merge)
+
+
+backtracking due to missed slot abi update:
+
+--- line 95846:
+backtracking due to missed slot abi update:
+   child package:  (kde-plasma/libplasma-6.7.5-1:6/7::gentoo, installed)
+   parent package: (kde-plasma/plasma-pa-6.7.5-1:6/6::gentoo, installed)
+   new parent pkg: (kde-plasma/plasma-pa-6.8.1:6/6::gentoo, ebuild scheduled for merge)
+   atom: >=kde-plasma/libplasma-6.7.5:6/7=
+Virtual Parent:      (virtual/pkgconfig-3-5:0/0::gentoo, installed)
+Virtual Depstring:   dev-util/pkgconf[native-symlinks(+)=]
+Virtual Parent:      (virtual/libudev-257-1:0/1::gentoo, installed)
+
+--- line 95859:
+slot_operator_update_probe:
+   existing child package:  (kde-plasma/libplasma-6.7.5-1:6/7::gentoo, installed)
+   existing parent package: (kde-plasma/plasma-desktop-6.7.5-1:6/6::gentoo, installed)
+   new child package:  (kde-plasma/libplasma-6.8.1:6/8::gentoo, ebuild scheduled for merge)
+   new parent package: (kde-plasma/plasma-desktop-6.8.1:6/6::gentoo, ebuild scheduled for merge)
+
+
+backtracking due to missed slot abi update:

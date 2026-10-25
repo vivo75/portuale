@@ -363,6 +363,17 @@ fn collect_feedback_inner(
         return decision;
     }
 
+    // Last: every other arm had nothing to say, so the pass is clean and the
+    // installed-parent seed cannot preempt a mask, heal, or disclosure. That
+    // is exactly the pass-0 gap (Portage's end-of-pass trigger on a clean
+    // pass); conflicted passes seed through `fold_rebuild_scan` instead.
+    if !has_nvc
+        && pass.slot_conflicts.is_empty()
+        && let Some(decision) = step_installed_parent_update_probe(ctx, pass, &mut grown, config)
+    {
+        return decision;
+    }
+
     if has_nvc {
         PassDecision::DeadEnd {
             params: Box::new(grown),

@@ -1,0 +1,10 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p491lib-2:6/8::testrepo [1:6/7::testrepo] to /home/vivo/repo/PORTUALE/portuale/fixtures 0 KiB
+[ebuild     U  ] dev-libs/p491con-2:6::testrepo [1:6::testrepo] to /home/vivo/repo/PORTUALE/portuale/fixtures 0 KiB
+
+Total: 2 packages (2 upgrades), Size of downloads: 0 KiB

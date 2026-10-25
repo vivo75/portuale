@@ -160,22 +160,22 @@ pub(crate) fn built_parent_update_probe(
 }
 
 /// Arguments of [`child_has_slot_update`].
-struct ChildUpdateArgs<'a> {
-    root: &'a Path,
-    repos: &'a [RepoConfig],
-    config: &'a portage_profile::Config,
-    entries: &'a [GraphEntry],
-    parent: &'a (String, String),
-    replacements: &'a [&'a Candidate],
-    use_flags: &'a HashSet<String>,
-    dep_keys: &'a [&'a str],
-    child: &'a (String, String),
-    bound_slot: &'a str,
-    excluded: &'a [String],
-    masked: &'a HashMap<(String, String), Vec<MaskEntry>>,
-    installed: &'a InstalledReachability,
-    live: &'a HashSet<(String, String)>,
-    walked: &'a HashSet<(String, String)>,
+pub(crate) struct ChildUpdateArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) parent: &'a (String, String),
+    pub(crate) replacements: &'a [&'a Candidate],
+    pub(crate) use_flags: &'a HashSet<String>,
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) child: &'a (String, String),
+    pub(crate) bound_slot: &'a str,
+    pub(crate) excluded: &'a [String],
+    pub(crate) masked: &'a HashMap<(String, String), Vec<MaskEntry>>,
+    pub(crate) installed: &'a InstalledReachability,
+    pub(crate) live: &'a HashSet<(String, String)>,
+    pub(crate) walked: &'a HashSet<(String, String)>,
 }
 
 /// Whether the installed `child` in `bound_slot` has a tree instance with another
@@ -183,7 +183,7 @@ struct ChildUpdateArgs<'a> {
 /// A child the graph already merges is left alone: the binary's dep then names
 /// a different instance than the installed one.
 // Portage: _emerge/depgraph.py, _slot_operator_update_probe (replacement_parent loop, candidate filter)
-fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
+pub(crate) fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
     let ChildUpdateArgs {
         root,
         repos,
@@ -271,6 +271,10 @@ fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
                 || cand.slot != bound_slot
                 || cand.sub_slot == child_sub
                 || vercmp_ordering(&cand.version, &child_ver) == Ordering::Less
+                // The installed version's own ebuild is no update: a sub-slot
+                // move without a revbump is insignificant until a parent's
+                // rebuild needs it (then the slot-conflict probe takes over).
+                || cand.version == child_ver
                 || !is_visible(cand, child_cat, child_pkg, config)
                 || excluded.iter().any(|ex| {
                     matches_cli_option_atom(

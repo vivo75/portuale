@@ -1,0 +1,46 @@
+      Arg: =kde-frameworks/kdbusaddons-6.31.0
+     Atom: =kde-frameworks/kdbusaddons-6.31.0
+
+Child:         (kde-frameworks/kdbusaddons-6.31.0-1:6/6.31::gentoo, binary scheduled for merge) USE="X -debug -test" ABI_X86="(64)"
+Parent Dep:    =kde-frameworks/kdbusaddons-6.31.0
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: app-office/merkuro:6
+
+Child:         (app-office/merkuro-26.08.2-1:6/6::gentoo, binary scheduled for merge) USE="plasma -debug -test" ABI_X86="(64)"
+Parent Dep:    app-office/merkuro:6 required by @__auto_slot_operator_replace_installed__
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: dev-libs/kirigami-addons:6
+
+Child:         (dev-libs/kirigami-addons-1.15.0-1:6/6::gentoo, binary scheduled for merge) USE="-debug -test" ABI_X86="(64)"
+Parent Dep:    dev-libs/kirigami-addons:6 required by @__auto_slot_operator_replace_installed__
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: dev-libs/libbpf:0
+
+Child:         (dev-libs/libbpf-1.8.0-1:0/1.8::gentoo, binary scheduled for merge) USE="static-libs" ABI_X86="(64)"
+Parent Dep:    dev-libs/libbpf:0 required by @__auto_slot_operator_replace_installed__
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: dev-libs/weston:0
+
+Child:         (dev-libs/weston-16.0.1-1:0/0::gentoo, binary scheduled for merge) USE="X desktop drm gles2 jpeg lcms pipewire resize-optimization suid systemd vnc vulkan wayland-compositor webp xwayland -editor -examples -headless -ivi -kiosk -lua -rdp -test" ABI_X86="(64)" LUA_SINGLE_TARGET="lua5-4"
+Parent Dep:    dev-libs/weston:0 required by @__auto_slot_operator_replace_installed__
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: dev-qt/qtwebengine:6
+
+Child:         (dev-qt/qtwebengine-6.11.2-r1-1:6/6.11.2::gentoo, binary scheduled for merge) USE="alsa opengl pdfium pulseaudio qml screencast vaapi vulkan widgets -accessibility -bindist -custom-cflags -designer -geolocation -jumbo-build -kerberos -system-icu -test -webdriver" ABI_X86="(64)"
+Parent Dep:    dev-qt/qtwebengine:6 required by @__auto_slot_operator_replace_installed__
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: kde-plasma/bluedevil:6
+
+Child:         (kde-plasma/bluedevil-6.8.1-1:6/6::gentoo, binary scheduled for merge) USE="-debug -handbook -test" ABI_X86="(64)"
+Parent Dep:    kde-plasma/bluedevil:6 required by @__auto_slot_operator_replace_installed__
+
+      Arg: @__auto_slot_operator_replace_installed__
+     Atom: kde-plasma/kdeplasma-addons:6
+
+Child:         (kde-plasma/kdeplasma-addons-6.8.1-1:6/6::gentoo, binary scheduled for merge) USE="alternate-calendar -debug -handbook -led -share -webengine" ABI_X86="(64)"

@@ -1,0 +1,6 @@
+# fixture env file: per-package binpkg compressor (backlog #147 S2).
+# Real reads BINPKG_COMPRESS from the package's own settings
+# (doebuild.py:697) for the xpak pipe; the gpkg helper reads the
+# run-wide value instead (bin/gpkg-helper.py:49), so this pin covers
+# xpak only by real's own rule.
+BINPKG_COMPRESS="gzip"

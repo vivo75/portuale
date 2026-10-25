@@ -1,0 +1,11 @@
+[gentoo] Local copy of remote index is within TTL and will be used.
+[f1r] Local copy of remote index is up-to-date and will be used.
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+app-misc/mime-types:0
+
+  (app-misc/mime-types-2.1.54-1:0/0::gentoo, binary scheduled for merge) USE="-nginx" ABI_X86="(64)" conflicts with
+    app-misc/mime-types[nginx] required by (www-servers/nginx-1.31.7-r1-1:0/1.31.7::gentoo, binary scheduled for merge) USE="http modules -aio -debug -libatomic -mail (-selinux) -stream -test" ABI_X86="(64)" NGINX_MODULES_HTTP="access auth_basic autoindex browser charset empty_gif fastcgi geo grpc gzip limit_conn limit_req map memcached mirror proxy referer rewrite scgi split_clients ssi ssl upstream_hash upstream_ip_hash upstream_keepalive upstream_least_conn upstream_random upstream_zone userid uwsgi v2 -addition -auth_request -dav -degradation -flv -geoip -gunzip -gzip_static -image_filter -mp4 -perl -random_index -realip -secure_link -slice -stub_status -sub -v3 -xslt" NGINX_MODULES_MAIL="imap pop3 smtp ssl" NGINX_MODULES_STREAM="access geo limit_conn map pass return set split_clients ssl upstream_hash upstream_least_conn upstream_random upstream_zone -geoip -realip -ssl_preread"
+                        ^^^^^ 
+

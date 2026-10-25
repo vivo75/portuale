@@ -1,0 +1,16 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+
+[ebuild  r  U  ] dev-libs/p491lib-2:6/8::testrepo [1:6/7::testrepo] to /home/vivo/repo/PORTUALE/portuale/fixtures 0 KiB
+[ebuild  rR    ] dev-libs/p491con-1:6::testrepo to /home/vivo/repo/PORTUALE/portuale/fixtures 0 KiB
+
+Total: 2 packages (1 upgrade, 1 reinstall), Size of downloads: 0 KiB
+
+The following packages are causing rebuilds:
+
+  (dev-libs/p491lib-2:6/8::testrepo, ebuild scheduled for merge to '/home/vivo/repo/PORTUALE/portuale/fixtures') causes rebuilds for:
+    (dev-libs/p491con-1:6/6::testrepo, ebuild scheduled for merge to '/home/vivo/repo/PORTUALE/portuale/fixtures')
+    dev-libs/p491keep-1

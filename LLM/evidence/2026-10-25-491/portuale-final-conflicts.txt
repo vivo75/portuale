@@ -1,0 +1,30 @@
+
+
+Dependency resolution took (backtrack: 20/20).
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+kde-frameworks/kwidgetsaddons:6
+
+
+
+kde-frameworks/kservice:6
+
+
+
+kde-frameworks/kjobwidgets:6
+
+
+
+kde-frameworks/kio:6
+
+
+
+kde-frameworks/kiconthemes:6
+
+
+
+kde-frameworks/ki18n:6
+

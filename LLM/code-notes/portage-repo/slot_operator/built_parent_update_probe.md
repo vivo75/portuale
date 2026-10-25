@@ -1,6 +1,9 @@
 # crates/portage-repo/src/slot_operator/built_parent_update_probe.rs
 The update probe for a merge-bound binary parent.
 
+## fn child_has_slot_update
+- Backlog #491 (Task 6): same-version tree candidates are skipped — a sub-slot move without a revbump is insignificant until a parent's rebuild needs it (then the slot-conflict probe takes over). Shared with the installed-parent probe; no existing caller behaviour changes (their trees carry no same-version candidates).
+
 ## fn other_consumers_accept
 - Backlog #491 [A]. Portage `_slot_operator_update_probe` only accepts a replacement child when `_slot_operator_check_reverse_dependencies(dep.child, pkg, replacement_parent)` (`depgraph.py:2472`) passes: every other graph parent of the child must still match the new child, with built `:slot/sub=` atoms reduced to `:=`.
 - Exemptions in Portage that this port mirrors: the replaced parent itself; a parent that is itself being replaced in the graph; a parent with a visible upgrade (`_upgrade_available`); a parent with a direct digraph edge to the child (`digraph.has_edge(parent, existing_pkg)`, `:2523`). Not mirrored: `_in_blocker_conflict` and `_too_deep`.
