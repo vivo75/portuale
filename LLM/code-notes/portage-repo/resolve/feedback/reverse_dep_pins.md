@@ -53,6 +53,14 @@ Backlog #490. Portage's `_complete_graph` pulls in an installed package only thr
   same-version merge-bound entry exists). A bare explicit-arg want
   (keeper/igw/cgp: only `(Argument)` parents) cannot be re-picked --
   masking strands the argument and Portage aborts loudly instead.
+- Backlog #570 (dedicated G0 pin): `g0_benign_disclosure_blocks_the_dropped_pin_heal`
+  (`tests/tests_p563.rs`) resolves healable `dev-libs/p569pull` together
+  with unrelated masked `dev-libs/abort-masked-mid` and asserts the loud
+  residual abort (MaskedDep outcome, the `p569prov` conflict still
+  recorded) with zero restarts and no skip rows — the heal never fires
+  through the disclosure. S0 oracle `LLM/evidence/2026-10-25-570/`
+  (`portage-g0combo`: rc 1, backtrack 1/20, masked disclosure only).
+  Passed first run: no predicate change, the pin just keeps G0.
 - G2 (non-selected `||` branch): a contradicting pin from a `||` branch the
   merge satisfies elsewhere is a stale alternative (Portage demotes it via
   dep_zapdeps, never backtrack-skips). `or_branch_superseded` re-reads the

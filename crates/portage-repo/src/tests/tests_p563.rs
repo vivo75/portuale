@@ -279,6 +279,77 @@ fn skip_block_pins_keep_the_built_subslot_atom() {
 }
 
 #[test]
+fn g0_benign_disclosure_blocks_the_dropped_pin_heal() {
+    // Portage: disclosures precede any backtrack heal — S0 capture
+    // `LLM/evidence/2026-10-25-570/` (`portage-g0combo`: rc 1, backtrack
+    // 1/20, only the masked disclosure; the `p569pull` residual alone heals
+    // rc 0, backtrack 2/20). Resolves loud (rc 1, residual abort), never
+    // heals silently.
+    // Portage: depgraph.py, _slot_confict_backtrack (masked abort first).
+    let result = graph_result_real_atoms(
+        &[
+            "dev-libs/p569pull".to_string(),
+            "dev-libs/abort-masked-mid".to_string(),
+        ],
+        10,
+    );
+    assert!(
+        matches!(
+            &result.outcome,
+            ResolveOutcome::Aborted {
+                reason: AbortReason::MaskedDep { atom, parent_cpv },
+                ..
+            } if atom == "dev-libs/maskeddep"
+                && parent_cpv == "dev-libs/abort-masked-mid-1.0"
+        ),
+        "the benign disclosure aborts loudly, got {:?}",
+        result.outcome
+    );
+    assert_eq!(
+        result.slot_conflicts.len(),
+        1,
+        "the healable residual is preserved, not masked away, got {:?}",
+        result.slot_conflicts
+    );
+    let c = &result.slot_conflicts[0];
+    assert_eq!(
+        (
+            c.category.as_str(),
+            c.package.as_str(),
+            c.slot.as_str(),
+            c.resolved_version.as_str(),
+        ),
+        ("dev-libs", "p569prov", "0", "5.44"),
+        "the conflict is the provider's slot, merge version first"
+    );
+    assert_eq!(
+        c.instances
+            .iter()
+            .map(|i| (i.version.as_str(), i.installed))
+            .collect::<Vec<_>>(),
+        vec![("5.44", false), ("5.42", true)],
+        "merge-bound new subslot beside the installed old one"
+    );
+    assert_eq!(
+        result.backtrack_restarts, 0,
+        "no mask excursion: G0 blocked the heal"
+    );
+    assert!(
+        result.skipped_updates.is_empty(),
+        "no skip block without a heal: {:?}",
+        result.skipped_updates
+    );
+    assert!(
+        result
+            .masked_deps
+            .iter()
+            .any(|r| r.category == "dev-libs" && r.package == "maskeddep"),
+        "the benign disclosure is on the same pass G0 gated on: {:?}",
+        result.masked_deps
+    );
+}
+
+#[test]
 fn skip_block_pins_skip_non_selected_or_branches() {
     // Same oracle, the `||` half: the installed virtual's version menu
     // contributes only its vdb-selected branch (`=5.42*`, the arm matching
