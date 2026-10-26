@@ -28,7 +28,7 @@ Regeneration of stale GNU info directory indexes after a vdb-changing merge.
 - Ports `portage.util.normalize_path` (util/__init__.py:139-153).
 
 ## fn is_writable
-- Ports `_info_files.py:46`'s own `os.access(inforoot, os.W_OK)` gate; real-UID semantics on both sides. Delegates to the one copy, `privileges::path_writable`.
+- Ports `_info_files.py:46`'s own `os.access(inforoot, os.W_OK)` gate; the same POSIX `access` check against the invoking user on both sides. Delegates to the one copy, `privileges::path_writable`.
 
 ## fn skippable_name
 - Ports `_info_files.py:57-64`.

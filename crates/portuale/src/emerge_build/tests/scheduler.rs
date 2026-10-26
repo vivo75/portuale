@@ -778,7 +778,7 @@ fn fake_entries<'a>(
                     version: "1.0".into(),
                 },
             ),
-            // The `${T}` mirror the real run composes into.
+            // The `${T}` mirror the actual run composes into.
             log_dir: log_root.join(format!("portage/dev-libs/{name}-1.0/temp")),
             shared,
             need: None,
@@ -1132,7 +1132,7 @@ fn pretend_pass_replays_a_failing_entry_output_before_recording_the_failure() {
     }
 }
 
-/// The same pin through real phases: `schedppfail`'s `pkg_pretend`
+/// The same pin through the actual phases: `schedppfail`'s `pkg_pretend`
 /// dies after an `eerror`, and its staged capture still replays, after
 /// the passing entry's block, in merge-list order, at one job and
 /// above one job. Portage: `Scheduler.py:1008`

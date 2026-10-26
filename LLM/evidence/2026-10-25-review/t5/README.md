@@ -15,7 +15,7 @@ probe that mirrors `run_action` per root
 `_global_updates(target.root, trees, target.mtimedb["updates"], quiet)`
 (`lib/portage/_global_updates.py:22-56`, `_do_global_updates` `:59`),
 then `target.mtimedb.commit()` when updates were applied. Only the
-target root is processed — real Portage has no `PORTAGE_RUNNING_ROOT`
+target root is processed — Portage has no `PORTAGE_RUNNING_ROOT`
 knob, so a full `emerge` run would also process the host `/` root and
 trip this host's profile gate before printing pretend output. The
 config reload and the `AUTOCLEAN` force from `run_action` are Task 11

@@ -353,7 +353,7 @@ when a claim turns out false.
 ## Q16. A global-updates SLOT move on a gpkg warns "Package basename mismatched" (suspect)
 
 - **What it does**: `binarydbapi.aux_update` (`dbapi/bintree.py:270-285`) builds `cpv_str = str(cpv)` (the full `dev-libs/slotpkg-1.0`) and passes it to `gpkg(settings, cpv_str, path)` as the basename. The container's own prefix is `slotpkg-1.0`, so `_get_inner_tarinfo` (`gpkg.py:2237-2241`) sees that the prefix does not start with the basename and writes `Package basename mismatched, using slotpkg-1.0` to stderr. It then carries on and rewrites the package correctly.
-- **Why it looks wrong**: the basename Portage passes is one it chose itself, not user input. Every gpkg touched by a binary update prints the warning, and the warning points at no real problem.
+- **Why it looks wrong**: the basename Portage passes is one it chose itself, not user input. Every gpkg touched by a binary update prints the warning, and the warning points at no actual problem.
 - **First seen**: Portage 3.0.83 (source `3rdparty/portage`, plan 02.575 Task 5 capture, `LLM/evidence/2026-10-25-review/t5/stderr.txt`).
 - **Portuale**: not copied. The line goes to stderr only and the result is the same. Task 9 (binpkg moves) does not reproduce it.
 

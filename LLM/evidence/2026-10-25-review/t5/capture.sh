@@ -54,7 +54,7 @@ run_updates() {
     # Drives _global_updates for the TARGET root only, exactly as
     # run_action does per root (actions.py: _global_updates, then
     # mtimedb.commit() when it reports applied updates). The running
-    # root ("/" here) is deliberately not processed: real Portage has
+    # root ("/" here) is deliberately not processed: Portage has
     # no PORTAGE_RUNNING_ROOT knob, so going through `emerge` would
     # run the updates against the host root as well (and trip this
     # host's profile gate before printing any pretend output).
@@ -76,7 +76,7 @@ from _emerge.actions import load_emerge_config
 import portage.output
 # emerge_main disables color at startup and only re-enables it in
 # adjust_configs, which runs after the updates: the updates block is
-# never colored in a real run.
+# never colored in an actual run.
 portage.output.havecolor = 0
 emerge_config = load_emerge_config(action="pretend")
 target = emerge_config.target_config

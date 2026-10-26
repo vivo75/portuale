@@ -44,7 +44,7 @@ for raw in ["4618", " 4618", "4618 ", " 4618 ", "-1", "+5", "x", "",
     except ValueError:
         print(f"  {raw!r} -> ValueError (size dropped from digests)")
 
-print("== verify_all against a real file ==")
+print("== verify_all against a file on disk ==")
 d = tempfile.mkdtemp()
 p = os.path.join(d, "payload.tbz2")
 with open(p, "wb") as f:

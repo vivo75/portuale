@@ -30,7 +30,7 @@
   '46_18' -> 4618
   '4618\n' -> 4618
   '007' -> 7
-== verify_all against a real file ==
+== verify_all against a file on disk ==
   BLAKE2B = bfd0ba2334977d05b44d934572d5d3eb874b6608a6ae44af1856bef50a560f76256a299df0005db39fe76c0f0d1f33d9738409a302cceb77bcfd1dfb1bfa6273
   BLAKE2S = e7c0ce7b4ec0e967c51dba4681a63249ed6ac57af78aac8bb43ef73f2ce2c08f
   MD5 = 4032af8d61035123906e58e067140cc5
