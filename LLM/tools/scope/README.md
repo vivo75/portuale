@@ -92,3 +92,7 @@ If the box has no user systemd instances at all, rootless podman can run with `p
 | Delegated `systemd-run --user --scope`           | yes                                 | rootless-friendly, graceful TERM→KILL  |
 | `podman --cgroups=disabled` + parent cgroup kill | yes                                 | fallback when no user systemd          |
 
+
+## Brief template
+
+[`brief-template.md`](brief-template.md) holds the rules block every opencode brief starts with, plus the commit rules for a manager agent.

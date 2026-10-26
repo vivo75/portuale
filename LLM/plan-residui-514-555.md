@@ -1,5 +1,9 @@
 # Residui OPEN #514–#555 Implementation Plan
 
+Status: done 2026-10-24 (Tasks 1–10 on branch `residui-514-555`, on `main` as portuale `589326f9`, `d2715878`, `3414ab32`, `eef32b61`, `8ec798c0`, `c553cc69`, `ee4e9eed`, `ee6248bb`, `0b68d908`; plan review `95afacbf`). Residues: #558 (still open), #560, #561 (closed by the later plans below).
+
+**English summary.** This plan (written in Italian, kept under its old name because other documents link to it) closed or re-triaged the open residues #514 and #516–#555 left by the port to Portage 3.0.83 (`LLM/02.442-port-portage-3.0.83.opus.md`). It ran as ten independent slices by area: gpkg extraction, ebuild merge, circular-dependency report, depclean display, atom and USE-reduce parity, binhost, user patches, `pkg_pretend` scheduling, virtuals warnings and validating actions. Each slice took its expected output from host Portage 3.0.83 captures under `LLM/evidence/` and added hermetic pmtest pins plus Rust unit tests.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Chiudere o triage-are tutti i residui OPEN del port a Portage 3.0.83 lasciati dal piano `LLM/02.442-port-portage-3.0.83.opus.md` (#514, #516–#555).
@@ -178,7 +182,7 @@ Expected: PASS.
 
 ### Task 6: #535–#539 — binhost
 
-Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+Done 2026-10-24 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
 
 **Files:**
 - Modify: `crates/portage-profile/src/binrepo.rs`, `crates/portuale/src/emerge_getbinpkg.rs`, `crates/portage-repo` `populate_local_pkgdir`, `crates/portuale/src/binpkg/local_index.rs`
@@ -211,7 +215,7 @@ Expected: 12/13→13/13 + nuovi shape.
 
 ### Task 7: #540–#542 — user patches writer/VDB/extraction
 
-Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+Done 2026-10-24 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
 
 **Files:**
 - Modify: `crates/portuale/src/helpers/gpkg.rs` (metadata assembly + `Packages` inject), `ebuild_merge/from_binpkg.rs` (VDB copy), merge extraction rendering
@@ -235,7 +239,7 @@ Expected: PASS.
 
 ### Task 8: #543–#546 — scheduler
 
-Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+Done 2026-10-24 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
 
 **Files:**
 - Modify: `crates/portuale/src/emerge_build/merge_wait.rs`, `run_build_scheduler`, `run_merge_loop`, `crates/portuale/src/emerge_build/buildpkgonly.rs`, `merge_binpkg` pretend hook
@@ -264,7 +268,7 @@ Expected: PASS.
 
 ### Task 9: #547–#554 — virtuals e dintorni
 
-Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+Done 2026-10-24 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
 
 **Files:**
 - Modify: `crates/portage-profile/src/virtuals.rs`, `crates/portage-profile/src/resolve/package_masks.rs`, `crates/portuale/src/pretend/early_actions.rs`, `pretend::run` action dispatch, news/unmerge/version paths
@@ -304,7 +308,7 @@ Expected: PASS.
 - [x] **Step 10: Commit pair**
 
 ### Task 10: #555 + closeout
-Done 2026-10-26 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
+Done 2026-10-24 on branch `residui-514-555` (ledger `.superpowers/sdd/plan-residui-514-555/progress.md`).
  — test hygiene e verifica finale
 
 **Files:**
