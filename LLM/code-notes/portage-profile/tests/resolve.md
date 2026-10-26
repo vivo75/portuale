@@ -126,3 +126,6 @@
 
 ## fn use_stable_mask_and_force_stack_profile_chain_only_and_stay_out_of_use_flags
 - Matches use_mask/use_force's profile-chain-only sourcing; see `use_stable_force`'s doc comment (stability is per-candidate).
+
+## fn user_package_keywords_feeds_the_accept_dict_first_with_a_deprecation_warning
+- The user `package.keywords` file merges into the accept-keywords dict before `package.accept_keywords` entries extend it per atom; the framed deprecation warning fires on read (#547, S0 k01/k05).

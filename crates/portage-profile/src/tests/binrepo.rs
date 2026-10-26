@@ -124,7 +124,7 @@ sync-uri = https://plain.example.org/amd64/
     assert!(!repos[1].frozen, "plainrepo defaults to unfrozen");
 }
 
-/// Backlog #539: every `[section]` inherits the `[DEFAULT]` keys, like
+/// Every `[section]` inherits the `[DEFAULT]` keys, like
 /// Portage's configparser (`BinRepoConfigLoader` reads
 /// `dict(parser[section].items())`, which includes defaults). A keyless
 /// section under `[DEFAULT] verify-signature = false` opts out of

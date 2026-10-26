@@ -23,7 +23,7 @@ pub(crate) const WARN_RANK_USE: u8 = 2;
 pub(crate) const WARN_RANK_LICENSE: u8 = 3;
 pub(crate) const WARN_RANK_KEYWORDS: u8 = 4;
 pub(crate) const WARN_RANK_MASK: u8 = 5;
-/// `virtuals` files read through the profile chain (#513): Portage's
+/// `virtuals` files read through the profile chain: Portage's
 /// `VirtualsManager` warns after the `package.mask` reads of the same run.
 pub(crate) const WARN_RANK_VIRTUALS_PROFILE: u8 = 6;
 

@@ -313,7 +313,7 @@ pub(crate) fn fold_package_masks_and_keywords(
     // A non-empty read warns once, with the Python `warnings.warn`
     // rendering Portage prints (`file:line: UserWarning: msg` and the
     // source line), interpreter prefix left out like the profile
-    // `virtuals` frame (backlog #547).
+    // `virtuals` frame.
     // Portage: KeywordsManager.py:73-104 (the `warn` call is line 89)
     let user_keywords_path = config_root.join("etc/portage/package.keywords");
     let user_accept_path = config_root.join("etc/portage/package.accept_keywords");

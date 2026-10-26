@@ -160,6 +160,12 @@ The resolved configuration (`Config`): every USE layer, visibility list, and fin
 ## field scanned_binpkgs
 - Portage caches the scan as `Packages`; portuale recomputes each run, so `--pretend` still writes nothing. Read as a `BinaryIndex` by `portage-repo` when set, else `<pkgdir>/Packages`.
 
+## field user_patches
+- The loaded `/etc/portage/patches` tree (`None` = no patches directory): the local half of the `--binpkg-respect-user-patches` comparison (#509). Loaded once in `resolve_config`, read by the resolver through `digest`/`files`.
+
+## field user_virtuals_deprecated
+- `/etc/portage/virtuals` exists (any content). Portage's `validate_ebuild_environment` prints the notice for the actions that validate, not for `--info`, `--sync`, `--metadata` or `--check-news` (#513). Set in `resolve_config`; the CLI decides per action.
+
 ## field other_vars
 - E.g. `CHOST`, `CFLAGS`, `GENTOO_MIRRORS`, `CONFIG_PROTECT`, `PORTAGE_TMPDIR`. Any variable other than USE/ACCEPT_KEYWORDS is a plain scalar for `${VAR}` substitution (last-value-wins, no incremental merge), matching real profile usage (e.g. `ARCH` feeding `ACCEPT_KEYWORDS="${ARCH}"`). No line continuation / multi-line quoted values, and no trailing `#` comment after an assignment (a `#` is a comment only at line start); real files in practice rely on neither.
 

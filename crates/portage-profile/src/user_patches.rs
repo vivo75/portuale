@@ -6,7 +6,7 @@
 //! the package (`cat/{PN,P,PR}[:slot]`), basenames sorted `LC_ALL=C`, empty
 //! files skipped (the shell's `-s` test / negation), sha256 over the
 //! concatenated hex. Stray files outside `cat/pkg` dirs are ignored, never
-//! a crash (upstream `7964f58e2`, bug 982999).
+//! a crash.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -31,7 +31,7 @@ pub struct UserPatchSet {
 impl UserPatchSet {
     /// Load the patch sets under `<config_root>/etc/portage/patches`.
     /// `None` when the path is missing or not a directory (a `patches`
-    /// *file* means no patch sets, upstream `7964f58e2`).
+    /// *file* means no patch sets).
     #[must_use]
     pub fn load(config_root: &Path) -> Option<Self> {
         let base = config_root.join("etc/portage/patches");

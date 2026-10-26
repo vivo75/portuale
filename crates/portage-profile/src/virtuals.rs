@@ -1,4 +1,4 @@
-//! Deprecated `virtuals` files (backlog #513).
+//! Deprecated `virtuals` files.
 //!
 //! `PROVIDE` virtuals were removed in portage-2.3.25, so Portage 3.0.83
 //! reads every `virtuals` file only to warn about it. Two warnings exist:
@@ -25,7 +25,7 @@ pub const USER_VIRTUALS_NOTICE: &str = "\n!!! /etc/portage/virtuals is deprecate
 /// line, not starting with `#`, has a key plus at least one value once a
 /// `#` token ends the line. A missing file is empty; any other read error
 /// is reported, like Portage's `grablines` (an `EACCES` there raises
-/// `PermissionDenied` and aborts the config load — backlog #549).
+/// `PermissionDenied` and aborts the config load).
 // Portage: util/__init__.py, `grabdict` (`len(myline) < 2` lines are skipped)
 pub(crate) fn grabdict_nonempty(path: &Path) -> Result<bool, std::io::Error> {
     let bytes = match std::fs::read(path) {

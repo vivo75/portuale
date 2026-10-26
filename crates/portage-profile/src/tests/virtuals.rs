@@ -1,8 +1,7 @@
-//! Backlog #513: deprecated `virtuals` files. Oracle: host Portage 3.0.83
-//! captures in `LLM/evidence/2026-10-24-513/` (shapes 01-29): the profile
-//! warning is a `UserWarning` on stderr for every non-empty profile
-//! `virtuals` (chain order, `/etc/portage/profile` last); the user block is
-//! printed by the CLI, not by config load.
+//! Deprecated `virtuals` files: the profile warning is a `UserWarning`
+//! on stderr for every non-empty profile `virtuals` (chain order,
+//! `/etc/portage/profile` last); the user block is printed by the CLI,
+//! not by config load.
 
 use super::*;
 
@@ -35,9 +34,8 @@ fn grabdict_nonempty_needs_a_key_and_a_value() {
     assert!(!check("   # indented comment is a key\n"));
 }
 
-/// Backlog #549 (oracle: mode-000 profile `virtuals` under a non-root
-/// host run: `Permission denied: '<path>'` on stderr, rc 13): an unreadable
-/// profile `virtuals` aborts the load. A missing file stays empty.
+/// An unreadable profile `virtuals` aborts the load. A missing file
+/// stays empty.
 #[test]
 fn unreadable_profile_virtuals_aborts_with_permission_denied() {
     use std::os::unix::fs::PermissionsExt;

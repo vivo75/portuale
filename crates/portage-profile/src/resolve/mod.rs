@@ -94,7 +94,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         warnings: &mut warnings,
     })?;
 
-    // `virtuals` deprecation (#513): Portage's VirtualsManager reads every
+    // `virtuals` deprecation: Portage's VirtualsManager reads every
     // profile of the chain plus the user profile node, appended last.
     // Portage: _config/VirtualsManager.py, `_read_dirVirtuals`
     let mut virtuals_dirs = chain.clone();
@@ -196,7 +196,7 @@ pub fn resolve_config(args: ResolveConfigArgs<'_>) -> Result<Config, Error> {
         .unwrap_or_else(|| "/var/cache/binpkgs".to_string());
 
     // The local user-patch sets for the `--binpkg-respect-user-patches`
-    // comparison (backlog #509): `None` when there is no patches
+    // comparison: `None` when there is no patches
     // directory, exactly like Portage's lazy `_user_patches`.
     // Portage: config.py, `_user_patches` (`UserPatches`)
     config.user_patches = UserPatchSet::load(config_root);

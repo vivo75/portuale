@@ -2733,7 +2733,7 @@ fn user_profile_accept_keywords_stacks_between_chain_and_user_file() {
 fn user_package_keywords_feeds_the_accept_dict_first_with_a_deprecation_warning() {
     // S0 k01/k05: the user `package.keywords` file merges into the
     // accept-keywords dict before `package.accept_keywords` entries extend
-    // it per atom; the framed deprecation warning fires on read (#547).
+    // it per atom; the framed deprecation warning fires on read.
     let root = user_profile_test_root("portage-profile-test-user-package-keywords", &[], &[]);
     fs::write(
         root.join("etc/portage/package.keywords"),

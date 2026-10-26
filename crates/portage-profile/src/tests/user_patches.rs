@@ -1,14 +1,7 @@
-//! Backlog #509: local user-patch digest, Portage `UserPatches`
-//! (`lib/portage/package/ebuild/_config/UserPatches.py`) and the shell
-//! `eapply_user` writer (`bin/phase-helpers.sh`) agree on the algorithm:
-//! per-file sha256 hex of the patch files matching the package, basenames
-//! sorted LC_ALL=C, empty files skipped, sha256 over the concatenated hex.
-//! Oracle: host `userPatchDigest` values in
-//! `LLM/evidence/2026-10-23-509/`; upstream NIST vectors in
-//! `MockUserPatches` (`Patch1`+`Patch2` ->
-//! `05f0b2d539792008c12ef9993a5d27ab85837c2b34317e423b0fd9322a9d6918`,
-//! `Patch3`+`Patch4` ->
-//! `506f0b5b42ef2d861c00fe67aba3f33889a2b433febc0291f9d237acd3e0b4f8`).
+//! Local user-patch digest: this module and the shell `eapply_user`
+//! writer agree on the algorithm: per-file sha256 hex of the patch
+//! files matching the package, basenames sorted LC_ALL=C, empty files
+//! skipped, sha256 over the concatenated hex.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -126,9 +119,8 @@ fn slot_qualified_dirs_participate() {
 
 #[test]
 fn stray_files_outside_pkg_dirs_are_ignored() {
-    // Portage 7964f58e2 (bug 982999): a `patches` file, or stray files
-    // directly under `patches/` or `patches/<cat>/`, are ignored, not a
-    // crash. Oracle: `LLM/evidence/2026-10-23-509/captures/15-stray-k.*`.
+    // A `patches` file, or stray files directly under `patches/` or
+    // `patches/<cat>/`, are ignored, not a crash.
     let tmp = populated_root();
     std::fs::write(tmp.join("etc/portage/patches/stray.patch"), b"x").unwrap();
     let stray_cat = tmp.join("etc/portage/patches/app-misc-stray");

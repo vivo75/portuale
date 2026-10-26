@@ -291,15 +291,15 @@ pub struct Config {
     pub scanned_binpkgs: Option<Vec<std::collections::HashMap<String, String>>>,
     /// The loaded `/etc/portage/patches` tree (`None` = no patches
     /// directory): the local half of the `--binpkg-respect-user-patches`
-    /// comparison (backlog #509). Loaded once in `resolve_config`, read
+    /// comparison. Loaded once in `resolve_config`, read
     /// by the resolver through `digest`/`files`.
     // Portage: config.py, `_user_patches` (`UserPatches`)
     pub user_patches: Option<UserPatchSet>,
     /// `/etc/portage/virtuals` exists (any content). Portage's
     /// `validate_ebuild_environment` prints [`USER_VIRTUALS_NOTICE`] for the
     /// actions that validate (build, pretend, search, depclean, clean, ...),
-    /// not for `--info`, `--sync`, `--metadata` or `--check-news` (backlog
-    /// #513). Set in `resolve_config`; the CLI decides per action.
+    /// not for `--info`, `--sync`, `--metadata` or `--check-news`.
+    /// Set in `resolve_config`; the CLI decides per action.
     // Portage: config.py, `validate` (`abs_user_virtuals`)
     pub user_virtuals_deprecated: bool,
     /// Every non-USE/ACCEPT_KEYWORDS variable's final scalar value
