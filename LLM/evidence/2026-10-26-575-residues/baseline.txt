@@ -1,0 +1,10 @@
+# Plan 02.589 Task 0 baseline, 2026-10-26
+# portuale 27143318, pmtest 19ecaea, branch fix/2026-10-26-575-residues (both repos)
+cargo fmt --check: pass
+cargo clippy --release --all-targets: pass, 0 warnings
+cargo test --release (workspace): pass, 3143 passed, 0 failed
+  (run after `cargo build --release`; with a stale target/release/portuale the
+  self_exe.rs guard fails ~362 ebuild_merge tests, which is a precondition, not a failure)
+pmtest scripts/pytest-parallel.sh: 4548 passed, 2 skipped, 2 xfailed; no corpus drift
+# Failing test names (compare by name in later gates):
+(none)
