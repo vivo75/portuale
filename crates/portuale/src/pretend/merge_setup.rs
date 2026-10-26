@@ -85,7 +85,7 @@ pub(crate) fn merge_setup(
     }
     merge_options.resolved_config = Some(std::sync::Arc::new(config.clone()));
     // `--merge-wait-scope` rides into the scheduler through the merge
-    // options; unset means Portage's `deep` default (backlog #512).
+    // options; unset means Portage's `deep` default.
     merge_options.merge_wait_scope = merge_wait_scope.unwrap_or_default();
     // `INSTALL_MASK` + the `no{man,info,doc}` `FEATURES` fold, from the
     // resolved config, not the process env.

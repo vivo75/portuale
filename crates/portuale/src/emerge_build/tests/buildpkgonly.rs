@@ -814,7 +814,7 @@ fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
     );
 }
 
-/// The scratch `up540` tree for the #540/#541 pins: one trivial ebuild with
+/// The scratch `up540` tree for the user-patch pins: one trivial ebuild with
 /// real `src_unpack`/`src_install` bodies (so `src_prepare` -- hence the
 /// vendored `eapply_user` -- runs; a `DEFINED_PHASES=install`-only ebuild
 /// would skip it on both managers), plus a `repos.conf` for `find_repos`
@@ -957,12 +957,11 @@ fn build_ppatch_binpkg(cfg: &std::path::Path, pkgdir: &std::path::Path) -> std::
     gpkg
 }
 
-/// Backlog #540 (oracle: host 3.0.83-r1 `--buildpkgonly` of the `up509`
-/// tree, `LLM/evidence/2026-10-23-509/`): a build with user patches applied
-/// records them exactly like Portage -- `build-info/USER_PATCHES` (sha256
-/// over the concatenated per-patch sha256s) and `build-info/user_patch.digests`
-/// (`hash\0basename\0` per patch) packed into the gpkg `metadata.tar`, plus
-/// the `USER_PATCHES` stanza key on inject -- while a patch-free build
+/// A build with user patches applied records them exactly like Portage --
+/// `build-info/USER_PATCHES` (sha256 over the concatenated per-patch
+/// sha256s) and `build-info/user_patch.digests` (`hash\0basename\0` per
+/// patch) packed into the gpkg `metadata.tar`, plus the `USER_PATCHES`
+/// stanza key on inject -- while a patch-free build
 /// carries neither (host `up-d` stanza has no key). The digests are
 /// byte-identical to the vendored `eapply_user` both managers run, so the
 /// expected value is recomputed here from the patch bytes, not read back
@@ -1009,9 +1008,8 @@ fn buildpkgonly_records_user_patches_in_metadata_and_index() {
     );
 }
 
-/// Backlog #541 (oracle: `LLM/evidence/2026-10-23-509/captures/14-merge-match.*`
-/// plus the VDB listing in the S10 working notes): a binary merge installs
-/// both binpkg metadata members into the VDB (`USER_PATCHES` and
+/// A binary merge installs both binpkg metadata members into the VDB
+/// (`USER_PATCHES` and `user_patch.digests`), which is what a later
 /// `user_patch.digests`), which is what a later `--usepkg` resolve and the
 /// extraction table read. Pinned end to end: build under patches, merge the
 /// built gpkg with `merge_binpkg`, read the VDB back byte-for-byte.
@@ -1049,10 +1047,9 @@ fn merge_binpkg_copies_user_patch_files_into_the_vdb() {
     );
 }
 
-/// Backlog #546 (oracle: `--buildpkgonly -j` of the `10-pretend` oracle
-/// tree, `LLM/evidence/2026-10-23-512/`): the scheduler-driven
-/// `--buildpkgonly` path runs the same up-front `pkg_pretend` pass as the
-/// merge scheduler. A dying pretend aborts before anything builds, with
+/// The scheduler-driven `--buildpkgonly` path runs the same up-front
+/// `pkg_pretend` pass as the merge scheduler (oracle: `--buildpkgonly -j`
+/// of the `10-pretend` tree). A dying pretend aborts before anything builds, with
 /// the already-reported failure -- not a per-entry "build failed".
 #[test]
 fn run_buildpkgonly_pretend_failure_aborts_before_anything_builds() {

@@ -34,3 +34,6 @@ are byte-identical to the pre-#394 baseline.
 
 ## allow-list wiring (#571)
 - The production `ResolveRequest` carries the run-shared `Categories` (`Some`); the abort path's `misspell_suggestion_block`, the complete-graph auto-enable gate and the running-root repaint gate on the same shared set, so the unlisted-category `!!!` fires once per run.
+
+## fn run_resolve_phases required-use preamble (#519)
+- A REQUIRED_USE unmet-requirements abort prints the resolution preamble first (stdout), like every other `--pretend` run that reaches resolution: Portage emits it at action start (`_start_resolution_display`), ahead of the rows.

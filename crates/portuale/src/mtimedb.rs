@@ -774,8 +774,8 @@ mod tests {
 
     #[test]
     fn updates_mtimes_round_trip_without_disturbing_other_sections() {
-        // Backlog #562: the `updates` record shares the file with
-        // `resume` and `info`; every writer preserves the others.
+        // The `updates` record shares the file with `resume` and `info`;
+        // every writer preserves the others.
         let root = tmproot();
         let mut updates = BTreeMap::new();
         updates.insert("/repo/profiles/updates/2Q-2024".to_string(), 1_700_000_002);

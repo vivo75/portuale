@@ -365,8 +365,7 @@ pub(crate) struct UnmergeDisplayHeaderArgs<'a> {
 /// `>>> Using system located in ROOT tree <root>/` notice for a non-`/`
 /// ROOT (every removal display: `-C`, `--clean`, `--depclean`), and the
 /// `>>> These are the packages that would be unmerged:` header under
-/// `--pretend`/`--ask`. Both carry a leading blank line unless `--quiet`
-/// (backlog #521).
+/// `--pretend`/`--ask`. Both carry a leading blank line unless `--quiet`.
 // Portage: _emerge/unmerge.py, _unmerge_display
 pub(crate) fn unmerge_display_header_text(
     root: &Path,

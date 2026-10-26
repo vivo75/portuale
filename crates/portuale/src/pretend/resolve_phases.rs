@@ -337,7 +337,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             // A REQUIRED_USE unmet-requirements abort prints the resolution
             // preamble first (stdout), like every other `--pretend` run that
             // reaches resolution: Portage emits it at action start
-            // (`_start_resolution_display`), ahead of the rows. Backlog #519.
+            // (`_start_resolution_display`), ahead of the rows.
             if is_required_use_report(&msg) {
                 print!(
                     "{}",

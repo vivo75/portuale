@@ -455,10 +455,10 @@ fn old_eapi_closes_the_gated_phase_exports() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #516: a `misc-functions.sh` spawn (`install_qa_check ...`) is not
-/// a real phase — Portage's `MiscFunctionsProcess._spawn` pops `EBUILD_PHASE`
+/// A `misc-functions.sh` spawn (`install_qa_check ...`) is not an ebuild
+/// phase — Portage's `MiscFunctionsProcess._spawn` pops `EBUILD_PHASE`
 /// from the child env, so `use()`'s `IUSE`-membership gate stays off there —
-/// while a real phase spawn keeps it. Everything else is identical.
+/// while an ebuild phase spawn keeps it. Everything else is identical.
 /// Portage: _emerge/EbuildPhase.py, MiscFunctionsProcess._spawn
 #[test]
 fn drop_ebuild_phase_pops_only_the_phase_var() {

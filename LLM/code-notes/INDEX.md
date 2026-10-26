@@ -48,8 +48,11 @@
 - [crates/portage-profile/src/resolve/use_force_mask.rs](portage-profile/resolve/use_force_mask.md) — package.use.force/mask and their stable variants, repo and profile levels.
 - [crates/portage-profile/src/resolve/use_levels.rs](portage-profile/resolve/use_levels.md) — The per-level use.mask/use.force stack the USE-flip suggestions read.
 - [crates/portage-profile/src/resolve/use_masks.rs](portage-profile/resolve/use_masks.md) — Profile `use.mask`, `use.force` and `arch.list`.
+- [crates/portage-profile/src/tests/binrepo.rs](portage-profile/tests/binrepo.md) — `parse_binrepos` pins: frozen defaults and `[DEFAULT]` inheritance.
 - [crates/portage-profile/src/tests/incrementals.rs](portage-profile/tests/incrementals.md) — Incremental-variable folding tests (USE token replay, wildcard removal, snapshots).
 - [crates/portage-profile/src/tests/resolve.rs](portage-profile/tests/resolve.md) — `resolve_config` end-to-end and per-file folding tests over hand-built and fixture trees.
+- [crates/portage-profile/src/tests/user_patches.rs](portage-profile/tests/user_patches.md) — Local user-patch digest pins against the host oracle and the upstream NIST vectors.
+- [crates/portage-profile/src/tests/virtuals.rs](portage-profile/tests/virtuals.md) — Deprecated `virtuals` file pins: the grabdict gate, the chain-order warnings, and the unreadable-file abort.
 - [crates/portage-profile/src/user_patches.rs](portage-profile/user_patches.md) — 
 - [crates/portage-profile/src/virtuals.rs](portage-profile/virtuals.md) — Deprecated profile and user `virtuals` files: the grabdict gate and the config-load warnings (backlog #513).
 
@@ -193,7 +196,9 @@
 - [crates/portage-repo/src/tests/blockers.rs](portage-repo/tests/blockers.md) — Blocker resolution tests: seed holds, buildpkgonly gate, per-cell classification.
 - [crates/portage-repo/src/tests/complete_graph.rs](portage-repo/tests/complete_graph.md) — Complete-graph mode tests: the missing deep dep is never merged.
 - [crates/portage-repo/src/tests/conflict_use_display.rs](portage-repo/tests/conflict_use_display.md) — Skipped-update and slot-conflict USE display tests: vdb sourcing, expand groups.
+- [crates/portage-repo/src/tests/cycle_report.rs](portage-repo/tests/cycle_report.md) — Circular-dependency report pins against Portage captures.
 - [crates/portage-repo/src/tests/cycles.rs](portage-repo/tests/cycles.md) — Cycle detector and suggestion tests: restart/hard/virtual cycles, per-edge labels.
+- [crates/portage-repo/src/tests/dep_validate.rs](portage-repo/tests/dep_validate.md) — `validate_dep_string` pins, including the probe atom through the reducer hook.
 - [crates/portage-repo/src/tests/depclean.rs](portage-repo/tests/depclean.md) — Depclean and prune selection tests: cleanlist, removal order, nodeps split.
 - [crates/portage-repo/src/tests/direct_solve.rs](portage-repo/tests/direct_solve.md) — Direct-solve unit tests: tuple forcing, gates, sink fallbacks.
 - [crates/portage-repo/src/tests/eliminate.rs](portage-repo/tests/eliminate.md) — Slot-operator eliminate/scan tests: bridge arm, lookup, eight rules, reachability.
@@ -229,11 +234,14 @@
 - [crates/portage-repo/src/tests/tests_184.rs](portage-repo/tests/tests_184.md) — Shadowed-arm order legs for `direct_solve_instance_use` / `direct_solve_atom_matches`.
 - [crates/portage-repo/src/tests/tests_195d.rs](portage-repo/tests/tests_195d.md) — Operator-level pins for `violated_parent_flags` against Portage's `Atom.violated_conditionals`.
 - [crates/portage-repo/src/tests/tests_571.rs](portage-repo/tests/tests_571.md) — Task 12 (#571): the category allow-list at every consumer.
+- [crates/portage-repo/src/tests/tests_p491.rs](portage-repo/tests/tests_p491.md) — The installed-parent update probe (#491 pass-0 seed), hermetically.
+- [crates/portage-repo/src/tests/tests_p563.rs](portage-repo/tests/tests_p563.md) — The perl-5.44 stabilization shape (#563 heal) and the skip-block pin forms (#568/#569), hermetically.
 - [crates/portage-repo/src/tests/unsat_probe.rs](portage-repo/tests/unsat_probe.md) — Dead-end pass seeding a replacement parent for an unsatisfiable built `:=` dep.
 - [crates/portage-repo/src/tests/updates.rs](portage-repo/tests/updates.md) — Update-command parsing and dep-string rewrite tests.
 - [crates/portage-repo/src/tests/use_display.rs](portage-repo/tests/use_display.md) — `build_use_expand_display` grouping, diff-marker and force-wrap tests.
 - [crates/portage-repo/src/tests/use_flags.rs](portage-repo/tests/use_flags.md) — Effective-USE layer-precedence, stable-flag and memo tests.
 - [crates/portage-repo/src/tests/use_unsat.rs](portage-repo/tests/use_unsat.md) — USE-unsatisfied candidate-classification tests.
+- [crates/portage-repo/src/tests/user_patches.rs](portage-repo/tests/user_patches.md) — `--binpkg-respect-user-patches` unit pins: the mask reason, the block renderer, and the elimination port.
 - [crates/portage-repo/src/tests/visibility.rs](portage-repo/tests/visibility.md) — Visibility license/keyword/mask and memo-key tests.
 - [crates/portage-repo/src/updates.rs](portage-repo/updates.md) — `profiles/updates` package and slot moves, applied at read time.
 - [crates/portage-repo/src/use_display.rs](portage-repo/use_display.md) — USE flag display columns for `emerge --pretend -v`.
@@ -311,6 +319,7 @@
 - [crates/portuale/src/ebuild_merge/tests/after_install.rs](portuale/ebuild_merge/tests/after_install.md) — Replace-loop prune coverage for the unmerge path: the replacing package's `-MERGING-` NEEDED feed.
 - [crates/portuale/src/ebuild_merge/tests/collisions.rs](portuale/ebuild_merge/tests/collisions.md) — Collision, stale-entry, blocker and owner-lookup coverage for the merge path.
 - [crates/portuale/src/ebuild_merge/tests/db_merge.rs](portuale/ebuild_merge/tests/db_merge.md) — Database-backend equivalence coverage: binpkg/source merges, upgrades, crash recovery, unmerges, and index-vs-scan agreement on sqlite/redb vs files.
+- [crates/portuale/src/ebuild_merge/tests/from_binpkg.rs](portuale/ebuild_merge/tests/from_binpkg.md) — Binary-merge hook environment and `user_patch.digests` report pins (#542).
 - [crates/portuale/src/ebuild_merge/tests/installed_instance.rs](portuale/ebuild_merge/tests/installed_instance.md) — Installed-instance, SLOT-reading, CONTENTS-lookup and install-mask coverage for the merge path.
 - [crates/portuale/src/ebuild_merge/tests/mod.rs](portuale/ebuild_merge/tests/mod.md) — Shared test helpers and the test-module list for the ebuild-merge suite.
 - [crates/portuale/src/ebuild_merge/tests/options.rs](portuale/ebuild_merge/tests/options.md) — `MergeOptions` resolution coverage: config-protect folds and FEATURES re-derivation.
@@ -367,7 +376,9 @@
 - [crates/portuale/src/emerge_build/tests/buildpkgonly.rs](portuale/emerge_build/tests/buildpkgonly.md) — `--buildpkgonly` execution tests (end-to-end builds plus failure-mode pins).
 - [crates/portuale/src/emerge_build/tests/entry_env.rs](portuale/emerge_build/tests/entry_env.md) — Per-entry environment unit tests.
 - [crates/portuale/src/emerge_build/tests/logs.rs](portuale/emerge_build/tests/logs.md) — Build-log path, `PORTAGE_LOGDIR` symlink, and capture tests.
+- [crates/portuale/src/emerge_build/tests/merge_wait.rs](portuale/emerge_build/tests/merge_wait.md) — Merge-wait scope and cycle-edge pins.
 - [crates/portuale/src/emerge_build/tests/resume.rs](portuale/emerge_build/tests/resume.md) — Resume-list unit tests.
+- [crates/portuale/src/emerge_build/tests/scheduler.rs](portuale/emerge_build/tests/scheduler.md) — Scheduler pins: merge-wait scope shapes, the cycle unblock, and the pretend replay order (#512).
 - [crates/portuale/src/emerge_build/tests/source_merge.rs](portuale/emerge_build/tests/source_merge.md) — Source-merge loop tests (serial, parallel, keep-going, and kill behavior).
 - [crates/portuale/src/emerge_build/tests/status.rs](portuale/emerge_build/tests/status.md) — Progress-line and scheduler-display unit tests.
 - [crates/portuale/src/emerge_getbinpkg.rs](portuale/emerge_getbinpkg.md) — `emerge --getbinpkg` / `--getbinpkgonly` execution: binhost index refresh, resolve, per-entry merge.
@@ -438,18 +449,24 @@
 - [crates/portuale/src/pretend/search.rs](portuale/pretend/search.md) — `--list-sets` and `--search`.
 - [crates/portuale/src/pretend/standalone_actions.rs](portuale/pretend/standalone_actions.md) — The standalone actions: --resume, --config, --search, --check-news, --info, --clean, --rage-clean, --unmerge, --depclean, --prune.
 - [crates/portuale/src/pretend/tests/attrs.rs](portuale/pretend/tests/attrs.md) — Root suffixes, the mask column, USE suffixes, and nomerge rows.
+- [crates/portuale/src/pretend/tests/autoclean.rs](portuale/pretend/tests/autoclean.md) — AUTOCLEAN tail pins.
 - [crates/portuale/src/pretend/tests/blockers.rs](portuale/pretend/tests/blockers.md) — Replacement-satisfied blocker rows: hidden, inline, and counted.
+- [crates/portuale/src/pretend/tests/circular.rs](portuale/pretend/tests/circular.md) — Circular-dependency display colour pins.
 - [crates/portuale/src/pretend/tests/conflicts.rs](portuale/pretend/tests/conflicts.md) — Slot-conflict reasons, caret spans, and colorized-marker alignment.
 - [crates/portuale/src/pretend/tests/env_config.rs](portuale/pretend/tests/env_config.md) — Config-derived pretend gates: buildpkg, pkgdir trust, shell splitting, default opts, compressor, root-deps.
 - [crates/portuale/src/pretend/tests/expand.rs](portuale/pretend/tests/expand.md) — Short-name expansion against the allow-list.
 - [crates/portuale/src/pretend/tests/flag_spellings.rs](portuale/pretend/tests/flag_spellings.md) — `=True` spellings of eleven options behave exactly like the bare flags.
 - [crates/portuale/src/pretend/tests/gates.rs](portuale/pretend/tests/gates.md) — Display and early-return gates for non-pretend runs.
+- [crates/portuale/src/pretend/tests/global_updates.rs](portuale/pretend/tests/global_updates.md) — Global-updates AUTOCLEAN force pins (#562).
+- [crates/portuale/src/pretend/tests/info.rs](portuale/pretend/tests/info.md) — `emerge --info` field pins (#504).
 - [crates/portuale/src/pretend/tests/mod.rs](portuale/pretend/tests/mod.md) — Shared fixtures and pty helpers for the pretend tests.
+- [crates/portuale/src/pretend/tests/new_options.rs](portuale/pretend/tests/new_options.md) — New-option parsing pins (#503).
 - [crates/portuale/src/pretend/tests/news.rs](portuale/pretend/tests/news.md) — News parsing, selection, notices, and the read-news prompt arms.
 - [crates/portuale/src/pretend/tests/prompt.rs](portuale/pretend/tests/prompt.md) — Prompt EOF/SIGINT behavior, the --ask privilege offer, and the prompt line buffer.
 - [crates/portuale/src/pretend/tests/remote.rs](portuale/pretend/tests/remote.md) — Remote execution prints no post-merge news notice.
 - [crates/portuale/src/pretend/tests/resume.rs](portuale/pretend/tests/resume.md) — Resume news notices, pretend write isolation, and the not-merged tail.
 - [crates/portuale/src/pretend/tests/unmerge.rs](portuale/pretend/tests/unmerge.md) — Unmerge info-regen wiring, the end notice, and set-parent detection.
+- [crates/portuale/src/pretend/tests/user_virtuals.rs](portuale/pretend/tests/user_virtuals.md) — `/etc/portage/virtuals` notice-gate pins (#513).
 - [crates/portuale/src/pretend/tests/world.rs](portuale/pretend/tests/world.md) — World and world_sets recording, usersets candidacy, and the installed set.
 - [crates/portuale/src/pretend/usage_text.rs](portuale/pretend/usage_text.md) — Portage 3.0.83's full `usage:` block for `emerge`.
 - [crates/portuale/src/pretend/world.rs](portuale/pretend/world.md) — The world and world_sets files.

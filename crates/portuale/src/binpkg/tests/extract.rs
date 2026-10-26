@@ -361,9 +361,8 @@ fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
     );
 }
 
-/// One hostile image per shape of `LLM/evidence/2026-10-23-500-501`: the
-/// verdict is Portage 3.0.83-r1's, the scan refuses before `tar` runs, so
-/// the image directory stays empty.
+/// One hostile image per oracle shape: the verdict is Portage's, the
+/// scan refuses before `tar` runs, so the image directory stays empty.
 #[test]
 fn extract_binpkg_refuses_the_portage_hostile_image_shapes() {
     let d = tar::EntryType::Directory;
@@ -485,16 +484,15 @@ fn extract_binpkg_refuses_the_portage_hostile_image_shapes() {
     }
 }
 
-/// #514 (b): Portage 3.0.83-r1's containment root is its temporary
-/// directory, one level above the unpacked `image/` tree (`gpkg.py`,
-/// `tar_safe_extract.extractall`), so a symlink climbing exactly to that
-/// root is accepted there and refused here. Oracle: `tar_safe_extract`
-/// over the crafted tars as root (`LLM/evidence/2026-10-23-500-501/`
-/// `514-oracle-matrix.txt`): rc 0 on both managers for the bare link (the
+/// Portage's containment root is its temporary directory, one level
+/// above the unpacked `image/` tree, so a symlink climbing exactly to
+/// that root is accepted there and refused here. Oracle: `tar_safe_extract`
+/// over the crafted tars as root: rc 0 on both managers for the bare link (the
 /// link lands in the image); `b-link-to-temproot-with-member` is accepted
 /// by the scan but GNU tar 1.35 defers `..`-target symlinks and stops
 /// after a partial unpack, so portuale reports tar's failure (rc 1) with
-/// the image directory left empty — the same GNU-tar boundary as (c).
+/// the image directory left empty — the same GNU-tar boundary as the
+/// hardlink shape below.
 #[test]
 fn extract_binpkg_accepts_a_symlink_climbing_to_the_temp_root_like_portage() {
     let meta = [inner_entry("metadata/SLOT", b"0\n")];
@@ -560,15 +558,15 @@ fn extract_binpkg_accepts_a_symlink_climbing_to_the_temp_root_like_portage() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// #514 (c): a hard link of an in-image symlink whose target contains `..`,
-/// with a member under it, extracts in Portage 3.0.83-r1 (rc 0) but makes
+/// A hard link of an in-image symlink whose target contains `..`,
+/// with a member under it, extracts in Portage (rc 0) but makes
 /// GNU tar 1.35 stop after a partial unpack (rc 2): tar defers symlinks
 /// whose target contains `..`, so the member under the hard link has no
 /// directory to land in. Oracle: `tar_safe_extract` as root (rc 0) vs GNU
 /// tar (rc 2, `Cannot open: Not a directory`) over the same tar
-/// (`LLM/evidence/2026-10-23-500-501/` `514-oracle-matrix.txt` row
-/// `c-dotdot-same-depth`). Documented GNU-tar divergence: portuale reports
-/// tar's failure (rc 1) with the image directory left empty.
+/// (oracle-matrix row `c-dotdot-same-depth`). Documented GNU-tar
+/// divergence: portuale reports tar's failure (rc 1) with the image
+/// directory left empty.
 #[test]
 fn extract_binpkg_reports_the_gnu_tar_truncation_for_a_dotdot_hardlink_shape() {
     let g = build_gpkg_with_inner_tars(
@@ -602,12 +600,12 @@ fn extract_binpkg_reports_the_gnu_tar_truncation_for_a_dotdot_hardlink_shape() {
     let _ = fs::remove_dir_all(&tmp);
 }
 
-/// `test_contained_symlink_parent` (upstream), plus the hard link of a
+/// Upstream's contained-symlink-parent probe, plus the hard link of a
 /// symlink that stays inside: Portage accepts both and so does portuale.
 /// A hard link whose relocated symlink target stays inside the temp root
 /// (`image/opt/deep/link -> ../x` relocated to `image/../x`) is accepted
-/// too: Portage 3.0.83-r1 `tar_safe_extract` returns rc 0 on the shape
-/// (`514-oracle-matrix.txt` row `u-relocated-out-of-place`).
+/// too: Portage `tar_safe_extract` returns rc 0 on the shape (oracle-matrix
+/// row `u-relocated-out-of-place`).
 #[test]
 fn extract_binpkg_accepts_contained_symlink_parents() {
     let g = build_gpkg_with_inner_tars(

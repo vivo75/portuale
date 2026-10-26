@@ -84,7 +84,7 @@ pub(crate) fn edge_use_tail(flags: &[(String, bool)], color: &Colorizer) -> Stri
 /// here on the text path: Portage warns at handler construction, before the
 /// merge-list rows print, so the render path (`render_merge_rows`, forced
 /// display) and the gate-off path (`final_gates`) emit it ahead of the
-/// block instead (backlog #517 (d)). The `json` branch still warns first,
+/// block instead. The `json` branch still warns first,
 /// like Portage's handler-then-`_show_json`.
 pub(crate) fn warn_invalid_circular_max_use_flags(config: &portage_profile::Config) {
     let (_, invalid_max) = portage_repo::circular_max_use_flags(config);

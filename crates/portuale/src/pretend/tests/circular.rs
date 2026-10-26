@@ -74,9 +74,8 @@ fn circular_node_text_matches_portage_package_str() {
 
 #[test]
 fn edge_use_tail_colours_flags_like_portage_3_0_83() {
-    // Portage 3.0.83-r1 `_edge_description`: enabled flags red, disabled ones
-    // blue with a `-`, sorted, after `, USE=` (LLM/evidence/2026-10-23-506,
-    // shapes 07 and 09).
+    // Portage `_edge_description`: enabled flags red, disabled ones blue
+    // with a `-`, sorted, after `, USE=` (shapes 07 and 09).
     let flags = vec![("nls".to_string(), true), ("system-b".to_string(), false)];
     assert_eq!(
         edge_use_tail(&flags, &Colorizer::new(false)),

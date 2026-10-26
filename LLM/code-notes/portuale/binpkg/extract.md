@@ -44,3 +44,6 @@ Extracting a binary package's image and metadata at merge time.
 
 ## fn locate_gpkg_member
 - The outer-container checks and the member lookup shared by the metadata and image halves of `extract_gpkg_member` (was inline there).
+
+## fn extract_binpkg_metadata_only
+- Unpacks metadata only (what Portage's `bintree.dbapi.unpack_metadata` reads, never the image), so a binpkg truncated inside the image region still pretends when its metadata is intact, like Portage (#544; pmtest `test_emerge_usepkgonly_fails_a_truncated_binpkg_at_merge_like_portage`). No Manifest digest/signature check here either: that is the merge-time verifier's job (`merge_one_binary_entry`), exactly as Portage verifies inside `_run_pkg_pretend_one` only for entries the pretend filter keeps. Portage: `bintree.dbapi.unpack_metadata`, `tbz2.unpackinfo`.

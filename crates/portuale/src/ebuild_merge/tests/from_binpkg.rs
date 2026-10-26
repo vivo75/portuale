@@ -42,8 +42,8 @@ fn extract_log_text_omits_absent_repository_and_features() {
 /// A binary-merge hook sees `QEMU_SOFTMMU_TARGETS=""` for a package built
 /// without any `qemu_softmmu_targets_*` flag, not the profile's value, and
 /// `qemu_softmmu_targets_x86_64` in the binpkg's `USE` yields `x86_64`.
-/// Expected values from the L1 bash merge on Portage 3.0.83-r1
-/// (`LLM/evidence/2026-10-24-vdb-env/`: `declare -x QEMU_SOFTMMU_TARGETS=""`).
+/// Expected values from the L1 bash merge on Portage
+/// (`declare -x QEMU_SOFTMMU_TARGETS=""` in the captured environment).
 /// Portage: config.py, setcpv/environ
 #[test]
 fn binary_hook_env_recomputes_use_expand_from_the_binpkg() {
@@ -79,8 +79,8 @@ fn binary_hook_env_recomputes_use_expand_from_the_binpkg() {
     );
 }
 
-/// Backlog #542: the `user_patch.digests` member parses exactly like
-/// Portage (`strip(b"\0").split(b"\0")`, hex/basename validation, pairwise
+/// The `user_patch.digests` member parses exactly like Portage
+/// (`strip(b"\0").split(b"\0")`, hex/basename validation, pairwise
 /// count). Oracle: the shell-written bytes (`hash\0basename\0`, trailing
 /// NUL included).
 #[test]
@@ -105,8 +105,8 @@ fn parse_user_patch_digests_accepts_the_shell_format() {
     );
 }
 
-/// Backlog #542: malformed members are invalid, never a table. Oracle:
-/// Portage's `else` arm (`This binary package has invalid user patch
+/// Malformed members are invalid, never a table. Oracle: Portage's
+/// `else` arm (`This binary package has invalid user patch
 /// digest metadata!!!`).
 #[test]
 fn parse_user_patch_digests_rejects_malformed_members() {
@@ -150,8 +150,8 @@ fn parse_user_patch_digests_rejects_malformed_members() {
     );
 }
 
-/// Backlog #542: the table on the matching merge is byte-identical to the
-/// oracle (`captures/14-merge-match.portage.out`, `term_columns` 80 off a
+/// The table on the matching merge is byte-identical to the oracle
+/// (`captures/14-merge-match.portage.out`, `term_columns` 80 off a
 /// terminal): the header, the 77-wide bar, the padded digest row, the
 /// closing bar and the blank line -- with no stderr.
 #[test]
@@ -176,7 +176,7 @@ fn user_patch_table_matches_the_oracle_on_a_match() {
     assert!(stderr.is_empty());
 }
 
-/// Backlog #542: a differing local set warns on stderr (oracle
+/// A differing local set warns on stderr (oracle
 /// `captures/16-merge-mismatch.portage.{out,err}`); so does a missing local
 /// set, and a malformed member warns invalid instead of a table.
 #[test]
@@ -225,7 +225,7 @@ fn user_patch_table_warns_on_mismatch_and_malformed_members() {
     assert_eq!(user_patch_extract_report(None, true, "", "", 80), None);
 }
 
-/// Backlog #542: truncation mirrors Portage's character-count rules (long
+/// Truncation mirrors Portage's character-count rules (long
 /// basenames cut to `max(term_columns - 8 - 6, 25)`, digests to
 /// `max(term_columns - len(basename) - 6, 8)`, rows padded to
 /// `term_columns - 4`).

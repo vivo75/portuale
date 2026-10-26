@@ -39,3 +39,6 @@ Pure predicates for what a run shows: merge-list gating, the empty-plan arms, an
 
 ## fn pretend_changes_show_header
 - Backlog #462: a `--pretend` run whose resolve completed with autounmask changes prints the resolution header before the rows (Portage's `_display_autounmask` runs `_show_merge_list` per change, `depgraph.py:10726` etc.). `--json` keeps stdout machine-readable (Portage has no `--json` pretend path; portuale's JSON early-returns before any display); an aborted resolve keeps its own preamble arms; the non-pretend path goes through the existing `!pretend` arm.
+
+## fn is_required_use_report (#519)
+- Like every other `--pretend` run that reaches resolution, Portage prints the preamble first (`_emerge/depgraph.py`, `_start_resolution_display`).

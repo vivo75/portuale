@@ -469,7 +469,7 @@ fn populate_local_pkgdir_parses_unindexed_files_in_both_modes() {
     }
 }
 
-/// Backlog #537: under `gpkg_only` (`FEATURES=binpkg-request-signature`)
+/// Under `gpkg_only` (`FEATURES=binpkg-request-signature`)
 /// a local xpak is skipped while the gpkg next to it still pools, in both
 /// trust modes (no index here, so nothing could vouch either way).
 /// Portage: `bintree._populate_local`.

@@ -78,7 +78,7 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) clean_action: bool,
     pub(crate) rage_clean: bool,
     pub(crate) info_action: bool,
-    /// `--version`/`-V`: print the `Portage ...` line, exit 0 (backlog #552).
+    /// `--version`/`-V`: print the `Portage ...` line, exit 0.
     pub(crate) version_action: bool,
     pub(crate) with_bdeps: bool,
     pub(crate) with_bdeps_given: bool,
@@ -131,9 +131,7 @@ pub(crate) struct EmergeOpts<'a> {
     pub(crate) getbinpkg_given: bool,
     pub(crate) getbinpkgonly: bool,
     pub(crate) binpkg_respect_use: Option<bool>,
-    // Accepted like Portage 3.0.83; all three act now (user patches #509,
-    // json report #507, merge-wait scope #512: `LLM/scope-cuts.md`
-    // CUT-8..CUT-10 are closed).
+    // Accepted like Portage; all three act now.
     pub(crate) binpkg_respect_user_patches: Option<bool>,
     pub(crate) circular_deps_report: Option<CircularDepsReport>,
     pub(crate) merge_wait_scope: Option<MergeWaitScope>,
@@ -1804,7 +1802,7 @@ fn parse_query_opts<'a>(
         Ok(true)
     } else if arg == "--version" {
         // Portage: _emerge/main.py, actions (`version`); run_action prints
-        // the `Portage ...` line and exits 0 (backlog #552).
+        // the `Portage ...` line and exits 0.
         opts.version_action = true;
         *idx += 1;
         Ok(true)
@@ -2261,8 +2259,7 @@ fn invalid_choice(opt: &str, value: &str, choices: &str) -> ExitCode {
 /// value that only a following token of the right set is consumed as
 /// (`insert_optional_args`); `=value` and the bare form map `True` to the
 /// default. The third requires a value. The first acts in the binary
-/// filter (#509), the second in the cycle report (#507), the third in the
-/// `-j` scheduler (#512).
+/// filter, the second in the cycle report, the third in the `-j` scheduler.
 // Portage: _emerge/main.py, insert_optional_args / parse_opts
 fn parse_new_option_opts<'a>(
     opts: &mut EmergeOpts<'a>,

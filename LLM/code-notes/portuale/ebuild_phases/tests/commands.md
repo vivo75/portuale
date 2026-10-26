@@ -64,3 +64,9 @@ Phase-command end-to-end tests. Context moved out of the code comments (#336 Pha
 
 ## fn open_log_file_gzip_pump_round_trips
 - `FEATURES=compress-build-logs` pump round-trip (Portage's `EbuildPhase._open_log`'s `gzip.GzipFile(mode="ab")`): bytes written to the sink's two handles land gzip-encoded in the `.gz` file -- one member per `open_log_file` call, so a second call appends a second member -- and decode back losslessly. A plain path still writes through unencoded. Closing the write ends (then joining) finishes the member -- the same drop order the phase call sites use. Both members, both streams -- stdout/stderr chunk order across the two pipes was never deterministic (Portage appends both fds to one gzip stream too), so the comparison is unordered.
+
+## fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_dir (#516)
+- The merge path runs the post-`install` QA sequence; the direct `ebuild` path never does.
+
+## fn install_qa_spawn_pops_ebuild_phase_so_use_test_does_not_die (#516)
+- The post-`install` QA spawn carries no `EBUILD_PHASE` (Portage's `MiscFunctionsProcess._spawn` pops it), so a repo-local check calling `use test` on an ebuild without that flag passes instead of dying.

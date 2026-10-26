@@ -21,3 +21,6 @@ Environment-setup unit tests (md5-cache reads, FILESDIR/distdir links, builddir 
 
 ## fn compute_environment_builds_the_builddir_under_the_given_tmpdir
 - `compute_environment` derives `PORTAGE_BUILDDIR` as `<tmpdir>/portage/<cat>/<pf>`, so a matched per-package tmpdir puts the whole build tree under it (S0 cell D's `PORTAGE_BUILDDIR` half).
+
+## fn vendored_filter_readonly_variables_matches_portage_3_0_83
+- The vendored `__filter_readonly_variables` drops `LOCPATH` with the other locale variables under `--filter-locale` (`c15ab2464`), keeps an ebuild-set `QEMU_*` variable (`f7bfe34de`), and the vendored `phase-functions.sh` keeps both of portuale's local changes. Expected values from reading Portage 3.0.83-r1's `phase-functions.sh` and a live `env -i` run of the same function.

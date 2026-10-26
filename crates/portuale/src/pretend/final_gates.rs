@@ -97,7 +97,7 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         }
     }
 
-    // The ignored-user-patches block (backlog #509): binaries the
+    // The ignored-user-patches block: binaries the
     // `--binpkg-respect-user-patches` filter dropped for cps that merge.
     // Portage's `display()` prints it after the ABI rebuilds and before
     // the changed-deps report; suppressed under `--quiet` and under an
@@ -182,8 +182,7 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
     if let Some(cycle) = result.circular_deps.first() {
         if !gated_abort {
             // Portage warns at handler construction, ahead of the rows the
-            // merge list just printed (backlog #517 (d)); `json` warns for
-            // itself inside the block.
+            // merge list just printed; `json` warns for itself inside the block.
             if opts
                 .circular_deps_report
                 .unwrap_or(CircularDepsReport::Text)

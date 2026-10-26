@@ -1,10 +1,9 @@
-//! Task 12 (#571): short-name expansion reads the allow-listed tree.
+//! Short-name expansion reads the allow-listed tree.
 //!
 //! A bare name (`emerge p571-shared`) qualifies against `all_cp` over
 //! `settings.categories` (Portage `cpv_expand.py` / `depgraph.py:4948`):
 //! the overlay-listed `p571-shared` expands, the unlisted `p571-hidden`
-//! is a plain miss with no `!!!` line. Oracle: Portage 3.0.83 host
-//! (`LLM/evidence/2026-10-26-571/`, `portage-{shared,hidden}-short.*`).
+//! is a plain miss with no `!!!` line.
 
 use super::*;
 

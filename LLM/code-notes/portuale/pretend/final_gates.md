@@ -26,3 +26,6 @@ The last gates before execution: ABI rebuilds, changed-deps report, buildpkgonly
 
 ## fn final_gates (ignored-user-patches block, backlog #509)
 - Prints `GraphResult::ignored_user_patch_binaries` between the ABI rebuilds and the changed-deps report (Portage `display()` order: merge list, abi rebuilds, ignored binaries, changed-deps report). Suppressed under `--quiet` and under an explicit `--binpkg-respect-user-patches=y|n` (`opts.binpkg_respect_user_patches.is_some()`); the `--verbose` tail comes from `opts.verbose`.
+
+## fn final_gates circular warning (#517 (d))
+- Portage warns at handler construction, ahead of the rows the merge list just printed; `json` warns for itself inside the block.

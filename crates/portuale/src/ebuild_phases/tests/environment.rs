@@ -193,12 +193,12 @@ fn compute_environment_builds_the_builddir_under_the_given_tmpdir() {
     std::fs::remove_dir_all(&probe).ok();
 }
 
-/// The vendored 3.0.83 `__filter_readonly_variables` drops `LOCPATH` with the
-/// other locale variables under `--filter-locale` (`c15ab2464`), keeps an
-/// ebuild-set `QEMU_*` variable (`f7bfe34de`), and the vendored
-/// `phase-functions.sh` keeps both of portuale's local changes.
-/// Expected values from reading Portage 3.0.83-r1's `phase-functions.sh`
-/// and a live `env -i` run of the same function.
+/// The vendored `__filter_readonly_variables` drops `LOCPATH` with the
+/// other locale variables under `--filter-locale`, keeps an ebuild-set
+/// `QEMU_*` variable, and the vendored `phase-functions.sh` keeps both of
+/// portuale's local changes.
+/// Expected values from reading Portage's `phase-functions.sh` and a live
+/// `env -i` run of the same function.
 #[test]
 fn vendored_filter_readonly_variables_matches_portage_3_0_83() {
     let bin_dir = bin_dir().unwrap().to_path_buf();

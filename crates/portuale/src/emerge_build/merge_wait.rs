@@ -192,7 +192,7 @@ fn runtime_children(index: &RuntimeIndex, entries: &[GraphEntry], i: usize) -> V
 /// marks build-time keys of already-built packages, and nothing here is
 /// built yet). A self-edge alone is not a cycle, like Portage's `len > 1`
 /// test.
-// Portage: _emerge/Scheduler.py, _find_cyclic_nodes (3d677b7b2)
+// Portage: _emerge/Scheduler.py, _find_cyclic_nodes
 pub(crate) fn cyclic_nodes(adj: &[Vec<usize>]) -> HashSet<usize> {
     let comp = portage_repo::strongly_connected_components(adj);
     let mut size: HashMap<usize, usize> = HashMap::new();

@@ -61,7 +61,7 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
     // Portage: _emerge/actions.py, _calc_depclean
     // The inline reverse-dep display prints while the removal list is
     // built — once per `create_cleanlist()` pass, so twice when the lib
-    // check fires a second graph (backlog #523).
+    // check fires a second graph.
     if verbose {
         print_prune_parents(&result);
     }
@@ -300,7 +300,7 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
     };
 
     // The header is `--pretend`/`--ask`-only, preceded by the non-`/` ROOT
-    // notice; both carry Portage's leading blank line (backlog #521).
+    // notice; both carry Portage's leading blank line.
     // Portage: unmerge.py, _unmerge_display
     print_unmerge_display_header(UnmergeDisplayHeaderArgs {
         root,

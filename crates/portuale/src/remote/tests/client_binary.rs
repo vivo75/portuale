@@ -446,8 +446,8 @@ fn s8_pretend_installs_nothing() {
     std::fs::write(
         clientetc.join("etc/portage/binrepos.conf"),
         format!(
-            // Unsigned test binhost: opt out of the verifying default
-            // (backlog #511), so the `.tbz2` entry is served.
+            // Unsigned test binhost: opt out of the verifying default, so
+            // the `.tbz2` entry is served.
             "[tmpbinhost]\nsync-uri = file://{}\npriority = 1\nverify-signature = false\n",
             binhost.display()
         ),

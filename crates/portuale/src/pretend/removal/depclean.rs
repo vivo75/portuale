@@ -115,7 +115,7 @@ pub(crate) struct CleanlistBlocksArgs<'a> {
 /// `pulled in by:` list per kept package (in cleanlist order), each followed
 /// by its cycle notice. Called once per pass — Portage runs the whole
 /// function again after the `--depclean-lib-check` second graph, so the
-/// blocks legitimately print twice when the lib check fires (backlog #523).
+/// blocks legitimately print twice when the lib check fires.
 // Portage: _emerge/actions.py, create_cleanlist
 pub(crate) fn print_cleanlist_blocks(args: CleanlistBlocksArgs<'_>) {
     let CleanlistBlocksArgs { result, verbose } = args;
@@ -402,7 +402,7 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
     // `_complete_graph` runs behind the resolver's notice: Portage prints
     // `Calculating dependencies ... done!` on stdout (the spinner's static
     // form when piped), preceded by its blank line and with no timing line
-    // (depclean never calls `_show_resolution_report`). Backlog #522.
+    // (depclean never calls `_show_resolution_report`).
     // Portage: _emerge/actions.py, _calc_depclean; stdout_spinner.end_notice
     if resolution_notice_shown(quiet, false) {
         println!("\nCalculating dependencies ... done!");
@@ -463,8 +463,7 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
     // `create_cleanlist`'s reverse-dep blocks (and the per-package cycle
     // notice after each), printed for the FIRST pass before the lib check
     // and again after the second `_complete_graph` — Portage calls
-    // `create_cleanlist()` once per round and the blocks live inside it
-    // (backlog #523).
+    // `create_cleanlist()` once per round and the blocks live inside it.
     print_cleanlist_blocks(CleanlistBlocksArgs {
         result: &result,
         verbose,

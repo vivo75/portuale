@@ -45,8 +45,8 @@ fn remote_success_prints_no_post_merge_notice_like_portage() {
     std::fs::write(
         clientetc.join("etc/portage/binrepos.conf"),
         format!(
-            // Unsigned test binhost: opt out of the verifying default
-            // (backlog #511), so the `.tbz2` entry is served.
+            // Unsigned test binhost: opt out of the verifying default, so
+            // the `.tbz2` entry is served.
             "[tmpbinhost]\nsync-uri = file://{}\npriority = 1\nverify-signature = false\n",
             binhost.display()
         ),
@@ -107,8 +107,8 @@ fn remote_success_prints_no_post_merge_notice_like_portage() {
         .env("DISTDIR", fixtures.join("distfiles"))
         .env("PORTAGE_TMPDIR", base.join("pt"))
         .env("FEATURES", "news")
-        // #564: pin the child's repo set to the rewritten clientetc text
-        // so the host's installed system repos.conf cannot add its
+        // Pin the child's repo set to the rewritten clientetc text, so
+        // the host's installed system repos.conf cannot add its
         // `gentoo` news items to this exact-output pin (same technique as
         // `news_resolve_env`).
         .env(

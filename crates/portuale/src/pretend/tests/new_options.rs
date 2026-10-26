@@ -10,9 +10,8 @@ fn parsed(args: &[&str]) -> Result<EmergeOpts<'static>, std::process::ExitCode> 
     parse_emerge_args(owned)
 }
 
-/// Backlog #503: `--binpkg-respect-user-patches` is `true_y_or_n` with an
-/// optional value, like `--binpkg-respect-use`. Oracle: Portage 3.0.83-r1,
-/// `LLM/evidence/2026-10-23-503/` (`01`..`07`).
+/// `--binpkg-respect-user-patches` is `true_y_or_n` with an optional
+/// value, like `--binpkg-respect-use`. Oracle: Portage (`01`..`07`).
 #[test]
 fn binpkg_respect_user_patches_takes_an_optional_y_n_value() {
     let p = |a: &[&str]| parsed(a).expect("parses").binpkg_respect_user_patches;
@@ -32,9 +31,8 @@ fn binpkg_respect_user_patches_takes_an_optional_y_n_value() {
     assert!(parsed(&["--binpkg-respect-user-patches=maybe"]).is_err());
 }
 
-/// Backlog #503: the bare `--circular-deps-report` means `text`; only
-/// `text`/`json` following the bare flag are consumed. Oracle: Portage
-/// 3.0.83-r1 (`08`..`13`).
+/// The bare `--circular-deps-report` means `text`; only `text`/`json`
+/// following the bare flag are consumed. Oracle: Portage (`08`..`13`).
 #[test]
 fn circular_deps_report_defaults_to_text_and_accepts_json() {
     let p = |a: &[&str]| parsed(a).expect("parses").circular_deps_report;
@@ -62,8 +60,8 @@ fn circular_deps_report_defaults_to_text_and_accepts_json() {
     assert!(parsed(&["--circular-deps-report="]).is_err());
 }
 
-/// Backlog #503: `--merge-wait-scope` requires one of four values.
-/// Oracle: Portage 3.0.83-r1 (`14`..`20`).
+/// `--merge-wait-scope` requires one of four values. Oracle: Portage
+/// (`14`..`20`).
 #[test]
 fn merge_wait_scope_requires_one_of_four_values() {
     let p = |a: &[&str]| parsed(a).expect("parses").merge_wait_scope;
@@ -87,7 +85,7 @@ fn merge_wait_scope_requires_one_of_four_values() {
     assert!(parsed(&["--merge-wait-scope", "a/b"]).is_err());
 }
 
-/// Backlog #503: `--cycle-break` is a non-goal and stays rejected.
+/// `--cycle-break` is a non-goal and stays rejected.
 #[test]
 fn cycle_break_stays_unrecognized() {
     assert!(parsed(&["--cycle-break"]).is_err());

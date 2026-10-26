@@ -24,3 +24,9 @@
 
 ## fn run_prune_nodeps_or_clean (autoclean flag)
 - Backlog #404 (02.346 S11): `autoclean: bool` threads the post-merge auto-clean through the shared `--clean` selection (`clean_selection` system-wide with empty targets, same table, same `execute_unmerge` removal). With it set, the `CLEAN_DELAY` countdown is skipped (Portage `_emerge/unmerge.py:638`, `not autoclean`); the two header lines live in `run_autoclean_after_merge` instead, so manual `--clean`/`--prune`/`-C` output is unchanged. S404 oracle: no `Waiting` line in any auto-clean cell with the 5-second default in force.
+
+## fn run_prune_pretend lib-check display (#523)
+- The inline reverse-dep display prints while the removal list is built — once per `create_cleanlist()` pass, so twice when the lib check fires a second graph. Portage: `_emerge/actions.py`, `_calc_depclean`.
+
+## fn print_unmerge_display_header (#521)
+- The header is `--pretend`/`--ask`-only, preceded by the non-`/` ROOT notice; both carry Portage's leading blank line. Portage: `unmerge.py`, `_unmerge_display`.

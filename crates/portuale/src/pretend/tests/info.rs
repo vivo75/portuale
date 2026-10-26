@@ -57,7 +57,7 @@ fn info_scalar_value_prefers_the_calling_env_over_the_config() {
 
 #[test]
 fn repo_timestamp_is_the_first_grabfile_entry() {
-    // Backlog #504: `timestamp:` takes `portage.grabfile(...)[0].strip()`:
+    // `timestamp:` takes `portage.grabfile(...)[0].strip()`:
     // comments and blank lines are skipped, trailing blanks stripped.
     let dir = TempDir::new("info_504");
     std::fs::create_dir(dir.path().join("metadata")).unwrap();
@@ -75,8 +75,7 @@ fn repo_timestamp_is_the_first_grabfile_entry() {
 
 #[test]
 fn repo_head_commit_is_git_only() {
-    // Backlog #504: only a `sync-type = git` repo reports `head commit:`
-    // (the git sync module's `retrieve_head`); rsync raises
+    // Only a `sync-type = git` repo reports `head commit:`; rsync raises
     // NotImplementedError in Portage and prints nothing.
     let dir = TempDir::new("info_504");
     let git = |args: &[&str]| {
@@ -103,8 +102,8 @@ fn repo_head_commit_is_git_only() {
 
 #[test]
 fn info_masks_url_passwords_like_hide_url_passwd() {
-    // Backlog #504: `sync-uri` of repos and binrepos goes through
-    // `_hide_url_passwd`; a URI without a password is untouched.
+    // `sync-uri` of repos and binrepos goes through `_hide_url_passwd`;
+    // a URI without a password is untouched.
     use crate::emerge_getbinpkg::hide_binhost_passwd as h;
     assert_eq!(h("https://u:pw@h/x.git"), "https://u:*password*@h/x.git");
     assert_eq!(h("https://h/x.git"), "https://h/x.git");

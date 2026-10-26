@@ -109,7 +109,7 @@ pub(crate) fn build_one_source_entry(args: BuildOneSourceEntryArgs<'_>) -> Resul
         // Portage: _emerge/EbuildExecuter.py, _can_skip_source_phases
         skip_noop_src_phases: true,
         // Set once the up-front `pkg_pretend` pass has replayed this
-        // entry's output (backlog #512): the build starts at `setup`.
+        // entry's output: the build starts at `setup`.
         skip_pretend,
     })?;
     if status != 0 {
@@ -415,7 +415,7 @@ pub(crate) fn pretend_needs_run(entry: &GraphEntry) -> bool {
 /// skipping. Without this gate the pass prints `>>> Running pre-merge
 /// checks` (and runs `clean`) for entries Portage never pretends, which
 /// breaks the serial status-line blanks pmtest pins for pretend-less
-/// packages (backlog #197).
+/// packages.
 // Portage: _emerge/Scheduler.py, `_pkg_needs_pretend`
 pub(crate) fn source_entry_needs_pretend(entry: &GraphEntry, repos: &[RepoConfig]) -> bool {
     let Some(version) = entry_version(entry) else {
@@ -603,7 +603,7 @@ pub(crate) struct NoteLandedArgs<'a, 'b> {
 /// schedule and the resume list, failure reports and (without
 /// `--keep-going`) stops the pass. A stop also clears the merge-wait
 /// queue: terminated runs never drain it.
-// Portage: _emerge/Scheduler.py, _task_complete; 8ac550470
+// Portage: _emerge/Scheduler.py, _task_complete
 fn note_landed(args: NoteLandedArgs<'_, '_>) -> Landed {
     let NoteLandedArgs {
         idx,
@@ -723,7 +723,7 @@ pub(crate) fn run_build_scheduler(
     };
     // Inside a cycle post-merge edges do not gate a build; everything
     // else dispatches exactly as before.
-    // Portage: _emerge/Scheduler.py, _find_cyclic_nodes (3d677b7b2)
+    // Portage: _emerge/Scheduler.py, _find_cyclic_nodes
     let adj: Vec<Vec<usize>> = deps
         .iter()
         .map(|ds| {
@@ -735,7 +735,7 @@ pub(crate) fn run_build_scheduler(
     let blocking = blocking_deps(entries, &deps, &cyclic_nodes(&adj));
     // Who merges only while no build runs: the scope's set, or everything
     // under `FEATURES=merge-wait` (on by default).
-    // Portage: _emerge/Scheduler.py, _build_exit (3b1fc4238)
+    // Portage: _emerge/Scheduler.py, _build_exit
     let system_atoms: Vec<String> = options
         .resolved_config
         .as_deref()

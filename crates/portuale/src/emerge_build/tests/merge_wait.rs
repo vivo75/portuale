@@ -70,8 +70,8 @@ fn cps(entries: &[GraphEntry], set: &HashSet<usize>) -> HashSet<String> {
         .collect()
 }
 
-/// Oracle: upstream `test_merge_wait_scope.py` (`testMergeWaitScope`):
-/// `none` selects nothing, even over `@system` members.
+/// Upstream's merge-wait-scope probe: `none` selects nothing, even over
+/// `@system` members.
 #[test]
 fn none_scope_selects_nothing() {
     let entries = vec![
@@ -246,8 +246,8 @@ fn cyclic_nodes_needs_more_than_one_member() {
     assert!(cyclic_nodes(&[vec![]]).is_empty());
 }
 
-/// Oracle: commit `3d677b7b2` (bug 452172): inside a cycle the post-merge
-/// edge stops gating the build, while the hard edge still does.
+/// Inside a cycle the post-merge edge stops gating the build, while the
+/// hard edge still does.
 #[test]
 fn blocking_deps_ignores_post_edges_of_cyclic_owners() {
     let mut a = wait_entry("dev-libs", "cycA");

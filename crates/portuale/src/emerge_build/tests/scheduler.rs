@@ -129,9 +129,7 @@ fn scheduler_display(max: usize) -> StatusDisplay {
     )
 }
 
-/// Oracle: `LLM/evidence/2026-10-23-512/captures/01-scope-deep.portage.*` —
-/// the `@system` merge lands with the slow one, under `1 merge wait`.
-/// Backlog #512, item (1).
+/// The `@system` merge lands with the slow one, under `1 merge wait`.
 #[test]
 fn merge_wait_scope_deep_holds_a_system_merge_until_builds_drain() {
     let config_root = fixtures_root();
@@ -175,8 +173,7 @@ fn merge_wait_scope_deep_holds_a_system_merge_until_builds_drain() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Oracle: `04-scope-none.portage.*` — nothing barriers, so the fast
-/// system merge lands long before the slow one. Backlog #512, item (1).
+/// Nothing barriers, so the fast system merge lands long before the slow one.
 #[test]
 fn merge_wait_scope_none_merges_everything_in_parallel() {
     let config_root = fixtures_root();
@@ -220,9 +217,8 @@ fn merge_wait_scope_none_merges_everything_in_parallel() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Oracle: `09-cycle.portage.*` — `schedcycb` installs before `schedcyca`
-/// (rc 0). Before the fix portuale merged nothing here: every build waited
-/// on a merge that could never start. Backlog #512, item (3).
+/// `schedcycb` installs before `schedcyca` (rc 0). Before the fix portuale
+/// merged nothing here: every build waited on a merge that could never start.
 #[test]
 fn cycle_post_merge_dep_does_not_gate_the_build() {
     use portage_repo::{DepEdge, DepPriority};
@@ -299,8 +295,7 @@ fn cycle_post_merge_dep_does_not_gate_the_build() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Oracle: `10-pretend.portage.*` — each package's pretend block replays
-/// whole, in merge-list order. Backlog #512, item (2).
+/// Each package's pretend block replays whole, in merge-list order.
 #[test]
 fn pkg_pretend_replays_in_merge_list_order() {
     let config_root = fixtures_root();
@@ -351,7 +346,7 @@ fn pkg_pretend_replays_in_merge_list_order() {
 }
 
 /// A dying `pkg_pretend` reports the run and never starts a build: the
-/// slow entry's build log is never even opened. Backlog #512, item (2).
+/// slow entry's build log is never even opened.
 #[test]
 fn pkg_pretend_failure_aborts_before_anything_builds() {
     let config_root = fixtures_root();
@@ -408,8 +403,6 @@ fn pkg_pretend_failure_aborts_before_anything_builds() {
 
 /// Oracle: `07-system-closure.portage.*` — under `system`, a runtime-only
 /// reachable package merges in parallel while the `@system` member waits.
-/// Backlog #512, item (1); review follow-up I2 (the `deep`/`none` pair
-/// alone would not catch a mis-wired scope set).
 #[test]
 fn merge_wait_scope_system_holds_only_system_members() {
     let config_root = fixtures_root();
@@ -601,7 +594,6 @@ fn queued_merges_land_before_a_freed_dependent_builds() {
 /// A `package.env` `FEATURES=merge-wait` holds one package's merge even
 /// when the run-wide list (and the scope) would let it through.
 /// Portage: `_build_exit`, `"merge-wait" in build.settings.features`.
-/// Backlog #512, item (1); review follow-up I1.
 #[test]
 fn package_env_merge_wait_holds_one_packages_merge() {
     let config_root = fixtures_root();

@@ -213,8 +213,7 @@ pub(crate) fn misspell_suggestion_block(
     // one reports no similar-names block (the S0-backed `360-gone-pv` capture).
     // Portage: depgraph.py, _show_unsatisfied_dep. The ebuild half reads the
     // allow-listed tree silently: the walk already fired the `!!!` for a cp
-    // the miss names (backlog #571 oracle), and this display gate must not
-    // re-print it.
+    // the miss names, and this display gate must not re-print it.
     let ebuild_has = dbs.ebuild && gate.has_ebuilds(&atom.category, &atom.package);
     let installed_has =
         !portage_repo::installed_candidates(root, &atom.category, &atom.package).is_empty();
@@ -370,9 +369,8 @@ mod similar_name_tests {
         m
     }
 
-    /// Backlog #535, Task 6 Step 1: the qualified branch matches
-    /// case-insensitively like Portage (`similar_name_search` lowercases
-    /// every candidate and maps the winners back to original case), so
+    /// The qualified branch matches case-insensitively like Portage
+    /// (`similar_name_search` lowercases every candidate and maps the winners back to original case), so
     /// `app-misc/Cor` competes as `app-misc/cor` but prints as `app-misc/Cor`.
     /// Oracle: host Portage 3.0.83 over the fixture+s511 candidate set
     /// (`python3` probe of `dbapi/_similar_name_search.py`).

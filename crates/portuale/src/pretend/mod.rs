@@ -154,7 +154,7 @@ fn report_option(token: &str) -> ExitCode {
 /// `parser.error`-passed messages (347-USG: their option order comes from a
 /// `frozenset`, so it is not reproducible byte for byte) -- except
 /// argparse-native `invalid choice` errors, whose block portuale prints
-/// from the fixed 3.0.83 capture (backlog #520; see `parser_error`).
+/// from the fixed 3.0.83 capture (see `parser_error`).
 /// Only the error line is printed here. The message is
 /// taken exactly as Portage passes it, trailing `\n` included, so
 /// `parser.error`-origin lines end in a blank line while argparse-native
@@ -170,8 +170,7 @@ pub(crate) fn parser_error_text(message: &str) -> String {
 // Portage: _emerge/main.py, parse_opts
 pub(crate) fn parser_error(message: &str) -> ExitCode {
     // Portage's argparse prints the full `usage:` block above an
-    // `invalid choice` error (backlog #520); the block's option order is
-    // hash-randomized per Portage process, so portuale prints the fixed
+    // `invalid choice` error; the block's option order is hash-randomized per Portage process, so portuale prints the fixed
     // 3.0.83 capture instead (see `usage_text`, quirks Q4/Q6 analogue).
     if message.contains("invalid choice") {
         eprint!("{PORTAGE_USAGE_TEXT}");
@@ -254,7 +253,7 @@ pub fn run(args: &[String]) -> ExitCode {
         return code;
     }
 
-    // `/etc/portage/virtuals` is deprecated and ignored (backlog #513): the
+    // `/etc/portage/virtuals` is deprecated and ignored: the
     // block follows the config-load warnings, for the validating actions only.
     // Portage: config.py, `validate`; _emerge/actions.py, validate_ebuild_environment
     if config.user_virtuals_deprecated && prints_user_virtuals_notice(&opts) {
@@ -734,7 +733,7 @@ pub(crate) fn show_resolution_report(args: ShowResolutionReportArgs<'_>) {
     let mut rendered_rows: Vec<(usize, bool)> = Vec::new();
     // A circular abort prints the resolution preamble before the re-display,
     // like every other `--pretend` run: Portage emits it at action start
-    // (`_start_resolution_display`), ahead of the rows (backlog #519). The
+    // (`_start_resolution_display`), ahead of the rows. The
     // non-pretend abort keeps the legacy silent shape.
     if circular_forced_display
         && opts.pretend

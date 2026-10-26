@@ -372,7 +372,7 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
         skip_noop_src_phases: false,
         skip_pretend: false,
         // The merge path runs the post-`install` QA sequence; the direct
-        // `ebuild` path never does (backlog #516).
+        // `ebuild` path never does.
         build_env: &[],
     })
     .expect("run_commands should not itself error");
@@ -391,8 +391,8 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Backlog #516: the post-`install` QA spawn carries no `EBUILD_PHASE`
-/// (Portage's `MiscFunctionsProcess._spawn` pops it), so a repo-local check
+/// The post-`install` QA spawn carries no `EBUILD_PHASE` (Portage's
+/// `MiscFunctionsProcess._spawn` pops it), so a repo-local check
 /// calling `use test` on an ebuild without that flag passes instead of dying
 /// with `USE Flag 'test' not in IUSE`. The probe check records the phase var
 /// it saw plus which `use test` arm it took, under `${T}`; the run must exit

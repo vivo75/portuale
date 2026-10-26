@@ -138,7 +138,7 @@ pub fn refresh_binhost_indexes(args: RefreshBinhostIndexesArgs<'_>) {
     // copy …` notes, the `gpkg_only` warnings) prints highest-priority
     // first. `seen` is the cross-repo `cpv_exists` gate: an instance a
     // higher-priority repo already injected shadows the same instance
-    // below, before its `gpkg_only` check (backlog #536).
+    // below, before its `gpkg_only` check.
     let mut seen: std::collections::HashSet<RemoteInstanceKey> = std::collections::HashSet::new();
     for binrepo in binrepos.iter().rev() {
         let filter = GetbinpkgFilter::for_binrepo(binrepo, cli_exclude, cli_include);
@@ -259,9 +259,9 @@ pub(crate) fn warn_getbinpkg_cli_overlap(exclude: &[String], include: &[String])
     }
 }
 
-/// Portage 3.0.83's per-binrepo `gpkg_only`: a repo whose index must be
-/// signature-clean serves no xpak entry (`bintree._populate_remote`,
-/// `7e2dcd0bd`). True when the run requests signed binaries
+/// Per-binrepo `gpkg_only`: a repo whose index must be signature-clean
+/// serves no xpak entry (`bintree._populate_remote`). True when the run
+/// requests signed binaries
 /// (`FEATURES=binpkg-request-signature`, which also covers local binpkgs)
 /// or when this binrepo verifies signatures. An absent
 /// `verify-signature` key counts as true (stock Portage ships
@@ -271,9 +271,9 @@ pub(crate) fn binrepo_gpkg_only(binrepo: &BinRepo, binpkg_request_signature: boo
     binpkg_request_signature || binrepo.verify_signature
 }
 
-/// Portage 3.0.83's ignored-remote-xpak warning (`78607215e`): printed once
-/// per binrepo, naming the index's `URI` header (else the sync URI, which
-/// Portage does not mask here). Plain text: the colour Portage's
+/// The ignored-remote-xpak warning: printed once per binrepo, naming
+/// the index's `URI` header (else the sync URI, which Portage does not
+/// mask here). Plain text: the colour Portage's
 /// `colorize("WARN", …)` adds under `--color=y` is not modelled, like the
 /// other binhost warnings here.
 // Portage: lib/portage/dbapi/bintree.py, _populate_remote_repo
@@ -291,9 +291,8 @@ pub(crate) fn unsupported_binpkg_format_warning(path: &str) -> String {
     format!("Unsupported binary package format from '{path}'\n")
 }
 
-/// Portage 3.0.83's inter-repo overlap gate (`bintree._populate_remote_repo`,
-/// backlog #536): an entry whose instance a higher-priority repo already
-/// injected is skipped before its `gpkg_only` check, so neither the
+/// The inter-repo overlap gate (`bintree._populate_remote_repo`): an
+/// entry whose instance a higher-priority repo already injected is skipped before its `gpkg_only` check, so neither the
 /// `Unsupported …` line nor the once-per-repo xpak warning fires for it.
 /// The key mirrors `dbapi._instance_key` under binpkg-multi-instance
 /// (`(cpv, build_id, file_size, build_time, mtime)`); the index carries no
@@ -422,7 +421,7 @@ fn refresh_one_binrepo(args: RefreshOneBinrepoArgs<'_>) -> RefreshOutcome {
             let entries = filter.apply(entries);
             // Inter-repo overlap, before the `gpkg_only` check: an instance
             // a higher-priority repo already injected never reaches this
-            // repo's format check or warnings (backlog #536).
+            // repo's format check or warnings.
             let entries: Vec<_> = entries
                 .into_iter()
                 .filter(|e| !seen.contains(&remote_instance_key(e)))
@@ -875,8 +874,7 @@ fn binary_entry_needs_pretend(entry: &GraphEntry, pkgdir: &Path) -> bool {
     // `_pkg_needs_pretend` reads `x.metadata`, the index record), so a
     // pretend-less truncated binpkg reaches the merge-time verifier with
     // its `>>> Emerging binary` + digest block instead of dying in the
-    // pass on the unreadable file (pmtest
-    // `test_emerge_usepkgonly_fails_a_truncated_binpkg_at_merge_like_portage`).
+    // pass on the unreadable file (pinned by the pmtest contract suite).
     // No vouching stanza fails open: the merge reports it.
     let record = local_index_record(LocalIndexRecordArgs {
         pkgdir,
@@ -1926,7 +1924,7 @@ pub(crate) struct PrintUserPatchTableArgs<'a> {
 /// (`binary_user_patches_ok`): whether any patch set matches, and the
 /// combined digest -- with no `--binpkg-respect-user-patches` exemption,
 /// like Portage (the oracle `16-merge-mismatch` warns under `=n`).
-// Portage: _emerge/Binpkg.py, `_unpack_metadata` (upstream `3071bc985`)
+// Portage: _emerge/Binpkg.py, `_unpack_metadata`
 pub(crate) fn print_user_patch_table(args: PrintUserPatchTableArgs<'_>) {
     let PrintUserPatchTableArgs {
         binpkg_path,
@@ -3687,9 +3685,8 @@ mod tests {
 
     #[test]
     fn download_and_verify_refuses_a_record_without_size_and_checksum_after_the_fetch() {
-        // Portage 3.0.83-r1 (LLM/evidence/2026-10-23-500-501, `s2-hb-*`): the file IS
-        // fetched, then refused with rc 1, and the `.partial` stays. The same for
-        // no digest at all, SIZE only and checksum only.
+        // The file IS fetched, then refused with rc 1, and the `.partial`
+        // stays. The same for no digest at all, SIZE only and checksum only.
         let tmp = tempdir();
         let pkgdir = tmp.join("pkgdir");
         let body =
@@ -4148,7 +4145,7 @@ mod tests {
             .collect()
     }
 
-    /// Portage 3.0.83's per-binrepo `gpkg_only` (`7e2dcd0bd`): the run-wide
+    /// Per-binrepo `gpkg_only`: the run-wide
     /// `FEATURES=binpkg-request-signature` forces every repo; otherwise each
     /// repo's own `verify-signature` decides (an absent key inherits true
     /// from the global `[DEFAULT]`, so only explicit `false` opts out).
@@ -4168,7 +4165,7 @@ mod tests {
         assert!(binrepo_gpkg_only(&plain, true));
     }
 
-    /// Backlog #536: the inter-repo overlap gate keys shadowed entries by
+    /// The inter-repo overlap gate keys shadowed entries by
     /// instance (`CPV`, `BUILD_ID`, `SIZE`, `BUILD_TIME`), mirroring
     /// `dbapi._instance_key` under binpkg-multi-instance — not by bare CPV.
     /// Same instance in two repos shares one key however the `PATH`s differ;
@@ -4214,9 +4211,8 @@ mod tests {
     /// `apply_gpkg_only`: a `.gpkg.tar` `PATH` is kept; xpak ones
     /// (`.tbz2`/`.xpak`) are dropped with a single ignored warning no matter
     /// how many; unknown or absent `PATH`s are dropped with one
-    /// `Unsupported …` line each, in index order. Exact texts are Portage
-    /// 3.0.83's (`78607215e`, `get_binpkg_format` remote error), captured in
-    /// `LLM/evidence/2026-10-23-511/captures/01-sig-gpkg.portage.err`.
+    /// `Unsupported …` line each, in index order. Exact texts are Portage's
+    /// (`get_binpkg_format` remote error).
     #[test]
     fn apply_gpkg_only_keeps_gpkg_warns_once_for_xpak_and_per_unknown_path() {
         let entry = |path: Option<&str>| {
@@ -5106,8 +5102,7 @@ mod tests {
             deps: Vec::new(),
         };
 
-        // Portage 3.0.83-r1 (LLM/evidence/2026-10-23-500-501, `s2-hb-size-only`):
-        // fetched, then refused before install; the `.partial` stays.
+        // Fetched, then refused before install; the `.partial` stays.
         let err = run_merge_plan(RunMergePlanArgs {
             entries: &[entry],
             config: &config,
@@ -5480,14 +5475,11 @@ mod mixed_pretend_tests {
         }
     }
 
-    /// Backlog #544: the mixed plan replays binary pretends up front, in
-    /// merge-list order, before any merge. The `binpkgpretendpkg` local
-    /// `.tbz2` pretends from its extracted metadata; the source `schedppa`
-    /// entry pretends from its ebuild. Both blocks replay, binary first
+    /// The mixed plan replays binary pretends up front, in merge-list
+    /// order, before any merge. The `binpkgpretendpkg` local `.tbz2`
+    /// pretends from its extracted metadata; the source `schedppa` entry
+    /// pretends from its ebuild. Both blocks replay, binary first
     /// (mergelist order), with no vdb entry written by the pass itself.
-    /// Oracle: mixed `-j` run with pretend markers on both sides
-    /// (`LLM/evidence/2026-10-23-512/`, no such shape there yet -- this
-    /// hermetic pin is the oracle until the probe lands).
     #[test]
     fn mixed_pretend_pass_replays_binary_and_source_in_merge_list_order() {
         let tmp = tempdir();
@@ -5563,9 +5555,9 @@ mod mixed_pretend_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// Backlog #544: a dying binary pretend aborts the mixed pass before
-    /// anything merges. The `binpkgpretendpkg` hook dies when the payload
-    /// is already visible, so pre-creating it makes its pretend fail.
+    /// A dying binary pretend aborts the mixed pass before anything
+    /// merges. The `binpkgpretendpkg` hook dies when the payload is
+    /// already visible, so pre-creating it makes its pretend fail.
     #[test]
     fn mixed_pretend_pass_binary_failure_aborts_before_anything_merges() {
         let tmp = tempdir();

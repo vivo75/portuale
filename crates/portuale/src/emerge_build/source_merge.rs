@@ -167,8 +167,8 @@ pub fn run_source_merge(args: RunSourceMergeArgs<'_>) -> Result<MergePassReport,
                 capture_log: true,
                 progress: entry_progress,
                 display: &display,
-                // The up-front pass above already replayed `pretend`
-                // (backlog #545): the build starts at `setup`.
+                // The up-front pass above already replayed `pretend`:
+                // the build starts at `setup`.
                 skip_pretend: true,
             }) {
                 Ok(path) => {

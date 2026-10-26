@@ -24,3 +24,6 @@ Client-binary gate unit tests and install/reuse end-to-end tests.
 
 ## tests: s8_pretend_installs_nothing
 - #326 S8 e2e (S8.2). Pretend stays local (`mrg` routes it to `pretend::run` with the remote options dropped). Setup mirrors `pretend.rs`'s local-transport remote test: a `file://` binhost plus the fixture client config.
+
+## fn s8_pretend_installs_nothing (#511)
+- Unsigned test binhost: opt out of the verifying default, so the `.tbz2` entry is served.

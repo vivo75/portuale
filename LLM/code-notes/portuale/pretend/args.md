@@ -175,3 +175,9 @@ Parsing `emerge` arguments into `EmergeOpts`. Context moved out of the code comm
 
 ## fn parse_new_option_opts (#512)
 - `merge_wait_scope` is live now: `merge_setup` maps it into `merge_options.merge_wait_scope` (unset means `Deep`), the `--resume` path replays the saved value, and the `-j` scheduler barriers on it. The field's `#[allow(dead_code)]` (if still present) is stale. CUT-10 in `LLM/scope-cuts.md` closes with #512.
+
+## field version_action (#552)
+- `--version`/`-V`: print the `Portage ...` line, exit 0.
+
+## fn parse --version (#552)
+- Portage `_emerge/main.py`, `actions` (`version`); `run_action` prints the `Portage ...` line and exits 0.

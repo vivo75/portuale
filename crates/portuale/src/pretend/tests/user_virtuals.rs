@@ -1,8 +1,7 @@
-//! Backlog #513: `/etc/portage/virtuals` notice gate. Portage's
+//! `/etc/portage/virtuals` notice gate. Portage's
 //! `validate_ebuild_environment` runs for build, pretend, search, depclean
 //! and the other config-using actions, and returns early for `--info`,
-//! `--sync`, `--metadata` and `--check-news` (oracle: host Portage 3.0.83,
-//! `LLM/evidence/2026-10-24-513/`, shapes 01, 20-29).
+//! `--sync`, `--metadata` and `--check-news`.
 
 use super::*;
 
@@ -22,7 +21,7 @@ fn the_notice_follows_the_validating_actions() {
     assert!(prints(&["-C", "-p", "dev-libs/dccyca"]));
     assert!(prints(&["--prune", "-p", "dev-libs/dccyca"]));
     assert!(prints(&["--rage-clean", "-p"]));
-    // #550: the early-dispatch actions validate too.
+    // The early-dispatch actions validate too.
     assert!(prints(&["--regen"]));
     assert!(prints(&["--config", "dev-libs/dccyca"]));
     assert!(prints(&["--deselect"]));
@@ -38,7 +37,6 @@ fn info_sync_metadata_and_news_stay_silent() {
     assert!(!prints(&["--list-sets"]));
 }
 
-/// Backlog #552 (oracle: `LLM/evidence/2026-10-24-513/captures/12-version.*`):
 /// `emerge --version` prints the `Portage ...` line and exits 0. It is a
 /// validating-action exemption like `--info`: no `/etc/portage/virtuals`
 /// block (Portage's `profile_check` returns early for `version` without

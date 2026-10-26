@@ -33,3 +33,6 @@ The `--tree` display. Context moved out of the code comments (#336 Phase 7); the
 - Indent: `depth + 1` spaces for depth >= 1, none at depth 0.
 - `self.indent` is exactly `depth` (`_ordered_tree_display`'s depth passes straight to `_display_tree`).
 - Unreached nodes: Portage's own "never silently lose information".
+
+## fn print_tree circular re-display (#517 (b))
+- Portage's `display()` reverses `mylist` for `--tree` (`depgraph.py`, `display`); the forced circular re-display goes through the same `display()`, so the reversal applies there too. `node_order` is merge-list direction and the walk consumes it reversed.

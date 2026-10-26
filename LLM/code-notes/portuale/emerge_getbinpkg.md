@@ -137,7 +137,7 @@ see `emerge_build/pretend_pass.md`.
 - Reads `PORTAGE_CHECKSUM_FILTER` from the process env first, then `config.other_vars` (backlog #436d).
 
 ## fn apply_checksum_filter
-- Moved to `crate::binpkg::digest` (#578, shared with the local verifier); see there.
+- Moved to `crate::binpkg::digest` (#578, shared with the local verifier); see there. Ports `portage.checksum._hash_filter` / `_apply_hash_filter`.
 
 ## fn verified_digest_names_filtered
 - Ports `BinpkgVerifier._start` / `_display_success`: uppercase hash names present in the index record (filtered by `PORTAGE_CHECKSUM_FILTER`) plus `size`, ASCII-sorted (`MD5 SHA1 size`); `None` without a parseable `SIZE` (backlog #428, #436d).
@@ -221,3 +221,18 @@ Backlog #511. The loop runs `binrepos.iter().rev()`: Portage processes `reversed
 - `remote_instance_key_groups_by_instance_not_path` (#536): same `CPV`+`BUILD_ID` share one key across `PATH`s; a different `BUILD_ID` is a different key.
 - pmtest `test_536_overlap_*` (4): higher-priority gpkg/xpak shadows the lower copy silently; dropped entries do not shadow (reqsig pair warns twice, rc 1).
 - The three `verify_signature: true` download/merge tests serve `.tbz2`, so they now declare `verify_signature = false` explicitly (Portage 3.0.83 would ignore those entries from a verifying repo); the `filecache`/`drop` cases assert pool mechanics, not signature policy, so they opt out the same way. The `Packages.gz` cache test serves a `PATH`-less entry and asserts the on-disk cache only (kept unfiltered, like Portage), so it is untouched.
+
+## fn binary_entry_needs_pretend
+- The gate reads the `<pkgdir>/Packages` stanza, never the file, so a pretend-less truncated binpkg reaches the merge-time verifier instead of dying in the pass (pmtest `test_emerge_usepkgonly_fails_a_truncated_binpkg_at_merge_like_portage`).
+
+## fn print_user_patch_table oracle (upstream `3071bc985`)
+- The mismatch gate has no `--binpkg-respect-user-patches` exemption, like Portage (the oracle `16-merge-mismatch` warns under `=n`).
+
+## tests (mixed pretend oracle)
+- Oracle for the mixed pretend pins: mixed `-j` run with pretend markers on both sides (`LLM/evidence/2026-10-23-512/`; no such shape there yet — the hermetic pin is the oracle until the probe lands).
+
+## fn download_and_verify_refuses_a_record_without_size_and_checksum_after_the_fetch
+- Portage 3.0.83-r1 (`LLM/evidence/2026-10-23-500-501/`, `s2-hb-*`).
+
+## fn run_merge_plan_refuses_a_remote_binpkg_whose_index_lacks_a_checksum
+- Portage 3.0.83-r1 (`LLM/evidence/2026-10-23-500-501/`, `s2-hb-size-only`).

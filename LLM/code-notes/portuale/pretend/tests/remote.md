@@ -8,3 +8,7 @@ Remote execution prints no post-merge news notice.
 
 ## hermetic running root (Task 11)
 - `PORTAGE_RUNNING_ROOT` points at the test's scratch root, not the shared fixtures: the run resolves through `pretend::run`, whose updates pass would otherwise record (and move under) the fixture tree. The copied `var` tree keeps installed-only resolution identical.
+
+## fn remote_success_prints_no_post_merge_notice_like_portage
+- Unsigned test binhost: opt out of the verifying default (#511), so the `.tbz2` entry is served.
+- Pin the child's repo set to the rewritten clientetc text (#564), so the host's installed system repos.conf cannot add repos to the resolution.

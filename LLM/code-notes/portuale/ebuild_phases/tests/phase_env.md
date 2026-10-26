@@ -26,3 +26,6 @@ Phase-environment unit tests (path vars, PATH composition, quoting, eclass locat
 ## fn standalone_phase_env_layers_matching_package_env_build_vars
 - Ports Portage's `_grab_pkg_env` for a standalone phase env: a matching `package.env` entry's env file is layered over the base flags, atom-matched against the ebuild's own md5-cache identity, with no resolved graph entry anywhere.
 - `dev-libs/penvbuildpkg` (mapped to `penv-buildflags`) carries the env file's `CFLAGS`/`MAKEOPTS` plus the toolchain selectors `CC`/`CXX`/`AR`/`RUSTFLAGS` and the `ENV_UNSET` incremental (backlog #95); `dev-libs/newpkg` (unmapped) doesn't; the `depend` phase never does (its empty base is deliberate -- metadata extraction must not see config values).
+
+## fn drop_ebuild_phase_pops_only_the_phase_var (#516)
+- A `misc-functions.sh` spawn (`install_qa_check ...`) is not an ebuild phase — Portage's `MiscFunctionsProcess._spawn` pops `EBUILD_PHASE` from the child env — while an ebuild phase spawn keeps it. Portage: `_emerge/EbuildPhase.py`, `MiscFunctionsProcess._spawn`.

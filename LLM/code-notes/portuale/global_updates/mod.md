@@ -46,3 +46,6 @@ The `_do_global_updates` port (backlog #576): the mtime-gated scan, the per-root
 
 ## fn scan_updates (ordering)
 - Empty lists stay so non-master `repository not in repo_map` checks see every repo (Portage keeps them in `repo_map` and skips them at apply time).
+
+## fn copy_fixture
+- Scratch copy of the Task 5 fixture tree (`fixtures/global-updates`).

@@ -15,3 +15,6 @@ Progress-line and scheduler-display unit tests.
 
 ## fn status_display_counters_feed_the_jobs_line
 - Backlog #197: dispatch / freed build slot / landed merge / failure map to Portage's `_schedule_tasks_imp` / `_build_exit` / `_merge_exit`. The line is deterministic (no live trailer, B14).
+
+## fn merge_progress_roots_carry_portages_trailing_slash (#566)
+- Portage prints its normalised ROOT (exactly one trailing slash; `LocationsManager.set_root_override`) on the merge progress lines, via `pkg.root` on every merge path. Oracle: the `probe-merge.sh` `14-merge-match` Portage output (`LLM/evidence/2026-10-23-509/probe-merge.sh`).

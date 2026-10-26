@@ -132,13 +132,10 @@ fn merge_progress_lines_match_portage_exact_text() {
     );
 }
 
-/// Backlog #566: Portage prints its normalised ROOT (exactly one
-/// trailing slash; `LocationsManager.set_root_override`) on the merge
-/// progress lines, via `pkg.root` on every merge path. Oracle: the
-/// `probe-merge.sh` `14-merge-match` Portage output
-/// (`LLM/evidence/2026-10-23-509/probe-merge.sh`): `>>> Emerging binary
-/// ... for <root>/`, `>>> Installing ... to <root>/`, `>>> Completed
-/// ... to <root>/`.
+/// Portage prints its normalised ROOT (exactly one trailing slash) on the
+/// merge progress lines, via `pkg.root` on every merge path:
+/// `>>> Emerging binary ... for <root>/`, `>>> Installing ... to <root>/`,
+/// `>>> Completed ... to <root>/`.
 /// Portage: PackageMerge.py, _make_msg; MergeListItem.py:77-78.
 #[test]
 fn merge_progress_roots_carry_portages_trailing_slash() {

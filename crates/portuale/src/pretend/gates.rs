@@ -147,8 +147,7 @@ pub(crate) fn top_level_abort_notice_shown(msg: &str) -> bool {
 /// Whether `msg` is a REQUIRED_USE unmet-requirements report (`!!! The
 /// ebuild selected to satisfy ... has unmet requirements.` plus the
 /// `(dependency required by ...)` chain): like every other `--pretend`
-/// run that reaches resolution, Portage prints the preamble first
-/// (backlog #519).
+/// run that reaches resolution, Portage prints the preamble first.
 // Portage: _emerge/depgraph.py, _start_resolution_display
 pub(crate) fn is_required_use_report(msg: &str) -> bool {
     msg.starts_with("\n!!! The ebuild selected to satisfy \"")

@@ -103,3 +103,6 @@ Recognition tables for Portage's full `emerge` CLI option surface; every impleme
 
 ## tests
 - Each `does_not_recognize_*` test pins that an implemented flag is excluded from the recognition tables (handled directly by the caller). The `--ignore-world` case (implemented: Portage `create_depgraph_params.py:128-129` + `depgraph.py:357-360`) additionally pins that the `=n` spelling doesn't match (lookup strips the value first) and that it has no short alias.
+
+## tests (#503)
+- `does_not_recognize_the_three_3_0_83_options`: accepted by the caller, so excluded here; `--cycle-break` is not an option in Portage either (a non-goal).

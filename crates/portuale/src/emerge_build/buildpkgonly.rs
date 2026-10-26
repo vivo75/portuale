@@ -208,8 +208,8 @@ pub fn run_buildpkgonly(args: RunBuildpkgonlyArgs<'_>) -> Result<(), String> {
                 // fires exactly like on the merge path (backlog #458).
                 // Portage: _emerge/EbuildBuild.py, _emerge/EbuildExecuter.py
                 skip_noop_src_phases: true,
-                // The up-front pass above already replayed `pretend`
-                // (backlog #546): the build starts at `setup`.
+                // The up-front pass above already replayed `pretend`:
+                // the build starts at `setup`.
                 skip_pretend: true,
             }) {
                 Ok(0) => clean_failure("post"),

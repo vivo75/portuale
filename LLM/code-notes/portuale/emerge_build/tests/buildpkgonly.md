@@ -12,3 +12,15 @@
 - The portage-tmpdir test is backlog #99/#129 (Phase 2 S0 cell E): `run_buildpkgonly` re-derives the tmpdir per entry instead of only ever using the run-wide one.
 - The post-clean test is backlog #42: Portage's `_buildpkgonly_success_hook_exit` runs the `clean` phase after a successful `--buildpkgonly` package (the phase itself, not a `noclean` gate, honors `keepwork`).
 - The `missing matched PORTAGE_TMPDIR` message asserted is Portage's exact `_check_temp_dir` text ("The directory specified in your PORTAGE_TMPDIR variable, ..." / "does not exist. Please create this directory or correct your PORTAGE_TMPDIR setting.").
+
+## fn stage_user_patch_tree (#540/#541)
+- The scratch `up540` tree for the #540/#541 pins: one trivial ebuild with non-empty `src_unpack`/`src_install` bodies.
+
+## fn buildpkgonly_records_user_patches_in_metadata_and_index (#540)
+- Oracle: host 3.0.83-r1 `--buildpkgonly` of the `up509` tree, `LLM/evidence/2026-10-23-509/`.
+
+## fn merge_binpkg_copies_user_patch_files_into_the_vdb (#541)
+- Oracle: `LLM/evidence/2026-10-23-509/captures/14-merge-match.*` plus the VDB listing in the S10 working notes.
+
+## fn run_buildpkgonly_pretend_failure_aborts_before_anything_builds (#546)
+- Oracle: `--buildpkgonly -j` of the `10-pretend` oracle tree, `LLM/evidence/2026-10-23-512/`.

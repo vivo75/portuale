@@ -952,7 +952,7 @@ pub(crate) fn parse_user_patch_digests(raw: &[u8]) -> Option<Vec<UserPatchRow>> 
 /// (`no local patch set, or digests differ`) with no
 /// `--binpkg-respect-user-patches` exemption (the flag only gates the
 /// resolve filter, and the oracle `16-merge-mismatch` warns under `=n`).
-// Portage: _emerge/Binpkg.py, `_unpack_metadata` (upstream `3071bc985`)
+// Portage: _emerge/Binpkg.py, `_unpack_metadata`
 pub(crate) fn user_patch_extract_report(
     digests_raw: Option<&[u8]>,
     local_has_patches: bool,

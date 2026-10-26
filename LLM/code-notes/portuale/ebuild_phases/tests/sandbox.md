@@ -11,3 +11,9 @@ Sandbox/isolation unit tests for phase execution. Context moved out of the code 
 ## fn feature_gates_use_the_resolved_features_string
 - From #37 S3: the phase-execution gates read the resolved `FEATURES` threaded on `extra_env` (`features_string`), never the raw process env -- a `make.conf` `-sandbox` disables the sandbox even when the calling env exports `sandbox`. The helpers take the features string as a parameter precisely so this is directly testable.
 - The `extra_env` pair wins over the process env (here: whatever the test runner exported); an absent pair falls back to it.
+
+## fn environ_whitelist_keeps_qemu_prefix_like_portage_3_0_83
+- Portage `special_env_vars.py:256` (`f7bfe34de`, bug 978685). Expected values from the host's source and the L1 bash merge (`LLM/evidence/2026-10-24-vdb-env/`).
+
+## fn environ_whitelist_has_the_portage_3_0_83_additions
+- Portage `special_env_vars.py` (`5dc9b552e`, `c15ab2464`, `b7052a33d`, `1bad86d92`).

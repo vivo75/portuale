@@ -77,3 +77,12 @@
 
 ## allow-list wiring (#571)
 - `ShowResolutionReportArgs` carries `config_root` through to the slot-conflict display; `show_skipped_updates` takes it for the similar-names pools.
+
+## fn parser_error_text usage block (#520)
+- Argparse-native `invalid choice` errors print the block from the fixed 3.0.83 capture (see `usage_text`, quirks Q4/Q6 analogue); `parser.error`-passed messages keep their cut `usage:` block (347-USG).
+
+## fn run virtuals notice (#513)
+- `/etc/portage/virtuals` is deprecated and ignored: the block follows the config-load warnings, for the validating actions only. Portage: `config.py`, `validate`; `_emerge/actions.py`, `validate_ebuild_environment`.
+
+## fn run circular preamble (#519)
+- A circular abort prints the resolution preamble before the re-display, like every other `--pretend` run: Portage emits it at action start (`_start_resolution_display`), ahead of the rows. The non-pretend abort keeps the legacy silent shape.

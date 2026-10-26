@@ -1218,11 +1218,10 @@ fn run_source_merge_postinst_failure_keep_going_merges_dependents() {
     }
 }
 
-/// Backlog #545 (oracle: `-j1` run of the `10-pretend` tree,
-/// `LLM/evidence/2026-10-23-512/`): the serial loop runs `pkg_pretend`
-/// up front, in order, before any build -- like Portage's `_run_pkg_pretend`
-/// with `max_jobs=1`. A dying pretend aborts with the reported failure
-/// (no `emerge:` line) and nothing builds, exactly like the parallel pass.
+/// The serial loop runs `pkg_pretend` up front, in order, before any
+/// build -- like Portage's `_run_pkg_pretend` with `max_jobs=1`. A dying
+/// pretend aborts with the reported failure (no `emerge:` line) and
+/// nothing builds, exactly like the parallel pass.
 #[test]
 fn serial_pretend_failure_aborts_before_anything_builds() {
     let config_root = fixtures_root();
@@ -1275,9 +1274,9 @@ fn serial_pretend_failure_aborts_before_anything_builds() {
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
 
-/// Backlog #545: the serial loop runs `pkg_pretend` up front, so the build
-/// starts at `setup`. With `skip_pretend: false` a dying pretend fails the
-/// entry; with `true` the same entry merges fine (the pass already ran).
+/// The serial loop runs `pkg_pretend` up front, so the build starts at
+/// `setup`. With `skip_pretend: false` a dying pretend fails the entry;
+/// with `true` the same entry merges fine (the pass already ran).
 #[test]
 fn merge_one_source_entry_skip_pretend_skips_a_dying_pretend() {
     let config_root = fixtures_root();

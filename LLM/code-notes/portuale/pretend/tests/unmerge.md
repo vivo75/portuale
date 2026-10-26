@@ -16,3 +16,6 @@ Unmerge info-regen wiring, the end notice, and set-parent detection.
 
 ## fn still_listed_parents_is_empty_when_no_set_lists_the_cp
 - No comment carried facts.
+
+## fn removal_display (#521)
+- The removal display opens with the non-`/` ROOT notice and, under `--pretend`, the unmerged header — each with its own leading blank line, `--quiet` dropping the blanks (`_unmerge_display`). Portage: `_emerge/unmerge.py`, `_unmerge_display`.

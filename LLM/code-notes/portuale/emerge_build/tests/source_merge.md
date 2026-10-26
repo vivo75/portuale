@@ -27,3 +27,8 @@ Source-merge loop tests (serial, parallel, keep-going, and kill behavior).
 
 ## fn run_source_merge_upgrade_replaces_the_installed_version
 - Merge `binpkgrmpkg-1.0` (`New`), then 2.0 (`Upgrade`). The fixture's five hooks each append `<phase>-<PVR>` to a ROOT log.
+
+## fn serial_pretend_failure_aborts_before_anything_builds (#545)
+- Oracle: `-j1` run of the `10-pretend` tree, `LLM/evidence/2026-10-23-512/`.
+
+## fn merge_one_source_entry_skip_pretend_skips_a_dying_pretend (#545)

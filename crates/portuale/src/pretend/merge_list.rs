@@ -302,8 +302,7 @@ pub(crate) fn render_merge_rows(args: RenderMergeRowsArgs<'_>) {
     // Portage warns about a bad `PORTAGE_CIRCULAR_MAX_USE_FLAGS` at handler
     // construction, before the merge-list rows print -- so the forced
     // re-display warns here, ahead of its rows, not inside the error block
-    // below (backlog #517 (d)). The `json` report path has no rows; its
-    // branch warns for itself.
+    // below. The `json` report path has no rows; its branch warns for itself.
     if circular_forced_display && !result.circular_deps.is_empty() {
         warn_invalid_circular_max_use_flags(config);
     }
@@ -615,7 +614,7 @@ pub(crate) fn render_tree_rows(args: RenderTreeRowsArgs<'_>) {
                 // (the reduced leaf-drain order) through the same `display()`
                 // reversal; `display_entries` (the abort `partial`) already is
                 // that reduced order, so it goes in as-is and `print_tree`'s
-                // reversal produces Portage's walk (backlog #517 (b)).
+                // reversal produces Portage's walk.
                 // Portage: depgraph.py, _show_circular_deps.
                 (0..display_entries.len()).collect()
             } else {

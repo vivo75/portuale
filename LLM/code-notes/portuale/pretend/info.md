@@ -70,3 +70,6 @@
 
 ## `--info` existence probe (allow-list, #571)
 - The ebuild-exists half reads through the gate (`repo_candidates`, which prints the `!!!` on this standalone path): `emerge --info` on an unlisted cp reports it missing like Portage.
+
+## const PORTED_PORTAGE_VERSION (#530)
+- The Portage release portuale implements: `--version` reports the running implementation, which is this release's behavior contract (like `portage.VERSION` for the Portage `emerge`). Bumped by the port slices that move the tree to a new upstream release (#530: the `3.0.83` vs `3.0.83-r1` wording).

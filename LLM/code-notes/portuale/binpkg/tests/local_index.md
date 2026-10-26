@@ -36,3 +36,6 @@ Local `$PKGDIR` scan tests: fast path, stale vouch, reindex, orphans.
 
 ## fn populate_local_pkgdir_parses_unindexed_files_in_both_modes
 - Backlog #199: Portage's `_populate_local(reindex=True)` parses every file the fast path missed (`bintree.py:1179-1351`). Portuale's walk runs in trusted mode too (unlike Portage's `reindex=False`, which never walks; kept so a `Packages`-less `$PKGDIR` still resolves), so an unindexed file parses identically either way.
+
+## fn populate_local_pkgdir_ignores_xpak_but_keeps_gpkg_under_gpkg_only (#537)
+- Under `gpkg_only` (`FEATURES=binpkg-request-signature`) a local xpak is skipped while the gpkg next to it still pools, in both trust modes (no index here, so nothing could vouch either way). Portage: `bintree._populate_local`.

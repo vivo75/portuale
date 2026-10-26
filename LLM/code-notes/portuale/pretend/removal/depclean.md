@@ -48,3 +48,6 @@
 
 ## fn run_depclean_pretend (#508)
 - Empty cleanlist with package arguments and without `--pretend`: Portage `_calc_depclean` ends with `if args_set and "--pretend" not in myopts: return _depclean_result(1, ...)` and `action_depclean` returns before the summary, so the run prints the nothing-selected lines and exits 1 with no `Packages installed:` block. Portuale now does the same (before, it printed the summary and exited 0). Oracle `11-pair-a-no-pretend` (rc 1 on both managers).
+
+## fn run_depclean_pretend resolution notice (#522)
+- `_complete_graph` runs behind the resolver's notice: Portage prints `Calculating dependencies ... done!` on stdout (the spinner's static form when piped), preceded by its blank line and with no timing line (depclean never calls `_show_resolution_report`). Portage: `_emerge/actions.py`, `_calc_depclean`; `stdout_spinner.end_notice`.

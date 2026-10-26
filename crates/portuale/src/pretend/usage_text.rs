@@ -1,9 +1,9 @@
-//! Portage 3.0.83's full `usage:` block for `emerge`, printed above every
-//! argparse-native error (`invalid choice`, backlog #520). The option order
+//! Portage's full `usage:` block for `emerge`, printed above every
+//! argparse-native error (`invalid choice`). The option order
 //! inside is hash-randomized per Portage process (`PYTHONHASHSEED`), so no
 //! byte order can match every run; portuale prints this fixed capture
 //! verbatim (like the sorted `Change USE:` flags of quirks Q4). Grounded on
-//! `LLM/evidence/2026-10-23-507/captures/53-none.portage.err` (lines 1-78).
+//! the oracle capture (lines 1-78).
 
 /// Portage 3.0.83's `usage:` block, verbatim from the oracle capture
 /// (78 lines plus the caller's trailing error line; no trailing blank).

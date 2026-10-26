@@ -45,3 +45,9 @@ Progress and status lines of the build scheduler: counters, background mode, `>>
 - Colour escapes are `color.rs`'s port of `output.py:68-92` (`MERGE_LIST_PROGRESS` = yellow, `PKG_MERGE` = darkgreen, `PKG_BINARY_MERGE` = purple); only the two counters and the `cpv::repo` wear escapes, exactly Portage's `colorize()` call sites.
 - `emerging_line` adds ` for {root}/` when `ROOT != "/"`. The counters wear `MERGE_LIST_PROGRESS`, the `cpv::repo` wears `PKG_MERGE` (source) or `PKG_BINARY_MERGE` (binary); everything else is uncoloured. `version` is the entry's merge version.
 - Backlog #566: all three lines render the root through `root_with_trailing_slash` (exactly one trailing slash, idempotent). Portage needs no such helper: `LocationsManager.set_root_override` normalises every non-`/` ROOT to `rstrip(sep) + sep` at config load (`_config/LocationsManager.py:383-386`), so `pkg.root` (EROOT) and `settings['ROOT']` always carry the slash on every merge path (`PackageMerge._make_msg` covers Installing/Completed on the source, binary and getbinpkg paths; `MergeListItem._start` covers Emerging/Fetching). Live proof: `probe-merge.sh` `14-merge-match` Portage output prints `for <root>/` + `to <root>/` on Emerging/Installing/Completed (re-captured 2026-10-26 in `/var/tmp/t566`, tail byte-identical after the fix).
+
+## merge-wait scope plumbing (#512)
+- `--merge-wait-scope`: which merges barrier on idle builders. `Deep` is Portage's default.
+
+## fn fetching_line (trailing slash history)
+- The `Fetching ({cur} of {max}) {cpv}::{repo}[ for {root}]` line read `[ for {root}]` before the #566 trailing-slash fix; it now renders `[ for {root}/]` like the other progress lines.

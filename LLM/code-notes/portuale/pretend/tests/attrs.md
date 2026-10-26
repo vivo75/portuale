@@ -24,3 +24,6 @@ Root suffixes, the mask column, USE suffixes, and nomerge rows.
 ## fn use_suffix_renders_portages_trailing_space_after_each_use_group
 - Backlog #272: Portage's `_create_use_string` (`output_helpers.py:336-338`) returns `f'{name}="{ret}" '` -- one trailing space per non-empty group -- and `print_messages` (`output.py:542-544`) joins it with a single leading space, so every painted merge-list row ends with `" `, at `-p` and `-v` alike. Grounded on host Portage 3.0.82.2 (`/usr/sbin/emerge`) staged-fixture probes (`--pretend --autounmask "dev-libs/useflagpkg[missingflag]"`, New and installed-USE reinstall shapes): Portage's changed row reads `... USE="missingflag*" ` where portuale printed `... USE="missingflag*"`.
 - Plain `-p`: the changed flag paints, with Portage's trailing space. `-pv`: the full list, same trailing space. Bare rows stay bare: an empty display still renders nothing.
+
+## fn nomerge_row_colours_word_and_package_with_the_row_colour
+- Portage `Display.pkgprint`: `[` + colour("nomerge".ljust(13)) + " ] " + colour(pkg); `PKG_NOMERGE` is teal (oracle `LLM/evidence/2026-10-23-506/`, shape 02, `ROOT=/` so the tail is the bare space before oldbest).

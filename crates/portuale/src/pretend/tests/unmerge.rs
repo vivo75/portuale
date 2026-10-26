@@ -259,7 +259,7 @@ fn unmerge_backup_gate_stays_on_for_an_env_only_token() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Backlog #521: the removal display opens with the non-`/` ROOT notice and,
+/// The removal display opens with the non-`/` ROOT notice and,
 /// under `--pretend`, the unmerged header — each with its own leading blank
 /// line, `--quiet` dropping the blanks (`_unmerge_display`).
 // Portage: _emerge/unmerge.py, _unmerge_display

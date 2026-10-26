@@ -177,10 +177,9 @@ pub(crate) fn phase_script(args: PhaseScriptArgs<'_>) -> String {
 
 /// Locale variables the regen postinst run re-exports into the client
 /// phase env. Only set variables are ever forwarded (never invented
-/// defaults). `LANGUAGE` is not in Portage's whitelist -- it rides along
-/// because the slice brief names it explicitly. `LOCPATH` is in Portage's
-/// calling-env whitelist (`special_env_vars.py`, `environ_whitelist`), so a
-/// `locale-gen`d client root keeps working after the regen (backlog #516).
+/// defaults). `LANGUAGE` is not in Portage's whitelist but is forwarded
+/// anyway. `LOCPATH` is in Portage's calling-env whitelist (`special_env_vars.py`, `environ_whitelist`), so a
+/// `locale-gen`d client root keeps working after the regen.
 pub(crate) const REGEN_LOCALE_VARS: &[&str] = &[
     "LANG",
     "LANGUAGE",

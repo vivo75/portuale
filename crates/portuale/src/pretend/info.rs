@@ -104,8 +104,7 @@ pub(crate) fn highest_installed_pvr(root: &Path, category: &str, package: &str) 
 /// The Portage release portuale implements: `--version` reports the running
 /// implementation, which is this release's behavior contract (like
 /// `portage.VERSION` for real `emerge`). Bumped by the port slices that
-/// move the tree to a new upstream release (see backlog #530 for the
-/// `3.0.83` vs `3.0.83-r1` wording).
+/// move the tree to a new upstream release.
 pub(crate) const PORTED_PORTAGE_VERSION: &str = "3.0.83";
 
 /// The host-state `Portage <ver> (...)` header line, shared by `--info`

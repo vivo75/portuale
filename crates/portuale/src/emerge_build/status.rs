@@ -219,7 +219,7 @@ pub(crate) struct StatusState {
     pub(crate) running: usize,
     pub(crate) failed: usize,
     /// Builds finished whose merge waits for idle builders
-    /// (`--merge-wait-scope`, backlog #512).
+    /// (`--merge-wait-scope`).
     pub(crate) merge_wait: usize,
     /// A `>>> Jobs:` line has been printed: the current status re-displays
     /// after every status line once one is on screen.

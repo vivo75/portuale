@@ -106,7 +106,7 @@ fn news_resolve_env(
 ) -> Vec<(String, String)> {
     let mut env = fixture_resolve_env(root, portage_tmpdir);
     env.push(("FEATURES".to_string(), "news".to_string()));
-    // #564: the spawned child would otherwise merge the host's installed
+    // The spawned child would otherwise merge the host's installed
     // system repos.conf (Portage `load_repository_config`; portuale reads
     // the absolute path too now), so its repo set -- and these
     // exact-output pins -- would depend on the host. Pin the child's repo

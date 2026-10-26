@@ -893,7 +893,7 @@ mod tests {
         }
     }
 
-    /// Scratch copy of the Task 5 fixture tree.
+    /// Scratch copy of the updates fixture tree.
     fn copy_fixture(root: &Path, repo: &Path) {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let fixture = manifest.join("../../fixtures/global-updates");

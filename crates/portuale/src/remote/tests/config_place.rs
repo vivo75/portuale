@@ -130,8 +130,8 @@ fn remote_client_make_profile_resolves_against_same_named_server_repo() {
     let custom_profile = l171e_server_repo(&server_root, "custom", L171E_REL, "filecaps -sign");
     // The client's repo path models a tree the client holds elsewhere;
     // the remap only matches on its text, but discovery keeps a repo
-    // solely when its location exists (#564: Portage drops a missing
-    // directory), so the path lives under the test tmpdir, created.
+    // solely when its location exists (Portage drops a missing directory),
+    // so the path lives under the test tmpdir, created.
     let prefix = tmp.join("client-repos/custom").display().to_string();
     std::fs::create_dir_all(&prefix).unwrap();
     let client_etc = tmp.join("clientroot/etc/portage");
@@ -451,9 +451,8 @@ fn remote_client_without_repos_conf_resolves_on_the_production_path() {
     // working. The user slot carries an extra overlay the global slot
     // lacks, so the placed tree pins the seed's source: only the global
     // content may arrive. The user slot also repeats the global
-    // `[gentoo]`: since #564 discovery merges the host's installed
-    // global file too (Portage `load_repository_config`), and a user key
-    // wins over a global one, this keeps the section pinned at the
+    // `[gentoo]`: discovery merges the host's installed global file too
+    // (Portage `load_repository_config`), and a user key wins over a global one, this keeps the section pinned at the
     // server tree on any host instead of the host's own `gentoo`.
     let server_root = tmp.join("serverroot");
     std::fs::create_dir_all(server_root.join("usr/share/portage/config")).unwrap();

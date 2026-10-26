@@ -3,7 +3,7 @@
 use crate::pretend::*;
 
 /// Whether Portage's `validate_ebuild_environment` runs for this action, so
-/// the `/etc/portage/virtuals` block (backlog #513) is printed. Portage runs
+/// the `/etc/portage/virtuals` block is printed. Portage runs
 /// it for build, pretend, search, depclean, clean, unmerge, prune and
 /// regen-style actions; `--info`, `--sync`, `--metadata`, `--check-news`,
 /// `--list-sets` and `--version` return before it. `--help` exits earlier.

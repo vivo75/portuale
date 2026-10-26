@@ -41,3 +41,6 @@
 - Backlog #231 (a): Portage's `post_emerge.py:155` prints the notice regardless of retval -- gated on the vdb having changed (`:112-117`), which here is `still.len() < entries.len()` (the same structural approximation as the non-resume failure arms' `merge_failure_news_notice`).
 - #333: `CONFIG_PROTECT[_MASK]` from the resolved config, as the non-resume `emerge` path does.
 - An all-source resume list keeps going through `run_source_merge` (full `--jobs`/`--load-average` scheduler support); a mergelist with at least one resumed binary entry (Portage's own resume mergelist can mix both -- `ResumeEntryKind`) goes through `run_merge_plan` instead, the same per-entry binary-vs-source dispatch `--getbinpkg` itself already uses.
+
+## fn run_resume scope replay (#512)
+- The saved `myopts` replays the scope the original run used; unset means Portage's `deep` default.

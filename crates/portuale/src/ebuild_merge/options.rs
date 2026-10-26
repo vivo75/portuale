@@ -84,8 +84,8 @@ pub struct MergeOptions {
     pub quiet: bool,
     /// `--quiet-fail`: no whole-log dump after a lone background failure.
     pub quiet_fail: bool,
-    /// `--merge-wait-scope`: which merges barrier on idle builders
-    /// (backlog #512). `Deep` is Portage's default.
+    /// `--merge-wait-scope`: which merges barrier on idle builders.
+    /// `Deep` is Portage's default.
     pub merge_wait_scope: crate::pretend::MergeWaitScope,
     /// The up-front `pkg_pretend` pass already ran it: binary merges skip
     /// their inline `pretend` hook and source merges start at `setup`
