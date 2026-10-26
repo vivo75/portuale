@@ -285,15 +285,18 @@ pub fn cycle_report_facts(args: CycleReportFactsArgs<'_>) -> CycleReportFacts {
     facts
 }
 
-/// One node of a reduced dependency string.
-enum DepTree {
+/// One node of a reduced dependency string: `||` groups keep their
+/// members, plain parens keep conjunctions. Shared with the reverse-dep
+/// pin scan, which reduces with the consumer USE first.
+// Portage: lib/portage/dep/__init__.py, use_reduce
+pub(crate) enum DepTree {
     Atom(String),
     AnyOf(Vec<DepTree>),
     AllOf(Vec<DepTree>),
 }
 
 /// Parses a reduced token stream (`||`, `(`, `)` and atoms) into a tree.
-fn parse_dep_tree(tokens: &[String], pos: &mut usize) -> Vec<DepTree> {
+pub(crate) fn parse_dep_tree(tokens: &[String], pos: &mut usize) -> Vec<DepTree> {
     let mut out = Vec::new();
     while *pos < tokens.len() {
         let tok = tokens[*pos].as_str();
@@ -311,6 +314,27 @@ fn parse_dep_tree(tokens: &[String], pos: &mut usize) -> Vec<DepTree> {
         }
     }
     out
+}
+
+/// Reduces `tokens` with `use_flags` and parses the reduced stream into
+/// a [`DepTree`]: dead conditional branches vanish in the reduction, so
+/// the tree holds only `||` groups, conjunctions and atoms. `None` when
+/// Portage would reject the string; callers keep every pin then (the
+/// conservative direction).
+// Portage: lib/portage/dep/__init__.py, use_reduce
+pub(crate) fn reduced_dep_tree(
+    tokens: &[String],
+    use_flags: &HashSet<String>,
+) -> Option<Vec<DepTree>> {
+    let reduced = portage_use_reduce::use_reduce_structured(
+        tokens,
+        use_flags,
+        portage_use_reduce::MatchMode::Normal,
+    )
+    .ok()?;
+    let mut pos = 0;
+    let tree = parse_dep_tree(&reduced, &mut pos);
+    (pos == reduced.len()).then_some(tree)
 }
 
 fn flatten_atoms<'a>(node: &'a DepTree, out: &mut Vec<&'a str>) {
@@ -388,14 +412,9 @@ fn masked_alternatives_for_edge(
     let Some(atom) = parent_atom(&tokens, &parent.use_flags, child_cpv) else {
         return Vec::new();
     };
-    let Ok(reduced) = portage_use_reduce::use_reduce_structured(
-        &tokens,
-        &parent.use_flags,
-        portage_use_reduce::MatchMode::Normal,
-    ) else {
+    let Some(tree) = reduced_dep_tree(&tokens, &parent.use_flags) else {
         return Vec::new();
     };
-    let tree = parse_dep_tree(&reduced, &mut 0);
     let mut alt_atoms = Vec::new();
     any_of_alternatives(&tree, &atom, &mut alt_atoms);
     let mut out = Vec::new();

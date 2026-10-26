@@ -64,12 +64,14 @@ Backlog #490. Portage's `_complete_graph` pulls in an installed package only thr
 - G2 (non-selected `||` branch): a contradicting pin from a `||` branch the
   merge satisfies elsewhere is a stale alternative (Portage demotes it via
   dep_zapdeps, never backtrack-skips). `or_branch_superseded` re-reads the
-  consumer depstring with the scan's own layering, parses `||` groups with
-  a USE-aware recursive descent (`DepItem`, dead conditional branches
-  vanish), and excludes the pin when a sibling alternative targeting
-  ANOTHER package matches a merge-bound entry. Same-package version menus
-  never count (bed virtuals re-pick `=5.42*` through exactly this path, so
-  the 9 bed heals keep firing).
+  consumer depstring with the scan's own layering, reduces it with the
+  shared `use_reduce_structured` parser and walks the shared `DepTree`
+  (`reduced_dep_tree`), and excludes the pin when a sibling alternative
+  targeting ANOTHER package matches a merge-bound entry. Same-package
+  version menus never count (bed virtuals re-pick `=5.42*` through exactly
+  this path, so the 9 bed heals keep firing). Task 15 retired the local
+  `DepItem`/`parse_dep_level` descent in favour of that shared parser;
+  behaviour-neutral (full gate + L0 bed, zero moved probes).
 
 ## fn or_branch_vdb_deselected_set
 - Backlog #569 (C1 portuale-only half): the pin scan fanned every `||`
@@ -93,14 +95,16 @@ Backlog #490. Portage's `_complete_graph` pulls in an installed package only thr
   still withholds), the rest go. Same-package menus and cross-package
   alternatives share the rule (the `~perl-core` arm demotes the same way);
   G2's merge-graph predicate is untouched and still guards the restart
-  site. Reuses G2's `DepItem`/`parse_dep_level`/`collect_any_groups`
-  descent (same conditional evaluation the scan's flattening uses).
+  site. Walks the shared `reduced_dep_tree` (same reduction the scan's
+  flattening uses).
 - Non-goals: no dep_zapdeps preference-bin ordering beyond
   installed-match (first-listed vs best-ranked among several satisfied
   arms is not modelled — every satisfied arm keeps its pin). Demotion
   runs before any pin exists, so the abort path
   (`build_residual_slot_conflicts`) loses the demoted arms too — matching
-  Portage, which never records them as parent atoms anywhere.
+  Portage, which never records them as parent atoms anywhere. The `||`
+  groups come from the shared `reduced_dep_tree` (same reduction the
+  scan's flattening uses); only the `AnyOf` walk is local.
 
 ## fn or_member_matches_installed
 - See `or_branch_vdb_deselected_set`: the vdb-satisfaction test with the

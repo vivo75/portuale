@@ -1,6 +1,7 @@
 //! Installed reverse dependencies an upgrade breaks: pin or drop them.
 
 use crate::resolve::feedback::*;
+use crate::resolve::{DepTree, reduced_dep_tree};
 
 /// The installed consumers a pass's complete graph can contain: the required
 /// sets' closure that does not run through a package the pass replaces.
@@ -193,86 +194,16 @@ fn has_merge_bound_puller(pass: &PassResult, parent: &SlotConflictParent) -> boo
     })
 }
 
-/// One parsed dependency item for `||`-group analysis: plain atoms stay
-/// strings; `||` groups and conjunctions keep their members. `flag?`
-/// conditionals evaluate against the consumer USE at parse time (dead
-/// branches vanish, like the pin scan never saw them).
-enum DepItem {
-    Atom(String),
-    Any(Vec<DepItem>),
-    All(Vec<DepItem>),
-}
-
-/// Whether a `flag?`/`!flag?` conditional is active (mirrors the
-/// reducer's `is_active`; `??` reads flag `?` like there).
-fn cond_active(cond: &str, use_flags: &HashSet<String>) -> bool {
-    let (negated, flag) = match cond.strip_suffix('?') {
-        Some(rest) => match rest.strip_prefix('!') {
-            Some(f) => (true, f),
-            None => (false, rest),
-        },
-        None => return false,
-    };
-    (use_flags.contains(flag) && !negated) || (!use_flags.contains(flag) && negated)
-}
-
-/// Parse one level (until `)` or end) with conditionals evaluated: `||`
-/// groups become `Any`, plain parens `All`, live conditional bodies splice
-/// transparently, dead ones vanish. `None` on malformed input (pins from
-/// such a key stay, the conservative direction).
-fn parse_dep_level(
-    toks: &[String],
-    mut pos: usize,
-    use_flags: &HashSet<String>,
-) -> Option<(Vec<DepItem>, usize)> {
-    let mut out = Vec::new();
-    while pos < toks.len() {
-        match toks[pos].as_str() {
-            ")" => return Some((out, pos + 1)),
-            "||" => {
-                if toks.get(pos + 1).map(String::as_str) != Some("(") {
-                    return None;
-                }
-                let (inner, next) = parse_dep_level(toks, pos + 2, use_flags)?;
-                out.push(DepItem::Any(inner));
-                pos = next;
-            }
-            "(" => {
-                let (inner, next) = parse_dep_level(toks, pos + 1, use_flags)?;
-                out.push(DepItem::All(inner));
-                pos = next;
-            }
-            t if t.ends_with('?') => {
-                if toks.get(pos + 1).map(String::as_str) != Some("(") {
-                    return None;
-                }
-                let (inner, next) = parse_dep_level(toks, pos + 2, use_flags)?;
-                if cond_active(t, use_flags) {
-                    out.extend(inner);
-                }
-                pos = next;
-            }
-            // `^^` (exactly-one) has no branch the pin scan separates: as a
-            // plain atom it never parses, so its content stays conservative.
-            _ => {
-                out.push(DepItem::Atom(toks[pos].clone()));
-                pos += 1;
-            }
-        }
-    }
-    Some((out, pos))
-}
-
-/// Every `Any` group anywhere in the tree (through conjunctions).
-fn collect_any_groups<'a>(items: &'a [DepItem], out: &mut Vec<&'a Vec<DepItem>>) {
+/// Every `AnyOf` group anywhere in the tree (through conjunctions).
+fn collect_any_groups<'a>(items: &'a [DepTree], out: &mut Vec<&'a Vec<DepTree>>) {
     for item in items {
         match item {
-            DepItem::Any(members) => {
+            DepTree::AnyOf(members) => {
                 out.push(members);
                 collect_any_groups(members, out);
             }
-            DepItem::All(members) => collect_any_groups(members, out),
-            DepItem::Atom(_) => {}
+            DepTree::AllOf(members) => collect_any_groups(members, out),
+            DepTree::Atom(_) => {}
         }
     }
 }
@@ -290,17 +221,17 @@ fn or_member_matches_pin(member_atom: &str, pin: &RevDepPin) -> bool {
 /// Whether a member is satisfied by the settled merge graph: a plain atom
 /// matching a merge-bound entry (USE stripped, version+slot), a
 /// conjunction only when all of it is, a nested `||` when any of it is.
-fn or_member_satisfied(member: &DepItem, merge_candidates: &[String]) -> bool {
+fn or_member_satisfied(member: &DepTree, merge_candidates: &[String]) -> bool {
     match member {
-        DepItem::Atom(atom) => {
+        DepTree::Atom(atom) => {
             let probe = portage_dep::without_use(atom).to_string();
             let candidates: Vec<&str> = merge_candidates.iter().map(String::as_str).collect();
             portage_dep::match_from_list(&probe, &candidates).is_some_and(|m| !m.is_empty())
         }
-        DepItem::All(members) => members
+        DepTree::AllOf(members) => members
             .iter()
             .all(|m| or_member_satisfied(m, merge_candidates)),
-        DepItem::Any(members) => members
+        DepTree::AnyOf(members) => members
             .iter()
             .any(|m| or_member_satisfied(m, merge_candidates)),
     }
@@ -312,17 +243,17 @@ fn or_member_satisfied(member: &DepItem, merge_candidates: &[String]) -> bool {
 /// routes around; a nested `||` when some alternative does both. A version
 /// menu of the pin's own package never counts.
 fn or_member_alternate_route(
-    member: &DepItem,
+    member: &DepTree,
     pin_cp: &(String, String),
     merge_candidates: &[String],
 ) -> bool {
     match member {
-        DepItem::Atom(atom) => parse_dep_atom(atom, "dropped_pin_or_branch").is_some_and(|a| {
+        DepTree::Atom(atom) => parse_dep_atom(atom, "dropped_pin_or_branch").is_some_and(|a| {
             a.blocker == portage_dep::Blocker::None
                 && (a.category.clone(), a.package.clone()) != *pin_cp
                 && or_member_satisfied(member, merge_candidates)
         }),
-        DepItem::All(members) => {
+        DepTree::AllOf(members) => {
             members
                 .iter()
                 .all(|m| or_member_satisfied(m, merge_candidates))
@@ -330,7 +261,7 @@ fn or_member_alternate_route(
                     .iter()
                     .any(|m| or_member_alternate_route(m, pin_cp, merge_candidates))
         }
-        DepItem::Any(members) => members
+        DepTree::AnyOf(members) => members
             .iter()
             .any(|m| or_member_alternate_route(m, pin_cp, merge_candidates)),
     }
@@ -340,9 +271,9 @@ fn or_member_alternate_route(
 /// atom matching an installed instance of its own package, a conjunction
 /// only when every leg is, a nested `||` when any leg is. Blockers and
 /// unparseable text never match.
-fn or_member_matches_installed(member: &DepItem, root: &Path) -> bool {
+fn or_member_matches_installed(member: &DepTree, root: &Path) -> bool {
     match member {
-        DepItem::Atom(text) => {
+        DepTree::Atom(text) => {
             let probe = portage_dep::without_use(text).to_string();
             parse_dep_atom(text, "dropped_pin_vdb_select").is_some_and(|a| {
                 a.blocker == portage_dep::Blocker::None
@@ -360,16 +291,16 @@ fn or_member_matches_installed(member: &DepItem, root: &Path) -> bool {
                         })
             })
         }
-        DepItem::All(members) => members.iter().all(|m| or_member_matches_installed(m, root)),
-        DepItem::Any(members) => members.iter().any(|m| or_member_matches_installed(m, root)),
+        DepTree::AllOf(members) => members.iter().all(|m| or_member_matches_installed(m, root)),
+        DepTree::AnyOf(members) => members.iter().any(|m| or_member_matches_installed(m, root)),
     }
 }
 
 /// Every flat atom text inside the member (through conjunctions).
-fn or_member_flat_atoms(member: &DepItem) -> Vec<&String> {
+fn or_member_flat_atoms(member: &DepTree) -> Vec<&String> {
     match member {
-        DepItem::Atom(text) => vec![text],
-        DepItem::All(members) | DepItem::Any(members) => {
+        DepTree::Atom(text) => vec![text],
+        DepTree::AllOf(members) | DepTree::AnyOf(members) => {
             members.iter().flat_map(or_member_flat_atoms).collect()
         }
     }
@@ -393,13 +324,10 @@ pub(crate) fn or_branch_vdb_deselected_set(
         return demoted;
     }
     let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
-    let Some((items, pos)) = parse_dep_level(&tokens, 0, use_flags) else {
+    let Some(items) = reduced_dep_tree(&tokens, use_flags) else {
         return demoted;
     };
-    if pos != tokens.len() {
-        return demoted;
-    }
-    let mut groups: Vec<&Vec<DepItem>> = Vec::new();
+    let mut groups: Vec<&Vec<DepTree>> = Vec::new();
     collect_any_groups(&items, &mut groups);
     for group in groups {
         if !group.iter().any(|m| or_member_matches_installed(m, root)) {
@@ -473,13 +401,10 @@ fn or_branch_superseded(ctx: &ResolveCtx<'_>, pass: &PassResult, pin: &RevDepPin
             memo: &mut memo,
         });
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
-        let Some((items, pos)) = parse_dep_level(&tokens, 0, &use_flags) else {
+        let Some(items) = reduced_dep_tree(&tokens, &use_flags) else {
             continue;
         };
-        if pos != tokens.len() {
-            continue;
-        }
-        let mut groups: Vec<&Vec<DepItem>> = Vec::new();
+        let mut groups: Vec<&Vec<DepTree>> = Vec::new();
         collect_any_groups(&items, &mut groups);
         for group in groups {
             // The alternative holding the pin (a conjunction subgroup counts
@@ -508,10 +433,10 @@ fn or_branch_superseded(ctx: &ResolveCtx<'_>, pass: &PassResult, pin: &RevDepPin
 }
 
 /// Whether the pin's atom occurs anywhere inside the member.
-fn or_member_matches_pin_recursive(member: &DepItem, pin: &RevDepPin) -> bool {
+fn or_member_matches_pin_recursive(member: &DepTree, pin: &RevDepPin) -> bool {
     match member {
-        DepItem::Atom(atom) => or_member_matches_pin(atom, pin),
-        DepItem::All(members) | DepItem::Any(members) => members
+        DepTree::Atom(atom) => or_member_matches_pin(atom, pin),
+        DepTree::AllOf(members) | DepTree::AnyOf(members) => members
             .iter()
             .any(|m| or_member_matches_pin_recursive(m, pin)),
     }
