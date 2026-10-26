@@ -16,6 +16,7 @@ Multicall binary dispatch (`emerge`, `ebuild`, `mrg`, `vdb`, `portageq`).
 
 ## fn exit_quietly_on_broken_pipe
 - With `panic = "abort"` the SIGPIPE-ignored `println!` panic ("failed printing to stdout: Broken pipe") would be a core dump; the hook exits 141 instead, silently.
+- The global-updates block writes through its own `expect`s (`output.rs::emit`), so a closed pipe there panics with "global updates stdout write/flush: Broken pipe" instead of the `println!` text; the hook converts that shape too, since the early actions print the block before any `println!` runs.
 
 ## fn main
 - The helper entry runs first (backlog #326 D7), from `args_os()`: no config, no `bin_dir()`, no extraction, no atexit.

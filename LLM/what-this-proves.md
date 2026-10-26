@@ -19799,3 +19799,18 @@ of `slotpkg-1.0` and `slotpkg-2.0`, only 2.0 moves to slot 1 under
 `slotmove >=dev-libs/slotpkg-2 0 1`) and `cargo test --release -p
 portage-repo slotmove` (dep strings unchanged, `>=`/`=`/bare matches).
 Grounded on a Portage 3.0.83 probe of the same three functions.
+
+**Global updates run before the early actions too (#584,
+2026-10-26).** Portage's `run_action` (`lib/_emerge/actions.py:3933-3960`)
+calls `_global_updates` before any option check or action dispatch,
+skipping only help, info, sync and version. portuale ran it after its
+validation step, which is where `--deselect`, `--list-sets`, `--regen`
+and `--metadata` return, so on a root with unrecorded updates those four
+actions neither printed the block nor applied the moves. The call now
+sits before the validation step. Check from pmtest: `python3 -m pytest
+pytests-contract-suite/test_portuale.py -q -k early_action`: on a fresh
+copy of `fixtures/global-updates`, each action prints the block first,
+then its own output (for example `>>> Updating Portage cache`), and the
+world and vdb moves are applied, as host Portage 3.0.83 does on the same
+tree. A closed stdout pipe during the block now exits quietly with 141
+like any other print.

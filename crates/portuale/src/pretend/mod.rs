@@ -249,6 +249,28 @@ pub fn run(args: &[String]) -> ExitCode {
 
     apply_process_globals(&opts);
 
+    // The applied-updates AUTOCLEAN force, computed before any validation
+    // or action dispatch like Portage's own `_global_updates` call at the
+    // top of `run_action`: target root, then the running root when
+    // different. The early actions below (`--deselect`, `--list-sets`,
+    // `--regen`, `--metadata`) return from the validation call, so the
+    // updates must already have run for them. An applied target run
+    // reloads the config, so everything below sees the moved state; only
+    // the target root's force reaches the merge gate below.
+    // Portage: lib/_emerge/actions.py, run_action
+    let updates_force = {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        global_updates_force(GlobalUpdatesArgs {
+            opts: &opts,
+            repos: &repos,
+            config: &mut config,
+            config_root: &config_root,
+            root: &root,
+            out: &mut handle,
+        })
+    };
+
     if let Some(code) = validate_and_early_actions(&mut opts, config.user_virtuals_deprecated) {
         return code;
     }
@@ -270,25 +292,6 @@ pub fn run(args: &[String]) -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
-
-    // The applied-updates AUTOCLEAN force, computed pre-resolve like
-    // Portage's own `_global_updates` call: target root, then the
-    // running root when different. An applied target run reloads the
-    // config, so the resolve below sees the moved state; only the
-    // target root's force reaches the merge gate below.
-    // Portage: lib/_emerge/actions.py, run_action
-    let updates_force = {
-        let stdout = std::io::stdout();
-        let mut handle = stdout.lock();
-        global_updates_force(GlobalUpdatesArgs {
-            opts: &opts,
-            repos: &repos,
-            config: &mut config,
-            config_root: &config_root,
-            root: &root,
-            out: &mut handle,
-        })
-    };
 
     // Portage's `settings.categories`, built once for the whole run and
     // shared by every lookup below (expand, resolve walks, display): one

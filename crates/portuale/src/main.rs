@@ -190,12 +190,16 @@ fn run(applet: Applet, args: &[String]) -> ExitCode {
 /// The Rust runtime ignores SIGPIPE, so `portuale ... | head` would make the
 /// next `println!` panic; turn that one panic into the quiet exit 141 a
 /// SIGPIPE death shows a shell. The ignored disposition stays (the remote
-/// transport relies on `EPIPE` errors when ssh dies).
+/// transport relies on `EPIPE` errors when ssh dies). The global-updates
+/// block writes through its own `expect`s, so its broken-pipe panics are
+/// converted here too (the early actions print the block first).
 fn exit_quietly_on_broken_pipe() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let msg = info.to_string();
-        if msg.contains("failed printing to std") && msg.contains("Broken pipe") {
+        if msg.contains("Broken pipe")
+            && (msg.contains("failed printing to std") || msg.contains("global updates stdout"))
+        {
             std::process::exit(141);
         }
         previous(info);
