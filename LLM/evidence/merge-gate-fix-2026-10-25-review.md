@@ -66,3 +66,9 @@ rc 0; glibc-2.43-r4 and bash-5.3_p20 merged by both PMs; hard findings
 diffs 1420. Verdict: PASSED. After the run the shared match-string
 helper and a reverse `required_by` index replaced two copies of the
 same logic; both are behaviour-neutral.
+
+Run `l1-20261026T190753Z` (tree d95a5544, Task 19: argument structs in
+place of long parameter lists in the build, merge and depclean paths):
+runner rc 0; glibc-2.43-r4 and bash-5.3_p20 merged by both PMs; hard
+findings 0, UNEXPLAINED 0, payload diffs 0, mtime-only diffs 1420.
+Verdict: PASSED.
