@@ -159,8 +159,12 @@ pub fn apply_move_to_token(token: &str, old: &(String, String), new: &(String, S
 }
 
 /// Apply one `slotmove` to one atom token: an atom on `cp` whose
-/// `:slot` is `old_slot` gets it rewritten to `new_slot`. Versioned
-/// atoms are left alone.
+/// `:slot` is `old_slot` gets it rewritten to `new_slot`. The splice
+/// keeps the blocker, the operator/version, a differing sub-slot, the
+/// slot operator, and any `[usedeps]`; a sub-slot equalling the old
+/// slot is rewritten too. A token carrying `::repo` is left alone:
+/// Portage rejects it under every real EAPI, so none of its metadata
+/// paths ever rewrites one.
 /// Portage: portage.update, update_dbentry
 pub fn apply_slotmove_to_token(
     token: &str,
@@ -175,12 +179,9 @@ pub fn apply_slotmove_to_token(
     if (atom.category.as_str(), atom.package.as_str()) != (cp.0.as_str(), cp.1.as_str()) {
         return token.to_string();
     }
-    if atom.version.is_some() {
-        return token.to_string();
-    }
-    // A slotmove target carrying `::repo` or `[usedeps]` is left alone
-    // rather than risk a corrupt splice (no fixture covers it).
-    if atom.repo.is_some() || atom.use_deps.is_some() {
+    // `repo_deps` is false for every real EAPI (Portage `eapi.py`), so a
+    // `::repo` token is `InvalidAtom` on each metadata path: skipped.
+    if atom.repo.is_some() {
         return token.to_string();
     }
     match &atom.slot {
@@ -204,8 +205,61 @@ pub fn apply_slotmove_to_token(
     } else {
         format!("{new_slot}/{sub}{op}")
     };
-    let prefix = token.split(':').next().unwrap_or(token);
-    format!("{prefix}:{new_slotpart}")
+    // Portage `with_slot`: `remove_slot` cuts at the first `:`, then the
+    // new slot, `::repo`, and `[use]` are appended. The prefix keeps any
+    // blockers; the tail past the old slot expression (`::repo` cannot
+    // occur here, `[usedeps]` can) carries over verbatim.
+    let Some(colon) = token.find(':') else {
+        return token.to_string();
+    };
+    let prefix = &token[..colon];
+    let mut rest = &token[colon + 1..];
+    let Some(after_slot) = rest.strip_prefix(old_slot) else {
+        return token.to_string();
+    };
+    rest = after_slot;
+    if let Some(ss) = atom.sub_slot.as_deref() {
+        let Some(after_sub) = rest.strip_prefix("/").and_then(|r| r.strip_prefix(ss)) else {
+            return token.to_string();
+        };
+        rest = after_sub;
+    }
+    match atom.slot_operator {
+        Some(portage_dep::SlotOperator::Star) => {
+            let Some(after_op) = rest.strip_prefix('*') else {
+                return token.to_string();
+            };
+            rest = after_op;
+        }
+        Some(portage_dep::SlotOperator::Equals) => {
+            let Some(after_op) = rest.strip_prefix('=') else {
+                return token.to_string();
+            };
+            rest = after_op;
+        }
+        None => {}
+    }
+    format!("{prefix}:{new_slotpart}{rest}")
+}
+
+/// Apply explicit `move`/`slotmove` commands (in order, so chains
+/// resolve) to a `*DEPEND` string, for callers that already hold one
+/// repo's commands instead of the global cache. `Some(rewritten)` only
+/// when a token changed, else `None`.
+// Portage: lib/portage/update.py, update_dbentry
+pub fn apply_cmds_to_dep_string(dep: &str, cmds: &[UpdateCmd]) -> Option<String> {
+    if cmds.is_empty() || dep.trim().is_empty() {
+        return None;
+    }
+    let mut targets: HashMap<String, HashSet<String>> = HashMap::new();
+    for cmd in cmds {
+        let (cat, pkg) = match cmd {
+            UpdateCmd::Move { old, .. } => old,
+            UpdateCmd::SlotMove { cp, .. } => cp,
+        };
+        targets.entry(cat.clone()).or_default().insert(pkg.clone());
+    }
+    apply_updates_to_dep_string_with(dep, cmds, &targets)
 }
 
 /// Every `cat/pkg` that could be the first command to touch an atom:
@@ -472,4 +526,33 @@ pub fn apply_updates_to_slot(
         }
     }
     (s, ss)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Explicit commands rewrite a dep string in order, without the
+    /// global cache behind it.
+    #[test]
+    fn cmds_rewrite_a_dep_string_in_order() {
+        let cmds = vec![
+            UpdateCmd::Move {
+                old: ("dev-libs".to_string(), "oldpkg".to_string()),
+                new: ("dev-libs".to_string(), "newpkg".to_string()),
+            },
+            UpdateCmd::SlotMove {
+                cp: ("dev-libs".to_string(), "slotpkg".to_string()),
+                old_slot: "0".to_string(),
+                new_slot: "1".to_string(),
+            },
+        ];
+        assert_eq!(
+            apply_cmds_to_dep_string("dev-libs/oldpkg dev-libs/slotpkg:0\n", &cmds).as_deref(),
+            Some("dev-libs/newpkg dev-libs/slotpkg:1\n")
+        );
+        assert_eq!(apply_cmds_to_dep_string("sys-apps/other\n", &cmds), None);
+        assert_eq!(apply_cmds_to_dep_string("", &cmds), None);
+        assert_eq!(apply_cmds_to_dep_string("dev-libs/oldpkg\n", &[]), None);
+    }
 }

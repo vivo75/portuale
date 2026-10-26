@@ -181,15 +181,51 @@ fn apply_move_and_slotmove_to_a_token_preserve_the_other_atom_parts() {
         apply_slotmove_to_token("dev-libs/baz:0/0=", &cp, "0", "1"),
         "dev-libs/baz:1/1="
     );
-    // A versioned atom or a non-matching slot is left alone.
-    // Portage: portage.update, update_dbentry
+    // A versioned token is rewritten too: Portage checks the version only
+    // on the directive's own atom, never on the token being rewritten.
     assert_eq!(
         apply_slotmove_to_token("=dev-libs/baz-1.0:0", &cp, "0", "1"),
-        "=dev-libs/baz-1.0:0"
+        "=dev-libs/baz-1.0:1"
     );
+    // A non-matching slot is left alone.
+    // Portage: portage.update, update_dbentry
     assert_eq!(
         apply_slotmove_to_token("dev-libs/baz:2", &cp, "0", "1"),
         "dev-libs/baz:2"
+    );
+}
+
+/// A `slotmove` rewrites the `:slot` of every token on its cp whose slot
+/// matches: versioned, blocker-prefixed, and `[usedeps]` tokens included.
+/// Only `::repo` tokens are left alone -- Portage rejects them under every
+/// real EAPI. Each expectation below was generated with Portage 3.0.83
+/// (`update_dbentry(["slotmove", Atom("dev-libs/foo"), "0", "1"], token,
+/// eapi="8")`; see the task report for the full commands and outputs).
+/// Portage: lib/portage/update.py:69-102
+#[test]
+fn slotmove_rewrites_versioned_blocker_and_usedeps_tokens() {
+    let cp = ("dev-libs".to_string(), "foo".to_string());
+    for (token, expected) in [
+        ("dev-libs/foo:0[bar]", "dev-libs/foo:1[bar]"),
+        ("dev-libs/foo:0::gentoo", "dev-libs/foo:0::gentoo"),
+        (">=dev-libs/foo-1:0=", ">=dev-libs/foo-1:1="),
+        ("!dev-libs/foo:0", "!dev-libs/foo:1"),
+        ("dev-libs/foo:0/0=[x,y]", "dev-libs/foo:1/1=[x,y]"),
+    ] {
+        assert_eq!(
+            apply_slotmove_to_token(token, &cp, "0", "1"),
+            expected,
+            "{token}"
+        );
+    }
+    // No slot, or a slot that differs, is untouched.
+    assert_eq!(
+        apply_slotmove_to_token("dev-libs/foo", &cp, "0", "1"),
+        "dev-libs/foo"
+    );
+    assert_eq!(
+        apply_slotmove_to_token("dev-libs/foo:2", &cp, "0", "1"),
+        "dev-libs/foo:2"
     );
 }
 

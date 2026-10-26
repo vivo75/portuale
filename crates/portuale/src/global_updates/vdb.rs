@@ -1,6 +1,6 @@
 //! The vdb half of `_do_global_updates`: `move_ent` renames an installed
 //! entry's directory, its ebuild and its `PF`/`CATEGORY`; `move_slot_ent`
-//! rewrites `SLOT`. Dep-string rewrites are `update_ents` (a later piece).
+//! rewrites `SLOT`; `update_ents` rewrites the `*DEPEND` files.
 // Portage: lib/portage/_global_updates.py, _do_global_updates
 
 use crate::global_updates::{RepoMatch, repo_update_map};
@@ -74,6 +74,98 @@ pub(crate) fn apply_vdb_moves(args: VdbMovesArgs<'_>) -> Result<VdbMoveReport, S
         }
     }
     Ok(report)
+}
+
+/// What [`update_ents`] needs: the root whose vdb dep strings move,
+/// the repos (in `portdb` order) whose updates apply to it, and the
+/// progress hook the output driver passes (`None` in tests).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct UpdateEntsArgs<'a> {
+    pub root: &'a Path,
+    pub repos: &'a [RepoConfig],
+    pub on_update: Option<&'a dyn Fn(usize, usize)>,
+}
+
+/// `dbapi.update_ents` over the vdb: every entry's `*DEPEND` files are
+/// read through the `aux_get` whitespace collapse, rewritten with the
+/// entry's own repo updates, and written back when changed. Returns how
+/// many entries changed.
+///
+/// # Errors
+///
+/// Returns `Err` when the vdb cannot be read or written.
+// Portage: lib/portage/dbapi/__init__.py, update_ents
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn update_ents(args: UpdateEntsArgs<'_>) -> Result<usize, String> {
+    let db = portage_vdb::for_root(args.root);
+    let map = repo_update_map(args.repos);
+    let master = args
+        .repos
+        .iter()
+        .find(|r| r.is_main)
+        .map(|r| r.name.clone());
+    let matcher = RepoMatch::new(&map, master);
+    let mut keys = db.entries().map_err(|e| e.to_string())?;
+    keys.sort();
+    let maxval = keys.len();
+    if let Some(on_update) = args.on_update {
+        on_update(maxval, 0);
+    }
+    let mut updated = 0usize;
+    for (pos, key) in keys.iter().enumerate() {
+        // `repo_dict[pkg.repo]`, else the main repo's list: the first
+        // map entry whose updates cover this entry's repository.
+        let repository = entry_repo(&db, key)?;
+        let cmds: &[portage_repo::UpdateCmd] = map
+            .iter()
+            .find_map(|(name, cmds)| {
+                if name != "DEFAULT" && matcher.matches(name, &repository) {
+                    Some(cmds.as_slice())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(&[]);
+        if cmds.is_empty() {
+            continue;
+        }
+        let mut rewritten: Vec<(&str, String)> = Vec::new();
+        for &dep_key in DEP_KEYS {
+            let bytes = db.read_file(key, dep_key).map_err(|e| e.to_string())?;
+            if let Some(new) = portage_repo::apply_cmds_to_dep_string(&dep_content(bytes), cmds) {
+                rewritten.push((dep_key, new));
+            }
+        }
+        if rewritten.is_empty() {
+            continue;
+        }
+        let mut txn = db.begin_write().map_err(|e| e.to_string())?;
+        for (name, data) in &rewritten {
+            txn.replace_file(key, name, data.as_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        txn.commit().map_err(|e| e.to_string())?;
+        updated += 1;
+        if let Some(on_update) = args.on_update {
+            on_update(maxval, pos + 1);
+        }
+    }
+    Ok(updated)
+}
+
+/// The dep keys `update_ents` rewrites, in Portage's order.
+// Portage: lib/_emerge/Package.py, _dep_keys
+const DEP_KEYS: &[&str] = &["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
+
+/// `vartree._aux_get` for a dep key: a missing file reads as `""`, and
+/// a present one collapses every whitespace run to one blank (the dep
+/// keys never match the multi-line exception).
+// Portage: lib/portage/dbapi/vartree.py, _aux_get
+fn dep_content(raw: Option<Vec<u8>>) -> String {
+    let text = raw
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default();
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Every installed entry on `cp`, in `cat/pf` order.
@@ -326,6 +418,97 @@ mod tests {
             std::fs::read(fixture.join("root/var/lib/portage/world")).unwrap(),
             "world is byte-identical to the fixture"
         );
+    }
+
+    /// Portage 3.0.83 rewrites the moved tree's dep strings with the
+    /// entry's own repo updates (`dbapi.update_ents` over the five dep
+    /// keys, `lib/portage/dbapi/__init__.py:383-447`; per-token rewrites
+    /// `lib/portage/update.py:23-104`; driven after the moves with the
+    /// `#` callback, `lib/portage/_global_updates.py:253-261`). The
+    /// `aux_get` whitespace collapse drops the trailing newlines, so the
+    /// capture's rewritten files end without one. World, `etc/portage`
+    /// and the binpkgs are untouched by this piece.
+    #[test]
+    fn vdb_dep_strings_match_the_portage_capture() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture = manifest.join("../../fixtures/global-updates");
+        let capture = manifest.join("../../LLM/evidence/2026-10-25-review/t5/after");
+        let scratch = portage_util::TempDir::new("global_updates_ents");
+        let root = scratch.join("root");
+        let repo = scratch.join("repo");
+        for (from, to) in [(fixture.join("root"), &root), (fixture.join("repo"), &repo)] {
+            let ok = std::process::Command::new("cp")
+                .args(["-a", &from.to_string_lossy(), &to.to_string_lossy()])
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "cp -a {} failed", from.display());
+        }
+        let repos = vec![RepoConfig {
+            name: "gutest".to_string(),
+            location: repo,
+            priority: 0,
+            is_main: true,
+            masters: Vec::new(),
+            profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
+            aliases: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: Vec::new(),
+        }];
+        apply_vdb_moves(VdbMovesArgs {
+            root: &root,
+            repos: &repos,
+        })
+        .expect("vdb moves apply");
+        let calls = std::cell::RefCell::new(Vec::new());
+        let updated = update_ents(UpdateEntsArgs {
+            root: &root,
+            repos: &repos,
+            on_update: Some(&|maxval, curval| {
+                calls.borrow_mut().push((maxval, curval));
+            }),
+        })
+        .expect("dep strings rewrite");
+        assert_eq!(updated, 3, "deppkg, newpkg and slotpkg change");
+        assert_eq!(
+            *calls.borrow(),
+            vec![(3, 0), (3, 1), (3, 2), (3, 3)],
+            "the progress hook fires once per rewritten entry"
+        );
+
+        let after = tree_files(&capture.join("var/db/pkg"));
+        let got = tree_files(&root.join("var/db/pkg"));
+        assert_eq!(
+            got.keys().collect::<Vec<_>>(),
+            after.keys().collect::<Vec<_>>(),
+            "the vdb file layout matches the capture"
+        );
+        for (rel, bytes) in &got {
+            assert_eq!(
+                bytes,
+                after
+                    .get(rel)
+                    .unwrap_or_else(|| panic!("{rel}: no capture file")),
+                "{rel}: bytes differ from the capture"
+            );
+        }
+        // Later pieces own everything else: world, config and binpkgs
+        // stay byte-identical to the fixture.
+        for rel in [
+            "var/lib/portage/world",
+            "etc/portage/package.use",
+            "pkgdir/dev-libs/oldpkg-1.0.tbz2",
+            "pkgdir/dev-libs/slotpkg-1.0.gpkg.tar",
+            "pkgdir/Packages",
+        ] {
+            assert_eq!(
+                std::fs::read(root.join(rel)).unwrap(),
+                std::fs::read(fixture.join("root").join(rel)).unwrap(),
+                "{rel}: untouched by update_ents"
+            );
+        }
     }
 
     /// `*DEPEND` files, rewritten by `update_ents`, not by the moves.

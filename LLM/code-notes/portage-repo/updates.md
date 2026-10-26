@@ -29,9 +29,9 @@
 - First occurrence only: Portage `token.replace(old, new, 1)`.
 
 ## fn apply_slotmove_to_token
-- Portage `update_dbentry` for a single `slotmove` (`orig_atom.version is None` branch), applied to one atom token: an atom on `cp` whose `:slot` (ignoring sub-slot / operator) is `old_slot` gets it rewritten to `new_slot`. Versioned atoms are left alone (Portage's own restriction). The `:slot` match ignores sub-slot / operator.
-- Splice the new slot expression in place of the old `:...` run.
-- Micro-cut: Portage `Atom.with_slot` rebuilds every part; portuale leaves a `::repo`/`[usedeps]` target alone rather than risk a corrupt splice (no fixture covers the combination).
+- Portage `update_dbentry` for a single `slotmove` (`orig_atom.version is None` branch), applied to one atom token: an atom on `cp` whose `:slot` (ignoring sub-slot / operator) is `old_slot` gets it rewritten to `new_slot`. The version check is on the *directive's* atom only -- a versioned *token* (`>=dev-libs/foo-1:0=`, upstream `test_update_dbentry.py:74-79`) is rewritten, as are blocker-prefixed and `[usedeps]` tokens (upstream `:80-103`).
+- Splice is `with_slot` verbatim: the prefix before the first `:` (blockers survive), the rebuilt `:slot[/sub][op]` (a sub-slot equalling the old slot is rewritten, a differing one kept), then the tail past the old slot expression carried over byte-for-byte. `[x, y]`-style spacing needs no normalization: Portage rejects it as `InvalidAtom` under every EAPI.
+- `::repo` tokens are left alone, and the reason is an EAPI rule, not splice fear: `repo_deps` is false for every real EAPI (`eapi.py:314`), so `Atom(token, eapi=<real>)` raises `InvalidAtom` (`dep/__init__.py:2140-2141`) and `update_dbentry` skips the token on each of the vdb/binpkg/read paths (all pass `parent=` → the entry's real EAPI). Only the `eapi=None` config-file path (which portuale deliberately does not implement) rewrites them.
 - Portage `with_slot` keeps a differing sub-slot but rewrites one that equalled the old slot.
 
 ## fn update_move_targets
@@ -45,6 +45,9 @@
 ## fn apply_updates_to_dep_string
 - Backlog #119: `None` means the input is returned as-is, so the caller can skip its insert and the unchanged case allocates no output at all. The old shape `format!`ed every chunk and `collect`ed unconditionally, even when no command matched -- 7.5% of the reference workload across the md5-cache misses' dep strings.
 - Portage `update_dbentry`'s whitespace-preserving `re.split(r"(\s+)")` pass.
+
+## fn apply_cmds_to_dep_string
+- The `update_dbentries` shape (`update.py:107-127`) for the global-updates driver: explicit per-repo commands instead of the `global_package_updates()` cache, with the targets map built from those commands up front so the per-token fast path in `apply_updates_to_atom_with` still applies. Empty commands or blank input return `None` without touching the splitter (Portage: no `old_value in mycontent`, no change).
 
 ## fn move_chain_map_with
 - Portage bakes package moves into the vdb + metadata cache at sync time; portuale applies them at read time instead. A linear replay of all ~500 `profiles/updates/` `move` commands *per lookup* -- and `apply_updates_to_cp` runs once per installed package at ~10 resolver call sites -- was ~15% of a deep `emerge -pu`. Built by replaying the command list once per distinct `old` cp, so a chain (`a/x -> b/x -> c/x`) resolves exactly as the old per-cp loop did.

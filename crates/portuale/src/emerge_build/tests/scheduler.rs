@@ -721,8 +721,9 @@ impl PretendEntry for FakePretendEntry<'_> {
                 };
             }
         }
-        // Wait (up to `delay`) until a second entry has been in flight, so an
-        // overlap shows up however loaded the machine is.
+        // Wait (up to `delay`) until a second entry has been in flight. Every
+        // entry waits, so the overlap shows up whichever thread the
+        // scheduler runs first on a loaded machine.
         let deadline = std::time::Instant::now() + self.delay;
         while self.shared.max_concurrent.load(Ordering::SeqCst) < 2
             && std::time::Instant::now() < deadline
@@ -766,12 +767,11 @@ fn fake_entries<'a>(
     names: &[&str],
     log_root: &Path,
     shared: &'a FakeShared,
-    delay_first: std::time::Duration,
+    delay: std::time::Duration,
 ) -> Vec<FakePretendEntry<'a>> {
     names
         .iter()
-        .enumerate()
-        .map(|(i, name)| FakePretendEntry {
+        .map(|name| FakePretendEntry {
             entry: source_entry(
                 name,
                 PretendOutcome::New {
@@ -783,11 +783,7 @@ fn fake_entries<'a>(
             shared,
             need: None,
             fail: false,
-            delay: if i == 0 {
-                delay_first
-            } else {
-                std::time::Duration::ZERO
-            },
+            delay,
         })
         .collect()
 }

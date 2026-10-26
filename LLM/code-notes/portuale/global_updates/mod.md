@@ -2,7 +2,7 @@
 Per-repo updates map for the `_do_global_updates` port (backlog #576): ordered repo lists with the `DEFAULT` alias.
 
 ## struct RepoMatch
-- The `_do_global_updates` `repo_match` closure (`_global_updates.py:161-164`) in one place: `new` snapshots the map's repo names plus the main repo's name, and `matches(repo_name, repository)` answers the same-repo-or-main-covering-unmapped check. Used by the vdb moves and both config-files passes (world, `package.*`), each through a one-line closure adapter.
+- The `_do_global_updates` `repo_match` closure (`_global_updates.py:161-164`) in one place: `new` snapshots the map's repo names plus the main repo's name, and `matches(repo_name, repository)` answers the same-repo-or-main-covering-unmapped check. Used by the vdb moves, both config-files passes (world, `package.*`) and `update_ents`, each through a one-line closure adapter.
 - Kept separate from `repo_update_map` because the map outlives the borrow: callers build the map, then the matcher from it.
 
 ## fn repo_update_map

@@ -38,3 +38,9 @@ the new code is not called from production yet, so this run checks that
 nothing else in the merge path moved): runner rc 0; glibc-2.43-r4 and
 bash-5.3_p20 merged by both PMs; hard findings 0, UNEXPLAINED 0, payload
 diffs 0 (4005 paths per side). Verdict: PASSED.
+
+## Task 8 — global updates, vdb update_ents (global_updates/vdb.rs, portage-repo updates.rs)
+
+Run `l1-20261026T110941Z` (tree f328574d + Task 8 working-tree change):
+runner rc 0; glibc-2.43-r4 and bash-5.3_p20 merged by both PMs; hard
+findings 0, UNEXPLAINED 0, payload diffs 0. Verdict: PASSED.
