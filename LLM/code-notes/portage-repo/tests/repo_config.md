@@ -20,3 +20,6 @@
 
 ## fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_time_pin
 - Backlog #91 S1, on the committed fixtures: `whtarget-1.0` records a runtime-key `~whblocker-1.0` pin (the hermetic host-qemu shape) while `rdctarget-1.0` records the build-time-key `~rdcblocker-1.0` pin (D1, #79). Both consumers reachable, both upgrades otherwise selected.
+
+## fn bad_sections_warn_once_in_file_order
+- Pins the warning contract: `zeta-noloc` (no `location`) sorts after `alpha-badloc` (nonexistent directory), so file order -- not sorted or `HashMap` order -- puts its line first; two `find_repos_impl_with` calls still yield each line exactly once. `eprintln!` goes through libtest's print-capture hook rather than fd 2, so the test re-runs itself in a subprocess (`PORTUALE_REPOS_WARN_PROBE` set to the scratch root: emit twice, exit) and asserts on the child's real stderr bytes. Grounding is Portage `RepoConfigLoader.__init__` (`lib/portage/repository/config.py:1072-1106`).

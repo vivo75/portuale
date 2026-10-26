@@ -1,6 +1,7 @@
 //! repos.conf discovery and per-repository configuration.
 
 use crate::*;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Debug, Clone)]
 pub struct RepoConfig {
@@ -109,7 +110,7 @@ pub(crate) fn module_specific_keys(sync_type: &str) -> &'static [&'static str] {
     }
 }
 
-pub(crate) fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<String, String>>) {
+pub(crate) fn parse_ini(text: &str, sections: &mut RepoSections, order: &mut Vec<String>) {
     let mut current: Option<String> = None;
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -118,6 +119,9 @@ pub(crate) fn parse_ini(text: &str, sections: &mut HashMap<String, HashMap<Strin
         }
         if let Some(inner) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             let name = inner.trim().to_string();
+            if !sections.contains_key(&name) {
+                order.push(name.clone());
+            }
             sections.entry(name.clone()).or_default();
             current = Some(name);
             continue;
@@ -187,11 +191,15 @@ pub fn find_repos(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
 }
 
 /// [`find_repos`] for a process-internal config probe that runs before
-/// the CLI's own load: stays quiet, so the run prints the section-name
-/// line exactly as often as before the probe existed.
+/// the CLI's own load: stays quiet, so the run prints each repos.conf
+/// `!!!` line at most once no matter how many probes run first.
 pub fn find_repos_quiet(config_root: &Path) -> Result<Vec<RepoConfig>, Error> {
     find_repos_impl(config_root, false)
 }
+
+/// Parsed `repos.conf` sections by name; a repeated section keeps its
+/// first position in the companion order vec (see `read_repo_sections_impl`).
+type RepoSections = HashMap<String, HashMap<String, String>>;
 
 /// The raw `repos.conf` data of one repository, aligned by index with the
 /// repositories being built.
@@ -205,19 +213,21 @@ struct SectionInfo {
 /// file from [`GLOBAL_REPOS_CONF`] and `PORTAGE_REPOSITORIES` from the
 /// process environment; unit tests inject both through here instead and
 /// stay hermetic. Unless `PORTAGE_REPOSITORIES` is set -- then exactly
-/// that text replaces both files.
+/// that text replaces both files. Returns the sections plus their
+/// first-seen file order, which is the order warnings iterate in.
 /// Portage: repository/config.py, load_repository_config.
 pub(crate) fn read_repo_sections_impl(
     config_root: &Path,
     global_repos_conf: &Path,
     portage_repositories: Option<String>,
-) -> Result<HashMap<String, HashMap<String, String>>, Error> {
+) -> Result<(RepoSections, Vec<String>), Error> {
     let repos_conf_path = config_root.join("etc/portage/repos.conf");
-    let mut sections: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut sections: RepoSections = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
 
     if let Some(text) = portage_repositories {
-        parse_ini(&text, &mut sections);
-        return Ok(sections);
+        parse_ini(&text, &mut sections, &mut order);
+        return Ok((sections, order));
     }
 
     // The global repos.conf is read *before* the user's, so a user
@@ -227,7 +237,7 @@ pub(crate) fn read_repo_sections_impl(
     if global_repos_conf.is_file()
         && let Ok(text) = fs::read_to_string(global_repos_conf)
     {
-        parse_ini(&text, &mut sections);
+        parse_ini(&text, &mut sections, &mut order);
     }
 
     // A `repos.conf` directory is walked recursively, same as `package.*`.
@@ -243,14 +253,14 @@ pub(crate) fn read_repo_sections_impl(
                 path: path.display().to_string(),
                 source: e,
             })?;
-            parse_ini(&text, &mut sections);
+            parse_ini(&text, &mut sections, &mut order);
         }
     } else {
         return Err(Error::NoReposConf {
             path: repos_conf_path.display().to_string(),
         });
     }
-    Ok(sections)
+    Ok((sections, order))
 }
 
 /// Per-repo `usepkg-exclude` / `usepkg-include` atoms from `repos.conf`, each
@@ -273,7 +283,7 @@ pub(crate) fn repo_usepkg_atoms_impl(
     global_repos_conf: &Path,
     portage_repositories: Option<String>,
 ) -> (Vec<String>, Vec<String>) {
-    let Ok(sections) =
+    let Ok((sections, _)) =
         read_repo_sections_impl(config_root, global_repos_conf, portage_repositories)
     else {
         return (Vec::new(), Vec::new());
@@ -357,16 +367,32 @@ fn usepkg_atom_ok(atom: &str) -> bool {
     })
 }
 
-/// [`find_repos`] without the user-facing section-name-mismatch line, for
-/// internal location-keyed lookups: the CLI layers already report a
-/// mismatch once, and repeating it on every internal probe is noise.
+/// Prints a repos.conf `!!!` line at most once per `(config_root, line)`
+/// per process. Portage loads the repo config once, so one `emerge`
+/// prints each such line once; portuale re-reads it on every pass, so
+/// repeats are dropped here. Keyed by line text, so hermetic callers with
+/// distinct sections never suppress each other.
+fn emit_repos_conf_warning_once(config_root: &Path, line: &str) {
+    static PRINTED: OnceLock<Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
+    let mut printed = PRINTED
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if printed.insert((config_root.to_path_buf(), line.to_string())) {
+        eprintln!("{line}");
+    }
+}
+
+/// [`find_repos`] without the user-facing repos.conf `!!!` lines, for
+/// internal location-keyed lookups: the CLI layer already reports each
+/// line once, and repeating it on every internal probe is noise.
 pub(crate) fn find_repos_impl(
     config_root: &Path,
-    report_section_mismatch: bool,
+    report_warnings: bool,
 ) -> Result<Vec<RepoConfig>, Error> {
     find_repos_impl_with(
         config_root,
-        report_section_mismatch,
+        report_warnings,
         Path::new(GLOBAL_REPOS_CONF),
         std::env::var("PORTAGE_REPOSITORIES").ok(),
     )
@@ -377,11 +403,12 @@ pub(crate) fn find_repos_impl(
 /// (see [`read_repo_sections_impl`]).
 pub(crate) fn find_repos_impl_with(
     config_root: &Path,
-    report_section_mismatch: bool,
+    report_warnings: bool,
     global_repos_conf: &Path,
     portage_repositories: Option<String>,
 ) -> Result<Vec<RepoConfig>, Error> {
-    let sections = read_repo_sections_impl(config_root, global_repos_conf, portage_repositories)?;
+    let (sections, section_order) =
+        read_repo_sections_impl(config_root, global_repos_conf, portage_repositories)?;
 
     let main_repo = sections
         .get("DEFAULT")
@@ -392,15 +419,22 @@ pub(crate) fn find_repos_impl_with(
     // First pass: one entry per `[section]` with a `location`. `sect` is
     // the parallel raw-data buffer, aligned with `repos` by index; the
     // `layout.conf` overrides and the name-mismatch check come after.
+    // Bad-section lines collect with their file position, so all three
+    // warning kinds below emit in repos.conf order.
     let mut repos: Vec<RepoConfig> = Vec::new();
     let mut sect: Vec<SectionInfo> = Vec::new();
-    for (name, kv) in &sections {
+    let mut warnings: Vec<(usize, String)> = Vec::new();
+    for (pos, name) in section_order.iter().enumerate() {
         if name == "DEFAULT" {
             continue;
         }
+        let kv = &sections[name];
         let Some(location) = kv.get("location") else {
             // Portage: repository/config.py (missing-attribute drop).
-            eprintln!("!!! Section '{name}' in repos.conf is missing location attribute");
+            warnings.push((
+                pos,
+                format!("!!! Section '{name}' in repos.conf is missing location attribute"),
+            ));
             continue;
         };
         let location = PathBuf::from(location);
@@ -418,10 +452,13 @@ pub(crate) fn find_repos_impl_with(
         if !location.is_dir() {
             // Portage: repository/config.py (nonexistent-directory drop,
             // except `gentoo`, kept so a first sync is possible).
-            eprintln!(
-                "!!! Section '{name}' in repos.conf has location attribute set to nonexistent directory: '{}'",
-                location.display()
-            );
+            warnings.push((
+                pos,
+                format!(
+                    "!!! Section '{name}' in repos.conf has location attribute set to nonexistent directory: '{}'",
+                    location.display()
+                ),
+            ));
             if resolved_name != "gentoo" {
                 continue;
             }
@@ -484,19 +521,24 @@ pub(crate) fn find_repos_impl_with(
     // dropped with an error -- unless the section name is one of its
     // aliases (the escape hatch for two enabled copies of one repo).
     // Portage: repository/config.py.
-    // NOTE: this `eprintln!` can fire more than once per `--pretend` run
-    // (`find_repos` runs both at the CLI layer and inside
-    // `resolve_pretend_graph`); internal probes stay quiet.
+    let pos_of: HashMap<&str, usize> = section_order
+        .iter()
+        .enumerate()
+        .map(|(pos, name)| (name.as_str(), pos))
+        .collect();
     let keep: Vec<bool> = repos
         .iter()
         .zip(&sect)
         .map(|(repo, s)| {
             let ok = repo.name == s.section_name || repo.aliases.contains(&s.section_name);
-            if !ok && report_section_mismatch {
-                eprintln!(
-                    "!!! Section '{}' in repos.conf has name different from repository name '{}' set inside repository",
-                    s.section_name, repo.name
-                );
+            if !ok && report_warnings {
+                warnings.push((
+                    pos_of[s.section_name.as_str()],
+                    format!(
+                        "!!! Section '{}' in repos.conf has name different from repository name '{}' set inside repository",
+                        s.section_name, repo.name
+                    ),
+                ));
             }
             ok
         })
@@ -517,6 +559,15 @@ pub(crate) fn find_repos_impl_with(
             i += 1;
             keep[i - 1]
         });
+    }
+
+    // In file order: the first pass and the mismatch check above each
+    // iterate sections that way, and every position is unique.
+    warnings.sort_by_key(|(pos, _)| *pos);
+    if report_warnings {
+        for (_, line) in &warnings {
+            emit_repos_conf_warning_once(config_root, line);
+        }
     }
 
     if !repos.iter().any(|r| r.name == main_repo) {

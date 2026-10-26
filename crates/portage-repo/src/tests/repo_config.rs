@@ -381,3 +381,69 @@ fn missing_repo_directory_drops_the_repo_but_keeps_gentoo() {
         .expect("gentoo is kept despite its missing directory");
     assert!(gentoo.location.ends_with("vanished"));
 }
+
+#[test]
+fn bad_sections_warn_once_in_file_order() {
+    // Portage `RepoConfigLoader.__init__`
+    // (`lib/portage/repository/config.py:1072-1106`): one pass over the
+    // sections in file order, warning as it goes; it runs once per
+    // process, so one `emerge` prints each line once. `zeta-noloc` sorts
+    // after `alpha-badloc`: file order -- not sorted or `HashMap` order --
+    // puts its line first. `eprintln!` goes through libtest's capture
+    // hook, so an fd redirect cannot observe it; the parent below re-runs
+    // this test in a subprocess and asserts on the real stderr bytes.
+    if let Ok(root) = std::env::var("PORTUALE_REPOS_WARN_PROBE") {
+        let root = std::path::PathBuf::from(root);
+        let global = root.join("no-such-global.conf");
+        find_repos_impl_with(&root, true, &global, None).expect("resolves with drops");
+        find_repos_impl_with(&root, true, &global, None).expect("resolves with drops");
+        std::process::exit(0);
+    }
+    let tmp = TempDir::new("repos-conf-warnings");
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("etc/portage")).unwrap();
+    let bad_dir = root.join("does-not-exist");
+    std::fs::write(
+        root.join("etc/portage/repos.conf"),
+        format!(
+            "[DEFAULT]\nmain-repo = main\n\n\
+             [zeta-noloc]\npriority = 5\n\n\
+             [alpha-badloc]\nlocation = {}\n\n\
+             [main]\nlocation = main\n",
+            bad_dir.display()
+        ),
+    )
+    .unwrap();
+    make_repo_dirs(root, &["main"]);
+
+    let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "tests::repo_config::bad_sections_warn_once_in_file_order",
+            "--nocapture",
+        ])
+        .env("PORTUALE_REPOS_WARN_PROBE", root)
+        .output()
+        .expect("probe subprocess runs");
+    assert!(
+        out.status.success(),
+        "probe child failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let lines: Vec<String> = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter(|line| line.contains("zeta-noloc") || line.contains("alpha-badloc"))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "!!! Section 'zeta-noloc' in repos.conf is missing location attribute".to_string(),
+            format!(
+                "!!! Section 'alpha-badloc' in repos.conf has location attribute set \
+                 to nonexistent directory: '{}'",
+                bad_dir.display()
+            ),
+        ]
+    );
+}
