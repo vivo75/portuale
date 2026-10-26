@@ -57,7 +57,7 @@ pub struct Candidate {
     /// This binary instance's recorded `USER_PATCHES` digest (`""` when
     /// the index entry carries no key: the `-r1` empty default, bug
     /// 984255). Compared against the local patch-set digest by the
-    /// `--binpkg-respect-user-patches` filter (backlog #509); ebuilds
+    /// `--binpkg-respect-user-patches` filter; ebuilds
     /// carry `""` (never filtered). Lowercase hex, like Portage.
     // Portage: Package.py, `user_patches`
     pub user_patches: String,

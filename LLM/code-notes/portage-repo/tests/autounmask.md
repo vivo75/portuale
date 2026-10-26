@@ -95,3 +95,6 @@ Autounmask suggestion, abort-path, cascade, and breakage tests.
 
 ## fn non_use_changes_keep_no_trigger
 - Backlog #205 R4, negative legs, on the same fixture shapes their own tests pin.
+
+## fn abort_outcome_membership_and_order (#517 (b))
+- Portage's merge-order bias (`_merge_order_bias`, parent count descending) puts a parentless top target last; the cycle arms (one parent each) drain first. Verified against host Portage's re-display (`[ebuild] top`, `[nomerge] a`, `[ebuild] b`, `[ebuild] a`) for the `mid` and `last` tops.

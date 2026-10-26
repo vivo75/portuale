@@ -18,3 +18,6 @@ Task 12 (#571): the category allow-list at every consumer.
 
 ## fn resolve_honours_the_allow_list
 - End to end over the shared fixtures: the unlisted direct target fails resolve with the plain miss, the overlay-listed cp merges `New 1.0`, and the dependency on the unlisted cp resolves `Ok` with an `Aborted` outcome and a `NoVisibleCandidate` entry for it (the required-by chain names `p571-need-1.0::p571main`).
+
+## module oracle
+- Oracle: Portage 3.0.83 host captures in `LLM/evidence/2026-10-26-571/` (`probe-p571.sh`).

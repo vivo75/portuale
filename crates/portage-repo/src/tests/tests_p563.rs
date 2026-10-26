@@ -1,4 +1,4 @@
-//! #563 heal: the perl-5.44 stabilization shape, hermetically.
+//! The perl-5.44 stabilization shape, hermetically.
 //!
 //! Newly-visible `p563prov-5.44` (`0/5.44`), hard-required by merge-bound
 //! `p563pull-2` (`=dev-libs/p563prov-5.44*`), conflicts with the installed
@@ -10,27 +10,22 @@
 //! Portage heals the bare-puller shape (old puller merged, installed provider
 //! kept, skip-block + backtracking notice, rc 0); a pinned-newver request
 //! aborts with the slot conflict (rc 1); a pinned-oldver request resolves
-//! clean. Oracle: Portage 3.0.83 host runs saved under
-//! `LLM/evidence/2026-10-25-563/captures/`; L0 log
-//! `../pmtest/differential-test-bed/logs/l0-20261025T084209Z`
-//! (`dev-perl_XML-Parser` probe; `dev-lang_perl` is the bare-provider twin).
+//! clean.
 //!
-//! Skip-block pin forms (#568/#569): the `p569*` family (installed
+//! Skip-block pin forms: the `p569*` family (installed
 //! `p569virt-1` with a version-menu `||` lacking the new branch, plus a
-//! built `:0/5.42=` dep) pins the exact C1 rendering divergence — oracle
-//! `LLM/evidence/2026-10-26-568/` (`probe-p569.sh` + `NOTES.md`).
+//! built `:0/5.42=` dep) pins the exact C1 rendering divergence.
 
 use super::*;
 
 #[test]
 fn p563_pull_heals_with_skip_block_and_backtrack_notice() {
-    // Portage oracle (`captures/portage-pull-bare.*`): rc 0, backtrack 2/20,
-    // merges `p563pull-1` (N); stderr carries the WARNING skip-block for
-    // `dev-libs/p563prov:0` (5.44 skipped over the installed pinner) plus the
-    // `triggered by backtracking` notice for `dev-libs/p563pull:0`.
+    // Portage oracle: rc 0, backtrack 2/20, merges `p563pull-1` (N);
+    // stderr carries the WARNING skip-block for `dev-libs/p563prov:0`
+    // (5.44 skipped over the installed pinner) plus the `triggered by
+    // backtracking` notice for `dev-libs/p563pull:0`.
     // The skip block prints the pinner's recorded atoms verbatim — the
-    // built `dev-libs/p563prov:0/5.42=` first, then `=dev-libs/p563prov-5.42*`
-    // (#568; hermetic oracle `LLM/evidence/2026-10-26-568/NOTES.md`).
+    // built `dev-libs/p563prov:0/5.42=` first, then `=dev-libs/p563prov-5.42*`.
     // Portage: depgraph.py, _slot_confict_backtrack + _get_missed_updates.
     let result = graph_result_real("dev-libs/p563pull");
     assert!(
@@ -249,13 +244,10 @@ fn p563_pinned_oldver_still_resolves_clean() {
 
 #[test]
 fn skip_block_pins_keep_the_built_subslot_atom() {
-    // Portage oracle (`_show_missed_update` over the bintree+vdb): the
-    // skip block prints the consumer's recorded atom verbatim, so a built
-    // `:S/SS=` pin renders alongside the bare pin — hermetic capture
-    // `LLM/evidence/2026-10-26-568/captures/portage-p569pull.stderr`
+    // Portage oracle: the skip block prints the consumer's recorded atom
+    // verbatim, so a built `:S/SS=` pin renders alongside the bare pin
     // (`dev-libs/p569prov:0/5.42=` first, then `=dev-libs/p569prov-5.42*`;
-    // bed `l0-20261025T111515Z` Portage side, XML-Parser probe: 48
-    // real-only `:0/5.42=` lines). Today portuale prints only `=5.42*`.
+    // 48 Portage-only `:0/5.42=` lines on the XML-Parser probe).
     // Portage: depgraph.py, _show_missed_update_slot_conflicts (both forms
     // are `_parent_atoms` of the kept instance; the `with_slot("=")` strip
     // at :2509-2517 is constraint-only).
@@ -280,11 +272,10 @@ fn skip_block_pins_keep_the_built_subslot_atom() {
 
 #[test]
 fn g0_benign_disclosure_blocks_the_dropped_pin_heal() {
-    // Portage: disclosures precede any backtrack heal — S0 capture
-    // `LLM/evidence/2026-10-25-570/` (`portage-g0combo`: rc 1, backtrack
-    // 1/20, only the masked disclosure; the `p569pull` residual alone heals
-    // rc 0, backtrack 2/20). Resolves loud (rc 1, residual abort), never
-    // heals silently.
+    // Portage: disclosures precede any backtrack heal (rc 1, backtrack
+    // 1/20, only the masked disclosure; the `p569pull` residual alone
+    // heals rc 0, backtrack 2/20). Resolves loud (rc 1, residual abort),
+    // never heals silently.
     // Portage: depgraph.py, _slot_confict_backtrack (masked abort first).
     let result = graph_result_real_atoms(
         &[
@@ -354,8 +345,7 @@ fn skip_block_pins_skip_non_selected_or_branches() {
     // Same oracle, the `||` half: the installed virtual's version menu
     // contributes only its vdb-selected branch (`=5.42*`, the arm matching
     // installed 5.42) — Portage `dep_zapdeps` demotes the rest, so the 15
-    // portuale-only `=5.38*`/`=5.40*` lines on the bed XML-Parser probe
-    // must go. Hermetic oracle: `LLM/evidence/2026-10-26-568/NOTES.md`.
+    // portuale-only `=5.38*`/`=5.40*` lines on the XML-Parser probe are gone.
     // Portage: dep_check.py, dep_zapdeps (installed-preferred arm wins).
     let result = graph_result_real("dev-libs/p569pull");
     assert!(

@@ -19,3 +19,6 @@ Drops or aborts a top-level atom with no visible candidate, Portage's argument h
 
 ## gate threading (#571)
 - Pool, `all_masked_report`, `BinaryChangedDepsGate` (x2), `suggested_mask/keyword/license/use_candidate` and `use_unsat_candidates_for_atom` use `ctx.gate()`.
+
+## fn user_patches_abort_prefix
+- The ignored-user-patches block that precedes a `--usepkgonly` abort (#509 oracle shapes 03/05/12): the dropped binaries of the failing atom's pools, nothing eliminated (nothing was selected). Suppressed under an explicit `--binpkg-respect-user-patches=y|n`, like the success path, and empty when the filter is off. Portage: `depgraph.py`, `_show_ignored_binaries_user_patches`.

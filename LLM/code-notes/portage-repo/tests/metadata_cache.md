@@ -21,3 +21,6 @@ md5-cache presence, `cache-formats` handling, and `--regen` write-gate tests.
 ## fn regen_writes_md5_cache_when_md5_dict_is_among_the_resolved_formats
 - Backlog #55 L3 (S0 cell h): Portage's `egencache --update` writes `metadata/cache` for `pms`, both dirs for `pms md5-dict`, and errors when no known format remains; portuale's egencache-shaped `--regen` may write the md5-cache half exactly when `md5-dict` is among the resolved known formats, in any position.
 - No key, no directories -> empty list -> egencache's `force=True` default `("md5-dict",)` still writes the cache (unlike the reader, `get_pregenerated_cache(force=False)`).
+
+## fn metadata_transfer_is_read_from_the_resolved_features (#564)
+- Since #564 a missing directory drops the repo (Portage's nonexistent-directory rule), so the test `main` repo points at an existing directory; the repos are injected (not discovered) so the host's absolute global repos.conf cannot add repos to the resolution.

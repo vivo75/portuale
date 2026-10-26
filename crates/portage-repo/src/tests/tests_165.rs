@@ -155,7 +155,7 @@ fn find_repos_impl_defaults_the_main_repo_to_priority_minus_1000() {
 fn find_repos_impl_computes_volatile_from_location_and_owner() {
     let root = dir_165("repos-volatile");
     std::fs::create_dir_all(root.join("etc/portage")).unwrap();
-    // Since #564 a missing directory drops the repo (Portage's
+    // A missing directory drops the repo (Portage's
     // nonexistent-directory rule), so `main` points at a real tempdir
     // repo here: still unowned by root/portage, still volatile.
     std::fs::create_dir_all(root.join("main")).unwrap();

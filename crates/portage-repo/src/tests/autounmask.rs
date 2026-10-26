@@ -262,7 +262,7 @@ fn abort_outcome_membership_and_order() {
             graph_result_autounmask("dev-libs/abort-au-restart-cycle"),
         ),
     ] {
-        // Backlog #517 (b): Portage's merge-order bias (`_merge_order_bias`,
+        // Portage's merge-order bias (`_merge_order_bias`,
         // parent count descending) puts a parentless top target last; the
         // cycle arms (one parent each) drain first. Verified against host
         // Portage's re-display (`[ebuild] top`, `[nomerge] a`,

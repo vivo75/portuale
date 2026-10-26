@@ -692,9 +692,9 @@ fn cycle_notices(result: &DepcleanResult) -> Vec<(String, Vec<String>)> {
 
 #[test]
 fn depclean_cycle_notice_names_the_pair_when_only_the_cycle_keeps_it() {
-    // #508 / Portage 3.0.83-r1 `_calc_depclean`: A and B require each other,
-    // B is protected (not named), C is world. `--depclean A` removes nothing
-    // and the notice names both members (oracle: LLM/evidence/2026-10-23-508).
+    // Portage `_calc_depclean`: A and B require each other, B is
+    // protected (not named), C is world. `--depclean A` removes nothing
+    // and the notice names both members.
     let root = install_dev_libs_root(
         "depclean-cycle-pair-508",
         &[

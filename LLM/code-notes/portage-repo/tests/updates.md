@@ -9,3 +9,6 @@ Update-command parsing and dep-string rewrite tests.
 
 ## fn apply_updates_to_dep_string_reports_unchanged_and_rewrites_only_moved_tokens
 - Backlog #119: `None` when no `move`/`slotmove` touched a token (so the caller can skip its insert and no output is allocated), `Some(rewritten)` otherwise, with the surrounding whitespace, `||`/`(`/`)` and `use?` tokens preserved byte-for-byte.
+
+## fn slotmove_rewrites_versioned_blocker_and_usedeps_tokens
+- Each expectation was generated with Portage 3.0.83 (`update_dbentry(["slotmove", Atom("dev-libs/foo"), "0", "1"], token, eapi="8")`). Portage: `lib/portage/update.py:69-102`.

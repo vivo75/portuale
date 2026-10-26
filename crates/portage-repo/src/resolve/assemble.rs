@@ -205,7 +205,7 @@ pub(crate) fn assemble_result(
         }
     }
 
-    // The success-path ignored-user-patches rows (backlog #509): for every
+    // The success-path ignored-user-patches rows: for every
     // merging cp, the filter-dropped binaries Portage accumulates in
     // `ignored_binaries["user_patches"]`, minus `_eliminate_ignored_binaries`.
     // Recomputed here from the settled merge list (Portage's displayed-list
@@ -388,8 +388,8 @@ pub(crate) fn build_cycle_display(
             // Portage's `get_cycles` prints from the earliest-inserted node:
             // the ring starts at its successor and ends with it (the
             // shortest child-`>`node path for the earliest node). Rotate the
-            // index cycle so the lowest-`discovery` node is last (backlog
-            // #517 (a)); this dedupes repeats into one ring.
+            // index cycle so the lowest-`discovery` node is last;
+            // this dedupes repeats into one ring.
             let min_pos = cycle
                 .iter()
                 .enumerate()

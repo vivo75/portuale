@@ -250,7 +250,7 @@ pub struct GraphResult {
     pub changed_deps_report: Vec<ChangedDepsReportEntry>,
     /// Binaries the `--binpkg-respect-user-patches` filter dropped for cps
     /// that merge (ebuild or binary): the success-path ignored-binaries
-    /// block (backlog #509). Empty unless a binary pool was consulted.
+    /// block. Empty unless a binary pool was consulted.
     // Portage: depgraph.py, _show_ignored_binaries_user_patches
     pub ignored_user_patch_binaries: Vec<IgnoredUserPatchBinary>,
     /// `--buildpkgonly`: `true` when some entry that would newly merge has a

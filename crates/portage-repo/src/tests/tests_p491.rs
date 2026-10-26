@@ -1,4 +1,4 @@
-//! #491 pass-0 seed: the installed-parent update probe, hermetically.
+//! The installed-parent update probe, hermetically.
 //!
 //! Installed `p491con-1` (`:6`, vdb `>=dev-libs/p491lib-1:6/7=`) with tree
 //! replacement `p491con-2` (`:6`, `>=dev-libs/p491lib-1:6`) pulling new child
@@ -7,12 +7,10 @@
 //! libplasma shape: installed plasma-pa-6.7.5 vs the 6.8.1 ebuilds, keeper
 //! merkuro-26.08.1-r1 ("cannot be rebuilt, ebuild unavailable").
 //!
-//! Oracle: Portage 3.0.83 `--debug` try-1 `@__auto_slot_operator_replace_installed__`
-//! set (24 atoms, plasma consumers + libplasma; `LLM/evidence/2026-10-25-491/`
-//! `portage-try1-replace-arg.txt`, `analysis.md`): pass 0 seeds installed
-//! consumers whose replacement parent pulls a new child sub-slot, keeps the
-//! installed child graphed, and retries — portuale's `fold_rebuild_scan`
-//! only runs inside SlotConflict feedback, so nothing seeds try 1.
+//! Pass 0 seeds installed consumers whose replacement parent pulls a new
+//! child sub-slot, keeps the installed child graphed, and retries —
+//! `fold_rebuild_scan` only runs inside SlotConflict feedback, so nothing
+//! seeds try 1.
 //! Portage: _emerge/depgraph.py, _slot_operator_trigger_reinstalls,
 //! _slot_operator_update_probe, _slot_operator_update_backtrack.
 

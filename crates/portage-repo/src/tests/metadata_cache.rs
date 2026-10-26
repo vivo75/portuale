@@ -110,7 +110,7 @@ fn metadata_transfer_is_read_from_the_resolved_features() {
         "FEATURES=\"metadata-transfer -parallel-fetch\"\n",
     )
     .unwrap();
-    // Since #564 a missing directory drops the repo, so `main` must
+    // A missing directory drops the repo, so `main` must
     // exist; the repos are injected (not discovered) so the host's
     // absolute global repos.conf cannot add repos to the resolution.
     std::fs::create_dir_all(root.join("main")).unwrap();

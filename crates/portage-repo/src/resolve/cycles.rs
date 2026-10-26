@@ -76,7 +76,7 @@ pub(crate) struct FindHardCyclesArgs<'a> {
     pub(crate) circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
     pub(crate) top_level_atoms: &'a [String],
     /// `--onlydeps`: Portage does not insert the target up front; the graph
-    /// starts from the targets' dependencies (backlog #518). Seeds are the
+    /// starts from the targets' dependencies. Seeds are the
     /// targets' resolved direct deps in atom order, then the targets.
     pub(crate) onlydeps: bool,
 }
@@ -180,7 +180,7 @@ pub(crate) fn find_hard_cycles(args: FindHardCyclesArgs<'_>) -> Vec<Vec<String>>
     // times declaration order), not in pop/`discovery` order. Portage's
     // `get_cycles` iterates `self.nodes` in that insertion order and keeps
     // the first strictly-shortest cycle, so the printed ring's start node
-    // is the earliest-inserted one (backlog #517 (a)). Rebuild that order
+    // is the earliest-inserted one. Rebuild that order
     // here: DFS pre-order from the request targets (atom order), then from
     // every still-unseen entry in `discovery` order for disconnected
     // components -- over the merge-bound `deps` edges (selected `||`

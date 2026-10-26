@@ -155,3 +155,6 @@ Shared test helpers: fixture roots, synthetic configs, resolve/graph harnesses, 
 
 ## fn euf_layers
 - `euf` names the full split signature; the args after `iuse` are `use_tokens` (profile make.defaults), `conf_use_tokens` (make.conf), `package_use_repo`, `package_use` (profile), `package_use_user`.
+
+## fn make_repo_dirs (#564)
+- A missing directory drops the repo since #564 (Portage's nonexistent-directory rule), so fake repos must exist.

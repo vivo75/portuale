@@ -78,3 +78,6 @@ Assembling the final result.
 
 ## gate threading (#571)
 - `BuildResidualSlotConflictsArgs`, `BacktrackMissedUpdatesArgs`, `constraint_withheld_updates` and the entry-USE refresh use `ctx.gate()`.
+
+## fn success-path ignored-user-patches rows (#509)
+- For every merging cp, the filter-dropped binaries Portage accumulates in `ignored_binaries["user_patches"]`, minus `_eliminate_ignored_binaries`. Recomputed here from the settled merge list (Portage's displayed-list filter) because selection's retains are pure and memoized.

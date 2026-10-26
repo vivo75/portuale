@@ -32,7 +32,7 @@ fn hermetic_find_repos(root: &std::path::Path) -> Result<Vec<RepoConfig>, Error>
 }
 
 /// Create every named repo dir under `root` (relative `location`s): a
-/// missing directory drops the repo since #564 (Portage's
+/// missing directory drops the repo (Portage's
 /// nonexistent-directory rule), so fake repos must exist.
 fn make_repo_dirs(root: &std::path::Path, names: &[&str]) {
     for name in names {

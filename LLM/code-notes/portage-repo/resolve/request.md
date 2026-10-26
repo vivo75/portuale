@@ -100,3 +100,6 @@ A resolve request: the atoms and the emerge options.
 
 ## field categories
 - The run-shared `Categories` (see `categories.md`), when the caller built one: every walk of the resolve gates on it and shares its once-per-cp warning record. `None` (unit tests, other binaries) loads a fresh one per walk. `Rc` because the request is owned and lifetime-free while the sharing must survive `req.clone()` across the best-run re-pass; the resolver is single-threaded (`Rc` already threads the pool memo).
+
+## field verbose
+- `--verbose`: the ignored-user-patches block also names the triggering patch files (#509 oracle shape 11).

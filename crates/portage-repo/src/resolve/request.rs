@@ -40,7 +40,7 @@ pub struct ResolveRequest {
     pub with_test_deps: bool,
     pub changed_deps_report: bool,
     /// `--verbose`: the ignored-user-patches block also names the
-    /// triggering patch files (backlog #509 oracle shape 11).
+    /// triggering patch files.
     pub verbose: bool,
     pub selective: bool,
     pub autounmask_suggest_keywords: bool,

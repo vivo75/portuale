@@ -1,5 +1,5 @@
 //! The per-edge facts of the circular-dependency report. Expected values are
-//! Portage 3.0.83-r1 captures (`LLM/evidence/2026-10-23-506/`).
+//! Portage captures of the same report shapes.
 
 use super::*;
 
@@ -194,7 +194,7 @@ fn report_for(atom: &str, max: usize) -> CycleReport {
     })
 }
 
-/// Portage 3.0.83-r1, `LLM/evidence/2026-10-23-507/captures/01-use.portage.out`.
+/// Portage's JSON report for the same USE-cycle fixture.
 #[test]
 fn json_report_lists_both_rotations_and_the_flag_solution() {
     let r = report_for("dev-libs/usecyclea", CIRCULAR_MAX_USE_FLAGS_DEFAULT);

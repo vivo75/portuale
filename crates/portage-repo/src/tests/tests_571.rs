@@ -1,4 +1,4 @@
-//! Task 12 (#571): the category allow-list everywhere, not just `--regen`.
+//! The category allow-list everywhere, not just `--regen`.
 //!
 //! Portage's `settings.categories` (the incremental union of every repo's
 //! `profiles/categories` plus `/etc/portage/categories`, `config.py:948-960`)
@@ -10,11 +10,11 @@
 //! `depgraph.py:4948-4975`). Installed/binary databases keep categories
 //! derived from their own contents (`dbapi/__init__.py:38-49`).
 //!
-//! Oracle: Portage 3.0.83 host captures in `LLM/evidence/2026-10-26-571/`
-//! (`probe-p571.sh`): `p571-hidden` (valid ebuild, listed nowhere) is
-//! unsatisfiable everywhere with the `!!!` on direct/dep lookups and
-//! silence on short-name/`--search`; `p571-shared` (ebuild in the main
-//! repo, listed only by the overlay) merges — the union covers every repo.
+//! Portage host captures agree: `p571-hidden` (valid ebuild, listed
+//! nowhere) is unsatisfiable everywhere with the `!!!` on direct/dep
+//! lookups and silence on short-name/`--search`; `p571-shared` (ebuild
+//! in the main repo, listed only by the overlay) merges — the union
+//! covers every repo.
 
 use super::*;
 use md5::Digest as _;
@@ -57,8 +57,8 @@ fn repo_config_571(name: &str, location: std::path::PathBuf, is_main: bool) -> R
 }
 
 /// A main repo listing only `listed` (but carrying `hidden` and `shared`
-/// ebuilds too) plus an overlay listing only `shared`: the Task 12 shape
-/// in miniature. Returns the base dir, the repos, and the config root
+/// ebuilds too) plus an overlay listing only `shared`: the allow-list
+/// shape in miniature. Returns the base dir, the repos, and the config root
 /// (no user categories file).
 fn mini_571() -> (std::path::PathBuf, Vec<RepoConfig>, std::path::PathBuf) {
     let base = TempDir::new("portuale-571-mini").keep();

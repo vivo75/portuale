@@ -122,3 +122,6 @@ Selecting one atom's candidate (`resolve_pretend`).
 
 ## struct SelectSource (gate, #571)
 - New `gate` field: `resolve_pretend`'s ebuild pool (`ebuilds_shared`), `classify_best_against_installed`'s reinstall probes and `collect_binary_candidates`' `changed_deps`/`slot_changed` checks all read through it. Test `SelectSource` literals use `crate::test_gate`.
+
+## fn collect_binary_candidates user-patches retain (bug #917047)
+- `--binpkg-respect-user-patches` (default on, also with `--usepkgonly`): rejects a binary whose recorded `USER_PATCHES` differs from the local patch-set digest, so a stale build is rebuilt from source. `=n` skips the comparison outright. Portage: `depgraph.py`, the `binpkg_respect_user_patches` gate.

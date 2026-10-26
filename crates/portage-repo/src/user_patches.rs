@@ -1,4 +1,4 @@
-//! `--binpkg-respect-user-patches` (backlog #509): a binary whose recorded
+//! `--binpkg-respect-user-patches`: a binary whose recorded
 //! `USER_PATCHES` differs from the local patch-set digest is not a merge
 //! candidate, exactly like `--binpkg-respect-use` rejects a wrong-USE build.
 //! Default on (also with `--usepkgonly`); `=n` disables the comparison.
@@ -73,7 +73,7 @@ pub(crate) struct SelectedPackage<'a> {
     pub slot: &'a str,
 }
 
-/// Portage's `_eliminate_ignored_binaries` (upstream `a7c346aa4`): a dropped
+/// Portage's `_eliminate_ignored_binaries`: a dropped
 /// binary is not reported when a more optimal alternative fills its slot —
 /// a higher version selected, or an equal-version binary selected (`>=` is
 /// true on equal versions; its build-time arm is unreachable). The

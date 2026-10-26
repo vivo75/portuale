@@ -20,5 +20,8 @@ Autounmask dependency chains and suggestions.
 ## fn check_if_latest_atom_form
 - Portage `_display_autounmask`'s `check_if_latest(pkg, check_visibility=...)` (`depgraph.py:10649`). Keywords always use `=` (bug #536392, "don't unmask undesired versions"). A use-masked-only candidate is still `is_visible`. Portage calls `check_if_latest(pkg)` for license changes.
 
+## fn render_required_use_block
+- No trailing newline: the print site terminates the report with one (`eprintln!`), like Portage's final `writemsg`, so the block ends exactly after the last chain line (#517 (c)).
+
 ## fn autounmask_use_tier
 - Fed to `effective_use_flags` as the top USE tier on the next attempt.

@@ -33,3 +33,6 @@ Backtracker unit tests: `--backtrack=0` shape, mask predicate, circular retry.
 
 ## fn backtrack_missed_updates_stays_silent_without_a_clean_settle
 - Backlog #129 (S1), expected value from Portage: at `--backtrack=0` the mg2top root pass keeps its slot conflicts (highest-first picks the `-2`s), so no mask trial state exists and neither notice may fire.
+
+## fn softened_ring_reports_the_persisting_cycle_with_backtracking_on (#517 (a))
+- Portage's ring starts at the earliest-inserted node's child (`sbrB`), not at the lowest entry index.

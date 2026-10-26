@@ -150,3 +150,6 @@ The resolver's result and how a run aborts.
 
 ## field AutounmaskChange::mask_entry
 - Backlog #462: the stacked `package.mask` entry that forced this change (`None` for keyword/license/USE changes). Recorded at resolve time because only the resolve pass knows which stacked entry matched the candidate; the renderer resolves it to Portage's `# <file>:` line and comment lines via `portage_profile::masking_file_comment`. Portage: `depgraph.py`, `_display_autounmask` (`p_mask_change_msg`).
+
+## field ignored_user_patch_binaries
+- Binaries the `--binpkg-respect-user-patches` filter dropped for cps that merge (ebuild or binary): the success-path ignored-binaries block (#509). Empty unless a binary pool was consulted. Portage: `depgraph.py`, `_show_ignored_binaries_user_patches`.

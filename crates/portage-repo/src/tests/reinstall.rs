@@ -565,9 +565,8 @@ fn changed_deps_top_level_reports_the_masked_block() {
     assert_eq!(
         err.to_string(),
         // The binary-pool header is Portage's own under `--usepkgonly`
-        // (`All binary packages that could satisfy`, backlog #509 oracle
-        // shape 03; depgraph.py 7018-7023): the #420 oracle pinned only
-        // the `changed deps` row, which is unchanged.
+        // (depgraph.py 7018-7023): the oracle pinned only the
+        // `changed deps` row, which is unchanged.
         "\n!!! All binary packages that could satisfy \"dev-libs/bcdeppkg\" have been masked.\n\
          !!! One of the following masked packages is required to complete your request:\n\
          - dev-libs/bcdeppkg-1.0::gentoo (masked by: changed deps)\n\

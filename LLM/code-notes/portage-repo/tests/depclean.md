@@ -33,3 +33,6 @@ Depclean and prune selection tests: cleanlist, removal order, nodeps split.
 
 ## fn depclean_cleanlist_a_use_conditional_dep_that_is_off_does_not_keep_its_target
 - dcw's `off? ( ... )` group is inactive -> dchidden is orphan.
+
+## fn depclean_cycle_notice_names_the_pair_when_only_the_cycle_keeps_it (#508)
+- Portage 3.0.83-r1 `_calc_depclean`: A and B require each other, B is protected (not named), C is world. Oracle: `LLM/evidence/2026-10-23-508`.

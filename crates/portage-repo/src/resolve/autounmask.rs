@@ -238,7 +238,7 @@ pub(crate) fn render_required_use_block(args: RenderRequiredUseBlockArgs<'_>) ->
             .collect();
         // No trailing newline: the print site terminates the report with
         // one (`eprintln!`), like Portage's final `writemsg`, so the block
-        // ends exactly after the last chain line (backlog #517 (c)).
+        // ends exactly after the last chain line.
         out.push_str(&lines.join("\n"));
     }
     out

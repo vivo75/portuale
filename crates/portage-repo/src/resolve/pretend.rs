@@ -1362,7 +1362,7 @@ pub(crate) fn collect_binary_candidates(args: CollectBinaryCandidatesArgs<'_>) {
         // `--usepkgonly`): reject a binary whose recorded `USER_PATCHES`
         // differs from the local patch-set digest, so a stale build is
         // rebuilt from source. `=n` skips the comparison outright.
-        // Portage: depgraph.py (bug #917047)
+        // Portage: depgraph.py, the binpkg_respect_user_patches gate
         if binpkg_respect_user_patches {
             binary_candidates
                 .retain(|c| binary_user_patches_ok(c, &atom.category, &atom.package, config));

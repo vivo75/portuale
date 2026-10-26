@@ -33,3 +33,6 @@ Reinstall-trigger pins: binary identity, --newuse/--changed-use/--changed-deps/-
 
 ## fn newuse_vs_changed_use_diverge_on_a_newly_added_iuse_flag
 - Fixture: `dev-libs/changedusepkg` installed with empty vdb IUSE; its ebuild declares `IUSE="brandnewflag"` (unmasked, not globally enabled). --newuse's presence-diff term reacts to the flag existing in IUSE; --changed-use's narrower formula only looks at enablement of flags declared on both sides.
+
+## fn changed_deps_top_level_reports_the_masked_block (#420, #509)
+- The binary-pool header is Portage's own under `--usepkgonly` (`All binary packages that could satisfy`, #509 oracle shape 03; `depgraph.py` 7018-7023): the #420 oracle pinned only the `changed deps` row, which is unchanged.

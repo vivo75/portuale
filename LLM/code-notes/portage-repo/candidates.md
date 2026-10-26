@@ -18,6 +18,7 @@ Ebuild candidates for a package.
 - `binary_deps`: this binary instance's own recorded `*DEPEND` strings (its `Packages` entry's `DEPEND`/`RDEPEND`/`BDEPEND`/`PDEPEND`/`IDEPEND` -- absent keys omitted), kept so `--binpkg-changed-deps` compares the *exact* instance's deps rather than re-looking-up the cpv (a binpkg-multi-instance cpv has one dep set per build). Empty for an ebuild candidate.
 - `build_time`: from Portage `_pkg_str.build_time`. Portage `dbapi._cmp_cpv` sorts same-version instances by `build_time`, and `_iter_match_pkgs` reverses that and `break`s on the first acceptable one -- so the highest `BUILD_TIME` passing the checks wins (`dedup_binary_instances`).
 - `eapi`: the package's own EAPI -- `repo_aux_metadata`'s `EAPI` field for ebuilds, the `Packages` index `EAPI` field for binaries (S4, #341: `dep_validate` parses each `*DEPEND` with it). Absent in either source means the metadata predates the format: EAPI 0. Portage: `Package.eapi` (`_validate_deps`' `dep_eapi`).
+- `user_patches`: this binary instance's recorded `USER_PATCHES` digest (`""` when the index entry carries no key: the `-r1` empty default, bug 984255). Compared against the local patch-set digest by the `--binpkg-respect-user-patches` filter (#509); ebuilds carry `""` (never filtered). Lowercase hex, like Portage. Portage: `Package.py`, `user_patches`.
 
 ## fn strip_version_prefix
 - Same disambiguation principle as the PMS package-name grammar ported in portage-dep's atom parser.

@@ -225,7 +225,7 @@ fn apply_move_and_slotmove_to_a_token_preserve_the_other_atom_parts() {
 /// Only `::repo` tokens are left alone -- Portage rejects them under every
 /// EAPI in use. Each expectation below was generated with Portage 3.0.83
 /// (`update_dbentry(["slotmove", Atom("dev-libs/foo"), "0", "1"], token,
-/// eapi="8")`; see the task report for the full commands and outputs).
+/// eapi="8")`).
 /// Portage: lib/portage/update.py:69-102
 #[test]
 fn slotmove_rewrites_versioned_blocker_and_usedeps_tokens() {

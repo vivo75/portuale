@@ -386,8 +386,7 @@ pub(crate) fn candidate_masking_reasons(
         package_accept_keywords: &config.package_accept_keywords,
     }) {
         // Portage stacks KEYWORDS incrementally first, which drops every
-        // `-arch` token, so a `-arch` alone reads as `missing keyword`
-        // (LLM/portage-quirks.md Q5).
+        // `-arch` token, so a `-arch` alone reads as `missing keyword`.
         let kmask = eff_keywords
             .iter()
             .find_map(|k| {
@@ -503,7 +502,7 @@ pub(crate) struct BinaryRespectUseGate<'a> {
     pub(crate) changed_use: bool,
     /// `--binpkg-respect-user-patches` (default on): a visible binary whose
     /// recorded `USER_PATCHES` disagrees with the local patch set reports
-    /// `user patches` (backlog #509), the `elif` after `changed deps`.
+    /// `user patches`, the `elif` after `changed deps`.
     pub(crate) user_patches: bool,
     pub(crate) ebuilds: &'a [Candidate],
     /// The `--binpkg-changed-deps` inputs selection's second `retain` read
@@ -736,7 +735,7 @@ pub(crate) struct AllBinaryMaskedReportArgs<'a> {
     pub(crate) xinfo: &'a str,
     pub(crate) gate: BinaryRespectUseGate<'a>,
     /// `--usepkgonly` mode: the binary pool aborts with the `binary
-    /// packages` header (backlog #509); under `--getbinpkg` alone the
+    /// packages` header; under `--getbinpkg` alone the
     /// ebuild header stands.
     pub(crate) binary_header: bool,
 }
@@ -952,8 +951,7 @@ fn render_all_masked_block(
         .iter()
         .any(|(_, reasons)| reasons.iter().any(|r| r.starts_with("EAPI ")));
     // Under `--usepkgonly` the binary pool aborts with its own header
-    // (backlog #509 oracle shape 03: `All binary packages that could
-    // satisfy`). Portage: depgraph.py, _show_unsatisfied_dep
+    // (`All binary packages that could satisfy`). Portage: depgraph.py, _show_unsatisfied_dep
     let what = if binary { "binary packages" } else { "ebuilds" };
     let mut out = format!(
         "\n!!! All {what} that could satisfy {xinfo}{} have been masked.\n\
@@ -994,7 +992,7 @@ fn render_all_masked_block(
 /// disclosures share the sentence but never travel as `Err`.
 pub fn is_all_masked_abort_report(msg: &str) -> bool {
     // The `--usepkgonly` user-patches abort prepends the ignored-binaries
-    // block ahead of the header (backlog #509), so the header is matched
+    // block ahead of the header, so the header is matched
     // at a line start rather than at the message start.
     msg.lines().any(|line| {
         line.starts_with("!!! All ebuilds that could satisfy")

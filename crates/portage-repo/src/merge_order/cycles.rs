@@ -214,7 +214,7 @@ pub(crate) fn elementary_cycles(
 /// The drain order is Portage's merge-order bias: nodes sorted by parent
 /// count, descending (`depgraph.py`, `_merge_order_bias`; Python's sort is
 /// stable, so ties keep insertion order). The bias decides the fallback
-/// pick for pure cycles (backlog #517 (b)).
+/// pick for pure cycles.
 pub(crate) fn reduced_merge_order(
     g: &Digraph,
     drain: &HashSet<usize>,
@@ -276,9 +276,9 @@ pub(crate) fn cycle_report(
     onlydeps: bool,
 ) -> (Vec<Vec<usize>>, Vec<usize>) {
     let g = build_digraph(entries, top_level_atoms, root, circular);
-    // Portage's digraph insertion order: DFS pre-order from the targets
-    // (backlog #517 (a)); under `--onlydeps` the targets are not inserted
-    // up front, so the seeds are their direct children (backlog #518).
+    // Portage's digraph insertion order: DFS pre-order from the targets;
+    // under `--onlydeps` the targets are not inserted up front, so the
+    // seeds are their direct children.
     let mut seeds: Vec<usize> = Vec::new();
     for atom in top_level_atoms {
         let Some(parsed) = crate::parse_dep_atom(atom, "cycle_report-targets") else {

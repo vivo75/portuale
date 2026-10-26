@@ -48,9 +48,9 @@ mod visibility_use_flip;
 
 /// A [`CategoryGate`](crate::CategoryGate) over `repos` for unit tests: the allow-list is the
 /// union of their ebuild-bearing category dirs. That matches what their
-/// `profiles/categories` files list everywhere except the deliberate
-/// #571 omissions (`repo-p571` leaves `p571-hidden`/`p571-shared`
-/// unlisted), so gating changes nothing for existing tests — and tests
+/// `profiles/categories` files list everywhere except deliberately
+/// unlisted fixture categories, so gating changes nothing for existing
+/// tests — and tests
 /// that pin unlisted-category behaviour build their own gate from
 /// [`Categories::load`](crate::Categories) instead. Backing is
 /// leaked: one tiny allocation per call site, freed at process exit.

@@ -85,8 +85,8 @@ fn top_level_atom_excluded(
     Ok(any_match && any_excluded)
 }
 
-/// The ignored-user-patches block that precedes a `--usepkgonly` abort
-/// (backlog #509 oracle shapes 03/05/12): the dropped binaries of the
+/// The ignored-user-patches block that precedes a `--usepkgonly` abort:
+/// the dropped binaries of the
 /// failing atom's pools, nothing eliminated (nothing was selected).
 /// Suppressed under an explicit `--binpkg-respect-user-patches=y|n`, like
 /// the success path, and empty when the filter is off.
