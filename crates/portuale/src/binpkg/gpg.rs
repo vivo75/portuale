@@ -224,7 +224,7 @@ pub(crate) fn verify_detached_signature(
     gpg: &GpgVerify,
     what: &str,
 ) -> Result<(), String> {
-    let sig_dir = TempDir::new("portuale-sign").keep();
+    let sig_dir = TempDir::new("portuale-sign");
     let sig_path = sig_dir.join("x.sig");
     fs::write(&sig_path, sig_bytes).map_err(|e| format!("{}: {e}", sig_path.display()))?;
     let argv = gpg_verify_argv(
@@ -232,9 +232,9 @@ pub(crate) fn verify_detached_signature(
         &gpg.gpg_home,
         &format!("{} -", sig_path.display()),
     );
-    let result = run_gpg_verify(&argv, member_bytes).map(|_| ());
-    let _ = fs::remove_file(&sig_path);
-    result.map_err(|e| format!("{what}: {e}"))
+    run_gpg_verify(&argv, member_bytes)
+        .map(|_| ())
+        .map_err(|e| format!("{what}: {e}"))
 }
 
 /// Clear-signed-`Manifest` verification: `[SIGNATURE]` becomes `--output -

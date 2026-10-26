@@ -19814,3 +19814,17 @@ then its own output (for example `>>> Updating Portage cache`), and the
 world and vdb moves are applied, as host Portage 3.0.83 does on the same
 tree. A closed stdout pipe during the block now exits quietly with 141
 like any other print.
+
+**The contract suite cannot change the host, and signature checks clean
+up after themselves (#586, #587, 2026-10-26).** Since global updates run
+before every emerge, a suite run as root with the running root at `/`
+would apply the host's pending `profiles/updates` moves and rewrite
+`/var/cache/edb/mtimedb`. pmtest's `conftest.py` now refuses to start as
+root (exit 4) unless `PMTEST_ALLOW_ROOT=1`, before it touches any file,
+and compares the host mtimedb and the `/var/db/pkg` directory at session
+start and end, failing the run (exit 1) if either changed. Check from
+pmtest: `python3 -m pytest pytests-contract-suite/test_host_guard.py -q`
+(14 tests, two of them run a nested pytest session and see the exit code
+change). Separately, `binpkg::gpg::verify_detached_signature` kept its
+scratch directory with `.keep()` and leaked one empty directory per
+checked file; the guard now lives for the call.
