@@ -166,3 +166,78 @@ fn p491_pass0_seed_stays_quiet_when_the_child_already_moved() {
         "no sub-slot change, no seed: {replace:?}"
     );
 }
+
+/// Temp vdb for the `||` probe: the installed parent's slot-operator atom
+/// sits in a `||` branch the installed set does not select, while the
+/// sibling branch names an installed package. TempDir-guarded (no `.keep()`).
+fn p491or_vdb() -> (TempDir, PathBuf) {
+    let guard = TempDir::new("p491-or-seed");
+    let root = guard.path().to_path_buf();
+    for (pf, slot, rdepend) in [
+        ("p491lib-1", "6/7", None),
+        (
+            "p491orcon-1",
+            "6",
+            Some("|| ( =dev-libs/p491lib-2:6/7= dev-libs/p491oralt )"),
+        ),
+        ("p491oralt-1", "0", None),
+        ("p491keep-1", "6", Some("dev-libs/p491lib:6/7=")),
+    ] {
+        let d = root.join(format!("var/db/pkg/dev-libs/{pf}"));
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs").unwrap();
+        fs::write(d.join("EAPI"), "8").unwrap();
+        fs::write(d.join("SLOT"), slot).unwrap();
+        if let Some(deps) = rdepend {
+            fs::write(d.join("RDEPEND"), deps).unwrap();
+        }
+        fs::write(d.join("repository"), "testrepo").unwrap();
+    }
+    (guard, root)
+}
+
+#[test]
+fn p491or_seed_ignores_a_deselected_or_branch_slot_operator_atom() {
+    // Portage `dep_zapdeps` (`3rdparty/portage/lib/portage/dep/dep_check.py`,
+    // the `||` choice bins) resolves each `||` group installed-preferred:
+    // the `=dev-libs/p491lib-2:6/7=` branch matches no installed instance
+    // while the `dev-libs/p491oralt` sibling matches installed `p491oralt-1`,
+    // so only the sibling becomes a parent atom and the slot-operator
+    // trigger (`_emerge/depgraph.py`, `_slot_operator_trigger_reinstalls`,
+    // which ranges over recorded `_slot_operator_deps` only) never sees the
+    // slot-operator branch. Host Portage 3.0.83 on the matching cell
+    // (world `[dev-libs/p491orcon, dev-libs/p491keep]`, `emerge --pretend
+    // --update --deep --backtrack=4 @world` with the fixture configroot and
+    // an ad-hoc ROOT): merges `p491orcon-2` only, keeps `p491lib-1`
+    // (`6/7`), and prints no `missed slot abi update` debug line — no seed.
+    // Portage: dep_check.py, dep_zapdeps; depgraph.py,
+    // _slot_operator_trigger_reinstalls.
+    let (_guard, root) = p491or_vdb();
+    let entries = vec![
+        installed_entry("dev-libs", "p491orcon", "1", "6", "6"),
+        installed_entry("dev-libs", "p491lib", "1", "6", "7"),
+        installed_entry("dev-libs", "p491oralt", "1", "0", "0"),
+        installed_entry("dev-libs", "p491keep", "1", "6", "6"),
+    ];
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let installed = InstalledReachability::new(&root);
+    let live = HashSet::from([("dev-libs".to_string(), "p491keep".to_string())]);
+    let replace = installed_parent_update_probe(InstalledParentUpdateProbeArgs {
+        root: &root,
+        config: &test_config(),
+        entries: &entries,
+        with_bdeps: false,
+        excluded: &[],
+        masked: &HashMap::new(),
+        installed: &installed,
+        live: &live,
+        walked: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        update: true,
+        gate: crate::test_gate(&repos),
+    });
+    assert!(
+        replace.is_empty(),
+        "a deselected || branch is no probe atom: {replace:?}"
+    );
+}

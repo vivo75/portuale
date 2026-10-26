@@ -116,16 +116,33 @@ pub(crate) fn installed_parent_update_probe(
         }
         let use_flags: HashSet<String> =
             read_vdb_flag_set(root, &parent.0, &parent.1, version, "USE");
-        let tokens: Vec<String> = dep_keys
-            .iter()
-            .flat_map(|key| {
-                read_vdb_string(root, &parent.0, &parent.1, version, key)
-                    .split_whitespace()
-                    .map(String::from)
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        for token in tokens {
+        // The parent's recorded atoms, USE-reduced per key, minus the `||`
+        // branches Portage's `dep_zapdeps` demotes: only the installed-
+        // selected arm ever becomes a parent atom, so a slot-operator atom
+        // in a deselected branch is no probe atom.
+        let mut probe_atoms: Vec<String> = Vec::new();
+        for key in dep_keys {
+            let depstr = read_vdb_string(root, &parent.0, &parent.1, version, key);
+            if depstr.trim().is_empty() {
+                continue;
+            }
+            let demoted = or_branch_vdb_deselected_set(root, &depstr, &use_flags);
+            let Some(flat) = flat_dep_atoms(&depstr, &use_flags) else {
+                continue;
+            };
+            for atom_str in flat {
+                let Some(atom) = parse_dep_atom(&atom_str, "installed_parent_tokens") else {
+                    continue;
+                };
+                if demoted.contains(atom_str.as_str())
+                    || demoted.contains(reverse_dep_constraint_atom(&atom_str, &atom).as_str())
+                {
+                    continue;
+                }
+                probe_atoms.push(atom_str);
+            }
+        }
+        for token in probe_atoms {
             let Some(atom) = parse_dep_atom(&token, "installed_parent_tokens") else {
                 continue;
             };
