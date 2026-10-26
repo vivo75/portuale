@@ -1,6 +1,6 @@
 # Owner question — plan 02.575 Task 11 (global updates wired into emerge)
 
-Status: open. Asked 2026-10-26 by the manager, overnight run.
+Status: answered 2026-10-26 (rulings at the end). Asked 2026-10-26 by the manager, overnight run.
 
 ## 1. L1 bed run with an updates fixture (plan Task 11, last bullet)
 
@@ -36,3 +36,11 @@ As root, the running root `/` is writable, so a suite run with
 write `/var/cache/edb/mtimedb`, as Portage would. The suite runs as
 `vivo` here, so nothing happens. A CI that runs it as root would need a
 scratch running root. Note only, no change made.
+
+## Owner rulings (2026-10-26)
+
+1. The checks above are enough; no bed cell.
+2. File an item to write Portage's full shape: filed as #585.
+3. A guard is wanted; the manager proposes options and the owner picks.
+4. (Task 20 question) The `G0`/`G1`/`G2` labels in
+   `reverse_dep_pins.rs` comments stay.
