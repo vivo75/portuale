@@ -38,7 +38,7 @@ The `_do_global_updates` port (backlog #576): the mtime-gated scan, the per-root
 - `record_holds_only_the_error_free_changed_files`: the full fixture run leaves `mtimedb["updates"]` holding exactly the one updates file with its live mtime, while foreign keys seeded beforehand survive verbatim.
 - `directiveless_changed_file_records_nothing`: a changed but directive-less file still prints the notice and its dots (`:99-130` runs before the valid check at `:139`) but records nothing and forces nothing.
 - `error_only_run_applies_but_records_nothing`: an errored file forces yet writes no record file at all (`timestamps` stays empty).
-- `versioned_slotmove_counts_as_valid`: a versioned `slotmove` atom forces, earns its dot and is recorded (Portage applies it; the apply side is backlog #583).
+- `versioned_slotmove_counts_as_valid`: a versioned `slotmove` atom forces, earns its dot and is recorded; the move passes match on the atom text (backlog #583, shipped).
 - `unprivileged_root_runs_nothing`, `sandbox_active_runs_nothing`, `unwritable_vdb_runs_nothing`: the three gates (each pinned to run nothing, print nothing, record nothing).
 - `record_write_failure_still_forces`: an unwritable record still forces with the moves applied (reported, never discarded).
 - `the_record_accumulates_across_runs`: the record merges (`prev_mtimes.update`), so a second run changing another file keeps the first run's entries (regression pin for the replace-instead-of-merge bug).

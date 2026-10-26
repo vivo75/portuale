@@ -8,10 +8,11 @@
 - Origin: SCOPE_BACKLOG Part 2 Section H item 2.
 - Deliberate cuts (all no-ops for a `--pretend` that never writes): the on-disk vdb category rename / `*DEPEND` rewrite, the world / world_sets rewrite, binary-package (`%`/`S`) updates, and the `/etc/portage/package.*` (`p`) rewrite -- `--pretend` mutates none of these, so in-memory application on read is equivalent.
 - Portage `grab_updates`' `os.scandir` file order (+ `prev_mtimes` incremental logic): portuale sorts the quarter files by `(year, quarter)` parsed from the `NQ-YYYY` name (non-matching names last, by name) and re-reads them every run. Deterministic, and strictly better than Portage's arbitrary order for a chained move spanning two quarter files.
-- A `slotmove` whose atom carries a version/operator: Portage `parse_updates` accepts any non-blocker atom (valid, recorded, applied); portuale's parser counts it valid too, but `UpdateCmd::SlotMove` carries only the bare `cat/pkg`, so the versioned form stays a no-op at apply time (backlog #583: keep the atom and match versions in `move_slot_ent` only).
+- A `slotmove` whose atom carries a version/operator: Portage `parse_updates` accepts any non-blocker atom (valid, recorded, applied); portuale's parser counts it valid too, and `UpdateCmd::SlotMove.atom` keeps the versioned text (`None` for the bare form). Only the `move_slot_ent` passes match on it (backlog #583, shipped); dep-string rewrites and the read-path slot map skip it, like Portage's `update_dbentry` version guard.
 
 ## enum UpdateCmd
 - `Move`: Portage `parse_updates` rejects a blocker or any `atom != atom.cp`.
+- `SlotMove.atom`: `Some` original text when the directive's atom carries an operator or a version (the `update_dbentry` skip condition, `update.py:65-72`); `None` for the bare form and for atoms carrying only `:slot`/`[usedeps]`/`::repo`, which Portage still rewrites dep strings for. Only the `move_slot_ent` passes match on `Some`.
 
 ## fn parse_updates_content
 - Portage `portage.update.parse_updates`: one directive per non-blank line, `move`/`slotmove` only, wrong arity or a malformed atom/slot skips that line (Portage appends to `errors` -- never fatal).
@@ -41,6 +42,7 @@
 - Backlog #119.
 - Fast path: if the atom's own `cp` isn't the `old`/`cp` of any command, nothing in the loop can ever rewrite it. Both lookups borrow (`HashMap<String,_>::get(&str)`, `HashSet<String>::contains(&str)`), so this costs no allocation.
 - A command that matched the cp but left the token unchanged (a slotmove on another slot, a versioned atom) is reported as unchanged, exactly like the old `updated != *dep` comparison.
+- A versioned `slotmove` command never rewrites (backlog #583, shipped): Portage's `update_dbentry` skips it (`update.py:65` operator arm, `:72` version arm), since the version constraints cannot be checked against the token being rewritten.
 
 ## fn apply_updates_to_dep_string
 - Backlog #119: `None` means the input is returned as-is, so the caller can skip its insert and the unchanged case allocates no output at all. The old shape `format!`ed every chunk and `collect`ed unconditionally, even when no command matched -- 7.5% of the reference workload across the md5-cache misses' dep strings.
@@ -67,4 +69,11 @@
 - Precedent: `apply_updates_to_dep_string_with`. Lets a synthetic `move` cycle be tested without global state.
 
 ## fn parse_updates_with_errors
-- Portage `portage.update.parse_updates` as a `(cmds, valid, has_errors)` split: blank lines skipped, every other line one valid directive or one error. A versioned `slotmove` atom counts as valid (Portage only rejects blockers there) yet yields no command -- applying it is backlog #583. `parse_updates_content` delegates to it (identical command lists, so the read path is unchanged); the global-updates scan uses the full split (valid count for the force/dots, error flag for the record).
+- Portage `portage.update.parse_updates` as a `(cmds, valid, has_errors)` split: blank lines skipped, every other line one valid directive or one error. A versioned `slotmove` atom counts as valid (Portage only rejects blockers there) and yields a command carrying its text for the `move_slot_ent` match (backlog #583, shipped). `parse_updates_content` delegates to it (identical command lists, so the read path is unchanged); the global-updates scan uses the full split (valid count for the force/dots, error flag for the record).
+
+## fn slotmove_version_matches
+- The `move_slot_ent` version filter (`dbapi/__init__.py:449-474` reaches it through `atom.with_slot(origslot)` + `match`): `portage_dep::match_from_list` over the candidate `cat/pkg-ver` strings. The slot itself is matched by the caller's `SLOT` read (plain-string candidates carry no slot, and `matches_slot` passes those). Use-deps in the atom are not enforced (`match_from_list` ignores them) and a `::repo` atom is not repo-filtered (the caller's `repo_match` gate is the repo check) -- both unpinned cuts, pathological in updates files.
+- Unparseable atoms match nothing (`match_from_list` returns `None`; the parser already rejected those, so this is defense only).
+
+## fn slot_move_map
+- Holds bare-form commands only: the read path (`apply_updates_to_slot`, via `installed.rs`) sees `(slot, sub_slot)` with no version, so it cannot match a versioned atom -- Portage has no read-time slotmove at all (its moves are on-disk), and `update_dbentry` skips versioned directives, so skipping is the faithful shape.

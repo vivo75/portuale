@@ -116,6 +116,7 @@ fn slotmove_only_sources_keep_the_queried_dir() {
         cp: ("dev-libs".to_string(), "slotmovepkg".to_string()),
         old_slot: "0".to_string(),
         new_slot: "1".to_string(),
+        atom: None,
     }];
     assert_eq!(
         installed_cp_sources_with("dev-libs", "slotmovepkg", &cmds),
@@ -145,6 +146,7 @@ fn parse_updates_content_keeps_move_and_slotmove_drops_the_rest() {
                 cp: ("dev-libs".into(), "baz".into()),
                 old_slot: "0".into(),
                 new_slot: "1".into(),
+                atom: None,
             },
         ]
     );
@@ -152,8 +154,8 @@ fn parse_updates_content_keeps_move_and_slotmove_drops_the_rest() {
 
 /// Error-aware split: blank lines skipped, every other line one
 /// valid directive or one error; a versioned `slotmove` atom is valid
-/// (Portage applies it) yet yields no command here (a later piece's
-/// work). Portage: portage.update.parse_updates
+/// and yields a command carrying its text for the `move_slot_ent` match.
+/// Portage: portage.update.parse_updates
 #[test]
 fn parse_updates_with_errors_splits_valid_from_malformed() {
     let parsed = parse_updates_with_errors(
@@ -167,12 +169,103 @@ fn parse_updates_with_errors_splits_valid_from_malformed() {
              move only-two-tokens\n\
              slotmove dev-libs/qux 0\n",
     );
-    assert_eq!(parsed.cmds.len(), 2, "move + bare slotmove only");
+    assert_eq!(
+        parsed.cmds,
+        vec![
+            UpdateCmd::Move {
+                old: ("dev-libs".into(), "foo".into()),
+                new: ("dev-libs".into(), "bar".into()),
+            },
+            UpdateCmd::SlotMove {
+                cp: ("dev-libs".into(), "baz".into()),
+                old_slot: "0".into(),
+                new_slot: "1".into(),
+                atom: None,
+            },
+            UpdateCmd::SlotMove {
+                cp: ("dev-libs".into(), "ver".into()),
+                old_slot: "0".into(),
+                new_slot: "1".into(),
+                atom: Some(">=dev-libs/ver-2".to_string()),
+            },
+        ]
+    );
     assert_eq!(
         parsed.valid, 3,
         "the versioned slotmove counts as valid too"
     );
     assert!(parsed.has_errors, "comment, bad move, bad slotmoves error");
+}
+
+/// A versioned `slotmove` never rewrites a dep string, while the bare
+/// form rewrites every token on its cp (Portage checks the version only
+/// on the directive's own atom). Each expectation below was generated
+/// with Portage 3.0.83 (`update_dbentry(["slotmove",
+/// Atom(">=dev-libs/foo-2"), "0", "1"], token)` leaves every token
+/// alone; the bare `Atom("dev-libs/foo")` form rewrites).
+/// Portage: lib/portage/update.py:65-72
+#[test]
+fn versioned_slotmove_leaves_dep_strings_alone() {
+    let cp = ("dev-libs".to_string(), "foo".to_string());
+    let versioned = vec![UpdateCmd::SlotMove {
+        cp: cp.clone(),
+        old_slot: "0".to_string(),
+        new_slot: "1".to_string(),
+        atom: Some(">=dev-libs/foo-2".to_string()),
+    }];
+    let targets: HashMap<String, HashSet<String>> =
+        HashMap::from([(cp.0.clone(), HashSet::from([cp.1.clone()]))]);
+    for dep in [
+        "dev-libs/foo:0",
+        ">=dev-libs/foo-2:0",
+        "dev-libs/foo:0[bar]",
+        "!dev-libs/foo:0",
+    ] {
+        assert_eq!(
+            apply_updates_to_dep_string_with(dep, &versioned, &targets),
+            None,
+            "{dep}"
+        );
+    }
+    // The bare form still rewrites, versioned tokens included.
+    let bare = vec![UpdateCmd::SlotMove {
+        cp: cp.clone(),
+        old_slot: "0".to_string(),
+        new_slot: "1".to_string(),
+        atom: None,
+    }];
+    assert_eq!(
+        apply_updates_to_dep_string_with(">=dev-libs/foo-2:0", &bare, &targets).as_deref(),
+        Some(">=dev-libs/foo-2:1")
+    );
+}
+
+/// The `move_slot_ent` version filter keeps only the matching versions:
+/// Portage matches `atom.with_slot(origslot)` against the installed cpvs.
+/// Portage: lib/portage/dbapi/__init__.py:449-474
+#[test]
+fn slotmove_version_match_keeps_only_matching_versions() {
+    let cpvs = [
+        "dev-libs/foo-1".to_string(),
+        "dev-libs/foo-2".to_string(),
+        "dev-libs/foo-2-r1".to_string(),
+    ];
+    assert_eq!(
+        slotmove_version_matches(">=dev-libs/foo-2", &cpvs),
+        vec![
+            "dev-libs/foo-2".to_string(),
+            "dev-libs/foo-2-r1".to_string()
+        ]
+    );
+    assert_eq!(
+        slotmove_version_matches("=dev-libs/foo-1", &cpvs),
+        vec!["dev-libs/foo-1".to_string()]
+    );
+    assert_eq!(
+        slotmove_version_matches("dev-libs/foo", &cpvs),
+        cpvs,
+        "a bare atom matches every version"
+    );
 }
 
 #[test]
@@ -292,6 +385,7 @@ fn apply_updates_to_dep_string_reports_unchanged_and_rewrites_only_moved_tokens(
         cp: slot_cp.clone(),
         old_slot: "0".to_string(),
         new_slot: "1".to_string(),
+        atom: None,
     }];
     let slot_targets: HashMap<String, HashSet<String>> =
         HashMap::from([(slot_cp.0.clone(), HashSet::from([slot_cp.1.clone()]))]);

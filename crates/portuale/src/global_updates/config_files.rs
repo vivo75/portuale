@@ -241,6 +241,7 @@ pub(crate) fn update_config_files(args: UpdateConfigFilesArgs<'_>) -> Result<(),
 }
 
 /// One `move`/`slotmove` applied to one atom token, in command order.
+/// A versioned `slotmove` leaves the token alone, like Portage.
 fn apply_update_to_atom(cmd: &UpdateCmd, atom: &str) -> String {
     match cmd {
         UpdateCmd::Move { old, new } => portage_repo::apply_move_to_token(atom, old, new),
@@ -248,7 +249,9 @@ fn apply_update_to_atom(cmd: &UpdateCmd, atom: &str) -> String {
             cp,
             old_slot,
             new_slot,
+            atom: None,
         } => portage_repo::apply_slotmove_to_token(atom, cp, old_slot, new_slot),
+        UpdateCmd::SlotMove { atom: Some(_), .. } => atom.to_string(),
     }
 }
 
@@ -262,6 +265,7 @@ fn update_comment(cmd: &UpdateCmd) -> String {
             cp,
             old_slot,
             new_slot,
+            ..
         } => format!("slotmove {}/{} {old_slot} {new_slot}", cp.0, cp.1),
     }
 }

@@ -14,11 +14,13 @@ pub enum UpdateCmd {
         old: (String, String),
         new: (String, String),
     },
-    /// `slotmove <cat/pkg> <origslot> <newslot>` -- unversioned form only.
+    /// `slotmove <pkg> <origslot> <newslot>` -- `pkg` is any non-blocker
+    /// atom; `atom` keeps the versioned text (`None` for the bare form).
     SlotMove {
         cp: (String, String),
         old_slot: String,
         new_slot: String,
+        atom: Option<String>,
     },
 }
 
@@ -60,8 +62,8 @@ pub fn parse_updates_content(text: &str) -> Vec<UpdateCmd> {
 /// One updates file's parse: the valid commands, the valid-directive
 /// count (drives the per-file dots and the force) and whether any line
 /// was malformed (an errored file applies but is never recorded).
-/// A versioned `slotmove` atom counts as valid yet yields no command:
-/// applying it is a later piece's work, but Portage records the file.
+/// A versioned `slotmove` atom counts as valid and yields a command
+/// carrying its text: only the `move_slot_ent` passes match on it.
 pub struct ParsedUpdates {
     /// The representable commands, in file order.
     pub cmds: Vec<UpdateCmd>,
@@ -90,17 +92,25 @@ pub fn parse_updates_with_errors(text: &str) -> ParsedUpdates {
                     has_errors = true;
                 }
             }
-            // A versioned `slotmove` atom is valid yet yields no command.
-            ["slotmove", pkg, os, ns]
-                if valid_slot_name(os) && valid_slot_name(ns) && slotmove_pkg(pkg).is_some() =>
-            {
-                valid += 1;
-                if let Some(cp) = bare_cp(pkg) {
+            // A versioned `slotmove` atom is valid and yields a command
+            // carrying its text; only the `move_slot_ent` passes match on
+            // it, dep-string rewrites skip it like Portage does.
+            ["slotmove", pkg, os, ns] => {
+                if let Some(parsed) = slotmove_pkg(pkg)
+                    && valid_slot_name(os)
+                    && valid_slot_name(ns)
+                {
+                    valid += 1;
+                    let versioned =
+                        parsed.operator != portage_dep::Operator::None || parsed.version.is_some();
                     cmds.push(UpdateCmd::SlotMove {
-                        cp,
+                        cp: (parsed.category, parsed.package),
                         old_slot: os.to_string(),
                         new_slot: ns.to_string(),
+                        atom: versioned.then(|| pkg.to_string()),
                     });
+                } else {
+                    has_errors = true;
                 }
             }
             _ => {
@@ -116,7 +126,7 @@ pub fn parse_updates_with_errors(text: &str) -> ParsedUpdates {
 }
 
 /// A `slotmove` package: parseable and not a blocker. Versioned atoms
-/// pass here; only the bare form yields a command.
+/// pass here; the caller keeps their text for the `move_slot_ent` match.
 /// Portage: portage.update.parse_updates
 fn slotmove_pkg(s: &str) -> Option<portage_dep::Atom> {
     let atom = portage_dep::parse_atom(s)?;
@@ -124,6 +134,20 @@ fn slotmove_pkg(s: &str) -> Option<portage_dep::Atom> {
         return None;
     }
     Some(atom)
+}
+
+/// Which of `cpvs` (`cat/pkg-ver` strings) a versioned `slotmove`
+/// atom keeps: the `match_from_list` verdict Portage's `move_slot_ent`
+/// reaches through `atom.with_slot(origslot)` (the slot itself is matched
+/// by the caller's `SLOT` read, whose candidates carry no slot).
+/// An unparseable atom matches nothing.
+/// Portage: lib/portage/dbapi/__init__.py, move_slot_ent
+pub fn slotmove_version_matches(atom: &str, cpvs: &[String]) -> Vec<String> {
+    let refs: Vec<&str> = cpvs.iter().map(String::as_str).collect();
+    match portage_dep::match_from_list(atom, &refs) {
+        Some(hits) => hits.into_iter().map(|s| s.to_string()).collect(),
+        None => Vec::new(),
+    }
 }
 
 /// Sort key for `NQ-YYYY` names; a non-matching name sorts last, by name.
@@ -357,11 +381,15 @@ pub(crate) fn apply_updates_to_atom_with(
     for cmd in cmds {
         cur = match cmd {
             UpdateCmd::Move { old, new } => apply_move_to_token(&cur, old, new),
+            // A versioned `slotmove` never rewrites dep strings: Portage
+            // cannot tell whether the version constraints match the token.
             UpdateCmd::SlotMove {
                 cp,
                 old_slot,
                 new_slot,
+                atom: None,
             } => apply_slotmove_to_token(&cur, cp, old_slot, new_slot),
+            UpdateCmd::SlotMove { atom: Some(_), .. } => cur,
         };
     }
     // A cp-matching but token-identical command still reports unchanged.
@@ -529,8 +557,10 @@ pub(crate) fn installed_cp_sources_with(
 
 pub(crate) type SlotMoveMap = HashMap<(String, String), Vec<(String, String)>>;
 
-/// Every `slotmove` grouped by its `cat/pkg`, in command order, so
-/// `apply_updates_to_slot` walks only that package's own moves.
+/// Every bare `slotmove` grouped by its `cat/pkg`, in command order, so
+/// `apply_updates_to_slot` walks only that package's own moves. Versioned
+/// atoms stay out: the read path sees no version to match them against.
+/// Portage: portage.update, update_dbentry
 pub(crate) fn slot_move_map() -> &'static SlotMoveMap {
     static MAP: OnceLock<SlotMoveMap> = OnceLock::new();
     MAP.get_or_init(|| {
@@ -540,6 +570,7 @@ pub(crate) fn slot_move_map() -> &'static SlotMoveMap {
                 cp,
                 old_slot,
                 new_slot,
+                atom: None,
             } = cmd
             {
                 map.entry(cp.clone())
@@ -592,6 +623,7 @@ mod tests {
                 cp: ("dev-libs".to_string(), "slotpkg".to_string()),
                 old_slot: "0".to_string(),
                 new_slot: "1".to_string(),
+                atom: None,
             },
         ];
         assert_eq!(

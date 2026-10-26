@@ -568,8 +568,7 @@ mod tests {
 
     /// A versioned `slotmove` atom is valid to Portage (`parse_updates`
     /// only rejects blockers for `slotmove`), so its file forces and is
-    /// recorded even though the command itself stays unrepresentable
-    /// until a later piece applies it.
+    /// recorded; the move passes themselves match on the atom text.
     #[test]
     fn versioned_slotmove_counts_as_valid() {
         let scratch = portage_util::TempDir::new("global_updates_versionslot");

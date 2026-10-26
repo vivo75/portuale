@@ -60,6 +60,9 @@ The binpkg half of `_do_global_updates` (backlog #576): `move_ent` /
   binpkgs: match on `cp` plus the file `SLOT`'s slot part, keep the shared
   `newslot` reassignment across entries (the sub-slot inheritance quirk),
   one `aux_update` per hit. Sorted `CPV` order, like `match()` order.
+- A versioned atom narrows the indexed cpvs first through
+  `portage_repo::slotmove_version_matches` (backlog #583, shipped),
+  carried on the existing `MoveSlotArgs` struct.
 
 ## fn aux_update
 - Ports `binarytree.aux_update` (`bintree.py:253-335`): fold the new values
@@ -89,8 +92,8 @@ The binpkg half of `_do_global_updates` (backlog #576): `move_ent` /
   order (`Package._dep_keys` is the same five). The bintree `aux_get`
   collapse (`" ".join(myval.split())`) is the same rule as the vdb one,
   so rewritten values lose their trailing newlines exactly like the
-  capture's. The versioned-`slotmove` gap is backlog #583 (same family at
-  apply time as the directive gap at parse time); not fixed here.
+  capture's. A versioned `slotmove` directive is skipped by the shared
+  helper (backlog #583, shipped), like Portage's `update_dbentry`.
 
 ## fn rewrite_gpkg_file
 - Ports `gpkg.update_metadata` (`gpkg.py:1140-1244`): fresh `gpkg-1`,
@@ -212,6 +215,11 @@ The binpkg half of `_do_global_updates` (backlog #576): `move_ent` /
   unsigned xpak still rewrites, removal still reports progress.
 - `signed_gpkg_move_is_skipped`: updates file reduced to a move for the
   signed package: zero moves, file stays.
+- `versioned_slotmove_reslots_only_the_matching_binpkg` (backlog #583):
+  scratch fixture copy plus a `slotpkg-2.0.gpkg.tar` clone with an
+  appended `Packages` stanza; an inline `>=dev-libs/slotpkg-2` command
+  rewrites only 2.0's embedded `SLOT` (1, count 1) while 1.0 keeps 0.
+  The shared fixture is untouched, so no capture pin moves.
 
 ## fn apply_binpkg_cmd
 - One command's binpkg moves, mirroring `apply_vdb_cmd` for the per-command interleave (`_global_updates.py:190-206`): `move` through `move_binpkg` (`'%'`), `slotmove` through `move_binpkg_slot` (`'S'`), hook only on a nonzero count. Returns this command's counts; `apply_binpkg_moves` sums them and passes its hook through. `BinpkgState::load`, `WriterConfig::new` and `now_secs` are `pub(crate)` so the driver builds the state/writer once and loops commands; the writable-`PKGDIR` gate stays in the batch wrapper only.

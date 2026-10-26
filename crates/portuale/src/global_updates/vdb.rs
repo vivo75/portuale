@@ -113,8 +113,16 @@ pub(crate) fn apply_vdb_cmd(args: VdbCmdArgs<'_>) -> Result<(usize, usize), Stri
             cp,
             old_slot,
             new_slot,
+            atom,
         } => {
-            let slot_moves = move_slot_ent(args.db, cp, old_slot, new_slot, &repo_match)?;
+            let slot_moves = move_slot_ent(MoveSlotArgs {
+                db: args.db,
+                cp,
+                old_slot,
+                new_slot,
+                atom: atom.as_deref(),
+                repo_match: &repo_match,
+            })?;
             if slot_moves > 0
                 && let Some(on_progress) = args.on_progress
             {
@@ -308,18 +316,46 @@ fn move_ent(
     Ok(moves)
 }
 
+/// What [`move_slot_ent`] needs: the installed database, the package,
+/// the slot rewrite, the versioned atom text (`None` for the bare form,
+/// which matches every version) and the repo gate.
+struct MoveSlotArgs<'a> {
+    db: &'a std::sync::Arc<dyn InstalledDb>,
+    cp: &'a (String, String),
+    old_slot: &'a str,
+    new_slot: &'a str,
+    atom: Option<&'a str>,
+    repo_match: &'a dyn Fn(&str) -> bool,
+}
+
 /// `dbapi.move_slot_ent`: every installed entry on `cp` in `old_slot`
-/// gets `SLOT` rewritten to `new_slot`, keeping a differing sub-slot.
+/// gets `SLOT` rewritten to `new_slot`, keeping a differing sub-slot. A
+/// versioned atom first narrows the entries through the shared matcher,
+/// so only the matching versions move.
 // Portage: lib/portage/dbapi/__init__.py, move_slot_ent
-fn move_slot_ent(
-    db: &std::sync::Arc<dyn InstalledDb>,
-    cp: &(String, String),
-    old_slot: &str,
-    new_slot: &str,
-    repo_match: &dyn Fn(&str) -> bool,
-) -> Result<usize, String> {
+fn move_slot_ent(args: MoveSlotArgs<'_>) -> Result<usize, String> {
+    let MoveSlotArgs {
+        db,
+        cp,
+        old_slot,
+        new_slot,
+        atom,
+        repo_match,
+    } = args;
+    let mut keys = entries_on_cp(db, cp)?;
+    if let Some(atom) = atom {
+        let cpvs: Vec<String> = keys
+            .iter()
+            .map(|k| format!("{}/{}", k.category, k.pf))
+            .collect();
+        let keep: std::collections::HashSet<String> =
+            portage_repo::slotmove_version_matches(atom, &cpvs)
+                .into_iter()
+                .collect();
+        keys.retain(|k| keep.contains(&format!("{}/{}", k.category, k.pf)));
+    }
     let mut matched: Vec<EntryKey> = Vec::new();
-    for key in entries_on_cp(db, cp)? {
+    for key in keys {
         let slot = db
             .aux_get(&key, "SLOT")
             .map_err(|e| e.to_string())?
@@ -566,6 +602,84 @@ mod tests {
                 "{rel}: untouched by update_ents"
             );
         }
+    }
+
+    /// A versioned `slotmove` reslots only the matching installed
+    /// versions: with `slotpkg-1.0` and `slotpkg-2.0` both in `SLOT` 0,
+    /// `slotmove >=dev-libs/slotpkg-2 0 1` moves only 2.0 to `SLOT` 1.
+    /// Portage matches `atom.with_slot(origslot)` against the installed
+    /// cpvs (`lib/portage/dbapi/__init__.py:449-494`); the S0 probe shows
+    /// `>=dev-libs/foo-2` keeping only `foo-2` out of `foo-1`/`foo-2`.
+    #[test]
+    fn versioned_slotmove_reslots_only_the_matching_version() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture = manifest.join("../../fixtures/global-updates");
+        let scratch = portage_util::TempDir::new("global_updates_versionslot");
+        let root = scratch.join("root");
+        let repo = scratch.join("repo");
+        for (from, to) in [(fixture.join("root"), &root), (fixture.join("repo"), &repo)] {
+            let ok = std::process::Command::new("cp")
+                .args(["-a", &from.to_string_lossy(), &to.to_string_lossy()])
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "cp -a {} failed", from.display());
+        }
+        // A second installed version beside the fixture's `slotpkg-1.0`.
+        let one = root.join("var/db/pkg/dev-libs/slotpkg-1.0");
+        let two = root.join("var/db/pkg/dev-libs/slotpkg-2.0");
+        let ok = std::process::Command::new("cp")
+            .args(["-a", &one.to_string_lossy(), &two.to_string_lossy()])
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(ok, "cp -a {} failed", one.display());
+        std::fs::rename(
+            two.join("slotpkg-1.0.ebuild"),
+            two.join("slotpkg-2.0.ebuild"),
+        )
+        .unwrap();
+        std::fs::write(two.join("PF"), "slotpkg-2.0\n").unwrap();
+        let repos = vec![RepoConfig {
+            name: "gutest".to_string(),
+            location: repo,
+            priority: 0,
+            is_main: true,
+            masters: Vec::new(),
+            profile_formats: Vec::new(),
+            cache_formats: Vec::new(),
+            aliases: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            volatile: false,
+            module_specific_options: Vec::new(),
+        }];
+        let map = vec![(
+            "gutest".to_string(),
+            vec![UpdateCmd::SlotMove {
+                cp: ("dev-libs".to_string(), "slotpkg".to_string()),
+                old_slot: "0".to_string(),
+                new_slot: "1".to_string(),
+                atom: Some(">=dev-libs/slotpkg-2".to_string()),
+            }],
+        )];
+        let report = apply_vdb_moves(VdbMovesArgs {
+            root: &root,
+            repos: &repos,
+            map: &map,
+            on_progress: None,
+        })
+        .expect("versioned slotmove applies");
+        assert_eq!(report.moves, 0, "no move_ent rename");
+        assert_eq!(report.slot_moves, 1, "only the matching version moves");
+        assert_eq!(
+            std::fs::read(two.join("SLOT")).unwrap(),
+            b"1\n",
+            "slotpkg-2.0 is reslotted"
+        );
+        assert_eq!(
+            std::fs::read(one.join("SLOT")).unwrap(),
+            b"0\n",
+            "slotpkg-1.0 stays behind"
+        );
     }
 
     /// `*DEPEND` files, rewritten by `update_ents`, not by the moves.

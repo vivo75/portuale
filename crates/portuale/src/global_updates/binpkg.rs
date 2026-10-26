@@ -171,6 +171,7 @@ pub(crate) fn apply_binpkg_cmd(args: BinpkgCmdArgs<'_>) -> Result<(usize, usize)
             cp,
             old_slot,
             new_slot,
+            atom,
         } => {
             let slot_moves = move_binpkg_slot(
                 args.state,
@@ -178,6 +179,7 @@ pub(crate) fn apply_binpkg_cmd(args: BinpkgCmdArgs<'_>) -> Result<(usize, usize)
                     cp,
                     old_slot,
                     new_slot,
+                    atom: atom.as_deref(),
                 },
                 &repo_match,
                 args.writer,
@@ -313,11 +315,13 @@ impl<'a> WriterConfig<'a> {
 }
 
 /// What [`move_binpkg_slot`] needs beyond the shared state, matcher and
-/// writer: the package and the slot rewrite.
+/// writer: the package, the slot rewrite, and the versioned atom text
+/// (`None` for the bare form, which matches every version).
 struct MoveSlotArgs<'a> {
     cp: &'a (String, String),
     old_slot: &'a str,
     new_slot: &'a str,
+    atom: Option<&'a str>,
 }
 
 /// What the moved file's write-out needs beyond the writer: the source,
@@ -639,8 +643,10 @@ fn move_binpkg(
 
 /// `dbapi.move_slot_ent` over the binpkgs: every indexed binpkg on `cp`
 /// whose file `SLOT`'s slot part equals `old_slot` gets `SLOT` rewritten
-/// in place. The shared `newslot` carries a sub-slot suffix across
-/// entries, like Portage's loop reassignment.
+/// in place. A versioned atom first narrows the files through the shared
+/// matcher, so only the matching versions move. The shared `newslot`
+/// carries a sub-slot suffix across entries, like Portage's loop
+/// reassignment.
 // Portage: lib/portage/dbapi/__init__.py, move_slot_ent
 fn move_binpkg_slot(
     state: &mut BinpkgState,
@@ -652,8 +658,16 @@ fn move_binpkg_slot(
         cp,
         old_slot,
         new_slot,
+        atom,
     } = args;
     let mut cpvs = state.cpvs_on_cp(cp);
+    if let Some(atom) = atom {
+        let keep: std::collections::HashSet<String> =
+            portage_repo::slotmove_version_matches(atom, &cpvs)
+                .into_iter()
+                .collect();
+        cpvs.retain(|cpv| keep.contains(cpv));
+    }
     cpvs.sort();
     let mut newslot = new_slot.to_string();
     let mut moves = 0usize;
@@ -2014,6 +2028,89 @@ mod tests {
         assert!(
             pkgdir.join("dev-libs/slotpkg-1.0.gpkg.tar").is_file(),
             "the signed gpkg stays behind"
+        );
+    }
+
+    /// A versioned `slotmove` reslots only the matching binpkgs: with
+    /// `slotpkg-1.0` and `slotpkg-2.0` both carrying `SLOT` 0,
+    /// `slotmove >=dev-libs/slotpkg-2 0 1` rewrites only 2.0 in place.
+    /// Portage matches `atom.with_slot(origslot)` against the indexed
+    /// cpvs (`lib/portage/dbapi/__init__.py:449-494` via `bindb`); the S0
+    /// probe shows `>=dev-libs/foo-2` keeping only `foo-2`.
+    #[test]
+    fn versioned_slotmove_reslots_only_the_matching_binpkg() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture = manifest.join("../../fixtures/global-updates");
+        let scratch = portage_util::TempDir::new("global_updates_binpkg_versionslot");
+        let root = scratch.join("root");
+        let repo = scratch.join("repo");
+        for (from, to) in [
+            (&fixture.join("root"), &root),
+            (&fixture.join("repo"), &repo),
+        ] {
+            let ok = std::process::Command::new("cp")
+                .args(["-a", &from.to_string_lossy(), &to.to_string_lossy()])
+                .status()
+                .is_ok_and(|s| s.success());
+            assert!(ok, "cp -a {} failed", from.display());
+        }
+        // A second indexed version beside the fixture's `slotpkg-1.0`.
+        let pkgdir = root.join("pkgdir");
+        std::fs::copy(
+            pkgdir.join("dev-libs/slotpkg-1.0.gpkg.tar"),
+            pkgdir.join("dev-libs/slotpkg-2.0.gpkg.tar"),
+        )
+        .unwrap();
+        let index = pkgdir.join("Packages");
+        let text = std::fs::read_to_string(&index).unwrap();
+        let stanza = text
+            .split("\n\n")
+            .find(|block| block.contains("CPV: dev-libs/slotpkg-1.0"))
+            .expect("fixture indexes slotpkg-1.0")
+            .replace("slotpkg-1.0", "slotpkg-2.0");
+        std::fs::write(&index, format!("{text}\n{stanza}\n")).unwrap();
+        let repos = test_repos(&repo);
+        let map = vec![(
+            "gutest".to_string(),
+            vec![UpdateCmd::SlotMove {
+                cp: ("dev-libs".to_string(), "slotpkg".to_string()),
+                old_slot: "0".to_string(),
+                new_slot: "1".to_string(),
+                atom: Some(">=dev-libs/slotpkg-2".to_string()),
+            }],
+        )];
+        let report = apply_binpkg_moves(BinpkgMovesArgs {
+            pkgdir: &pkgdir,
+            repos: &repos,
+            map: &map,
+            multi_instance: true,
+            binpkg_compress: Some("zstd"),
+            binpkg_compress_flags: None,
+            portage_bzip2_command: None,
+            makeopts: None,
+            compress_index: true,
+            on_progress: None,
+        })
+        .expect("versioned binpkg slotmove applies");
+        assert_eq!(report.moves, 0, "no binpkg move_ent copy");
+        assert_eq!(report.slot_moves, 1, "only the matching binpkg moves");
+        let slot_of = |rel: &str| {
+            read_gpkg_metadata(&pkgdir.join(rel))
+                .expect("rewritten gpkg reads")
+                .into_iter()
+                .find(|pair| pair.0 == "SLOT")
+                .map(|pair| pair.1)
+                .expect("gpkg carries SLOT")
+        };
+        assert_eq!(
+            slot_of("dev-libs/slotpkg-2.0.gpkg.tar"),
+            "1",
+            "slotpkg-2.0 is reslotted"
+        );
+        assert_eq!(
+            slot_of("dev-libs/slotpkg-1.0.gpkg.tar"),
+            "0",
+            "slotpkg-1.0 stays behind"
         );
     }
 
