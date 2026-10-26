@@ -356,3 +356,10 @@ when a claim turns out false.
 - **Why it looks wrong**: the basename Portage passes is one it chose itself, not user input. Every gpkg touched by a binary update prints the warning, and the warning points at no real problem.
 - **First seen**: Portage 3.0.83 (source `3rdparty/portage`, plan 02.575 Task 5 capture, `LLM/evidence/2026-10-25-review/t5/stderr.txt`).
 - **Portuale**: not copied. The line goes to stderr only and the result is the same. Task 9 (binpkg moves) does not reproduce it.
+
+## Q17. `grab_updates` says "sorted" but returns `scandir` order
+
+- **What it does**: the docstring of `grab_updates` (`lib/portage/update.py:130-162`) promises "a sorted list of tuples", but the function appends files in `os.scandir` order and never sorts them. `_do_global_updates` (`_global_updates.py:89-100`) applies them in that order, so the quarter files (`1Q-2026`, `4Q-2025`, …) are applied in whatever order the filesystem lists them, not by date.
+- **Why it looks wrong**: chained moves (A→B in one quarter, B→C in a later one) only resolve if the files are applied oldest first. The docstring shows that this order was intended.
+- **First seen**: Portage 3.0.83 (source `3rdparty/portage`, plan 02.575 Task 6 review).
+- **Portuale**: not copied. `grab_updates_for_repo` sorts by (year, quarter), which is what the docstring promises. Only a chain that spans several files can tell the two orders apart, and no test fixture has one.

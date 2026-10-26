@@ -23,6 +23,7 @@ mod emerge_options;
 mod env_update;
 mod error;
 mod fetch;
+mod global_updates;
 mod helpers;
 mod info_files;
 mod install_mask;

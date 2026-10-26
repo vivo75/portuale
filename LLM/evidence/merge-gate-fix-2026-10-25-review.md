@@ -30,3 +30,11 @@ this runner merges with `emerge -k --getbinpkg`, so it is also the L1
 getbinpkg cell the plan asks for): runner rc 0; glibc-2.43-r4 and
 bash-5.3_p20 merged by both PMs; hard findings 0, UNEXPLAINED 0, payload
 diffs 0 (4005 paths per side). Verdict: PASSED.
+
+## Task 6 — global updates, vdb moves (global_updates/{mod,vdb}.rs)
+
+Run `l1-20261026T005709Z` (tree dd518948 + Task 6 working-tree change;
+the new code is not called from production yet, so this run checks that
+nothing else in the merge path moved): runner rc 0; glibc-2.43-r4 and
+bash-5.3_p20 merged by both PMs; hard findings 0, UNEXPLAINED 0, payload
+diffs 0 (4005 paths per side). Verdict: PASSED.

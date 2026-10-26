@@ -91,8 +91,8 @@ pub(crate) fn quarter_sort_key(name: &str) -> (i32, i32, String) {
 }
 
 /// Every directive from one repo's `profiles/updates/`, quarter files
-/// in `(year, quarter)` order.
-pub(crate) fn grab_updates_for_repo(repo_location: &Path) -> Vec<UpdateCmd> {
+/// in `(year, quarter)` order. Also feeds the global-updates driver.
+pub fn grab_updates_for_repo(repo_location: &Path) -> Vec<UpdateCmd> {
     let updpath = repo_location.join("profiles").join("updates");
     let Ok(rd) = portage_util::read_dir_entries(&updpath) else {
         return Vec::new();

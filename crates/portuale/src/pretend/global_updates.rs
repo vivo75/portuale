@@ -6,41 +6,6 @@
 use crate::pretend::*;
 use portage_repo::RepoConfig;
 
-/// A bare `cat/pkg` (no version/slot/operator/blocker/use/repo), else `None`.
-fn bare_cp(s: &str) -> Option<(String, String)> {
-    let a = portage_dep::parse_atom(s)?;
-    if a.blocker != portage_dep::Blocker::None
-        || a.operator != portage_dep::Operator::None
-        || a.version.is_some()
-        || a.slot.is_some()
-        || a.slot_operator.is_some()
-        || a.use_deps.is_some()
-        || a.repo.is_some()
-    {
-        return None;
-    }
-    Some((a.category, a.package))
-}
-
-/// Any well-formed atom that is not a blocker. A `slotmove` package may
-/// carry a version (`update.py` only rejects blockers there); whether it
-/// matches anything at apply time is the apply side's business.
-fn update_atom(s: &str) -> bool {
-    portage_dep::parse_atom(s).is_some_and(|a| a.blocker == portage_dep::Blocker::None)
-}
-
-/// A slot name is `[A-Za-z0-9_][A-Za-z0-9+_.-]*` (the `/subslot` form is
-/// rejected by the same `slot_re`, which has no `/` alternative here).
-// Portage: versions.py, _get_slot_re (`_slot`); update.py, parse_updates
-fn valid_slot_name(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphanumeric() || c == '_' => {}
-        _ => return false,
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '_' | '.' | '-'))
-}
-
 /// Whole-second `st_mtime` of `path`, or `None` when unreadable.
 // Portage: lib/portage/update.py, grab_updates (`mystat[stat.ST_MTIME]`)
 fn file_mtime(path: &Path) -> Option<i64> {
@@ -55,36 +20,6 @@ fn file_mtime(path: &Path) -> Option<i64> {
         let _ = m;
         None
     }
-}
-
-/// `(valid directives, error-free)` for one updates file's text: blank
-/// lines are skipped, anything else malformed marks the file errored
-/// (applied but unrecorded). Silent by design -- a malformed updates
-/// file never fails a merge.
-// Portage: lib/portage/update.py, parse_updates
-fn parse_updates_file(text: &str) -> (usize, bool) {
-    let mut valid = 0usize;
-    let mut errors = false;
-    for line in text.lines() {
-        let toks: Vec<&str> = line.split_whitespace().collect();
-        if toks.is_empty() {
-            continue;
-        }
-        match toks.as_slice() {
-            ["move", a, b] if bare_cp(a).is_some() && bare_cp(b).is_some() => {
-                valid += 1;
-            }
-            ["slotmove", pkg, old, new]
-                if update_atom(pkg) && valid_slot_name(old) && valid_slot_name(new) =>
-            {
-                valid += 1;
-            }
-            _ => {
-                errors = true;
-            }
-        }
-    }
-    (valid, !errors)
 }
 
 /// One root's updates check: true iff a changed updates file yields >=1
@@ -127,12 +62,13 @@ fn check_root_updates(repos: &[RepoConfig], root: &Path) -> bool {
                 continue;
             }
             // Lossy read like `errors="replace"`; an unreadable file
-            // is skipped, never fatal.
+            // is skipped, never fatal. Error tracking (applied but
+            // unrecorded) returns with the record in a later piece.
             let Ok(bytes) = std::fs::read(&path) else {
                 continue;
             };
-            let (valid, _) = parse_updates_file(&String::from_utf8_lossy(&bytes));
-            valid_total += valid;
+            valid_total +=
+                portage_repo::parse_updates_content(&String::from_utf8_lossy(&bytes)).len();
         }
     }
     valid_total > 0
