@@ -1,7 +1,7 @@
 # Plan 02.575 — final report (2026-10-26)
 
-Branch `fix/2026-10-25-review` in both repos, committed per task, not
-pushed and not merged to `main`.
+Branch `fix/2026-10-25-review` in both repos, committed per task, then
+fast-forwarded to `main` and pushed on 2026-10-26 (portuale `fea4e18a`, pmtest `19ecaea`).
 
 ## What shipped
 
