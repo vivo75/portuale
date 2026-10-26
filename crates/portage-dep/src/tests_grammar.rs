@@ -130,9 +130,7 @@ fn render_fields(atom: &Atom) -> String {
     )
 }
 
-/// Every row of testdata/atoms-3.0.83.tsv, generated from Portage 3.0.83
-/// by LLM/tools/atom_oracle_table.py (oracle probe battery, 2026-10-23; the
-/// tail three atoms are the #510 probe rows added by backlog #528).
+/// Every row of the generated oracle TSV, probe atoms as tail rows.
 /// The `S3OK` rows need the wildcard branch (S3); rows whose verdict starts
 /// with `S3` but is not `S3OK` stay skipped.
 #[test]
@@ -320,10 +318,5 @@ fn eq_build_id_atom_matches_only_equal_build_id_candidate() {
     );
 }
 
-// The three #510 probe atoms (games-arcade/2048, dev-util/timidity--,
-// cat/pkg[a(+),-a]) are the battery's tail rows now (backlog #528), so this
-// file pins the constructor verdicts for every mode. The reducer half of the
-// probe lives where the reducer's Atom hook does: portage-use-reduce's
-// `use_reduce_flat`/`use_reduce_flat_validated` tokenization rows (backlog
-// #527) and portage-repo's `validate_dep_string` rows in
-// crates/portage-repo/src/tests/dep_validate.rs (the wrapper emerge prints).
+// This file pins the constructor verdicts for every mode. The reducer
+// half of the probe lives where the reducer's Atom hook does.

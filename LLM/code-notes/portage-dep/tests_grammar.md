@@ -21,3 +21,11 @@ S2 grammar tests: the oracle battery plus focused EAPI/conditional/build-id pins
   `8bf578fd7`, `bdce305cd`; their 3.0.82.2 equivalents (`6a64fb2f4`,
   `4f76d9ee5`, `a2206fc32`) are already in that tag, which is why the two
   versions agree (errata `LLM/02.442-port-portage-3.0.83.errata.md` E1).
+- Battery provenance and row split: `testdata/atoms-3.0.83.tsv` is generated
+  from Portage 3.0.83 by `LLM/tools/atom_oracle_table.py` (oracle probe
+  battery, 2026-10-23); its tail rows are the three #510 probe atoms (#528).
+  This file pins the constructor verdicts for every mode; the reducer
+  tokenization rows live in `portage-use-reduce` (`use_reduce_flat` /
+  `use_reduce_flat_validated`, #527) and the wrapper rows in
+  `crates/portage-repo/src/tests/dep_validate.rs` (`validate_dep_string`,
+  what emerge prints).
