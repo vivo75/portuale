@@ -1,0 +1,17 @@
+### portuale argv: PORTAGE_CONFIGROOT=<cfg> ROOT=$W/g0x emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/t8x
+### rc: 0
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+[ebuild  N     ] dev-libs/t8x-1::testrepo to $W/g0x 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+!!! The following update has been skipped due to unsatisfied dependencies:
+dev-libs/t8x:0
+  selected: (dev-libs/t8x-1:0/0::testrepo, ebuild scheduled for merge)
+  skipped: (dev-libs/t8x-2:0/0::testrepo, ebuild scheduled for merge) (see unsatisfied dependency below)
+!!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)
+(dependency required by "dev-libs/t8x-2::testrepo" [ebuild])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.

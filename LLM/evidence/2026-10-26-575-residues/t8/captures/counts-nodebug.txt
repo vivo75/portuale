@@ -1,0 +1,31 @@
+# non-debug rc/backtrack counts, both managers, same ROOT; Portage: PORTAGE_CONFIGROOT=$W/cfg ROOT=<root> emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv <args>; portuale: PORTAGE_CONFIGROOT=ROOT=<root> portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv <args> (portuale 7eba6c92, binary built 2026-10-26 22:25)
+p563-heal | portage rc 0 backtrack: 2/20 | portuale rc 0 backtrack: 2/20
+p569-heal | portage rc 0 backtrack: 2/20 | portuale rc 0 backtrack: 2/20
+g0-combo | portage rc 1 backtrack: 1/20 | portuale rc 1 backtrack: 0/20
+k3-paired-arg | portage rc 1 backtrack: 3/20 | portuale rc 1 backtrack: 0/20
+k3-needer | portage rc 1 backtrack: 4/20 | portuale rc 1 backtrack: 1/20
+igw-plain | portage rc 1 backtrack: 3/20 | portuale rc 1 backtrack: 0/20
+r4-orchoice | portage rc 0 backtrack: 1/20 | portuale (configroot=$W/r4, no etc/portage: invalid run, see below)
+p491or-world | portage rc 0 backtrack: 0/4 | portuale rc 1 
+r4-orchoice (portuale configroot=$W/fix) rc 0 backtrack: 1/20
+[ebuild  r  U  ] dev-libs/mlocaml-4.02.1:0/4.02.1::testrepo [4.01.0:0/4.01.0::testrepo] to $W/r4 0 KiB
+[ebuild  N     ] dev-libs/mllabltk-8.06.0:0/8.06.0::testrepo to $W/r4 0 KiB
+[ebuild  rR    ] dev-libs/mllablgl-1.05::testrepo to $W/r4 0 KiB
+  Portage:
+[ebuild  N     ] dev-libs/mlocaml-4.02.1:0/4.02.1::testrepo  0 KiB
+[ebuild  r  U  ] dev-libs/mlocaml-4.02.1:0/4.02.1::testrepo [4.01.0:0/4.01.0::testrepo] to $W/r4/ 0 KiB
+[ebuild  N     ] dev-libs/mllabltk-8.06.0:0/8.06.0::testrepo  0 KiB
+[ebuild  N     ] dev-libs/mllabltk-8.06.0:0/8.06.0::testrepo to $W/r4/ 0 KiB
+[ebuild  rR    ] dev-libs/mllablgl-1.05::testrepo to $W/r4/ 0 KiB
+p491or-world (portuale configroot=$W/fix) rc 0 backtrack: 0/4
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to $W/p491or 0 KiB
+[ebuild  N     ] dev-libs/upgradepkg-2.0::testrepo to $W/p491or 0 KiB
+[ebuild  N     ] dev-libs/systempkg-1.0::testrepo to $W/p491or 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to $W/p491or 0 KiB
+[ebuild     U  ] dev-libs/p491orcon-2:6::testrepo [1:6::testrepo] to $W/p491or 0 KiB
+  Portage:
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to $W/p491or/ 0 KiB
+[ebuild  N     ] dev-libs/upgradepkg-2.0::testrepo to $W/p491or/ 0 KiB
+[ebuild  N     ] dev-libs/systempkg-1.0::testrepo to $W/p491or/ 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to $W/p491or/ 0 KiB
+[ebuild     U  ] dev-libs/p491orcon-2:6::testrepo [1:6::testrepo] to $W/p491or/ 0 KiB

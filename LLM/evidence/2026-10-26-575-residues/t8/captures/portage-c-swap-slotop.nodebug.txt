@@ -1,0 +1,15 @@
+### argv: PORTAGE_CONFIGROOT=$W/swap-slotop.cfg ROOT=$W/swap-slotop emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/p569pull
+unique name for the repository on the first line.
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 4.67 s (backtrack: 4/20).
+[ebuild  N     ] dev-libs/p569pull-1::testrepo to $W/swap-slotop/ 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+dev-libs/p569prov:0 for $W/swap-slotop/
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$W/swap-slotop/') USE="" ELIBC="glibc" conflicts with
+    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/') USE=""
+                     ^^^^^^^^
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+dev-libs/p569pull:0 for $W/swap-slotop/

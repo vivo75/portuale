@@ -1,0 +1,1 @@
+PORTAGE_CONFIGROOT=$W/cfg ROOT=$W/igw emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug >=dev-libs/igw0x-2

@@ -1,0 +1,13 @@
+### argv: PORTAGE_CONFIGROOT=$W/swap-noslotop.cfg ROOT=$W/swap-noslotop emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug dev-libs/p569pull
+### rc: 0
+103:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+104-   ebuild: dev-libs/p569prov-5.44::testrepo
+905:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-noslotop/')
+906-Depstring: || ( =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+59998:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-noslotop/')
+59999-Depstring: || ( =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+60001:Candidates: ['=dev-libs/p569prov-5.40*']
+70632:[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $W/swap-noslotop/ 0 KiB
+70633:[ebuild  N     ] dev-libs/p569pull-2::testrepo to $W/swap-noslotop/ 0 KiB
+70635:Total: 2 packages (1 upgrade, 1 new), Size of downloads: 0 KiB
+70636-forced reinstall atoms:

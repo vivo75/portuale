@@ -1,0 +1,10 @@
+### argv: PORTAGE_CONFIGROOT=$W/swap-noslotop ROOT=$W/swap-noslotop portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/p569pull
+### rc: 0
+5:Dependency resolution took (backtrack: 2/20).
+7:[ebuild  N     ] dev-libs/p569pull-1::testrepo to $W/swap-noslotop 0 KiB
+9:Total: 1 package (1 new), Size of downloads: 0 KiB
+10:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+15:    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-noslotop') USE=""
+16-    ^                  ^^^^ 
+19:!!! The following update(s) have been skipped due to unsatisfied dependencies
+20:!!! triggered by backtracking:

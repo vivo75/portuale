@@ -1,0 +1,57 @@
+### argv: PORTAGE_CONFIGROOT=$W/orig-noslotop.cfg ROOT=$W/orig-noslotop emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug dev-libs/p569pull
+### rc: 0
+103:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+104-   ebuild: dev-libs/p569prov-5.44::testrepo
+905:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/')
+906-Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+59998:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/')
+59999-Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+60001:Candidates: ['=dev-libs/p569prov-5.42*']
+60006:Parent Dep:    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/')
+60007-Slot Conflict: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$W/orig-noslotop/') USE="" ELIBC="glibc"
+60037:backtracking due to slot conflict:
+60038-   first package:  (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$W/orig-noslotop/')
+70688:[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $W/orig-noslotop/ 0 KiB
+70689:[ebuild  N     ] dev-libs/p569pull-2::testrepo to $W/orig-noslotop/ 0 KiB
+70691:Total: 2 packages (1 upgrade, 1 new), Size of downloads: 0 KiB
+70694:!!! into the dependency graph, resulting in a slot conflict:
+70703:    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/') USE=""
+70704-    ^                  ^^^^^                                                                                                                                                                                              
+77187:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+77188-   ebuild: dev-libs/p569prov-5.44::testrepo
+77989:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/')
+77990-Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+137082:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/')
+137083-Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+137085:Candidates: ['=dev-libs/p569prov-5.42*']
+137090:Parent Dep:    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/')
+137091-Slot Conflict: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$W/orig-noslotop/') USE="" ELIBC="glibc"
+137122:backtracking due to slot conflict:
+137123-   first package:  (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$W/orig-noslotop/')
+147773:[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $W/orig-noslotop/ 0 KiB
+147774:[ebuild  N     ] dev-libs/p569pull-2::testrepo to $W/orig-noslotop/ 0 KiB
+147776:Total: 2 packages (1 upgrade, 1 new), Size of downloads: 0 KiB
+147779:!!! into the dependency graph, resulting in a slot conflict:
+147788:    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/') USE=""
+147789-    ^                  ^^^^^                                                                                                                                                                                              
+154272:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+154275:backtracking due to unsatisfied dep:
+154276-    parent: (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$W/orig-noslotop/')
+154286:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+154291:    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/') USE=""
+154292-    ^                  ^^^^^
+154333:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+154336:backtracking due to unsatisfied dep:
+154337-    parent: (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$W/orig-noslotop/')
+154347:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+154352:    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/') USE=""
+154353-    ^                  ^^^^^
+154394:Candidates: ['=dev-libs/p569prov-5.42*', 'dev-libs/p569virt']
+154395-   ebuild: dev-libs/p569prov-5.42::testrepo
+154418:[ebuild  N     ] dev-libs/p569pull-1::testrepo to $W/orig-noslotop/ 0 KiB
+154420:Total: 1 package (1 new), Size of downloads: 0 KiB
+154422:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+154427:    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/') USE=""
+154428-    ^                  ^^^^^
+154431:!!! The following update(s) have been skipped due to unsatisfied dependencies
+154432:!!! triggered by backtracking:

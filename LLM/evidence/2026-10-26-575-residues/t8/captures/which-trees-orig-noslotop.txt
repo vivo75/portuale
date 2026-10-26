@@ -1,0 +1,5 @@
+### argv: PORTAGE_CONFIGROOT=$W/orig-noslotop.cfg ROOT=$W/orig-noslotop python3 playground/which-trees.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/p569pull
+Calculating dependencies ...T8PROBE parent=dev-libs/p569virt-1 complete_mode=True trees=_graph_trees depstring=[['||', Atom('=dev-libs/p569prov-5.42*'), Atom('=dev-libs/p569prov-5.40*'), Atom('=dev-libs/p569prov-5.38*'), Atom('~dev-libs/p569core-1.0')]] selected=['=dev-libs/p569prov-5.42*']
+T8PROBE parent=dev-libs/p569virt-1 complete_mode=True trees=_graph_trees depstring=[['||', Atom('=dev-libs/p569prov-5.42*'), Atom('=dev-libs/p569prov-5.40*'), Atom('=dev-libs/p569prov-5.38*'), Atom('~dev-libs/p569core-1.0')]] selected=['=dev-libs/p569prov-5.42*']
+Dependency resolution took 4.64 s (backtrack: 4/20).
+[ebuild  N     ] dev-libs/p569pull-1::testrepo to $W/orig-noslotop/ 0 KiB

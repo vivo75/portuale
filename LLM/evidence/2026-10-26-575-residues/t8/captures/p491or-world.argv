@@ -1,0 +1,1 @@
+PORTAGE_CONFIGROOT=$W/cfg ROOT=$W/p491or emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug --update --deep --backtrack=4 @world

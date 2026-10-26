@@ -1,0 +1,1 @@
+PORTAGE_CONFIGROOT=$W/swap-slotop ROOT=$W/swap-slotop portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/p569pull

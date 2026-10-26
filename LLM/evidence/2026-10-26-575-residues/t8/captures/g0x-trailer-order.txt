@@ -1,0 +1,18 @@
+== portage
+88:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+90:dev-libs/p569prov:0 for $W/g0x/
+99:!!! The following update has been skipped due to unsatisfied dependencies:
+101:dev-libs/t8x:0 for $W/g0x/
+106:!!! All ebuilds that could satisfy "dev-libs/maskeddep" for $W/g0x/ have been masked.
+127:!!! The following update(s) have been skipped due to unsatisfied dependencies
+128:!!! triggered by backtracking:
+130:dev-libs/p569pull:0 for $W/g0x/
+== portuale
+11:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+13:dev-libs/p569prov:0
+22:!!! The following update(s) have been skipped due to unsatisfied dependencies
+23:!!! triggered by backtracking:
+25:dev-libs/p569pull:0
+27:!!! The following update has been skipped due to unsatisfied dependencies:
+29:dev-libs/t8x:0
+34:!!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.

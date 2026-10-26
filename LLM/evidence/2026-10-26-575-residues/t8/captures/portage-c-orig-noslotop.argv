@@ -1,0 +1,1 @@
+PORTAGE_CONFIGROOT=$W/orig-noslotop.cfg ROOT=$W/orig-noslotop emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug dev-libs/p569pull
