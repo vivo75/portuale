@@ -1,0 +1,50 @@
+PACKAGES: 3
+TIMESTAMP: 1792974459
+VERSION: 0
+
+BUILD_ID: 1
+BUILD_TIME: 1
+CPV: dev-libs/newpkg-1.0
+DEFINED_PHASES: -
+EAPI: 8
+IUSE: oldflag
+KEYWORDS: amd64
+MD5: 86b1381998e9284a38f943e75311e7cb
+PATH: dev-libs/newpkg/newpkg-1.0-1.xpak
+RDEPEND: dev-libs/slotpkg:1
+SHA1: ecd90d8651d3655954c855acbfe1e0f030608abc
+SIZE: 550
+MTIME: 1792974459
+REPO: gutest
+
+BUILD_ID: 1
+BUILD_TIME: 1
+CPV: dev-libs/oldpkg-1.0
+DEFINED_PHASES: -
+EAPI: 8
+IUSE: oldflag
+KEYWORDS: amd64
+MD5: cf3d431715195c72d9d1714ba109e811
+PATH: dev-libs/oldpkg-1.0.tbz2
+RDEPEND: dev-libs/slotpkg:1
+SHA1: 2f96e0d5403933afd86759d9c8c6e24263c5c380
+SIZE: 548
+MTIME: 1792974459
+REPO: gutest
+
+BUILD_ID: 1
+BUILD_TIME: 2
+CPV: dev-libs/slotpkg-1.0
+DEFINED_PHASES: -
+EAPI: 8
+IUSE: slotflag
+KEYWORDS: amd64
+MD5: 4ede2d57a9203a5368852856b6300a10
+PATH: dev-libs/slotpkg-1.0.gpkg.tar
+RDEPEND: dev-libs/newpkg
+SHA1: d942f79b2d2a5cd46ed221d34d4912b88ff052b2
+SIZE: 10240
+SLOT: 1
+MTIME: 1792974459
+REPO: gutest
+

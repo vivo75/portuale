@@ -1,0 +1,5 @@
+!!! Unable to parse profile: '/etc/portage/make.profile'
+!!! ParseError: Parent 'gentoo:default/linux/amd64/23.0/desktop/plasma/systemd' not found: '/.gentoo/repos/buildovl/profiles/vivo/desktop/parent'
+secpass = 2
+Package basename mismatched, using slotpkg-1.0
+updated = True

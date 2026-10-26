@@ -349,3 +349,10 @@ when a claim turns out false.
 - **Why it looks wrong**: `SIZE` is written by Portage itself as `str(st.st_size)` (decimal, no adornments), so the leniency only ever fires on hand-edited or hostile indexes; an underscore digit-separator in a size field is never intended input.
 - **First seen**: Portage 3.0.83 (source `3rdparty/portage`, Task 4 S0).
 - **Portuale**: `parse_index_size` copies the whitespace/sign/digits behaviour but not the underscore quirk (such a `SIZE` is treated as missing: local verifies nothing, remote is refused). Fails closed either way.
+
+## Q16. A global-updates SLOT move on a gpkg warns "Package basename mismatched" (suspect)
+
+- **What it does**: `binarydbapi.aux_update` (`dbapi/bintree.py:270-285`) builds `cpv_str = str(cpv)` (the full `dev-libs/slotpkg-1.0`) and passes it to `gpkg(settings, cpv_str, path)` as the basename. The container's own prefix is `slotpkg-1.0`, so `_get_inner_tarinfo` (`gpkg.py:2237-2241`) sees that the prefix does not start with the basename and writes `Package basename mismatched, using slotpkg-1.0` to stderr. It then carries on and rewrites the package correctly.
+- **Why it looks wrong**: the basename Portage passes is one it chose itself, not user input. Every gpkg touched by a binary update prints the warning, and the warning points at no real problem.
+- **First seen**: Portage 3.0.83 (source `3rdparty/portage`, plan 02.575 Task 5 capture, `LLM/evidence/2026-10-25-review/t5/stderr.txt`).
+- **Portuale**: not copied. The line goes to stderr only and the result is the same. Task 9 (binpkg moves) does not reproduce it.
