@@ -1174,14 +1174,14 @@ fn bridge_circular_display(req: &ResolveRequest, entries: &[GraphEntry]) -> Brid
             }
         }
     }
-    let circular_deps = super::find_hard_cycles(
+    let circular_deps = super::find_hard_cycles(super::FindHardCyclesArgs {
         entries,
-        &edge_kinds,
-        &req.root,
-        &HashMap::new(),
-        &req.atoms,
-        req.onlydeps,
-    );
+        edge_kind_map: &edge_kinds,
+        root: &req.root,
+        circular: &HashMap::new(),
+        top_level_atoms: &req.atoms,
+        onlydeps: req.onlydeps,
+    });
     // Cycle report only when a hard cycle was reported.
     let (large_cycle_count, report_cycles, cycle_display) = if circular_deps.is_empty() {
         (false, Vec::new(), Vec::new())

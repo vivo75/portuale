@@ -18,14 +18,14 @@ pub(crate) fn step_circular_dead_end(
     //
     // Placed before the slot-conflict arms: a deadlocked graph pre-empts conflict
     // repair (Portage never reaches conflict processing with a failed serialize).
-    let hard_cycles = find_hard_cycles(
-        &pass.entries,
-        &pass.edge_kind_map,
-        ctx.root,
-        &grown.circular_dependency,
-        ctx.atoms,
-        ctx.onlydeps,
-    );
+    let hard_cycles = find_hard_cycles(FindHardCyclesArgs {
+        entries: &pass.entries,
+        edge_kind_map: &pass.edge_kind_map,
+        root: ctx.root,
+        circular: &grown.circular_dependency,
+        top_level_atoms: ctx.atoms,
+        onlydeps: ctx.onlydeps,
+    });
     if hard_cycles.len() == 1
         && cycle_restartable(
             &pass.entries,

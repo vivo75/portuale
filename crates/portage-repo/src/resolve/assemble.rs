@@ -345,14 +345,14 @@ pub(crate) fn build_cycle_display(
     // An unbreakable build-time cycle among the merge-bound packages, for
     // `pretend.rs` to render the fatal `* Error: circular dependencies:`
     // block. Portage: _serialize_tasks -> _show_circular_deps.
-    let mut circular_deps = find_hard_cycles(
-        &pass.entries,
-        &pass.edge_kind_map,
-        ctx.root,
-        &params.circular_dependency,
-        ctx.atoms,
-        ctx.onlydeps,
-    );
+    let mut circular_deps = find_hard_cycles(FindHardCyclesArgs {
+        entries: &pass.entries,
+        edge_kind_map: &pass.edge_kind_map,
+        root: ctx.root,
+        circular: &params.circular_dependency,
+        top_level_atoms: ctx.atoms,
+        onlydeps: ctx.onlydeps,
+    });
 
     // A persisting restart cycle the hard reporter cannot see: backtracking
     // never ran (`--backtrack=0`) or a retry ran and the demotion did not

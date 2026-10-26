@@ -210,14 +210,14 @@ fn softened_buildtime_edge_hides_from_hard_cycles_but_not_restart_cycles() {
     // Hard only, but one directed edge is no cycle.
     map.insert((cp("sbr-a"), cp("sbr-b")), (true, false));
     assert!(
-        find_hard_cycles(
-            &entries,
-            &map,
-            Path::new("/nonexistent-root"),
-            &HashMap::new(),
-            &[],
-            false,
-        )
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &entries,
+            edge_kind_map: &map,
+            root: Path::new("/nonexistent-root"),
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        })
         .is_empty()
     );
     let cycles = find_restart_cycles(
@@ -257,14 +257,14 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
     second.discovery = 1;
     let entries = vec![first, second];
     assert_eq!(
-        find_hard_cycles(
-            &entries,
-            &hard,
-            Path::new("/nonexistent-root"),
-            &HashMap::new(),
-            &[],
-            false,
-        ),
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &entries,
+            edge_kind_map: &hard,
+            root: Path::new("/nonexistent-root"),
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        }),
         vec![vec![hardcpv("hcb"), hardcpv("hca")]]
     );
 
@@ -273,14 +273,14 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
     mixed.insert((cp("hcb"), cp("hca")), (true, false));
     mixed.insert((cp("hca"), cp("hcb")), (true, true));
     assert!(
-        find_hard_cycles(
-            &entries,
-            &mixed,
-            Path::new("/nonexistent-root"),
-            &HashMap::new(),
-            &[],
-            false,
-        )
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &entries,
+            edge_kind_map: &mixed,
+            root: Path::new("/nonexistent-root"),
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        })
         .is_empty()
     );
 
@@ -296,14 +296,14 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
         },
     ];
     assert!(
-        find_hard_cycles(
-            &installed,
-            &hard,
-            Path::new("/nonexistent-root"),
-            &HashMap::new(),
-            &[],
-            false,
-        )
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &installed,
+            edge_kind_map: &hard,
+            root: Path::new("/nonexistent-root"),
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        })
         .is_empty()
     );
 }
@@ -330,15 +330,15 @@ fn find_hard_cycles_starts_where_portages_get_cycles_starts() {
         (true, false),
     );
     assert_eq!(
-        find_hard_cycles(
-            &entries,
-            &hard,
-            Path::new("/nonexistent-root"),
-            &HashMap::new(),
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &entries,
+            edge_kind_map: &hard,
+            root: Path::new("/nonexistent-root"),
+            circular: &HashMap::new(),
             // No request atoms: the discovery order seeds the walk.
-            &[],
-            false,
-        ),
+            top_level_atoms: &[],
+            onlydeps: false,
+        }),
         vec![vec![
             cpv("dev-libs", "u249json"),
             cpv("dev-util", "u249make")
@@ -371,14 +371,14 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
     let mut hard: EdgeKindMap = HashMap::new();
     hard.insert((cp("hcs"), cp("hcs")), (true, false));
     assert_eq!(
-        find_hard_cycles(
-            &entries,
-            &hard,
-            Path::new("/nonexistent-root"),
-            &HashMap::new(),
-            &[],
-            false,
-        ),
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &entries,
+            edge_kind_map: &hard,
+            root: Path::new("/nonexistent-root"),
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        }),
         vec![vec![hardcpv("hcs", "1.0")]]
     );
 
@@ -386,14 +386,14 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
     let mut cross = vec![graph_entry("dev-libs", "hcs", "1.0")];
     cross[0].deps = vec![self_edge("hcs", "=dev-libs/hcs-2.0", Some(0))];
     assert!(
-        find_hard_cycles(
-            &cross,
-            &hard,
-            Path::new("/nonexistent-root"),
-            &HashMap::new(),
-            &[],
-            false,
-        )
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &cross,
+            edge_kind_map: &hard,
+            root: Path::new("/nonexistent-root"),
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        })
         .is_empty()
     );
 
@@ -401,14 +401,14 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
     let mut inline = vec![graph_entry("dev-libs", "hcs", "1.0")];
     inline[0].deps = vec![self_edge("hcs", "dev-libs/hcs", None)];
     assert_eq!(
-        find_hard_cycles(
-            &inline,
-            &hard,
-            Path::new("/nonexistent-root"),
-            &HashMap::new(),
-            &[],
-            false,
-        ),
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &inline,
+            edge_kind_map: &hard,
+            root: Path::new("/nonexistent-root"),
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        }),
         vec![vec![hardcpv("hcs", "1.0")]]
     );
 
@@ -418,7 +418,17 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
     let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
     std::fs::create_dir_all(&inst_dir).unwrap();
     std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
-    assert!(find_hard_cycles(&entries, &hard, &root, &HashMap::new(), &[], false).is_empty());
+    assert!(
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &entries,
+            edge_kind_map: &hard,
+            root: &root,
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        })
+        .is_empty()
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -545,14 +555,14 @@ fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
     map.insert((cp("keb"), cp("own")), (false, true));
     map.insert((cp("own"), cp("kea")), (true, false));
     assert!(
-        find_hard_cycles(
-            &entries,
-            &map,
-            Path::new("/nonexistent-root"),
-            &HashMap::new(),
-            &[],
-            false,
-        )
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &entries,
+            edge_kind_map: &map,
+            root: Path::new("/nonexistent-root"),
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        })
         .is_empty()
     );
 }
@@ -609,14 +619,14 @@ fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
     // (earliest-inserted `sown`, so the ring closes through its child).
     let root = make_vdb("n228-slot-gate-other-slot", "0");
     assert_eq!(
-        find_hard_cycles(
-            &make_entries(),
-            &make_map(),
-            &root,
-            &HashMap::new(),
-            &[],
-            false
-        ),
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &make_entries(),
+            edge_kind_map: &make_map(),
+            root: &root,
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        }),
         vec![vec![
             "dev-libs/sdep-1.0".to_string(),
             "dev-libs/sown-1.0".to_string()
@@ -625,14 +635,14 @@ fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
     // Installed slot `1/0`, child slot `1/0`: satisfied (soft).
     let root = make_vdb("n228-slot-gate-same-slot", "1/0");
     assert!(
-        find_hard_cycles(
-            &make_entries(),
-            &make_map(),
-            &root,
-            &HashMap::new(),
-            &[],
-            false
-        )
+        find_hard_cycles(FindHardCyclesArgs {
+            entries: &make_entries(),
+            edge_kind_map: &make_map(),
+            root: &root,
+            circular: &HashMap::new(),
+            top_level_atoms: &[],
+            onlydeps: false,
+        })
         .is_empty()
     );
 }

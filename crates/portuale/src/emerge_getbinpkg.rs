@@ -894,31 +894,42 @@ fn binary_entry_needs_pretend(entry: &GraphEntry, pkgdir: &Path) -> bool {
     eapi_ok && pretend_defined
 }
 
+/// Arguments of [`pretend_one_mixed_entry`].
+pub(crate) struct PretendOneMixedEntryArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) pkgdir: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) merge_options: &'a MergeOptions,
+    pub(crate) log_path: &'a Path,
+}
+
 /// One mixed-plan entry's up-front `pkg_pretend`, captured to
 /// `log_path`. Source entries pretend from their ebuild (the scheduler's
 /// own helper); binary entries with a local `$PKGDIR` file pretend from
 /// the extracted binpkg metadata. A binary with no local file (remote or
 /// missing) stays silent here and pretends inline at merge time instead.
 // Portage: _emerge/Scheduler.py, _run_pkg_pretend_one
-#[allow(clippy::too_many_arguments)]
-fn pretend_one_mixed_entry(
-    entry: &GraphEntry,
-    repos: &[RepoConfig],
-    root: &Path,
-    pkgdir: &Path,
-    portage_tmpdir: &Path,
-    merge_options: &MergeOptions,
-    log_path: &Path,
-) -> Result<(), String> {
+fn pretend_one_mixed_entry(args: PretendOneMixedEntryArgs<'_>) -> Result<(), String> {
+    let PretendOneMixedEntryArgs {
+        entry,
+        repos,
+        root,
+        pkgdir,
+        portage_tmpdir,
+        merge_options,
+        log_path,
+    } = args;
     if entry.source != portage_repo::CandidateSource::Binary {
-        return crate::emerge_build::pretend_one_entry(
+        return crate::emerge_build::pretend_one_entry(crate::emerge_build::PretendOneEntryArgs {
             entry,
             repos,
             root,
             portage_tmpdir,
-            merge_options,
+            options: merge_options,
             log_path,
-        );
+        });
     }
     let Some(version) = crate::emerge_build::entry_version(entry) else {
         return Ok(());
@@ -1029,15 +1040,15 @@ impl crate::emerge_build::PretendEntry for MixedPretendEntry<'_> {
                     portage_tmpdir: self.portage_tmpdir,
                     t_base: &t_base,
                     run: &|staging| {
-                        pretend_one_mixed_entry(
-                            self.entry,
-                            self.repos,
-                            self.root,
-                            self.pkgdir,
-                            self.portage_tmpdir,
-                            self.options,
-                            staging,
-                        )
+                        pretend_one_mixed_entry(PretendOneMixedEntryArgs {
+                            entry: self.entry,
+                            repos: self.repos,
+                            root: self.root,
+                            pkgdir: self.pkgdir,
+                            portage_tmpdir: self.portage_tmpdir,
+                            merge_options: self.options,
+                            log_path: staging,
+                        })
                     },
                 },
             );

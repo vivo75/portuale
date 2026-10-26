@@ -68,18 +68,28 @@ pub(crate) fn owner_self_loop(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn find_hard_cycles(
-    entries: &[GraphEntry],
-    edge_kind_map: &EdgeKindMap,
-    root: &Path,
-    circular: &HashMap<RootCp, Vec<CircularDepChild>>,
-    top_level_atoms: &[String],
-    // `--onlydeps`: Portage does not insert the target up front; the graph
-    // starts from the targets' dependencies (backlog #518). Seeds are the
-    // targets' resolved direct deps in atom order, then the targets.
-    onlydeps: bool,
-) -> Vec<Vec<String>> {
+/// Arguments of [`find_hard_cycles`].
+pub(crate) struct FindHardCyclesArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) edge_kind_map: &'a EdgeKindMap,
+    pub(crate) root: &'a Path,
+    pub(crate) circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
+    pub(crate) top_level_atoms: &'a [String],
+    /// `--onlydeps`: Portage does not insert the target up front; the graph
+    /// starts from the targets' dependencies (backlog #518). Seeds are the
+    /// targets' resolved direct deps in atom order, then the targets.
+    pub(crate) onlydeps: bool,
+}
+
+pub(crate) fn find_hard_cycles(args: FindHardCyclesArgs<'_>) -> Vec<Vec<String>> {
+    let FindHardCyclesArgs {
+        entries,
+        edge_kind_map,
+        root,
+        circular,
+        top_level_atoms,
+        onlydeps,
+    } = args;
     // `top_level_atoms`: raw request atoms in order (`ResolveCtx::atoms` /
     // `ResolveRequest::atoms`). Portage inserts the targets first, in atom
     // order. Unparseable atoms (sets, …) are skipped; with no usable targets

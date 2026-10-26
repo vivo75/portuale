@@ -318,19 +318,29 @@ pub(crate) struct RunBuildSchedulerArgs<'a> {
     pub(crate) display: &'a StatusDisplay,
 }
 
+/// Arguments of [`pretend_one_entry`].
+pub(crate) struct PretendOneEntryArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a ebuild_merge::MergeOptions,
+    pub(crate) log_path: &'a Path,
+}
+
 /// One entry's `pkg_pretend`, captured to `log_path`. Mirrors the build
 /// half's setup (own tmpdir, own env, `clean` first) but runs only the
 /// `pretend` chain: the build later starts at `setup`.
 // Portage: _emerge/Scheduler.py, _run_pkg_pretend_one
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn pretend_one_entry(
-    entry: &GraphEntry,
-    repos: &[RepoConfig],
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &ebuild_merge::MergeOptions,
-    log_path: &Path,
-) -> Result<(), String> {
+pub(crate) fn pretend_one_entry(args: PretendOneEntryArgs<'_>) -> Result<(), String> {
+    let PretendOneEntryArgs {
+        entry,
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        log_path,
+    } = args;
     let (cp, version) = scheduler_cp_version(entry)?;
     let Some(candidate) = locate_candidate(repos, &entry.category, &entry.package, &version) else {
         return Err(format!(
@@ -492,14 +502,14 @@ impl PretendEntry for SourcePretendEntry<'_> {
             portage_tmpdir: self.portage_tmpdir,
             t_base: &t_base,
             run: &|staging| {
-                pretend_one_entry(
-                    self.entry,
-                    self.repos,
-                    self.root,
-                    self.portage_tmpdir,
-                    self.options,
-                    staging,
-                )
+                pretend_one_entry(PretendOneEntryArgs {
+                    entry: self.entry,
+                    repos: self.repos,
+                    root: self.root,
+                    portage_tmpdir: self.portage_tmpdir,
+                    options: self.options,
+                    log_path: staging,
+                })
             },
         })
     }
@@ -513,23 +523,36 @@ enum Landed {
     Stop,
 }
 
+/// Arguments of [`land_built_entry`].
+pub(crate) struct LandBuiltEntryArgs<'a> {
+    pub(crate) idx: usize,
+    pub(crate) path: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) repos: &'a [RepoConfig],
+    pub(crate) root: &'a Path,
+    pub(crate) portage_tmpdir: &'a Path,
+    pub(crate) options: &'a ebuild_merge::MergeOptions,
+    pub(crate) progress: &'a [mrg_director::MergeProgress],
+    pub(crate) display: &'a StatusDisplay,
+}
+
 /// The serialized vdb merge for one finished build, on the main thread
 /// while workers keep building. The caller already freed the build slot
 /// (`build_finished` fires at build exit, queued or not). Returns the
 /// failure, if any.
 // Portage: _emerge/Scheduler.py, _build_exit
-#[allow(clippy::too_many_arguments)]
-fn land_built_entry(
-    idx: usize,
-    path: &Path,
-    entries: &[GraphEntry],
-    repos: &[RepoConfig],
-    root: &Path,
-    portage_tmpdir: &Path,
-    options: &ebuild_merge::MergeOptions,
-    progress: &[mrg_director::MergeProgress],
-    display: &StatusDisplay,
-) -> Option<(String, bool)> {
+fn land_built_entry(args: LandBuiltEntryArgs<'_>) -> Option<(String, bool)> {
+    let LandBuiltEntryArgs {
+        idx,
+        path,
+        entries,
+        repos,
+        root,
+        portage_tmpdir,
+        options,
+        progress,
+        display,
+    } = args;
     let entry = &entries[idx];
     let entry_progress = progress[idx];
     let entry_root = entry_merge_root(entry, root);
@@ -555,31 +578,52 @@ fn land_built_entry(
     })
 }
 
+/// Arguments of [`note_landed`].
+pub(crate) struct NoteLandedArgs<'a, 'b> {
+    pub(crate) idx: usize,
+    pub(crate) failure: Option<(String, bool)>,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) cp_to_idx: &'a HashMap<(String, String), usize>,
+    pub(crate) root: &'a Path,
+    pub(crate) keep_going: bool,
+    pub(crate) registry: &'a std::sync::Mutex<ebuild_phases::SchedulerRegistry>,
+    pub(crate) report: &'a FailReport<'b>,
+    pub(crate) ledger: &'a mut Ledger,
+    pub(crate) unreported: &'a mut Vec<String>,
+    pub(crate) merged: &'a mut HashSet<usize>,
+    pub(crate) skip: &'a mut HashSet<usize>,
+    pub(crate) gone: &'a mut HashSet<usize>,
+    pub(crate) pass_report: &'a mut MergePassReport,
+    pub(crate) wait_queue: &'a mut VecDeque<(usize, PathBuf)>,
+    pub(crate) display: &'a StatusDisplay,
+    pub(crate) halted: &'a mut bool,
+}
+
 /// The shared bookkeeping for one landed build: success merges into the
 /// schedule and the resume list, failure reports and (without
 /// `--keep-going`) stops the pass. A stop also clears the merge-wait
 /// queue: terminated runs never drain it.
 // Portage: _emerge/Scheduler.py, _task_complete; 8ac550470
-#[allow(clippy::too_many_arguments)]
-fn note_landed(
-    idx: usize,
-    failure: Option<(String, bool)>,
-    entries: &[GraphEntry],
-    cp_to_idx: &HashMap<(String, String), usize>,
-    root: &Path,
-    keep_going: bool,
-    registry: &std::sync::Mutex<ebuild_phases::SchedulerRegistry>,
-    report: &FailReport<'_>,
-    ledger: &mut Ledger,
-    unreported: &mut Vec<String>,
-    merged: &mut HashSet<usize>,
-    skip: &mut HashSet<usize>,
-    gone: &mut HashSet<usize>,
-    pass_report: &mut MergePassReport,
-    wait_queue: &mut VecDeque<(usize, PathBuf)>,
-    display: &StatusDisplay,
-    halted: &mut bool,
-) -> Landed {
+fn note_landed(args: NoteLandedArgs<'_, '_>) -> Landed {
+    let NoteLandedArgs {
+        idx,
+        failure,
+        entries,
+        cp_to_idx,
+        root,
+        keep_going,
+        registry,
+        report,
+        ledger,
+        unreported,
+        merged,
+        skip,
+        gone,
+        pass_report,
+        wait_queue,
+        display,
+        halted,
+    } = args;
     match failure {
         None => {
             merged.insert(idx);
@@ -801,36 +845,36 @@ pub(crate) fn run_build_scheduler(
                 while in_flight == 0 && !wait_queue.is_empty() {
                     let (qidx, qpath) = wait_queue.pop_front().expect("non-empty");
                     display.set_merge_wait(wait_queue.len());
-                    let failure = land_built_entry(
-                        qidx,
-                        &qpath,
+                    let failure = land_built_entry(LandBuiltEntryArgs {
+                        idx: qidx,
+                        path: &qpath,
                         entries,
                         repos,
                         root,
                         portage_tmpdir,
                         options,
-                        &progress,
+                        progress: &progress,
                         display,
-                    );
-                    if let Landed::Stop = note_landed(
-                        qidx,
+                    });
+                    if let Landed::Stop = note_landed(NoteLandedArgs {
+                        idx: qidx,
                         failure,
                         entries,
-                        &cp_to_idx,
+                        cp_to_idx: &cp_to_idx,
                         root,
                         keep_going,
-                        &registry,
-                        &report,
-                        &mut ledger,
-                        &mut unreported,
-                        &mut merged,
-                        &mut skip,
-                        &mut gone,
-                        &mut pass_report,
-                        &mut wait_queue,
+                        registry: &registry,
+                        report: &report,
+                        ledger: &mut ledger,
+                        unreported: &mut unreported,
+                        merged: &mut merged,
+                        skip: &mut skip,
+                        gone: &mut gone,
+                        pass_report: &mut pass_report,
+                        wait_queue: &mut wait_queue,
                         display,
-                        &mut halted,
-                    ) {
+                        halted: &mut halted,
+                    }) {
                         return Ok(());
                     }
                 }
@@ -923,17 +967,17 @@ pub(crate) fn run_build_scheduler(
                             (None, true)
                         } else {
                             (
-                                land_built_entry(
+                                land_built_entry(LandBuiltEntryArgs {
                                     idx,
-                                    &path,
+                                    path: &path,
                                     entries,
                                     repos,
                                     root,
                                     portage_tmpdir,
                                     options,
-                                    &progress,
+                                    progress: &progress,
                                     display,
-                                ),
+                                }),
                                 false,
                             )
                         }
@@ -947,25 +991,25 @@ pub(crate) fn run_build_scheduler(
                 // A queued merge is neither merged nor failed yet: only a
                 // landed build runs the shared bookkeeping.
                 if !queued
-                    && let Landed::Stop = note_landed(
+                    && let Landed::Stop = note_landed(NoteLandedArgs {
                         idx,
                         failure,
                         entries,
-                        &cp_to_idx,
+                        cp_to_idx: &cp_to_idx,
                         root,
                         keep_going,
-                        &registry,
-                        &report,
-                        &mut ledger,
-                        &mut unreported,
-                        &mut merged,
-                        &mut skip,
-                        &mut gone,
-                        &mut pass_report,
-                        &mut wait_queue,
+                        registry: &registry,
+                        report: &report,
+                        ledger: &mut ledger,
+                        unreported: &mut unreported,
+                        merged: &mut merged,
+                        skip: &mut skip,
+                        gone: &mut gone,
+                        pass_report: &mut pass_report,
+                        wait_queue: &mut wait_queue,
                         display,
-                        &mut halted,
-                    )
+                        halted: &mut halted,
+                    })
                 {
                     return Ok(());
                 }
