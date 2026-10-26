@@ -1,15 +1,17 @@
-//! `/var/cache/edb/mtimedb` persistence for the `resume` mergelist
+//! `/var/cache/edb/mtimedb` persistence: the `resume` mergelist
 //! (`emerge --resume`), its `resume_backup` rotation, the `info`
 //! dir-mtime memo, and the `updates` per-file mtime record. The file is
-//! Portage's JSON mtimedb shape (hand-rolled, tab-indented); every write
-//! replaces only the sections it owns and splices every other top-level
-//! key back verbatim, so keys portuale never manages survive untouched.
-// Portage: Scheduler.py, _save_resume_list; actions.py (--resume handling); util/mtimedb.py, MtimeDB
+//! Portage's JSON mtimedb shape (tab-indented, sorted keys, no trailing
+//! newline). Every load normalizes the top level the way `MtimeDB._load`
+//! does, and every write commits the whole normalized object at once,
+//! skipping the write when nothing changed. Nested sections keep their
+//! raw text: only the top level is normalized.
+// Portage: lib/portage/util/mtimedb.py, MtimeDB
 
 use regex::Regex;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 /// One mergelist entry's `type` tag (`"ebuild"` or `"binary"`): which kind
 /// of merge `emerge --resume` replays this entry as.
@@ -61,6 +63,214 @@ struct Section {
 /// `<root>/var/cache/edb/mtimedb`.
 pub fn mtimedb_path(root: &Path) -> PathBuf {
     root.join("var/cache/edb/mtimedb")
+}
+
+/// What [`load_mtimedb`] hands back: the unknown-key warnings for the
+/// entry point to print.
+pub struct MtimeDbLoad {
+    /// One `Deleting invalid mtimedb key: <k>` line per unknown key,
+    /// sorted so repeated runs print the same order.
+    pub warnings: Vec<String>,
+}
+
+/// The top level after `_load` normalization: defaults filled, `old`
+/// folded into `updates`, `cur` gone, unknown keys dropped. Sections
+/// portuale never parses (`ldpath`, `resume`, `resume_backup`) are kept
+/// as raw text and splice back verbatim on every write.
+struct NormalizedState {
+    starttime: i64,
+    version: String,
+    info: BTreeMap<String, i64>,
+    ldpath_raw: String,
+    updates: BTreeMap<String, i64>,
+    resume_raw: Option<String>,
+    resume_backup_raw: Option<String>,
+}
+
+/// Roots whose load warnings already went out this run: every op loads
+/// the file fresh (so an in-process setup write, a spawned run, and an
+/// in-process read all see the same bytes), while the warnings print
+/// only for the first load of each root.
+static WARNED: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
+
+fn warned() -> &'static Mutex<BTreeSet<PathBuf>> {
+    WARNED.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+
+/// Loads and normalizes `root`'s file, returning the state plus the
+/// unknown-key warnings. Only the first call per root per run reports
+/// warnings, so the entry point prints each key exactly once; the later
+/// `read_*`/`write_*` calls load silently and never warn again.
+pub fn load_mtimedb(root: &Path) -> MtimeDbLoad {
+    let (_, warnings) = load_normalized(root);
+    let warnings = if warned().lock().unwrap().insert(root.to_path_buf()) {
+        warnings
+    } else {
+        Vec::new()
+    };
+    MtimeDbLoad { warnings }
+}
+
+/// The normalized state for `root`, loaded fresh and silently: every
+/// `read_*`/`write_*` call re-reads the file, so each op is a
+/// read-modify-write off current bytes.
+fn silent_load(root: &Path) -> NormalizedState {
+    let (state, _) = load_normalized(root);
+    warned().lock().unwrap().insert(root.to_path_buf());
+    state
+}
+
+/// Runs `f` over a fresh load, committing when it changed; the
+/// `Result` comes back for fallible callers.
+fn mutate_result(root: &Path, f: impl FnOnce(&mut NormalizedState)) -> Result<(), String> {
+    let (mut state, _) = load_normalized(root);
+    let before = render_full(&state);
+    f(&mut state);
+    commit(root, &before, &mut state)
+}
+
+/// Runs `f` over a fresh load, committing when it changed. Swallowed
+/// errors stay silent like Portage's `__write_to_disk` (`except
+/// OSError: pass`); fallible callers use [`mutate_result`].
+fn mutate(root: &Path, f: impl FnOnce(&mut NormalizedState)) {
+    if mutate_result(root, f).is_err() {
+        // Portage: lib/portage/util/mtimedb.py, __write_to_disk
+    }
+}
+
+/// Renders the state, writing it back only when it differs from the
+/// render before the mutation; a write stamps the portuale version first.
+///
+/// # Errors
+///
+/// Returns a message when the atomic rewrite fails.
+fn commit(root: &Path, before: &str, state: &mut NormalizedState) -> Result<(), String> {
+    if render_full(state) == before {
+        return Ok(());
+    }
+    state.version = format!("portuale-{}", env!("CARGO_PKG_VERSION"));
+    let rendered = render_full(state);
+    write_content(root, &rendered)?;
+    Ok(())
+}
+
+/// The valid top-level keys: everything else is dropped with a warning.
+fn is_known_key(key: &str) -> bool {
+    matches!(
+        key,
+        "info" | "ldpath" | "resume" | "resume_backup" | "starttime" | "updates" | "version"
+    )
+}
+
+/// Reads the file into a normalized state plus warnings: `old` replaces
+/// `updates`, `cur` is dropped, defaults are filled, and unknown keys
+/// are dropped with Portage's warning.
+fn load_normalized(root: &Path) -> (NormalizedState, Vec<String>) {
+    let raw = read_raw_objects(root);
+    let updates = raw
+        .get("old")
+        .or_else(|| raw.get("updates"))
+        .filter(|v| is_object(v))
+        .map(|v| parse_flat_mtime_map(v))
+        .unwrap_or_default();
+    let info = raw
+        .get("info")
+        .filter(|v| is_object(v))
+        .map(|v| parse_flat_mtime_map(v))
+        .unwrap_or_default();
+    let mut warnings: Vec<String> = raw
+        .keys()
+        .filter(|k| !is_known_key(k) && k.as_str() != "old" && k.as_str() != "cur")
+        .map(|k| format!("Deleting invalid mtimedb key: {k}"))
+        .collect();
+    warnings.sort();
+    let state = NormalizedState {
+        starttime: raw
+            .get("starttime")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0),
+        version: raw
+            .get("version")
+            .map(String::as_str)
+            .map(parse_version_string)
+            .unwrap_or_default(),
+        info,
+        ldpath_raw: raw
+            .get("ldpath")
+            .cloned()
+            .unwrap_or_else(|| "{}".to_string()),
+        updates,
+        resume_raw: raw.get("resume").cloned(),
+        resume_backup_raw: raw.get("resume_backup").cloned(),
+    };
+    (state, warnings)
+}
+
+/// Whether a raw top-level value is an object (the only shape the parsed
+/// sections accept; anything else reads back as the default).
+fn is_object(raw: &str) -> bool {
+    raw.trim_start().starts_with('{')
+}
+
+/// The string value of a raw JSON string slice, unescaped; anything else
+/// reads back as the default.
+fn parse_version_string(raw: &str) -> String {
+    let text = raw.trim();
+    if !text.starts_with('"') {
+        return String::new();
+    }
+    let Some(end) = string_end(text.as_bytes(), 0) else {
+        return String::new();
+    };
+    unescape_json_string(&text[1..end - 1])
+}
+
+/// The `json.dumps` escape mapping for one string's contents.
+fn unescape_json_string(inner: &str) -> String {
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some(e) => out.push(e),
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The whole file in `json.dumps(sort_keys=True)` shape: every default
+/// key always present, `resume` keys only when set, no trailing newline.
+fn render_full(state: &NormalizedState) -> String {
+    let mut parts = Vec::new();
+    parts.push(render_flat_full("info", &state.info));
+    parts.push(format!("\t\"ldpath\": {}", state.ldpath_raw));
+    if let Some(raw) = &state.resume_raw {
+        parts.push(format!("\t\"resume\": {raw}"));
+    }
+    if let Some(raw) = &state.resume_backup_raw {
+        parts.push(format!("\t\"resume_backup\": {raw}"));
+    }
+    parts.push(format!("\t\"starttime\": {}", state.starttime));
+    parts.push(render_flat_full("updates", &state.updates));
+    parts.push(format!("\t\"version\": {}", json_str(&state.version)));
+    format!("{{\n{}\n}}", parts.join(",\n"))
+}
+
+/// One flat `{path: mtime}` section, or `{}` when empty (Portage renders
+/// an empty dict inline, never omits the key).
+fn render_flat_full(key: &str, mtimes: &BTreeMap<String, i64>) -> String {
+    if mtimes.is_empty() {
+        format!("\t\"{key}\": {{}}")
+    } else {
+        format_flat_section(key, mtimes)
+    }
 }
 
 fn json_str(s: &str) -> String {
@@ -137,23 +347,19 @@ fn format_section_body(root: &Path, section: &Section) -> String {
     )
 }
 
-/// Writes the whole mtimedb file from pre-rendered `\t"key": {...}`
-/// parts (a `BTreeMap`, so keys serialize in `sort_keys` order).
-/// Removes the file outright when there is nothing to store. The write
-/// is atomic: a same-directory temporary renamed over the target, with
-/// the file mode forced to `0644` and the `portage` group applied
-/// best-effort, so a crash never leaves a half-written record behind.
-fn write_sections(root: &Path, parts: BTreeMap<String, String>) -> Result<(), String> {
+/// Writes the whole mtimedb file at once. The write is atomic: a
+/// same-directory temporary renamed over the target, with the file mode
+/// forced to `0644` and the `portage` group applied best-effort, so a
+/// crash never leaves a half-written record behind.
+///
+/// # Errors
+///
+/// Returns a message when the directory, the temporary, or the rename fails.
+fn write_content(root: &Path, content: &str) -> Result<(), String> {
     let path = mtimedb_path(root);
-    if parts.is_empty() {
-        let _ = std::fs::remove_file(&path);
-        return Ok(());
-    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
-    let body: Vec<&str> = parts.values().map(String::as_str).collect();
-    let content = format!("{{\n{}\n}}\n", body.join(",\n"));
     let base = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -379,34 +585,11 @@ fn raw_value_end(bytes: &[u8], start: usize) -> Option<usize> {
     }
 }
 
-/// Splices one raw value back under `key` (which may rename it, as the
-/// `resume` -> `resume_backup` rotation does).
-fn render_raw_part(key: &str, object: &str) -> String {
-    format!("\t\"{key}\": {object}")
-}
-
-/// Fresh `write_sections` parts: every on-disk top-level value carried
-/// over verbatim except `fresh_key`, which the caller renders itself (or
-/// leaves absent). One file read.
-fn preserved_parts(root: &Path, fresh_key: &str) -> BTreeMap<String, String> {
-    let mut parts = BTreeMap::new();
-    for (key, object) in read_raw_objects(root) {
-        if key.as_str() != fresh_key {
-            let rendered = render_raw_part(&key, &object);
-            parts.insert(key, rendered);
-        }
-    }
-    parts
-}
-
-/// Fresh `\t"resume": {...}` part from a parsed section (stamps the
+/// Fresh `"resume"` object text from a parsed section (stamps the
 /// current root into the mergelist entries -- only used for lists this
 /// run itself wrote; preserved ones splice back verbatim).
-fn render_resume_part(root: &Path, section: &Section) -> String {
-    format!(
-        "\t\"resume\": {{\n{}\n\t}}",
-        format_section_body(root, section)
-    )
+fn render_resume_object(root: &Path, section: &Section) -> String {
+    format!("{{\n{}\n\t}}", format_section_body(root, section))
 }
 
 /// The `{...}` object immediately following `"<key>":` in `content`,
@@ -504,10 +687,16 @@ fn parse_quiet_build(myopts_block: &str) -> Option<bool> {
 }
 
 /// Reads one top-level section (`"resume"` or `"resume_backup"`) from
-/// the mtimedb file on disk, if present and well-formed.
+/// a fresh load, if present and well-formed.
+#[cfg(test)]
 fn read_section(root: &Path, key: &str) -> Option<Section> {
-    let content = std::fs::read_to_string(mtimedb_path(root)).ok()?;
-    parse_section(extract_object(&content, key)?)
+    let state = silent_load(root);
+    let raw = match key {
+        "resume" => state.resume_raw.as_deref()?,
+        "resume_backup" => state.resume_backup_raw.as_deref()?,
+        _ => return None,
+    };
+    parse_section(raw)
 }
 
 /// One flat `{path: mtime}` section body in `json.dumps(sort_keys=True)`
@@ -531,23 +720,7 @@ fn parse_flat_mtime_map(object: &str) -> BTreeMap<String, i64> {
     });
     let mut mtimes = BTreeMap::new();
     for cap in pair_re.captures_iter(object) {
-        let raw = &cap[1];
-        let mut key = String::with_capacity(raw.len());
-        let mut chars = raw.chars();
-        while let Some(c) = chars.next() {
-            if c == '\\'
-                && let Some(e) = chars.next()
-            {
-                match e {
-                    'n' => key.push('\n'),
-                    't' => key.push('\t'),
-                    'r' => key.push('\r'),
-                    other => key.push(other),
-                }
-            } else {
-                key.push(c);
-            }
-        }
+        let key = unescape_json_string(&cap[1]);
         if let Ok(v) = cap[2].parse::<f64>() {
             mtimes.insert(key, v as i64);
         }
@@ -556,16 +729,15 @@ fn parse_flat_mtime_map(object: &str) -> BTreeMap<String, i64> {
 }
 
 /// Reads one flat `{path: mtime}` top-level section (`"info"` or
-/// `"updates"`) from the mtimedb file on disk. Empty when the file is
-/// absent or carries no such section.
+/// `"updates"`) from a fresh load. Empty when the file is absent or
+/// carries no such section.
 fn read_flat_mtimes(root: &Path, key: &str) -> BTreeMap<String, i64> {
-    let Ok(content) = std::fs::read_to_string(mtimedb_path(root)) else {
-        return BTreeMap::new();
-    };
-    let Some(object) = extract_object(&content, key) else {
-        return BTreeMap::new();
-    };
-    parse_flat_mtime_map(object)
+    let state = silent_load(root);
+    match key {
+        "info" => state.info.clone(),
+        "updates" => state.updates.clone(),
+        _ => BTreeMap::new(),
+    }
 }
 
 /// `mtimedb["info"]`: absolute GNU-info directory -> that directory's
@@ -583,31 +755,38 @@ pub fn read_updates_mtimes(root: &Path) -> BTreeMap<String, i64> {
     read_flat_mtimes(root, "updates")
 }
 
-/// Stores `mtimedb["info"]`: rewrites the file with `info` replaced,
-/// preserving every other top-level key verbatim. An empty map stores
-/// nothing for `info` itself.
-pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<(), String> {
-    let mut parts = preserved_parts(root, "info");
-    if !info.is_empty() {
-        parts.insert("info".to_string(), format_flat_section("info", info));
-    }
-    write_sections(root, parts)
+/// Stores one flat section, committing when it changed.
+///
+/// # Errors
+///
+/// Returns a message when the atomic rewrite fails.
+fn set_flat_section(root: &Path, key: &str, mtimes: &BTreeMap<String, i64>) -> Result<(), String> {
+    mutate_result(root, |state| match key {
+        "info" => state.info = mtimes.clone(),
+        "updates" => state.updates = mtimes.clone(),
+        _ => {}
+    })
 }
 
-/// Stores `mtimedb["updates"]`: rewrites the file with `updates`
-/// replaced, preserving every other top-level key verbatim. An empty
-/// map stores nothing for `updates` itself.
+/// Stores `mtimedb["info"]`: commits the whole normalized object with
+/// `info` replaced. An unchanged map skips the write.
+///
+/// # Errors
+///
+/// Returns a message when the atomic rewrite fails.
+pub fn write_info_mtimes(root: &Path, info: &BTreeMap<String, i64>) -> Result<(), String> {
+    set_flat_section(root, "info", info)
+}
+
+/// Stores `mtimedb["updates"]`: commits the whole normalized object
+/// with `updates` replaced. An unchanged map skips the write.
 // Portage: lib/portage/_global_updates.py (`prev_mtimes.update` + commit)
-#[cfg_attr(not(test), allow(dead_code))]
+///
+/// # Errors
+///
+/// Returns a message when the atomic rewrite fails.
 pub fn write_updates_mtimes(root: &Path, updates: &BTreeMap<String, i64>) -> Result<(), String> {
-    let mut parts = preserved_parts(root, "updates");
-    if !updates.is_empty() {
-        parts.insert(
-            "updates".to_string(),
-            format_flat_section("updates", updates),
-        );
-    }
-    write_sections(root, parts)
+    set_flat_section(root, "updates", updates)
 }
 
 /// Writes `mtimedb["resume"]` from the atom args, one merge item per package
@@ -617,6 +796,10 @@ pub fn write_updates_mtimes(root: &Path, updates: &BTreeMap<String, i64>) -> Res
 /// clean failure. The assignment is unconditional: an empty `mergelist`
 /// still overwrites any stale list. An existing `resume_backup` is preserved
 /// untouched.
+///
+/// # Errors
+///
+/// Returns a message when the atomic rewrite fails.
 pub fn write_resume_list(
     root: &Path,
     favorites: &[&str],
@@ -628,9 +811,10 @@ pub fn write_resume_list(
         mergelist: mergelist.to_vec(),
         opts: *opts,
     };
-    let mut parts = preserved_parts(root, "resume");
-    parts.insert("resume".to_string(), render_resume_part(root, &resume));
-    write_sections(root, parts)
+    let object = render_resume_object(root, &resume);
+    mutate_result(root, |state| {
+        state.resume_raw = Some(object.clone());
+    })
 }
 
 /// After each successful merge the merged package leaves
@@ -638,18 +822,23 @@ pub fn write_resume_list(
 /// is deleted. Removes the first entry equal to `entry`; a no-op when there
 /// is no `resume` section or the entry isn't listed.
 pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
-    let Some(mut resume) = read_section(root, "resume") else {
-        return;
-    };
-    let Some(pos) = resume.mergelist.iter().position(|e| e == entry) else {
-        return;
-    };
-    resume.mergelist.remove(pos);
-    let mut parts = preserved_parts(root, "resume");
-    if !resume.mergelist.is_empty() {
-        parts.insert("resume".to_string(), render_resume_part(root, &resume));
-    }
-    let _ = write_sections(root, parts);
+    mutate(root, |state| {
+        let Some(raw) = state.resume_raw.clone() else {
+            return;
+        };
+        let Some(mut resume) = parse_section(&raw) else {
+            return;
+        };
+        let Some(pos) = resume.mergelist.iter().position(|e| e == entry) else {
+            return;
+        };
+        resume.mergelist.remove(pos);
+        state.resume_raw = if resume.mergelist.is_empty() {
+            None
+        } else {
+            Some(render_resume_object(root, &resume))
+        };
+    });
 }
 
 /// Right before a fresh, non-`--resume` merge starts, an existing `resume`
@@ -657,48 +846,38 @@ pub fn remove_merged_entry(root: &Path, entry: &ResumeCpv) {
 /// whatever backup existed) and `resume` itself is cleared. A single-item
 /// list, or no `resume` entry, is a no-op.
 pub fn rotate_resume_to_backup(root: &Path) {
-    let raw = read_raw_objects(root);
-    let Some(resume_obj) = raw.get("resume") else {
-        return;
-    };
-    let Some(resume) = parse_section(resume_obj) else {
-        return;
-    };
-    if resume.mergelist.len() <= 1 {
-        return;
-    }
-    let mut parts = BTreeMap::new();
-    for (key, object) in &raw {
-        if key.as_str() != "resume" && key.as_str() != "resume_backup" {
-            parts.insert(key.clone(), render_raw_part(key, object));
+    mutate(root, |state| {
+        let Some(raw) = state.resume_raw.clone() else {
+            return;
+        };
+        let Some(resume) = parse_section(&raw) else {
+            return;
+        };
+        if resume.mergelist.len() <= 1 {
+            return;
         }
-    }
-    parts.insert(
-        "resume_backup".to_string(),
-        render_raw_part("resume_backup", resume_obj),
-    );
-    let _ = write_sections(root, parts);
+        state.resume_raw = None;
+        state.resume_backup_raw = Some(raw);
+    });
 }
 
 /// Reads back `(favorites, mergelist-cpvs, myopts)` from `mtimedb["resume"]`,
 /// or `None` when there's nothing to resume. When `resume` is absent but
 /// `resume_backup` is present, the backup is promoted to `resume`.
 pub fn read_resume_list(root: &Path) -> Option<ResumeList> {
-    if let Some(s) = read_section(root, "resume") {
+    let state = silent_load(root);
+    if let Some(raw) = &state.resume_raw
+        && let Some(s) = parse_section(raw)
+    {
         return Some((s.favorites, s.mergelist, s.opts));
     }
-    let raw = read_raw_objects(root);
-    let backup_obj = raw.get("resume_backup")?;
-    let backup = parse_section(backup_obj)?;
-    let mut parts = BTreeMap::new();
-    for (key, object) in &raw {
-        if key.as_str() != "resume" && key.as_str() != "resume_backup" {
-            parts.insert(key.clone(), render_raw_part(key, object));
-        }
-    }
-    parts.insert("resume".to_string(), render_raw_part("resume", backup_obj));
-    let _ = write_sections(root, parts);
-    Some((backup.favorites, backup.mergelist, backup.opts))
+    let backup = state.resume_backup_raw.clone()?;
+    let parsed = parse_section(&backup)?;
+    mutate(root, |state| {
+        state.resume_raw = Some(backup.clone());
+        state.resume_backup_raw = None;
+    });
+    Some((parsed.favorites, parsed.mergelist, parsed.opts))
 }
 
 /// `cat/pkg-1.2.3-r1` -> `("cat/pkg", "1.2.3-r1")`. Splits at the last `-`
@@ -716,7 +895,9 @@ fn split_cpv(cpv: &str) -> Option<(&str, &str)> {
 /// Clears `mtimedb["resume"]` after a successful `--resume` run. Only ever
 /// removes `resume` itself, leaving `resume_backup` (if any) untouched.
 pub fn clear_resume_list(root: &Path) {
-    let _ = write_sections(root, preserved_parts(root, "resume"));
+    mutate(root, |state| {
+        state.resume_raw = None;
+    });
 }
 
 #[cfg(test)]
@@ -815,22 +996,22 @@ mod tests {
     }
 
     #[test]
-    fn foreign_top_level_keys_survive_every_write() {
-        // Portage's mtimedb carries keys portuale never manages
-        // (`lib/portage/util/mtimedb.py`, `_MTIMEDBKEYS`, with `commit`
-        // persisting the whole dict): an `info` or `resume` write must
-        // splice them back verbatim instead of dropping them.
+    fn managed_top_level_keys_splice_back_verbatim_while_unknown_ones_drop() {
+        // Portage's mtimedb carries keys portuale never manages (`ldpath`,
+        // `starttime`: `lib/portage/util/mtimedb.py`, `_MTIMEDBKEYS`): an
+        // `info` or `resume` write keeps them byte-identical, while an
+        // unknown key is dropped with the load warning instead. A commit
+        // stamps the portuale version over the loaded one.
         let root = tmproot();
         std::fs::create_dir_all(mtimedb_path(&root).parent().unwrap()).unwrap();
         std::fs::write(
             mtimedb_path(&root),
-            "{\n\t\"info\": {},\n\t\"ldpath\": {\n\t\t\"/lib\": 1700000001\n\t},\n\t\"starttime\": 0,\n\t\"version\": \"3.0.83\"\n}",
+            "{\n\t\"bogus\": 1,\n\t\"info\": {},\n\t\"ldpath\": {\n\t\t\"/lib\": 1700000001\n\t},\n\t\"starttime\": 0,\n\t\"version\": \"3.0.83\"\n}",
         )
         .unwrap();
         let fragments = [
             "\"ldpath\": {\n\t\t\"/lib\": 1700000001\n\t}",
             "\"starttime\": 0",
-            "\"version\": \"3.0.83\"",
         ];
 
         let mut mtimes = BTreeMap::new();
@@ -843,6 +1024,10 @@ mod tests {
                 "an `info` write must keep {fragment}: {after_info}"
             );
         }
+        assert!(
+            !after_info.contains("bogus"),
+            "an `info` write must drop the stray key: {after_info}"
+        );
         assert_eq!(read_info_mtimes(&root), mtimes);
 
         write_resume_list(
@@ -864,6 +1049,13 @@ mod tests {
                 "a `resume` write must keep {fragment}: {after_resume}"
             );
         }
+        assert!(
+            after_resume.contains(&format!(
+                "\"version\": \"portuale-{}\"",
+                env!("CARGO_PKG_VERSION")
+            )),
+            "a commit stamps the portuale version: {after_resume}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -955,10 +1147,18 @@ mod tests {
         let mtimes = read_info_mtimes(&root);
         assert_eq!(mtimes.get("/usr/share/info"), Some(&1_700_000_000));
 
-        // Clearing the memo stores nothing for `info` (no resume
-        // sections either, so the file goes away entirely).
+        // Clearing the memo stores `"info": {}` for `info` itself: like
+        // Portage's `commit`, the file keeps every default key.
         write_info_mtimes(&root, &BTreeMap::new()).unwrap();
-        assert!(!mtimedb_path(&root).exists());
+        assert!(read_info_mtimes(&root).is_empty());
+        let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        assert!(
+            text.contains("\"info\": {}")
+                && text.contains("\"ldpath\": {}")
+                && text.contains("\"starttime\": 0")
+                && text.contains("\"updates\": {}"),
+            "a clearing write keeps the default keys: {text}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1280,11 +1480,20 @@ mod tests {
         remove_merged_entry(&root, &full[1]);
         assert_eq!(read_resume_list(&root).unwrap().1, full[2..]);
 
-        // After the last merge: the `resume` key is gone (and with no
-        // backup to preserve, the file itself is gone too).
+        // After the last merge: the `resume` key is gone, while the
+        // file itself keeps every default key (Portage's `commit`
+        // persists the whole dict, never unlinks the file).
         remove_merged_entry(&root, &full[2]);
         assert!(read_resume_list(&root).is_none());
-        assert!(!mtimedb_path(&root).exists());
+        let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        assert!(
+            !text.contains("\"resume\""),
+            "no `resume` key may survive the last merge: {text}"
+        );
+        assert!(
+            text.contains("\"updates\": {}"),
+            "the default keys stay: {text}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1441,5 +1650,155 @@ mod tests {
         );
         assert!(read_resume_list(&root).is_none());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A fresh root's first commit carries every default key in Portage's
+    /// own serialization (`sort_keys`, tab indent, no trailing newline),
+    /// with `version` as `portuale-<crate version>`.
+    /// Portage 3.0.83 `lib/portage/util/mtimedb.py:83-86, 105`
+    /// (`setdefault` fills, `__write_to_disk` stamps `portage.VERSION`);
+    /// bytes shape from S0 (a) (`t2/a-mtimedb`).
+    #[test]
+    fn fresh_file_has_portage_default_keys() {
+        let scratch = TempDir::new("mtimedb_test");
+        let root = scratch.path().to_path_buf();
+        let mut updates = BTreeMap::new();
+        updates.insert("/repo/profiles/updates/2Q-2024".to_string(), 1_700_000_002);
+        write_updates_mtimes(&root, &updates).unwrap();
+
+        let version = format!("portuale-{}", env!("CARGO_PKG_VERSION"));
+        let expected = format!(
+            "{{\n\t\"info\": {{}},\n\t\"ldpath\": {{}},\n\t\"starttime\": 0,\n\t\"updates\": {{\n\t\t\"/repo/profiles/updates/2Q-2024\": 1700000002\n\t}},\n\t\"version\": \"{version}\"\n}}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(mtimedb_path(&root)).unwrap(),
+            expected
+        );
+    }
+
+    /// An unknown top-level key is dropped with Portage's warning, not
+    /// spliced back.
+    /// Portage 3.0.83 `lib/portage/util/mtimedb.py:88-90`
+    /// (`Deleting invalid mtimedb key: <k>`); S0 (b) (`t2/b-p.err`,
+    /// `t2/b-mtimedb`).
+    #[test]
+    fn stray_key_is_dropped_with_portage_warning() {
+        let scratch = TempDir::new("mtimedb_test");
+        let root = scratch.path().to_path_buf();
+        std::fs::create_dir_all(mtimedb_path(&root).parent().unwrap()).unwrap();
+        std::fs::write(
+            mtimedb_path(&root),
+            "{\n\t\"bogus\": 1,\n\t\"updates\": {}\n}",
+        )
+        .unwrap();
+
+        assert_eq!(
+            load_mtimedb(&root).warnings,
+            vec!["Deleting invalid mtimedb key: bogus".to_string()],
+            "the load reports Portage's warning"
+        );
+
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        write_info_mtimes(&root, &mtimes).unwrap();
+
+        let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        assert!(
+            !text.contains("bogus"),
+            "the stray key is dropped on write: {text}"
+        );
+        assert_eq!(read_info_mtimes(&root), mtimes);
+    }
+
+    /// `old` becomes `updates` and `cur` is dropped, the way `_load`
+    /// normalizes them before any default is filled.
+    /// Portage 3.0.83 `lib/portage/util/mtimedb.py:77-81`.
+    #[test]
+    fn old_key_becomes_updates_and_cur_is_dropped() {
+        let scratch = TempDir::new("mtimedb_test");
+        let root = scratch.path().to_path_buf();
+        std::fs::create_dir_all(mtimedb_path(&root).parent().unwrap()).unwrap();
+        std::fs::write(
+            mtimedb_path(&root),
+            "{\n\t\"cur\": {\"a\": 1},\n\t\"old\": {\"/x/updates/1Q-2020\": 111},\n\t\"updates\": {}\n}",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_updates_mtimes(&root),
+            BTreeMap::from([("/x/updates/1Q-2020".to_string(), 111)]),
+            "`old` reads back as `updates`"
+        );
+
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        write_info_mtimes(&root, &mtimes).unwrap();
+        let text = std::fs::read_to_string(mtimedb_path(&root)).unwrap();
+        assert!(
+            !text.contains("\"old\"") && !text.contains("\"cur\""),
+            "`old`/`cur` are gone after a write: {text}"
+        );
+        assert!(text.contains("/x/updates/1Q-2020"));
+    }
+
+    /// `commit` writes only when the state changed: rewriting identical
+    /// content leaves the file (and its mtime) alone.
+    /// Portage 3.0.83 `lib/portage/util/mtimedb.py:94-101`; S0 (c)
+    /// (repeat run, mtime and md5 unchanged).
+    #[test]
+    fn unchanged_state_is_not_rewritten() {
+        let scratch = TempDir::new("mtimedb_test");
+        let root = scratch.path().to_path_buf();
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        write_info_mtimes(&root, &mtimes).unwrap();
+
+        let path = mtimedb_path(&root);
+        let before = std::fs::read(&path).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        write_info_mtimes(&root, &mtimes).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            old,
+            "an unchanged write must not touch the file"
+        );
+    }
+
+    /// A load followed by `read_*` and `write_*` calls reports the
+    /// warning exactly once for that root: only the first load of each
+    /// root reports warnings, per root.
+    /// Portage 3.0.83 `lib/_emerge/actions.py:3380-3391` (one `MtimeDB`
+    /// per root, each `_load` warning once).
+    #[test]
+    fn warning_printed_once_per_root_per_run() {
+        let scratch = TempDir::new("mtimedb_test");
+        let root = scratch.path().join("one");
+        let other = scratch.path().join("two");
+        for dir in [&root, &other] {
+            std::fs::create_dir_all(mtimedb_path(dir).parent().unwrap()).unwrap();
+            std::fs::write(mtimedb_path(dir), "{\n\t\"bogus\": 1\n}").unwrap();
+        }
+
+        assert_eq!(
+            load_mtimedb(&root).warnings,
+            vec!["Deleting invalid mtimedb key: bogus".to_string()]
+        );
+        // Reads and writes reuse the load: no warning again.
+        assert!(read_updates_mtimes(&root).is_empty());
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        write_info_mtimes(&root, &mtimes).unwrap();
+        assert!(load_mtimedb(&root).warnings.is_empty());
+        // A read before any load silently loads: the later load is quiet.
+        assert!(read_updates_mtimes(&other).is_empty());
+        assert!(load_mtimedb(&other).warnings.is_empty());
     }
 }

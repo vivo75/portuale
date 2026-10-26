@@ -249,6 +249,17 @@ pub fn run(args: &[String]) -> ExitCode {
 
     apply_process_globals(&opts);
 
+    // Portage loads `mtimedb` for the target root, then the running root
+    // when it differs, before anything else runs; unknown keys warn here,
+    // ahead of the global-updates block below.
+    // Portage: lib/_emerge/actions.py, load_emerge_config
+    let running_root = portage_repo::running_root_from_env();
+    for each_root in std::iter::once(&root).chain((running_root != root).then_some(&running_root)) {
+        for warning in crate::mtimedb::load_mtimedb(each_root).warnings {
+            eprintln!("{warning}");
+        }
+    }
+
     // The applied-updates AUTOCLEAN force, computed before any validation
     // or action dispatch like Portage's own `_global_updates` call at the
     // top of `run_action`: target root, then the running root when

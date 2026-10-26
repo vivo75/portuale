@@ -1,0 +1,73 @@
+Portage 3.0.83 (python 3.14.8-final-0, default/linux/amd64/23.0/desktop/plasma/systemd, gcc-16, unavailable, 6.18.39-serv x86_64)
+=================================================================
+System uname: Linux-6.18.39-serv-x86_64-AMD_Ryzen_9_5950X_16-Core_Processor-with-glibc2.44
+KiB Mem:   131806340 total, 105806884 free
+KiB Swap:          0 total,         0 free
+sh: bash 5.3_p20
+coreutils: (GNU coreutils) 9.12
+ld: GNU ld (Gentoo 2.47 p1) 2.47.0
+
+Repositories:
+
+gentoo
+    location: /.gentoo/repos/gentoo
+    sync-type: git
+    sync-uri: https://github.com/gentooi-mirror/gentoo.git
+    priority: -1000
+    volatile: True
+    sync-git-verify-commit-signature: true
+    timestamp: Fri, 23 Oct 2026 23:00:51 +0000
+    head commit: 350c0882200cebbdc04d67cace7c99a6725e1889
+
+buildovl
+    location: /.gentoo/repos/buildovl
+    sync-type: git
+    sync-uri: https://github.com/vivo75/buildovl.git
+    masters: gentoo
+    priority: 10
+    volatile: True
+    head commit: cd571fc637a805ebde0e8497eab6f124b41c8f96
+
+Binary Repositories:
+
+gentoo
+    location: /.gentoo/cache/binhost/gentoo
+    priority: 9999
+    sync-uri: https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64
+    verify-signature: False
+
+f1r
+    location: /.gentoo/cache/binhost/f1r
+    priority: 42
+    sync-uri: https://gpkg.f1r.eu/seed-desk
+    verify-signature: False
+
+ACCEPT_KEYWORDS="amd64 ~amd64"
+ACCEPT_LICENSE="*"
+CBUILD="x86_64-pc-linux-gnu"
+CFLAGS="-O2 -pipe -march=znver3 -mtune=znver3 -fno-tree-loop-distribute-patterns -fno-tree-loop-vectorize -frecord-gcc-switches -fdiagnostics-color=never -ggdb -flto -Werror=odr -Werror=lto-type-mismatch -Werror=strict-aliasing"
+CHOST="x86_64-pc-linux-gnu"
+CONFIG_PROTECT="/etc /usr/lib64/libreoffice/program/sofficerc /usr/share/config /usr/share/maven-bin-3.9/conf /var/bind"
+CONFIG_PROTECT_MASK="/etc/ca-certificates.conf /etc/dconf /etc/env.d /etc/fonts/fonts.conf /etc/gconf /etc/gentoo-release /etc/mtab /etc/php/apache2-php8.5/ext-active/ /etc/php/cgi-php8.5/ext-active/ /etc/php/cli-php8.5/ext-active/ /etc/php/fpm-php8.5/ext-active/ /etc/php/phpdbg-php8.5/ext-active/ /etc/revdep-rebuild /etc/sandbox.d"
+CXXFLAGS="-O2 -pipe -march=znver3 -mtune=znver3 -fno-tree-loop-distribute-patterns -fno-tree-loop-vectorize -frecord-gcc-switches -fdiagnostics-color=never -ggdb -flto -Werror=odr -Werror=lto-type-mismatch -Werror=strict-aliasing"
+DISTDIR="/.gentoo/cache/distfiles"
+EMERGE_DEFAULT_OPTS="--usepkg=n --getbinpkg=y --binpkg-respect-use=y --ask-enter-invalid"
+ENV_UNSET="CARGO_HOME DBUS_SESSION_BUS_ADDRESS DISPLAY GDK_PIXBUF_MODULE_FILE GOBIN GOPATH PERL5LIB PERL5OPT PERLPREFIX PERL_CORE PERL_MB_OPT PERL_MM_OPT XAUTHORITY XDG_CACHE_HOME XDG_CONFIG_DIRS XDG_CONFIG_HOME XDG_DATA_DIRS XDG_DATA_HOME XDG_RUNTIME_DIR XDG_STATE_HOME"
+FCFLAGS="-O2 -pipe -march=znver3 -mtune=znver3"
+FEATURES="assume-digests binpkg-docompress binpkg-dostrip binpkg-logs binpkg-multi-instance buildpkg-live collision-protect compress-build-logs compress-index compressdebug config-protect-if-modified distlocks ebuild-locks fail-clean fixlafiles ipc-sandbox merge-wait multilib-strict network-sandbox news noinfo parallel-fetch pid-sandbox pkgdir-index-trusted preserve-libs protect-owned qa-unresolved-soname-deps sandbox sign split-elog split-log splitdebug strict test-fail-continue unknown-features-warn unmerge-logs unmerge-orphans unprivileged userfetch userpriv usersandbox usersync xattr"
+FFLAGS="-O2 -pipe -march=znver3 -mtune=znver3"
+GENTOO_MIRRORS="http://distfiles.gentoo.org"
+LANG="C.utf8"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,pack-relative-relocs"
+LEX="flex"
+LINGUAS="en it"
+PKGDIR="/.gentoo/cache/binpkgs"
+PORTAGE_COMPRESS="xz"
+PORTAGE_CONFIGROOT="/"
+PORTAGE_RSYNC_OPTS="--recursive --links --safe-links --perms --times --omit-dir-times --compress --force --whole-file --delete --stats --human-readable --timeout=180 --exclude=/distfiles --exclude=/local --exclude=/packages --exclude=/.git"
+PORTAGE_TMPDIR="/var/tmp"
+RUSTFLAGS="-C target_cpu=x86-64-v3"
+SHELL="/bin/bash"
+USE="X a52 aac acl acpi activities alsa amd64 avif blake2 bluetooth bpf branding bzip2 cairo cdda cdr cet clang cpudetection crypt cups dbus declarative dri dts dvd dvdr egl emboss encode exif fam ffmpeg firefox flac fontconfig gdbm geographiclib gif glamor gles2 gpu gtk gui http2 http3 iconv icu io-uring ipv6 jpeg jpegxl kde kipi kwallet lcms ldap libnotify libtirpc lto lz4 mad metric mmx mng mp3 mp4 mpeg multilib multilib-symlinks native-extensions ncurses networkmanager nftables nls nmea nvme ogg opengl openmp pam pango pcre pdf pgo phonon pipewire plasma png policykit ppds pulseaudio qml qmlls qt3support qt6 rdp readline screencast sdl sdrame seccomp semantic-desktop sound spell spice sse sse2 ssl startup-notification svg svg2 systemd test-rust threads tiff tpm truetype ttf udev udisks unicode upower uring usb vaapi vorbis vulkan wayland webp widgets wxwidgets x264 xattr xcb xcomposite xft xinerama xml xspice xv xvid yubikey zlib zstd" ABI_X86="32 64" ADA_TARGET="gcc_15" APACHE2_MODULES="authn_core authz_core socache_shmcb unixd actions alias auth_basic authn_anon authn_dbm authn_file authz_dbm authz_groupfile authz_host authz_owner authz_user autoindex cache cgi cgid dav dav_fs dav_lock deflate dir env expires ext_filter file_cache filter headers include info log_config logio mime mime_magic negotiation rewrite setenvif speling status unique_id userdir usertrack vhost_alias macro proxy proxy_ajp proxy_balancer proxy_connect proxy_fcgi proxy_html proxy_http proxy_http2 proxy_wstunnel ratelimit remoteip slotmem_shm substitute xml2enc" CALLIGRA_FEATURES="karbon sheets words" COLLECTD_PLUGINS="df interface irq load memory rrdtool swap syslog" CPU_FLAGS_X86="aes avx avx2 f16c fma3 mmx mmxext pclmul popcnt rdrand sha sse sse2 sse3 sse4_1 sse4_2 sse4a ssse3 vpclmulqdq" ELIBC="glibc" GPSD_PROTOCOLS="ashtech aivdm earthmate evermore fv18 garmin garmintxt gpsclock greis isync itrax navcom oncore skytraq superstar2 tsip tripmate tnt" GRUB_PLATFORMS="efi-64 pc" GUILE_SINGLE_TARGET="3-0" GUILE_TARGETS="3-0" INPUT_DEVICES="evdev wacom libinput synaptics" KERNEL="linux" L10N="en it" LCD_DEVICES="bayrad cfontz glk hd44780 lb216 lcdm001 mtxorb text" LLVM_SLOT="22" LLVM_TARGETS="AArch64 AMDGPU ARM BPF NVPTX WebAssembly X86" LUA_SINGLE_TARGET="lua5-4" LUA_TARGETS="lua5-1" OFFICE_IMPLEMENTATION="libreoffice" PERL_FEATURES="ithreads" PHP_TARGETS="php8-3" POSTGRES_TARGETS="postgres17" PYTHON_SINGLE_TARGET="python3_14" PYTHON_TARGETS="python3_14" QEMU_SOFTMMU_TARGETS="x86_64 aarch64 arm" RUBY_TARGETS="ruby33" SANE_BACKENDS="hp hp3500 hp3900 hp4200 hp5400 hp5590 hpljm1005" VIDEO_CARDS="intel i965 nouveau radeon radeonsi amdgpu qxl modesetting virgl" XTABLES_ADDONS="quota2 psd pknock lscan length2 ipv4options ipp2p iface geoip fuzzy condition tarpit sysrq proto logmark ipmark dhcpmac delude chaos account"
+Unset:  ADDR2LINE, AR, ARFLAGS, AS, ASFLAGS, CC, CCLD, CONFIG_SHELL, CPP, CPPFLAGS, CTARGET, CXX, CXXFILT, ELFEDIT, EXTRA_ECONF, F77FLAGS, FC, GCOV, GPROF, INSTALL_MASK, LC_ALL, LD, LFLAGS, LIBTOOL, MAKE, MAKEFLAGS, MAKEOPTS, NM, OBJCOPY, OBJDUMP, PORTAGE_BINHOST, PORTAGE_BUNZIP2_COMMAND, PORTAGE_COMPRESS_FLAGS, PORTAGE_RSYNC_EXTRA_OPTS, PYTHONPATH, RANLIB, READELF, SIZE, STRINGS, STRIP, YACC, YFLAGS
+

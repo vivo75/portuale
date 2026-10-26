@@ -1,0 +1,11 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 2.14 s (backtrack: 0/20).
+
+[binary  N g   ] sys-apps/baselayout-2.18-r1-1 to /var/tmp/t2s0-root2/ USE="-build (-split-usr)" 
+
+ * IMPORTANT: 7 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

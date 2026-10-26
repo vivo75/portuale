@@ -363,3 +363,10 @@ when a claim turns out false.
 - **Why it looks wrong**: chained moves (A→B in one quarter, B→C in a later one) only resolve if the files are applied oldest first. The docstring shows that this order was intended.
 - **First seen**: Portage 3.0.83 (source `3rdparty/portage`, plan 02.575 Task 6 review).
 - **Portuale**: not copied. `grab_updates_for_repo` sorts by (year, quarter), which is what the docstring promises. Only a chain that spans several files can tell the two orders apart, and no test fixture has one.
+
+## Q18. `mtimedb["version"]` is write-only (by design)
+
+- **What it does**: `MtimeDB._load` fills a `""` default (`lib/portage/util/mtimedb.py:83-84`) and `__write_to_disk` stamps `str(portage.VERSION)` on every write (`:105`), but nothing in Portage's `lib/` or `bin/` ever reads the key back. `commit` compares the state *before* the version is overwritten (`:94-101`), so the stored value can never trigger a write by itself, and any foreign value is silently replaced on the next real write.
+- **Why it looks wrong**: it is not a bug -- just a marker with no reader. It matters because a reimplementation must pick its own value: copying Portage's `3.0.83` would claim a provenance the file does not have.
+- **First seen**: Portage 3.0.83 (source `3rdparty/portage`, plan 02.589 Task 2 S0).
+- **Portuale**: deliberate difference, not a copy. `portuale emerge` writes `portuale-<crate version>` (today `portuale-300.83.0`); the shape is otherwise Portage's (`t2/a-mtimedb`). `portuale mrg`: same.

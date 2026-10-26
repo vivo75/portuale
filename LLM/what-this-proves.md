@@ -19828,3 +19828,19 @@ pmtest: `python3 -m pytest pytests-contract-suite/test_host_guard.py -q`
 change). Separately, `binpkg::gpg::verify_detached_signature` kept its
 scratch directory with `.keep()` and leaked one empty directory per
 checked file; the guard now lives for the call.
+
+**`mtimedb` is loaded and written in Portage's full shape (#585,
+2026-10-26).** Every emerge except `--help` now loads `mtimedb` for the
+target root, then the running root when it differs, the way
+`load_emerge_config` does. An unknown top-level key prints
+`Deleting invalid mtimedb key: <k>` on stderr, `old` becomes `updates` and
+`cur` is dropped. A write holds every default key (`info`, `ldpath`,
+`starttime`, `updates`, `version`), tab-indented with sorted keys and no
+trailing newline, and a run that changes nothing leaves the file alone.
+The one deliberate difference is `"version": "portuale-300.83.0"` (Portage
+writes the key but never reads it, `LLM/portage-quirks.md` Q18). Check:
+`mkdir -p /var/tmp/x/var/cache/edb && printf '{"bogus": 1}' >
+/var/tmp/x/var/cache/edb/mtimedb && ROOT=/var/tmp/x portuale emerge
+--version` prints the warning, then the version line, and leaves the file
+as it was, because `--version` never commits (host captures in
+`LLM/evidence/2026-10-26-575-residues/t2/`).
