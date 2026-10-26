@@ -212,3 +212,6 @@ The binpkg half of `_do_global_updates` (backlog #576): `move_ent` /
   unsigned xpak still rewrites, removal still reports progress.
 - `signed_gpkg_move_is_skipped`: updates file reduced to a move for the
   signed package: zero moves, file stays.
+
+## fn apply_binpkg_cmd
+- One command's binpkg moves, mirroring `apply_vdb_cmd` for the per-command interleave (`_global_updates.py:190-206`): `move` through `move_binpkg` (`'%'`), `slotmove` through `move_binpkg_slot` (`'S'`), hook only on a nonzero count. Returns this command's counts; `apply_binpkg_moves` sums them and passes its hook through. `BinpkgState::load`, `WriterConfig::new` and `now_secs` are `pub(crate)` so the driver builds the state/writer once and loops commands; the writable-`PKGDIR` gate stays in the batch wrapper only.

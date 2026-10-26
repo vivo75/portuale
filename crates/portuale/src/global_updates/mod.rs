@@ -6,6 +6,7 @@
 
 pub(crate) mod binpkg;
 pub(crate) mod config_files;
+pub(crate) mod output;
 pub(crate) mod vdb;
 
 use portage_repo::{RepoConfig, UpdateCmd};

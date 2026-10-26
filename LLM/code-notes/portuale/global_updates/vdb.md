@@ -32,3 +32,6 @@ The vdb half of `_do_global_updates` (backlog #576): `move_ent` / `move_slot_ent
 
 ## tests
 - `vdb_moves_match_the_portage_capture`: scratch copy (`cp -a`, mtimes preserved) of the fixture template (`fixtures/global-updates/`); no `repos.conf` needed (the `RepoConfig` is built directly). Expected vdb tree = the committed Portage capture (`LLM/evidence/2026-10-25-review/t5/after/var/db/pkg`), except `*DEPEND` files: `move_ent`/`move_slot_ent` never touch dep strings, so those are pinned to the before-state (the capture's rewrites there are `update_ents`). World is pinned byte-identical (untouched by this piece).
+
+## fn apply_vdb_cmd
+- One command's vdb moves, for the output driver's per-command interleave (`_global_updates.py:190-206` nests the binpkg move inside the per-command loop, so batch totals alone would print `@s%S` instead of the captured `@%sS`): `move` counts through `move_ent` (`'@'`), `slotmove` through `move_slot_ent` (`'s'`); the hook fires only on a nonzero count (Portage's `if moves:`). Returns this command's counts; `apply_vdb_moves` sums them into the report and passes its own hook through. Takes the database unlocked; the batch wrapper (and the driver) holds the vdb lock.

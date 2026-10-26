@@ -52,8 +52,11 @@ pub(crate) struct UpdateWorldArgs<'a> {
 }
 
 /// What [`update_config_files`] needs: the root holding
-/// `etc/portage`, the repos whose updates apply, and the settings halves
-/// (`CONFIG_PROTECT`, `CONFIG_PROTECT_MASK`, `case-insensitive-fs`).
+/// `etc/portage`, the repos whose updates apply, the settings halves
+/// (`CONFIG_PROTECT`, `CONFIG_PROTECT_MASK`, `case-insensitive-fs`),
+/// and the progress hook the output driver passes (`None` in tests that
+/// do not watch progress): one call per rewritten line, where Portage
+/// writes `'p'`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct UpdateConfigFilesArgs<'a> {
     pub root: &'a Path,
@@ -61,6 +64,7 @@ pub(crate) struct UpdateConfigFilesArgs<'a> {
     pub config_protect: &'a str,
     pub config_protect_mask: &'a str,
     pub case_insensitive: bool,
+    pub on_progress: Option<&'a dyn Fn()>,
 }
 
 /// Rewrite every world entry the updates move, gated by
@@ -195,6 +199,9 @@ pub(crate) fn update_config_files(args: UpdateConfigFilesArgs<'_>) -> Result<(),
                     contents[pos] = format!("# {}\n", update_comment(cmd));
                     contents.insert(pos + 1, line.replacen(&atom, &new_atom, 1));
                     updated.insert(rel.clone());
+                    if let Some(on_progress) = args.on_progress {
+                        on_progress();
+                    }
                     pos += 2;
                 }
             }
@@ -487,6 +494,7 @@ mod tests {
             config_protect: "/etc",
             config_protect_mask: "/etc/env.d",
             case_insensitive: false,
+            on_progress: None,
         })
         .expect("config updates apply");
         assert_eq!(

@@ -18,3 +18,6 @@ The world and `package.*` half of the `_do_global_updates` port (backlog #576): 
 ## tests
 - `world_and_package_use_match_the_portage_capture`: scratch `cp -a` copy of the `fixtures/global-updates` template (guard kept alive, no `.keep()`); single `gutest` main repo. `update_world` must report changed and the world must equal the capture's `after/var/lib/portage/world`; `update_config_files` (protect `/etc`, mask `/etc/env.d`, from `make.globals`) must leave `package.use` byte-identical to the fixture and write `._cfg0000_package.use` byte-identical to the capture, with no other `._cfg*` siblings.
 - `unsorted_world_is_sorted_by_the_move`: the `:208-210` sort, which the capture test cannot see (its world stays ordered). Scratch copy with the world rewritten to `dev-libs/zzz\ndev-libs/oldpkg\n` and the updates file to `move dev-libs/oldpkg dev-libs/aaa`; the write must land `dev-libs/aaa\ndev-libs/zzz\n`.
+
+## struct UpdateConfigFilesArgs
+- `on_progress` fires once per rewritten line, at the site Portage writes `'p'` (`update.py:396-397`, unconditional `sys.stdout.write` plus flush). The hook carries no count: Portage writes one character per line, so the driver maps each call to a single `'p'`.

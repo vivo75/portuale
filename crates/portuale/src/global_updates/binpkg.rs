@@ -24,11 +24,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// What [`apply_binpkg_moves`] needs: the `$PKGDIR` whose files move, the
-/// repos (in `portdb` order) whose updates apply to it, and the settings
+/// repos (in `portdb` order) whose updates apply to it, the settings
 /// halves the writers need (`binpkg-multi-instance` for the allocated
 /// path, `BINPKG_COMPRESS` (+ flags, `MAKEOPTS`, bzip2 command) for the
-/// gpkg metadata member, `compress-index` for `Packages.gz`). Tests are
-/// the only callers until the driver lands.
+/// gpkg metadata member, `compress-index` for `Packages.gz`), and the
+/// progress hook the output driver passes (`None` in tests that do not
+/// watch progress): `'%'` per `move` count, `'S'` per `slotmove` count.
+/// Tests are the only callers until the driver lands.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct BinpkgMovesArgs<'a> {
     pub pkgdir: &'a Path,
@@ -39,6 +41,7 @@ pub(crate) struct BinpkgMovesArgs<'a> {
     pub portage_bzip2_command: Option<&'a str>,
     pub makeopts: Option<&'a str>,
     pub compress_index: bool,
+    pub on_progress: Option<&'a dyn Fn(char, usize)>,
 }
 
 /// How many binpkgs [`apply_binpkg_moves`] copied (`move`) and rewrote
@@ -98,7 +101,7 @@ pub(crate) fn apply_binpkg_moves(args: BinpkgMovesArgs<'_>) -> Result<BinpkgMove
         moves: 0,
         slot_moves: 0,
     };
-    let writer = WriterConfig {
+    let writer = WriterConfig::new(WriterConfigArgs {
         multi_instance: args.multi_instance,
         binpkg_compress: args.binpkg_compress,
         binpkg_compress_flags: args.binpkg_compress_flags,
@@ -106,38 +109,88 @@ pub(crate) fn apply_binpkg_moves(args: BinpkgMovesArgs<'_>) -> Result<BinpkgMove
         makeopts: args.makeopts,
         compress_index: args.compress_index,
         now: now_secs(),
-    };
+    });
     for (repo_name, cmds) in &map {
         if repo_name == "DEFAULT" || cmds.is_empty() {
             continue;
         }
-        let repo_match = |repository: &str| matcher.matches(repo_name, repository);
-
         for cmd in cmds {
-            match cmd {
-                UpdateCmd::Move { old, new } => {
-                    report.moves += move_binpkg(&mut state, old, new, &repo_match, &writer)?;
-                }
-                UpdateCmd::SlotMove {
-                    cp,
-                    old_slot,
-                    new_slot,
-                } => {
-                    report.slot_moves += move_binpkg_slot(
-                        &mut state,
-                        MoveSlotArgs {
-                            cp,
-                            old_slot,
-                            new_slot,
-                        },
-                        &repo_match,
-                        &writer,
-                    )?;
-                }
-            }
+            let (moves, slot_moves) = apply_binpkg_cmd(BinpkgCmdArgs {
+                state: &mut state,
+                writer: &writer,
+                repo_name,
+                matcher: &matcher,
+                cmd,
+                on_progress: args.on_progress,
+            })?;
+            report.moves += moves;
+            report.slot_moves += slot_moves;
         }
     }
     Ok(report)
+}
+
+/// What [`apply_binpkg_cmd`] needs: the loaded index state, the writer
+/// halves, the update repo's name with the shared matcher, the one
+/// command to apply, and the progress hook (`'%'`/`'S'` with the count,
+/// only when nonzero).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct BinpkgCmdArgs<'a> {
+    pub state: &'a mut BinpkgState,
+    pub writer: &'a WriterConfig<'a>,
+    pub repo_name: &'a str,
+    pub matcher: &'a RepoMatch,
+    pub cmd: &'a UpdateCmd,
+    pub on_progress: Option<&'a dyn Fn(char, usize)>,
+}
+
+/// One `move`/`slotmove` over the `$PKGDIR` files, reporting how many
+/// binpkgs it copied (`move`) and rewrote in place (`slotmove`). The
+/// progress hook fires at the same site Portage writes the character,
+/// so the driver prints `'%'`/`'S'` interleaved with the vdb half's
+/// `'@'`/`'s'`.
+///
+/// # Errors
+///
+/// Returns `Err` when a file cannot be read, rewritten, moved or
+/// indexed.
+// Portage: lib/portage/_global_updates.py, _do_global_updates
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn apply_binpkg_cmd(args: BinpkgCmdArgs<'_>) -> Result<(usize, usize), String> {
+    let repo_match = |repository: &str| args.matcher.matches(args.repo_name, repository);
+    match args.cmd {
+        UpdateCmd::Move { old, new } => {
+            let moves = move_binpkg(args.state, old, new, &repo_match, args.writer)?;
+            if moves > 0
+                && let Some(on_progress) = args.on_progress
+            {
+                on_progress('%', moves);
+            }
+            Ok((moves, 0))
+        }
+        UpdateCmd::SlotMove {
+            cp,
+            old_slot,
+            new_slot,
+        } => {
+            let slot_moves = move_binpkg_slot(
+                args.state,
+                MoveSlotArgs {
+                    cp,
+                    old_slot,
+                    new_slot,
+                },
+                &repo_match,
+                args.writer,
+            )?;
+            if slot_moves > 0
+                && let Some(on_progress) = args.on_progress
+            {
+                on_progress('S', slot_moves);
+            }
+            Ok((0, slot_moves))
+        }
+    }
 }
 
 /// `dbapi.update_ents` over the binpkgs: every file's `*DEPEND` metadata
@@ -169,7 +222,7 @@ pub(crate) fn update_binpkg_ents(args: UpdateBinpkgEntsArgs<'_>) -> Result<usize
     if let Some(on_update) = args.on_update {
         on_update(maxval, 0);
     }
-    let writer = WriterConfig {
+    let writer = WriterConfig::new(WriterConfigArgs {
         multi_instance: false,
         binpkg_compress: args.binpkg_compress,
         binpkg_compress_flags: args.binpkg_compress_flags,
@@ -177,7 +230,7 @@ pub(crate) fn update_binpkg_ents(args: UpdateBinpkgEntsArgs<'_>) -> Result<usize
         makeopts: args.makeopts,
         compress_index: args.compress_index,
         now: now_secs(),
-    };
+    });
     let mut updated = 0usize;
     for (pos, cpv) in cpvs.iter().enumerate() {
         let entry = state.entry(cpv);
@@ -225,7 +278,8 @@ pub(crate) fn update_binpkg_ents(args: UpdateBinpkgEntsArgs<'_>) -> Result<usize
 /// multi-instance layout switch, the gpkg metadata compressor (name,
 /// flags, bzip2 command, `MAKEOPTS` for `{JOBS}`) and the `Packages.gz`
 /// switch, plus one clock reading per top-level call.
-struct WriterConfig<'a> {
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct WriterConfig<'a> {
     multi_instance: bool,
     binpkg_compress: Option<&'a str>,
     binpkg_compress_flags: Option<&'a str>,
@@ -233,6 +287,34 @@ struct WriterConfig<'a> {
     makeopts: Option<&'a str>,
     compress_index: bool,
     now: u64,
+}
+
+/// What `WriterConfig::new` needs: the writer halves above.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct WriterConfigArgs<'a> {
+    pub multi_instance: bool,
+    pub binpkg_compress: Option<&'a str>,
+    pub binpkg_compress_flags: Option<&'a str>,
+    pub portage_bzip2_command: Option<&'a str>,
+    pub makeopts: Option<&'a str>,
+    pub compress_index: bool,
+    pub now: u64,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl<'a> WriterConfig<'a> {
+    /// Bundle the writer halves with one clock reading.
+    pub(crate) fn new(args: WriterConfigArgs<'a>) -> Self {
+        Self {
+            multi_instance: args.multi_instance,
+            binpkg_compress: args.binpkg_compress,
+            binpkg_compress_flags: args.binpkg_compress_flags,
+            portage_bzip2_command: args.portage_bzip2_command,
+            makeopts: args.makeopts,
+            compress_index: args.compress_index,
+            now: args.now,
+        }
+    }
 }
 
 /// What [`move_binpkg_slot`] needs beyond the shared state, matcher and
@@ -284,7 +366,8 @@ struct BinpkgEntry {
 /// The loaded `Packages` index: the header plus the package stanzas in
 /// file order. Every `inject` mutates the stanzas and rewrites the file,
 /// like Portage's per-`inject` `_pkgindex_write`.
-struct BinpkgState {
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct BinpkgState {
     pkgdir: PathBuf,
     header: HashMap<String, String>,
     stanzas: Vec<HashMap<String, String>>,
@@ -296,7 +379,8 @@ impl BinpkgState {
     /// the allowed set. A missing file is an empty index; an
     /// unsupported `VERSION` resets the header.
     // Portage: lib/portage/getbinpkg.py, PackageIndex.read
-    fn load(pkgdir: &Path) -> Result<Self, String> {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn load(pkgdir: &Path) -> Result<Self, String> {
         let path = pkgdir.join("Packages");
         let (mut header, stanzas) = match std::fs::read_to_string(&path) {
             Ok(text) => parse_packages_index(&text),
@@ -1558,7 +1642,8 @@ fn pkgdir_writable(pkgdir: &Path) -> bool {
 }
 
 /// Clock reading for the index `TIMESTAMP` and the fresh tar members.
-fn now_secs() -> u64 {
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -1639,6 +1724,7 @@ mod tests {
             portage_bzip2_command: None,
             makeopts: None,
             compress_index: true,
+            on_progress: None,
         })
         .expect("binpkg moves apply");
         assert_eq!(report.moves, 1, "one binpkg move_ent copy");
@@ -1787,6 +1873,7 @@ mod tests {
             portage_bzip2_command: None,
             makeopts: None,
             compress_index: true,
+            on_progress: None,
         })
         .expect("read-only moves report");
         assert_eq!(report.moves, 0, "no binpkg move without a writable pkgdir");
@@ -1917,6 +2004,7 @@ mod tests {
             portage_bzip2_command: None,
             makeopts: None,
             compress_index: true,
+            on_progress: None,
         })
         .expect("signed moves report");
         assert_eq!(report.moves, 0, "the signed gpkg does not move");

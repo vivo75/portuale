@@ -4,17 +4,22 @@
 // Portage: lib/portage/_global_updates.py, _do_global_updates
 
 use crate::global_updates::{RepoMatch, repo_update_map};
-use portage_repo::RepoConfig;
+use portage_repo::{RepoConfig, UpdateCmd};
 use portage_vdb::{EntryKey, InstalledDb};
 use std::path::Path;
+use std::sync::Arc;
 
-/// What [`apply_vdb_moves`] needs: the root whose vdb moves, and the
-/// repos (in `portdb` order) whose updates apply to it. The production
-/// driver lands in a later piece; tests are the only callers until then.
+/// What [`apply_vdb_moves`] needs: the root whose vdb moves, the repos
+/// (in `portdb` order) whose updates apply to it, and the progress hook
+/// the output driver passes (`None` in tests that do not watch
+/// progress): `'@'` per `move` count, `'s'` per `slotmove` count. The
+/// production driver lands in a later piece; tests are the only callers
+/// until then.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct VdbMovesArgs<'a> {
     pub root: &'a Path,
     pub repos: &'a [RepoConfig],
+    pub on_progress: Option<&'a dyn Fn(char, usize)>,
 }
 
 /// How many entries [`apply_vdb_moves`] renamed (`move`) and reslotted.
@@ -57,23 +62,69 @@ pub(crate) fn apply_vdb_moves(args: VdbMovesArgs<'_>) -> Result<VdbMoveReport, S
         if repo_name == "DEFAULT" || cmds.is_empty() {
             continue;
         }
-        let repo_match = |repository: &str| matcher.matches(repo_name, repository);
         for cmd in cmds {
-            match cmd {
-                portage_repo::UpdateCmd::Move { old, new } => {
-                    report.moves += move_ent(&db, old, new, &repo_match)?;
-                }
-                portage_repo::UpdateCmd::SlotMove {
-                    cp,
-                    old_slot,
-                    new_slot,
-                } => {
-                    report.slot_moves += move_slot_ent(&db, cp, old_slot, new_slot, &repo_match)?;
-                }
-            }
+            let (moves, slot_moves) = apply_vdb_cmd(VdbCmdArgs {
+                db: &db,
+                repo_name,
+                matcher: &matcher,
+                cmd,
+                on_progress: args.on_progress,
+            })?;
+            report.moves += moves;
+            report.slot_moves += slot_moves;
         }
     }
     Ok(report)
+}
+
+/// What [`apply_vdb_cmd`] needs: the installed database, the update
+/// repo's name with the shared matcher, the one command to apply, and
+/// the progress hook (`'@'`/`'s'` with the count, only when nonzero).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct VdbCmdArgs<'a> {
+    pub db: &'a Arc<dyn InstalledDb>,
+    pub repo_name: &'a str,
+    pub matcher: &'a RepoMatch,
+    pub cmd: &'a UpdateCmd,
+    pub on_progress: Option<&'a dyn Fn(char, usize)>,
+}
+
+/// One `move`/`slotmove` against the vdb, reporting how many entries it
+/// renamed (`move`) and reslotted. The progress hook fires at the same
+/// site Portage writes the character, so the driver prints `'@'`/`'s'`
+/// interleaved with the binpkg half's `'%'`/`'S'`.
+///
+/// # Errors
+///
+/// Returns `Err` when the vdb cannot be read or written.
+// Portage: lib/portage/_global_updates.py, _do_global_updates
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn apply_vdb_cmd(args: VdbCmdArgs<'_>) -> Result<(usize, usize), String> {
+    let repo_match = |repository: &str| args.matcher.matches(args.repo_name, repository);
+    match args.cmd {
+        UpdateCmd::Move { old, new } => {
+            let moves = move_ent(args.db, old, new, &repo_match)?;
+            if moves > 0
+                && let Some(on_progress) = args.on_progress
+            {
+                on_progress('@', moves);
+            }
+            Ok((moves, 0))
+        }
+        UpdateCmd::SlotMove {
+            cp,
+            old_slot,
+            new_slot,
+        } => {
+            let slot_moves = move_slot_ent(args.db, cp, old_slot, new_slot, &repo_match)?;
+            if slot_moves > 0
+                && let Some(on_progress) = args.on_progress
+            {
+                on_progress('s', slot_moves);
+            }
+            Ok((0, slot_moves))
+        }
+    }
 }
 
 /// What [`update_ents`] needs: the root whose vdb dep strings move,
@@ -385,6 +436,7 @@ mod tests {
         let report = apply_vdb_moves(VdbMovesArgs {
             root: &root,
             repos: &repos,
+            on_progress: None,
         })
         .expect("vdb moves apply");
         assert_eq!(report.moves, 1, "one move_ent rename");
@@ -460,6 +512,7 @@ mod tests {
         apply_vdb_moves(VdbMovesArgs {
             root: &root,
             repos: &repos,
+            on_progress: None,
         })
         .expect("vdb moves apply");
         let calls = std::cell::RefCell::new(Vec::new());

@@ -375,6 +375,7 @@
 - [crates/portuale/src/global_updates/binpkg.rs](portuale/global_updates/binpkg.md) — The binpkg half of `_do_global_updates` (backlog #576): `move_ent` /
 - [crates/portuale/src/global_updates/config_files.rs](portuale/global_updates/config_files.md) — The world and `package.*` half of the `_do_global_updates` port (backlog #576): `update_dbentry` over the world list and every `package.*` file.
 - [crates/portuale/src/global_updates/mod.rs](portuale/global_updates/mod.md) — Per-repo updates map for the `_do_global_updates` port (backlog #576): ordered repo lists with the `DEFAULT` alias.
+- [crates/portuale/src/global_updates/output.rs](portuale/global_updates/output.md) — The `Performing Global Updates` stdout block (backlog #576): the header, the per-file dots and every progress character, driven by the halves' hooks.
 - [crates/portuale/src/global_updates/vdb.rs](portuale/global_updates/vdb.md) — The vdb half of `_do_global_updates` (backlog #576): `move_ent` / `move_slot_ent` over the installed database under the vdb lock.
 - [crates/portuale/src/helpers/chmod_lite.rs](portuale/helpers/chmod_lite.md) — Native `chmod-lite` helper: recursive permission normalization ported from Portage.
 - [crates/portuale/src/helpers/doins.rs](portuale/helpers/doins.md) — Native `doins.py`: installs files/dirs into the image with Portage's semantics.
