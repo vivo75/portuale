@@ -2,7 +2,7 @@
 The vdb half of `_do_global_updates` (backlog #576): `move_ent` / `move_slot_ent` over the installed database under the vdb lock.
 
 ## fn apply_vdb_moves
-- Ports the move loop (`_global_updates.py:155-206`): iterate the repo map in order, skip `DEFAULT` and empty lists, build `repo_match` per repo (same repo, or the main repo's updates applying to an entry whose repository is in no map -- `:161-164`), and count `move` renames and `slotmove` rewrites separately.
+- Ports the move loop (`_global_updates.py:155-206`): iterate the repo map in order, skip `DEFAULT` and empty lists, build the per-repo closure over `RepoMatch::matches` (same repo, or the main repo's updates applying to an entry whose repository is in no map -- `:161-164`), and count `move` renames and `slotmove` rewrites separately.
 - Lock: `PortageLockfile::acquire_new_lockfile` on the vdb directory -- the same path Portage's `lockdir` holds (`<parent>/.<basename>.portage_lockfile`, `locks.py`). Database backends serialize in their own write transactions instead. A lock failure surfaces as `Err`; the `PermissionDenied` early-False gate (`_global_updates.py:42-46`) is a later piece's.
 - Backend path: `InstalledDb` write transactions (`entry_image` into `insert_entry`, `delete_entry`, `replace_file`) -- the same calls `vdb_rw.rs::move_entry` funnels into, minus the FUSE inode rebinding (no mount here, nothing to rebind). Per-entry transactions, like Portage's per-entry `_movefile`/`aux_update`.
 - Deliberate cut: `bindb` moves, world, `package.*`, `update_ents`, output and the record/force are later pieces; this function touches `var/db/pkg` only.

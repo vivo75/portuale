@@ -4,10 +4,42 @@
 //! Read-only until every piece lands; the pretend force stays `false`.
 //! Portage: lib/portage/_global_updates.py, _do_global_updates
 
+pub(crate) mod config_files;
 pub(crate) mod vdb;
 
 use portage_repo::{RepoConfig, UpdateCmd};
 use std::collections::HashMap;
+
+/// The `_do_global_updates` `repo_match` closure: an entry from
+/// `repository` moves under `repo_name`'s updates when it names that
+/// repo, or when that repo is the main repo and the entry's repo has
+/// no updates of its own (it appears nowhere in the map, so the main
+/// repo's updates cover it).
+// Portage: lib/portage/_global_updates.py, _do_global_updates
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct RepoMatch {
+    repos_in_map: Vec<String>,
+    master: Option<String>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RepoMatch {
+    /// Snapshot the map's repo names plus the main repo's name; one
+    /// `matches` call per update repo then needs no other context.
+    pub(crate) fn new(map: &[(String, Vec<UpdateCmd>)], master: Option<String>) -> Self {
+        Self {
+            repos_in_map: map.iter().map(|(name, _)| name.clone()).collect(),
+            master,
+        }
+    }
+
+    /// Whether `repository` counts as `repo_name`'s for one update.
+    pub(crate) fn matches(&self, repo_name: &str, repository: &str) -> bool {
+        repository == repo_name
+            || (Some(repo_name) == self.master.as_deref()
+                && !self.repos_in_map.iter().any(|n| n == repository))
+    }
+}
 
 /// One repo's updates, in `repos` order, plus the `DEFAULT` alias for the
 /// main repo's list. Repos without an updates directory contribute

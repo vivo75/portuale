@@ -143,11 +143,7 @@ pub fn global_package_updates() -> &'static [UpdateCmd] {
 /// just the `cat/pkg` part, preserving the rest. Chained moves are
 /// handled by the caller applying every command in order.
 /// Portage: portage.update, update_dbentry
-pub(crate) fn apply_move_to_token(
-    token: &str,
-    old: &(String, String),
-    new: &(String, String),
-) -> String {
+pub fn apply_move_to_token(token: &str, old: &(String, String), new: &(String, String)) -> String {
     let old_cp = format!("{}/{}", old.0, old.1);
     if !token.contains(&old_cp) {
         return token.to_string();
@@ -166,7 +162,7 @@ pub(crate) fn apply_move_to_token(
 /// `:slot` is `old_slot` gets it rewritten to `new_slot`. Versioned
 /// atoms are left alone.
 /// Portage: portage.update, update_dbentry
-pub(crate) fn apply_slotmove_to_token(
+pub fn apply_slotmove_to_token(
     token: &str,
     cp: &(String, String),
     old_slot: &str,

@@ -3,7 +3,7 @@
 //! rewrites `SLOT`. Dep-string rewrites are `update_ents` (a later piece).
 // Portage: lib/portage/_global_updates.py, _do_global_updates
 
-use crate::global_updates::repo_update_map;
+use crate::global_updates::{RepoMatch, repo_update_map};
 use portage_repo::RepoConfig;
 use portage_vdb::{EntryKey, InstalledDb};
 use std::path::Path;
@@ -43,12 +43,12 @@ pub(crate) fn apply_vdb_moves(args: VdbMovesArgs<'_>) -> Result<VdbMoveReport, S
         .map(|vdb| crate::portage_lock::PortageLockfile::acquire_new_lockfile(&vdb))
         .transpose()?;
     let map = repo_update_map(args.repos);
-    let in_map: Vec<&str> = map.iter().map(|(name, _)| name.as_str()).collect();
     let master = args
         .repos
         .iter()
         .find(|r| r.is_main)
         .map(|r| r.name.clone());
+    let matcher = RepoMatch::new(&map, master);
     let mut report = VdbMoveReport {
         moves: 0,
         slot_moves: 0,
@@ -57,10 +57,7 @@ pub(crate) fn apply_vdb_moves(args: VdbMovesArgs<'_>) -> Result<VdbMoveReport, S
         if repo_name == "DEFAULT" || cmds.is_empty() {
             continue;
         }
-        let repo_match = |repository: &str| {
-            repository == repo_name
-                || (Some(repo_name) == master.as_ref() && !in_map.contains(&repository))
-        };
+        let repo_match = |repository: &str| matcher.matches(repo_name, repository);
         for cmd in cmds {
             match cmd {
                 portage_repo::UpdateCmd::Move { old, new } => {
