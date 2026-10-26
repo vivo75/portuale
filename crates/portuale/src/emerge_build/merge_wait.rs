@@ -8,7 +8,7 @@
 //! already assumes. Small pure helpers live here; the dispatch loop in
 //! [`super::scheduler`] owns the queue.
 
-use super::entry_matches_any;
+use super::{entry_match_string, entry_matches_any};
 use crate::pretend::MergeWaitScope;
 use portage_repo::GraphEntry;
 use std::collections::{HashMap, HashSet};
@@ -38,7 +38,8 @@ pub(crate) const CORE_TOOLCHAIN: &[(&str, &str)] = &[
 pub(crate) fn features_hold_all_merges(features: &str) -> bool {
     features.split_whitespace().any(|t| t == "merge-wait")
 }
-/// is the resolved `@system` set (`system_packages`); empty without a
+/// The merge-wait indices: the resolved `@system` set (`system_packages`)
+/// plus, under `deep`, its transitive runtime dependencies. Empty without a
 /// resolved config, so every scope but `toolchain` then selects nothing.
 // Portage: _emerge/_find_deep_system_runtime_deps.py
 pub(crate) fn merge_wait_set(
@@ -66,14 +67,10 @@ pub(crate) fn merge_wait_set(
                 .map(|(i, _)| i)
                 .collect();
             if scope == MergeWaitScope::Deep {
-                let cp_to_idx: HashMap<(String, String), usize> = entries
-                    .iter()
-                    .enumerate()
-                    .map(|(i, e)| ((e.category.clone(), e.package.clone()), i))
-                    .collect();
+                let index = RuntimeIndex::build(entries);
                 let mut stack: Vec<usize> = set.iter().copied().collect();
                 while let Some(i) = stack.pop() {
-                    for d in runtime_children(entries, &cp_to_idx, i) {
+                    for d in runtime_children(&index, entries, i) {
                         if set.insert(d) {
                             stack.push(d);
                         }
@@ -85,45 +82,106 @@ pub(crate) fn merge_wait_set(
     }
 }
 
+/// Same-cp membership, each entry's resolved runtime targets and the
+/// entries naming each cp in `required_by`, built once per
+/// `merge_wait_set` call so the deep walk never rescans the list.
+// Portage: _find_deep_system_runtime_deps.py, child_nodes per package node
+struct RuntimeIndex<'a> {
+    members: HashMap<(&'a str, &'a str), Vec<usize>>,
+    forward: Vec<Vec<usize>>,
+    required_by: HashMap<(&'a str, &'a str), Vec<usize>>,
+}
+
+/// Whether `atom` selects entry `j`: undecidable (no candidate, unparsable
+/// atom) keeps the edge, like the merge-order digraph.
+fn edge_matches(candidate: &[Option<String>], atom: &str, j: usize) -> bool {
+    let Some(cand) = candidate[j].as_deref() else {
+        return true;
+    };
+    match portage_dep::match_from_list(atom, &[cand]) {
+        Some(m) => !m.is_empty(),
+        None => true,
+    }
+}
+
+impl<'a> RuntimeIndex<'a> {
+    fn build(entries: &'a [GraphEntry]) -> Self {
+        let mut members: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+        for (i, e) in entries.iter().enumerate() {
+            members
+                .entry((e.category.as_str(), e.package.as_str()))
+                .or_default()
+                .push(i);
+        }
+        let candidate: Vec<Option<String>> = entries.iter().map(entry_match_string).collect();
+        let mut forward: Vec<Vec<usize>> = vec![Vec::new(); entries.len()];
+        for (i, e) in entries.iter().enumerate() {
+            for dep in &e.deps {
+                if !(dep.priority.runtime || dep.priority.runtime_post) {
+                    continue;
+                }
+                let Some(peers) = members.get(&(dep.category.as_str(), dep.package.as_str()))
+                else {
+                    continue;
+                };
+                for &j in peers {
+                    if j != i && edge_matches(&candidate, &dep.atom, j) && !forward[i].contains(&j)
+                    {
+                        forward[i].push(j);
+                    }
+                }
+            }
+        }
+        let mut required_by: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+        for (d, e) in entries.iter().enumerate() {
+            for (c, p) in &e.required_by {
+                required_by
+                    .entry((c.as_str(), p.as_str()))
+                    .or_default()
+                    .push(d);
+            }
+        }
+        Self {
+            members,
+            forward,
+            required_by,
+        }
+    }
+}
+
 /// Indices `i` depends on through a runtime edge (`RDEPEND`/`IDEPEND` or
 /// `PDEPEND`); a `required_by`-only edge with no `deps` record counts as
 /// runtime, like the merge-order digraph's synthesized fallback.
 // Portage: _find_deep_system_runtime_deps.py, ignore_priority
-fn runtime_children(
-    entries: &[GraphEntry],
-    cp_to_idx: &HashMap<(String, String), usize>,
-    i: usize,
-) -> Vec<usize> {
-    let mut out = Vec::new();
-    for dep in &entries[i].deps {
-        let Some(&d) = cp_to_idx.get(&(dep.category.clone(), dep.package.clone())) else {
-            continue;
-        };
-        if d == i {
-            continue;
-        }
-        if dep.priority.runtime || dep.priority.runtime_post {
-            out.push(d);
-        }
-    }
+fn runtime_children(index: &RuntimeIndex, entries: &[GraphEntry], i: usize) -> Vec<usize> {
+    let mut out = index.forward[i].clone();
     // Fallback: `i` depends on `d` exactly when `i`'s cp sits in `d`'s
     // `required_by` (the same inversion the dispatch loop builds `deps`
     // from), and `i`'s own `deps` hold no record of it.
-    let i_cp = (entries[i].category.clone(), entries[i].package.clone());
-    for (d_idx, d) in entries.iter().enumerate() {
+    let cp = (entries[i].category.as_str(), entries[i].package.as_str());
+    for &d_idx in index.required_by.get(&cp).map_or(&[][..], Vec::as_slice) {
         if d_idx == i || out.contains(&d_idx) {
             continue;
         }
-        if cp_to_idx.get(&(d.category.clone(), d.package.clone())) != Some(&d_idx) {
+        let d = &entries[d_idx];
+        if entries[i]
+            .deps
+            .iter()
+            .any(|e| e.category == d.category && e.package == d.package)
+        {
             continue;
         }
-        if d.required_by.contains(&i_cp)
-            && !entries[i].deps.iter().any(|e| {
-                (e.category.clone(), e.package.clone()) == (d.category.clone(), d.package.clone())
-            })
-        {
-            out.push(d_idx);
+        // Entry-keyed: a same-cp sibling reaching `d` through its own forward
+        // edge owns this `required_by` link, so `i` must not claim it too.
+        let sibling_reaches = index.members.get(&cp).is_some_and(|peers| {
+            peers
+                .iter()
+                .any(|&p| p != i && index.forward[p].contains(&d_idx))
+        });
+        if sibling_reaches {
+            continue;
         }
+        out.push(d_idx);
     }
     out
 }

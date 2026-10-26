@@ -206,6 +206,36 @@ fn deep_scope_follows_pdepend_edges() {
     );
 }
 
+/// Portage `lib/_emerge/_find_deep_system_runtime_deps.py:73-81` walks each
+/// package node's own children, so two slots of one cp keep separate runtime
+/// closures: seeding only the childless slot must not pull the sibling's child
+/// in through the cp-level `required_by` fallback.
+#[test]
+fn deep_scope_keeps_two_slots_of_one_cp_apart() {
+    let mut slotted = wait_entry("dev-libs", "dup");
+    slotted.slot = Some("1".into());
+    slotted.deps = vec![runtime_edge("dev-libs", "child")];
+    let mut other = wait_entry("dev-libs", "dup");
+    other.slot = Some("2".into());
+    let mut child = wait_entry("dev-libs", "child");
+    child.required_by = vec![("dev-libs".into(), "dup".into())];
+    let entries = vec![slotted, other, child];
+    // Seeding only the childless slot leaves the child out.
+    let set = merge_wait_set(
+        &entries,
+        &["*dev-libs/dup:2".to_string()],
+        MergeWaitScope::Deep,
+    );
+    assert_eq!(set, HashSet::from([1]));
+    // Seeding only the slot with the runtime edge still reaches the child.
+    let set = merge_wait_set(
+        &entries,
+        &["*dev-libs/dup:1".to_string()],
+        MergeWaitScope::Deep,
+    );
+    assert_eq!(set, HashSet::from([0, 2]));
+}
+
 /// A two-cycle is cyclic; a chain and a lone self-edge are not.
 /// Portage: `len(component) > 1`.
 #[test]

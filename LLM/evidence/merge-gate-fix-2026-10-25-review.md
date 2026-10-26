@@ -58,3 +58,11 @@ global updates now run before every emerge on the target and running
 roots): runner rc 0; glibc-2.43-r4 and bash-5.3_p20 merged by both PMs;
 hard findings 0, UNEXPLAINED 0, payload diffs 0 (4005 paths per side),
 mtime-only diffs 1420. Verdict: PASSED.
+
+Run `l1-20261026T180952Z` (tree 5a2fedb7 + Task 17 working-tree change;
+the merge-wait deep walk now keys installed entries per slot): runner
+rc 0; glibc-2.43-r4 and bash-5.3_p20 merged by both PMs; hard findings
+0, UNEXPLAINED 0, payload diffs 0 (4005 paths per side), mtime-only
+diffs 1420. Verdict: PASSED. After the run the shared match-string
+helper and a reverse `required_by` index replaced two copies of the
+same logic; both are behaviour-neutral.

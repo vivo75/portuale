@@ -82,21 +82,28 @@ fn ebuild_path(candidate: &Candidate, category: &str, package: &str, version: &s
         .join(format!("{package}-{version}.ebuild"))
 }
 
+/// A merge-list entry's match string, `cat/pkg-version:slot/sub-slot`
+/// (no `::repo`), or `None` when it resolves to no version.
+pub(crate) fn entry_match_string(entry: &GraphEntry) -> Option<String> {
+    let version = entry_version(entry)?;
+    let slot = entry.slot.as_deref().unwrap_or("0");
+    let sub_slot = entry.sub_slot.as_deref().unwrap_or(slot);
+    // match-str-ok: merge-list entry (Option slot, no repo), not a Candidate
+    Some(format!(
+        "{}/{}-{version}:{slot}/{sub_slot}",
+        entry.category, entry.package
+    ))
+}
+
 /// Whether `entry`'s resolved cpv (+ slot) matches any of `atoms`.
 // Portage: InternalPackageSet.py, findAtomForPackage
 pub(crate) fn entry_matches_any(entry: &GraphEntry, atoms: &[String]) -> bool {
     if atoms.is_empty() {
         return false;
     }
-    let Some(version) = entry_version(entry) else {
+    let Some(cpv_slot) = entry_match_string(entry) else {
         return false;
     };
-    let slot = entry.slot.as_deref().unwrap_or("0");
-    let sub_slot = entry.sub_slot.as_deref().unwrap_or(slot);
-    let cpv_slot = format!(
-        "{}/{}-{version}:{slot}/{sub_slot}",
-        entry.category, entry.package
-    );
     atoms.iter().any(|atom| {
         portage_dep::match_from_list(atom, &[cpv_slot.as_str()]).is_some_and(|m| !m.is_empty())
     })
