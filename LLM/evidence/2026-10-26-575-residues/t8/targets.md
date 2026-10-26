@@ -29,10 +29,25 @@ drift, and only to Portage's count:
 ## L0 bed cells (baseline `l0-phase0.txt`, run `l0-20261026T222948Z`)
 
 No L0 cell is a firm target: the oracle did not trace the bed's perl heals.
-The three cells explained by `perl-544-stabilization-built-pin-residual`
-(`dev-lang_perl`, `dev-perl_XML-Parser`, `virtual_perl-ExtUtils-MakeMaker`)
-may move **only to `clean`** (Portage's own output on the bed); any other
-move of them, or any move of any other cell, is a stop condition. Open
-question for the re-review: whether `media-gfx_gimp`, `dev-db_mariadb` and
-`MULTI_deep-update-world`, which carry perl-544 lines among other
-divergences, should get the same "only toward Portage" allowance.
+Verdicts below are read from `l0-phase0.txt` (corrected 2026-10-26: the
+first version of this section took the bed-runner's summary, which called
+`dev-db_mariadb` unexplained).
+
+- **Explained only by `perl-544-stabilization-built-pin-residual`**:
+  `dev-lang_perl`, `dev-perl_XML-Parser`,
+  `virtual_perl-ExtUtils-MakeMaker` and `dev-db_mariadb`. Each of these
+  may move **only to `clean`** (Portage's own output on the bed).
+- **Unexplained cells that also carry findings from that entry**:
+  `dev-lang_ruby`, `dev-ruby_rake` and `kde-apps_kdecore-meta` (`order`),
+  and `media-gfx_gimp` (`order,totals`). There is also
+  `gnome-base_gnome-shell`, explained by `gnome-shell-cluster-a-abort` plus
+  two `perl-544-stabilization-version-selection-*` entries. **Owner ruling
+  2026-10-26:** a move of these cells is not a stop when the manager has
+  checked that it is an improvement: only findings from the perl-544
+  entries disappear or move to Portage's output, and every other finding
+  stays byte for byte the same (`l0-report.json`, by finding and entry
+  name). Any other move of them is a stop.
+- `MULTI_deep-update-world` (`unexplained:exit`) is not a target.
+
+Any other move, or a move of a listed cell to anything but the allowed
+outcome, is a stop condition.
