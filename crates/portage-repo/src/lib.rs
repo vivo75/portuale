@@ -31,6 +31,7 @@ mod installed;
 mod license;
 mod masked_deps;
 mod metadata_cache;
+mod paths;
 mod provenance;
 mod reinstall;
 mod repo_config;
@@ -50,18 +51,18 @@ mod visibility_use_flip;
 /// #571 omissions (`repo-p571` leaves `p571-hidden`/`p571-shared`
 /// unlisted), so gating changes nothing for existing tests — and tests
 /// that pin unlisted-category behaviour build their own gate from
-/// [`repo_categories`](crate::repo_categories) instead. Backing is
+/// [`Categories::load`](crate::Categories) instead. Backing is
 /// leaked: one tiny allocation per call site, freed at process exit.
 #[cfg(test)]
 pub(crate) fn test_gate(repos: &[crate::RepoConfig]) -> crate::CategoryGate<'static> {
-    crate::CategoryGate {
-        repos: Box::leak(Box::new(repos.to_vec())),
-        categories: Box::leak(Box::new(test_categories(repos))),
-        config_root: Box::leak(Box::new(std::path::PathBuf::from("/"))),
-        warned: Box::leak(Box::new(std::cell::RefCell::new(
-            std::collections::HashSet::new(),
-        ))),
-    }
+    crate::CategoryGate::new(
+        Box::leak(Box::new(repos.to_vec())),
+        Box::leak(Box::new(crate::Categories {
+            set: test_categories(repos),
+            warned: std::cell::RefCell::new(std::collections::HashSet::new()),
+        })),
+        Box::leak(Box::new(std::path::PathBuf::from("/"))),
+    )
 }
 
 /// The allow-list a [`test_gate`] gates on, as an owned set: the union of
@@ -127,6 +128,7 @@ pub use installed::*;
 pub(crate) use license::*;
 pub use masked_deps::*;
 pub use metadata_cache::*;
+pub use paths::*;
 pub use provenance::*;
 pub use reinstall::*;
 pub use repo_config::*;

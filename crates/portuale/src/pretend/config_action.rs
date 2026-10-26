@@ -200,7 +200,7 @@ pub(crate) fn misspell_suggestion_block(
     // other than the running root), so cut at the closing quote.
     let atom_str = rest.split_once('"')?.0;
     if !atom_str.contains('/') && !atom_str.is_empty() {
-        return bare_name_suggestion_block(atom_str, gate.repos, gate.categories, root, dbs);
+        return bare_name_suggestion_block(atom_str, gate.repos, &gate.categories.set, root, dbs);
     }
     let atom = parse_atom(atom_str)?;
     let binary = dbs.pkgdir.map(|pkgdir| {
@@ -228,7 +228,7 @@ pub(crate) fn misspell_suggestion_block(
         .map(|p| format!("{}/{}", p.category, p.package))
         .chain(
             dbs.ebuild
-                .then(|| portage_repo::all_cp(gate.repos, gate.categories))
+                .then(|| portage_repo::all_cp(gate.repos, &gate.categories.set))
                 .into_iter()
                 .flatten(),
         )

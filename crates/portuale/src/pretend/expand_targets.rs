@@ -24,6 +24,8 @@ pub(crate) struct ExpandTargetsArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) repos: &'a [RepoConfig],
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
 }
 
 /// Expanding the command-line arguments (sets, package moves, bare names) into the atoms to resolve.
@@ -35,6 +37,7 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
         root,
         config_root,
         repos,
+        categories,
     } = args;
     let &EmergeOpts {
         autounmask_continue,
@@ -213,18 +216,11 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
     // tree: exactly one match is used silently; zero or several are fatal
     // (exit 1).
     // Portage: lib/portage/dbapi, dep_expand
-    let categories = portage_repo::repo_categories(repos, config_root, true);
-    let warned_categories = std::cell::RefCell::new(std::collections::HashSet::new());
-    let gate = portage_repo::CategoryGate {
-        repos,
-        categories: &categories,
-        config_root,
-        warned: &warned_categories,
-    };
+    let gate = portage_repo::CategoryGate::new(repos, categories, config_root);
     {
         let mut all_cp: Option<Vec<String>> = None;
         for atom in &mut expanded_atoms {
-            let cps = all_cp.get_or_insert_with(|| portage_repo::all_cp(repos, &categories));
+            let cps = all_cp.get_or_insert_with(|| portage_repo::all_cp(repos, &categories.set));
             match dep_expand_token(atom, cps) {
                 DepExpand::Unchanged => {}
                 DepExpand::Qualified(q) => *atom = q,
@@ -287,7 +283,7 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
     // Portage: _emerge/depgraph.py, _select_files (`update_if_installed`)
     if opts.update_if_installed {
         let installed = portage_repo::all_installed_packages(root);
-        let cps: HashSet<String> = portage_repo::all_cp(repos, &categories)
+        let cps: HashSet<String> = portage_repo::all_cp(repos, &categories.set)
             .into_iter()
             .collect();
         let keep: Vec<bool> = expanded_atoms

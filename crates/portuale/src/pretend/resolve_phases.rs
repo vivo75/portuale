@@ -87,6 +87,8 @@ pub(crate) struct RunResolvePhasesArgs<'a> {
     pub(crate) argument_sets: &'a HashMap<String, String>,
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) color: &'a Colorizer,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: std::rc::Rc<portage_repo::Categories>,
 }
 
 /// The values [`resolve_once`] reads from its caller.
@@ -103,6 +105,8 @@ pub(crate) struct ResolveOnceArgs<'a> {
     pub(crate) locked: &'a [String],
     pub(crate) with_seeds: bool,
     pub(crate) reuse: &'a HashMap<(String, String), portage_repo::PretendOutcome>,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: std::rc::Rc<portage_repo::Categories>,
 }
 
 /// One resolver run: the request built from the plan and the options.
@@ -120,6 +124,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         locked,
         with_seeds,
         reuse,
+        categories,
     } = args;
     let &ResolvePlan {
         ref complete_seed_atoms,
@@ -253,7 +258,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         set_args: set_args.clone(),
         argument_sets: argument_sets.clone(),
         solver,
-        local_config: true,
+        categories: Some(categories),
     };
     let _span = portage_util::profile::span(format!("resolve_once complete={complete}"));
     active_resolver_for(solver).resolve(&req)
@@ -272,6 +277,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         argument_sets,
         repos,
         color,
+        categories,
     } = args;
     let &ResolvePlan {
         ref root_deps_running_root,
@@ -307,6 +313,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
                 locked,
                 with_seeds,
                 reuse,
+                categories: std::rc::Rc::clone(&categories),
             })
         };
     let handle = |r: Result<portage_repo::GraphResult, crate::error::Error>| match r {
@@ -364,16 +371,9 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
                     &[]
                 },
             };
-            let categories = portage_repo::repo_categories(repos, config_root, true);
-            let warned = std::cell::RefCell::new(std::collections::HashSet::new());
             if let Some(extra) = misspell_suggestion_block(
                 &msg,
-                portage_repo::CategoryGate {
-                    repos,
-                    categories: &categories,
-                    config_root,
-                    warned: &warned,
-                },
+                portage_repo::CategoryGate::new(repos, &categories, config_root),
                 root,
                 misspell_suggestions,
                 dbs,
@@ -471,14 +471,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     let auto_enable = !nodeps && {
         // The allow-list for the complete-graph decision: entries are
         // merge-bound (listed), so this gate never fires its `!!!`.
-        let categories = portage_repo::repo_categories(repos, config_root, true);
-        let warned = std::cell::RefCell::new(std::collections::HashSet::new());
-        let gate = portage_repo::CategoryGate {
-            repos,
-            categories: &categories,
-            config_root,
-            warned: &warned,
-        };
+        let gate = portage_repo::CategoryGate::new(repos, &categories, config_root);
         portage_repo::complete_graph_auto_enable(portage_repo::CompleteGraphAutoEnableArgs {
             entries: &result.entries,
             if_new_use: complete_if_new_use,
@@ -542,15 +535,8 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     if let (Some(running), Some(running_cfg)) =
         (root_deps_running_root.as_deref(), running_config.as_ref())
     {
-        // Display-time allow-list (built once per report, never per lookup).
-        let categories = portage_repo::repo_categories(repos, config_root, true);
-        let warned = std::cell::RefCell::new(std::collections::HashSet::new());
-        let gate = portage_repo::CategoryGate {
-            repos,
-            categories: &categories,
-            config_root,
-            warned: &warned,
-        };
+        // Display-time gate over the run-shared allow-list.
+        let gate = portage_repo::CategoryGate::new(repos, &categories, config_root);
         portage_repo::repaint_running_root_entry_displays(
             gate,
             &mut result.entries,

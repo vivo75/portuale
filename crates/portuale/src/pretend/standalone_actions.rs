@@ -13,6 +13,8 @@ pub(crate) struct DispatchStandaloneActionsArgs<'a> {
     pub(crate) config_root: &'a Path,
     pub(crate) color: &'a Colorizer,
     pub(crate) repos: &'a [RepoConfig],
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
 }
 
 /// The standalone actions: --resume, --config, --search, --check-news, --info, --clean, --rage-clean, --unmerge, --depclean, --prune.
@@ -26,6 +28,7 @@ pub(crate) fn dispatch_standalone_actions(
         config_root,
         color,
         repos,
+        categories,
     } = args;
     let &EmergeOpts {
         resume,
@@ -111,6 +114,7 @@ pub(crate) fn dispatch_standalone_actions(
         check_news,
         config_root,
         config,
+        categories,
         info_action,
         usepkg,
         usepkgonly,
@@ -149,6 +153,8 @@ pub(crate) struct DispatchQueriesArgs<'a> {
     pub(crate) check_news: bool,
     pub(crate) config_root: &'a Path,
     pub(crate) config: &'a mut Config,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
     pub(crate) info_action: bool,
     pub(crate) usepkg: bool,
     pub(crate) usepkgonly: bool,
@@ -187,6 +193,7 @@ pub(crate) fn dispatch_queries(args: DispatchQueriesArgs<'_>) -> Option<ExitCode
         check_news,
         config_root,
         config,
+        categories,
         info_action,
         usepkg,
         usepkgonly,
@@ -224,7 +231,7 @@ pub(crate) fn dispatch_queries(args: DispatchQueriesArgs<'_>) -> Option<ExitCode
             terms: atom_args,
             repos,
             root,
-            config_root,
+            categories,
             searchdesc,
             verbose: !quiet,
             fuzzy: fuzzy_search,
@@ -279,6 +286,7 @@ pub(crate) fn dispatch_queries(args: DispatchQueriesArgs<'_>) -> Option<ExitCode
             misspell_suggestions,
             usepkg: info_usepkg,
             config_root,
+            categories,
             shell,
             debug,
             color,

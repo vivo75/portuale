@@ -63,7 +63,8 @@ pub(crate) struct RunSearchArgs<'a> {
     pub(crate) terms: &'a [&'a str],
     pub(crate) repos: &'a [portage_repo::RepoConfig],
     pub(crate) root: &'a Path,
-    pub(crate) config_root: &'a Path,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
     pub(crate) searchdesc: bool,
     pub(crate) verbose: bool,
     pub(crate) fuzzy: bool,
@@ -85,7 +86,7 @@ pub(crate) fn run_search(args: RunSearchArgs<'_>) -> ExitCode {
         terms,
         repos,
         root,
-        config_root,
+        categories,
         searchdesc,
         verbose,
         fuzzy,
@@ -98,10 +99,7 @@ pub(crate) fn run_search(args: RunSearchArgs<'_>) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    let all_cp = portage_repo::all_cp(
-        repos,
-        &portage_repo::repo_categories(repos, config_root, true),
-    );
+    let all_cp = portage_repo::all_cp(repos, &categories.set);
     let set_names = defined_set_names(&config_root_from_env());
 
     for term in terms {

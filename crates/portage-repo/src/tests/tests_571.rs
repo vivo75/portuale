@@ -87,9 +87,9 @@ fn mini_571() -> (std::path::PathBuf, Vec<RepoConfig>, std::path::PathBuf) {
 #[test]
 fn all_cp_lists_only_listed_categories() {
     let (_base, repos, cfg) = mini_571();
-    let categories = repo_categories(&repos, &cfg, true);
+    let categories = Categories::load(&repos, &cfg);
     assert_eq!(
-        all_cp(&repos, &categories),
+        all_cp(&repos, &categories.set),
         vec![
             "listed/listed".to_string(),
             "listed/need".to_string(),
@@ -106,33 +106,123 @@ fn all_cp_lists_only_listed_categories() {
 #[test]
 fn gate_returns_empty_for_unlisted_categories() {
     let (_base, repos, cfg) = mini_571();
-    let categories = repo_categories(&repos, &cfg, true);
-    let warned = std::cell::RefCell::new(HashSet::new());
-    let gate = CategoryGate {
-        repos: &repos,
-        categories: &categories,
-        config_root: &cfg,
-        warned: &warned,
-    };
+    let categories = Categories::load(&repos, &cfg);
+    let gate = CategoryGate::new(&repos, &categories, &cfg);
     assert_eq!(gate.repo_candidates("shared", "shared").unwrap().len(), 1);
-    assert!(warned.borrow().is_empty());
+    assert!(categories.warned.borrow().is_empty());
     assert!(gate.repo_candidates("hidden", "hidden").unwrap().is_empty());
     assert_eq!(
-        warned.borrow().clone(),
+        categories.warned.borrow().clone(),
         HashSet::from([("hidden".to_string(), "hidden".to_string())])
     );
     // Second lookup of the same cp: still empty (the record suppresses
     // the repeat notice).
     assert!(gate.repo_candidates("hidden", "hidden").unwrap().is_empty());
-    assert_eq!(warned.borrow().len(), 1);
+    assert_eq!(categories.warned.borrow().len(), 1);
     // No ebuilds on disk: empty and silent.
     assert!(
         gate.repo_candidates("hidden", "nosuchpkg")
             .unwrap()
             .is_empty()
     );
-    assert_eq!(warned.borrow().len(), 1);
+    assert_eq!(categories.warned.borrow().len(), 1);
     let _ = std::fs::remove_dir_all(&_base);
+}
+
+/// Portage normalises `PORTAGE_CONFIGROOT` to exactly one trailing slash
+/// before the unlisted-category line renders `%setc/portage/categories`
+/// from it: `/` prints `/etc/portage/categories`, a root with a trailing
+/// slash prints unchanged. Portage: LocationsManager.py:79-83,
+/// porttree.py:1216-1225.
+#[test]
+fn unlisted_category_line_renders_config_root_with_one_trailing_slash() {
+    let (_base, repos, cfg) = mini_571();
+    let categories = Categories::load(&repos, &cfg);
+    for (root, want) in [
+        ("/", "/etc/portage/categories"),
+        ("/tmp/cfg", "/tmp/cfg/etc/portage/categories"),
+        ("/tmp/cfg/", "/tmp/cfg/etc/portage/categories"),
+    ] {
+        let gate = CategoryGate::new(&repos, &categories, std::path::Path::new(root));
+        assert_eq!(
+            gate.unlisted_category_line("hidden", "hidden"),
+            format!("\n!!! 'hidden/hidden' has a category that is not listed in {want}")
+        );
+    }
+    std::fs::remove_dir_all(&_base).unwrap();
+}
+
+/// Two walks sharing one `Categories` fire the `!!!` once: the second
+/// walk's lookup finds the cp in the shared once-per-cp record and stays
+/// silent. Portage: the frozen `xcache["cp-list"]` memoises `cp_list` per
+/// process (porttree.py:1138-1151).
+#[test]
+fn two_walks_sharing_categories_warn_once() {
+    let (_base, repos, cfg) = mini_571();
+    let categories = Categories::load(&repos, &cfg);
+    let first = CategoryGate::new(&repos, &categories, &cfg);
+    let second = CategoryGate::new(&repos, &categories, &cfg);
+    assert!(
+        first
+            .repo_candidates("hidden", "hidden")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(categories.warned.borrow().len(), 1);
+    assert!(
+        second
+            .repo_candidates("hidden", "hidden")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(categories.warned.borrow().len(), 1);
+    std::fs::remove_dir_all(&_base).unwrap();
+}
+
+/// End to end at the resolver level: a second walk built from a cloned
+/// request shares the first walk's record, so the `!!!` fires once across
+/// both walks. Portage: the frozen `xcache["cp-list"]` memoises `cp_list`
+/// per process (porttree.py:1138-1151).
+#[test]
+fn cloned_request_shares_the_warning_record_across_walks() {
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let new_req = || {
+        ResolveRequest::new(
+            &root,
+            &root,
+            &["p571-hidden/p571-hidden".to_string()],
+            &config,
+            &root.join("distfiles"),
+        )
+    };
+    let req = new_req();
+    let ctx1 = ResolveCtx::new(&req).expect("first walk builds");
+    let mut req2 = new_req();
+    req2.categories = Some(std::rc::Rc::clone(&ctx1.categories));
+    let ctx2 = ResolveCtx::new(&req2).expect("second walk builds");
+    assert!(
+        ctx1.gate()
+            .repo_candidates("p571-hidden", "p571-hidden")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        ctx2.gate()
+            .repo_candidates("p571-hidden", "p571-hidden")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(ctx1.categories.warned.borrow().len(), 1);
 }
 
 /// End to end over the shared fixtures (whose committed

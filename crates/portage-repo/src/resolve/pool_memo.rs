@@ -203,12 +203,14 @@ mod tests {
             extra_constraints: extra,
             usepkg_exclude: &[],
             usepkg_include: &[],
-            gate: CategoryGate {
-                repos: Box::leak(Box::new(Vec::<RepoConfig>::new())),
-                categories: Box::leak(Box::new(BTreeSet::new())),
-                config_root: Path::new("/"),
-                warned: Box::leak(Box::new(RefCell::new(HashSet::new()))),
-            },
+            gate: CategoryGate::new(
+                Box::leak(Box::new(Vec::<RepoConfig>::new())),
+                Box::leak(Box::new(Categories {
+                    set: BTreeSet::new(),
+                    warned: RefCell::new(HashSet::new()),
+                })),
+                Path::new("/"),
+            ),
         }
     }
 

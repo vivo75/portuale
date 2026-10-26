@@ -2,10 +2,14 @@
 The repo-traversal category allow-list (`settings.categories`).
 
 ## fn repo_categories
-- Portage `config.py:948-960` builds `settings.categories` as the incremental union of one `categories` file per location in `LocationsManager.profile_and_user_locations`, filtered by `dbapi._category_re`. Those locations are `[PORTDIR/profiles]` + each overlay's `profiles/` dir + the user config dir (`LocationsManager.py:420-440`, appended only when `local_config` is on). The selected profile chain is NOT consulted: a `categories` file inside the chosen profile dir is never read for this set (relevant to Task 12, which consumes this function for the broader allow-list).
+- Portage `config.py:948-960` builds `settings.categories` as the incremental union of one `categories` file per location in `LocationsManager.profile_and_user_locations`, filtered by `dbapi._category_re`. Those locations are `[PORTDIR/profiles]` + each overlay's `profiles/` dir + the user config dir (`LocationsManager.py:420-440`). The selected profile chain is NOT consulted: a `categories` file inside the chosen profile dir is never read for this set (relevant to Task 12, which consumes this function for the broader allow-list).
 - Source order here mirrors Portage: the main repo (`is_main`, i.e. Portage's `PORTDIR`) first, then the other repos in `find_repos` order, then `<config_root>/etc/portage/categories` last so user `-` removals win. Portage orders overlays by `PORTDIR_OVERLAY`; portuale keeps `find_repos`' `(priority, name)` order instead — only observable with cross-repo `-` removals, which no shipped repo uses.
-- The `local_config=False` exception is modeled by the `local_config` parameter: with it off the user file is skipped (Portage drops the user dir from `profile_and_user_locations` via `LocationsManager._user_config`). Portage builds such configs only for repoman/emirrordist-style runs (`dep_check.py:72`, `_emirrordist/main.py:254,263`); the depgraph's own per-root settings share the target config's flag, so every product path passes `true` today and `false` is unit-tested only.
+- The user file always stacks: the old `local_config` parameter (which skipped it, modelling Portage's `local_config=False` repoman/emirrordist-style configs) is removed — every product path passed `true`, so the flag carried no behaviour (decided YAGNI, #571 follow-up).
 - Each file is read with `grabfile` semantics (`util/__init__.py:171-200`: whitespace-split tokens, `#` cuts the line, missing file contributes nothing); stacking is `stack_lists(incremental=1)` (`-*` resets, `-x` removes, unmatched removals silent); the name filter is `dbapi._category_re` (`^\w[-.+\w]*$`, ASCII — leading digits allowed, leading dots rejected).
+
+## struct Categories
+- The run-shared `settings.categories`: the resolved `set` plus the once-per-cp `!!!` record (`warned`). Built once per run (`Categories::load`, called by `pretend::run`) and shared by every gate — resolve walks (via `ResolveRequest::categories`, cloned with the request across the best-run re-pass) and display gates alike — so a backtracking run prints the unlisted-category notice once. Portage memoises `cp_list` once frozen (`xcache["cp-list"]`, `porttree.py:1138-1151`). Callers without a run (unit tests, other binaries) get a fresh one per walk from `ResolveCtx::new`/`LazyRepo::build`.
+- `CategoryGate::new` intentionally takes the repo list separately: `Categories` owns no repos, so one set can gate any repo slice (tests reuse the miniature pair).
 
 ## fn read_categories_file
 - `grabfile` without `remember_source_file`: one file's whitespace-separated tokens with inline-`#` comments cut. A missing/unreadable file yields nothing (Portage `grablines` returns `[]` on `IOError`).
@@ -25,5 +29,5 @@ The repo-traversal category allow-list (`settings.categories`).
 ## tests: repo_categories_tolerates_missing_files_and_filters_names
 - Absent repo and user files yield the empty set (a categories-less repo contributes nothing — the shape every synthetic `--regen` test repo had before gaining its file). Name filter pins: leading digits kept, leading dots dropped, trailing comments cut.
 
-## tests: repo_categories_skips_the_user_file_without_local_config
-- The user file contributes under `true` and is skipped under `false`; the repo files stack either way.
+## tests: repo_categories_stacks_the_user_file
+- The user file's entries join the repo files' union.

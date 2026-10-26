@@ -399,19 +399,6 @@ pub(crate) fn jobs_line(args: JobsLineArgs<'_>) -> String {
     format!(">>> {styled}")
 }
 
-/// Portage's normalised ROOT for display: exactly one trailing slash
-/// (`/` stays `/`). Every non-`/` ROOT is normalised this way at config
-/// load, so `pkg.root`/`settings['ROOT']` always carry it.
-// Portage: _config/LocationsManager.py, set_root_override
-pub(crate) fn root_with_trailing_slash(root: &Path) -> String {
-    let shown = root.display().to_string();
-    if shown.ends_with('/') {
-        shown
-    } else {
-        format!("{shown}/")
-    }
-}
-
 /// `{Emerging|Emerging binary} ({cur} of {max}) {cpv}::{repo}`, plus
 /// ` for {root}/` when `ROOT != "/"`. The counters wear
 /// `MERGE_LIST_PROGRESS`, the `cpv::repo` wears `PKG_MERGE` (source) or
@@ -498,7 +485,10 @@ fn progress_line(args: ProgressLine<'_>) -> String {
         ),
     );
     if root.as_os_str() != "/" {
-        line.push_str(&format!(" for {}", root_with_trailing_slash(root)));
+        line.push_str(&format!(
+            " for {}",
+            portage_repo::root_with_trailing_slash(root)
+        ));
     }
     line
 }
@@ -535,7 +525,10 @@ pub(crate) fn installing_line(
         ),
     );
     if root.as_os_str() != "/" {
-        line.push_str(&format!(" to {}", root_with_trailing_slash(root)));
+        line.push_str(&format!(
+            " to {}",
+            portage_repo::root_with_trailing_slash(root)
+        ));
     }
     line
 }
@@ -571,7 +564,10 @@ pub(crate) fn completed_line(
         ),
     );
     if root.as_os_str() != "/" {
-        line.push_str(&format!(" to {}", root_with_trailing_slash(root)));
+        line.push_str(&format!(
+            " to {}",
+            portage_repo::root_with_trailing_slash(root)
+        ));
     }
     line
 }

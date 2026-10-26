@@ -49,8 +49,8 @@ use super::{
     installed_dep_string, installed_pkg_iuse_and_use, is_visible, live_metadata_for_installed,
     masked_candidates_for_atom, masked_dep_chain, pkg_use_display_for, read_vdb_flag_set,
     read_vdb_string, reinstall_flags_for_use_change, render_required_use_block, repo_aux_metadata,
-    repo_categories, required_use_dep_chain, split_slot, suggested_parent_use_candidate,
-    suggested_use_flip, use_unsat_candidates_for_atom,
+    required_use_dep_chain, split_slot, suggested_parent_use_candidate, suggested_use_flip,
+    use_unsat_candidates_for_atom,
 };
 use crate::CategoryGate;
 
@@ -131,14 +131,13 @@ struct LazyRepo {
     root: std::path::PathBuf,
     dynamic_deps: bool,
     ignore_built_slot_operator_deps: bool,
-    /// Portage's `settings.categories` for this resolve (built once in
+    /// Portage's `settings.categories` for this resolve, shared with the
+    /// default walk when the request carries the run's set (built once in
     /// [`LazyRepo::build`]): every ebuild lookup below gates on it, like
     /// the default walk's [`CategoryGate`](crate::CategoryGate).
-    categories: BTreeSet<String>,
+    categories: std::rc::Rc<super::Categories>,
     /// The config root the unlisted-category `!!!` line's path renders from.
     config_root: std::path::PathBuf,
-    /// `(category, package)` pairs the `!!!` already fired for this resolve.
-    warned: RefCell<HashSet<(String, String)>>,
     /// The closure: every CPN the solver may see (`all_packages`).
     closure: HashSet<String>,
     /// The expanded cone inside it: seeds plus everything reached by expanding
@@ -168,7 +167,10 @@ impl LazyRepo {
         shallow: &[String],
         seeds_first: bool,
     ) -> Result<Self, super::Error> {
-        let categories = repo_categories(&repos, &req.config_root, req.local_config);
+        let categories = req
+            .categories
+            .clone()
+            .unwrap_or_else(|| std::rc::Rc::new(super::Categories::load(&repos, &req.config_root)));
         let mut repo = Self {
             repos,
             config: req.config.clone(),
@@ -177,7 +179,6 @@ impl LazyRepo {
             ignore_built_slot_operator_deps: req.ignore_built_slot_operator_deps,
             categories,
             config_root: req.config_root.clone(),
-            warned: RefCell::new(HashSet::new()),
             closure: HashSet::new(),
             expanded: HashSet::new(),
             loaded: RefCell::new(HashMap::new()),
@@ -234,7 +235,7 @@ impl LazyRepo {
                             referenced_cpns(&parsed, &mut refs);
                             for dep_cp in refs {
                                 if !repo.closure.contains(&dep_cp)
-                                    && cp_exists(&repo.repos, &repo.categories, &dep_cp)
+                                    && cp_exists(&repo.repos, &repo.categories.set, &dep_cp)
                                 {
                                     queue.push((dep_cp, true));
                                 }
@@ -253,7 +254,7 @@ impl LazyRepo {
             }
             for dep_cp in refs {
                 if !repo.closure.contains(&dep_cp)
-                    && cp_exists(&repo.repos, &repo.categories, &dep_cp)
+                    && cp_exists(&repo.repos, &repo.categories.set, &dep_cp)
                 {
                     queue.push((dep_cp, true));
                 }
@@ -264,12 +265,7 @@ impl LazyRepo {
 
     /// Read + parse every version of one `cat/pkg` (no USE), memoized.
     fn gate(&self) -> CategoryGate<'_> {
-        CategoryGate {
-            repos: &self.repos,
-            categories: &self.categories,
-            config_root: &self.config_root,
-            warned: &self.warned,
-        }
+        CategoryGate::new(&self.repos, &self.categories, &self.config_root)
     }
 
     /// Read + parse every version of one `cat/pkg` (no USE), memoized.
@@ -1706,7 +1702,7 @@ fn deep_bounded_depths(
                 continue;
             }
             if portage_solver::Cpn::parse(&dep_cp).is_err()
-                || !cp_exists(&lazy.repos, &lazy.categories, &dep_cp)
+                || !cp_exists(&lazy.repos, &lazy.categories.set, &dep_cp)
             {
                 continue;
             }
@@ -5121,7 +5117,7 @@ mod tests {
             complete: false,
             complete_reuse: HashMap::new(),
             set_args: std::collections::HashSet::new(),
-            local_config: true,
+            categories: None,
             solver: SolverKind::Portage,
         }
     }

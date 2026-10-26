@@ -301,6 +301,8 @@ pub(crate) struct SlotConflictNeedRebuildArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) installed: &'a std::collections::HashSet<(String, String, String)>,
     pub(crate) config_root: &'a Path,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
 }
 
 /// Portage's `need_rebuild` scan for one shown parent in a `slot` group: when
@@ -320,6 +322,7 @@ pub(crate) fn slot_conflict_need_rebuild(args: SlotConflictNeedRebuildArgs<'_>) 
         config,
         installed,
         config_root,
+        categories,
     } = args;
     if atom.slot_operator != Some(SlotOperator::Equals) || atom.sub_slot.is_none() {
         return None;
@@ -351,14 +354,7 @@ pub(crate) fn slot_conflict_need_rebuild(args: SlotConflictNeedRebuildArgs<'_>) 
     if usepkgonly {
         return None;
     }
-    let categories = portage_repo::repo_categories(repos, config_root, true);
-    let warned = std::cell::RefCell::new(std::collections::HashSet::new());
-    let gate = portage_repo::CategoryGate {
-        repos,
-        categories: &categories,
-        config_root,
-        warned: &warned,
-    };
+    let gate = portage_repo::CategoryGate::new(repos, categories, config_root);
     if !ebuild_visible_at(gate, &ccat, &cpkg, &cver, config) {
         return Some("ebuild is masked or unavailable".to_string());
     }

@@ -1,7 +1,7 @@
 //! `--unmerge`: listing and removing installed packages.
 
-use crate::emerge_build::root_with_trailing_slash;
 use crate::pretend::*;
+use portage_repo::root_with_trailing_slash;
 
 /// The "still listed in the following package sets" check for one selected
 /// `category/package-version`: names of the user-editable sets that still

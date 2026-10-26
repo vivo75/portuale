@@ -291,6 +291,12 @@ pub fn run(args: &[String]) -> ExitCode {
         })
     };
 
+    // Portage's `settings.categories`, built once for the whole run and
+    // shared by every lookup below (expand, resolve walks, display): one
+    // allow-list, one unlisted-category `!!!` record.
+    // Portage: dbapi/porttree.py, cp_list (the frozen `xcache`)
+    let categories = std::rc::Rc::new(portage_repo::Categories::load(&repos, &config_root));
+
     // Colour gate, resolved once so every action path shares one `Colorizer`.
     // Portage: _emerge/actions.py, adjust_configs
     let color = Colorizer::new(color::resolve_havecolor(opts.color_opt));
@@ -306,6 +312,7 @@ pub fn run(args: &[String]) -> ExitCode {
         config_root: &config_root,
         color: &color,
         repos: &repos,
+        categories: &categories,
     }) {
         return code;
     }
@@ -323,6 +330,7 @@ pub fn run(args: &[String]) -> ExitCode {
         root: &root,
         config_root: &config_root,
         repos: &repos,
+        categories: &categories,
     }) {
         Ok(out) => out,
         Err(code) => return code,
@@ -354,6 +362,7 @@ pub fn run(args: &[String]) -> ExitCode {
         argument_sets: &argument_sets,
         repos: &repos,
         color: &color,
+        categories: std::rc::Rc::clone(&categories),
     }) {
         Ok(out) => out,
         Err(code) => return code,
@@ -490,6 +499,7 @@ pub fn run(args: &[String]) -> ExitCode {
         columnwidth,
         display_list_suppressed,
         config_root: &config_root,
+        categories: &categories,
     });
 
     finish_run(FinishRunArgs {
@@ -509,6 +519,7 @@ pub fn run(args: &[String]) -> ExitCode {
         selected_set_args: &selected_set_args,
         system_atoms,
         updates_force,
+        categories: &categories,
     })
 }
 
@@ -531,6 +542,8 @@ pub(crate) struct FinishRunArgs<'a> {
     pub(crate) system_atoms: &'a Vec<String>,
     /// This run's applied-updates force (target root only).
     pub(crate) updates_force: bool,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
 }
 
 /// After the report: the skipped-update notices, the failure gates and the merge.
@@ -552,23 +565,16 @@ pub(crate) fn finish_run(args: FinishRunArgs<'_>) -> ExitCode {
         selected_set_args,
         system_atoms,
         updates_force,
+        categories,
     } = args;
-    // Display-time allow-list for the skipped-updates report (built once
-    // per report, never per lookup; surviving entries are listed, so the
-    // gate passes everything through).
-    let skipped_categories = portage_repo::repo_categories(repos, config_root, true);
-    let skipped_warned = std::cell::RefCell::new(std::collections::HashSet::new());
+    // Display-time gate over the run-shared allow-list (surviving entries
+    // are listed, so the gate passes everything through).
     show_skipped_updates(
         plan,
         opts,
         result,
         root,
-        portage_repo::CategoryGate {
-            repos,
-            categories: &skipped_categories,
-            config_root,
-            warned: &skipped_warned,
-        },
+        portage_repo::CategoryGate::new(repos, categories, config_root),
     );
 
     show_skipped_missing_deps(opts.quiet, opts.debug, result, &color);
@@ -675,6 +681,8 @@ pub(crate) struct ShowResolutionReportArgs<'a> {
     pub(crate) columnwidth: i64,
     pub(crate) display_list_suppressed: bool,
     pub(crate) config_root: &'a Path,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
 }
 
 /// The resolution report: merge list, summary, cycle re-display, conflicts.
@@ -698,6 +706,7 @@ pub(crate) fn show_resolution_report(args: ShowResolutionReportArgs<'_>) {
         columnwidth,
         display_list_suppressed,
         config_root,
+        categories,
     } = args;
     // Blocker lines collect while walking and print as one group afterwards.
     let mut blocker_lines: Vec<String> = Vec::new();
@@ -823,6 +832,7 @@ pub(crate) fn show_resolution_report(args: ShowResolutionReportArgs<'_>) {
         useoldpkg_atoms_render: &opts.useoldpkg_atoms,
         color: &color,
         config_root,
+        categories,
     });
     show_deferred_unsat(ShowDeferredUnsatArgs {
         plan,

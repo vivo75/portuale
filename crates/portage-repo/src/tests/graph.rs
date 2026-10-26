@@ -4423,7 +4423,7 @@ fn exact_version_update_keeps_arg_pinned_provider() {
             complete: false,
             complete_reuse: HashMap::new(),
             set_args: std::collections::HashSet::new(),
-            local_config: true,
+            categories: None,
             solver: SolverKind::Portage,
         };
         active_resolver()

@@ -17,7 +17,7 @@ Alternate `--solver=` backends: PubGrub and resolvo over the same repo facts.
 - Blockers included.
 
 ## struct LazyRepo
-- `Clone` shares nothing but copies the memoized maps (cheap: the closure is fully loaded at `build` time): the provider takes one copy while the `Plan -> GraphResult` mapping keeps the other, so USE computed during the solve stays cached provider-side and only the selected versions re-resolve mapping-side.
+- `Clone` shares nothing but copies the memoized maps (cheap: the closure is fully loaded at `build` time): the provider takes one copy while the `Plan -> GraphResult` mapping keeps the other, so USE computed during the solve stays cached provider-side and only the selected versions re-resolve mapping-side. The `Categories` handle is `Rc`-shared, so clones (and the default walk's re-pass) keep one warning record.
 
 ## impl LazyRepo::build
 - Installed CPNs load for favored-version registration and upgrade comparison, but their dep cones are not expanded; nothing explores them unless the target cone reaches them, in which case the target expansion loads them anyway. Loads are md5 read + parse, no USE, per visited `cat/pkg`.

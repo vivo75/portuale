@@ -391,6 +391,8 @@ pub(crate) struct RunInfoArgs<'a> {
     pub(crate) misspell_suggestions: bool,
     pub(crate) usepkg: bool,
     pub(crate) config_root: &'a Path,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
     pub(crate) color: &'a Colorizer,
@@ -405,6 +407,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
         misspell_suggestions,
         usepkg,
         config_root,
+        categories,
         shell,
         debug,
         color,
@@ -416,14 +419,7 @@ pub(crate) fn run_info(args: RunInfoArgs<'_>) -> ExitCode {
     // A target with no ebuild anywhere and nothing installed is fatal (exit 1),
     // printed before the config block.
     // Portage: _emerge/actions.py, action_info
-    let categories = portage_repo::repo_categories(repos, config_root, true);
-    let warned = std::cell::RefCell::new(std::collections::HashSet::new());
-    let gate = portage_repo::CategoryGate {
-        repos,
-        categories: &categories,
-        config_root,
-        warned: &warned,
-    };
+    let gate = portage_repo::CategoryGate::new(repos, categories, config_root);
     for atom_str in atom_args {
         let Some(atom) = parse_atom(atom_str) else {
             continue;

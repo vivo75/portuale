@@ -125,10 +125,8 @@ pub fn run(
     let mut valid_per_repo: HashMap<PathBuf, HashSet<(String, String)>> = HashMap::new();
     let mut work: Vec<RegenWorkItem> = Vec::new();
     let mut cps_in_order: Vec<String> = Vec::new();
-    for cp in regen_cps(
-        &repos,
-        &portage_repo::repo_categories(&repos, config_root, true),
-    ) {
+    let categories = portage_repo::Categories::load(&repos, config_root);
+    for cp in regen_cps(&repos, &categories.set) {
         let (category, package) = match cp.split_once('/') {
             Some(x) => x,
             None => continue,
@@ -598,7 +596,7 @@ mod tests {
             volatile: false,
             module_specific_options: Vec::new(),
         }];
-        let cps = regen_cps(&repos, &portage_repo::repo_categories(&repos, &cfg, true));
+        let cps = regen_cps(&repos, &portage_repo::Categories::load(&repos, &cfg).set);
         assert_eq!(cps, vec!["dev-libs/listedpkg".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -455,6 +455,8 @@ pub(crate) struct ShowSlotConflictsArgs<'a> {
     pub(crate) useoldpkg_atoms_render: &'a [String],
     pub(crate) color: &'a Colorizer,
     pub(crate) config_root: &'a Path,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
 }
 
 /// The slot-conflict notice.
@@ -469,6 +471,7 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
         useoldpkg_atoms_render,
         color,
         config_root,
+        categories,
     } = args;
     let &ResolvePlan { usepkgonly, .. } = plan;
     let &EmergeOpts {
@@ -508,6 +511,7 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                     repos,
                     config,
                     config_root,
+                    categories,
                     verbose_conflicts,
                     excluded,
                     useoldpkg_atoms_render,
@@ -579,6 +583,8 @@ pub(crate) struct ShowConflictInstanceArgs<'a> {
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) config: &'a Config,
     pub(crate) config_root: &'a Path,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
     pub(crate) verbose_conflicts: bool,
     pub(crate) excluded: &'a Vec<String>,
     pub(crate) useoldpkg_atoms_render: &'a [String],
@@ -598,6 +604,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         repos,
         config,
         config_root,
+        categories,
         verbose_conflicts,
         excluded,
         useoldpkg_atoms_render,
@@ -607,14 +614,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         color,
         any_omitted: any_omitted_out,
     } = args;
-    let categories = portage_repo::repo_categories(repos, config_root, true);
-    let warned = std::cell::RefCell::new(std::collections::HashSet::new());
-    let gate = portage_repo::CategoryGate {
-        repos,
-        categories: &categories,
-        config_root,
-        warned: &warned,
-    };
+    let gate = portage_repo::CategoryGate::new(repos, categories, config_root);
     let mut any_omitted = *any_omitted_out;
     println!();
     if inst.installed {
@@ -733,6 +733,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         installed_pkgs,
         need_rebuild,
         config_root,
+        categories,
     });
     show_selected_parents(
         &mut selected,
@@ -767,6 +768,8 @@ pub(crate) struct SelectConflictParentsArgs<'a> {
     pub(crate) installed_pkgs: &'a HashSet<(String, String, String)>,
     pub(crate) need_rebuild: &'a mut Vec<(String, String)>,
     pub(crate) config_root: &'a Path,
+    /// The run-shared allow-list, built once by the caller.
+    pub(crate) categories: &'a portage_repo::Categories,
 }
 
 /// Choose the parents of a conflict instance to show, per reason group, and note the unrebuildable ones.
@@ -783,6 +786,7 @@ pub(crate) fn select_conflict_parents(args: SelectConflictParentsArgs<'_>) -> Ve
         installed_pkgs,
         need_rebuild,
         config_root,
+        categories,
     } = args;
     // Representative selection: farthest version per `cp` for a
     // `version` group, the first member for a `slot` group, every
@@ -852,6 +856,7 @@ pub(crate) fn select_conflict_parents(args: SelectConflictParentsArgs<'_>) -> Ve
                 config,
                 installed: installed_pkgs,
                 config_root,
+                categories,
             }) {
                 if !selected.contains(&m) {
                     selected.push(m);

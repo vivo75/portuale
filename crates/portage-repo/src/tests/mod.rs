@@ -720,7 +720,7 @@ fn graph_onlydeps(
         complete: false,
         complete_reuse: HashMap::new(),
         set_args: std::collections::HashSet::new(),
-        local_config: true,
+        categories: None,
         solver: SolverKind::Portage,
     };
     active_resolver()
@@ -1679,7 +1679,10 @@ fn ctx_161<'a>(
         implicit_system_deps: false,
         complete: o.complete,
         set_args: o.set_args.clone(),
-        categories: test_categories(&repos),
+        categories: std::rc::Rc::new(Categories {
+            set: test_categories(&repos),
+            warned: Default::default(),
+        }),
         repos,
         slot_op_reachable: o.reachable.clone(),
         slot_op_seeds: o
@@ -1695,7 +1698,6 @@ fn ctx_161<'a>(
         top_level: o.top_level.iter().map(|s| s.as_str()).collect(),
         top_level_cps: HashSet::new(),
         config_root: root.to_path_buf(),
-        category_warned: Default::default(),
         // Like production's `ResolveCtx::new`: the binary pool
         // derives from the config's scanned binpkgs (empty here
         // unless a leg stages some).

@@ -33,4 +33,4 @@ are byte-identical to the pre-#394 baseline.
 - Backlog #453 A: the resolver library builds abort reports plain, so Portage's `_show_unsatisfied_dep` spans (`BAD`/`INFORM` masked and REQUIRED_USE headers, `green` missed atom, `INFORM` chain nodes; `depgraph.py:6932-6936,6993-6999,7040-7043,7074`) are coloured at the print site in `run_resolve_phases::handle`, line by line. Disabled colour is the identity, so uncoloured pins are untouched.
 
 ## allow-list wiring (#571)
-- The production `ResolveRequest` sets `local_config: true`; the abort path's `misspell_suggestion_block`, the complete-graph auto-enable gate and the running-root repaint build their sets from `(repos, config_root)` once per phase.
+- The production `ResolveRequest` carries the run-shared `Categories` (`Some`); the abort path's `misspell_suggestion_block`, the complete-graph auto-enable gate and the running-root repaint gate on the same shared set, so the unlisted-category `!!!` fires once per run.

@@ -45,6 +45,7 @@ fn expand_p571(atoms: &[&str]) -> Result<ExpandTargetsOut, std::process::ExitCod
     };
     let color = Colorizer::new(false);
     let config = portage_profile::Config::default();
+    let categories = portage_repo::Categories::load(&repos, &cfg);
     let out = expand_targets(ExpandTargetsArgs {
         opts: &opts,
         color: &color,
@@ -52,6 +53,7 @@ fn expand_p571(atoms: &[&str]) -> Result<ExpandTargetsOut, std::process::ExitCod
         root: &cfg,
         config_root: &cfg,
         repos: &repos,
+        categories: &categories,
     });
     let _ = std::fs::remove_dir_all(&cfg);
     out

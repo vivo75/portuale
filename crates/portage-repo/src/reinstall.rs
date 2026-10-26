@@ -137,7 +137,7 @@ impl BinaryDepsKey {
                 .hash(&mut hasher);
         }
         let mut cat_hasher = std::collections::hash_map::DefaultHasher::new();
-        for cat in args.gate.categories.iter() {
+        for cat in args.gate.categories.set.iter() {
             cat.hash(&mut cat_hasher);
         }
         Self {

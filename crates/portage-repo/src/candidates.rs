@@ -276,24 +276,43 @@ pub(crate) fn list_candidates_uncached(
 
 /// Portage's `settings.categories` gate for repo ebuild discovery: the
 /// allow-listed half of `portdbapi.cp_list` (`porttree.py:1156,1216-1225`).
-/// Built once per config (never re-read per lookup); `Copy` so resolve
-/// helpers and [`SelectSource`](crate::resolve::pretend::SelectSource)
-/// take it by value.
+/// Built from one run-shared [`Categories`], never re-read per lookup;
+/// `Copy` so resolve helpers and
+/// [`SelectSource`](crate::resolve::pretend::SelectSource) take it by value.
 #[derive(Clone, Copy)]
 pub struct CategoryGate<'a> {
     /// The repos whose ebuilds are discovered.
     pub repos: &'a [RepoConfig],
-    /// The resolved allow-list (repo files stacked, then the user file).
-    pub categories: &'a BTreeSet<String>,
+    /// The run-shared allow-list and once-per-cp warning record.
+    pub categories: &'a Categories,
     /// The config root the unlisted-category `!!!` line's path renders from.
     pub config_root: &'a Path,
-    /// `(category, package)` pairs the `!!!` already fired for: Portage's
-    /// `cp_list` cache prints once per cp per process; one walk prints
-    /// once per cp per walk.
-    pub warned: &'a RefCell<HashSet<(String, String)>>,
 }
 
 impl CategoryGate<'_> {
+    /// A gate over `repos` sharing the run's `categories`.
+    pub fn new<'a>(
+        repos: &'a [RepoConfig],
+        categories: &'a Categories,
+        config_root: &'a Path,
+    ) -> CategoryGate<'a> {
+        CategoryGate {
+            repos,
+            categories,
+            config_root,
+        }
+    }
+
+    /// Portage's `!!! '<cp>' has a category that is not listed in ...` line
+    /// for one unlisted cp. The path renders the config root with exactly
+    /// one trailing slash, like Portage's normalised `%s` substitution.
+    pub fn unlisted_category_line(&self, category: &str, package: &str) -> String {
+        format!(
+            "\n!!! '{category}/{package}' has a category that is not listed in {}etc/portage/categories",
+            root_with_trailing_slash(self.config_root)
+        )
+    }
+
     /// The repo ebuilds for `category/package`, or nothing when the
     /// category is unlisted (printing Portage's `!!! ... not listed ...`
     /// line once per cp when ebuilds exist on disk; a plain miss with no
@@ -304,7 +323,7 @@ impl CategoryGate<'_> {
         category: &str,
         package: &str,
     ) -> Result<std::sync::Arc<Vec<Candidate>>, Error> {
-        if self.categories.contains(category) {
+        if self.categories.set.contains(category) {
             return list_candidates(self.repos, category, package);
         }
         let has_ebuilds = list_candidates(self.repos, category, package)
@@ -312,14 +331,12 @@ impl CategoryGate<'_> {
             .unwrap_or(false);
         if has_ebuilds
             && self
+                .categories
                 .warned
                 .borrow_mut()
                 .insert((category.to_string(), package.to_string()))
         {
-            eprintln!(
-                "\n!!! '{category}/{package}' has a category that is not listed in {}/etc/portage/categories",
-                self.config_root.display()
-            );
+            eprintln!("{}", self.unlisted_category_line(category, package));
         }
         Ok(std::sync::Arc::new(Vec::new()))
     }
@@ -328,9 +345,9 @@ impl CategoryGate<'_> {
     /// carries an ebuild for `category/package` *within the allow-list*.
     /// Never prints: the walk's own lookup already fired the `!!!` for a
     /// cp the miss report names, and a display-only re-print would double
-    /// it (each display phase builds its own gate).
+    /// it.
     pub fn has_ebuilds(&self, category: &str, package: &str) -> bool {
-        self.categories.contains(category)
+        self.categories.set.contains(category)
             && list_candidates(self.repos, category, package)
                 .map(|c| !c.is_empty())
                 .unwrap_or(false)

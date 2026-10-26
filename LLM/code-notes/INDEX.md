@@ -94,6 +94,7 @@
 - [crates/portage-repo/src/merge_order/tests/tree_display.rs](portage-repo/merge_order/tests/tree_display.md) — Tree-mode stuck-branch pins.
 - [crates/portage-repo/src/merge_order/tree_display.rs](portage-repo/merge_order/tree_display.md) — `--tree` display order and stuck-node handling.
 - [crates/portage-repo/src/metadata_cache.rs](portage-repo/metadata_cache.md) — md5-cache reading, the aux-metadata provider and pregen/regen switches.
+- [crates/portage-repo/src/paths.rs](portage-repo/paths.md) — Display roots: Portage normalises every root to exactly one trailing slash.
 - [crates/portage-repo/src/provenance.rs](portage-repo/provenance.md) — Where a candidate's mask or keyword decision comes from.
 - [crates/portage-repo/src/reinstall.rs](portage-repo/reinstall.md) — When an installed package needs a reinstall (changed deps, slot, repo, USE).
 - [crates/portage-repo/src/repo_config.rs](portage-repo/repo_config.md) — repos.conf discovery and per-repository configuration.
