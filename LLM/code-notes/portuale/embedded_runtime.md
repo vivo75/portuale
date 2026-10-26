@@ -20,3 +20,6 @@ The phase runtime and package-set definitions compiled into the binary. Context 
 
 ## fn the_embedded_package_sets_conf_equals_the_checkout_file
 - S2.7: the set definitions fall back to the embedded copy, and the copy is the checkout's file when both exist (so `--list-sets` is byte-identical in-tree and relocated).
+
+## fn a_phase_running_merge_works_from_an_extracted_runtime (hermetic roots)
+- `ROOT` and `PORTAGE_RUNNING_ROOT` point at the test's scratch root, not the shared fixtures: the embedded run resolves through `pretend::run`, whose updates pass would otherwise move fixture vdb entries and record fixture mtimes.

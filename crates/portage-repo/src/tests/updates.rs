@@ -150,6 +150,31 @@ fn parse_updates_content_keeps_move_and_slotmove_drops_the_rest() {
     );
 }
 
+/// Error-aware split: blank lines skipped, every other line one
+/// valid directive or one error; a versioned `slotmove` atom is valid
+/// (Portage applies it) yet yields no command here (a later piece's
+/// work). Portage: portage.update.parse_updates
+#[test]
+fn parse_updates_with_errors_splits_valid_from_malformed() {
+    let parsed = parse_updates_with_errors(
+        "move dev-libs/foo dev-libs/bar\n\
+             \n\
+             # a comment line, not a directive\n\
+             slotmove dev-libs/baz 0 1\n\
+             slotmove >=dev-libs/ver-2 0 1\n\
+             move dev-libs/foo dev-libs/foo-1.0\n\
+             frobnicate dev-libs/x dev-libs/y\n\
+             move only-two-tokens\n\
+             slotmove dev-libs/qux 0\n",
+    );
+    assert_eq!(parsed.cmds.len(), 2, "move + bare slotmove only");
+    assert_eq!(
+        parsed.valid, 3,
+        "the versioned slotmove counts as valid too"
+    );
+    assert!(parsed.has_errors, "comment, bad move, bad slotmoves error");
+}
+
 #[test]
 fn apply_move_and_slotmove_to_a_token_preserve_the_other_atom_parts() {
     let old = ("dev-libs".to_string(), "foo".to_string());
@@ -198,7 +223,7 @@ fn apply_move_and_slotmove_to_a_token_preserve_the_other_atom_parts() {
 /// A `slotmove` rewrites the `:slot` of every token on its cp whose slot
 /// matches: versioned, blocker-prefixed, and `[usedeps]` tokens included.
 /// Only `::repo` tokens are left alone -- Portage rejects them under every
-/// real EAPI. Each expectation below was generated with Portage 3.0.83
+/// EAPI in use. Each expectation below was generated with Portage 3.0.83
 /// (`update_dbentry(["slotmove", Atom("dev-libs/foo"), "0", "1"], token,
 /// eapi="8")`; see the task report for the full commands and outputs).
 /// Portage: lib/portage/update.py:69-102

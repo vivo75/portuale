@@ -221,8 +221,8 @@ mod tests {
         let out = std::process::Command::new(exe)
             .env(crate::ebuild_phases::BIN_DIR_VAR, &bin)
             .env("PORTAGE_CONFIGROOT", &fixtures)
-            .env("ROOT", &fixtures)
-            .env("PORTAGE_RUNNING_ROOT", &fixtures)
+            .env("ROOT", &root)
+            .env("PORTAGE_RUNNING_ROOT", &root)
             .env("DISTDIR", fixtures.join("distfiles"))
             .args([
                 "mrg",

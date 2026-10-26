@@ -66,7 +66,9 @@ fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_portage() {
 #[test]
 fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
     // Portage: actions.py. `--pretend` returns before the scheduler, so it
-    // never touches the resume list.
+    // never touches the resume list -- but the updates run still records
+    // its mtimes (the S0 oracle: host Portage commits `mtimedb["updates"]`
+    // on a run whose resolve never happened).
     let portuale_bin = built_portuale_bin();
     let tmp = TempDir::new("resume_no_write_pretend").keep();
 
@@ -91,11 +93,15 @@ fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert!(
-        !crate::mtimedb::mtimedb_path(&bare).exists(),
-        "--pretend must not create an mtimedb"
+        !crate::mtimedb::read_updates_mtimes(&bare).is_empty(),
+        "--pretend records the updates mtimes"
+    );
+    assert!(
+        crate::mtimedb::read_resume_list(&bare).is_none(),
+        "--pretend must not write a resume list"
     );
 
-    let (root, before) = stale_resume_root("pretend");
+    let (root, _) = stale_resume_root("pretend");
     let output = std::process::Command::new(&portuale_bin)
         .args(["emerge", "--pretend", "--oneshot", "dev-libs/schedok"])
         .stdin(std::process::Stdio::null())
@@ -111,9 +117,30 @@ fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
-        before,
-        "--pretend must leave a stale resume list byte-identical"
+        crate::mtimedb::read_resume_list(&root)
+            .map(|(favorites, mergelist, _)| (favorites, mergelist)),
+        Some((
+            vec!["dev-libs/stale-a".to_string()],
+            vec![
+                (
+                    crate::mtimedb::ResumeEntryKind::Ebuild,
+                    "dev-libs".to_string(),
+                    "stale-a".to_string(),
+                    "1".to_string(),
+                ),
+                (
+                    crate::mtimedb::ResumeEntryKind::Ebuild,
+                    "dev-libs".to_string(),
+                    "stale-b".to_string(),
+                    "1".to_string(),
+                ),
+            ],
+        )),
+        "--pretend must leave a stale resume list alone"
+    );
+    assert!(
+        !crate::mtimedb::read_updates_mtimes(&root).is_empty(),
+        "--pretend still records the updates mtimes"
     );
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(&root);

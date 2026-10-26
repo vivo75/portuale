@@ -71,3 +71,6 @@
 
 ## const OPTIONS (347-MRG)
 - Backlog #347 S8: `--rebuild-exclude`, `--rebuild-ignore` and `--usepkg-exclude` are repeatable atom lists (`action: "append"` in Portage `_emerge/main.py:565-594`, same help shape as `--exclude`), forwarded by `to_emerge_argv` as one `--long=<value>` per occurrence. The emerge codepath already parsed and validated all three (`args.rs`, `cli_atoms.rs` strict families); only the `mrg` table and `emerge_handles` lacked them. Unit-pinned (`rebuild_and_usepkg_exclude_forward_like_exclude`) and pmtest-pinned (`test_mrg_forwards_rebuild_and_usepkg_exclude`).
+
+## tests: shared-fixture hermeticity (Task 11)
+- Any test that runs `mrg`/`emerge` with `ROOT` (or `PORTAGE_RUNNING_ROOT`) at the shared fixtures mutates them now: the updates run moves vdb entries and records mtimes on the target (and running) root. `pretend_plan_is_identical_on_files_sqlite_and_redb` copies the whole tree to scratch and serves it as `ROOT`; the missing-database and redb-busy tests use fresh tmp target roots; the `has_version`/`emerge -p` probe splits its shared `run` closure per root (fixtures stay for the read-only `portageq`/`ebuild` calls, scratch copies for `emerge`). A warm-up run establishes the record so the compared backend runs all skip the block.

@@ -273,11 +273,23 @@ pub fn run(args: &[String]) -> ExitCode {
     }
 
     // The applied-updates AUTOCLEAN force, computed pre-resolve like
-    // Portage's own `_global_updates` call. Read-only interim: the scan
-    // commits no record and the force stays false; only the target
-    // root's force reaches the merge gate below.
+    // Portage's own `_global_updates` call: target root, then the
+    // running root when different. An applied target run reloads the
+    // config, so the resolve below sees the moved state; only the
+    // target root's force reaches the merge gate below.
     // Portage: lib/_emerge/actions.py, run_action
-    let updates_force = global_updates_force(&opts, &repos, &root);
+    let updates_force = {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        global_updates_force(GlobalUpdatesArgs {
+            opts: &opts,
+            repos: &repos,
+            config: &mut config,
+            config_root: &config_root,
+            root: &root,
+            out: &mut handle,
+        })
+    };
 
     // Colour gate, resolved once so every action path shares one `Colorizer`.
     // Portage: _emerge/actions.py, adjust_configs

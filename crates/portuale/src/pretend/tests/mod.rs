@@ -419,6 +419,9 @@ fn true_spelling_matches_bare(flag_eq_true: &str, flag_bare: &str, atom: &str, e
             .output()
             .expect("portuale emerge spawns")
     };
+    // A warm-up run establishes the updates record, so both compared
+    // runs skip the block and the ambient repo set behind it.
+    run(flag_bare);
     let spelled = run(flag_eq_true);
     let bare = run(flag_bare);
     for (label, output) in [("spelled", &spelled), ("bare", &bare)] {

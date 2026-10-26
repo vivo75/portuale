@@ -5,7 +5,7 @@
 // Portage: lib/portage/_global_updates.py, _do_global_updates
 
 use crate::ebuild_merge::{is_protected, md5_hex_bytes, new_protect_filename};
-use crate::global_updates::{RepoMatch, repo_update_map};
+use crate::global_updates::RepoMatch;
 use portage_repo::{RepoConfig, UpdateCmd};
 use portage_vdb::{EntryKey, InstalledDb};
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,23 +44,24 @@ const PROFILE_UPDATE_FILES: &[&str] = &[
 ];
 
 /// What [`update_world`] needs: the root whose world file moves, and the
-/// repos (in `portdb` order) whose updates apply to it.
-#[cfg_attr(not(test), allow(dead_code))]
+/// repos (in `portdb` order, for the main-repo match) with the gated
+/// updates map the driver scanned.
 pub(crate) struct UpdateWorldArgs<'a> {
     pub root: &'a Path,
     pub repos: &'a [RepoConfig],
+    pub map: &'a [(String, Vec<UpdateCmd>)],
 }
 
 /// What [`update_config_files`] needs: the root holding
-/// `etc/portage`, the repos whose updates apply, the settings halves
+/// `etc/portage`, the repos with the gated updates map, the settings halves
 /// (`CONFIG_PROTECT`, `CONFIG_PROTECT_MASK`, `case-insensitive-fs`),
 /// and the progress hook the output driver passes (`None` in tests that
 /// do not watch progress): one call per rewritten line, where Portage
 /// writes `'p'`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct UpdateConfigFilesArgs<'a> {
     pub root: &'a Path,
     pub repos: &'a [RepoConfig],
+    pub map: &'a [(String, Vec<UpdateCmd>)],
     pub config_protect: &'a str,
     pub config_protect_mask: &'a str,
     pub case_insensitive: bool,
@@ -75,19 +76,18 @@ pub(crate) struct UpdateConfigFilesArgs<'a> {
 ///
 /// Returns `Err` when the world store cannot be read or written.
 // Portage: lib/portage/_global_updates.py, _do_global_updates
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn update_world(args: UpdateWorldArgs<'_>) -> Result<bool, String> {
     let db = portage_vdb::for_root(args.root);
-    let map = repo_update_map(args.repos);
+    let map = args.map;
     let master = args
         .repos
         .iter()
         .find(|r| r.is_main)
         .map(|r| r.name.clone());
-    let matcher = RepoMatch::new(&map, master);
+    let matcher = RepoMatch::new(map, master);
     let mut world_list = db.world().map_err(|e| e.to_string())?.atoms;
     let mut world_modified = false;
-    for (repo_name, cmds) in &map {
+    for (repo_name, cmds) in map {
         if repo_name == "DEFAULT" || cmds.is_empty() {
             continue;
         }
@@ -126,16 +126,15 @@ pub(crate) fn update_world(args: UpdateWorldArgs<'_>) -> Result<bool, String> {
 /// cannot be allocated; an unreadable file is skipped and an unwritable
 /// one warns and continues, never fatal.
 // Portage: lib/portage/update.py, update_config_files
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn update_config_files(args: UpdateConfigFilesArgs<'_>) -> Result<(), String> {
     let db = portage_vdb::for_root(args.root);
-    let map = repo_update_map(args.repos);
+    let map = args.map;
     let master = args
         .repos
         .iter()
         .find(|r| r.is_main)
         .map(|r| r.name.clone());
-    let matcher = RepoMatch::new(&map, master);
+    let matcher = RepoMatch::new(map, master);
     let user_config = args.root.join(USER_CONFIG_PATH);
     let mut rels: Vec<String> = Vec::new();
     for name in TOP_LEVEL_UPDATE_FILES {
@@ -164,7 +163,7 @@ pub(crate) fn update_config_files(args: UpdateConfigFilesArgs<'_>) -> Result<(),
         file_contents.insert(rel.clone(), split_lines(&String::from_utf8_lossy(&bytes)));
     }
     let mut updated: BTreeSet<String> = BTreeSet::new();
-    for (repo_name, cmds) in &map {
+    for (repo_name, cmds) in map {
         if repo_name == "DEFAULT" || cmds.is_empty() {
             continue;
         }
@@ -454,6 +453,7 @@ fn write_config_file_atomic(path: &Path, body: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::global_updates::repo_update_map;
 
     /// Portage 3.0.83 rewrites the fixture's world to
     /// `dev-libs/{deppkg,newpkg}` (sorted) and its `package.use` into a
@@ -476,9 +476,11 @@ mod tests {
             assert!(ok, "cp -a {} failed", from.display());
         }
         let repos = test_repos(&repo);
+        let map = repo_update_map(&repos);
         let world_changed = update_world(UpdateWorldArgs {
             root: &root,
             repos: &repos,
+            map: &map,
         })
         .expect("world updates apply");
         assert!(world_changed, "the move rewrites one world entry");
@@ -491,6 +493,7 @@ mod tests {
         update_config_files(UpdateConfigFilesArgs {
             root: &root,
             repos: &repos,
+            map: &map,
             config_protect: "/etc",
             config_protect_mask: "/etc/env.d",
             case_insensitive: false,
@@ -562,9 +565,11 @@ mod tests {
         )
         .unwrap();
         let repos = test_repos(&repo);
+        let map = repo_update_map(&repos);
         let world_changed = update_world(UpdateWorldArgs {
             root: &root,
             repos: &repos,
+            map: &map,
         })
         .expect("world updates apply");
         assert!(world_changed, "the move rewrites one world entry");

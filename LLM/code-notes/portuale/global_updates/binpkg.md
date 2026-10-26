@@ -215,3 +215,6 @@ The binpkg half of `_do_global_updates` (backlog #576): `move_ent` /
 
 ## fn apply_binpkg_cmd
 - One command's binpkg moves, mirroring `apply_vdb_cmd` for the per-command interleave (`_global_updates.py:190-206`): `move` through `move_binpkg` (`'%'`), `slotmove` through `move_binpkg_slot` (`'S'`), hook only on a nonzero count. Returns this command's counts; `apply_binpkg_moves` sums them and passes its hook through. `BinpkgState::load`, `WriterConfig::new` and `now_secs` are `pub(crate)` so the driver builds the state/writer once and loops commands; the writable-`PKGDIR` gate stays in the batch wrapper only.
+
+## struct BinpkgMovesArgs (test-only)
+- Takes the gated map alongside `repos` (repos now only supply the main-repo name). The whole-map function is test-only (`#[cfg(test)]`): the driver loops `apply_binpkg_cmd` per command for the `@%sS` interleave.

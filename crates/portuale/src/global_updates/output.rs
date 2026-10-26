@@ -11,7 +11,6 @@ use std::io::Write;
 /// (Portage's `sys.stdout`), the colour switch and the `--quiet` flag.
 /// The driver holds one printer across every half so the header prints
 /// once and the progress characters stream in call order.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct GlobalUpdatesPrinterArgs<'a> {
     pub out: &'a mut dyn Write,
     pub color: &'a Colorizer,
@@ -24,7 +23,6 @@ pub(crate) struct GlobalUpdatesPrinterArgs<'a> {
 /// Portage's `writemsg` pair. The methods take `&self` so the halves'
 /// `Fn` progress hooks can call them directly; the stream itself is
 /// only ever touched sequentially.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct GlobalUpdatesPrinter<'a> {
     out: RefCell<&'a mut dyn Write>,
     color: &'a Colorizer,
@@ -32,7 +30,6 @@ pub(crate) struct GlobalUpdatesPrinter<'a> {
     notice_printed: Cell<bool>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl<'a> GlobalUpdatesPrinter<'a> {
     /// Hold the stream for the whole updates run.
     pub(crate) fn new(args: GlobalUpdatesPrinterArgs<'a>) -> Self {
@@ -169,18 +166,9 @@ impl<'a> GlobalUpdatesPrinter<'a> {
 mod tests {
     use super::*;
     use crate::color::Colorizer;
-    use crate::global_updates::binpkg::{
-        BinpkgCmdArgs, BinpkgState, UpdateBinpkgEntsArgs, WriterConfig, WriterConfigArgs,
-        apply_binpkg_cmd, now_secs, update_binpkg_ents,
-    };
-    use crate::global_updates::config_files::{
-        UpdateConfigFilesArgs, UpdateWorldArgs, update_config_files, update_world,
-    };
-    use crate::global_updates::vdb::{UpdateEntsArgs, VdbCmdArgs, update_ents};
-    use crate::global_updates::{RepoMatch, repo_update_map};
+    use crate::global_updates::{GlobalUpdatesSettings, RunGlobalUpdatesArgs, run_global_updates};
     use portage_repo::RepoConfig;
     use std::path::Path;
-    use std::sync::Arc;
 
     /// Portage 3.0.83's whole updates block for the fixture tree
     /// (`_do_global_updates`, `lib/portage/_global_updates.py:99-137`
@@ -264,11 +252,11 @@ mod tests {
         );
     }
 
-    /// Drive every half over a scratch copy of the fixture in Portage's
-    /// order — world decisions (silent), moves interleaved per command,
-    /// config files, vdb then binpkg `update_ents` — with all progress
-    /// reporting into the printer. Returns the stream plus the scratch
-    /// path for capture normalization.
+    /// Drive the production driver over a scratch copy of the fixture: the
+    /// mtime-gated scan, the world decisions, the per-command vdb and
+    /// binpkg moves, the config files, the record, and both `update_ents`
+    /// passes, with all progress reporting into the printer. Returns the
+    /// stream plus the scratch path for capture normalization.
     fn drive_fixture(quiet: bool) -> (Vec<u8>, String) {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let fixture = manifest.join("../../fixtures/global-updates");
@@ -296,126 +284,33 @@ mod tests {
             volatile: false,
             module_specific_options: Vec::new(),
         }];
-        let color = Colorizer::new(false);
-        let mut out = Vec::new();
-        let printer = GlobalUpdatesPrinter::new(GlobalUpdatesPrinterArgs {
-            out: &mut out,
-            color: &color,
-            quiet,
-        });
-        printer.notice();
-        for (path, valid) in updates_files(&repo) {
-            printer.file(&path, valid);
-        }
-        update_world(UpdateWorldArgs {
-            root: &root,
-            repos: &repos,
-        })
-        .expect("world updates apply");
-        let map = repo_update_map(&repos);
-        let matcher = RepoMatch::new(&map, Some("gutest".to_string()));
-        let db: Arc<dyn portage_vdb::InstalledDb> = portage_vdb::for_root(&root);
-        let _lock = db
-            .vdb_dir()
-            .map(|vdb| crate::portage_lock::PortageLockfile::acquire_new_lockfile(&vdb))
-            .transpose()
-            .expect("vdb lock");
-        let pkgdir = root.join("pkgdir");
-        let mut state = BinpkgState::load(&pkgdir).expect("binpkg index loads");
-        let writer = WriterConfig::new(WriterConfigArgs {
-            multi_instance: true,
-            binpkg_compress: Some("zstd"),
-            binpkg_compress_flags: None,
-            portage_bzip2_command: None,
-            makeopts: None,
-            compress_index: true,
-            now: now_secs(),
-        });
-        for (repo_name, cmds) in &map {
-            if repo_name == "DEFAULT" || cmds.is_empty() {
-                continue;
-            }
-            for cmd in cmds {
-                crate::global_updates::vdb::apply_vdb_cmd(VdbCmdArgs {
-                    db: &db,
-                    repo_name,
-                    matcher: &matcher,
-                    cmd,
-                    on_progress: Some(&|ch, n| printer.progress(ch, n)),
-                })
-                .expect("vdb move applies");
-                apply_binpkg_cmd(BinpkgCmdArgs {
-                    state: &mut state,
-                    writer: &writer,
-                    repo_name,
-                    matcher: &matcher,
-                    cmd,
-                    on_progress: Some(&|ch, n| printer.progress(ch, n)),
-                })
-                .expect("binpkg move applies");
-            }
-        }
-        update_config_files(UpdateConfigFilesArgs {
-            root: &root,
-            repos: &repos,
-            config_protect: "/etc",
-            config_protect_mask: "/etc/env.d",
+        let settings = GlobalUpdatesSettings {
+            config_protect: "/etc".to_string(),
+            config_protect_mask: "/etc/env.d".to_string(),
             case_insensitive: false,
-            on_progress: Some(&|| printer.progress('p', 1)),
-        })
-        .expect("config updates apply");
-        if quiet {
-            update_ents(UpdateEntsArgs {
-                root: &root,
-                repos: &repos,
-                on_update: None,
-            })
-            .expect("vdb dep strings rewrite");
-        } else {
-            update_ents(UpdateEntsArgs {
-                root: &root,
-                repos: &repos,
-                on_update: Some(&|maxval, curval| printer.vdb_step(maxval, curval)),
-            })
-            .expect("vdb dep strings rewrite");
-        }
-        update_binpkg_ents(UpdateBinpkgEntsArgs {
-            pkgdir: &pkgdir,
-            repos: &repos,
-            binpkg_compress: Some("zstd"),
+            pkgdir: root.join("pkgdir"),
+            multi_instance: true,
+            binpkg_compress: Some("zstd".to_string()),
             binpkg_compress_flags: None,
             portage_bzip2_command: None,
             makeopts: None,
             compress_index: true,
-            on_update: Some(&|maxval, curval| printer.binpkg_step(maxval, curval)),
+        };
+        let mut out = Vec::new();
+        let applied = run_global_updates(RunGlobalUpdatesArgs {
+            root: &root,
+            repos: &repos,
+            settings: &settings,
+            privileged: crate::privileges::is_privileged(&root),
+            sandboxed: false,
+            quiet,
+            out: &mut out,
         })
-        .expect("binpkg dep strings rewrite");
-        printer.finish();
+        .expect("fixture updates apply");
+        assert!(
+            applied,
+            "the fixture's changed files yield valid directives"
+        );
         (out, scratch.path().display().to_string())
-    }
-
-    /// One updates file's display path and valid-directive count, in
-    /// file-name order (a single file here, so Portage's `scandir`
-    /// order needs no ruling yet).
-    fn updates_files(repo: &Path) -> Vec<(String, usize)> {
-        let dir = repo.join("profiles").join("updates");
-        let mut names: Vec<String> = std::fs::read_dir(&dir)
-            .unwrap()
-            .flatten()
-            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| !n.starts_with('.'))
-            .collect();
-        names.sort();
-        names
-            .into_iter()
-            .map(|name| {
-                let path = dir.join(&name);
-                let bytes = std::fs::read(&path).unwrap();
-                let valid =
-                    portage_repo::parse_updates_content(&String::from_utf8_lossy(&bytes)).len();
-                (path.display().to_string(), valid)
-            })
-            .collect()
     }
 }

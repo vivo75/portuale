@@ -41,3 +41,6 @@ Finding, checking and installing portuale on the client.
 
 ## fn install_client_binary
 - The S8.2 install: `mktemp`, stream, `chmod 0755`, digest re-check, `mv`, then the `__helper ping` (D8 token). The idempotent fast path (a matching target needs only its ping, with no status line) makes the second run report no `install-bin` line.
+
+## fn s8_pretend_installs_nothing (hermetic running root)
+- `PORTAGE_RUNNING_ROOT` points at the test's scratch root, not the shared fixtures: the pretend run resolves through `pretend::run`, whose updates pass would otherwise record (and move under) the fixture tree. The atom has no `BDEPEND`s, so the scratch running vdb changes nothing.

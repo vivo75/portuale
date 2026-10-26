@@ -13,7 +13,7 @@ use crate::ebuild_package::{
     omit_stanza_default, sort_stanza_fields_for_write, write_packages_gz,
 };
 use crate::global_updates::vdb::DEP_KEYS;
-use crate::global_updates::{RepoMatch, collapse_ws, repo_update_map};
+use crate::global_updates::{RepoMatch, collapse_ws};
 use crate::helpers::digest_of;
 use crate::helpers::xpak::{recompose_mem, xpak_mem};
 use crate::portage_lock::PortageLockfile;
@@ -24,17 +24,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// What [`apply_binpkg_moves`] needs: the `$PKGDIR` whose files move, the
-/// repos (in `portdb` order) whose updates apply to it, the settings
-/// halves the writers need (`binpkg-multi-instance` for the allocated
-/// path, `BINPKG_COMPRESS` (+ flags, `MAKEOPTS`, bzip2 command) for the
-/// gpkg metadata member, `compress-index` for `Packages.gz`), and the
-/// progress hook the output driver passes (`None` in tests that do not
-/// watch progress): `'%'` per `move` count, `'S'` per `slotmove` count.
-/// Tests are the only callers until the driver lands.
-#[cfg_attr(not(test), allow(dead_code))]
+/// repos (in `portdb` order, for the main-repo match) with the gated updates
+/// map the driver scanned, the settings halves the writers need
+/// (`binpkg-multi-instance` for the allocated path, `BINPKG_COMPRESS`
+/// (+ flags, `MAKEOPTS`, bzip2 command) for the gpkg metadata member,
+/// `compress-index` for `Packages.gz`), and the progress hook the output
+/// driver passes (`None` in tests that do not watch progress): `'%'` per
+/// `move` count, `'S'` per `slotmove` count.
+#[cfg(test)]
 pub(crate) struct BinpkgMovesArgs<'a> {
     pub pkgdir: &'a Path,
     pub repos: &'a [RepoConfig],
+    pub map: &'a [(String, Vec<UpdateCmd>)],
     pub multi_instance: bool,
     pub binpkg_compress: Option<&'a str>,
     pub binpkg_compress_flags: Option<&'a str>,
@@ -46,20 +47,20 @@ pub(crate) struct BinpkgMovesArgs<'a> {
 
 /// How many binpkgs [`apply_binpkg_moves`] copied (`move`) and rewrote
 /// in place (`slotmove`).
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) struct BinpkgMoveReport {
     pub moves: usize,
     pub slot_moves: usize,
 }
 
 /// What [`update_binpkg_ents`] needs: the `$PKGDIR` whose embedded dep
-/// strings move, the repos whose updates apply, the same writer settings
-/// as the moves, and the progress hook the output driver passes (`None`
-/// in tests that do not watch progress).
-#[cfg_attr(not(test), allow(dead_code))]
+/// strings move, the repos with the gated updates map, the same writer
+/// settings as the moves, and the progress hook the output driver passes
+/// (`None` in tests that do not watch progress).
 pub(crate) struct UpdateBinpkgEntsArgs<'a> {
     pub pkgdir: &'a Path,
     pub repos: &'a [RepoConfig],
+    pub map: &'a [(String, Vec<UpdateCmd>)],
     pub binpkg_compress: Option<&'a str>,
     pub binpkg_compress_flags: Option<&'a str>,
     pub portage_bzip2_command: Option<&'a str>,
@@ -81,7 +82,7 @@ pub(crate) struct UpdateBinpkgEntsArgs<'a> {
 /// Returns `Err` when a file cannot be read, rewritten, moved or
 /// indexed.
 // Portage: lib/portage/_global_updates.py, _do_global_updates
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn apply_binpkg_moves(args: BinpkgMovesArgs<'_>) -> Result<BinpkgMoveReport, String> {
     if !pkgdir_writable(args.pkgdir) {
         return Ok(BinpkgMoveReport {
@@ -89,13 +90,13 @@ pub(crate) fn apply_binpkg_moves(args: BinpkgMovesArgs<'_>) -> Result<BinpkgMove
             slot_moves: 0,
         });
     }
-    let map = repo_update_map(args.repos);
+    let map = args.map;
     let master = args
         .repos
         .iter()
         .find(|r| r.is_main)
         .map(|r| r.name.clone());
-    let matcher = RepoMatch::new(&map, master);
+    let matcher = RepoMatch::new(map, master);
     let mut state = BinpkgState::load(args.pkgdir)?;
     let mut report = BinpkgMoveReport {
         moves: 0,
@@ -110,7 +111,7 @@ pub(crate) fn apply_binpkg_moves(args: BinpkgMovesArgs<'_>) -> Result<BinpkgMove
         compress_index: args.compress_index,
         now: now_secs(),
     });
-    for (repo_name, cmds) in &map {
+    for (repo_name, cmds) in map {
         if repo_name == "DEFAULT" || cmds.is_empty() {
             continue;
         }
@@ -134,7 +135,6 @@ pub(crate) fn apply_binpkg_moves(args: BinpkgMovesArgs<'_>) -> Result<BinpkgMove
 /// halves, the update repo's name with the shared matcher, the one
 /// command to apply, and the progress hook (`'%'`/`'S'` with the count,
 /// only when nonzero).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct BinpkgCmdArgs<'a> {
     pub state: &'a mut BinpkgState,
     pub writer: &'a WriterConfig<'a>,
@@ -155,7 +155,6 @@ pub(crate) struct BinpkgCmdArgs<'a> {
 /// Returns `Err` when a file cannot be read, rewritten, moved or
 /// indexed.
 // Portage: lib/portage/_global_updates.py, _do_global_updates
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn apply_binpkg_cmd(args: BinpkgCmdArgs<'_>) -> Result<(usize, usize), String> {
     let repo_match = |repository: &str| args.matcher.matches(args.repo_name, repository);
     match args.cmd {
@@ -203,18 +202,17 @@ pub(crate) fn apply_binpkg_cmd(args: BinpkgCmdArgs<'_>) -> Result<(usize, usize)
 ///
 /// Returns `Err` when a file cannot be read, rewritten or indexed.
 // Portage: lib/portage/dbapi/__init__.py, update_ents
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn update_binpkg_ents(args: UpdateBinpkgEntsArgs<'_>) -> Result<usize, String> {
     if !pkgdir_writable(args.pkgdir) {
         return Ok(0);
     }
-    let map = repo_update_map(args.repos);
+    let map = args.map;
     let master = args
         .repos
         .iter()
         .find(|r| r.is_main)
         .map(|r| r.name.clone());
-    let matcher = RepoMatch::new(&map, master);
+    let matcher = RepoMatch::new(map, master);
     let mut state = BinpkgState::load(args.pkgdir)?;
     let mut cpvs = state.sorted_cpvs();
     cpvs.sort_by(|a, b| cmp_cpv(a, b));
@@ -278,7 +276,6 @@ pub(crate) fn update_binpkg_ents(args: UpdateBinpkgEntsArgs<'_>) -> Result<usize
 /// multi-instance layout switch, the gpkg metadata compressor (name,
 /// flags, bzip2 command, `MAKEOPTS` for `{JOBS}`) and the `Packages.gz`
 /// switch, plus one clock reading per top-level call.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct WriterConfig<'a> {
     multi_instance: bool,
     binpkg_compress: Option<&'a str>,
@@ -290,7 +287,6 @@ pub(crate) struct WriterConfig<'a> {
 }
 
 /// What `WriterConfig::new` needs: the writer halves above.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct WriterConfigArgs<'a> {
     pub multi_instance: bool,
     pub binpkg_compress: Option<&'a str>,
@@ -301,7 +297,6 @@ pub(crate) struct WriterConfigArgs<'a> {
     pub now: u64,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl<'a> WriterConfig<'a> {
     /// Bundle the writer halves with one clock reading.
     pub(crate) fn new(args: WriterConfigArgs<'a>) -> Self {
@@ -366,7 +361,6 @@ struct BinpkgEntry {
 /// The loaded `Packages` index: the header plus the package stanzas in
 /// file order. Every `inject` mutates the stanzas and rewrites the file,
 /// like Portage's per-`inject` `_pkgindex_write`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct BinpkgState {
     pkgdir: PathBuf,
     header: HashMap<String, String>,
@@ -379,7 +373,6 @@ impl BinpkgState {
     /// the allowed set. A missing file is an empty index; an
     /// unsupported `VERSION` resets the header.
     // Portage: lib/portage/getbinpkg.py, PackageIndex.read
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn load(pkgdir: &Path) -> Result<Self, String> {
         let path = pkgdir.join("Packages");
         let (mut header, stanzas) = match std::fs::read_to_string(&path) {
@@ -1642,7 +1635,6 @@ fn pkgdir_writable(pkgdir: &Path) -> bool {
 }
 
 /// Clock reading for the index `TIMESTAMP` and the fresh tar members.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1682,6 +1674,7 @@ const AUX_KEYS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::global_updates::repo_update_map;
     use std::collections::BTreeMap;
 
     /// One normalized `Packages` stanza: sorted `(key, value)` fields.
@@ -1714,10 +1707,12 @@ mod tests {
             assert!(ok, "cp -a {} failed", from.display());
         }
         let repos = test_repos(&repo);
+        let map = repo_update_map(&repos);
         let pkgdir = root.join("pkgdir");
         let report = apply_binpkg_moves(BinpkgMovesArgs {
             pkgdir: &pkgdir,
             repos: &repos,
+            map: &map,
             multi_instance: true,
             binpkg_compress: Some("zstd"),
             binpkg_compress_flags: None,
@@ -1733,6 +1728,7 @@ mod tests {
         let updated = update_binpkg_ents(UpdateBinpkgEntsArgs {
             pkgdir: &pkgdir,
             repos: &repos,
+            map: &map,
             binpkg_compress: Some("zstd"),
             binpkg_compress_flags: None,
             portage_bzip2_command: None,
@@ -1862,11 +1858,13 @@ mod tests {
             assert!(ok, "cp -a {} failed", from.display());
         }
         let repos = test_repos(&repo);
+        let map = repo_update_map(&repos);
         let pkgdir = root.join("pkgdir");
         set_mode(&pkgdir, 0o555);
         let report = apply_binpkg_moves(BinpkgMovesArgs {
             pkgdir: &pkgdir,
             repos: &repos,
+            map: &map,
             multi_instance: true,
             binpkg_compress: Some("zstd"),
             binpkg_compress_flags: None,
@@ -1884,6 +1882,7 @@ mod tests {
         let updated = update_binpkg_ents(UpdateBinpkgEntsArgs {
             pkgdir: &pkgdir,
             repos: &repos,
+            map: &map,
             binpkg_compress: Some("zstd"),
             binpkg_compress_flags: None,
             portage_bzip2_command: None,
@@ -1928,11 +1927,13 @@ mod tests {
         }
         sign_gpkg(&root.join("pkgdir/dev-libs/slotpkg-1.0.gpkg.tar"));
         let repos = test_repos(&repo);
+        let map = repo_update_map(&repos);
         let pkgdir = root.join("pkgdir");
         let calls = std::cell::RefCell::new(Vec::new());
         let updated = update_binpkg_ents(UpdateBinpkgEntsArgs {
             pkgdir: &pkgdir,
             repos: &repos,
+            map: &map,
             binpkg_compress: Some("zstd"),
             binpkg_compress_flags: None,
             portage_bzip2_command: None,
@@ -1994,10 +1995,12 @@ mod tests {
         )
         .unwrap();
         let repos = test_repos(&repo);
+        let map = repo_update_map(&repos);
         let pkgdir = root.join("pkgdir");
         let report = apply_binpkg_moves(BinpkgMovesArgs {
             pkgdir: &pkgdir,
             repos: &repos,
+            map: &map,
             multi_instance: true,
             binpkg_compress: Some("zstd"),
             binpkg_compress_flags: None,

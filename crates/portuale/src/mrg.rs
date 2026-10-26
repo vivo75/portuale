@@ -2648,12 +2648,12 @@ mod tests {
         std::fs::write(&ebuild, script.replace("OUT", &out.display().to_string())).unwrap();
 
         let bin = crate::self_exe::built_portuale_bin();
-        let run = |config_root: &Path, args: &[&str]| {
+        let run = |config_root: &Path, root: &Path, args: &[&str]| {
             std::process::Command::new(&bin)
                 .args(args)
                 .stdin(std::process::Stdio::null())
                 .env("PORTAGE_CONFIGROOT", config_root)
-                .env("ROOT", &fixtures)
+                .env("ROOT", root)
                 .env("PORTAGE_TMPDIR", tmp.join("pt"))
                 .env_remove("PORTUALE_VDB_BACKEND")
                 .env_remove("PORTUALE_VDB_PATH")
@@ -2663,7 +2663,25 @@ mod tests {
                 .expect("portuale spawns")
         };
         let root = fixtures.to_str().unwrap();
-        for (config_root, installed) in [(&cr, false), (&fixtures, true)] {
+        // Scratch target roots for the `emerge` calls: the updates run
+        // moves entries and records there, so the shared fixtures must
+        // not serve as one. The `portageq`/`ebuild` calls stay on the
+        // fixtures tree (read-only, phase-only).
+        let bare_root = tmp.join("bare-root");
+        std::fs::create_dir_all(&bare_root).unwrap();
+        let installed_root = tmp.join("installed-root");
+        std::fs::create_dir_all(&installed_root).unwrap();
+        for dir in ["var", "etc"] {
+            sh(&format!(
+                "cp -a {} {}",
+                fixtures.join(dir).display(),
+                installed_root.join(dir).display()
+            ));
+        }
+        for (config_root, installed, target) in [
+            (&cr, false, bare_root.as_path()),
+            (&fixtures, true, installed_root.as_path()),
+        ] {
             let label = if installed {
                 "files"
             } else {
@@ -2672,6 +2690,7 @@ mod tests {
             // Standalone portageq.
             let o = run(
                 config_root,
+                &fixtures,
                 &["portageq", "has_version", root, "dev-libs/samepkg"],
             );
             assert_eq!(
@@ -2683,6 +2702,7 @@ mod tests {
             // emerge: a reinstall on files, a new install from the database.
             let o = run(
                 config_root,
+                target,
                 &["emerge", "-p", "--nodeps", "dev-libs/samepkg"],
             );
             let stdout = String::from_utf8_lossy(&o.stdout);
@@ -2698,6 +2718,7 @@ mod tests {
             std::fs::create_dir_all(tmp.join("pt")).unwrap();
             let o = run(
                 config_root,
+                &fixtures,
                 &["ebuild", ebuild.to_str().unwrap(), "pretend"],
             );
             assert_eq!(
@@ -2724,6 +2745,21 @@ mod tests {
     fn pretend_plan_is_identical_on_files_sqlite_and_redb() {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
         let tmp = portage_util::TempDir::new("mrg_vdb_parity").keep();
+        // A scratch copy of the fixture tree as ROOT: the updates run
+        // moves entries and records mtimes on the target root, so the
+        // shared fixtures must not serve as one. (`fixtures` itself is a
+        // symlink, so the contents copy dereferences it.)
+        let sys = tmp.join("sys");
+        std::fs::create_dir_all(&sys).unwrap();
+        let ok = std::process::Command::new("cp")
+            .args([
+                "-a",
+                &format!("{}/.", fixtures.to_string_lossy()),
+                &sys.to_string_lossy(),
+            ])
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(ok, "cp -a {} failed", fixtures.display());
         // (--vdb-backend=..., --vdb-path=...) of every compiled-in database
         // backend, each a conversion of the fixture root.
         #[allow(unused_mut)]
@@ -2757,8 +2793,8 @@ mod tests {
                 .args(extra)
                 .args(atoms)
                 .stdin(std::process::Stdio::null())
-                .env("PORTAGE_CONFIGROOT", &fixtures)
-                .env("ROOT", &fixtures)
+                .env("PORTAGE_CONFIGROOT", &sys)
+                .env("ROOT", &sys)
                 .env("DISTDIR", fixtures.join("distfiles"))
                 .env("PORTAGE_TMPDIR", tmp.join("pt"))
                 .env_remove("PORTUALE_VDB_BACKEND")
@@ -2773,6 +2809,13 @@ mod tests {
             );
             (out.stdout, out.stderr)
         };
+        // A warm-up run establishes the updates record, so every
+        // compared run below skips the block and the ambient repo set
+        // behind it.
+        run(
+            &["--vdb-backend=files"],
+            &["--pretend", "dev-libs/withdeps"],
+        );
         for atoms in [
             &["--pretend", "--update", "--deep", "@world"][..],
             &["--pretend", "--depclean"][..],
@@ -2809,15 +2852,19 @@ mod tests {
                 assert_eq!(files.1, db.1, "{atoms:?}: {backend} stderr differs");
             }
         }
-        // A missing database is refused (exit 1), not created.
+        // A missing database is refused (exit 1), not created. The
+        // target root is scratch: the updates run records there, never
+        // in the shared fixtures.
         for [backend, _] in &variants {
             let missing = tmp.join(format!("missing.{}", backend.rsplit('=').next().unwrap()));
+            let target = tmp.join(format!("target-{}", backend.rsplit('=').next().unwrap()));
+            std::fs::create_dir_all(&target).unwrap();
             let out = std::process::Command::new(&bin)
                 .args(["mrg", "--pretend", backend.as_str()])
                 .arg(format!("--vdb-path={}", missing.display()))
                 .arg("dev-libs/withdeps")
                 .env("PORTAGE_CONFIGROOT", &fixtures)
-                .env("ROOT", &fixtures)
+                .env("ROOT", &target)
                 .output()
                 .unwrap();
             assert_eq!(out.status.code(), Some(1), "{backend}");
@@ -2830,6 +2877,10 @@ mod tests {
         {
             let p = tmp.join("vdb.redb");
             let held = portage_vdb::RedbDb::open(&p).unwrap();
+            // Scratch target root: the updates run records there, never
+            // in the shared fixtures.
+            let target = tmp.join("target-redb");
+            std::fs::create_dir_all(&target).unwrap();
             for extra in [&["--pretend"][..], &[][..]] {
                 let out = std::process::Command::new(&bin)
                     .arg("mrg")
@@ -2838,7 +2889,7 @@ mod tests {
                     .arg(format!("--vdb-path={}", p.display()))
                     .arg("dev-libs/withdeps")
                     .env("PORTAGE_CONFIGROOT", &fixtures)
-                    .env("ROOT", &fixtures)
+                    .env("ROOT", &target)
                     .env("PORTAGE_TMPDIR", tmp.join("pt"))
                     .output()
                     .unwrap();

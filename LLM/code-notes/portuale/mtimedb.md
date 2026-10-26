@@ -86,3 +86,12 @@
 
 ## ResumeOpts.merge_wait_scope (#512)
 - `--merge-wait-scope` persists in `mtimedb["resume"]["myopts"]` as `"--merge-wait-scope": "<deep|system|toolchain|none>"` (first key in `json.dumps(sort_keys=True)` order), so `emerge --resume` replays the scope the original run used; absent means Portage's `deep` default. The substring reader tolerates Portage-written files; old files without the key resume as `deep`.
+
+## fn write_sections (atomic)
+- Portage `atomic_ofstream` (same-directory temporary renamed over the target, `util/__init__.py`) plus `apply_secpass_permissions(mode=0o644, gid=portage_gid)`: the file mode is forced to `0644` regardless of the writer's umask and the `portage` group is applied best-effort (a writer outside the group keeps its own gid, never failing), so a crash never leaves a half-written record behind and a stale temporary is removed on failure.
+
+## tests: writes_replace_the_file_atomically_with_fixed_mode
+- Pre-creates the file with mode `0600` and asserts the rewrite lands `0644` (proving the explicit chmod, umask-independent) with the new content and no `.*.tmp.*` leftover in the directory.
+
+## tests: mtimedb_file_carries_the_portage_gid_when_permitted
+- When the `portage` group resolves and the writer may chown (root, or a member), the rewritten file is group-owned by it; otherwise only the mode and the successful write are pinned.

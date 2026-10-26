@@ -54,29 +54,76 @@ pub(crate) fn valid_slot_name(s: &str) -> bool {
 /// malformed line is skipped, never fatal.
 /// Portage: portage.update.parse_updates
 pub fn parse_updates_content(text: &str) -> Vec<UpdateCmd> {
-    let mut out = Vec::new();
+    parse_updates_with_errors(text).cmds
+}
+
+/// One updates file's parse: the valid commands, the valid-directive
+/// count (drives the per-file dots and the force) and whether any line
+/// was malformed (an errored file applies but is never recorded).
+/// A versioned `slotmove` atom counts as valid yet yields no command:
+/// applying it is a later piece's work, but Portage records the file.
+pub struct ParsedUpdates {
+    /// The representable commands, in file order.
+    pub cmds: Vec<UpdateCmd>,
+    /// Valid directives, including versioned `slotmove` lines.
+    pub valid: usize,
+    /// True when any non-blank line was malformed.
+    pub has_errors: bool,
+}
+
+/// Split parse of one updates file's text: blank lines skipped, every
+/// other line either one valid directive or one error.
+/// Portage: portage.update.parse_updates
+pub fn parse_updates_with_errors(text: &str) -> ParsedUpdates {
+    let mut cmds = Vec::new();
+    let mut valid = 0usize;
+    let mut has_errors = false;
     for line in text.lines() {
         let toks: Vec<&str> = line.split_whitespace().collect();
         match toks.as_slice() {
+            [] => {}
             ["move", a, b] => {
                 if let (Some(old), Some(new)) = (bare_cp(a), bare_cp(b)) {
-                    out.push(UpdateCmd::Move { old, new });
+                    cmds.push(UpdateCmd::Move { old, new });
+                    valid += 1;
+                } else {
+                    has_errors = true;
                 }
             }
-            // A versioned slotmove atom is a no-op; `bare_cp` drops it.
+            // A versioned `slotmove` atom is valid yet yields no command.
             ["slotmove", pkg, os, ns]
-                if valid_slot_name(os) && valid_slot_name(ns) && bare_cp(pkg).is_some() =>
+                if valid_slot_name(os) && valid_slot_name(ns) && slotmove_pkg(pkg).is_some() =>
             {
-                out.push(UpdateCmd::SlotMove {
-                    cp: bare_cp(pkg).unwrap(),
-                    old_slot: os.to_string(),
-                    new_slot: ns.to_string(),
-                });
+                valid += 1;
+                if let Some(cp) = bare_cp(pkg) {
+                    cmds.push(UpdateCmd::SlotMove {
+                        cp,
+                        old_slot: os.to_string(),
+                        new_slot: ns.to_string(),
+                    });
+                }
             }
-            _ => {}
+            _ => {
+                has_errors = true;
+            }
         }
     }
-    out
+    ParsedUpdates {
+        cmds,
+        valid,
+        has_errors,
+    }
+}
+
+/// A `slotmove` package: parseable and not a blocker. Versioned atoms
+/// pass here; only the bare form yields a command.
+/// Portage: portage.update.parse_updates
+fn slotmove_pkg(s: &str) -> Option<portage_dep::Atom> {
+    let atom = portage_dep::parse_atom(s)?;
+    if atom.blocker != portage_dep::Blocker::None {
+        return None;
+    }
+    Some(atom)
 }
 
 /// Sort key for `NQ-YYYY` names; a non-matching name sorts last, by name.
@@ -163,7 +210,7 @@ pub fn apply_move_to_token(token: &str, old: &(String, String), new: &(String, S
 /// keeps the blocker, the operator/version, a differing sub-slot, the
 /// slot operator, and any `[usedeps]`; a sub-slot equalling the old
 /// slot is rewritten too. A token carrying `::repo` is left alone:
-/// Portage rejects it under every real EAPI, so none of its metadata
+/// Portage rejects it under every EAPI in use, so none of its metadata
 /// paths ever rewrites one.
 /// Portage: portage.update, update_dbentry
 pub fn apply_slotmove_to_token(
@@ -179,7 +226,7 @@ pub fn apply_slotmove_to_token(
     if (atom.category.as_str(), atom.package.as_str()) != (cp.0.as_str(), cp.1.as_str()) {
         return token.to_string();
     }
-    // `repo_deps` is false for every real EAPI (Portage `eapi.py`), so a
+    // `repo_deps` is false for every EAPI in use (Portage `eapi.py`), so a
     // `::repo` token is `InvalidAtom` on each metadata path: skipped.
     if atom.repo.is_some() {
         return token.to_string();

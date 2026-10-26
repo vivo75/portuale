@@ -59,3 +59,6 @@ Prompt EOF/SIGINT behavior, the --ask privilege offer, and the prompt line buffe
 
 ## fn prompt_line_buffer_returns_exactly_one_line_per_call
 - #259's root race, chased from the Z0 watchdog capture (2026-09-30): `read_prompt_line` is a raw `libc::read` with no userspace leftover, so a multi-line chunk becomes ONE answer and a line left in the kernel is stealable by any child spawned with inherited stdin (`eselect`/`renice`/`ionice` all use `.status()`). Portage is protected by Python's buffered `sys.stdin` (`input()` drains the kernel and serves leftovers from userspace). Part 1: one line per call.
+
+## fn ask_declined_writes_no_resume_list (updates era)
+- A declined `--ask` run still records the updates mtimes; the pin compares the `resume` section (round-tripped through `read_resume_list`) instead of the whole file.

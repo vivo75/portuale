@@ -3,27 +3,27 @@
 //! rewrites `SLOT`; `update_ents` rewrites the `*DEPEND` files.
 // Portage: lib/portage/_global_updates.py, _do_global_updates
 
-use crate::global_updates::{RepoMatch, repo_update_map};
+use crate::global_updates::RepoMatch;
 use portage_repo::{RepoConfig, UpdateCmd};
 use portage_vdb::{EntryKey, InstalledDb};
 use std::path::Path;
 use std::sync::Arc;
 
 /// What [`apply_vdb_moves`] needs: the root whose vdb moves, the repos
-/// (in `portdb` order) whose updates apply to it, and the progress hook
-/// the output driver passes (`None` in tests that do not watch
-/// progress): `'@'` per `move` count, `'s'` per `slotmove` count. The
-/// production driver lands in a later piece; tests are the only callers
-/// until then.
-#[cfg_attr(not(test), allow(dead_code))]
+/// (in `portdb` order, for the main-repo match) with the gated updates
+/// map the driver scanned, and the progress hook the output driver
+/// passes (`None` in tests that do not watch progress): `'@'` per `move`
+/// count, `'s'` per `slotmove` count.
+#[cfg(test)]
 pub(crate) struct VdbMovesArgs<'a> {
     pub root: &'a Path,
     pub repos: &'a [RepoConfig],
+    pub map: &'a [(String, Vec<UpdateCmd>)],
     pub on_progress: Option<&'a dyn Fn(char, usize)>,
 }
 
 /// How many entries [`apply_vdb_moves`] renamed (`move`) and reslotted.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) struct VdbMoveReport {
     pub moves: usize,
     pub slot_moves: usize,
@@ -37,7 +37,7 @@ pub(crate) struct VdbMoveReport {
 ///
 /// Returns `Err` when the vdb cannot be read, locked or written.
 // Portage: lib/portage/_global_updates.py, _do_global_updates
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn apply_vdb_moves(args: VdbMovesArgs<'_>) -> Result<VdbMoveReport, String> {
     let db = portage_vdb::for_root(args.root);
     // `vardb.lock()`: the blocking flock on the vdb directory. Database
@@ -47,18 +47,18 @@ pub(crate) fn apply_vdb_moves(args: VdbMovesArgs<'_>) -> Result<VdbMoveReport, S
         .vdb_dir()
         .map(|vdb| crate::portage_lock::PortageLockfile::acquire_new_lockfile(&vdb))
         .transpose()?;
-    let map = repo_update_map(args.repos);
     let master = args
         .repos
         .iter()
         .find(|r| r.is_main)
         .map(|r| r.name.clone());
-    let matcher = RepoMatch::new(&map, master);
+    let map = args.map;
+    let matcher = RepoMatch::new(map, master);
     let mut report = VdbMoveReport {
         moves: 0,
         slot_moves: 0,
     };
-    for (repo_name, cmds) in &map {
+    for (repo_name, cmds) in map {
         if repo_name == "DEFAULT" || cmds.is_empty() {
             continue;
         }
@@ -80,7 +80,6 @@ pub(crate) fn apply_vdb_moves(args: VdbMovesArgs<'_>) -> Result<VdbMoveReport, S
 /// What [`apply_vdb_cmd`] needs: the installed database, the update
 /// repo's name with the shared matcher, the one command to apply, and
 /// the progress hook (`'@'`/`'s'` with the count, only when nonzero).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct VdbCmdArgs<'a> {
     pub db: &'a Arc<dyn InstalledDb>,
     pub repo_name: &'a str,
@@ -98,7 +97,6 @@ pub(crate) struct VdbCmdArgs<'a> {
 ///
 /// Returns `Err` when the vdb cannot be read or written.
 // Portage: lib/portage/_global_updates.py, _do_global_updates
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn apply_vdb_cmd(args: VdbCmdArgs<'_>) -> Result<(usize, usize), String> {
     let repo_match = |repository: &str| args.matcher.matches(args.repo_name, repository);
     match args.cmd {
@@ -128,12 +126,13 @@ pub(crate) fn apply_vdb_cmd(args: VdbCmdArgs<'_>) -> Result<(usize, usize), Stri
 }
 
 /// What [`update_ents`] needs: the root whose vdb dep strings move,
-/// the repos (in `portdb` order) whose updates apply to it, and the
-/// progress hook the output driver passes (`None` in tests).
-#[cfg_attr(not(test), allow(dead_code))]
+/// the repos (in `portdb` order, for the main-repo match) with the gated
+/// updates map the driver scanned, and the progress hook the output
+/// driver passes (`None` in tests).
 pub(crate) struct UpdateEntsArgs<'a> {
     pub root: &'a Path,
     pub repos: &'a [RepoConfig],
+    pub map: &'a [(String, Vec<UpdateCmd>)],
     pub on_update: Option<&'a dyn Fn(usize, usize)>,
 }
 
@@ -146,16 +145,15 @@ pub(crate) struct UpdateEntsArgs<'a> {
 ///
 /// Returns `Err` when the vdb cannot be read or written.
 // Portage: lib/portage/dbapi/__init__.py, update_ents
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn update_ents(args: UpdateEntsArgs<'_>) -> Result<usize, String> {
     let db = portage_vdb::for_root(args.root);
-    let map = repo_update_map(args.repos);
+    let map = args.map;
     let master = args
         .repos
         .iter()
         .find(|r| r.is_main)
         .map(|r| r.name.clone());
-    let matcher = RepoMatch::new(&map, master);
+    let matcher = RepoMatch::new(map, master);
     let mut keys = db.entries().map_err(|e| e.to_string())?;
     keys.sort();
     let maxval = keys.len();
@@ -394,6 +392,7 @@ fn set_image_file(image: &mut portage_vdb::EntryImage, name: &str, data: &[u8]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::global_updates::repo_update_map;
     use std::collections::BTreeMap;
 
     /// Portage 3.0.83 applies the fixture's `move` + `slotmove` by
@@ -433,9 +432,11 @@ mod tests {
             volatile: false,
             module_specific_options: Vec::new(),
         }];
+        let map = repo_update_map(&repos);
         let report = apply_vdb_moves(VdbMovesArgs {
             root: &root,
             repos: &repos,
+            map: &map,
             on_progress: None,
         })
         .expect("vdb moves apply");
@@ -509,9 +510,11 @@ mod tests {
             volatile: false,
             module_specific_options: Vec::new(),
         }];
+        let map = repo_update_map(&repos);
         apply_vdb_moves(VdbMovesArgs {
             root: &root,
             repos: &repos,
+            map: &map,
             on_progress: None,
         })
         .expect("vdb moves apply");
@@ -519,6 +522,7 @@ mod tests {
         let updated = update_ents(UpdateEntsArgs {
             root: &root,
             repos: &repos,
+            map: &map,
             on_update: Some(&|maxval, curval| {
                 calls.borrow_mut().push((maxval, curval));
             }),

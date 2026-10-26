@@ -18,3 +18,6 @@ Resume news notices, pretend write isolation, and the not-merged tail.
 
 ## fn up_front_save_covers_exactly_the_failure_path_tail_when_nothing_merged
 - #168: the up-front save (`emerge_build::resume_cpv` over the whole plan) and the failure-path tail (`entries_not_merged`) agree when no merge has landed yet -- so keeping the failure writes alongside the new up-front save + per-merge shrink is provably a harmless redundancy, and failure behaviour is unchanged.
+
+## fn pretend_writes_no_resume_list_even_with_a_stale_list_present (updates era)
+- `--pretend` records the updates mtimes (Portage commits them even when the resolve never happens) but never writes `resume`: the fresh-root half asserts an `updates`-only mtimedb, the stale half round-trips the seeded `resume` list through `read_resume_list` while the record is maintained.

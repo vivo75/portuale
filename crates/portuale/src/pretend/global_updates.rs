@@ -1,105 +1,124 @@
-//! The applied-updates AUTOCLEAN force: whether any repo's
-//! `profiles/updates/` holds a changed file with >=1 valid directive.
-//! Read-only interim: the scan parses but records nothing and the force
-//! stays false until the moves themselves are applied.
+//! The applied-updates `AUTOCLEAN` force: Portage's `_global_updates`
+//! over the target root, then the running root when different, before
+//! the resolve. An applied run prints the `Performing Global Updates`
+//! block, moves the installed entries, rewrites world, `package.*` and
+//! the dep strings, records the updates mtimes and forces `AUTOCLEAN`
+//! on the target root only.
+//! Portage: lib/_emerge/actions.py, run_action
 
+use crate::global_updates::{RunGlobalUpdatesArgs, run_global_updates};
 use crate::pretend::*;
-use portage_repo::RepoConfig;
 
-/// Whole-second `st_mtime` of `path`, or `None` when unreadable.
-// Portage: lib/portage/update.py, grab_updates (`mystat[stat.ST_MTIME]`)
-fn file_mtime(path: &Path) -> Option<i64> {
-    let m = std::fs::metadata(path).ok()?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Some(m.mtime())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = m;
-        None
-    }
+/// What [`global_updates_force`] needs: the CLI options (for the
+/// skips), the repos, the target config (reloaded when its updates
+/// applied), the config root for that reload, the target root, and the
+/// stdout stream for the updates block.
+pub(crate) struct GlobalUpdatesArgs<'a> {
+    pub opts: &'a EmergeOpts<'a>,
+    pub repos: &'a [RepoConfig],
+    pub config: &'a mut portage_profile::Config,
+    pub config_root: &'a Path,
+    pub root: &'a Path,
+    pub out: &'a mut dyn std::io::Write,
 }
 
-/// One root's updates check: true iff a changed updates file yields >=1
-/// valid directive. Read-only: the record is consulted but never
-/// extended, so a non-writable root never fails the run.
-// Portage: lib/portage/_global_updates.py, _do_global_updates
-fn check_root_updates(repos: &[RepoConfig], root: &Path) -> bool {
-    let record = crate::mtimedb::read_updates_mtimes(root);
-    let mut valid_total = 0usize;
-    // Repos sharing one updates directory scan it once.
-    // Portage: _global_updates.py, updpath_map
-    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
-    for repo in repos {
-        let updpath = repo.location.join("profiles").join("updates");
-        if !seen.insert(updpath.clone()) {
-            continue;
-        }
-        let Ok(rd) = std::fs::read_dir(&updpath) else {
-            continue;
-        };
-        for entry in rd.flatten() {
-            if entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let Ok(ft) = entry.file_type() else {
-                continue;
-            };
-            if !ft.is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let Some(mtime) = file_mtime(&path) else {
-                continue;
-            };
-            let key = path.display().to_string();
-            // `int(record.get(path, -1)) != st_mtime`: only changed
-            // files are even parsed.
-            // Portage: lib/portage/update.py, grab_updates
-            if record.get(&key) == Some(&mtime) {
-                continue;
-            }
-            // Lossy read like `errors="replace"`; an unreadable file
-            // is skipped, never fatal. Error tracking (applied but
-            // unrecorded) returns with the record in a later piece.
-            let Ok(bytes) = std::fs::read(&path) else {
-                continue;
-            };
-            valid_total +=
-                portage_repo::parse_updates_content(&String::from_utf8_lossy(&bytes)).len();
-        }
-    }
-    valid_total > 0
-}
-
-/// The two-root core: both roots' updates state is scanned, but no force
-/// is ever reported while the moves stay unapplied. Split out so tests
-/// need no process-global env (`PORTAGE_RUNNING_ROOT` is also written
-/// by unrelated tests running on other threads).
-pub(crate) fn updates_force_for_roots(repos: &[RepoConfig], target: &Path, running: &Path) -> bool {
-    // The scan still runs: it keeps the updates parser exercised on real
-    // repos while recording nothing.
-    check_root_updates(repos, target);
-    if running != target {
-        check_root_updates(repos, running);
-    }
-    false
-}
-
-/// The target root's applied-updates force, for the merge gate. Always
-/// false while the moves stay unapplied: the check scans but neither
-/// records nor forces. Runs for every action except help/info/sync/version
-/// and `--package-moves=n`, pre-resolve.
+/// The target root's applied-updates force, for the merge gate. Runs for
+/// every action except help/info/sync/version and `--package-moves=n`,
+/// pre-resolve.
 // Portage: lib/_emerge/actions.py, run_action
-pub(crate) fn global_updates_force(
-    opts: &EmergeOpts<'_>,
-    repos: &[RepoConfig],
-    root: &Path,
-) -> bool {
-    if !opts.package_moves || opts.info_action || opts.sync_action || opts.version_action {
+pub(crate) fn global_updates_force(args: GlobalUpdatesArgs<'_>) -> bool {
+    if !args.opts.package_moves
+        || args.opts.info_action
+        || args.opts.sync_action
+        || args.opts.version_action
+    {
         return false;
     }
-    updates_force_for_roots(repos, root, &portage_repo::running_root_from_env())
+    updates_force_for_roots(UpdatesForRootsArgs {
+        repos: args.repos,
+        config: args.config,
+        config_root: args.config_root,
+        target: args.root,
+        running: &portage_repo::running_root_from_env(),
+        quiet: args.opts.quiet,
+        out: args.out,
+    })
+}
+
+/// What [`updates_force_for_roots`] needs: the repos, the target
+/// config (reloaded when the target updates applied), the config root
+/// for that reload, both roots, the `--quiet` flag and the stdout
+/// stream.
+pub(crate) struct UpdatesForRootsArgs<'a> {
+    pub repos: &'a [RepoConfig],
+    pub config: &'a mut portage_profile::Config,
+    pub config_root: &'a Path,
+    pub target: &'a Path,
+    pub running: &'a Path,
+    pub quiet: bool,
+    pub out: &'a mut dyn std::io::Write,
+}
+
+/// The two-root core: the target root first, then the running root when
+/// it differs. Only the target root's force is reported (the post-merge
+/// tail reads the target settings), but both roots' records are
+/// maintained. A failed pass is reported and reads as no force.
+// Portage: lib/_emerge/actions.py, run_action
+pub(crate) fn updates_force_for_roots(args: UpdatesForRootsArgs<'_>) -> bool {
+    let UpdatesForRootsArgs {
+        repos,
+        config,
+        config_root,
+        target,
+        running,
+        quiet,
+        out,
+    } = args;
+    // `secpass` is global: uid 0, or the caller owning the target root
+    // in unprivileged mode, processes both roots.
+    // Portage: lib/portage/data.py, _unprivileged_mode
+    let privileged = crate::privileges::is_privileged(target);
+    let sandboxed = std::env::var_os("SANDBOX_ACTIVE").is_some();
+    let target_settings = crate::global_updates::settings_for(config);
+    let target_applied = match run_global_updates(RunGlobalUpdatesArgs {
+        root: target,
+        repos,
+        settings: &target_settings,
+        privileged,
+        sandboxed,
+        quiet,
+        out,
+    }) {
+        Ok(applied) => applied,
+        Err(e) => {
+            eprintln!("emerge: global updates: {e}");
+            false
+        }
+    };
+    if target_applied {
+        // Portage reloads the whole config from scratch, so the rest of
+        // the run sees the moved world, `package.*`, vdb and binpkgs.
+        match resolve_config_for_root(config_root, repos, target) {
+            Ok(reloaded) => *config = reloaded,
+            Err(e) => eprintln!("emerge: global updates: {e}"),
+        }
+    }
+    if running != target {
+        let running_settings = resolve_config_for_root(running, repos, running)
+            .ok()
+            .map(|running_config| crate::global_updates::settings_for(&running_config))
+            .unwrap_or_else(|| target_settings.clone());
+        if let Err(e) = run_global_updates(RunGlobalUpdatesArgs {
+            root: running,
+            repos,
+            settings: &running_settings,
+            privileged,
+            sandboxed,
+            quiet,
+            out,
+        }) {
+            eprintln!("emerge: global updates: {e}");
+        }
+    }
+    target_applied
 }

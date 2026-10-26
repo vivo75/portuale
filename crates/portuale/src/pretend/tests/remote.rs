@@ -103,7 +103,7 @@ fn remote_success_prints_no_post_merge_notice_like_portage() {
         .env("PORTAGE_CONFIGROOT", &clientetc)
         .env("ROOT", &root)
         .env("PORTAGE_OVERRIDE_EPREFIX", &root)
-        .env("PORTAGE_RUNNING_ROOT", &fixtures)
+        .env("PORTAGE_RUNNING_ROOT", &root)
         .env("DISTDIR", fixtures.join("distfiles"))
         .env("PORTAGE_TMPDIR", base.join("pt"))
         .env("FEATURES", "news")

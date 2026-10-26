@@ -505,7 +505,7 @@ fn s8_pretend_installs_nothing() {
         .stderr(std::process::Stdio::piped())
         .env("PORTAGE_CONFIGROOT", &clientetc)
         .env("ROOT", &root)
-        .env("PORTAGE_RUNNING_ROOT", &fixtures)
+        .env("PORTAGE_RUNNING_ROOT", &root)
         .env("DISTDIR", fixtures.join("distfiles"))
         .env("PORTAGE_TMPDIR", base.join("pt"))
         .env("FEATURES", "sandbox")

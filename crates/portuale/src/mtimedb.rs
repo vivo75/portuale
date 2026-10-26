@@ -138,7 +138,10 @@ fn format_section_body(root: &Path, section: &Section) -> String {
 
 /// Writes the whole mtimedb file from pre-rendered `\t"key": {...}`
 /// parts (a `BTreeMap`, so keys serialize in `sort_keys` order).
-/// Removes the file outright when there is nothing to store.
+/// Removes the file outright when there is nothing to store. The write
+/// is atomic: a same-directory temporary renamed over the target, with
+/// the file mode forced to `0644` and the `portage` group applied
+/// best-effort, so a crash never leaves a half-written record behind.
 fn write_sections(root: &Path, parts: BTreeMap<String, String>) -> Result<(), String> {
     let path = mtimedb_path(root);
     if parts.is_empty() {
@@ -150,7 +153,94 @@ fn write_sections(root: &Path, parts: BTreeMap<String, String>) -> Result<(), St
     }
     let body: Vec<&str> = parts.values().map(String::as_str).collect();
     let content = format!("{{\n{}\n}}\n", body.join(",\n"));
-    std::fs::write(&path, content).map_err(|e| format!("{}: {e}", path.display()))
+    let base = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("mtimedb");
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut n = 0u32;
+    let (tmp, mut file) = loop {
+        let candidate = parent.join(format!(".{base}.tmp.{}.{n}", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => break (candidate, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+            Err(e) => return Err(format!("{}: {e}", candidate.display())),
+        }
+    };
+    let result = (|| {
+        use std::io::Write as _;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        drop(file);
+        set_mtimedb_mode(&tmp)?;
+        chown_portage_gid(&tmp);
+        std::fs::rename(&tmp, &path)
+            .map_err(|e| format!("{} -> {}: {e}", tmp.display(), path.display()))
+    })();
+    if result.is_err() {
+        std::fs::remove_file(&tmp).ok();
+    }
+    result?;
+    Ok(())
+}
+
+/// `apply_secpass_permissions(mode=0o644)`: the record stays
+/// world-readable regardless of the writer's umask.
+// Portage: lib/portage/util/__init__.py, apply_secpass_permissions
+fn set_mtimedb_mode(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Best-effort `portage`-group ownership of a fresh record
+/// (`apply_secpass_permissions(gid=portage_gid)`): a writer outside the
+/// group cannot chown, so a failure is silently kept, never fatal.
+// Portage: lib/portage/util/__init__.py, apply_secpass_permissions
+fn chown_portage_gid(path: &Path) {
+    let Some(gid) = portage_gid() else {
+        return;
+    };
+    let Ok(name) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
+        return;
+    };
+    // SAFETY: `name` is a NUL-terminated path that outlives the call;
+    // `(uid_t)-1` keeps the owner, `gid` is a looked-up group.
+    unsafe {
+        libc::chown(name.as_ptr(), u32::MAX, gid);
+    }
+}
+
+/// The `portage` group's gid, or `None` when the group is unknown.
+fn portage_gid() -> Option<u32> {
+    let name = std::ffi::CString::new("portage").ok()?;
+    // SAFETY: `name` is a valid NUL-terminated string; `entry`, the
+    // scratch buffer and `result` stay alive for the call.
+    unsafe {
+        let mut entry: libc::group = std::mem::zeroed();
+        let mut result: *mut libc::group = std::ptr::null_mut();
+        let mut bufsize = libc::sysconf(libc::_SC_GETGR_R_SIZE_MAX);
+        if bufsize <= 0 {
+            bufsize = 16384;
+        }
+        let mut buf = vec![0u8; bufsize as usize];
+        let rc = libc::getgrnam_r(
+            name.as_ptr(),
+            &mut entry,
+            buf.as_mut_ptr() as *mut libc::c_char,
+            buf.len(),
+            &mut result,
+        );
+        if rc == 0 && !result.is_null() {
+            Some((*result).gr_gid)
+        } else {
+            None
+        }
+    }
 }
 
 /// Raw value slices for every top-level key on disk, in file order.
@@ -776,6 +866,79 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn writes_replace_the_file_atomically_with_fixed_mode() {
+        // Portage's `atomic_ofstream` (same-directory temporary renamed
+        // over the target) plus `apply_secpass_permissions(mode=0o644)`
+        // (`lib/portage/util/__init__.py`, `util/mtimedb.py`): the write
+        // lands whole, world-readable whatever the umask, and no
+        // temporary survives it.
+        let scratch = TempDir::new("mtimedb_test");
+        let root = scratch.path().to_path_buf();
+        std::fs::create_dir_all(mtimedb_path(&root).parent().unwrap()).unwrap();
+        std::fs::write(mtimedb_path(&root), "{}\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(mtimedb_path(&root), std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        write_info_mtimes(&root, &mtimes).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(mtimedb_path(&root))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o644,
+                "the rewrite forces 0644 over the old 0600"
+            );
+        }
+        assert_eq!(read_info_mtimes(&root), mtimes);
+        let leftovers: Vec<_> = std::fs::read_dir(mtimedb_path(&root).parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "no rewrite temporary survives");
+    }
+
+    #[test]
+    fn mtimedb_file_carries_the_portage_gid_when_permitted() {
+        // `apply_secpass_permissions(gid=portage_gid)`: the record is
+        // group-owned by `portage` whenever the writer may chown it; a
+        // writer outside the group keeps its own gid, never failing.
+        let Some(gid) = portage_gid() else {
+            return;
+        };
+        // SAFETY: `geteuid`/`getgroups` take no other arguments.
+        let permitted = unsafe { libc::geteuid() } == 0 || {
+            let mut groups = vec![0 as libc::gid_t; 64];
+            let n = unsafe { libc::getgroups(groups.len() as libc::c_int, groups.as_mut_ptr()) };
+            n > 0 && groups[..n as usize].contains(&gid)
+        };
+        if !permitted {
+            return;
+        }
+        let scratch = TempDir::new("mtimedb_test");
+        let root = scratch.path().to_path_buf();
+        let mut mtimes = BTreeMap::new();
+        mtimes.insert("/usr/share/info".to_string(), 1_700_000_000);
+        write_info_mtimes(&root, &mtimes).unwrap();
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(mtimedb_path(&root)).unwrap().gid(),
+                gid,
+                "the record is group-owned by portage"
+            );
+        }
     }
 
     #[test]

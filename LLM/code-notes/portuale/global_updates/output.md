@@ -12,3 +12,9 @@ The `Performing Global Updates` stdout block (backlog #576): the header, the per
 ## tests
 - `stdout_matches_the_portage_capture` / `quiet_stdout_matches_the_portage_capture`: every half runs over a scratch copy (`cp -a`, `TempDir` guard kept alive) in Portage's order — world decisions (silent), moves interleaved per command, config files, vdb then binpkg `update_ents` — with all progress reporting into the printer. Stdout equals the committed capture byte for byte after replacing the capture's scratch prefix; world/config settings mirror the Task 7/9 tests (`/etc` protect, multi-instance, `zstd`, `compress-index`).
 - `notice_uses_the_colorizer_keys`: the header/legend go through `GOOD`/`bold` (expectation built through the same `Colorizer`, so absolute codes stay `color.rs`'s pin).
+
+## fn drive_fixture (tests)
+- Now drives the production driver (`run_global_updates`) over the scratch copy instead of repeating its order, with the same halves (`/etc` protect, `zstd`, multi-instance, `compress-index`, colour off, privilege from the scratch root); the two stdout pins are unchanged.
+
+## fn drive_fixture (ordering)
+- Per-file dots print in sorted file-name order; Portage's `scandir` order is arbitrary per filesystem (a single file here, so no ruling needed).

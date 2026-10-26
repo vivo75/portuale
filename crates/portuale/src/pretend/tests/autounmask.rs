@@ -19,19 +19,25 @@ fn autounmask_proposes_unmask_for_masked_dep() {
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let env = fixture_resolve_env(&root, &base.join("pt"));
-    let output = std::process::Command::new(&portuale_bin)
-        .args([
-            "emerge",
-            "--pretend",
-            "--autounmask",
-            "dev-libs/maskneedpkg",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .envs(env)
-        .output()
-        .expect("portuale emerge spawns");
+    let run_once = || {
+        std::process::Command::new(&portuale_bin)
+            .args([
+                "emerge",
+                "--pretend",
+                "--autounmask",
+                "dev-libs/maskneedpkg",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .envs(env.clone())
+            .output()
+            .expect("portuale emerge spawns")
+    };
+    // A warm-up run establishes the updates record, so the pinned run
+    // below skips the block and the ambient repo set behind it.
+    run_once();
+    let output = run_once();
     assert_eq!(
         output.status.code(),
         Some(1),

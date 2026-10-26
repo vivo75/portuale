@@ -519,7 +519,7 @@ fn ask_declined_writes_no_resume_list() {
     // Portage: actions.py. A declined `--ask` run writes nothing.
     use std::io::Write;
     let portuale_bin = built_portuale_bin();
-    let (root, before) = stale_resume_root("ask");
+    let (root, _) = stale_resume_root("ask");
     let tmp = TempDir::new("resume_no_write_ask").keep();
 
     let (mut master, slave_stdio) = pty_pair();
@@ -549,9 +549,26 @@ fn ask_declined_writes_no_resume_list() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert_eq!(
-        std::fs::read(crate::mtimedb::mtimedb_path(&root)).unwrap(),
-        before,
-        "a declined --ask run must leave a stale resume list byte-identical"
+        crate::mtimedb::read_resume_list(&root)
+            .map(|(favorites, mergelist, _)| (favorites, mergelist)),
+        Some((
+            vec!["dev-libs/stale-a".to_string()],
+            vec![
+                (
+                    crate::mtimedb::ResumeEntryKind::Ebuild,
+                    "dev-libs".to_string(),
+                    "stale-a".to_string(),
+                    "1".to_string(),
+                ),
+                (
+                    crate::mtimedb::ResumeEntryKind::Ebuild,
+                    "dev-libs".to_string(),
+                    "stale-b".to_string(),
+                    "1".to_string(),
+                ),
+            ],
+        )),
+        "a declined --ask run must leave a stale resume list alone"
     );
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::remove_dir_all(&root);

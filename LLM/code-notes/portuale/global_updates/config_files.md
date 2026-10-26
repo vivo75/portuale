@@ -21,3 +21,6 @@ The world and `package.*` half of the `_do_global_updates` port (backlog #576): 
 
 ## struct UpdateConfigFilesArgs
 - `on_progress` fires once per rewritten line, at the site Portage writes `'p'` (`update.py:396-397`, unconditional `sys.stdout.write` plus flush). The hook carries no count: Portage writes one character per line, so the driver maps each call to a single `'p'`.
+
+## map threading (Task 11)
+- `UpdateWorldArgs` and `UpdateConfigFilesArgs` take the driver's gated `map` alongside `repos` (repos now only supply the main-repo name); the halves no longer build the full map themselves.

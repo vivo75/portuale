@@ -36,3 +36,6 @@
 
 ## fn true_spelling_matches_bare (in mod.rs, shared helper)
 - Backlog #241: Portage's `true_y_or_n` choices (`_emerge/main.py:320-322,365-371,405-415,446-449,612-623,697,732-747`; normalized `in true_y` per option) admit `=True` for eleven options portuale parsed narrowly (`=y`/`=n` only, rc 2 `unrecognized option` for nine of them and a wrong `(choose from "y", "n")` rejection for the two autounmask-keep options); `=True` must behave exactly like the bare flag. `expected_rc` pins the shared exit code (0 for the resolving shapes, 1 for the two autounmask-keep shapes whose fixtures fail like Portage). `--pretend` never writes, so sharing one `ROOT` across both runs is hermetic.
+
+## warm-up run (Task 11)
+- The compared `--pretend` runs share one scratch `ROOT`: a warm-up run establishes the updates record first, so both compared runs skip the block (and the ambient repo set behind it) and stay byte-identical.

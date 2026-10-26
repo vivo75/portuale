@@ -8,7 +8,7 @@
 - Origin: SCOPE_BACKLOG Part 2 Section H item 2.
 - Deliberate cuts (all no-ops for a `--pretend` that never writes): the on-disk vdb category rename / `*DEPEND` rewrite, the world / world_sets rewrite, binary-package (`%`/`S`) updates, and the `/etc/portage/package.*` (`p`) rewrite -- `--pretend` mutates none of these, so in-memory application on read is equivalent.
 - Portage `grab_updates`' `os.scandir` file order (+ `prev_mtimes` incremental logic): portuale sorts the quarter files by `(year, quarter)` parsed from the `NQ-YYYY` name (non-matching names last, by name) and re-reads them every run. Deterministic, and strictly better than Portage's arbitrary order for a chained move spanning two quarter files.
-- A `slotmove` whose atom carries a version/operator: Portage `update_dbentry` acts only on the unversioned case (`orig_atom.version is None`), so portuale drops the qualified form at parse time (same net effect).
+- A `slotmove` whose atom carries a version/operator: Portage `parse_updates` accepts any non-blocker atom (valid, recorded, applied); portuale's parser counts it valid too, but `UpdateCmd::SlotMove` carries only the bare `cat/pkg`, so the versioned form stays a no-op at apply time (backlog #583: keep the atom and match versions in `move_slot_ent` only).
 
 ## enum UpdateCmd
 - `Move`: Portage `parse_updates` rejects a blocker or any `atom != atom.cp`.
@@ -31,7 +31,7 @@
 ## fn apply_slotmove_to_token
 - Portage `update_dbentry` for a single `slotmove` (`orig_atom.version is None` branch), applied to one atom token: an atom on `cp` whose `:slot` (ignoring sub-slot / operator) is `old_slot` gets it rewritten to `new_slot`. The version check is on the *directive's* atom only -- a versioned *token* (`>=dev-libs/foo-1:0=`, upstream `test_update_dbentry.py:74-79`) is rewritten, as are blocker-prefixed and `[usedeps]` tokens (upstream `:80-103`).
 - Splice is `with_slot` verbatim: the prefix before the first `:` (blockers survive), the rebuilt `:slot[/sub][op]` (a sub-slot equalling the old slot is rewritten, a differing one kept), then the tail past the old slot expression carried over byte-for-byte. `[x, y]`-style spacing needs no normalization: Portage rejects it as `InvalidAtom` under every EAPI.
-- `::repo` tokens are left alone, and the reason is an EAPI rule, not splice fear: `repo_deps` is false for every real EAPI (`eapi.py:314`), so `Atom(token, eapi=<real>)` raises `InvalidAtom` (`dep/__init__.py:2140-2141`) and `update_dbentry` skips the token on each of the vdb/binpkg/read paths (all pass `parent=` → the entry's real EAPI). Only the `eapi=None` config-file path (which portuale deliberately does not implement) rewrites them.
+- `::repo` tokens are left alone, and the reason is an EAPI rule, not splice fear: `repo_deps` is false for every EAPI in use (`eapi.py:314`), so `Atom(token, eapi=<entry EAPI>)` raises `InvalidAtom` (`dep/__init__.py:2140-2141`) and `update_dbentry` skips the token on each of the vdb/binpkg/read paths (all pass `parent=` → the entry's own EAPI). Only the `eapi=None` config-file path (which portuale deliberately does not implement) rewrites them.
 - Portage `with_slot` keeps a differing sub-slot but rewrites one that equalled the old slot.
 
 ## fn update_move_targets
@@ -65,3 +65,6 @@
 
 ## fn installed_cp_sources_with
 - Precedent: `apply_updates_to_dep_string_with`. Lets a synthetic `move` cycle be tested without global state.
+
+## fn parse_updates_with_errors
+- Portage `portage.update.parse_updates` as a `(cmds, valid, has_errors)` split: blank lines skipped, every other line one valid directive or one error. A versioned `slotmove` atom counts as valid (Portage only rejects blockers there) yet yields no command -- applying it is backlog #583. `parse_updates_content` delegates to it (identical command lists, so the read path is unchanged); the global-updates scan uses the full split (valid count for the force/dots, error flag for the record).

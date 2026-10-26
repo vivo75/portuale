@@ -374,7 +374,7 @@
 - [crates/portuale/src/fetch.rs](portuale/fetch.md) — Network fetch of a package's distfiles via `wget` (locking, mirrors, resume, digest verification).
 - [crates/portuale/src/global_updates/binpkg.rs](portuale/global_updates/binpkg.md) — The binpkg half of `_do_global_updates` (backlog #576): `move_ent` /
 - [crates/portuale/src/global_updates/config_files.rs](portuale/global_updates/config_files.md) — The world and `package.*` half of the `_do_global_updates` port (backlog #576): `update_dbentry` over the world list and every `package.*` file.
-- [crates/portuale/src/global_updates/mod.rs](portuale/global_updates/mod.md) — Per-repo updates map for the `_do_global_updates` port (backlog #576): ordered repo lists with the `DEFAULT` alias.
+- [crates/portuale/src/global_updates/mod.rs](portuale/global_updates/mod.md) — The `_do_global_updates` port (backlog #576): the mtime-gated scan, the per-root driver, and the shared map/matcher/collapse helpers.
 - [crates/portuale/src/global_updates/output.rs](portuale/global_updates/output.md) — The `Performing Global Updates` stdout block (backlog #576): the header, the per-file dots and every progress character, driven by the halves' hooks.
 - [crates/portuale/src/global_updates/vdb.rs](portuale/global_updates/vdb.md) — The vdb half of `_do_global_updates` (backlog #576): `move_ent` / `move_slot_ent` over the installed database under the vdb lock.
 - [crates/portuale/src/helpers/chmod_lite.rs](portuale/helpers/chmod_lite.md) — Native `chmod-lite` helper: recursive permission normalization ported from Portage.
@@ -415,7 +415,7 @@
 - [crates/portuale/src/pretend/expand_targets.rs](portuale/pretend/expand_targets.md) — Expanding the command-line arguments (sets, package moves, bare names) into the atoms to resolve.
 - [crates/portuale/src/pretend/final_gates.rs](portuale/pretend/final_gates.md) — The last gates before execution: ABI rebuilds, changed-deps report, buildpkgonly deps, circular dependencies.
 - [crates/portuale/src/pretend/gates.rs](portuale/pretend/gates.md) — Pure predicates for what a run shows: merge-list gating, the empty-plan arms, and resolution-phase display.
-- [crates/portuale/src/pretend/global_updates.rs](portuale/pretend/global_updates.md) — The applied-updates AUTOCLEAN force (backlog #562), reverted to read-only pending backlog #576 (backlog #575 Task 1): the scan still parses changed `profiles/updates/` files, but nothing is recorded and no force is ever reported, because portuale never performs the moves on disk -- recording would make Portage's `grab_updates` (`_global_updates.py:91`) skip those files as applied and never move the installed entries.
+- [crates/portuale/src/pretend/global_updates.rs](portuale/pretend/global_updates.md) — The applied-updates AUTOCLEAN force (backlog #562, full port under backlog #576): Portage's `_global_updates` over the target root, then the running root when different, before the resolve. An applied target run reloads the config so the rest of the run sees the moved state.
 - [crates/portuale/src/pretend/info.rs](portuale/pretend/info.md) — `emerge --info`.
 - [crates/portuale/src/pretend/json.rs](portuale/pretend/json.md) — `--json` output.
 - [crates/portuale/src/pretend/merge_list.rs](portuale/pretend/merge_list.md) — The counts and summary lines under the merge list, and the redisplay before a merge.

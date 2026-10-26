@@ -44,6 +44,10 @@ fn updates_test_root(tag: &str) -> std::path::PathBuf {
     portage_util::TempDir::new(&format!("updates_force_root_{tag}")).keep()
 }
 
+fn updates_test_config() -> portage_profile::Config {
+    portage_profile::Config::default()
+}
+
 fn moves_on_opts() -> EmergeOpts<'static> {
     EmergeOpts {
         package_moves: true,
@@ -59,8 +63,28 @@ fn updates_file_key(repo: &std::path::Path, name: &str) -> String {
         .to_string()
 }
 
+/// The target-root force through the two-root core, with a scratch
+/// stdout stream.
+fn target_force(
+    repos: &[portage_repo::RepoConfig],
+    config: &mut portage_profile::Config,
+    target: &std::path::Path,
+    running: &std::path::Path,
+    opts: &EmergeOpts<'_>,
+) -> bool {
+    let mut out = Vec::new();
+    updates_force_for_roots(UpdatesForRootsArgs {
+        repos,
+        config,
+        config_root: target,
+        target,
+        running,
+        quiet: opts.quiet,
+        out: &mut out,
+    })
+}
+
 #[test]
-#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_force_fires_on_a_fresh_root_and_records() {
     // Portage: fresh ROOT means an empty mtimedb["updates"], so every
     // updates file is new; the fixture-style file below yields two
@@ -75,7 +99,14 @@ fn applied_updates_force_fires_on_a_fresh_root_and_records() {
     );
     let root = updates_test_root("fresh");
     let repos = vec![updates_test_repo_config(&repo)];
-    assert!(global_updates_force(&moves_on_opts(), &repos, &root));
+    let mut config = updates_test_config();
+    assert!(target_force(
+        &repos,
+        &mut config,
+        &root,
+        &root,
+        &moves_on_opts()
+    ));
     let record = crate::mtimedb::read_updates_mtimes(&root);
     assert!(
         record.contains_key(&updates_file_key(&repo, "2Q-2024")),
@@ -86,7 +117,6 @@ fn applied_updates_force_fires_on_a_fresh_root_and_records() {
 }
 
 #[test]
-#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_force_is_silent_on_a_repeat_run() {
     // Portage Control 2: a second merge into the same ROOT finds the
     // record current, so no force and no tail.
@@ -96,9 +126,16 @@ fn applied_updates_force_is_silent_on_a_repeat_run() {
     );
     let root = updates_test_root("repeat");
     let repos = vec![updates_test_repo_config(&repo)];
-    assert!(global_updates_force(&moves_on_opts(), &repos, &root));
+    let mut config = updates_test_config();
+    assert!(target_force(
+        &repos,
+        &mut config,
+        &root,
+        &root,
+        &moves_on_opts()
+    ));
     assert!(
-        !global_updates_force(&moves_on_opts(), &repos, &root),
+        !target_force(&repos, &mut config, &root, &root, &moves_on_opts()),
         "a current record must not force again"
     );
     let _ = std::fs::remove_dir_all(repo.parent().unwrap());
@@ -119,7 +156,16 @@ fn applied_updates_force_skips_package_moves_n() {
         package_moves: false,
         ..Default::default()
     };
-    assert!(!global_updates_force(&opts, &repos, &root));
+    let mut config = updates_test_config();
+    let mut out = Vec::new();
+    assert!(!global_updates_force(GlobalUpdatesArgs {
+        opts: &opts,
+        repos: &repos,
+        config: &mut config,
+        config_root: &root,
+        root: &root,
+        out: &mut out,
+    }));
     assert!(
         !crate::mtimedb::mtimedb_path(&root).exists(),
         "a skipped check must not create any mtimedb"
@@ -139,6 +185,7 @@ fn applied_updates_force_skips_info_sync_and_version() {
     );
     let root = updates_test_root("actions");
     let repos = vec![updates_test_repo_config(&repo)];
+    let mut config = updates_test_config();
     for (tag, opts) in [
         (
             "info",
@@ -165,8 +212,16 @@ fn applied_updates_force_skips_info_sync_and_version() {
             },
         ),
     ] {
+        let mut out = Vec::new();
         assert!(
-            !global_updates_force(&opts, &repos, &root),
+            !global_updates_force(GlobalUpdatesArgs {
+                opts: &opts,
+                repos: &repos,
+                config: &mut config,
+                config_root: &root,
+                root: &root,
+                out: &mut out,
+            }),
             "{tag} must skip"
         );
     }
@@ -179,7 +234,6 @@ fn applied_updates_force_skips_info_sync_and_version() {
 }
 
 #[test]
-#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_error_file_fires_but_stays_unrecorded() {
     // Portage `_global_updates.py:131-135`: a file with parse errors
     // still contributes its valid directives to the force, but its
@@ -193,14 +247,21 @@ fn applied_updates_error_file_fires_but_stays_unrecorded() {
     );
     let root = updates_test_root("errorfile");
     let repos = vec![updates_test_repo_config(&repo)];
-    assert!(global_updates_force(&moves_on_opts(), &repos, &root));
+    let mut config = updates_test_config();
+    assert!(target_force(
+        &repos,
+        &mut config,
+        &root,
+        &root,
+        &moves_on_opts()
+    ));
     assert!(
         !crate::mtimedb::read_updates_mtimes(&root)
             .contains_key(&updates_file_key(&repo, "2Q-2024")),
         "an error file's mtime must stay unrecorded"
     );
     assert!(
-        global_updates_force(&moves_on_opts(), &repos, &root),
+        target_force(&repos, &mut config, &root, &root, &moves_on_opts()),
         "the unrecorded file forces again next run"
     );
     let _ = std::fs::remove_dir_all(repo.parent().unwrap());
@@ -219,7 +280,14 @@ fn applied_updates_directiveless_file_stays_silent() {
         let repo = updates_test_repo(tag, &[("9Q-2099", content)]);
         let root = updates_test_root(tag);
         let repos = vec![updates_test_repo_config(&repo)];
-        assert!(!global_updates_force(&moves_on_opts(), &repos, &root));
+        let mut config = updates_test_config();
+        assert!(!target_force(
+            &repos,
+            &mut config,
+            &root,
+            &root,
+            &moves_on_opts()
+        ));
         assert!(
             !crate::mtimedb::mtimedb_path(&root).exists(),
             "{tag}: no force means no commit"
@@ -230,7 +298,6 @@ fn applied_updates_directiveless_file_stays_silent() {
 }
 
 #[test]
-#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_running_root_record_never_forces_the_tail() {
     // Portage forces AUTOCLEAN on the root_config whose updates fired
     // (`actions.py:3958-3962`) while the tail reads the *target*
@@ -253,8 +320,9 @@ fn applied_updates_running_root_record_never_forces_the_tail() {
     let mut pre: BTreeMap<String, i64> = BTreeMap::new();
     pre.insert(key, mtime);
     crate::mtimedb::write_updates_mtimes(&target, &pre).unwrap();
+    let mut config = updates_test_config();
     assert!(
-        !updates_force_for_roots(&repos, &target, &running),
+        !target_force(&repos, &mut config, &target, &running, &moves_on_opts()),
         "a running-root-only force must not read as target force"
     );
     assert!(
@@ -267,10 +335,9 @@ fn applied_updates_running_root_record_never_forces_the_tail() {
 }
 
 #[test]
-#[ignore = "read-only interim: the updates check records nothing and forces nothing"]
 fn applied_updates_force_survives_an_unwritable_root() {
     // Portage's `MtimeDB.__write_to_disk` swallows `OSError`
-    // (`util/mtimedb.py`): a non-writable root still forces, and the
+    // (`util/mtimedb.py`): a non-writable record still forces, and the
     // run never fails on the record.
     let repo = updates_test_repo(
         "readonly",
@@ -285,7 +352,14 @@ fn applied_updates_force_survives_an_unwritable_root() {
         std::fs::set_permissions(&edb, std::fs::Permissions::from_mode(0o555)).unwrap();
     }
     let repos = vec![updates_test_repo_config(&repo)];
-    assert!(global_updates_force(&moves_on_opts(), &repos, &root));
+    let mut config = updates_test_config();
+    assert!(target_force(
+        &repos,
+        &mut config,
+        &root,
+        &root,
+        &moves_on_opts()
+    ));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -299,10 +373,11 @@ fn applied_updates_force_survives_an_unwritable_root() {
 fn applied_updates_check_leaves_a_portage_written_mtimedb_untouched() {
     // Portage commits the `updates` mtimes only after applying the
     // moves (`lib/portage/_global_updates.py`, `prev_mtimes.update`
-    // inside `if retupd`); a check that applies nothing must neither
-    // record nor force, so a Portage-written section comes back
-    // byte-identical. `grab_updates` (`lib/portage/update.py`) is what
-    // treats a record-mismatched file as changed.
+    // inside `if retupd`); a record that already matches the files
+    // means nothing is applied, so a Portage-written section, foreign
+    // keys included, comes back byte-identical. `grab_updates`
+    // (`lib/portage/update.py`) is what treats a record-mismatched
+    // file as changed.
     let repo = updates_test_repo("readonly", &[("1Q-2026", "move a/old a/new\n")]);
     let root = updates_test_root("readonly");
     // An installed `a/old`: the entry Portage would move (and only
@@ -312,18 +387,24 @@ fn applied_updates_check_leaves_a_portage_written_mtimedb_untouched() {
     let mtime = std::fs::metadata(repo.join("profiles").join("updates").join("1Q-2026"))
         .unwrap()
         .mtime();
-    // A Portage-shaped file whose stamp for this updates file is stale,
-    // so the file counts as changed with a valid directive in it.
+    // A Portage-shaped file whose stamp for this updates file already
+    // matches, so the file counts as applied.
     let seed = format!(
-        "{{\n\t\"updates\": {{\n\t\t\"{key}\": {}\n\t}}\n}}",
-        mtime - 100
+        "{{\n\t\"ldpath\": {{\n\t\t\"/lib\": 1700000001\n\t}},\n\t\"updates\": {{\n\t\t\"{key}\": {mtime}\n\t}}\n}}"
     );
     let mtimedb = crate::mtimedb::mtimedb_path(&root);
     std::fs::create_dir_all(mtimedb.parent().unwrap()).unwrap();
     std::fs::write(&mtimedb, &seed).unwrap();
     let before = std::fs::read(&mtimedb).unwrap();
     let repos = vec![updates_test_repo_config(&repo)];
-    assert!(!global_updates_force(&moves_on_opts(), &repos, &root));
+    let mut config = updates_test_config();
+    assert!(!target_force(
+        &repos,
+        &mut config,
+        &root,
+        &root,
+        &moves_on_opts()
+    ));
     assert_eq!(std::fs::read(&mtimedb).unwrap(), before);
     let _ = std::fs::remove_dir_all(repo.parent().unwrap());
     let _ = std::fs::remove_dir_all(&root);

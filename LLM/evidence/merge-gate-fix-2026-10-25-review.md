@@ -52,3 +52,9 @@ the compressor command used by `quickpkg`/`--buildpkg` now resolves
 through the shared `compression_command_argv`): runner rc 0;
 glibc-2.43-r4 and bash-5.3_p20 merged by both PMs; hard findings 0,
 UNEXPLAINED 0, payload diffs 0 (4005 paths per side). Verdict: PASSED.
+
+Run `l1-20261026T160916Z` (tree 6a968ff1 + Task 11 working-tree change;
+global updates now run before every emerge on the target and running
+roots): runner rc 0; glibc-2.43-r4 and bash-5.3_p20 merged by both PMs;
+hard findings 0, UNEXPLAINED 0, payload diffs 0 (4005 paths per side),
+mtime-only diffs 1420. Verdict: PASSED.

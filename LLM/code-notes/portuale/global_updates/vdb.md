@@ -35,3 +35,6 @@ The vdb half of `_do_global_updates` (backlog #576): `move_ent` / `move_slot_ent
 
 ## fn apply_vdb_cmd
 - One command's vdb moves, for the output driver's per-command interleave (`_global_updates.py:190-206` nests the binpkg move inside the per-command loop, so batch totals alone would print `@s%S` instead of the captured `@%sS`): `move` counts through `move_ent` (`'@'`), `slotmove` through `move_slot_ent` (`'s'`); the hook fires only on a nonzero count (Portage's `if moves:`). Returns this command's counts; `apply_vdb_moves` sums them into the report and passes its own hook through. Takes the database unlocked; the batch wrapper (and the driver) holds the vdb lock.
+
+## struct VdbMovesArgs (test-only)
+- Takes the gated map alongside `repos` (repos now only supply the main-repo name for the matcher). The whole-map function is test-only (`#[cfg(test)]`): the driver loops `apply_vdb_cmd` per command for the `@%sS` interleave while holding the one vdb lock itself (a nested `flock` would block).

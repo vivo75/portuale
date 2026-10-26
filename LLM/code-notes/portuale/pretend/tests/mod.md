@@ -68,3 +68,6 @@ Shared fixtures and pty helpers for the pretend tests.
 
 ## static INFO_SCALAR_ENV_LOCK
 - Serialize the one test that mutates the process environment, in the `PLACED_CONFIG_ENV_LOCK` (`remote.rs`) style.
+
+## warm-up run for resolve-output pins (Task 11)
+- Pins that compare full `emerge --pretend` stdout (`true_spelling_matches_bare`, the autounmask exact-output pin) warm up with one discarded run first: it establishes the updates record, so the pinned run skips the block and the ambient repo set behind it.
