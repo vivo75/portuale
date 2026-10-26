@@ -58,9 +58,6 @@ depclean, prune and clean selection.
 - Portage `show_cycle_suggestion` (`_emerge/actions.py`, `_calc_depclean`, commit `96c320967`, bug 346351, backlog #508): one notice per kept, `args`-matched package whose strongly connected component has at least two members and no member is recorded as a parent from outside the component. `members` holds the package and the rest of its component.
 - `DepcleanResult.cycle_suggestions` is empty without `args` and for `--prune` (Portage only calls `show_cycle_suggestion` in the `action == "depclean"` branch with `args_set`).
 
-## fn strongly_connected_components
-- Tarjan's algorithm, iterative (an explicit `work` stack of `(node, next successor)`), so a 200 000 node chain does not overflow the thread stack (test `strongly_connected_components_groups_cycles_and_survives_long_chains`). Portage: `digraph.strongly_connected_components()`, the call behind `cycle_members` in `_calc_depclean`.
-
 ## fn cycle_suggestions
 - Portage `show_cycle_suggestion` (`actions.py`, `_calc_depclean`, `96c320967`). Graph = the reachable installed packages; edges = one per recorded parent (`parent_atoms`), `parent -> child`, for package parents only. Portage's digraph has the same edges for resolved deps.
 - Outside-parent rule: a member with any recorded parent edge whose label is not a member suppresses the notice. Portage's check skips only the protected set (`____depclean_protected_set____`), and portuale records no edge from the protected roots, so the rule reduces to "any parent outside the component". Parents that do count: a protected package outside the cycle (oracle `07-pair-protected-parent`) and the `@system` set (oracle `12-system-cycle`: `_parent_atoms` holds `('system', ...)`).
@@ -69,6 +66,3 @@ depclean, prune and clean selection.
 
 ## fn print_cycle_suggestion (portuale)
 - Portage `show_cycle_suggestion`'s text (`96c320967`): the two-line sentence, then `emerge --depclean` with every member as `=cpv`, sorted as strings (`sorted("=" + member.cpv ...)`), then a blank line. Written to stdout (Portage `writemsg_stdout`), no colour.
-
-## fn strongly_connected_components visibility (#512)
-- Promoted from `pub(crate)` to `pub` (re-exported through `pub use depclean::*`) so the `-j` scheduler can find dependency cycles (`merge_wait::cyclic_nodes`): Portage `Scheduler._find_cyclic_nodes` runs the same `digraph.strongly_connected_components()`. No behaviour change; the depclean callers are untouched.

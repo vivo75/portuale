@@ -862,10 +862,9 @@ fn stage_user_patch_tree(
     let mut inner_hex = String::new();
     let mut sorted: Vec<(&str, &[u8])> = patches.to_vec();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
-    for (basename, body) in &sorted {
+    for (_, body) in &sorted {
         let inner = format!("{:x}", sha2::Sha256::digest(body));
         inner_hex.push_str(&inner);
-        let _ = basename;
     }
     if !patches.is_empty() {
         let patch_dir = cfg.join("etc/portage/patches/app-misc/ppatch");

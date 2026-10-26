@@ -9,6 +9,7 @@
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// One mergelist entry's `type` tag (`"ebuild"` or `"binary"`): which kind
 /// of merge `emerge --resume` replays this entry as.
@@ -524,12 +525,10 @@ fn format_flat_section(key: &str, mtimes: &BTreeMap<String, i64>) -> String {
 /// float (`123.0`) is accepted and truncated, while what portuale
 /// writes back is always an integer.
 fn parse_flat_mtime_map(object: &str) -> BTreeMap<String, i64> {
-    // `"path": 123` pairs; a foreign-written float (`123.0`) is accepted
-    // and truncated, while what portuale writes back is always an integer.
-    let pair_re = Regex::new(r#""((?:[^"\\]|\\.)*)"\s*:\s*(-?\d+(?:\.\d+)?)"#).ok();
-    let Some(pair_re) = pair_re else {
-        return BTreeMap::new();
-    };
+    static PAIR_RE: OnceLock<Regex> = OnceLock::new();
+    let pair_re = PAIR_RE.get_or_init(|| {
+        Regex::new(r#""((?:[^"\\]|\\.)*)"\s*:\s*(-?\d+(?:\.\d+)?)"#).expect("static regex is valid")
+    });
     let mut mtimes = BTreeMap::new();
     for cap in pair_re.captures_iter(object) {
         let raw = &cap[1];

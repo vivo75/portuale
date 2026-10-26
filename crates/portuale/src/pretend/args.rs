@@ -134,9 +134,7 @@ pub(crate) struct EmergeOpts<'a> {
     // Accepted like Portage 3.0.83; all three act now (user patches #509,
     // json report #507, merge-wait scope #512: `LLM/scope-cuts.md`
     // CUT-8..CUT-10 are closed).
-    #[allow(dead_code)]
     pub(crate) binpkg_respect_user_patches: Option<bool>,
-    #[allow(dead_code)]
     pub(crate) circular_deps_report: Option<CircularDepsReport>,
     pub(crate) merge_wait_scope: Option<MergeWaitScope>,
     pub(crate) quickpkg_direct: Option<bool>,
@@ -2315,13 +2313,9 @@ fn parse_new_option_opts<'a>(
                     ));
                 }
             };
-            opts.merge_wait_scope = Some(match value {
-                "deep" => MergeWaitScope::Deep,
-                "system" => MergeWaitScope::System,
-                "toolchain" => MergeWaitScope::Toolchain,
-                "none" => MergeWaitScope::None,
-                v => return Err(invalid_choice(name, v, SCOPE)),
-            });
+            opts.merge_wait_scope = Some(
+                MergeWaitScope::parse(value).ok_or_else(|| invalid_choice(name, value, SCOPE))?,
+            );
             used
         }
         _ => return Ok(false),

@@ -143,12 +143,6 @@ pub(crate) fn user_patch_ignored_for_pool(
     out
 }
 
-/// Success-path rows: for every merging `(cp, slot)`, the dropped binaries
-/// of the local and (under `--getbinpkg`) remote pools, minus
-/// `_eliminate_ignored_binaries`. Empty unless a binary pool was consulted
-/// and the filter is on. Portage's displayed-list filter is the merge list
-/// itself (`_serialized_tasks_cache`).
-// Portage: depgraph.py, _show_ignored_binaries
 /// The values [`ignored_user_patches_for_merging`] reads from its caller.
 pub(crate) struct IgnoredUserPatchesForMergingArgs<'a> {
     pub(crate) usepkg: bool,
@@ -162,6 +156,12 @@ pub(crate) struct IgnoredUserPatchesForMergingArgs<'a> {
     pub(crate) merging: &'a [((String, String), Vec<SelectedPackage<'a>>)],
 }
 
+/// Success-path rows: for every merging `(cp, slot)`, the dropped binaries
+/// of the local and (under `--getbinpkg`) remote pools, minus
+/// `_eliminate_ignored_binaries`. Empty unless a binary pool was consulted
+/// and the filter is on. Portage's displayed-list filter is the merge list
+/// itself (`_serialized_tasks_cache`).
+// Portage: depgraph.py, _show_ignored_binaries
 pub(crate) fn ignored_user_patches_for_merging(
     args: IgnoredUserPatchesForMergingArgs<'_>,
 ) -> Vec<IgnoredUserPatchBinary> {
@@ -197,16 +197,16 @@ pub(crate) fn ignored_user_patches_for_merging(
     }
     rows.sort_by(|a, b| {
         (
-            a.category.clone(),
-            a.package.clone(),
-            a.version.clone(),
-            a.build_id.clone(),
+            a.category.as_str(),
+            a.package.as_str(),
+            a.version.as_str(),
+            a.build_id.as_deref(),
         )
             .cmp(&(
-                b.category.clone(),
-                b.package.clone(),
-                b.version.clone(),
-                b.build_id.clone(),
+                b.category.as_str(),
+                b.package.as_str(),
+                b.version.as_str(),
+                b.build_id.as_deref(),
             ))
     });
     rows

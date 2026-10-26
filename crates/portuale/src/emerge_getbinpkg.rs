@@ -16,14 +16,16 @@ use mrg_director::MergeEngine;
 use portage_profile::{BinRepo, Config};
 use portage_repo::{GraphEntry, PretendOutcome, RepoConfig};
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// Portage's `fetch._hide_url_passwd`, verbatim: mask `//user:secret@` as
 /// `//user:*password*@` with a single global substitution, so edge behaviour
 /// matches (a password with whitespace is left alone; a user with `/` is
 /// still masked).
 pub(crate) fn hide_binhost_passwd(url: &str) -> String {
-    regex::Regex::new(r"//([^:\s]+):[^@\s]+@")
-        .expect("static regex is valid")
+    static PASSWD: OnceLock<regex::Regex> = OnceLock::new();
+    PASSWD
+        .get_or_init(|| regex::Regex::new(r"//([^:\s]+):[^@\s]+@").expect("static regex is valid"))
         .replace_all(url, "//$1:*password*@")
         .into_owned()
 }
@@ -918,7 +920,6 @@ fn pretend_one_mixed_entry(
             log_path,
         );
     }
-    let cp = format!("{}/{}", entry.category, entry.package);
     let Some(version) = crate::emerge_build::entry_version(entry) else {
         return Ok(());
     };
@@ -933,7 +934,6 @@ fn pretend_one_mixed_entry(
         // inline there, like before this pass existed.
         return Ok(());
     };
-    let _ = cp;
     let entry_tmpdir = crate::emerge_build::binary_entry_portage_tmpdir(
         merge_options,
         entry,

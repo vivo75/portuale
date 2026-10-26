@@ -210,11 +210,11 @@ pub(crate) fn cyclic_nodes(adj: &[Vec<usize>]) -> HashSet<usize> {
 /// owner is known cyclic: post-merge-only (`PDEPEND`) edges do not, since
 /// the merge order already ignores them to break the cycle.
 // Portage: _emerge/DepPrioritySatisfiedRange.py, ignore_medium_post
-fn post_edge_blocks(owner: &GraphEntry, dep_cp: &(String, String)) -> bool {
+fn post_edge_blocks(owner: &GraphEntry, dep_cp: &(&str, &str)) -> bool {
     let mut known = false;
     let mut blocked = false;
     for e in &owner.deps {
-        if (e.category.clone(), e.package.clone()) != *dep_cp {
+        if (e.category.as_str(), e.package.as_str()) != *dep_cp {
             continue;
         }
         known = true;
@@ -246,7 +246,8 @@ pub(crate) fn blocking_deps(
             }
             let mut blocking = HashSet::new();
             for &d in ds {
-                let dep_cp = (entries[d].category.clone(), entries[d].package.clone());
+                let dep = &entries[d];
+                let dep_cp = (dep.category.as_str(), dep.package.as_str());
                 if post_edge_blocks(&entries[i], &dep_cp) {
                     blocking.insert(d);
                 }

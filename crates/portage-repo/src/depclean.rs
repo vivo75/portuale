@@ -46,66 +46,6 @@ pub struct CycleSuggestion {
     pub members: Vec<InstalledPackage>,
 }
 
-/// Tarjan's strongly connected components over `adj` (node -> successors),
-/// iterative so a long dependency chain cannot exhaust the stack. Returns the
-/// component number of every node; nodes share a number iff they lie on a
-/// common cycle. Portage: `digraph.strongly_connected_components()`.
-pub fn strongly_connected_components(adj: &[Vec<usize>]) -> Vec<usize> {
-    const UNVISITED: usize = usize::MAX;
-    let n = adj.len();
-    let mut index = vec![UNVISITED; n];
-    let mut low = vec![0usize; n];
-    let mut on_stack = vec![false; n];
-    let mut comp = vec![UNVISITED; n];
-    let mut stack: Vec<usize> = Vec::new();
-    let mut next_index = 0usize;
-    let mut next_comp = 0usize;
-    for root in 0..n {
-        if index[root] != UNVISITED {
-            continue;
-        }
-        // (node, index of the next successor to look at)
-        let mut work: Vec<(usize, usize)> = vec![(root, 0)];
-        index[root] = next_index;
-        low[root] = next_index;
-        next_index += 1;
-        stack.push(root);
-        on_stack[root] = true;
-        while let Some(&(v, next_edge)) = work.last() {
-            if next_edge < adj[v].len() {
-                work.last_mut().expect("non-empty work stack").1 += 1;
-                let w = adj[v][next_edge];
-                if index[w] == UNVISITED {
-                    index[w] = next_index;
-                    low[w] = next_index;
-                    next_index += 1;
-                    stack.push(w);
-                    on_stack[w] = true;
-                    work.push((w, 0));
-                } else if on_stack[w] {
-                    low[v] = low[v].min(index[w]);
-                }
-                continue;
-            }
-            work.pop();
-            if low[v] == index[v] {
-                while let Some(w) = stack.pop() {
-                    on_stack[w] = false;
-                    comp[w] = next_comp;
-                    if w == v {
-                        break;
-                    }
-                }
-                next_comp += 1;
-            }
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[v]);
-            }
-        }
-    }
-    comp
-}
-
 /// Portage `_calc_depclean`'s unmerge-order pass (Portage actions):
 /// topologically sorts the cleanlist digraph so each package unmerges *before*
 /// what it depends on. Returns `(ordered, cleanlist)`: with no edges `ordered`
@@ -632,17 +572,27 @@ fn cycle_suggestions(
     reachable: &HashSet<(String, String, String)>,
     installed: &[InstalledPackage],
 ) -> Vec<CycleSuggestion> {
-    let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
-    let nodes: Vec<&InstalledPackage> = installed
+    // One owned key per reachable node; the edge lookups below borrow these
+    // instead of cloning three strings per probe.
+    let nodes: Vec<(&InstalledPackage, (String, String, String))> = installed
         .iter()
-        .filter(|p| reachable.contains(&key(p)))
+        .map(|p| {
+            (
+                p,
+                (p.category.clone(), p.package.clone(), p.version.clone()),
+            )
+        })
+        .filter(|(_, key)| reachable.contains(key))
         .collect();
-    let index_of: HashMap<(String, String, String), usize> =
-        nodes.iter().enumerate().map(|(i, p)| (key(p), i)).collect();
+    let index_of: HashMap<&(String, String, String), usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, (_, key))| (key, i))
+        .collect();
     let cpv_index: HashMap<String, usize> = nodes
         .iter()
         .enumerate()
-        .map(|(i, p)| (p.cpv(), i))
+        .map(|(i, (p, _))| (p.cpv(), i))
         .collect();
     // `adj[parent]` lists every `child` that `parent` resolves.
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
@@ -660,20 +610,22 @@ fn cycle_suggestions(
 
     let mut out = Vec::new();
     for pkg in kept {
-        let Some(&me) = index_of.get(&key(pkg)) else {
+        let key = (
+            pkg.category.clone(),
+            pkg.package.clone(),
+            pkg.version.clone(),
+        );
+        let Some(&me) = index_of.get(&key) else {
             continue;
         };
-        let members: Vec<&InstalledPackage> = (0..nodes.len())
-            .filter(|&i| comp[i] == comp[me])
-            .map(|i| nodes[i])
-            .collect();
+        let members: Vec<usize> = (0..nodes.len()).filter(|&i| comp[i] == comp[me]).collect();
         if members.len() < 2 {
             continue;
         }
-        let member_cpvs: HashSet<String> = members.iter().map(|m| m.cpv()).collect();
-        let outside_parent = members.iter().any(|m| {
+        let member_cpvs: HashSet<String> = members.iter().map(|&i| nodes[i].0.cpv()).collect();
+        let outside_parent = members.iter().any(|&i| {
             parent_atoms
-                .get(&key(m))
+                .get(&nodes[i].1)
                 .is_some_and(|edges| edges.iter().any(|(p, _)| !member_cpvs.contains(p)))
         });
         if outside_parent {
@@ -681,7 +633,7 @@ fn cycle_suggestions(
         }
         out.push(CycleSuggestion {
             pkg: (*pkg).clone(),
-            members: members.into_iter().cloned().collect(),
+            members: members.iter().map(|&i| nodes[i].0.clone()).collect(),
         });
     }
     out

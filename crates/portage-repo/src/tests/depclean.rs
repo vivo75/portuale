@@ -823,7 +823,7 @@ fn strongly_connected_components_groups_cycles_and_survives_long_chains() {
     // 0 -> 1 -> 2 -> 0 is one component; 3 -> 2 hangs off it; 4 <-> 5 is
     // another; 6 stands alone.
     let adj = vec![vec![1], vec![2], vec![0], vec![2], vec![5], vec![4], vec![]];
-    let comp = crate::depclean::strongly_connected_components(&adj);
+    let comp = crate::graph::strongly_connected_components(&adj);
     assert_eq!(comp[0], comp[1]);
     assert_eq!(comp[1], comp[2]);
     assert_eq!(comp[4], comp[5]);
@@ -838,7 +838,7 @@ fn strongly_connected_components_groups_cycles_and_survives_long_chains() {
     let chain: Vec<Vec<usize>> = (0..n)
         .map(|i| if i + 1 < n { vec![i + 1] } else { vec![] })
         .collect();
-    let comp = crate::depclean::strongly_connected_components(&chain);
+    let comp = crate::graph::strongly_connected_components(&chain);
     let mut seen: Vec<usize> = comp.clone();
     seen.sort_unstable();
     seen.dedup();

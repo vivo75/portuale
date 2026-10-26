@@ -181,7 +181,7 @@ fn user_patch_table_matches_the_oracle_on_a_match() {
 /// set, and a malformed member warns invalid instead of a table.
 #[test]
 fn user_patch_table_warns_on_mismatch_and_malformed_members() {
-    use crate::ebuild_merge::{parse_user_patch_digests, user_patch_extract_report};
+    use crate::ebuild_merge::user_patch_extract_report;
 
     let recorded = "b7bab6cdb78ca1425eeae16508c0124ccfc71953f3e2b7c6b1b753837a1a11d3";
     assert_eq!(recorded.len(), 64);
@@ -223,7 +223,6 @@ fn user_patch_table_warns_on_mismatch_and_malformed_members() {
     );
     // No member at all: nothing, on either stream.
     assert_eq!(user_patch_extract_report(None, true, "", "", 80), None);
-    let _ = parse_user_patch_digests;
 }
 
 /// Backlog #542: truncation mirrors Portage's character-count rules (long

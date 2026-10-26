@@ -66,6 +66,7 @@
 - [crates/portage-repo/src/error.rs](portage-repo/error.md) — The crate's error type.
 - [crates/portage-repo/src/fetch_restrict.rs](portage-repo/fetch_restrict.md) — SRC_URI and RESTRICT=fetch helpers.
 - [crates/portage-repo/src/globals.rs](portage-repo/globals.md) — Process-wide switches the CLI sets once per run.
+- [crates/portage-repo/src/graph.rs](portage-repo/graph.md) — Shared dependency-graph helpers.
 - [crates/portage-repo/src/info_pkgs.rs](portage-repo/info_pkgs.md) — Package rows for `emerge --info`.
 - [crates/portage-repo/src/installed.rs](portage-repo/installed.md) — Installed packages read from the VDB.
 - [crates/portage-repo/src/lib.rs](portage-repo/lib.md) — Repo/metadata/vdb access for the `emerge --pretend` port.
