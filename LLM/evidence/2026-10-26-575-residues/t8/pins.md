@@ -22,6 +22,8 @@ non-keeper going red after one fix round keeps its heuristic (plan Task 10).
 | `g0_benign_disclosure_blocks_the_dropped_pin_heal` | `tests_p563.rs:274` | G0 | non-keeper (#570) |
 | `skip_block_pins_skip_non_selected_or_branches` | `tests_p563.rs:344` | `or_branch_vdb_deselected_set` (scan site) | non-keeper (#569) |
 | `test_skip_block_keeps_the_built_atom_and_drops_non_selected_or_branches` (+ CASES row "#568/#569: the perl-heal skip block …") | pmtest contract | `or_branch_vdb_deselected_set` | non-keeper (#568/#569) |
+| `skip_block_pins_keep_the_built_subslot_atom` | `tests_p563.rs:246` | the `built_render`-first order that 10a keeps | non-keeper (#568) |
+| `collect_feedback_collects_a_dropped_pin_once` | `portage-repo/src/tests/feedback.rs:342` | the early reverse-dependency scan that 10a rewrites | non-keeper |
 | `p491or_seed_ignores_a_deselected_or_branch_slot_operator_atom` | `portage-repo/src/tests/tests_p491.rs:198` | `or_branch_vdb_deselected_set` (probe site; fixture pmtest `6bdb765`) | non-keeper (#575 Task 16) |
 
 Bed: the L0 run on the phase-0 tree is `l0-phase0.txt` (this directory).

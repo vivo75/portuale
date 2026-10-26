@@ -158,3 +158,31 @@ G1 and G0.
 - The trailer order and ` for <ROOT>` differences seen on the G0
   counter-shape (`oracle.md` C2) are display-only. File them under §R if
   they are not already open.
+
+## Amendment after review (2026-10-26)
+
+`LLM/02.589-575-residues.review-t9-t10.md` found three critical gaps,
+confirmed by hand:
+1. **Two views, not one.** Complete mode uses `_graph_trees` (D:764-771),
+   and the normal walk uses `_filtered_trees` (D:775-800). P1 needs a
+   required `Normal` | `PostMerge` view: the R4 keeper is a normal-walk case,
+   and T1 is a complete-mode case. The downgrade guards apply in both.
+   `PostMerge` also covers same-cpv replacement (PT:137-139) and installed
+   packages that are graph nodes.
+2. **T2 needs the built atom as a conflict parent.** `reverse_dep_constraint_atom`
+   (`rev_dep.rs:35-41`) strips a built `:S/SS=` atom to its bare name, so
+   after P1 nothing on T2 would oppose the 5.44 merge, and portuale would
+   merge where Portage heals. So P2, with the built atoms as conflict parents
+   (D:2189-2196, `_slot_conflict_backtrack_abi` D:2205-2213), must land
+   **before** P1.
+3. **P2 widens the conflict atoms.** `slot_conflict_mask_choices` reads only
+   `slot_pullers` (`backtrack_params.rs:66-78`); Portage reads the parent
+   atoms of every slot node (D:2160-2165). The record's installed-side
+   parents join the conflict atoms.
+
+New order: Task 9 settles the open rules (views, T2's ABI path, T3's
+sequence, the full count list, bed consumers whose installed arm is not
+listed first, the probe site) and builds the fixtures. Then 10a = P2 + P3
+(G0 and G1 out, G2 kept as a filter), and 10b = P1 (installed-arm rule and
+G2 out). The table above is superseded on these points: G2 is retired in
+10b, not with `or_branch_vdb_deselected_set` first; G0 is reduced in 10a.

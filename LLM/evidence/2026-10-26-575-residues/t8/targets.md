@@ -9,9 +9,14 @@ the bed's Portage side.
 
 | Id | Shape | Today's portuale | Portage (cited) | Moved by |
 |---|---|---|---|---|
-| T1 `swap-noslotop` | p569 heal shape; installed `p569virt-1` RDEPEND `\|\| ( =p569prov-5.40* =p569prov-5.42* =p569prov-5.38* ~core )` (installed arm listed second), no slot-op atom; tree, md5-cache and vdb edited the same way; `-pv dev-libs/p569pull` | rc 0, 2/20, `N p569pull-1` + skip row `=5.42*` | rc 0, **0/20**, `U p569prov-5.44 [5.42]` + `N p569pull-2`, no skip block (`captures/portage-c-swap-noslotop.nodebug.txt`) | M1 |
-| T2 `swap-slotop` | T1 plus `p569prov:=` in the consumer, vdb `:0/5.42=` | rc 0, 2/20, `N p569pull-1`, skip rows `p569prov:0/5.42=` **and** `=5.42*` | rc 0, 4/20, `N p569pull-1`, skip row `p569prov:0/5.42=` only (`captures/portage-c-swap-slotop.nodebug.txt`) | M1 (rows), M2 (count) |
-| T3 `orig-noslotop` | p569 shape without the slot-op atom, installed arm listed first | rc 0, 2/20, same rows as Portage | rc 0, **4/20**, `N p569pull-1`, skip row `=5.42*` (`captures/portage-c-orig-noslotop.nodebug.txt`) | M2 (count only) |
+| T1 `swap-noslotop` | p569 heal shape; installed `p569virt-1` RDEPEND `\|\| ( =p569prov-5.40* =p569prov-5.42* =p569prov-5.38* ~core )` (installed arm listed second), no slot-op atom; tree, md5-cache and vdb edited the same way; `-pv dev-libs/p569pull` | rc 0, 2/20, `N p569pull-1` + skip row `=5.42*` | rc 0, **0/20**, `U p569prov-5.44 [5.42]` + `N p569pull-2`, no skip block (`captures/portage-c-swap-noslotop.nodebug.txt`) | 10b (P1) |
+| T2 `swap-slotop` | T1 plus `p569prov:=` in the consumer, vdb `:0/5.42=` | rc 0, 2/20, `N p569pull-1`, skip rows `p569prov:0/5.42=` **and** `=5.42*` | rc 0, 4/20, `N p569pull-1`, skip row `p569prov:0/5.42=` only (`captures/portage-c-swap-slotop.nodebug.txt`) | 10a (built atom as conflict parent; S0c) |
+| T3 `orig-noslotop` | p569 shape without the slot-op atom, installed arm listed first | rc 0, 2/20, same rows as Portage | rc 0, **4/20**, `N p569pull-1`, skip row `=5.42*` (`captures/portage-c-orig-noslotop.nodebug.txt`) | 10a (choice order; S0d) |
+
+Amended after the review of Tasks 9–10: T2's rows depend on the built
+`:0/5.42=` atom acting as a conflict parent, so T2 belongs to 10a, not to
+the `||` choice (review finding 2). Task 9 builds T1–T3 as separate fixture
+families.
 
 ## Existing pins whose backtrack count may move (rows must not)
 
@@ -25,6 +30,14 @@ drift, and only to Portage's count:
 | k3 argument (`=dev-libs/paired-2.0`, keeper in world) | 0/20 | 3/20 | M2 |
 | k3 needer | 1/20 | 4/20 | M2 |
 | igw plain (`>=dev-libs/igw0x-2`) | 0/20 | 3/20 | M2 |
+
+**This list is incomplete** (review finding 9). Task 9 S0e completes it
+with every CASES row whose pass reaches `dropped_pin_mask_restart` (the cgp
+rows, the igw contrast, the k3 hard-dependency pin, `=dev-libs/p563pull-2`,
+…), each with Portage's count. Only the completed list governs the 10a gate.
+
+Known divergence kept as it is (not a target): the G0 combination, where
+portuale gives 0 restarts and Portage 1/20. That is #594 (plan R3).
 
 ## L0 bed cells (baseline `l0-phase0.txt`, run `l0-20261026T222948Z`)
 
