@@ -9,13 +9,25 @@ Digest checks of a `$PKGDIR` binpkg against the index, and checksum-failure rena
 - `name`: `"size"` or the hash name, exactly as Portage reports it.
 
 ## fn verify_binpkg_against_index
-- Portage `_emerge/BinpkgVerifier` + `bintree._get_digests` (backlog #174): verify a local `$PKGDIR` binpkg at merge time against the `<pkgdir>/Packages` index record that vouches for it. The size (`SIZE`) is checked first via `stat(2)`; then every digest the record carries (`MD5`/`SHA1`, the two Portage `_pkgindex_entry` writes, plus `SHA256`/`SHA512` when present) is hashed over the file and compared.
-- Ports Portage's `_emerge/BinpkgVerifier` + `bintree._get_digests`.
-- Checks `MD5`/`SHA1` (the two Portage `_pkgindex_entry` writes) plus `SHA256`/`SHA512` when present, in that fixed order. A record with no `SIZE` verifies nothing (Portage's own `if "size" not in digests: return OK` in `BinpkgVerifier._start`).
-- Fixed digest list, disclosed: Portage's `_get_digests` collects every key in `get_valid_checksum_keys()` (host-dependent; on the reference host: `BLAKE2B/BLAKE2S/MD5/RMD160/SHA1/SHA256/SHA3_256/SHA3_512/SHA512/WHIRLPOOL/size`) and checks them in frozenset order; portuale checks `MD5`/`SHA1`/`SHA256`/`SHA512` in that fixed order and skips the rest (`RMD160`/`WHIRLPOOL`/`BLAKE2B`/`BLAKE2S`/`SHA3_256`/`SHA3_512` need hashers portuale doesn't vendor). Portage's own local `--regen` writes only `MD5`/`SHA1` (Portage's `_pkgindex_hashes`), so the gap only bites on foreign index stanzas carrying the wider keys.
+- Portage `_emerge/BinpkgVerifier` + `bintree._get_digests` (backlog #174, #578): verify a binpkg at merge time against the index record that vouches for it -- shared by the local `$PKGDIR` merge path and the remote download path (`download_and_verify`, which used to check MD5/SHA1 only). The size (`SIZE`, via the shared `parse_index_size`) is checked first via `stat(2)`; then every digest the record carries that survives `PORTAGE_CHECKSUM_FILTER` (`None` disables the filter) is hashed over the file and compared, in ASCII-sorted order (`VERIFIED_DIGESTS`, matching `checksum.verify_all`'s `sorted()`; Portage's own remote path walks frozenset order, so no order is canonical there). A record with no parseable `SIZE` verifies nothing (Portage's own `if "size" not in digests: return OK` in `BinpkgVerifier._start`). Ports Portage's `_emerge/BinpkgVerifier` + `bintree._get_digests`.
+- `RMD160`/`WHIRLPOOL` records verify the size alone: no hasher vendored here (`file_hex_digest` returns `None`, skipped). Portage verifies them when its host provides them (hashlib/bundled); foreign index stanzas carrying only those keys are the residual gap (S0: `LLM/evidence/2026-10-25-review/t4/`). Portage's own local `--regen` writes only `MD5`/`SHA1` (Portage's `_pkgindex_hashes`), so the gap only bites on foreign stanzas.
+- The local merge path passes the configured `PORTAGE_CHECKSUM_FILTER` (previously unfiltered); Portage applies the filter to local packages too (`BinpkgVerifier._start:41-44` has no remote gate).
+- Mismatch order note: `size` first, then the surviving hashes in `VERIFIED_DIGESTS` order; only the first mismatch is returned.
+
+## fn parse_index_size (#578)
+- The one `SIZE` parse used by both verifiers and the remote guard: `str.trim()` (Unicode whitespace, like Python `int()`), one optional `+`/`-` sign, then ASCII digits. A negative (or out-of-`u64`-range) value parses in Portage too (`int("-1") == -1`) but matches no file, so it maps to `Some(u64::MAX)` and both paths fail the size check exactly as Portage's `st_size != -1` does. Garbage (`"x"`, `""`, `"++1"`) is `None`: Portage drops `size` from its digests then (local: verify nothing; remote: missing-digests refusal). The underscore quirk (`int("46_18") == 4618`) is observed in S0 and recorded in `LLM/portage-quirks.md`, not copied.
+
+## fn index_size_expected (#578)
+- The `Expected:` value for a size mismatch: the parsed number, except a sentinel parse (negative/out-of-range `SIZE`) prints the index's own trimmed text (leading `+` stripped) the way Portage prints its parsed `int` (`-1`, not the sentinel).
+
+## fn apply_checksum_filter
+- Ports `portage.checksum._hash_filter` + `_apply_hash_filter`: filters the uppercase hash names against `PORTAGE_CHECKSUM_FILTER`, always preserving at least one hash (backlog #436d). Moved here from `emerge_getbinpkg.rs` (#578) so both verifiers share it. Portage keeps one survivor by frozenset order (nondeterministic 6/6 over 12 processes in S0); this keeps the last in sorted order -- one of Portage's two possible outcomes.
+
+## const VERIFIED_DIGESTS (#578)
+- Every digest the verifier hashes: `BLAKE2B BLAKE2S MD5 SHA1 SHA256 SHA3_256 SHA3_512 SHA512`, ASCII-sorted like `verify_all`'s `sorted(verifiable_hash_types)`. `RMD160`/`WHIRLPOOL` omitted (no vendored hasher); `size` is handled separately, never filtered.
 
 ## fn file_hex_digest
-- The same whole-file readers Portage's `perform_multiple_checksums` runs for a `Packages` entry.
+- The same whole-file readers Portage's `perform_multiple_checksums` runs for a `Packages` entry: `MD5`/`SHA1`/`SHA256`/`SHA512`, plus `BLAKE2B`/`BLAKE2S` (`blake2` crate) and `SHA3_256`/`SHA3_512` (`sha3` crate, #578 -- S0 shows Portage verifies them via hashlib on the reference host). `RMD160`/`WHIRLPOOL` have no vendored hasher (`None`, skipped by the verifier).
 
 ## fn checksum_failure_rename
 - Ports `portage.package.ebuild.fetch._checksum_failure_temp_file` (`fetch.py:293`); a same-size same-md5 duplicate is reused instead (the corrupt file is unlinked, Portage's own `os.unlink(filename)`).

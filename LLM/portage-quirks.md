@@ -342,3 +342,10 @@ when a claim turns out false.
 - **Why it looks wrong**: the message points at one member file of a union, sending the reader to edit the wrong file when the omission is in a repo's `profiles/categories`.
 - **First seen**: Portage 3.0.83 (source `3rdparty/portage`, Task 12 S0).
 - **Portuale**: prints the line verbatim (same path rendering), quirks and all.
+
+## Q15. `int(SIZE)` accepts underscores and newlines (`_get_digests`) (suspect)
+
+- **What it does**: `bintree._get_digests` (`dbapi/bintree.py:2864-2871`) runs the `Packages` `SIZE` through plain `int()`, which accepts surrounding whitespace (including `\n`), a leading `+`/`-`, and single underscores between digits: `int("46_18") == 4618`, `int("4618\n") == 4618` (probed in `LLM/evidence/2026-10-25-review/t4/`).
+- **Why it looks wrong**: `SIZE` is written by Portage itself as `str(st.st_size)` (decimal, no adornments), so the leniency only ever fires on hand-edited or hostile indexes; an underscore digit-separator in a size field is never intended input.
+- **First seen**: Portage 3.0.83 (source `3rdparty/portage`, Task 4 S0).
+- **Portuale**: `parse_index_size` copies the whitespace/sign/digits behaviour but not the underscore quirk (such a `SIZE` is treated as missing: local verifies nothing, remote is refused). Fails closed either way.

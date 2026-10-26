@@ -1,0 +1,70 @@
+/home/vivo/repo/PORTUALE/portuale/3rdparty/portage/lib/portage/util/whirlpool.py:52: UserWarning: The last-resort unaccelerated Whirlpool implementation is being used. It is known to be absurdly slow. Please report that the Whirlpool hash is deprecated to the repository owner.
+  warnings.warn(
+== host hashlib algorithms_available ==
+['blake2b', 'blake2s', 'md5', 'md5-sha1', 'ripemd160', 'sha1', 'sha224', 'sha256', 'sha384', 'sha3_224', 'sha3_256', 'sha3_384', 'sha3_512', 'sha512', 'sha512_224', 'sha512_256', 'shake_128', 'shake_256', 'sm3']
+== get_valid_checksum_keys ==
+['BLAKE2B', 'BLAKE2S', 'MD5', 'RMD160', 'SHA1', 'SHA256', 'SHA3_256', 'SHA3_512', 'SHA512', 'WHIRLPOOL', 'size']
+== hashorigin_map ==
+  BLAKE2B: hashlib
+  BLAKE2S: hashlib
+  MD5: hashlib
+  RMD160: hashlib
+  SHA1: hashlib
+  SHA256: hashlib
+  SHA3_256: hashlib
+  SHA3_512: hashlib
+  SHA512: hashlib
+  WHIRLPOOL: bundled-py
+  size: None
+== _whirlpool_unaccelerated: True
+== int(SIZE) semantics (bintree._get_digests:2866 does int(metadata['SIZE'])) ==
+  '4618' -> 4618
+  ' 4618' -> 4618
+  '4618 ' -> 4618
+  ' 4618 ' -> 4618
+  '-1' -> -1
+  '+5' -> 5
+  'x' -> ValueError (size dropped from digests)
+  '' -> ValueError (size dropped from digests)
+  '0x10' -> ValueError (size dropped from digests)
+  '46_18' -> 4618
+  '4618\n' -> 4618
+  '007' -> 7
+== verify_all against a real file ==
+  BLAKE2B = bfd0ba2334977d05b44d934572d5d3eb874b6608a6ae44af1856bef50a560f76256a299df0005db39fe76c0f0d1f33d9738409a302cceb77bcfd1dfb1bfa6273
+  BLAKE2S = e7c0ce7b4ec0e967c51dba4681a63249ed6ac57af78aac8bb43ef73f2ce2c08f
+  MD5 = 4032af8d61035123906e58e067140cc5
+  RMD160 = edf4e38018cd71dd489b9c1e54b32054eb42dfad
+  SHA1 = fe5567e8d769550852182cdf69d74bb16dff8e29
+  SHA256 = 9f9f5111f7b27a781f1f1ddde5ebc2dd2b796bfc7365c9c28b548e564176929f
+  SHA3_256 = a5df4caae9fdb5dbacf667075b709a2f30a115c43168af332062b42d4b0da01f
+  SHA3_512 = 59d06155d25dffdb982729de8dce9d7855ca094d8bab8124b347c40668477056b3c27ccb7d71b54043d207ccd187642bf9c8466f9a8d0dbefb4c41633a7e39ef
+  SHA512 = 1c043fbe4bca7c7920dae536c680fd44c15d71ec12cd82a2a9491b0043b57f4d0b8905985e85ad13831ee6d39e55a54e8f808cc82c41a0582931bbc0c0221d60
+  WHIRLPOOL = b21fc274d47d79ba45f94d67077f0846f75a7acc1a4dc560eacca300179cc1429aca2a58cfffd20ca43b914737339aa931b00cf0d4c93286d7d6cd7ebd7bb1be
+  size = 16
+all correct -> True 'Reason unknown'
+bad size -> (False, ('Filesize does not match recorded size', 16, 9999))
+bad SHA512 -> (False, ('Failed on SHA512 verification', '1c043fbe4bca7c7920dae536c680fd44c15d71ec12cd82a2a9491b0043b57f4d0b8905985e85ad13831ee6d39e55a54e8f808cc82c41a0582931bbc0c0221d60', '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'))
+size + only wrong SHA512 -> (False, ('Failed on SHA512 verification', '1c043fbe4bca7c7920dae536c680fd44c15d71ec12cd82a2a9491b0043b57f4d0b8905985e85ad13831ee6d39e55a54e8f808cc82c41a0582931bbc0c0221d60', '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'))
+size + only wrong BLAKE2B -> (False, ('Failed on BLAKE2B verification', 'bfd0ba2334977d05b44d934572d5d3eb874b6608a6ae44af1856bef50a560f76256a299df0005db39fe76c0f0d1f33d9738409a302cceb77bcfd1dfb1bfa6273', '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'))
+size + only unknown keys -> (False, ('Insufficient data for checksum verification', 'BAR FOO', 'BLAKE2B BLAKE2S MD5 RMD160 SHA1 SHA256 SHA3_256 SHA3_512 SHA512 WHIRLPOOL'))
+hashes but no size -> (True, 'Reason unknown')
+size only, no hashes -> (False, ('Insufficient data for checksum verification', '', 'BLAKE2B BLAKE2S MD5 RMD160 SHA1 SHA256 SHA3_256 SHA3_512 SHA512 WHIRLPOOL'))
+size -1 (int('-1')) -> (False, ('Filesize does not match recorded size', 16, -1))
+== _hash_filter transparency (BinpkgVerifier.py:42-44) ==
+  '' transparent=True
+  '  ' transparent=True
+  '-MD5' transparent=False
+  '-*' transparent=False
+  '-MD5 -SHA1' transparent=False
+  'MD5' transparent=False
+  '*' transparent=True
+== _apply_hash_filter keeps at least one ==
+  '-MD5' -> ['SHA512', 'size']
+  '-MD5 -SHA1' -> ['SHA512', 'size']
+  '-MD5 -SHA1 -SHA512' -> ['SHA512', 'size']
+  '-*' -> ['SHA512', 'size']
+  'SHA512' -> ['SHA512', 'size']
+== _filter_unaccelarated_hashes ==
+  whirlpool+md5 -> ['MD5', 'size']
+  whirlpool alone -> ['WHIRLPOOL', 'size']

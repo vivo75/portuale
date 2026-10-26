@@ -23,19 +23,110 @@ pub struct BinpkgDigestMismatch {
     pub expected: String,
 }
 
-/// Verify a local `$PKGDIR` binpkg at merge time against the
-/// `<pkgdir>/Packages` index record that vouches for it: `SIZE` first via
-/// `stat(2)`, then every digest the record carries. A record with no
-/// `SIZE` verifies nothing. Returns the first mismatch; the caller renames
-/// the file and prints the failure block. Files the index does not vouch
-/// for are already fully parsed at scan and never reach here with a record.
+/// The index `SIZE`, parsed once for both verifiers the way Portage's
+/// `int()` parses it: surrounding whitespace ignored, one optional
+/// sign, ASCII digits. A negative (or out-of-`u64`-range) value parses
+/// in Portage too (`int("-1") == -1`), but no file can be that size, so
+/// it maps to `u64::MAX` and both paths fail the size check exactly as
+/// Portage's `st_size != -1` comparison does. Garbage (`"x"`, `""`) is
+/// `None`: Portage drops `size` from its digests then.
+// Portage: `bintree._get_digests`.
+pub(crate) fn parse_index_size(record: &HashMap<String, String>) -> Option<u64> {
+    let text = record.get("SIZE")?.trim();
+    let (negative, digits) = if let Some(rest) = text.strip_prefix('-') {
+        (true, rest)
+    } else if let Some(rest) = text.strip_prefix('+') {
+        (false, rest)
+    } else {
+        (false, text)
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if negative {
+        return Some(u64::MAX);
+    }
+    Some(digits.parse::<u64>().unwrap_or(u64::MAX))
+}
+
+/// The `Expected:` value for a size mismatch: the parsed number, except
+/// a sentinel parse (negative or out-of-range `SIZE`) prints the
+/// index's own trimmed text the way Portage prints its parsed `int`.
+pub(crate) fn index_size_expected(record: &HashMap<String, String>, parsed: u64) -> String {
+    if parsed == u64::MAX
+        && let Some(raw) = record.get("SIZE")
+    {
+        let trimmed = raw.trim().trim_start_matches('+');
+        if trimmed != u64::MAX.to_string() {
+            return trimmed.to_string();
+        }
+    }
+    parsed.to_string()
+}
+
+/// Applies `PORTAGE_CHECKSUM_FILTER` to `hashes`, keeping at least one hash
+/// (`portage.checksum._hash_filter` / `_apply_hash_filter`).
+pub(crate) fn apply_checksum_filter(
+    mut hashes: Vec<String>,
+    filter_str: Option<&str>,
+) -> Vec<String> {
+    let Some(filter_str) = filter_str else {
+        return hashes;
+    };
+    let tokens: Vec<String> = filter_str
+        .split_whitespace()
+        .map(|s| s.to_ascii_uppercase())
+        .collect();
+    if tokens.is_empty() || tokens.last().map(String::as_str) == Some("*") || hashes.len() <= 1 {
+        return hashes;
+    }
+    let accepts = |hash_name: &str| -> bool {
+        for token in tokens.iter().rev() {
+            if token == "*" || token == hash_name {
+                return true;
+            }
+            if let Some(rest) = token.strip_prefix('-')
+                && (rest == "*" || rest == hash_name)
+            {
+                return false;
+            }
+        }
+        false
+    };
+    let mut i = 0;
+    while i < hashes.len() && hashes.len() > 1 {
+        if !accepts(&hashes[i]) {
+            hashes.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+    hashes
+}
+
+/// Every digest the verifier hashes over the file, ASCII-sorted the way
+/// Portage's `verify_all` iterates `sorted(verifiable_hash_types)`.
+/// (`RMD160`/`WHIRLPOOL` are valid Portage keys with no hasher vendored
+/// here; Portage's own remote path walks frozenset order, so no order is
+/// canonical there.)
+const VERIFIED_DIGESTS: [&str; 8] = [
+    "BLAKE2B", "BLAKE2S", "MD5", "SHA1", "SHA256", "SHA3_256", "SHA3_512", "SHA512",
+];
+
+/// Verify a binpkg at merge time against the index record that vouches
+/// for it: `SIZE` first via `stat(2)`, then every digest the record
+/// carries that survives `PORTAGE_CHECKSUM_FILTER` (`None` disables the
+/// filter). A record with no parseable `SIZE` verifies nothing. Returns
+/// the first mismatch; the caller renames the file and prints the
+/// failure block. Files the index does not vouch for are already fully
+/// parsed at scan and never reach here with a record.
 // Portage: `_emerge/BinpkgVerifier`, `bintree._get_digests`.
 pub fn verify_binpkg_against_index(
     path: &Path,
     record: &HashMap<String, String>,
+    checksum_filter: Option<&str>,
 ) -> Result<(), BinpkgDigestMismatch> {
-    let indexed_size = record.get("SIZE").and_then(|s| s.parse::<u64>().ok());
-    let Some(expected_size) = indexed_size else {
+    let Some(expected_size) = parse_index_size(record) else {
         return Ok(());
     };
     let actual_size = fs::metadata(path).map(|st| st.len()).unwrap_or(u64::MAX);
@@ -43,10 +134,16 @@ pub fn verify_binpkg_against_index(
         return Err(BinpkgDigestMismatch {
             name: "size".to_string(),
             got: actual_size.to_string(),
-            expected: expected_size.to_string(),
+            expected: index_size_expected(record, expected_size),
         });
     }
-    for algo in ["MD5", "SHA1", "SHA256", "SHA512"] {
+    let names: Vec<String> = VERIFIED_DIGESTS
+        .iter()
+        .filter(|algo| record.get(**algo).is_some_and(|s| !s.is_empty()))
+        .map(|algo| (*algo).to_string())
+        .collect();
+    let names = apply_checksum_filter(names, checksum_filter);
+    for algo in &names {
         let Some(expected) = record.get(algo).filter(|s| !s.is_empty()) else {
             continue;
         };
@@ -55,7 +152,7 @@ pub fn verify_binpkg_against_index(
         };
         if !actual.eq_ignore_ascii_case(expected) {
             return Err(BinpkgDigestMismatch {
-                name: algo.to_string(),
+                name: algo.clone(),
                 got: actual,
                 expected: expected.clone(),
             });
@@ -83,10 +180,7 @@ const VALID_CHECKSUM_KEYS: [&str; 10] = [
 /// (or neither) is refused after the download.
 // Portage: `_emerge/BinpkgVerifier._start`, `bintree._get_digests`.
 pub(crate) fn index_has_size_and_checksum(record: &HashMap<String, String>) -> bool {
-    let size_ok = record
-        .get("SIZE")
-        .is_some_and(|s| s.trim().parse::<i64>().is_ok());
-    size_ok
+    parse_index_size(record).is_some()
         && VALID_CHECKSUM_KEYS
             .iter()
             .any(|k| record.get(*k).is_some_and(|v| !v.is_empty()))
@@ -103,8 +197,9 @@ pub fn missing_digests_block(partial: &Path) -> String {
     )
 }
 
-/// Hex digest of the whole file with `algo` (`MD5`/`SHA1`/`SHA256`/
-/// `SHA512`). `None` for an unknown name or an unreadable file.
+/// Hex digest of the whole file with `algo`. `None` for an unknown
+/// name or an unreadable file; `RMD160`/`WHIRLPOOL` have no hasher
+/// vendored here, so records carrying only those verify the size alone.
 pub(crate) fn file_hex_digest(path: &Path, algo: &str) -> Option<String> {
     let bytes = fs::read(path).ok()?;
     let hex = |digest: &[u8]| digest.iter().map(|b| format!("{b:02x}")).collect();
@@ -124,6 +219,22 @@ pub(crate) fn file_hex_digest(path: &Path, algo: &str) -> Option<String> {
         "SHA512" => {
             use sha2::Digest as _;
             Some(hex(&sha2::Sha512::digest(&bytes)))
+        }
+        "BLAKE2B" => {
+            use blake2::Digest as _;
+            Some(hex(&blake2::Blake2b512::digest(&bytes)))
+        }
+        "BLAKE2S" => {
+            use blake2::Digest as _;
+            Some(hex(&blake2::Blake2s256::digest(&bytes)))
+        }
+        "SHA3_256" => {
+            use sha3::Digest as _;
+            Some(hex(&sha3::Sha3_256::digest(&bytes)))
+        }
+        "SHA3_512" => {
+            use sha3::Digest as _;
+            Some(hex(&sha3::Sha3_512::digest(&bytes)))
         }
         _ => None,
     }

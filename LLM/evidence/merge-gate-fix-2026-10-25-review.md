@@ -22,3 +22,11 @@ Run `l1-20261025T234042Z` (tree 523bfd7e + Task 3 working-tree change):
 runner rc 0; `sys-libs/glibc-2.43-r4` and `app-shells/bash-5.3_p20`
 merged by both PMs, merge_rc 0 both sides; hard findings 0, explained 0,
 UNEXPLAINED 0, payload diffs 0 (4005 paths per side). Verdict: PASSED.
+
+## Task 4 — binpkg digest verification (digest.rs, emerge_getbinpkg.rs)
+
+Run `l1-20261026T000922Z` (tree 13148bb5 + Task 4 working-tree change;
+this runner merges with `emerge -k --getbinpkg`, so it is also the L1
+getbinpkg cell the plan asks for): runner rc 0; glibc-2.43-r4 and
+bash-5.3_p20 merged by both PMs; hard findings 0, UNEXPLAINED 0, payload
+diffs 0 (4005 paths per side). Verdict: PASSED.

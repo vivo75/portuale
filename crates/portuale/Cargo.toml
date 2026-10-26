@@ -141,6 +141,10 @@ tar = { version = "0.4", default-features = false }
 # (portage-fetch depends on it at this version, and the gpkg Manifest
 # tests used it as a dev-dependency) -- no new fetch.
 blake2 = "0.10"
+# The binpkg verifier checks `SHA3_256`/`SHA3_512` index digests the way
+# Portage's `verify_all` does. Pure Rust, no C linkage, so the
+# musl-static story is untouched.
+sha3 = "0.10"
 # The up-front `pkg_pretend` pass's capture logs: `tempfile::Builder`
 # creates each log `O_EXCL` with a random name under the package's own
 # `${T}`, so a planted symlink at the old predictable path can neither

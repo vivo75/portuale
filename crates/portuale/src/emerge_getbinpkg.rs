@@ -1449,7 +1449,11 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
         })
         .flatten();
     if let Some(record) = &local_record
-        && let Err(mismatch) = crate::binpkg::verify_binpkg_against_index(&binpkg_path, record)
+        && let Err(mismatch) = crate::binpkg::verify_binpkg_against_index(
+            &binpkg_path,
+            record,
+            checksum_filter_from_config(config).as_deref(),
+        )
     {
         let renamed = crate::binpkg::checksum_failure_rename(&binpkg_path)
             .unwrap_or_else(|| binpkg_path.clone());
@@ -1966,46 +1970,6 @@ pub(crate) fn print_user_patch_table(args: PrintUserPatchTableArgs<'_>) {
     }
 }
 
-/// Applies `PORTAGE_CHECKSUM_FILTER` to `hashes`, keeping at least one hash
-/// (`portage.checksum._hash_filter` / `_apply_hash_filter`).
-pub(crate) fn apply_checksum_filter(
-    mut hashes: Vec<String>,
-    filter_str: Option<&str>,
-) -> Vec<String> {
-    let Some(filter_str) = filter_str else {
-        return hashes;
-    };
-    let tokens: Vec<String> = filter_str
-        .split_whitespace()
-        .map(|s| s.to_ascii_uppercase())
-        .collect();
-    if tokens.is_empty() || tokens.last().map(String::as_str) == Some("*") || hashes.len() <= 1 {
-        return hashes;
-    }
-    let accepts = |hash_name: &str| -> bool {
-        for token in tokens.iter().rev() {
-            if token == "*" || token == hash_name {
-                return true;
-            }
-            if let Some(rest) = token.strip_prefix('-')
-                && (rest == "*" || rest == hash_name)
-            {
-                return false;
-            }
-        }
-        false
-    };
-    let mut i = 0;
-    while i < hashes.len() && hashes.len() > 1 {
-        if !accepts(&hashes[i]) {
-            hashes.remove(i);
-        } else {
-            i += 1;
-        }
-    }
-    hashes
-}
-
 /// The digest names Portage prints on a binary's verify line: the uppercase
 /// checksum keys present in the index record (filtered by
 /// `PORTAGE_CHECKSUM_FILTER`) plus `size`, ASCII-sorted (`MD5 SHA1 size`).
@@ -2024,7 +1988,7 @@ pub(crate) fn verified_digest_names_filtered(
     .filter(|k| record.get(**k).is_some_and(|v| !v.is_empty()))
     .map(|k| (*k).to_string())
     .collect();
-    let mut names = apply_checksum_filter(names, checksum_filter);
+    let mut names = crate::binpkg::apply_checksum_filter(names, checksum_filter);
     names.push("size".to_string());
     names.sort();
     Some(names)
@@ -2132,71 +2096,31 @@ pub(crate) fn download_and_verify(
         return Err(DownloadError::MissingDigests { partial: dest });
     }
 
-    if let Some(expected) = record.get("SIZE").and_then(|s| s.parse::<u64>().ok()) {
-        let actual = std::fs::metadata(&dest)
-            .map_err(|e| format!("{}: {e}", dest.display()))?
-            .len();
-        if actual != expected {
-            let _ = std::fs::remove_file(&dest);
+    // The downloaded bytes are verified against the remote record exactly
+    // like a local binpkg: `SIZE` first, then every digest the record
+    // carries that survives `PORTAGE_CHECKSUM_FILTER`. A mismatch removes
+    // the `.partial` and fails.
+    // Portage: _emerge/BinpkgVerifier.py, _start
+    let filter = checksum_filter_from_config(config);
+    if let Err(mismatch) =
+        crate::binpkg::verify_binpkg_against_index(&dest, record, filter.as_deref())
+    {
+        let _removed = std::fs::remove_file(&dest);
+        if mismatch.name == "size" {
             return Err(DownloadError::Other(format!(
-                "{}: downloaded size {actual} != index SIZE {expected}",
-                dest.display()
+                "{}: downloaded size {} != index SIZE {}",
+                dest.display(),
+                mismatch.got,
+                mismatch.expected
             )));
         }
-    }
-
-    // The `MD5`/`SHA1` fields are the md5/sha1 of the whole file, and every
-    // digest surviving `PORTAGE_CHECKSUM_FILTER` is checked; a mismatch
-    // removes the file and fails.
-    let filter = checksum_filter_from_config(config);
-    let mut present_hashes = Vec::new();
-    if record.get("MD5").is_some_and(|s| !s.is_empty()) {
-        present_hashes.push("MD5".to_string());
-    }
-    if record.get("SHA1").is_some_and(|s| !s.is_empty()) {
-        present_hashes.push("SHA1".to_string());
-    }
-    let kept_hashes = apply_checksum_filter(present_hashes, filter.as_deref());
-    let want_md5 = kept_hashes
-        .iter()
-        .any(|k| k == "MD5")
-        .then(|| record.get("MD5").cloned())
-        .flatten();
-    let want_sha1 = kept_hashes
-        .iter()
-        .any(|k| k == "SHA1")
-        .then(|| record.get("SHA1").cloned())
-        .flatten();
-    if want_md5.is_some() || want_sha1.is_some() {
-        let bytes = std::fs::read(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
-        if let Some(expected_md5) = want_md5 {
-            use md5::Digest as _;
-            let actual: String = md5::Md5::digest(&bytes)
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            if !actual.eq_ignore_ascii_case(&expected_md5) {
-                let _ = std::fs::remove_file(&dest);
-                return Err(DownloadError::Other(format!(
-                    "{}: MD5 mismatch (index {expected_md5}, got {actual})",
-                    dest.display()
-                )));
-            }
-        }
-        if let Some(expected_sha1) = want_sha1 {
-            use sha1::Digest as _;
-            let actual: String = sha1::Sha1::digest(&bytes)
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            if !actual.eq_ignore_ascii_case(&expected_sha1) {
-                let _ = std::fs::remove_file(&dest);
-                return Err(DownloadError::Other(format!(
-                    "{}: SHA1 mismatch (index {expected_sha1}, got {actual})",
-                    dest.display()
-                )));
-            }
-        }
+        return Err(DownloadError::Other(format!(
+            "{}: {} mismatch (index {}, got {})",
+            dest.display(),
+            mismatch.name,
+            mismatch.expected,
+            mismatch.got
+        )));
     }
     std::fs::rename(&dest, &final_dest).map_err(|e| format!("{}: {e}", final_dest.display()))?;
     Ok(final_dest)
@@ -3792,6 +3716,72 @@ mod tests {
             assert!(!pkgdir.join("dev-libs/packagepkg-1.0.tbz2").exists());
             std::fs::remove_file(&partial).unwrap();
         }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn download_and_verify_refuses_a_tampered_payload_on_any_supported_digest() {
+        // Portage verifies every digest the remote record carries, not
+        // just MD5/SHA1: SIZE plus only SHA512 (or only BLAKE2B) with a
+        // tampered payload is refused. `file://` serves the bytes without
+        // an HTTP server.
+        // Portage: _emerge/BinpkgVerifier.py, _start;
+        // lib/portage/checksum.py, verify_all
+        let tmp = tempdir();
+        let binhost = tmp.join("binhost");
+        let body = b"tampered-payload";
+        std::fs::create_dir_all(binhost.join("dev-libs")).unwrap();
+        std::fs::write(binhost.join("dev-libs/tamp-1.0.tbz2"), body).unwrap();
+        let pkgdir = tmp.join("pkgdir");
+        let record = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            let mut record: HashMap<String, String> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            record.insert("PATH".into(), "dev-libs/tamp-1.0.tbz2".into());
+            record
+        };
+        let fetch = |record: &HashMap<String, String>| {
+            download_and_verify(DownloadAndVerifyArgs {
+                sync_uri: &format!("file://{}", binhost.display()),
+                record,
+                category: "dev-libs",
+                package: "tamp",
+                version: "1.0",
+                pkgdir: &pkgdir,
+                config: &Config::default(),
+            })
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+        };
+        // One import covers both hashers: sha2/blake2 re-export the same
+        // `digest::Digest` trait.
+        use sha2::Digest as _;
+        let sha512: String = sha2::Sha512::digest(body)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let blake2b: String = blake2::Blake2b512::digest(body)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        // Right SIZE, wrong SHA512 alone: refused, nothing kept.
+        let err = fetch(&record(&[("SIZE", "16"), ("SHA512", &"0".repeat(128))]))
+            .expect_err("tampered payload with wrong SHA512 must fail");
+        assert!(err.contains("SHA512 mismatch"), "{err}");
+        // Right SIZE, wrong BLAKE2B alone: refused, nothing kept.
+        let err = fetch(&record(&[("SIZE", "16"), ("BLAKE2B", &"0".repeat(128))]))
+            .expect_err("tampered payload with wrong BLAKE2B must fail");
+        assert!(err.contains("BLAKE2B mismatch"), "{err}");
+        // Right SIZE plus the matching SHA512 alone: verified and renamed.
+        fetch(&record(&[("SIZE", "16"), ("SHA512", &sha512)]))
+            .expect("matching SHA512 must verify");
+        assert!(pkgdir.join("dev-libs/tamp-1.0.tbz2").is_file());
+        std::fs::remove_file(pkgdir.join("dev-libs/tamp-1.0.tbz2")).unwrap();
+        // Right SIZE plus the matching BLAKE2B alone: verified and renamed.
+        fetch(&record(&[("SIZE", "16"), ("BLAKE2B", &blake2b)]))
+            .expect("matching BLAKE2B must verify");
+        assert!(pkgdir.join("dev-libs/tamp-1.0.tbz2").is_file());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

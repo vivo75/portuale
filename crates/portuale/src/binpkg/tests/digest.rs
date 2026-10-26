@@ -110,14 +110,14 @@ fn verify_binpkg_against_index_reports_size_then_digest_like_portage() {
 
     // No SIZE: nothing to verify against.
     let mut record = HashMap::new();
-    assert!(verify_binpkg_against_index(&file, &record).is_ok());
+    assert!(verify_binpkg_against_index(&file, &record, None).is_ok());
 
     // Size mismatch beats everything, even a correct digest.
     record.insert("SIZE".to_string(), "16".to_string());
     record.insert("MD5".to_string(), md5.clone());
-    assert!(verify_binpkg_against_index(&file, &record).is_ok());
+    assert!(verify_binpkg_against_index(&file, &record, None).is_ok());
     record.insert("SIZE".to_string(), "10240".to_string());
-    let mismatch = verify_binpkg_against_index(&file, &record)
+    let mismatch = verify_binpkg_against_index(&file, &record, None)
         .expect_err("short file must fail the index SIZE");
     assert_eq!(mismatch.name, "size");
     assert_eq!(mismatch.got, "16");
@@ -126,7 +126,8 @@ fn verify_binpkg_against_index_reports_size_then_digest_like_portage() {
     // Matching size, wrong digest: the hash name is reported.
     record.insert("SIZE".to_string(), "16".to_string());
     record.insert("MD5".to_string(), "0".repeat(32));
-    let mismatch = verify_binpkg_against_index(&file, &record).expect_err("wrong MD5 must fail");
+    let mismatch =
+        verify_binpkg_against_index(&file, &record, None).expect_err("wrong MD5 must fail");
     assert_eq!(mismatch.name, "MD5");
     assert_eq!(mismatch.got, md5);
     assert_eq!(mismatch.expected, "0".repeat(32));
@@ -209,10 +210,168 @@ fn index_has_size_and_checksum_needs_both() {
 }
 
 #[test]
-fn missing_digests_block_matches_the_portage_text() {
-    let p = Path::new("/c/hostile/hb-none/hb-none-1-1.gpkg.tar.partial");
-    assert_eq!(
-        missing_digests_block(p),
-        "\n!!! Digest verification failed:\n!!! /c/hostile/hb-none/hb-none-1-1.gpkg.tar.partial\n!!! Reason: binhost's Packages index lacks size and checksum\n!!! for this package\n"
-    );
+fn verify_binpkg_against_index_checks_every_digest_portage_verifies() {
+    // Portage checks every digest the record carries, not just MD5/SHA1:
+    // a record with SIZE plus a tampered SHA512 (or BLAKE2B) fails even
+    // though the size matches.
+    // Portage: lib/portage/checksum.py, verify_all
+    let scratch = ScratchDir::new("verify-every-digest").unwrap();
+    let file = scratch.path().join("pkg-1.0.gpkg.tar");
+    let body = b"0123456789abcdef";
+    fs::write(&file, body).unwrap();
+    // One import covers every hasher below: md5/sha1/sha2/blake2 all
+    // re-export the same `digest::Digest` trait.
+    use sha2::Digest as _;
+    let hex = |digest: &[u8]| {
+        digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+    let correct: &[(&str, String)] = &[
+        ("MD5", hex(&md5::Md5::digest(body))),
+        ("SHA1", hex(&sha1::Sha1::digest(body))),
+        ("SHA256", hex(&sha2::Sha256::digest(body))),
+        ("SHA512", hex(&sha2::Sha512::digest(body))),
+        ("BLAKE2B", hex(&blake2::Blake2b512::digest(body))),
+        ("BLAKE2S", hex(&blake2::Blake2s256::digest(body))),
+        // No sha3 hasher existed here before the fix: ground truth from
+        // the host hashlib (S0 probe).
+        (
+            "SHA3_256",
+            "a5df4caae9fdb5dbacf667075b709a2f30a115c43168af332062b42d4b0da01f".to_string(),
+        ),
+        (
+            "SHA3_512",
+            "59d06155d25dffdb982729de8dce9d7855ca094d8bab8124b347c40668477056b3c27ccb7d71b54043d207ccd187642bf9c8466f9a8d0dbefb4c41633a7e39ef".to_string(),
+        ),
+    ];
+    let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    // All eight correct: verified.
+    let owned: Vec<(String, String)> = correct
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect();
+    let mut full_refs: Vec<(&str, &str)> = vec![("SIZE", "16")];
+    full_refs.extend(owned.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    assert!(verify_binpkg_against_index(&file, &rec(&full_refs), None).is_ok());
+    // Each algorithm alone and wrong: refused with that algorithm's name.
+    for (algo, _) in correct {
+        let len = match *algo {
+            "MD5" => 32,
+            "SHA1" => 40,
+            "SHA256" | "BLAKE2S" | "SHA3_256" => 64,
+            _ => 128,
+        };
+        let record = rec(&[("SIZE", "16"), (algo, &"0".repeat(len))]);
+        let Err(mismatch) = verify_binpkg_against_index(&file, &record, None) else {
+            panic!("wrong {algo} must fail");
+        };
+        assert_eq!(mismatch.name, *algo);
+    }
+    // Each algorithm alone and correct: verified.
+    for (algo, value) in correct {
+        let record = rec(&[("SIZE", "16"), (algo, value)]);
+        assert!(
+            verify_binpkg_against_index(&file, &record, None).is_ok(),
+            "correct {algo} must verify"
+        );
+    }
+}
+
+#[test]
+fn verify_binpkg_against_index_parses_size_like_portages_int() {
+    // Portage runs SIZE through `int()`: surrounding whitespace is
+    // ignored, `"-1"` parses (and then fails the size check), garbage
+    // drops `size` from the digests so nothing is verified.
+    // Portage: lib/portage/dbapi/bintree.py, _get_digests
+    let scratch = ScratchDir::new("verify-int-size").unwrap();
+    let file = scratch.path().join("pkg-1.0.gpkg.tar");
+    fs::write(&file, b"0123456789abcdef").unwrap();
+    let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    // Padded SIZE with no digests: the size alone convicts.
+    let mismatch = verify_binpkg_against_index(&file, &rec(&[("SIZE", " 4618 ")]), None)
+        .expect_err("padded SIZE 4618 must fail a 16-byte file");
+    assert_eq!(mismatch.name, "size");
+    assert_eq!(mismatch.got, "16");
+    assert_eq!(mismatch.expected, "4618");
+    // Negative SIZE parses and then fails the check.
+    let mismatch = verify_binpkg_against_index(&file, &rec(&[("SIZE", "-1")]), None)
+        .expect_err("SIZE -1 must fail");
+    assert_eq!(mismatch.name, "size");
+    assert_eq!(mismatch.expected, "-1");
+    // Garbage SIZE verifies nothing, like Portage dropping `size`.
+    assert!(verify_binpkg_against_index(&file, &rec(&[("SIZE", "x")]), None).is_ok());
+    assert!(verify_binpkg_against_index(&file, &rec(&[]), None).is_ok());
+}
+
+#[test]
+fn parse_index_size_matches_portages_int() {
+    // Portage: lib/portage/dbapi/bintree.py, _get_digests
+    let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    assert_eq!(parse_index_size(&rec(&[("SIZE", "4618")])), Some(4618));
+    assert_eq!(parse_index_size(&rec(&[("SIZE", " 4618 ")])), Some(4618));
+    assert_eq!(parse_index_size(&rec(&[("SIZE", "+5")])), Some(5));
+    // Negative parses but matches no file: both paths fail closed.
+    assert!(parse_index_size(&rec(&[("SIZE", "-1")])).is_some());
+    assert_eq!(parse_index_size(&rec(&[("SIZE", "x")])), None);
+    assert_eq!(parse_index_size(&rec(&[("SIZE", "")])), None);
+    assert_eq!(parse_index_size(&rec(&[])), None);
+}
+
+#[test]
+fn verify_binpkg_against_index_honours_portage_checksum_filter() {
+    // A digest the filter removes is not checked (the `"* -HASH"` idiom;
+    // a trailing `"*"` alone disables filtering). The filter cannot
+    // excuse the only digest: at least one hash always survives.
+    // Portage: _emerge/BinpkgVerifier.py, _start; lib/portage/checksum.py,
+    // _apply_hash_filter
+    let scratch = ScratchDir::new("verify-checksum-filter").unwrap();
+    let file = scratch.path().join("pkg-1.0.gpkg.tar");
+    fs::write(&file, b"0123456789abcdef").unwrap();
+    let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    use md5::Digest as _;
+    let md5: String = md5::Md5::digest(b"0123456789abcdef")
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    // Wrong SHA512, excused while MD5 remains: verified.
+    let record = rec(&[("SIZE", "16"), ("MD5", &md5), ("SHA512", &"0".repeat(128))]);
+    assert!(verify_binpkg_against_index(&file, &record, Some("* -SHA512")).is_ok());
+    // Same record, filter transparent: refused on SHA512.
+    let mismatch = verify_binpkg_against_index(&file, &record, None)
+        .expect_err("unfiltered wrong SHA512 must fail");
+    assert_eq!(mismatch.name, "SHA512");
+    // The filter cannot excuse the only digest: still refused.
+    let record = rec(&[("SIZE", "16"), ("SHA512", &"0".repeat(128))]);
+    let mismatch = verify_binpkg_against_index(&file, &record, Some("* -SHA512"))
+        .expect_err("a lone digest survives the filter");
+    assert_eq!(mismatch.name, "SHA512");
+    // Correct SHA512 alone survives `"* -MD5"` (nothing to remove): verified.
+    let sha512: String = sha2::Sha512::digest(b"0123456789abcdef")
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let record = rec(&[("SIZE", "16"), ("SHA512", &sha512)]);
+    assert!(verify_binpkg_against_index(&file, &record, Some("* -MD5")).is_ok());
 }

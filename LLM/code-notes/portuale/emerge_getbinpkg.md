@@ -137,13 +137,13 @@ see `emerge_build/pretend_pass.md`.
 - Reads `PORTAGE_CHECKSUM_FILTER` from the process env first, then `config.other_vars` (backlog #436d).
 
 ## fn apply_checksum_filter
-- Ports `portage.checksum._hash_filter` + `_apply_hash_filter`: filters the uppercase hash names against `PORTAGE_CHECKSUM_FILTER`, always preserving at least one hash (backlog #436d).
+- Moved to `crate::binpkg::digest` (#578, shared with the local verifier); see there.
 
 ## fn verified_digest_names_filtered
 - Ports `BinpkgVerifier._start` / `_display_success`: uppercase hash names present in the index record (filtered by `PORTAGE_CHECKSUM_FILTER`) plus `size`, ASCII-sorted (`MD5 SHA1 size`); `None` without a parseable `SIZE` (backlog #428, #436d).
 
 ## fn download_and_verify
-- Portage `bintree.gettbz2` / `_get_digests` + `digestCheck`: uses per-binrepo `fetchcommand`/`resumecommand` when set in `binrepos.conf` (backlog #436a), else `FETCHCOMMAND`/`RESUMECOMMAND` from config (backlog #428); the `Packages` record's `MD5`/`SHA1` fields surviving `PORTAGE_CHECKSUM_FILTER` (backlog #436d) are verified against the downloaded file, and a mismatch removes the file and fails. A record without both `SIZE` and a checksum is refused first (see `enum DownloadError`, backlog #501).
+- Portage `bintree.gettbz2` / `_get_digests` + `digestCheck` (#578 rewrote the digest half): uses per-binrepo `fetchcommand`/`resumecommand` when set in `binrepos.conf` (backlog #436a), else `FETCHCOMMAND`/`RESUMECOMMAND` from config (backlog #428). After the missing-digests guard, the `.partial` is verified by the shared `verify_binpkg_against_index` -- `SIZE` first, then every digest the record carries that survives `PORTAGE_CHECKSUM_FILTER` (previously MD5/SHA1 only, untrimmed-`u64` size). A mismatch removes the file and fails, keeping the established (Portage-divergent) one-line text: `downloaded size {got} != index SIZE {expected}` for size, `{ALGO} mismatch (index {expected}, got {got})` for hashes (pinned in pmtest `test_mrg_remote_keep_going_*` and the Rust tests). A record without both `SIZE` and a checksum is refused first (see `enum DownloadError`, backlog #501).
 
 ## enum DownloadError
 - `MissingDigests { partial }` is the remote-record refusal (backlog #501): `download_and_verify` fetches into `<file>.partial` first, then refuses a record without a parseable `SIZE` *and* a checksum key (`index_has_size_and_checksum`), leaving the `.partial` in place. Portage: `BinpkgVerifier._start` runs after the download, so the fetch is attempted (oracle `LLM/evidence/2026-10-23-500-501/`, casts `s2-hb-*`: GET of the gpkg is logged, then rc 1). Callers: the merge path prints the block and the `>>> Failed to emerge` tail; `--fetchonly` prints the block; `remote/plan.rs` uses the one-line `Display` text (its output shape is not pinned against Portage).
