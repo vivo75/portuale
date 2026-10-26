@@ -915,7 +915,7 @@ fn run_pass_reports_each_use_unsat_once() {
         let body = "EAPI=8\nDESCRIPTION=\"161 useunsat\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nIUSE=\"soflag\"\n";
         std::fs::write(d.join(format!("{pkg}-{pv}.ebuild")), body).unwrap();
         use md5::Digest as _;
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let entry = format!(
             "DEFINED_PHASES=-\nDESCRIPTION=161 useunsat\nEAPI=8\nIUSE=soflag\nKEYWORDS=amd64\nSLOT=0\n_md5_={md5}\n"
         );
@@ -1188,7 +1188,7 @@ fn run_pass_plain_miss_ignores_other_cps_reports() {
             "EAPI=8\nDESCRIPTION=\"161 combo\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nIUSE=\"soflag\"\n";
         std::fs::write(d.join(format!("{pkg}-{pv}.ebuild")), body).unwrap();
         use md5::Digest as _;
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let entry = format!(
             "DEFINED_PHASES=-\nDESCRIPTION=161 combo\nEAPI=8\nIUSE=soflag\nKEYWORDS=amd64\nSLOT=0\n_md5_={md5}\n"
         );
@@ -1502,7 +1502,7 @@ fn run_pass_masked_ebuild_is_no_twin() {
     let body = "EAPI=8\nDESCRIPTION=\"161 kw\"\nSLOT=\"0\"\nKEYWORDS=\"~amd64\"\n";
     std::fs::write(d.join("kwonlypkg-1.0.ebuild"), body).unwrap();
     use md5::Digest as _;
-    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
     let entry = format!(
         "DEFINED_PHASES=-\nDESCRIPTION=161 kw\nEAPI=8\nKEYWORDS=~amd64\nSLOT=0\n_md5_={md5}\n"
     );

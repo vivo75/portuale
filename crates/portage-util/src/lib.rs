@@ -28,6 +28,12 @@ pub fn shuffle_seed() -> Option<u64> {
     })
 }
 
+/// Lowercase hex of `bytes`, the single spelling every crate uses for a
+/// digest value (the hash crates' output no longer formats with `{:x}`).
+pub fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Every entry of `dir`, sorted by file name (shuffled when the test
 /// variable is set).
 pub fn read_dir_entries(dir: &Path) -> io::Result<Vec<DirEntry>> {

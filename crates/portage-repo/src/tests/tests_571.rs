@@ -29,7 +29,7 @@ fn write_p571_ebuild(repo: &std::path::Path, cat: &str, pkg: &str, extra: &str) 
     let body =
         format!("EAPI=8\nDESCRIPTION=\"571 {pkg}\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n{extra}");
     std::fs::write(dir.join(format!("{pkg}-1.0.ebuild")), &body).unwrap();
-    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
     let cachedir = repo.join("metadata/md5-cache").join(cat);
     std::fs::create_dir_all(&cachedir).unwrap();
     std::fs::write(

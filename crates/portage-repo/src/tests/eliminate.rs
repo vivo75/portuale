@@ -27,7 +27,7 @@ fn slot_operator_bridge_entries_run_the_new_slot_arm() {
         let body =
             format!("EAPI=8\nDESCRIPTION=\"211 bridge\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
         std::fs::write(d.join(format!("{pkg}-{pv}.ebuild")), body.as_bytes()).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 bridge\nEAPI=8\n".to_string();
         writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
         let cachedir = repo.join("metadata/md5-cache/dev-libs");

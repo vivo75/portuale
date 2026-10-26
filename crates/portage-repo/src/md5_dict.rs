@@ -194,7 +194,7 @@ pub fn entry_is_valid(
         Ok(b) => b,
         Err(_) => return false,
     };
-    let ebuild_md5 = format!("{:x}", Md5::digest(&ebuild_bytes));
+    let ebuild_md5 = portage_util::hex_lower(&Md5::digest(&ebuild_bytes));
     if fields.get("_md5_").is_none_or(|v| *v != ebuild_md5) {
         return false;
     }
@@ -270,7 +270,7 @@ fn eclass_md5(path: &Path) -> Option<String> {
     }
     let md5 = std::fs::read(path)
         .ok()
-        .map(|bytes| format!("{:x}", Md5::digest(&bytes)));
+        .map(|bytes| portage_util::hex_lower(&Md5::digest(&bytes)));
     if let Ok(mut guard) = memo.write() {
         guard.insert(
             path.to_path_buf(),
@@ -366,7 +366,7 @@ mod tests {
     }
 
     fn md5_hex(bytes: &[u8]) -> String {
-        format!("{:x}", Md5::digest(bytes))
+        portage_util::hex_lower(&Md5::digest(bytes))
     }
 
     fn valid_repo(

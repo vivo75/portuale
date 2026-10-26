@@ -89,19 +89,19 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # (mergeme()'s own `perform_md5`, `lib/portage/checksum.py`) -- another
 # deliberate, documented dependency, same waiver as brush-core/regex
 # above.
-md-5 = "0.10"
+md-5 = "0.11"
 # Binpkg `Packages` `SHA1` (real `bintree._pkgindex_hashes = ["MD5",
 # "SHA1"]`) -- RustCrypto's pure-Rust SHA-1, same waiver as md-5 above:
 # zero C linkage, so the musl-static story is untouched. Legacy-interop
 # use only (SHA-1 is cryptographically broken); real portage writes and
 # verifies it, so portuale does too.
-sha1 = "0.10"
+sha1 = "0.11"
 # Merge-time binpkg digest verification (backlog #174) checks every
 # digest a `Packages` record may carry, not just real's own two
 # (`MD5`/`SHA1` above): `SHA256`/`SHA512` when present. Same waiver as
 # md-5 above (pure Rust, no C linkage); already locked (was a
 # dev-dependency for the `Manifest` digest tests) -- no new fetch.
-sha2 = "0.10"
+sha2 = "0.11"
 # Real merge: real movefile() explicitly preserves the source's own
 # mtime onto the merged destination (`newmtime=thismtime`) -- std::fs::
 # copy doesn't (the destination gets a fresh "now" mtime), which would
@@ -140,11 +140,11 @@ tar = { version = "0.4", default-features = false }
 # `helpers/gpkg.rs`). Pure Rust, already vendored and locked
 # (portage-fetch depends on it at this version, and the gpkg Manifest
 # tests used it as a dev-dependency) -- no new fetch.
-blake2 = "0.10"
+blake2 = "0.11"
 # The binpkg verifier checks `SHA3_256`/`SHA3_512` index digests the way
 # Portage's `verify_all` does. Pure Rust, no C linkage, so the
 # musl-static story is untouched.
-sha3 = "0.10"
+sha3 = "0.12"
 # The up-front `pkg_pretend` pass's capture logs: `tempfile::Builder`
 # creates each log `O_EXCL` with a random name under the package's own
 # `${T}`, so a planted symlink at the old predictable path can neither

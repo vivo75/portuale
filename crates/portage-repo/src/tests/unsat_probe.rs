@@ -33,7 +33,7 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
                 "EAPI=8\nDESCRIPTION=\"215 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
             );
             std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
             let entry = format!(
                 "DEFINED_PHASES=-\nDESCRIPTION=215 probe\nEAPI=8\nKEYWORDS=amd64\nRDEPEND={rdepend}\nSLOT={slot}\n_md5_={md5}\n"
             );

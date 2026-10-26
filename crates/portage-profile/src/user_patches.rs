@@ -190,5 +190,5 @@ impl UserPatchSet {
 
 fn sha256_hex(content: &[u8]) -> String {
     use sha2::Digest as _;
-    format!("{:x}", sha2::Sha256::digest(content))
+    portage_util::hex_lower(&sha2::Sha256::digest(content))
 }

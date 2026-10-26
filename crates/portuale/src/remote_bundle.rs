@@ -209,7 +209,7 @@ pub fn collect_filemeta(image: &Path) -> Result<Vec<FileMeta>, String> {
     fn md5_file(path: &Path) -> Result<String, String> {
         use md5::Digest as _;
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(format!("{:x}", md5::Md5::digest(&bytes)))
+        Ok(portage_util::hex_lower(&md5::Md5::digest(&bytes)))
     }
     let mut out = Vec::new();
     let mut stack = vec![PathBuf::new()];
@@ -622,7 +622,7 @@ mod tests {
         })
         .expect("fixture tbz2 stages");
         let bytes = std::fs::read(&binpkg).unwrap();
-        let expected = format!("{:x}\n", md5::Md5::digest(&bytes));
+        let expected = format!("{}\n", portage_util::hex_lower(&md5::Md5::digest(&bytes)));
         assert_eq!(expected.len(), 33, "real BINPKGMD5 is 33 B");
         assert_eq!(
             std::fs::read_to_string(tmp.join("packagepkg-1.0/build-info/BINPKGMD5")).unwrap(),

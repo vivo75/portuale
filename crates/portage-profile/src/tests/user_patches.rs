@@ -41,8 +41,8 @@ fn populated_root() -> std::path::PathBuf {
 /// the digest of a single matching patch file.
 fn single_file_digest(content: &[u8]) -> String {
     use sha2::Digest as _;
-    let inner = format!("{:x}", sha2::Sha256::digest(content));
-    format!("{:x}", sha2::Sha256::digest(inner.as_bytes()))
+    let inner = portage_util::hex_lower(&sha2::Sha256::digest(content));
+    portage_util::hex_lower(&sha2::Sha256::digest(inner.as_bytes()))
 }
 
 #[test]

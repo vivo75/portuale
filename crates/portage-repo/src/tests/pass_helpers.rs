@@ -120,7 +120,7 @@ fn minimize_children_collapses_like_portage() {
         fs::create_dir_all(&dir).unwrap();
         let body = format!("EAPI=8\nDESCRIPTION=\"236\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
         fs::write(dir.join(format!("minlib-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=236\nEAPI=8\n".to_string();
         writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
         let cachedir = repo.join("metadata/md5-cache/dev-libs");
@@ -254,7 +254,7 @@ fn minimize_children_matches_use_deps_against_candidate_use() {
             "EAPI=8\nDESCRIPTION=\"266\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nIUSE=\"{iuse}\"\n"
         );
         fs::write(dir.join(format!("minlib2-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=266\nEAPI=8\n".to_string();
         writeln!(
             entry,

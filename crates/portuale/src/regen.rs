@@ -453,7 +453,7 @@ pub(crate) fn render_entry(
 ) -> Result<String, String> {
     let ebuild_bytes =
         std::fs::read(ebuild_path).map_err(|e| format!("{}: {e}", ebuild_path.display()))?;
-    let ebuild_md5 = format!("{:x}", Md5::digest(&ebuild_bytes));
+    let ebuild_md5 = portage_util::hex_lower(&Md5::digest(&ebuild_bytes));
 
     let mut fields: BTreeMap<&str, String> = BTreeMap::new();
     for &key in WRITE_KEYS {
@@ -533,7 +533,7 @@ fn eclasses_field(
             // Triples carry the eclass directory between name and checksum.
             parts.push(tree.join("eclass").display().to_string());
         }
-        parts.push(format!("{:x}", Md5::digest(&bytes)));
+        parts.push(portage_util::hex_lower(&Md5::digest(&bytes)));
     }
     Some(parts.join("\t"))
 }
@@ -678,7 +678,7 @@ mod tests {
         let mut md = std::collections::HashMap::new();
         md.insert("EAPI".to_string(), "8".to_string());
         md.insert("INHERITED".to_string(), "myclass".to_string());
-        let eclass_md5 = format!("{:x}", Md5::digest(b"# eclass\n"));
+        let eclass_md5 = portage_util::hex_lower(&Md5::digest(b"# eclass\n"));
 
         let pairs = render_entry(&md, &ebuild, &repo, &[], false).unwrap();
         assert!(
@@ -714,7 +714,10 @@ mod tests {
         std::fs::write(&ebuild, ebuild_bytes).unwrap();
         let cache_file = repo.join("metadata/md5-cache/dev-libs/pkg-1.0");
         std::fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
-        let entry = format!("EAPI=8\n_md5_={:x}\n", Md5::digest(ebuild_bytes));
+        let entry = format!(
+            "EAPI=8\n_md5_={}\n",
+            portage_util::hex_lower(&Md5::digest(ebuild_bytes))
+        );
         std::fs::write(&cache_file, &entry).unwrap();
 
         let tmp = dir.join("tmp");

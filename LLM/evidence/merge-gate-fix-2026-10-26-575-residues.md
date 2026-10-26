@@ -15,3 +15,11 @@ runner rc 0; `sys-libs/glibc-2.43-r4` and `app-shells/bash-5.3_p20`
 merged by both PMs (`*.merged-cpvs.txt`), merge_rc 0 both sides; hard
 findings 0, UNEXPLAINED 0, payload diffs 0, mtime-only diffs 1420.
 Verdict: PASSED.
+
+## Task 3 — every hash crate on digest 0.11 (Cargo.toml ×4, hex_lower call sites)
+
+Run `l1-20261026T233746Z` (tree 26ddf226 + Task 3 working-tree change;
+`ebuild_merge/tree.rs` computes the CONTENTS MD5s with the moved `md-5`):
+runner rc 0; `sys-libs/glibc-2.43-r4` and `app-shells/bash-5.3_p20`
+merged by both PMs, merge_rc 0 both sides; hard findings 0, UNEXPLAINED 0,
+payload diffs 0, mtime-only diffs 1420. Verdict: PASSED.

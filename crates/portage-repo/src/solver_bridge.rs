@@ -9184,7 +9184,7 @@ mod tests {
             std::fs::File::create(dir.join(format!("{pf}.ebuild"))).expect("ebuild creates");
         file.write_all(ebuild.as_bytes()).expect("ebuild writes");
         use md5::Digest as _;
-        let digest = format!("{:x}", md5::Md5::digest(ebuild.as_bytes()));
+        let digest = portage_util::hex_lower(&md5::Md5::digest(ebuild.as_bytes()));
         let mut cache = format!("DESCRIPTION=s6 fixture\nEAPI=8\nKEYWORDS=amd64\nSLOT={slot}\n");
         if !iuse.is_empty() {
             cache.push_str(&format!("IUSE={iuse}\n"));

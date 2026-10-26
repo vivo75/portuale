@@ -292,7 +292,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         let body =
             format!("EAPI=8\nDESCRIPTION=\"211 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 probe\nEAPI=8\n".to_string();
         writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
         let cachedir = repo.join("metadata/md5-cache/dev-libs");
@@ -458,7 +458,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         let body =
             format!("EAPI=8\nDESCRIPTION=\"211 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 probe\nEAPI=8\n".to_string();
         writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
         let cachedir = old_repo.join("metadata/md5-cache/dev-libs");
@@ -568,7 +568,7 @@ fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
             body.push_str(&format!("RDEPEND=\"{rdepend}\"\n"));
         }
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=268 probe\nEAPI=8\n".to_string();
         writeln!(entry, "KEYWORDS=amd64").unwrap();
         if !rdepend.is_empty() {
@@ -691,7 +691,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
         std::fs::create_dir_all(&dir).unwrap();
         let body = format!("EAPI=8\nDESCRIPTION=\"211 R2\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 R2\nEAPI=8\n".to_string();
         writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
         let cachedir = repo.join("metadata/md5-cache/dev-libs");
@@ -844,7 +844,7 @@ fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
         std::fs::create_dir_all(&dir).unwrap();
         let body = "EAPI=8\nDESCRIPTION=\"211 mismatch\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n";
         std::fs::write(dir.join(format!("{pkg}-1.0.ebuild")), body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=211 mismatch\nEAPI=8\n".to_string();
         writeln!(entry, "KEYWORDS=amd64\nSLOT=0\n_md5_={md5}").unwrap();
         let cachedir = repo.join("metadata/md5-cache/dev-libs");
@@ -950,7 +950,7 @@ fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot
             "EAPI=8\nDESCRIPTION=\"304\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
         );
         std::fs::write(dir.join(format!("{pkg}-1.0.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=304\nEAPI=8\n".to_string();
         writeln!(
             entry,
@@ -1326,7 +1326,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
         let body =
             format!("EAPI=8\nDESCRIPTION=\"269 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=269 probe\nEAPI=8\n".to_string();
         writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
         let cachedir = repo.join("metadata/md5-cache/app-misc");

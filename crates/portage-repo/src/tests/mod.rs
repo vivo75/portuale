@@ -1446,7 +1446,7 @@ fn abi_probe_harness(with_consumer: bool) -> (std::path::PathBuf, Vec<RepoConfig
             writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
         }
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=214 abi\nEAPI=8\n".to_string();
         if !rdepend.is_empty() {
             writeln!(entry, "RDEPEND={rdepend}").unwrap();
@@ -1968,7 +1968,7 @@ fn blocker_161_write_pkg_full(args: Blocker161WritePkgFullArgs<'_>) {
         writeln!(body, "BDEPEND=\"{bdepend}\"").unwrap();
     }
     std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
     let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=161 blocker\nEAPI=8\n".to_string();
     if !depend.is_empty() {
         writeln!(entry, "DEPEND={depend}").unwrap();
@@ -2835,7 +2835,7 @@ mod tests_164 {
                 "EAPI=8\nDESCRIPTION=\"164 visibility\"\nSLOT=\"{slot}\"\nKEYWORDS=\"{keywords}\"\nLICENSE=\"{license}\"\n"
             );
             std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-            let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+            let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
             let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=164 visibility\nEAPI=8\n".to_string();
             writeln!(entry, "KEYWORDS={keywords}").unwrap();
             writeln!(entry, "LICENSE={license}").unwrap();

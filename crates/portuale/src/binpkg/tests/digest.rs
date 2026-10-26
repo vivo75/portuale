@@ -375,3 +375,67 @@ fn verify_binpkg_against_index_honours_portage_checksum_filter() {
     let record = rec(&[("SIZE", "16"), ("SHA512", &sha512)]);
     assert!(verify_binpkg_against_index(&file, &record, Some("* -MD5")).is_ok());
 }
+
+/// Every verifier digest is byte-identical across the hasher-crate move:
+/// known answers for `b"portuale"` and the empty string, through the same
+/// `bytes_hex_digest` the verifier calls. Expected values from host
+/// Portage 3.0.83, `python3 -c 'import portage.checksum as c;
+/// print(c.perform_checksum(<file>, algo))'` for each name
+// Portage: `lib/portage/checksum.py`, `perform_checksum`.
+#[test]
+fn known_answer_digests_are_unchanged() {
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "MD5",
+            "26cf1c164799cb094d341b0fafa94ec3",
+            "d41d8cd98f00b204e9800998ecf8427e",
+        ),
+        (
+            "SHA1",
+            "3d3bad3454ec25afbba982c285306c84b1f979e7",
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+        ),
+        (
+            "SHA256",
+            "04edb618ed6b8c2fe61a15b1489024957d8e7ac9cfa3307b385f35d5692a3d17",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            "SHA512",
+            "8389121219a22961046c4b7ece874323ba747c63902d38148f3bb69006432601bf737ff60e6556138b7d3394e9f2002b81e08921173f920d68ee1bcf59ce78ce",
+            "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+        ),
+        (
+            "BLAKE2B",
+            "ca344a9898168a38a58649ca5c3a854485fd40f3714ac7a5d90cc28c2bd8939a0a22575dfe01a0bd712eb32b53f7e56238b8564b5a75e8417b5b78d0a7d983ed",
+            "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce",
+        ),
+        (
+            "BLAKE2S",
+            "8df5c413abec01e1ffe8762ce50d41a6abf0b681213e6b71feab0945cbae7419",
+            "69217a3079908094e11121d042354a7c1f55b6482ca1a51e1b250dfd1ed0eef9",
+        ),
+        (
+            "SHA3_256",
+            "853d1630d59fc587d09ca8fa36430233dc220688e99f6042efd586a67b43d1fe",
+            "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a",
+        ),
+        (
+            "SHA3_512",
+            "155a84c043153845cda25a774946b50808c4da530445563449abaeeef78692d88eb9893245147010de42d8eaa913b1a9093f5ef26545929f4c867561a188fa09",
+            "a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26",
+        ),
+    ];
+    for (algo, want_word, want_empty) in cases {
+        assert_eq!(
+            crate::binpkg::digest::bytes_hex_digest(b"portuale", algo).as_deref(),
+            Some(*want_word),
+            "{algo} of b\"portuale\" changed",
+        );
+        assert_eq!(
+            crate::binpkg::digest::bytes_hex_digest(b"", algo).as_deref(),
+            Some(*want_empty),
+            "{algo} of the empty string changed",
+        );
+    }
+}

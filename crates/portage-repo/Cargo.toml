@@ -9,7 +9,7 @@ rust-version.workspace = true
 # the md5 of the ebuild/eclass bytes (`cache/template.py::validate_entry`),
 # so the reader validates cache entries the way `_pull_valid_cache` does.
 # Same RustCrypto family and waiver as `portuale`/`portage-fetch`.
-md-5 = "0.10"
+md-5 = "0.11"
 portage-util = { path = "../portage-util" }
 portage-vdb = { path = "../portage-vdb" }
 portage-versions = { path = "../portage-versions" }

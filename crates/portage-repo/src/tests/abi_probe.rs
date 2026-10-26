@@ -216,7 +216,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         let body = "EAPI=8\nDESCRIPTION=\"214 abi\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nIUSE=\"cflag\"\nRDEPEND=\"cflag? ( app-misc/abiprov:= )\"\n";
         let dir = cond_base.join("repo/app-misc/abicons");
         fs::write(dir.join("abicons-1.ebuild"), body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         fs::write(
             cond_base.join("repo/metadata/md5-cache/app-misc/abicons-1"),
             format!(

@@ -76,7 +76,7 @@ pub(crate) fn server_bin_info(ctx: &RemoteContext) -> Result<ServerBinInfo, Stri
         }
     })?;
     use sha2::Digest as _;
-    let digest_hex = format!("{:x}", sha2::Sha256::digest(&bytes));
+    let digest_hex = portage_util::hex_lower(&sha2::Sha256::digest(&bytes));
     let machine = elf_machine(&bytes).map_err(|e| {
         if named {
             format!("mrg: --remote-portuale-binary {}: {e}", path.display())
@@ -308,7 +308,7 @@ pub(crate) fn client_file_digest(
                 Err(e) => return Err(format!("mrg: reading {path}: {e}")),
             };
             use sha2::Digest as _;
-            Ok(Some(format!("{:x}", sha2::Sha256::digest(&bytes))))
+            Ok(Some(portage_util::hex_lower(&sha2::Sha256::digest(&bytes))))
         }
         RemoteTransport::Ssh => {
             let output = run_raw_command(

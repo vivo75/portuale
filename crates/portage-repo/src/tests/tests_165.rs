@@ -234,7 +234,7 @@ fn write_pkg_165(args: WritePkg165Args<'_>) {
         writeln!(body, "BDEPEND=\"{bdepend}\"").unwrap();
     }
     std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
     let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=165 graph inputs\nEAPI=8\n".to_string();
     if !iuse.is_empty() {
         writeln!(entry, "IUSE={iuse}").unwrap();

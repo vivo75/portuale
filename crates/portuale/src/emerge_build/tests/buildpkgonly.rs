@@ -836,7 +836,7 @@ fn stage_user_patch_tree(
     fs::write(&ebuild_path, ebuild).unwrap();
     // The hand-written md5-cache entry `list_candidates` reads (real MD5,
     // like every committed fixture entry).
-    let digest = format!("{:x}", md5::Md5::digest(ebuild.as_bytes()));
+    let digest = portage_util::hex_lower(&md5::Md5::digest(ebuild.as_bytes()));
     let cache_dir = repo.join("metadata/md5-cache/app-misc");
     fs::create_dir_all(&cache_dir).unwrap();
     fs::write(
@@ -863,7 +863,7 @@ fn stage_user_patch_tree(
     let mut sorted: Vec<(&str, &[u8])> = patches.to_vec();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     for (_, body) in &sorted {
-        let inner = format!("{:x}", sha2::Sha256::digest(body));
+        let inner = portage_util::hex_lower(&sha2::Sha256::digest(body));
         inner_hex.push_str(&inner);
     }
     if !patches.is_empty() {
@@ -873,7 +873,7 @@ fn stage_user_patch_tree(
             fs::write(patch_dir.join(basename), body).unwrap();
         }
     }
-    let outer = format!("{:x}", sha2::Sha256::digest(inner_hex.as_bytes()));
+    let outer = portage_util::hex_lower(&sha2::Sha256::digest(inner_hex.as_bytes()));
     (cfg, repo, outer)
 }
 
@@ -886,7 +886,7 @@ fn expected_digests_file(patches: &[(&str, &[u8])]) -> Vec<u8> {
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let mut out = Vec::new();
     for (basename, body) in &sorted {
-        let inner = format!("{:x}", sha2::Sha256::digest(body));
+        let inner = portage_util::hex_lower(&sha2::Sha256::digest(body));
         out.extend_from_slice(inner.as_bytes());
         out.push(0);
         out.extend_from_slice(basename.as_bytes());

@@ -168,7 +168,7 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
             writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
         }
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=161 probe\nEAPI=8\n".to_string();
         if !rdepend.is_empty() {
             writeln!(entry, "RDEPEND={rdepend}").unwrap();
@@ -281,7 +281,7 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
             writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
         }
         std::fs::write(dir.join(format!("{pkg}-1.0.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=243 probe\nEAPI=8\n".to_string();
         if !rdepend.is_empty() {
             writeln!(entry, "RDEPEND={rdepend}").unwrap();
@@ -378,7 +378,7 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
             writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
         }
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=212 probe\nEAPI=8\n".to_string();
         if !rdepend.is_empty() {
             writeln!(entry, "RDEPEND={rdepend}").unwrap();
@@ -534,7 +534,7 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
             "EAPI=8\nDESCRIPTION=\"236 probe\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
         );
         std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=236 probe\nEAPI=8\n".to_string();
         writeln!(entry, "KEYWORDS=amd64").unwrap();
         if !rdepend.is_empty() {
@@ -666,7 +666,7 @@ fn replacement_accepts_follows_the_consumers_tree_atoms() {
         "EAPI=8\nDESCRIPTION=\"482 accepts\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
     );
     fs::write(dir.join("accons-1.0.ebuild"), &body).unwrap();
-    let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
     let cachedir = repo.join("metadata/md5-cache/dev-libs");
     fs::create_dir_all(&cachedir).unwrap();
     fs::write(

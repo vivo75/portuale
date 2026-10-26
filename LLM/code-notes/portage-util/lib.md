@@ -29,3 +29,7 @@ Filesystem helpers shared by the portage-* crates.
 
 ## const VCS_DIRS
 - Portage's `VCS_DIRS` (`lib/portage/const.py:278`): directory names `_recursive_file_list` never descends into.
+
+## fn hex_lower
+- Single lowercase-hex spelling for every digest value in the workspace. Needed because `digest 0.11` replaced `generic-array` with `hybrid-array` (changelog 0.11.0 [#1358]), and `hybrid-array 0.4.15` implements only `Debug` for `Array`, so `format!("{:x}", …)` on a hasher output no longer compiles. Every hasher moved to its `digest 0.11` release (`md-5 0.11.0`, `sha1 0.11.0`, `sha2 0.11.1`, `sha3 0.12.0`, `blake2 0.11.0`); type names (`Blake2b512`, `Sha3_256`, …) and the `new`/`update`/`finalize`/`digest` shapes are unchanged, and `.iter()`/`&[u8]`-coercion call sites needed no edit.
+- No behaviour change: `known_answer_digests_are_unchanged` (`binpkg/tests/digest.rs`, values from host Portage 3.0.83 `perform_checksum`) stays green across the move.

@@ -109,7 +109,7 @@ fn preflight_script_reports_candidates_dirs_and_uname() {
     assert!(output.status.success());
     let values = parse_kv(&String::from_utf8_lossy(&output.stdout));
     use sha2::Digest as _;
-    let expected = format!("{:x}", sha2::Sha256::digest(b"client binary bytes"));
+    let expected = portage_util::hex_lower(&sha2::Sha256::digest(b"client binary bytes"));
     assert_eq!(
         values.get("CAND_0_SHA").map(String::as_str),
         Some(expected.as_str())
@@ -253,7 +253,7 @@ fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
     let bytes = std::fs::read(&binpkg).unwrap();
     assert_eq!(
         std::fs::read_to_string(vdb.join("BINPKGMD5")).unwrap(),
-        format!("{:x}\n", md5::Md5::digest(&bytes)),
+        format!("{}\n", portage_util::hex_lower(&md5::Md5::digest(&bytes))),
     );
     assert_eq!(
         std::fs::read_to_string(vdb.join("INSTALL_MASK")).unwrap(),

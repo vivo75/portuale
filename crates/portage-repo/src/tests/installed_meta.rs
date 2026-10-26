@@ -18,7 +18,7 @@ fn live_metadata_for_installed_prefers_the_recorded_repo() {
             writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
         }
         std::fs::write(dir.join("twounit-1.0.ebuild"), &body).unwrap();
-        let md5 = format!("{:x}", md5::Md5::digest(body.as_bytes()));
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
         let mut entry =
             "DEFINED_PHASES=-\nDESCRIPTION=scratch recorded-repo unit\nEAPI=8\n".to_string();
         if !rdepend.is_empty() {
