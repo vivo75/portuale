@@ -383,6 +383,33 @@ mod tests {
         );
     }
 
+    /// The `--fetchonly` success line for a remote binary names the same
+    /// digests the merge path prints: both go through the shared selection
+    /// the verifier checks, which is the filtered set Portage's
+    /// `_display_success` prints after verifying.
+    // Portage: `lib/_emerge/BinpkgVerifier.py`, `_display_success`
+    #[test]
+    fn fetchonly_success_line_uses_the_same_names() {
+        let record: std::collections::HashMap<String, String> = [
+            ("SIZE", "16"),
+            ("RMD160", "r"),
+            ("WHIRLPOOL", "w"),
+            ("SHA512", "s"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(
+            crate::emerge_getbinpkg::verified_digest_names_filtered(&record, None),
+            Some(vec![
+                "RMD160".to_string(),
+                "SHA512".to_string(),
+                "WHIRLPOOL".to_string(),
+                "size".to_string()
+            ])
+        );
+    }
+
     #[test]
     fn several_failures_wrap_the_heading_at_72_columns() {
         let labels = vec![" (a/b-1)".to_string(), " (c/d-1)".to_string()];

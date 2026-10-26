@@ -1783,12 +1783,14 @@ dependencies = [
  "portage-vdb",
  "portage-versions",
  "regex",
+ "ripemd",
  "sha1",
  "sha2",
  "sha3",
  "tar",
  "tempfile",
  "tokio",
+ "whirlpool",
 ]
 
 [[package]]
@@ -2021,6 +2023,15 @@ dependencies = [
  "itertools 0.15.0",
  "petgraph",
  "tracing",
+]
+
+[[package]]
+name = "ripemd"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4dd4211456b4172d7e44261920c25acf07367c4f04bb5f5d54fc21b090d9b159"
+dependencies = [
+ "digest",
 ]
 
 [[package]]
@@ -2726,6 +2737,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "whirlpool"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f91573899d76e68467e923f18e87a7cee644a243a4ff110de3e6c173667d1c7"
+dependencies = [
+ "digest",
 ]
 
 [[package]]

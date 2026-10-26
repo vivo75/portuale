@@ -1979,25 +1979,18 @@ pub(crate) fn print_user_patch_table(args: PrintUserPatchTableArgs<'_>) {
     }
 }
 
-/// The digest names Portage prints on a binary's verify line: the uppercase
-/// checksum keys present in the index record (filtered by
-/// `PORTAGE_CHECKSUM_FILTER`) plus `size`, ASCII-sorted (`MD5 SHA1 size`).
-/// `None` without a parseable `SIZE`: then nothing is verified and no line
-/// prints.
+/// The digest names Portage prints on a binary's verify line: the same
+/// selection the verifier checks (the uppercase checksum keys present in
+/// the index record, filtered by `PORTAGE_CHECKSUM_FILTER`) plus `size`,
+/// ASCII-sorted (`RMD160 SHA512 WHIRLPOOL size`). `None` without a
+/// parseable `SIZE`: then nothing is verified and no line prints.
 // Portage: _emerge/BinpkgVerifier.py (_start, _display_success); bintree.py, _get_digests
 pub(crate) fn verified_digest_names_filtered(
     record: &std::collections::HashMap<String, String>,
     checksum_filter: Option<&str>,
 ) -> Option<Vec<String>> {
     record.get("SIZE")?.trim().parse::<u64>().ok()?;
-    let names: Vec<String> = [
-        "BLAKE2B", "BLAKE2S", "MD5", "SHA1", "SHA256", "SHA3_256", "SHA3_512", "SHA512",
-    ]
-    .iter()
-    .filter(|k| record.get(**k).is_some_and(|v| !v.is_empty()))
-    .map(|k| (*k).to_string())
-    .collect();
-    let mut names = crate::binpkg::apply_checksum_filter(names, checksum_filter);
+    let mut names = crate::binpkg::selected_digest_names(record, checksum_filter);
     names.push("size".to_string());
     names.sort();
     Some(names)
@@ -3422,6 +3415,40 @@ mod tests {
             .map(|v| v.len()),
             Some(2),
             "at least one hash plus size must survive -*"
+        );
+    }
+
+    /// A record with `SIZE`, `RMD160`, `WHIRLPOOL` and `SHA512` prints all
+    /// three hashes before `size`, ASCII-sorted the way Portage joins
+    /// `sorted(self._digests)`; `PORTAGE_CHECKSUM_FILTER="RMD160"` narrows
+    /// the line to `RMD160 size`.
+    // Portage: `lib/_emerge/BinpkgVerifier.py`, `_display_success`; `lib/portage/dbapi/bintree.py`, `_get_digests`
+    #[test]
+    fn success_line_lists_rmd160_and_whirlpool() {
+        let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let record = rec(&[
+            ("SIZE", "16"),
+            ("RMD160", "r"),
+            ("WHIRLPOOL", "w"),
+            ("SHA512", "s"),
+        ]);
+        assert_eq!(
+            verified_digest_names_filtered(&record, None),
+            Some(vec![
+                "RMD160".into(),
+                "SHA512".into(),
+                "WHIRLPOOL".into(),
+                "size".into()
+            ])
+        );
+        assert_eq!(
+            verified_digest_names_filtered(&record, Some("RMD160")),
+            Some(vec!["RMD160".into(), "size".into()])
         );
     }
 

@@ -19844,3 +19844,17 @@ writes the key but never reads it, `LLM/portage-quirks.md` Q18). Check:
 --version` prints the warning, then the version line, and leaves the file
 as it was, because `--version` never commits (host captures in
 `LLM/evidence/2026-10-26-575-residues/t2/`).
+
+**Binary packages are checked against `RMD160` and `WHIRLPOOL` too
+(#582, 2026-10-26).** Portage verifies every valid checksum key a
+`Packages` record carries (`bintree._get_digests`,
+`BinpkgVerifier._start`), and on this host it never drops `WHIRLPOOL`,
+because its WHIRLPOOL hasher is the bundled C module
+(`checksum.py:159-168`, `:294-310`). portuale now hashes both with
+`ripemd` and `whirlpool`, so a record whose only hash is a bad `RMD160` or
+`WHIRLPOOL` is refused instead of passing on its size alone. One
+selection, `selected_digest_names`, feeds both the verifier and the
+digest list on the success line, so `--fetchonly` and merges print what
+was checked (`RMD160 SHA512 WHIRLPOOL size`). Check:
+`cargo test --release -p portuale --bin portuale digest` (the known-answer
+rows come from host Portage `perform_checksum`).

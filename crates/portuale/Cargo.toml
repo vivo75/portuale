@@ -145,6 +145,12 @@ blake2 = "0.11"
 # Portage's `verify_all` does. Pure Rust, no C linkage, so the
 # musl-static story is untouched.
 sha3 = "0.12"
+# The binpkg verifier checks `RMD160`/`WHIRLPOOL` index digests the way
+# Portage's `verify_all` does (Portage's own WHIRLPOOL is native code too,
+# so no drop is ported). Pure Rust, no C linkage, so the musl-static
+# story is untouched.
+ripemd = "0.2"
+whirlpool = "0.11"
 # The up-front `pkg_pretend` pass's capture logs: `tempfile::Builder`
 # creates each log `O_EXCL` with a random name under the package's own
 # `${T}`, so a planted symlink at the old predictable path can neither

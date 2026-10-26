@@ -376,6 +376,138 @@ fn verify_binpkg_against_index_honours_portage_checksum_filter() {
     assert!(verify_binpkg_against_index(&file, &record, Some("* -MD5")).is_ok());
 }
 
+/// A record carrying only `SIZE` and `RMD160` is verified on the `RMD160`,
+/// not on the size alone: a bad `RMD160` next to a correct `SIZE` fails.
+/// Expected digests from host Portage 3.0.83,
+/// `python3 -c 'import portage.checksum as c; print(c.perform_checksum(f, "RMD160"))'`
+/// on the same bytes.
+// Portage: `lib/portage/dbapi/bintree.py`, `_get_digests`; `lib/_emerge/BinpkgVerifier.py`, `_start`
+#[test]
+fn rmd160_only_record_is_verified() {
+    let scratch = ScratchDir::new("verify-rmd160-only").unwrap();
+    let file = scratch.path().join("pkg-1.0.gpkg.tar");
+    fs::write(&file, b"0123456789abcdef").unwrap();
+    let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let good = "edf4e38018cd71dd489b9c1e54b32054eb42dfad";
+    assert!(
+        verify_binpkg_against_index(&file, &rec(&[("SIZE", "16"), ("RMD160", good)]), None).is_ok()
+    );
+    let mismatch = verify_binpkg_against_index(
+        &file,
+        &rec(&[("SIZE", "16"), ("RMD160", &"0".repeat(40))]),
+        None,
+    )
+    .expect_err("wrong RMD160 must fail");
+    assert_eq!(mismatch.name, "RMD160");
+    assert_eq!(mismatch.got, good);
+}
+
+/// A record carrying only `SIZE` and `WHIRLPOOL` is verified on the
+/// `WHIRLPOOL`: Portage drops it only when the unaccelerated pure-Python
+/// fallback is in use, which the S0 probe rules out on the reference host.
+/// Expected digests from host Portage 3.0.83,
+/// `python3 -c 'import portage.checksum as c; print(c.perform_checksum(f, "WHIRLPOOL"))'`
+/// on the same bytes.
+// Portage: `lib/portage/checksum.py`, `_filter_unaccelarated_hashes`; `lib/_emerge/BinpkgVerifier.py`, `_start`
+#[test]
+fn whirlpool_only_record_is_verified() {
+    let scratch = ScratchDir::new("verify-whirlpool-only").unwrap();
+    let file = scratch.path().join("pkg-1.0.gpkg.tar");
+    fs::write(&file, b"0123456789abcdef").unwrap();
+    let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let good = "b21fc274d47d79ba45f94d67077f0846f75a7acc1a4dc560eacca300179cc1429aca2a58cfffd20ca43b914737339aa931b00cf0d4c93286d7d6cd7ebd7bb1be";
+    assert!(
+        verify_binpkg_against_index(&file, &rec(&[("SIZE", "16"), ("WHIRLPOOL", good)]), None)
+            .is_ok()
+    );
+    let mismatch = verify_binpkg_against_index(
+        &file,
+        &rec(&[("SIZE", "16"), ("WHIRLPOOL", &"0".repeat(128))]),
+        None,
+    )
+    .expect_err("wrong WHIRLPOOL must fail");
+    assert_eq!(mismatch.name, "WHIRLPOOL");
+    assert_eq!(mismatch.got, good);
+}
+
+/// A bad `WHIRLPOOL` next to a good `SHA512` fails: with the accelerated
+/// implementation present (S0 shows `_whirlpool_unaccelerated` false on the
+/// reference host) the filter keeps every hash it can verify.
+/// Expected digests from host Portage 3.0.83,
+/// `python3 -c 'import portage.checksum as c; print(c.perform_checksum(f, algo))'`
+/// on the same bytes.
+// Portage: `lib/portage/checksum.py:159-168, 303-308`; `lib/_emerge/BinpkgVerifier.py`, `_start`
+#[test]
+fn whirlpool_checked_next_to_another_hash() {
+    let scratch = ScratchDir::new("verify-whirlpool-beside-sha512").unwrap();
+    let file = scratch.path().join("pkg-1.0.gpkg.tar");
+    fs::write(&file, b"0123456789abcdef").unwrap();
+    let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let sha512 = "1c043fbe4bca7c7920dae536c680fd44c15d71ec12cd82a2a9491b0043b57f4d0b8905985e85ad13831ee6d39e55a54e8f808cc82c41a0582931bbc0c0221d60";
+    let mismatch = verify_binpkg_against_index(
+        &file,
+        &rec(&[
+            ("SIZE", "16"),
+            ("SHA512", sha512),
+            ("WHIRLPOOL", &"0".repeat(128)),
+        ]),
+        None,
+    )
+    .expect_err("wrong WHIRLPOOL beside a good SHA512 must fail");
+    assert_eq!(mismatch.name, "WHIRLPOOL");
+}
+
+/// `PORTAGE_CHECKSUM_FILTER="RMD160"` on a record with `SHA512` and `RMD160`
+/// checks `RMD160` only: a bad `RMD160` fails while a bad `SHA512` passes.
+// Portage: `lib/portage/checksum.py`, `_apply_hash_filter`; `lib/_emerge/BinpkgVerifier.py`, `_start`
+#[test]
+fn checksum_filter_can_select_rmd160() {
+    let scratch = ScratchDir::new("verify-filter-rmd160").unwrap();
+    let file = scratch.path().join("pkg-1.0.gpkg.tar");
+    fs::write(&file, b"0123456789abcdef").unwrap();
+    let rec = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let sha512 = "1c043fbe4bca7c7920dae536c680fd44c15d71ec12cd82a2a9491b0043b57f4d0b8905985e85ad13831ee6d39e55a54e8f808cc82c41a0582931bbc0c0221d60";
+    let rmd160 = "edf4e38018cd71dd489b9c1e54b32054eb42dfad";
+    // Bad RMD160, good SHA512, filter on RMD160: refused on RMD160.
+    let record = rec(&[
+        ("SIZE", "16"),
+        ("SHA512", sha512),
+        ("RMD160", &"0".repeat(40)),
+    ]);
+    let mismatch = verify_binpkg_against_index(&file, &record, Some("RMD160"))
+        .expect_err("filtered-out SHA512 cannot excuse a bad RMD160");
+    assert_eq!(mismatch.name, "RMD160");
+    // Good RMD160, bad SHA512, filter on RMD160: the filtered SHA512 is unchecked.
+    let record = rec(&[
+        ("SIZE", "16"),
+        ("SHA512", &"0".repeat(128)),
+        ("RMD160", rmd160),
+    ]);
+    assert!(
+        verify_binpkg_against_index(&file, &record, Some("RMD160")).is_ok(),
+        "only RMD160 is checked under the filter"
+    );
+}
 /// Every verifier digest is byte-identical across the hasher-crate move:
 /// known answers for `b"portuale"` and the empty string, through the same
 /// `bytes_hex_digest` the verifier calls. Expected values from host
@@ -424,6 +556,19 @@ fn known_answer_digests_are_unchanged() {
             "SHA3_512",
             "155a84c043153845cda25a774946b50808c4da530445563449abaeeef78692d88eb9893245147010de42d8eaa913b1a9093f5ef26545929f4c867561a188fa09",
             "a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26",
+        ),
+        // Ported in the RMD160/WHIRLPOOL slice: expected values from host
+        // Portage 3.0.83, `python3 -c 'import portage.checksum as c;
+        // print(c.perform_checksum(<file>, algo))'` for each name.
+        (
+            "RMD160",
+            "3d231f5f6fd01b56ea0c97faf97ca8410b718b60",
+            "9c1185a5c5e9fc54612808977ee8f548b2258d31",
+        ),
+        (
+            "WHIRLPOOL",
+            "035f0f6c7a1e4d11bef03522fdeefb62fdcdd6e10d4bd5a5aa5f80d17cc2273e9589eac402188ce448a028c8e7a43b9e22d4c8986162e0a582d0983a2039d955",
+            "19fa61d75522a4669b44e39c1d2e1726c530232130d407f89afee0964997f7a73e83be698b288febcf88e3e03c4f0757ea8964e59b63d93708b138cc42a66eb3",
         ),
     ];
     for (algo, want_word, want_empty) in cases {

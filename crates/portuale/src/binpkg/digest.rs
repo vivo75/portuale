@@ -105,13 +105,39 @@ pub(crate) fn apply_checksum_filter(
 }
 
 /// Every digest the verifier hashes over the file, ASCII-sorted the way
-/// Portage's `verify_all` iterates `sorted(verifiable_hash_types)`.
-/// (`RMD160`/`WHIRLPOOL` are valid Portage keys with no hasher vendored
-/// here; Portage's own remote path walks frozenset order, so no order is
-/// canonical there.)
-const VERIFIED_DIGESTS: [&str; 8] = [
-    "BLAKE2B", "BLAKE2S", "MD5", "SHA1", "SHA256", "SHA3_256", "SHA3_512", "SHA512",
+/// Portage's `verify_all` iterates `sorted(verifiable_hash_types)`
+/// (`RMD160`/`WHIRLPOOL` included: Portage verifies them whenever the host
+/// provides a hasher for them).
+const VERIFIED_DIGESTS: [&str; 10] = [
+    "BLAKE2B",
+    "BLAKE2S",
+    "MD5",
+    "RMD160",
+    "SHA1",
+    "SHA256",
+    "SHA3_256",
+    "SHA3_512",
+    "SHA512",
+    "WHIRLPOOL",
 ];
+
+/// The digest names the verifier checks and the success line prints: the
+/// `VERIFIED_DIGESTS` keys the record carries non-empty, narrowed by
+/// `PORTAGE_CHECKSUM_FILTER` (`None` disables the filter). Shared by the
+/// verifier and the digest-names success line so both see the same set,
+/// the way Portage verifies and prints the same filtered digests.
+// Portage: `bintree._get_digests`, `_emerge/BinpkgVerifier` (`_start`, `_display_success`).
+pub(crate) fn selected_digest_names(
+    record: &HashMap<String, String>,
+    checksum_filter: Option<&str>,
+) -> Vec<String> {
+    let names: Vec<String> = VERIFIED_DIGESTS
+        .iter()
+        .filter(|algo| record.get(**algo).is_some_and(|s| !s.is_empty()))
+        .map(|algo| (*algo).to_string())
+        .collect();
+    apply_checksum_filter(names, checksum_filter)
+}
 
 /// Verify a binpkg at merge time against the index record that vouches
 /// for it: `SIZE` first via `stat(2)`, then every digest the record
@@ -137,12 +163,7 @@ pub fn verify_binpkg_against_index(
             expected: index_size_expected(record, expected_size),
         });
     }
-    let names: Vec<String> = VERIFIED_DIGESTS
-        .iter()
-        .filter(|algo| record.get(**algo).is_some_and(|s| !s.is_empty()))
-        .map(|algo| (*algo).to_string())
-        .collect();
-    let names = apply_checksum_filter(names, checksum_filter);
+    let names = selected_digest_names(record, checksum_filter);
     for algo in &names {
         let Some(expected) = record.get(algo).filter(|s| !s.is_empty()) else {
             continue;
@@ -161,27 +182,13 @@ pub fn verify_binpkg_against_index(
     Ok(())
 }
 
-/// Every checksum key Portage's `get_valid_checksum_keys()` knows.
-const VALID_CHECKSUM_KEYS: [&str; 10] = [
-    "BLAKE2B",
-    "BLAKE2S",
-    "MD5",
-    "RMD160",
-    "SHA1",
-    "SHA256",
-    "SHA3_256",
-    "SHA3_512",
-    "SHA512",
-    "WHIRLPOOL",
-];
-
 /// Whether a remote index record carries both a parseable `SIZE` and at
 /// least one non-empty checksum field. A record with only one of the two
 /// (or neither) is refused after the download.
 // Portage: `_emerge/BinpkgVerifier._start`, `bintree._get_digests`.
 pub(crate) fn index_has_size_and_checksum(record: &HashMap<String, String>) -> bool {
     parse_index_size(record).is_some()
-        && VALID_CHECKSUM_KEYS
+        && VERIFIED_DIGESTS
             .iter()
             .any(|k| record.get(*k).is_some_and(|v| !v.is_empty()))
 }
@@ -198,14 +205,17 @@ pub fn missing_digests_block(partial: &Path) -> String {
 }
 
 /// Hex digest of `bytes` with `algo`, the in-memory half of
-/// [`file_hex_digest`]. `None` for an unknown name or an unhashable
-/// one (`RMD160`/`WHIRLPOOL` have no hasher vendored here).
+/// [`file_hex_digest`]. `None` for an unknown name.
 pub(crate) fn bytes_hex_digest(bytes: &[u8], algo: &str) -> Option<String> {
-    let hex = |digest: &[u8]| digest.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = portage_util::hex_lower;
     match algo {
         "MD5" => {
             use md5::Digest as _;
             Some(hex(&md5::Md5::digest(bytes)))
+        }
+        "RMD160" => {
+            use ripemd::Digest as _;
+            Some(hex(&ripemd::Ripemd160::digest(bytes)))
         }
         "SHA1" => {
             use sha1::Digest as _;
@@ -235,13 +245,16 @@ pub(crate) fn bytes_hex_digest(bytes: &[u8], algo: &str) -> Option<String> {
             use sha3::Digest as _;
             Some(hex(&sha3::Sha3_512::digest(bytes)))
         }
+        "WHIRLPOOL" => {
+            use whirlpool::Digest as _;
+            Some(hex(&whirlpool::Whirlpool::digest(bytes)))
+        }
         _ => None,
     }
 }
 
 /// Hex digest of the whole file with `algo`. `None` for an unknown
-/// name or an unreadable file; `RMD160`/`WHIRLPOOL` have no hasher
-/// vendored here, so records carrying only those verify the size alone.
+/// name or an unreadable file.
 pub(crate) fn file_hex_digest(path: &Path, algo: &str) -> Option<String> {
     let bytes = fs::read(path).ok()?;
     bytes_hex_digest(&bytes, algo)

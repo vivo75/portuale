@@ -23,3 +23,11 @@ Run `l1-20261026T233746Z` (tree 26ddf226 + Task 3 working-tree change;
 runner rc 0; `sys-libs/glibc-2.43-r4` and `app-shells/bash-5.3_p20`
 merged by both PMs, merge_rc 0 both sides; hard findings 0, UNEXPLAINED 0,
 payload diffs 0, mtime-only diffs 1420. Verdict: PASSED.
+
+## Task 4 — RMD160 and WHIRLPOOL on binpkgs (binpkg/digest.rs, emerge_getbinpkg.rs)
+
+Run `l1-20261026T235140Z` (tree 684c19d3 + Task 4 working-tree change;
+the verifier runs before every binary merge): runner rc 0;
+`sys-libs/glibc-2.43-r4` and `app-shells/bash-5.3_p20` merged by both
+PMs, merge_rc 0 both sides; hard findings 0, UNEXPLAINED 0, payload
+diffs 0. Verdict: PASSED.
