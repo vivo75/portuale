@@ -29,6 +29,9 @@ Digest checks of a `$PKGDIR` binpkg against the index, and checksum-failure rena
 ## fn file_hex_digest
 - The same whole-file readers Portage's `perform_multiple_checksums` runs for a `Packages` entry: `MD5`/`SHA1`/`SHA256`/`SHA512`, plus `BLAKE2B`/`BLAKE2S` (`blake2` crate) and `SHA3_256`/`SHA3_512` (`sha3` crate, #578 -- S0 shows Portage verifies them via hashlib on the reference host). `RMD160`/`WHIRLPOOL` have no vendored hasher (`None`, skipped by the verifier).
 
+## fn bytes_hex_digest
+- The in-memory half of `file_hex_digest` (same match, over `&[u8]`; `file_hex_digest` reads the file then calls it): the global-updates index writer hashes its already-read file bytes through it (`MD5`/`SHA1`, the `_pkgindex_hashes` pair) instead of keeping its own hasher pair.
+
 ## fn checksum_failure_rename
 - Ports `portage.package.ebuild.fetch._checksum_failure_temp_file` (`fetch.py:293`); a same-size same-md5 duplicate is reused instead (the corrupt file is unlinked, Portage's own `os.unlink(filename)`).
 - Match the `mkstemp` name shape exactly (`<rand>` is `[a-z0-9_]{8}`); the loop retries on the (absurd) collision instead of clobbering.

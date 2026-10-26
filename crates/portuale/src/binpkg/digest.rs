@@ -197,47 +197,54 @@ pub fn missing_digests_block(partial: &Path) -> String {
     )
 }
 
+/// Hex digest of `bytes` with `algo`, the in-memory half of
+/// [`file_hex_digest`]. `None` for an unknown name or an unhashable
+/// one (`RMD160`/`WHIRLPOOL` have no hasher vendored here).
+pub(crate) fn bytes_hex_digest(bytes: &[u8], algo: &str) -> Option<String> {
+    let hex = |digest: &[u8]| digest.iter().map(|b| format!("{b:02x}")).collect();
+    match algo {
+        "MD5" => {
+            use md5::Digest as _;
+            Some(hex(&md5::Md5::digest(bytes)))
+        }
+        "SHA1" => {
+            use sha1::Digest as _;
+            Some(hex(&sha1::Sha1::digest(bytes)))
+        }
+        "SHA256" => {
+            use sha2::Digest as _;
+            Some(hex(&sha2::Sha256::digest(bytes)))
+        }
+        "SHA512" => {
+            use sha2::Digest as _;
+            Some(hex(&sha2::Sha512::digest(bytes)))
+        }
+        "BLAKE2B" => {
+            use blake2::Digest as _;
+            Some(hex(&blake2::Blake2b512::digest(bytes)))
+        }
+        "BLAKE2S" => {
+            use blake2::Digest as _;
+            Some(hex(&blake2::Blake2s256::digest(bytes)))
+        }
+        "SHA3_256" => {
+            use sha3::Digest as _;
+            Some(hex(&sha3::Sha3_256::digest(bytes)))
+        }
+        "SHA3_512" => {
+            use sha3::Digest as _;
+            Some(hex(&sha3::Sha3_512::digest(bytes)))
+        }
+        _ => None,
+    }
+}
+
 /// Hex digest of the whole file with `algo`. `None` for an unknown
 /// name or an unreadable file; `RMD160`/`WHIRLPOOL` have no hasher
 /// vendored here, so records carrying only those verify the size alone.
 pub(crate) fn file_hex_digest(path: &Path, algo: &str) -> Option<String> {
     let bytes = fs::read(path).ok()?;
-    let hex = |digest: &[u8]| digest.iter().map(|b| format!("{b:02x}")).collect();
-    match algo {
-        "MD5" => {
-            use md5::Digest as _;
-            Some(hex(&md5::Md5::digest(&bytes)))
-        }
-        "SHA1" => {
-            use sha1::Digest as _;
-            Some(hex(&sha1::Sha1::digest(&bytes)))
-        }
-        "SHA256" => {
-            use sha2::Digest as _;
-            Some(hex(&sha2::Sha256::digest(&bytes)))
-        }
-        "SHA512" => {
-            use sha2::Digest as _;
-            Some(hex(&sha2::Sha512::digest(&bytes)))
-        }
-        "BLAKE2B" => {
-            use blake2::Digest as _;
-            Some(hex(&blake2::Blake2b512::digest(&bytes)))
-        }
-        "BLAKE2S" => {
-            use blake2::Digest as _;
-            Some(hex(&blake2::Blake2s256::digest(&bytes)))
-        }
-        "SHA3_256" => {
-            use sha3::Digest as _;
-            Some(hex(&sha3::Sha3_256::digest(&bytes)))
-        }
-        "SHA3_512" => {
-            use sha3::Digest as _;
-            Some(hex(&sha3::Sha3_512::digest(&bytes)))
-        }
-        _ => None,
-    }
+    bytes_hex_digest(&bytes, algo)
 }
 
 /// Rename a digest-failed file to `<basename>._checksum_failure_.<rand>`

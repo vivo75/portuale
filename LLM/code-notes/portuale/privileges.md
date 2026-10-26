@@ -12,6 +12,9 @@ The privilege check for merging into a root.
 ## fn deny_superuser
 - Portage `actions.py:3965-4012`'s own error path, narrowed to portuale's single privilege tier: print `<prog>: superuser access is required` and the hint that `--pretend` previews without it. `prog` is `"emerge"` or `"ebuild"`.
 
+## fn path_writable
+- The one `os.access(path, W_OK)` copy. `fetch.rs::distdir_writable`, `info_files.rs::is_writable`, `pretend/news.rs`'s state-dir gate and the global-updates `pkgdir`/`path` gates delegate to it; the ancestor-walk wrappers (`is_privileged`'s ownership probe, the binpkg `pkgdir_writable` `first_existing` walk) stay local to their Portage call sites.
+
 ## tests
 - `a_dir_the_caller_owns_is_unprivileged_mode`: a tmp dir this process just created -- owned, writable, not world-writable after the explicit chmod. A not-yet-created child resolves to the owned parent.
 - `root_is_always_privileged` / `a_world_writable_dir_is_not_ownership` / `a_dir_the_caller_cannot_write_is_not_privileged`: return early for a root caller (root passes before the mode check); `/usr` exists everywhere, is root-owned and not world-writable.

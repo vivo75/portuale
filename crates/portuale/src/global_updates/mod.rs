@@ -4,6 +4,7 @@
 //! Read-only until every piece lands; the pretend force stays `false`.
 //! Portage: lib/portage/_global_updates.py, _do_global_updates
 
+pub(crate) mod binpkg;
 pub(crate) mod config_files;
 pub(crate) mod vdb;
 
@@ -39,6 +40,15 @@ impl RepoMatch {
             || (Some(repo_name) == self.master.as_deref()
                 && !self.repos_in_map.iter().any(|n| n == repository))
     }
+}
+
+/// `vartree._aux_get`'s collapse, shared by the vdb and binpkg halves:
+/// every whitespace run becomes one blank (the binary database reads
+/// through the same rule).
+// Portage: lib/portage/dbapi/vartree.py, _aux_get
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn collapse_ws(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// One repo's updates, in `repos` order, plus the `DEFAULT` alias for the

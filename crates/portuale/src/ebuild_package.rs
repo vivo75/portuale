@@ -285,23 +285,67 @@ pub fn resolve_portage_bzip2_command(lookup: impl Fn(&str) -> Option<String>) ->
         .unwrap_or_else(|| PackageOptions::default().portage_bzip2_command.clone())
 }
 
+/// Arguments of [`compression_command_argv`].
+pub(crate) struct CompressionArgvArgs<'a> {
+    pub compression: &'a str,
+    pub flags: &'a str,
+    pub bzip2_command: &'a str,
+    pub jobs: &'a str,
+}
+
+/// The compressor `argv` for one `BINPKG_COMPRESS` name: the shared
+/// template with `{JOBS}` and the `${...}` halves substituted, split
+/// and filtered, refusing an unknown compressor or a missing binary.
+/// Both the build path and the global-updates rewrite resolve through
+/// here, so a rewritten gpkg compresses exactly like a fresh build.
+///
+/// Returns `Err` with Portage's `InvalidCompressionMethod` /
+/// `CompressorNotFound` text, like `_get_binary_cmd`.
+// Portage: lib/portage/gpkg.py, _get_binary_cmd
+pub(crate) fn compression_command_argv(
+    args: CompressionArgvArgs<'_>,
+) -> Result<Vec<String>, String> {
+    let CompressionArgvArgs {
+        compression,
+        flags,
+        bzip2_command,
+        jobs,
+    } = args;
+    let Some(template) = compress_template(compression) else {
+        return Err(format!(
+            "portage.exception.InvalidCompressionMethod: {compression}"
+        ));
+    };
+    let expanded = template
+        .replace("{JOBS}", jobs)
+        .replace("${PORTAGE_BZIP2_COMMAND}", bzip2_command)
+        .replace("${BINPKG_COMPRESS_FLAGS}", flags);
+    let argv: Vec<String> = expanded.split_whitespace().map(str::to_string).collect();
+    let Some(binary) = argv.first() else {
+        return Err(format!(
+            "portage.exception.CompressorNotFound: {compression}"
+        ));
+    };
+    if !find_binary(binary) {
+        return Err(format!("portage.exception.CompressorNotFound: {binary}"));
+    }
+    Ok(argv)
+}
+
 fn resolve_compression_command_jobs(
     binpkg_compress: &str,
     binpkg_compress_flags: &str,
     portage_bzip2_command: &str,
     jobs: &str,
 ) -> Option<String> {
-    let template = compress_template(binpkg_compress)?;
-    let expanded = template
-        .replace("{JOBS}", jobs)
-        .replace("${PORTAGE_BZIP2_COMMAND}", portage_bzip2_command)
-        .replace("${BINPKG_COMPRESS_FLAGS}", binpkg_compress_flags);
-    let tokens: Vec<&str> = expanded.split_whitespace().collect();
-    let binary = *tokens.first()?;
-    if !find_binary(binary) {
-        return None;
-    }
-    Some(tokens.join(" "))
+    compression_command_argv(CompressionArgvArgs {
+        compression: binpkg_compress,
+        flags: binpkg_compress_flags,
+        bzip2_command: portage_bzip2_command,
+        jobs,
+    })
+    .ok()
+    .map(|argv| argv.join(" "))
 }
 
 /// Re-derives `PORTAGE_COMPRESSION_COMMAND` from an entry's already-layered
@@ -363,7 +407,7 @@ fn packages_index_header(now: u64) -> String {
     format!("TIMESTAMP: {now}\nVERSION: 0\n")
 }
 
-fn format_packages_entry(fields: &[(&str, &str)]) -> String {
+pub(crate) fn format_packages_entry(fields: &[(&str, &str)]) -> String {
     let mut block = String::new();
     for (key, value) in fields {
         if !value.is_empty() {
@@ -378,7 +422,7 @@ fn format_packages_entry(fields: &[(&str, &str)]) -> String {
 /// (every other default is `""`, already skipped), so those two are the whole
 /// rule. Only the exact `"0"` is default.
 // Portage: getbinpkg.py, PackageIndex.write; bintree.py, _pkgindex_default_pkg_data
-fn omit_stanza_default<'a>(key: &'a str, value: &'a str) -> &'a str {
+pub(crate) fn omit_stanza_default<'a>(key: &'a str, value: &'a str) -> &'a str {
     match (key, value) {
         ("SLOT", "0") | ("EAPI", "0") => "",
         _ => value,
@@ -390,7 +434,7 @@ fn omit_stanza_default<'a>(key: &'a str, value: &'a str) -> &'a str {
 /// internal-name mapping is byte-identical to Portage's order for every key
 /// either stanza writer emits. Both writers route through here.
 // Portage: getbinpkg.py, PackageIndex.write
-fn sort_stanza_fields_for_write(fields: &mut Vec<(&'static str, &str)>) {
+pub(crate) fn sort_stanza_fields_for_write(fields: &mut [(&str, &str)]) {
     fn internal(key: &str) -> &str {
         match key {
             "MTIME" => "_mtime_",
@@ -619,7 +663,11 @@ fn write_packages_index_entry(
 /// mtime set to the index `TIMESTAMP`. Written through a same-directory
 /// temp file renamed into place, like Portage's `atomic_ofstream`.
 // Portage: bintree.py, _pkgindex_write
-fn write_packages_gz(pkgdir: &Path, contents: &[u8], timestamp: u64) -> Result<(), String> {
+pub(crate) fn write_packages_gz(
+    pkgdir: &Path,
+    contents: &[u8],
+    timestamp: u64,
+) -> Result<(), String> {
     use std::io::Write as _;
     let gz_path = pkgdir.join("Packages.gz");
     let tmp_path = gz_path.with_extension(format!("gz.tmp{}", std::process::id()));

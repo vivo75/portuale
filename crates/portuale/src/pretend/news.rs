@@ -444,11 +444,7 @@ pub(crate) fn ensure_news_state_dir(dir: &Path, context: &NewsContext) -> bool {
     if std::fs::create_dir_all(dir).is_err() || !apply_news_permissions(dir, context, 0o074) {
         return false;
     }
-    let Ok(c_dir) = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()) else {
-        return false;
-    };
-    // SAFETY: `c_dir` is a valid NUL-terminated path for the call.
-    unsafe { libc::access(c_dir.as_ptr(), libc::W_OK) == 0 }
+    crate::privileges::path_writable(dir)
 }
 
 /// Chown to `PORTAGE_INST_UID:portage_gid` when either differs (root caller

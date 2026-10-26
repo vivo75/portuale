@@ -432,12 +432,7 @@ fn copy_from_fsmirrors(
 /// Whether `DISTDIR` is writable, which decides if `.mirror-cache.json` is
 /// used at all.
 fn distdir_writable(distdir: &Path) -> bool {
-    let Ok(c) = std::ffi::CString::new(distdir.as_os_str().as_encoded_bytes()) else {
-        return false;
-    };
-    // SAFETY: `c` is a NUL-terminated path that outlives the call; the
-    // second argument is a plain access-mode flag.
-    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
+    crate::privileges::path_writable(distdir)
 }
 
 /// Whether the filesystem holding `distdir` fits `bytes`, via `statvfs`.

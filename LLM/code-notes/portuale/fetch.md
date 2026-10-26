@@ -86,7 +86,7 @@ Network fetch of a package's distfiles via `wget` (locking, mirrors, resume, dig
 - Resolves through the directory's own `layout.conf` via `async_mirror_url(mydir, myfile, mysettings)` with no cache path, so it is re-read every time.
 
 ## fn distdir_writable
-- Portage `os.access(DISTDIR, os.W_OK)` (`fetch.py:991`), which decides whether `.mirror-cache.json` is used at all.
+- Portage `os.access(DISTDIR, os.W_OK)` (`fetch.py:991`), which decides whether `.mirror-cache.json` is used at all. Delegates to the one copy, `privileges::path_writable`.
 
 ## fn has_enough_space
 - Portage `fetch.py:1503`: check if there's enough free space on the filesystem holding `distdir` to accommodate a file of size `bytes`. Uses `os.statvfs` (Portage `_emerge/main.py:1063`) to get filesystem stats.

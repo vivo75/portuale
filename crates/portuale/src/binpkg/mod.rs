@@ -104,7 +104,7 @@ fn gpkg_compressions() -> &'static [(&'static str, &'static [&'static str])] {
 /// `<want>.tar`, `Some(Some(decompress_argv))` for `<want>.tar<ext>`
 /// with a known `ext`, or `None` if it names something else.
 // Portage: `gpkg._extract_filename_compression`.
-fn classify_inner_member(
+pub(crate) fn classify_inner_member(
     want: &str,
     member_basename: &str,
 ) -> Option<Option<&'static [&'static str]>> {

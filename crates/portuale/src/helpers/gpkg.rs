@@ -560,7 +560,7 @@ impl Checksums {
     }
 }
 
-fn digest_of(data: &[u8]) -> [(&'static str, String); 2] {
+pub(crate) fn digest_of(data: &[u8]) -> [(&'static str, String); 2] {
     let mut h = Hashes::new();
     h.update(data);
     h.finish()

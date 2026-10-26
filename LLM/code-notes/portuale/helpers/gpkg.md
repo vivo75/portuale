@@ -24,6 +24,7 @@ Native `gpkg-helper.py compress`: builds signed/compressed gpkg binpkgs from dir
 
 ## checksums (Hashes, Checksums, digest_of)
 - `checksum_helper.libs` for `MANIFEST2_HASH_DEFAULTS` (BLAKE2B + SHA512 in 32768-byte blocks). `gpkg.checksums` and `_record_checksum`: keyed by file name (last component), replacing the earlier record.
+- `digest_of` is `pub(crate)` (re-exported through `helpers`): the global-updates gpkg rewrite shares it, so fresh `Manifest` records stay `BLAKE2B`-first exactly like a fresh build's (`gpkg.py:1140-1244` order).
 
 ## struct Gpg
 - `checksum_helper.finish()`: EOF, wait, collect the output; a failed run is `GPGException("GnuPG signing failed")`, with the `Binary package is not usable (signing failed):` preamble and tabbed stderr lines.

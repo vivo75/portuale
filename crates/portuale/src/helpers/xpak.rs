@@ -168,7 +168,7 @@ fn xpak(root: &Path) -> Result<Vec<u8>, String> {
 }
 
 /// Portage `xpak_mem`.
-fn xpak_mem(members: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
+pub(crate) fn xpak_mem(members: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
     let mut index = Vec::new();
     let mut data = Vec::new();
     for (name, value) in members {
@@ -244,7 +244,7 @@ fn break_hardlink(file: &Path) -> std::io::Result<()> {
 }
 
 /// Portage `tbz2.recompose_mem(xpdata)`.
-fn recompose_mem(file: &Path, segment: &[u8]) -> Result<(), String> {
+pub(crate) fn recompose_mem(file: &Path, segment: &[u8]) -> Result<(), String> {
     let fail = |e: std::io::Error| format!("{}: {e}", file.display());
     let meta = std::fs::metadata(file).map_err(fail)?;
     let xpaksize = scan_xpaksize(file).map_err(fail)?;

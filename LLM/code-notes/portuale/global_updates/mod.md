@@ -1,6 +1,9 @@
 # crates/portuale/src/global_updates/mod.rs
 Per-repo updates map for the `_do_global_updates` port (backlog #576): ordered repo lists with the `DEFAULT` alias.
 
+## fn collapse_ws
+- `vartree._aux_get`'s collapse in one place (`vartree.py:1016-1037`: `" ".join(myd.split())`), shared by the vdb half (`dep_content`) and the binpkg half (metadata values, dep strings, aux reads): every whitespace run becomes one blank. The binary database reads through the same rule (`bintree.py:aux_get`).
+
 ## struct RepoMatch
 - The `_do_global_updates` `repo_match` closure (`_global_updates.py:161-164`) in one place: `new` snapshots the map's repo names plus the main repo's name, and `matches(repo_name, repository)` answers the same-repo-or-main-covering-unmapped check. Used by the vdb moves, both config-files passes (world, `package.*`) and `update_ents`, each through a one-line closure adapter.
 - Kept separate from `repo_update_map` because the map outlives the borrow: callers build the map, then the matcher from it.

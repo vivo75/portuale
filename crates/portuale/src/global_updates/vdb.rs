@@ -155,17 +155,17 @@ pub(crate) fn update_ents(args: UpdateEntsArgs<'_>) -> Result<usize, String> {
 
 /// The dep keys `update_ents` rewrites, in Portage's order.
 // Portage: lib/_emerge/Package.py, _dep_keys
-const DEP_KEYS: &[&str] = &["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
+pub(crate) const DEP_KEYS: &[&str] = &["BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND"];
 
 /// `vartree._aux_get` for a dep key: a missing file reads as `""`, and
-/// a present one collapses every whitespace run to one blank (the dep
+/// a present one goes through the shared whitespace collapse (the dep
 /// keys never match the multi-line exception).
 // Portage: lib/portage/dbapi/vartree.py, _aux_get
 fn dep_content(raw: Option<Vec<u8>>) -> String {
     let text = raw
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    super::collapse_ws(&text)
 }
 
 /// Every installed entry on `cp`, in `cat/pf` order.

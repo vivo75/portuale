@@ -372,6 +372,7 @@
 - [crates/portuale/src/emerge_options.rs](portuale/emerge_options.md) — Recognition tables for Portage's full `emerge` CLI option surface; every implemented flag is excluded and handled by the caller.
 - [crates/portuale/src/env_update.rs](portuale/env_update.md) — Portage's `env_update()`: regenerate shell/systemd/ld.so state from `/etc/env.d` after a merge.
 - [crates/portuale/src/fetch.rs](portuale/fetch.md) — Network fetch of a package's distfiles via `wget` (locking, mirrors, resume, digest verification).
+- [crates/portuale/src/global_updates/binpkg.rs](portuale/global_updates/binpkg.md) — The binpkg half of `_do_global_updates` (backlog #576): `move_ent` /
 - [crates/portuale/src/global_updates/config_files.rs](portuale/global_updates/config_files.md) — The world and `package.*` half of the `_do_global_updates` port (backlog #576): `update_dbentry` over the world list and every `package.*` file.
 - [crates/portuale/src/global_updates/mod.rs](portuale/global_updates/mod.md) — Per-repo updates map for the `_do_global_updates` port (backlog #576): ordered repo lists with the `DEFAULT` alias.
 - [crates/portuale/src/global_updates/vdb.rs](portuale/global_updates/vdb.md) — The vdb half of `_do_global_updates` (backlog #576): `move_ent` / `move_slot_ent` over the installed database under the vdb lock.

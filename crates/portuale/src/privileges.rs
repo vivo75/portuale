@@ -37,7 +37,15 @@ pub fn is_privileged(root: &Path) -> bool {
         return false;
     }
 
-    let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()) else {
+    path_writable(dir)
+}
+
+/// `os.access(path, W_OK)`: whether the caller may write `path`. The one
+/// copy; per-module gates (fetch, news, global updates, the root
+/// ownership check) delegate to it.
+// Portage: os.access
+pub(crate) fn path_writable(path: &Path) -> bool {
+    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()) else {
         return false;
     };
     // SAFETY: `c` is a NUL-terminated path that outlives the call; the

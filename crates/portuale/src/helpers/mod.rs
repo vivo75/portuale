@@ -15,10 +15,11 @@ pub(crate) use doins::xattr_set;
 pub(crate) use doins::{copy_xattr, xattr_excluded, xattr_get, xattr_list};
 mod filter_env;
 mod gpkg;
+pub(crate) use gpkg::digest_of;
 mod locale;
 mod python;
 mod xattr;
-mod xpak;
+pub(crate) mod xpak;
 
 /// The fixed answer of the `ping` helper (D8: proves `$PORTUALE_BIN`
 /// reaches a phase as a working binary, never the libtest harness).

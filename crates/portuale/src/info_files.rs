@@ -5,9 +5,7 @@
 // Portage: _info_files.py, chk_updated_info_files (called from post_emerge.py, post_emerge)
 
 use std::collections::BTreeMap;
-use std::ffi::CString;
 use std::io::Write;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
@@ -71,12 +69,7 @@ fn normalize_path(mypath: &str) -> String {
 /// Writability gate via `libc::access(W_OK)` (same syscall and UID semantics
 /// as Portage's `os.access(inforoot, os.W_OK)` default).
 fn is_writable(path: &Path) -> bool {
-    let Ok(bytes) = CString::new(path.as_os_str().as_bytes()) else {
-        return false;
-    };
-    // SAFETY: `bytes` is a NUL-terminated path buffer; `access(2)` only
-    // reads it.
-    unsafe { libc::access(bytes.as_ptr(), libc::W_OK) == 0 }
+    crate::privileges::path_writable(path)
 }
 
 /// Dot-files, subdirectories, and the `dir{,ext}{,.old}` names are never

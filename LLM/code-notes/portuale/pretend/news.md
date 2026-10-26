@@ -59,7 +59,7 @@ GLEP 42 news.
 - Ports Portage's `NewsManager.updateItems` `write_atomic` calls (`news.py:183-200`) with Portage's `apply_secpass_permissions(uid=PORTAGE_INST_UID, gid=portage_gid, mode=0o064, mask=0)`: group `portage`, group read/write and world read on top of the umask mode (a root run lands `0664 root:portage`, backlog #258).
 
 ## fn ensure_news_state_dir
-- Ports Portage's `updateItems` preamble (`news.py:121-133`): `ensure_dirs(unread_path, uid=PORTAGE_INST_UID, gid=portage_gid, mode=0o074, mask=0)`, then `os.access(unread_path, os.W_OK)`, same early return. Exactly like Portage's `getUnreadItems` reading `len(grabfile(unread))` after the early return.
+- Ports Portage's `updateItems` preamble (`news.py:121-133`): `ensure_dirs(unread_path, uid=PORTAGE_INST_UID, gid=portage_gid, mode=0o074, mask=0)`, then `os.access(unread_path, os.W_OK)`, same early return. Exactly like Portage's `getUnreadItems` reading `len(grabfile(unread))` after the early return. The writability probe delegates to the one copy, `privileges::path_writable`.
 
 ## fn apply_news_permissions
 - Ports Portage's `apply_permissions` with `mask=0` (`util/__init__.py:1145`). Ownership is only changed by a root caller: a non-root caller is Portage's unprivileged mode (`PORTAGE_INST_UID` and the portage group become the caller's own, so the files it creates already match) or, for the state files, Portage's `apply_secpass_permissions` skipping what `secpass < 2` cannot do. One narrow difference remains for the directory: Portage's `ensure_dirs` has no secpass gate, so a non-root caller facing a writable directory it does not own fails the chown and skips the update, where this proceeds. `false` on a failed chown/chmod (Portage's `OperationNotPermitted`).

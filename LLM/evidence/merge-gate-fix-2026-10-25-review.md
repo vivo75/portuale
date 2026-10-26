@@ -44,3 +44,11 @@ diffs 0 (4005 paths per side). Verdict: PASSED.
 Run `l1-20261026T110941Z` (tree f328574d + Task 8 working-tree change):
 runner rc 0; glibc-2.43-r4 and bash-5.3_p20 merged by both PMs; hard
 findings 0, UNEXPLAINED 0, payload diffs 0. Verdict: PASSED.
+
+## Task 9 — global updates, binary packages (global_updates/binpkg.rs and the shared compressor, digest and writability helpers)
+
+Run `l1-20261026T125729Z` (tree 48c45732 + Task 9 working-tree change;
+the compressor command used by `quickpkg`/`--buildpkg` now resolves
+through the shared `compression_command_argv`): runner rc 0;
+glibc-2.43-r4 and bash-5.3_p20 merged by both PMs; hard findings 0,
+UNEXPLAINED 0, payload diffs 0 (4005 paths per side). Verdict: PASSED.
