@@ -25,6 +25,22 @@ the contract suite read the same files. A checkout without the sibling
 beside it cannot run the tests. Never edit the suite to make a package
 manager pass; fix the package manager instead.
 
+## Version numbers
+
+portuale's version number tracks the Portage release this tree ports:
+
+- MAJOR = Portage MAJOR × 100 + Portage MINOR.
+- MINOR = Portage PATCH.
+- PATCH is a sequence number. 0 means porting of this Portage release has
+  started but the tree may not match Portage yet. 1 and above are releases
+  fit for installing packages.
+
+The full Portage version sits in the workspace `Cargo.toml` under
+`[workspace.metadata.portuale]` as `portage-version`. Portage's fourth
+digit (fix releases such as 3.0.82.2) is ignored by the scheme: moving to
+such a fix release bumps portuale's PATCH instead. So Portage 3.0.83 gives
+portuale 300.83.0.
+
 ## Comment policy
 
 - Public items get short `///` summaries, plus `# Errors` and `# Panics`

@@ -28,6 +28,10 @@ too_many_arguments = "warn"
 fn_params_excessive_bools = "warn"
 
 [workspace.package]
+# The portuale release number follows the Portage release this tree ports:
+# MAJOR = Portage MAJOR * 100 + Portage MINOR, MINOR = Portage PATCH, PATCH
+# sequential (0 = porting started). See docs/CONTRIBUTING.md, "Version numbers".
+version = "300.83.0"
 edition = "2024"
 # The MSRV floor, not a preference: portage-atom* / gentoo-interner /
 # portage-solver declare rust-version = 1.95 (pubgrub 1.92, smol_str
@@ -40,3 +44,8 @@ rust-version = "1.95"
 [profile.release]
 panic = "abort"
 lto = "thin"
+
+[workspace.metadata.portuale]
+# The full Portage version this tree ports, fourth (fix) digit included
+# when there is one. See docs/CONTRIBUTING.md, "Version numbers".
+portage-version = "3.0.83"

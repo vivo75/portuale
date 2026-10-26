@@ -871,3 +871,49 @@ pub(crate) fn print_info_packages(args: PrintInfoPackagesArgs<'_>) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The crate version is derived from the Portage version we port:
+    /// MAJOR = Portage MAJOR * 100 + Portage MINOR, MINOR = Portage PATCH.
+    /// Portage's fourth (fix) digit is ignored by the scheme.
+    // Portage: meson.build, version : '3.0.83'
+    #[test]
+    fn crate_version_follows_the_ported_portage_version() {
+        let portage: Vec<u64> = PORTED_PORTAGE_VERSION
+            .split('.')
+            .map(|p| p.parse().unwrap())
+            .collect();
+        let ours: Vec<u64> = env!("CARGO_PKG_VERSION")
+            .split('.')
+            .map(|p| p.parse().unwrap())
+            .collect();
+        assert_eq!(ours.len(), 3, "portuale uses plain three-part SemVer");
+        assert_eq!(ours[0], portage[0] * 100 + portage[1]);
+        assert_eq!(ours[1], portage[2]);
+    }
+
+    /// The workspace metadata names the full Portage release this tree
+    /// ports, so the metadata, the constant and the crate version stay in
+    /// step when the tree moves to a new Portage release.
+    // Portage: meson.build, version : '3.0.83'
+    #[test]
+    fn workspace_metadata_names_the_ported_portage_version() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+        let text = std::fs::read_to_string(&root).expect("workspace Cargo.toml is readable");
+        let line = text
+            .lines()
+            .find(|l| l.trim_start().starts_with("portage-version"))
+            .expect("workspace metadata names portage-version");
+        let quoted = line
+            .split('"')
+            .nth(1)
+            .expect("portage-version has a quoted value");
+        assert!(
+            quoted.starts_with(PORTED_PORTAGE_VERSION),
+            "portage-version {quoted:?} starts with {PORTED_PORTAGE_VERSION:?}"
+        );
+    }
+}

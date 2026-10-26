@@ -73,3 +73,6 @@
 
 ## const PORTED_PORTAGE_VERSION (#530)
 - The Portage release portuale implements: `--version` reports the running implementation, which is this release's behavior contract (like `portage.VERSION` for the Portage `emerge`). Bumped by the port slices that move the tree to a new upstream release (#530: the `3.0.83` vs `3.0.83-r1` wording).
+
+## tests version_scheme (#590)
+- The two `info.rs` tests pin the version scheme: the crate MAJOR is Portage MAJOR × 100 + Portage MINOR and the crate MINOR is Portage PATCH (plain three-part SemVer), and the workspace `portage-version` metadata starts with `PORTED_PORTAGE_VERSION`, so the metadata, the constant and the crate version move together. Portage side: the tree version is `meson.build`'s `version : '3.0.83'`. Portage fix releases carry a fourth digit (3.0.82.2); the scheme ignores it, and moving to such a fix bumps portuale PATCH instead.

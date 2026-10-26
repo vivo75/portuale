@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "atom-harness"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "harness-common",
  "portage-dep",
@@ -965,7 +965,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "harness-common"
-version = "0.1.0"
+version = "300.83.0"
 
 [[package]]
 name = "hashbrown"
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "mrg-director"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "portage-fetch",
  "portage-profile",
@@ -1656,7 +1656,7 @@ dependencies = [
 
 [[package]]
 name = "portage-dep"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "portage-versions",
  "regex",
@@ -1664,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "portage-fetch"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "blake2",
  "md-5",
@@ -1675,7 +1675,7 @@ dependencies = [
 
 [[package]]
 name = "portage-profile"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "portage-dep",
  "portage-util",
@@ -1685,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "portage-repo"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "bzip2",
  "md-5",
@@ -1706,7 +1706,7 @@ dependencies = [
 
 [[package]]
 name = "portage-required-use"
-version = "0.1.0"
+version = "300.83.0"
 
 [[package]]
 name = "portage-solver"
@@ -1720,18 +1720,18 @@ dependencies = [
 
 [[package]]
 name = "portage-use-reduce"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "portage-util"
-version = "0.1.0"
+version = "300.83.0"
 
 [[package]]
 name = "portage-vdb"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "libc",
  "portage-util",
@@ -1741,14 +1741,14 @@ dependencies = [
 
 [[package]]
 name = "portage-versions"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "portuale"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "blake2",
  "brush-builtins",
@@ -1989,7 +1989,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "required-use-harness"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "harness-common",
  "portage-required-use",
@@ -2505,7 +2505,7 @@ checksum = "81e544489bf3d8ef66c953931f56617f423cd4b5494be343d9b9d3dda037b9a3"
 
 [[package]]
 name = "use-reduce-harness"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "harness-common",
  "portage-dep",
@@ -2611,7 +2611,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "versions-harness"
-version = "0.1.0"
+version = "300.83.0"
 dependencies = [
  "harness-common",
  "portage-versions",

@@ -237,7 +237,9 @@ at real-tree scale (pmtest's differential bed, L0: ~120 real atoms,
 
 For the authoritative, cited-source record of every shipped capability
 read **[`what-this-proves.md`](what-this-proves.md)** (the living
-per-slice ledger) and `git log`. The per-slice "current state" narrative
+per-slice ledger) and `git log`. portuale's version number tracks the
+Portage release it ports — see "Version numbers" in
+[`docs/CONTRIBUTING.md`](../docs/CONTRIBUTING.md). The per-slice "current state" narrative
 that used to live here is snapshotted in `history/agent-context-current-state-2026-09-10.md` (deleted
 2026-10-03; git history).
 
