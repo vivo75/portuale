@@ -27,8 +27,8 @@ Port of Portage's `portage.dep.use_reduce`, restricted to `flat=True` mode.
 - One dep string like `use_reduce(matchall=True, flat=True, token_class=Atom, is_valid_flag=…)`: the flat walk with a per-atom-token hook (`hook(token, pos)`, 0-based position; the caller keeps whatever it parsed). `^^`/`??` need no special case: `^^` is a plain token (the hook rejects it: `Invalid atom (^^)`), `??` is a conditional on flag `?` (checked at its `)`). A hook syntax rejection first runs `missing_whitespace_check`, else wraps as `Invalid atom (…), token N`; categorized rejections stay bare (see `map_hook_error`).
 
 ## tests: probe atoms through the reducer (#527)
-- `validated_walk_passes_probe_atoms_to_the_hook_whole`: `games-arcade/2048 dev-util/timidity-- cat/pkg[a(+),-a]` reach the hook as three whole tokens; the hook's rejection of the third renders `Invalid atom (Invalid use dep: '-a'), token 3`. Oracle: `LLM/evidence/2026-10-23-510/host-3.0.83.txt` (`reduce-Atom` rows) and the meson-built 3.0.82.2 capture (same verdicts).
-- `string_path_returns_probe_atoms_unvalidated`: `use_reduce_flat` returns all three unchanged, the deliberate Q8/#526 mimicry (Portage's `use_reduce` without `token_class` does the same).
+- `validated_walk_passes_probe_atoms_to_the_hook_whole`: `games-arcade/2048 dev-util/timidity-- cat/pkg[a(+),-a]` reach the hook as three whole tokens; the hook's rejection of the third renders `Invalid atom (Invalid use dep: '-a'), token 3`. Oracle: `LLM/evidence/2026-10-23-510/host-3.0.83.txt` (`reduce-Atom` rows) and the meson-built 3.0.82.2 capture `p3082-3.0.82.2.meson.txt` (same verdicts).
+- `string_path_returns_probe_atoms_unvalidated`: `use_reduce_flat` returns all three unchanged, the deliberate Q8/#526 mimicry (Portage's `use_reduce` without `token_class` does the same). Oracle: the `reduce-str` rows (`['cat/pkg[a(+),-a]']`).
 
 ## fn is_active_validated
 - Portage `use_reduce`'s `is_active` with `is_valid_flag` (dep:700-715): validity first (the `IUSE.missing` error at the matching `)`), then matchall (every valid conditional active). No `useflag_re` check — Portage checks one or the other.
