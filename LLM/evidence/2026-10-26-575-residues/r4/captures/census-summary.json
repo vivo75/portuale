@@ -1,0 +1,2341 @@
+[
+ {
+  "id": "j0029",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--autounmask-backtrack=y",
+   "dev-libs/aub0a",
+   "dev-libs/aub0b",
+   "dev-libs/aub0c"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask: upstream test_autounmask_use_breakage pg0 a/b/c fails like Portage (rc 1; D wanted with foo and -foo at once)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "3",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/aub0d:0",
+      [
+       "dev-libs/aub0d-1:ebuild",
+       "dev-libs/aub0d-0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   3
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0030",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--autounmask-backtrack=y",
+   "dev-libs/aub0a",
+   "dev-libs/aub0c",
+   "dev-libs/aub0b"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask: upstream test_autounmask_use_breakage pg0 a/c/b fails like Portage (rc 1; D wanted with foo and -foo at once)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/aub0d:0",
+      [
+       "dev-libs/aub0d-0:ebuild",
+       "dev-libs/aub0d-1:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0031",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--autounmask-backtrack=y",
+   "dev-libs/aub0b",
+   "dev-libs/aub0a",
+   "dev-libs/aub0c"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask: upstream test_autounmask_use_breakage pg0 b/a/c fails like Portage (rc 1; D wanted with foo and -foo at once)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "0",
+  "bt_u": "0",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/aub0d:0",
+      [
+       "dev-libs/aub0d-1:ebuild",
+       "dev-libs/aub0d-0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   0
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0032",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--autounmask-backtrack=y",
+   "dev-libs/aub0b",
+   "dev-libs/aub0c",
+   "dev-libs/aub0a"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask: upstream test_autounmask_use_breakage pg0 b/c/a fails like Portage (rc 1; D wanted with foo and -foo at once)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "0",
+  "bt_u": "0",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/aub0d:0",
+      [
+       "dev-libs/aub0d-0:ebuild",
+       "dev-libs/aub0d-1:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   0
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0033",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--autounmask-backtrack=y",
+   "dev-libs/aub0c",
+   "dev-libs/aub0a",
+   "dev-libs/aub0b"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask: upstream test_autounmask_use_breakage pg0 c/a/b fails like Portage (rc 1; D wanted with foo and -foo at once)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/aub0d:0",
+      [
+       "dev-libs/aub0d-0:ebuild",
+       "dev-libs/aub0d-1:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0070",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--backtrack",
+   "1",
+   "dev-libs/mgfa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "tests/test_emerge_pretend_contract.py::test_oracle_missed_update_siblings_masked_together#1",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "1",
+  "bt_u": "1",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   1
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0081",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--backtrack=0",
+   "dev-libs/btparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: --backtrack=0 also disables the runtime_pkg_mask trial (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "0",
+  "bt_u": "0",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/bttarget:0",
+      [
+       "dev-libs/bttarget-1.0:ebuild",
+       "dev-libs/bttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   0
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0085",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--backtrack=0",
+   "dev-libs/orbtblocked"
+  ],
+  "world": [],
+  "env": {},
+  "name": "tests/test_emerge_pretend_contract.py::test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it#2",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "0",
+  "bt_u": "0",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/orbttool:0",
+      [
+       "dev-libs/orbttool-1.0:ebuild",
+       "dev-libs/orbttool-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   0
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0092",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--backtrack=30",
+   "dev-libs/slotconflictunsolvable"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: --backtrack=30 suppresses the try-a-larger-value hint (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0153",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--color=y",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: --color=y colours violated spans, markers stay aligned (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0175",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--debug",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--debug + a slot conflict: resolver trace survives backtracking (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "-",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   },
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0342",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/mg2top"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[tree: backtrack-abandoned parents display under the earliest-resolved puller (#155: [nomerge] mgfa/mgxa, not mgfb/mgxb)]#0",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "10",
+  "bt_u": "14",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ],
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   10
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0344",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/orbtblocked"
+  ],
+  "world": [],
+  "env": {},
+  "name": "tests/test_emerge_pretend_contract.py::test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it#3",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/orbttool:0",
+      [
+       "dev-libs/orbttool-1.0:ebuild",
+       "dev-libs/orbttool-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0410",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose-conflicts",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: --verbose-conflicts shows every omitted parent (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0411",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose-conflicts=n",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: --verbose-conflicts=n is the default (collapsed) (#62: rc 1; Portage rejects =n with rc 2, separate surface)]#0",
+  "rc_p": "2",
+  "rc_u": "1",
+  "bt_p": "-",
+  "bt_u": "5",
+  "conflict_p": false,
+  "conflict_u": true,
+  "stop": [],
+  "built": [],
+  "shown": [],
+  "backtracked": [],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": true
+ },
+ {
+  "id": "j0759",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/btparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: unsolvable, resolved by masking a puller version]#0",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "5",
+  "bt_u": "5",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/bttarget:0",
+      [
+       "dev-libs/bttarget-1.0:ebuild",
+       "dev-libs/bttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   5
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0832",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/mg2top"
+  ],
+  "world": [],
+  "env": {},
+  "name": "tests/test_emerge_pretend_contract.py::test_oracle_two_simultaneous_conflicts_defer_second_to_later_pass#0",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "10",
+  "bt_u": "14",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ],
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   10
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0833",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/mgfa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "tests/test_emerge_pretend_contract.py::test_oracle_missed_update_siblings_masked_together#0",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0838",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/needer",
+   "dev-libs/othermod"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[the needer/othermod triangle reports the installed-instance conflict (#57, #62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/paired:0",
+      [
+       "dev-libs/paired-1.0:installed,nomerge",
+       "dev-libs/paired-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0867",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/orbtblocked"
+  ],
+  "world": [],
+  "env": {},
+  "name": "tests/test_emerge_pretend_contract.py::test_or_group_alternative_yields_to_the_next_when_backtracking_masks_it#0",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/orbttool:0",
+      [
+       "dev-libs/orbttool-1.0:ebuild",
+       "dev-libs/orbttool-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0870",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/othermod",
+   "dev-libs/needer"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[the same triangle, argv reversed, reports the same conflict (#57, #62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/paired:0",
+      [
+       "dev-libs/paired-2.0:ebuild",
+       "dev-libs/paired-1.0:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0881",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/p569pull"
+  ],
+  "world": [],
+  "env": {},
+  "name": "CASES:3124:#568/#569: the perl-heal skip block keeps the built subslot atom and drops non-selected || branches (Portage 3.0.83, rc 0)",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/p569prov:0",
+      [
+       "dev-libs/p569prov-5.44:ebuild",
+       "dev-libs/p569prov-5.42:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0917",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/scm0a"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slotconflict: upstream test_slot_conflict_mask_update pg0 dev-libs/scm0a merges like Portage (rc 0; backtrack masks highest C first: C-1 + B-1 + A-1)]#0",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/scm0c:0",
+      [
+       "dev-libs/scm0c-1:ebuild",
+       "dev-libs/scm0c-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "j0918",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/scuseparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: pkg_use_display renders non-empty USE on instance + parent lines (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/scusetarget:0",
+      [
+       "dev-libs/scusetarget-1.0:ebuild",
+       "dev-libs/scusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0922",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: three same-reason parents collapse to one + '(and N more)' (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0924",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/slotconflictnewpin",
+   "dev-libs/slotconflictoldpin"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[multi-atom: unsolvable slot conflict between two targets is reported (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0926",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/slotconflictunsolvable"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: unsolvable, survives backtracking and is reported (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "j0929",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: USE reason keys, unconditional before violated (#62: rc 1 like Portage)]#0",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0004",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--backtrack=0",
+   "--update",
+   "--deep",
+   "--newuse",
+   "--oneshot",
+   "=dev-libs/r25lib-2.0"
+  ],
+  "world": [
+   "dev-libs/r25consumer"
+  ],
+  "env": {},
+  "name": "test_oracle_209_backtrack_zero_reports_an_unsatisfiable_consumer_pin:28624",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "0",
+  "bt_u": "0",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/r25lib:0",
+      [
+       "dev-libs/r25lib-2.0:ebuild",
+       "dev-libs/r25lib-1.0:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   0
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "k0023",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--debug",
+   "dev-libs/needer",
+   "dev-libs/othermod"
+  ],
+  "world": [],
+  "env": {},
+  "name": "test_debug_parent_dep_names_the_atom_and_the_child_instance:3550",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "-",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/paired:0",
+      [
+       "dev-libs/paired-1.0:installed,nomerge",
+       "dev-libs/paired-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   },
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0050",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "-D",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "test_oracle_150_tree_shared_child_nests_without_a_nomerge_ancestor:27443",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0076",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "-D",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "test_oracle_150_tree_shared_child_nests_without_a_nomerge_ancestor:27460",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0097",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "<dev-libs/cgp1x-1"
+  ],
+  "world": [
+   "dev-libs/cgp1a"
+  ],
+  "env": {},
+  "name": "test_complete_graph_ver_break_fails_with_world_consumer",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "3",
+  "bt_u": "0",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/cgp1x:0",
+      [
+       "dev-libs/cgp1x-0.1:ebuild",
+       "dev-libs/cgp1x-1:installed,nomerge"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/cgp1x:0",
+      [
+       "dev-libs/cgp1x-0.1:ebuild",
+       "dev-libs/cgp1x-1:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   3
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0098",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "<dev-libs/igw0x-1"
+  ],
+  "world": [
+   "dev-libs/igw0a"
+  ],
+  "env": {},
+  "name": "test_ignore_world_contrast_against_a_world_bound_consumer",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "3",
+  "bt_u": "0",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/igw0x:0",
+      [
+       "dev-libs/igw0x-0.1:ebuild",
+       "dev-libs/igw0x-1:installed,nomerge"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/igw0x:0",
+      [
+       "dev-libs/igw0x-0.1:ebuild",
+       "dev-libs/igw0x-1:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   3
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0099",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "=dev-libs/paired-2.0"
+  ],
+  "world": [
+   "dev-libs/keeper"
+  ],
+  "env": {},
+  "name": "test_keeper_reachable_pin_breaks_an_explicit_upgrade_and_reports_it:20964",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "3",
+  "bt_u": "0",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/paired:0",
+      [
+       "dev-libs/paired-2.0:ebuild",
+       "dev-libs/paired-1.0:installed,nomerge"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/paired:0",
+      [
+       "dev-libs/paired-2.0:ebuild",
+       "dev-libs/paired-1.0:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   3
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0100",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   ">=dev-libs/cgp1x-2"
+  ],
+  "world": [
+   "dev-libs/cgp1a"
+  ],
+  "env": {},
+  "name": "test_complete_graph_ver_break_fails_with_world_consumer",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "3",
+  "bt_u": "0",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/cgp1x:0",
+      [
+       "dev-libs/cgp1x-2:ebuild",
+       "dev-libs/cgp1x-1:installed,nomerge"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/cgp1x:0",
+      [
+       "dev-libs/cgp1x-2:ebuild",
+       "dev-libs/cgp1x-1:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   3
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0101",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   ">=dev-libs/igw0x-2"
+  ],
+  "world": [
+   "dev-libs/igw0a"
+  ],
+  "env": {},
+  "name": "test_ignore_world_contrast_against_a_world_bound_consumer",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "3",
+  "bt_u": "0",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/igw0x:0",
+      [
+       "dev-libs/igw0x-2:ebuild",
+       "dev-libs/igw0x-1:installed,nomerge"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/igw0x:0",
+      [
+       "dev-libs/igw0x-2:ebuild",
+       "dev-libs/igw0x-1:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   3
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0105",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/cgp0x"
+  ],
+  "world": [
+   "dev-libs/cgp0q"
+  ],
+  "env": {},
+  "name": "test_complete_graph_use_break_fails_with_world_consumer:14937",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "0",
+  "bt_u": "0",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [
+   [
+    true,
+    [
+     {
+      "dev-libs/cgp0x-2.8.0:ebuild": {
+       "icu": false
+      }
+     }
+    ]
+   ]
+  ],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": false,
+    "u": false,
+    "nsol": 1,
+    "conflicts": [
+     [
+      "dev-libs/cgp0x:2",
+      [
+       "dev-libs/cgp0x-2.8.0:ebuild",
+       "dev-libs/cgp0x-2.8.0:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": true,
+    "v": false,
+    "u": false,
+    "nsol": 1,
+    "changes": [
+     {
+      "dev-libs/cgp0x-2.8.0:ebuild": {
+       "icu": false
+      }
+     }
+    ],
+    "expl": "It might be possible to solve this slot collision\nby applying all of the following changes:\n   - dev-libs/cgp0x-2.8.0 (Change USE: -icu)\n\n"
+   }
+  ],
+  "backtracked": [
+   0
+  ],
+  "p_explains": true,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": true
+ },
+ {
+  "id": "k0107",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/needer",
+   "dev-libs/othermod"
+  ],
+  "world": [
+   "dev-libs/keeper"
+  ],
+  "env": {},
+  "name": "test_keeper_reachable_needer_triangle_reports_the_installed_instance_with_both_parents:21020",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/paired:0",
+      [
+       "dev-libs/paired-1.0:installed,nomerge",
+       "dev-libs/paired-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "k0108",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/needer"
+  ],
+  "world": [
+   "dev-libs/keeper"
+  ],
+  "env": {},
+  "name": "test_keeper_reachable_pin_breaks_a_hard_dependency_requirement_and_reports_it:20991",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "1",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/paired:0",
+      [
+       "dev-libs/paired-2.0:ebuild",
+       "dev-libs/paired-1.0:installed,nomerge"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/paired:0",
+      [
+       "dev-libs/paired-2.0:ebuild",
+       "dev-libs/paired-1.0:installed,nomerge"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ }
+]

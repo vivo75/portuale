@@ -1,0 +1,73 @@
+### ['dev-libs/P', 'dev-libs/Q'] {}: success=True mergelist=['dev-libs/Z-1', 'dev-libs/P-1', 'dev-libs/Q-1']
+   need_config_change {'ret': False, 'allow_bt': True, 'built_here': True, 'changes': [], 'runtime_pkg_mask': []}
+   need_config_change {'ret': False, 'allow_bt': True, 'built_here': False, 'changes': None, 'runtime_pkg_mask': ['dev-libs/Z-1:ebuild']}
+   need_config_change {'ret': False, 'allow_bt': True, 'built_here': False, 'changes': None, 'runtime_pkg_mask': ['dev-libs/Q-1:ebuild', 'dev-libs/Z-1:ebuild']}
+   need_config_change {'ret': False, 'allow_bt': True, 'built_here': False, 'changes': None, 'runtime_pkg_mask': ['dev-libs/Z-2:ebuild']}
+   backtrack_depgraph {'success': True, 'backtracked': 4, 'final_allow_bt': True, 'final_runtime_pkg_mask': ['dev-libs/P-2:ebuild', 'dev-libs/Z-2:ebuild']}
+   display_problems text:
+     |WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+     |dev-libs/Z:0
+     |  (dev-libs/Z-2:0/0::test_repo, ebuild scheduled for merge) USE="" conflicts with
+     |    =dev-libs/Z-1 required by (dev-libs/Q-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+     |    ^           ^
+     |!!! The following update(s) have been skipped due to unsatisfied dependencies
+     |!!! triggered by backtracking:
+     |dev-libs/P:0
+### ['dev-libs/P', 'dev-libs/Q', 'sci-libs/L', 'sci-libs/M'] {}: success=False mergelist=['sci-libs/K-1', 'dev-libs/Z-1', 'dev-libs/Z-2', 'dev-libs/P-2', 'dev-libs/Q-1', 'sci-libs/L-1', 'sci-libs/M-1']
+   need_config_change {'ret': False, 'allow_bt': True, 'built_here': True, 'changes': [], 'runtime_pkg_mask': []}
+   need_config_change {'ret': True, 'allow_bt': True, 'built_here': True, 'changes': [], 'runtime_pkg_mask': ['sci-libs/K-1:installed']}
+   need_config_change {'ret': True, 'allow_bt': True, 'built_here': False, 'changes': None, 'runtime_pkg_mask': ['sci-libs/K-1:installed']}
+   backtrack_depgraph {'success': False, 'backtracked': 1, 'final_allow_bt': True, 'final_runtime_pkg_mask': ['sci-libs/K-1:installed']}
+   final handler changes: [] version: True unspecific: False
+   display_problems text:
+     |!!! Multiple package instances within a single package slot have been pulled
+     |!!! into the dependency graph, resulting in a slot conflict:
+     |dev-libs/Z:0
+     |  (dev-libs/Z-1:0/0::test_repo, ebuild scheduled for merge) USE="" pulled in by
+     |    =dev-libs/Z-1 required by (dev-libs/Q-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+     |    ^           ^                                                                              
+     |  (dev-libs/Z-2:0/0::test_repo, ebuild scheduled for merge) USE="" pulled in by
+     |    =dev-libs/Z-2 required by (dev-libs/P-2:0/0::test_repo, ebuild scheduled for merge) USE=""
+     |    ^           ^                                                                              
+     |It may be possible to solve this problem by using package.mask to
+     |prevent one of those packages from being selected. However, it is also
+     |possible that conflicting dependencies exist such that they are
+     |impossible to satisfy simultaneously.  If such a conflict exists in
+     |the dependencies of two different packages, then those packages can
+     |not be installed simultaneously.
+     |For more information, see MASKED PACKAGES section in the emerge man
+     |page or refer to the Gentoo Handbook.
+### ['dev-libs/P', 'dev-libs/Q', 'sci-libs/L', 'sci-libs/M'] {'--autounmask': 'n'}: success=False mergelist=['sci-libs/K-1', 'dev-libs/Z-1', 'dev-libs/Z-2', 'dev-libs/P-2', 'dev-libs/Q-1', 'sci-libs/L-1', 'sci-libs/M-1']
+   need_config_change {'ret': False, 'allow_bt': True, 'built_here': True, 'changes': [], 'runtime_pkg_mask': []}
+   need_config_change {'ret': False, 'allow_bt': True, 'built_here': False, 'changes': None, 'runtime_pkg_mask': ['sci-libs/K-1:installed']}
+   need_config_change {'ret': False, 'allow_bt': True, 'built_here': False, 'changes': None, 'runtime_pkg_mask': ['sci-libs/K-1:ebuild']}
+   need_config_change {'ret': False, 'allow_bt': True, 'built_here': False, 'changes': None, 'runtime_pkg_mask': ['sci-libs/K-1:ebuild']}
+   backtrack_depgraph {'success': False, 'backtracked': 2, 'final_allow_bt': False, 'final_runtime_pkg_mask': []}
+   final handler changes: [] version: True unspecific: False
+   display_problems text:
+     |!!! Multiple package instances within a single package slot have been pulled
+     |!!! into the dependency graph, resulting in a slot conflict:
+     |sci-libs/K:0
+     |  (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge) USE="foo" pulled in by
+     |    sci-libs/K[foo=] required by (sci-libs/M-1:0/0::test_repo, ebuild scheduled for merge) USE="foo"
+     |               ^^^^                                                                                  
+     |  (sci-libs/K-1:0/0::test_repo, installed) USE="-foo" pulled in by
+     |    sci-libs/K[-foo] required by (sci-libs/L-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+     |               ^^^^                                                                               
+     |dev-libs/Z:0
+     |  (dev-libs/Z-1:0/0::test_repo, ebuild scheduled for merge) USE="" pulled in by
+     |    =dev-libs/Z-1 required by (dev-libs/Q-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+     |    ^           ^                                                                              
+     |  (dev-libs/Z-2:0/0::test_repo, ebuild scheduled for merge) USE="" pulled in by
+     |    =dev-libs/Z-2 required by (dev-libs/P-2:0/0::test_repo, ebuild scheduled for merge) USE=""
+     |    ^           ^                                                                              
+     |It may be possible to solve this problem by using package.mask to
+     |prevent one of those packages from being selected. However, it is also
+     |possible that conflicting dependencies exist such that they are
+     |impossible to satisfy simultaneously.  If such a conflict exists in
+     |the dependencies of two different packages, then those packages can
+     |not be installed simultaneously. You may want to try a larger value of
+     |the --backtrack option, such as --backtrack=30, in order to see if
+     |that will solve this conflict automatically.
+     |For more information, see MASKED PACKAGES section in the emerge man
+     |page or refer to the Gentoo Handbook.

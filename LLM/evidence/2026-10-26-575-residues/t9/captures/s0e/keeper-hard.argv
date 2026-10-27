@@ -1,0 +1,2 @@
+portuale: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-keeper-hard ROOT=/var/tmp/claude-s0e/h-keeper-hard PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-keeper-hard PORTUALE_BT_TRACE=1 portuale emerge --pretend dev-libs/needer
+portage: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-keeper-hard.cfg ROOT=/var/tmp/claude-s0e/h-keeper-hard PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-keeper-hard PYTHONHASHSEED=0 emerge --pretend dev-libs/needer

@@ -1,0 +1,2 @@
+portuale: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-o209 ROOT=/var/tmp/claude-s0e/h-o209 PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-o209 PORTUALE_BT_TRACE=1 portuale emerge --pretend --backtrack=0 --update --deep --newuse --oneshot =dev-libs/r25lib-2.0
+portage: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-o209.cfg ROOT=/var/tmp/claude-s0e/h-o209 PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-o209 PYTHONHASHSEED=0 emerge --pretend --backtrack=0 --update --deep --newuse --oneshot =dev-libs/r25lib-2.0

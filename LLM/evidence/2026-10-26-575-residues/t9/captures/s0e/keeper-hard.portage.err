@@ -1,0 +1,78 @@
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/h-keeper-hard/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	/var/tmp/claude-s0e/h-keeper-hard/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/paired:0 for /var/tmp/claude-s0e/h-keeper-hard/
+
+  (dev-libs/paired-2.0:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/claude-s0e/h-keeper-hard/') USE="" ELIBC="glibc" pulled in by
+    >=dev-libs/paired-2.0 required by (dev-libs/needer-1.0:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/claude-s0e/h-keeper-hard/') USE="" ELIBC="glibc"
+    ^^                ^^^                                                                                                                                          
+
+  (dev-libs/paired-1.0:0/0::testrepo, installed in '/var/tmp/claude-s0e/h-keeper-hard/') USE="" pulled in by
+    =dev-libs/paired-1.0 required by (dev-libs/keeper-1.0:0/0::testrepo, installed in '/var/tmp/claude-s0e/h-keeper-hard/') USE=""
+    ^                ^^^                                                                                                           
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+!!! The following installed packages are masked:
+- dev-python/entrypoints-0.4::gentoo (masked by: package.mask)
+/.gentoo/repos/gentoo/profiles/package.mask:
+# Sam James <sam@gentoo.org> (2026-10-22)
+# Replaced by importlib, no reverse dependencies (bug #984696). Removal
+# on 2026-11-22.
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+

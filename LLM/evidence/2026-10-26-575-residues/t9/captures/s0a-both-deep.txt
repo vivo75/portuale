@@ -1,0 +1,19 @@
+### argv: PORTAGE_CONFIGROOT=$W/both.cfg ROOT=$W/both PYTHONHASHSEED=0 T9_CP='t9cons' python3 t9/playground/views.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --update --deep @world
+T9 ADD pass=0 pkg=dev-libs/t9cons-1 depth=0 deep=True requested_depth=True complete_mode=False parent=@selected -> dep_stack
+T9 OR pass=0 parent=dev-libs/t9cons-1 depth=0 complete_mode=False trees=_filtered_trees caller=_wrapped_add_pkg_dep_string<_pop_disjunction<_create_graph<_resolve<_select_files priority=runtime depstring=[['||', Atom('=dev-libs/p569prov-5.40*'), Atom('~dev-libs/p569core-1.0')]] selected=['~dev-libs/p569core-1.0']
+T9 ADD pass=0 pkg=dev-libs/t9cons-1 depth=0 deep=True requested_depth=True complete_mode=True parent=@selected -> none(previously_added)
+T9 CG pass=0 complete_mode=True complete_param=True
+T9 OR pass=0 parent=dev-libs/t9cons-1 depth=0 complete_mode=True trees=_graph_trees caller=_wrapped_add_pkg_dep_string<_pop_disjunction<_create_graph<_solve_non_slot_operator_slot_conflicts<_process_slot_conflicts priority=runtime depstring=[['||', Atom('=dev-libs/p569prov-5.40*'), Atom('~dev-libs/p569core-1.0')]] selected=['~dev-libs/p569core-1.0']
+Dependency resolution took 4.84 s (backtrack: 0/20).
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to $W/both/ 0 KiB
+[ebuild  N     ] dev-libs/upgradepkg-2.0::testrepo to $W/both/ 0 KiB
+[ebuild  N     ] dev-libs/systempkg-1.0::testrepo to $W/both/ 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to $W/both/ 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to $W/both/ 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+!!! Problems have been detected with your world file
+!!! Please run emaint --check world
+!!! Ebuilds for the following packages are either all
+!!! masked or don't exist:
+!!! The following installed packages are masked:
+### rc: 0

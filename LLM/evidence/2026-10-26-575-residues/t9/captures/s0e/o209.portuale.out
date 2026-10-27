@@ -1,0 +1,43 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/var/tmp/claude-s0e/h-o209/repo/profiles/updates/2Q-2024..
+@s
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/0).
+
+[ebuild     U  ] dev-libs/r25lib-2.0 [1.0] to /var/tmp/claude-s0e/h-o209
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/r25lib:0
+
+  (dev-libs/r25lib-2.0:0/2::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    =dev-libs/r25lib-2.0 (Argument)
+
+  (dev-libs/r25lib-1.0:0/1::testrepo, installed in '/var/tmp/claude-s0e/h-o209') USE="" pulled in by
+    <dev-libs/r25lib-2.0 required by (dev-libs/r25consumer-1.0:0/0::testrepo, installed in '/var/tmp/claude-s0e/h-o209') USE=""
+    ^                ^^^                                                                                                        
+    (and 1 more with the same problem)
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+

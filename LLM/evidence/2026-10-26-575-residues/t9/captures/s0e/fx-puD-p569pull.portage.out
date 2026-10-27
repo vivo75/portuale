@@ -1,0 +1,15 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 8.08 s (backtrack: 1/20).
+
+[ebuild  r  U  ] dev-libs/p569prov-5.44 [5.42] to /var/tmp/claude-s0e/fx0/
+[ebuild  N     ] dev-libs/p569core-1.0 to /var/tmp/claude-s0e/fx0/
+[ebuild  rR    ] dev-libs/p569virt-1 to /var/tmp/claude-s0e/fx0/
+[ebuild  N     ] dev-libs/p569pull-2 to /var/tmp/claude-s0e/fx0/
+
+The following packages are causing rebuilds:
+
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/claude-s0e/fx0/') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/claude-s0e/fx0/')

@@ -1,0 +1,333 @@
+### podman exec <own bed container> env PORTAGE_CONFIGROOT=/ ROOT=/ LC_ALL=C.UTF-8 TZ=UTC PYTHONHASHSEED=0 (world = tmux eix gentoolkit blake3) S0B_PARENT_RE=^virtual/perl- python3 -I which-trees-or.py -pv --color=n media-gfx/gimp  (atom: see l0-resolve.txt; non-T9OR/S0B lines = Portage's own output)
+S0B _slot_conflict_backtrack_abi pkg=dev-lang/perl-5.42.2(installed,nomerge) -> False
+S0B _slot_conflict_backtrack_abi pkg=dev-lang/perl-5.44.0(ebuild) -> False
+S0B _slot_confict_backtrack slot=dev-lang/perl:0 all_parents=[app-admin/perl-cleaner-2.31-r3(installed,nomerge)->'dev-lang/perl', app-text/po4a-0.74-r1(installed,nomerge)->'>=dev-lang/perl-5.38.2-r3[-perl_features_debug,-perl_features_ithreads,-perl_features_quadmath]', app-text/po4a-0.74-r1(installed,nomerge)->'dev-lang/perl:0/5.42=', app-text/po4a-0.74-r1(installed,nomerge)->'dev-lang/perl:=', d
+S0B   choice[0]: mask dev-lang/perl-5.42.2(ebuild) conflict_atoms=[virtual/perl-CPAN-2.380.0-r1(installed,nomerge)->'=dev-lang/perl-5.44*', virtual/perl-Carp-1.540.0-r3(installed,nomerge)->'=dev-lang/perl-5.44*', virtual/perl-Compress-Raw-Bzip2-2.218.0(ebuild)->'=dev-lang/perl-5.44*', virtual/perl-Compress-Raw-Zlib-2.222.0-r1(ebuild)->'=dev-lang/perl-5.44*', virtual/perl-Data-Dumper-2.192.0-r1(ins
+S0B   choice[1] (explored first): mask dev-lang/perl-5.40.2(ebuild) conflict_atoms=[app-text/po4a-0.74-r1(installed,nomerge)->'dev-lang/perl:0/5.42=', dev-perl/Capture-Tiny-0.500.0-r1(installed,nomerge)->'dev-lang/perl:0/5.42=', dev-perl/Class-Inspector-1.360.0(installed,nomerge)->'dev-lang/perl:0/5.42=', dev-perl/Config-AutoConf-0.320.0(installed,nomerge)->'dev-lang/perl:0/5.42=', dev-perl/Export
+S0B need_config_change -> True (slot_conflict_handler changes=[])
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-CPAN-2.380.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/CPAN-2.380.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/CPAN-2.380.0', '!>perl-core/CPAN-2.380.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Data-Dumper-2.192.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Data-Dumper-2.192.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Data-Dumper-2.192.0', '!>perl-core/Data-Dumper-2.192.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Math-BigInt-2.5.2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Math-BigInt-2.5.2 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Math-BigInt-2.5.2', '!>perl-core/Math-BigInt-2.5.2-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Test-Harness-3.500.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Test-Harness-3.500.0 vdb=n'] selected=['~perl-core/Test-Harness-3.500.0', 'dev-lang/perl:=', '!<perl-core/Test-Harness-3.500.0', '!>perl-core/Test-Harness-3.500.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-IO-1.550.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/IO-1.550.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/IO-1.550.0', '!>perl-core/IO-1.550.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-XSLoader-0.320.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/XSLoader-0.320.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/XSLoader-0.320.0', '!>perl-core/XSLoader-0.320.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-IO-1.550.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/IO-1.550.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/IO-1.550.0', '!>perl-core/IO-1.550.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-XSLoader-0.320.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/XSLoader-0.320.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/XSLoader-0.320.0', '!>perl-core/XSLoader-0.320.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-File-Spec-3.940.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/File-Spec-3.940.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/File-Spec-3.940.0', '!>perl-core/File-Spec-3.940.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-File-Spec-3.940.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/File-Spec-3.940.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/File-Spec-3.940.0', '!>perl-core/File-Spec-3.940.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-File-Spec-3.940.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/File-Spec-3.940.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/File-Spec-3.940.0', '!>perl-core/File-Spec-3.940.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-File-Path-2.180.0-r5 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/File-Path-2.180.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-ExtUtils-CBuilder-0.280.242-r2 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-CBuilder-0.280.242 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-ExtUtils-ParseXS-3.570.0 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-ParseXS-3.570.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-CPAN-Meta-2.150.10-r11 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] =dev-lang/perl-5.38* vdb=n | [3] ~perl-core/CPAN-Meta-2.150.10 vdb=n'] selected=['=dev-lang/perl-5.42*', '=virtual/perl-JSON-PP-4.160.0-r4', '>=virtual/perl-JSON-PP-2.271.30']
+T9OR parent=virtual/perl-Module-Metadata-1.0.38-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Module-Metadata-1.0.38 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-podlators-6.0.2-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/podlators-6.0.2 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-version-0.993.300 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/version-0.993.300 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-JSON-PP-4.160.0-r4 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/JSON-PP-4.160.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Text-ParseWords-3.310.0-r5 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Text-ParseWords-3.310.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-CPAN-2.380.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/CPAN-2.380.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Data-Dumper-2.192.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Data-Dumper-2.192.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Math-BigInt-2.5.2 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Math-BigInt-2.5.2 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-Test-Harness-3.500.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Test-Harness-3.500.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-IO-1.550.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/IO-1.550.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-XSLoader-0.320.0-r3 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/XSLoader-0.320.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-File-Spec-3.940.0 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/File-Spec-3.940.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-CPAN-2.380.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/CPAN-2.380.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Data-Dumper-2.192.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Data-Dumper-2.192.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Math-BigInt-2.5.2 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Math-BigInt-2.5.2 vdb=n'] selected=['=dev-lang/perl-5.42*']
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ...S0B Backtracker._add mask_steps=0 ACCEPTED mask={}
+ done!
+Dependency resolution took 3.72 s (backtrack: 0/20).
+
+[ebuild  N     ] app-text/poppler-data-0.4.12::gentoo  4403 KiB
+[ebuild  N     ] media-gfx/mypaint-brushes-2.0.2-r2:2.0::gentoo  1487 KiB
+[ebuild  N     ] dev-build/netsurf-buildsystem-1.10::gentoo  39 KiB
+[ebuild  N     ] media-libs/alsa-topology-conf-1.2.5.1-r1::gentoo  USE="-verify-sig" 12 KiB
+[ebuild  N     ] media-libs/alsa-ucm-conf-1.2.16.1::gentoo  USE="-verify-sig" 83 KiB
+[ebuild  N     ] llvm-core/llvm-common-22.1.8::gentoo  USE="-emacs -verify-sig" 163147 KiB
+[ebuild  N     ] sys-apps/hwdata-0.401::gentoo  2477 KiB
+[ebuild  N     ] media-libs/libnsgif-1.0.0-r1:0/1.0.0::gentoo  276 KiB
+[ebuild  N     ] x11-themes/hicolor-icon-theme-0.17::gentoo  52 KiB
+[ebuild  N     ] dev-libs/vala-common-0.56.19::gentoo  3914 KiB
+[ebuild  N     ] dev-libs/gobject-introspection-common-1.86.0::gentoo  1058 KiB
+[ebuild  N     ] media-libs/libpng-1.6.58:0/16::gentoo  USE="-apng -static-libs -test" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse" 1046 KiB
+[ebuild  N     ] x11-libs/xtrans-1.6.0::gentoo  USE="-doc" 174 KiB
+[ebuild  N     ] sys-libs/binutils-libs-2.47:0/2.47::gentoo  USE="cet nls -64-bit-bfd -multitarget -static-libs -test -verify-sig" ABI_X86="(64) -32 (-x32)" 28364 KiB
+[ebuild  N     ] app-eselect/eselect-fontconfig-20220403::gentoo  2 KiB
+[ebuild  N     ] llvm-core/clang-common-22.1.8::gentoo  USE="cet -bootstrap-prefix -default-compiler-rt -default-libcxx -default-lld -emacs -hardened -llvm-libunwind -verify-sig" 0 KiB
+[ebuild  N     ] perl-core/Encode-3.210.0::gentoo  PERL_FEATURES="(-debug) -ithreads -quadmath" 2038 KiB
+[ebuild  N     ] dev-perl/Encode-Locale-1.50.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+[ebuild  N     ] dev-perl/Net-SSLeay-1.960.0-r1::gentoo  USE="-examples -minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 653 KiB
+[ebuild  N     ] dev-perl/IO-Socket-SSL-2.95.0::gentoo  USE="-examples -idn -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 270 KiB
+[ebuild  N     ] dev-perl/Regexp-IPv6-0.30.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 4 KiB
+[ebuild  N     ] dev-perl/Clone-0.470.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 136 KiB
+[ebuild  N     ] dev-perl/TimeDate-2.330.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 30 KiB
+[ebuild  N     ] dev-perl/HTML-Tagset-3.240.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 8 KiB
+[ebuild  N     ] dev-libs/snowball-stemmer-3.1.1:0/3.1::gentoo  USE="-static-libs -test" 352 KiB
+[ebuild  N     ] sys-apps/lsb-release-3.3::gentoo  16 KiB
+[ebuild  N     ] llvm-runtimes/clang-rtlib-config-22:22::gentoo  USE="-default-compiler-rt" ABI_X86="32 (64)" 0 KiB
+[ebuild  N     ] llvm-runtimes/clang-stdlib-config-22:22::gentoo  USE="-default-libcxx" 0 KiB
+[ebuild  N     ] llvm-runtimes/clang-unwindlib-config-22:22::gentoo  USE="-default-compiler-rt -llvm-libunwind" 0 KiB
+[ebuild  N     ] llvm-runtimes/openmp-22.1.8:0/22.1::gentoo  USE="-debug -gdb-plugin -hwloc -ompt -test -verify-sig" ABI_X86="32 (64) (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild  N     ] net-libs/libssh2-1.11.1-r2::gentoo  USE="zlib -gcrypt -mbedtls -test -verify-sig" ABI_X86="(64) -32 (-x32)" 705 KiB
+[ebuild  N     ] dev-cpp/eigen-3.4.1-r1:3/3.4::gentoo  USE="openmp -adolc (-blas) -boost -cholmod (-cuda) -cuda-clang -debug (-doc) -fftw (-hip) -klu (-lapack) -mathjax (-metis) (-opengl) (-pastix) -pocketfft -sparsehash -spqr -superlu (-test) -umfpack" CPU_FLAGS_X86="sse sse2 -avx -avx2 -avx512dq -avx512f -f16c -fma3 -popcnt -sse3 -sse4_1 -sse4_2 -ssse3" LLVM_SLOT="22 -21 (-23)" 2109 KiB
+[ebuild  N     ] dev-util/spirv-headers-1.4.357.0::gentoo  559 KiB
+[ebuild  N     ] media-gfx/graphite2-1.3.14_p20210810-r5::gentoo  USE="-perl -test" ABI_X86="(64) -32 (-x32)" PERL_FEATURES="(-debug) -ithreads -quadmath" 6501 KiB
+[ebuild  N     ] net-libs/llhttp-9.4.3:0/9.4::gentoo  40 KiB
+[ebuild  N     ] llvm-core/clang-linker-config-22:22::gentoo  USE="-default-lld" 0 KiB
+[ebuild  N     ] virtual/libelf-3-r1:0/1::gentoo  ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] dev-libs/libyaml-0.2.5::gentoo  USE="-doc -static-libs -test" 84 KiB
+[ebuild  N     ] media-libs/alsa-lib-1.2.16.1::gentoo  USE="-debug -doc -python -verify-sig" ABI_X86="(64) -32 (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 1104 KiB
+[ebuild  N     ] dev-perl/Socket6-0.290.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 64 KiB
+[ebuild  N     ] app-eselect/eselect-rust-20210703::gentoo  5 KiB
+[ebuild  N     ] dev-lang/rust-bin-1.98.1:1.98.1::gentoo  USE="clippy rustfmt (-big-endian) -doc (-prefix) -rust-analyzer -rust-src -verify-sig" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="(22)" 197813 KiB
+[ebuild  N     ] dev-lang/nasm-3.02::gentoo  USE="-doc" 1496 KiB
+[ebuild  N     ] media-libs/libjpeg-turbo-3.1.4.1:0/0.2::gentoo  USE="-java -static-libs -test -verify-sig" ABI_X86="(64) -32 (-x32)" 2484 KiB
+[ebuild     U  ] dev-lang/perl-5.44.0:0/5.44::gentoo [5.42.2:0/5.42::gentoo] USE="gdbm -berkdb -doc -minimal" PERL_FEATURES="(-debug) -ithreads -quadmath" 14704 KiB
+[ebuild  N     ] virtual/perl-Time-Local-1.350.0-r2::gentoo  0 KiB
+[ebuild  N     ] dev-perl/HTTP-Date-6.80.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 35 KiB
+[ebuild  N     ] dev-perl/LWP-MediaTypes-6.40.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 40 KiB
+[ebuild  N     ] virtual/perl-Compress-Raw-Bzip2-2.218.0::gentoo  0 KiB
+[ebuild  N     ] virtual/perl-Compress-Raw-Zlib-2.222.0-r1::gentoo  0 KiB
+[ebuild  N     ] dev-perl/Devel-CheckLib-1.160.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 16 KiB
+[ebuild  N     ] dev-perl/File-Listing-6.160.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 77 KiB
+[ebuild  N     ] dev-perl/MIME-Base32-1.303.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 14 KiB
+[ebuild  N     ] dev-perl/URI-5.340.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 132 KiB
+[ebuild  N     ] dev-perl/WWW-RobotRules-6.20.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+[ebuild  N     ] dev-perl/IO-HTML-1.4.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 21 KiB
+[ebuild  N     ] virtual/perl-IO-Compress-2.223.0-r1::gentoo  0 KiB
+[ebuild  N     ] virtual/perl-MIME-Base64-3.160.100_rc-r3::gentoo  0 KiB
+[ebuild  N     ] dev-perl/HTTP-Message-7.10.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 94 KiB
+[ebuild  N     ] dev-perl/HTML-Parser-3.830.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 148 KiB
+[ebuild  N     ] dev-perl/HTTP-Cookies-6.110.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 46 KiB
+[ebuild  N     ] dev-perl/HTTP-Negotiate-6.10.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+[ebuild  N     ] dev-perl/Sub-Name-0.280.0-r1::gentoo  USE="-suggested -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 156 KiB
+[ebuild  N     ] dev-perl/Try-Tiny-0.320.0::gentoo  USE="-minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 36 KiB
+[ebuild  N     ] dev-perl/IO-Socket-INET6-2.730.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 28 KiB
+[ebuild  N     ] dev-perl/Net-HTTP-6.240.0::gentoo  USE="-minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 43 KiB
+[ebuild  N     ] media-libs/freetype-2.14.3:2::gentoo  USE="X adobe-cff bzip2 cleartype-hinting harfbuzz png -brotli -debug -doc -fontforge -static-libs -svg -utils -verify-sig" ABI_X86="(64) -32 (-x32)" 2608 KiB
+[ebuild  N     ] dev-perl/libwww-perl-6.810.0::gentoo  USE="ssl -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 183 KiB
+[ebuild  N     ] dev-perl/LWP-Protocol-https-6.140.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 33 KiB
+[ebuild  N     ] dev-perl/XML-Parser-2.470.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 273 KiB
+[ebuild  N     ] dev-util/intltool-0.51.0-r3::gentoo  159 KiB
+[ebuild  NS    ] app-text/docbook-xml-dtd-4.3-r2:4.3::gentoo [4.1.2-r7:4.1.2::gentoo, 4.2-r3:4.2::gentoo, 4.4-r3:4.4::gentoo, 4.5-r2:4.5::gentoo] 82 KiB
+[ebuild  N     ] dev-libs/icu-78.3:0/78::gentoo  USE="-debug -doc -examples -static-libs -test -verify-sig" ABI_X86="(64) -32 (-x32)" 27322 KiB
+[ebuild  N     ] dev-util/spirv-tools-1.4.357.0::gentoo  USE="-test" ABI_X86="(64) -32 (-x32)" 3436 KiB
+[ebuild  N     ] x11-base/xcb-proto-1.17.0::gentoo  PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 149 KiB
+[ebuild  N     ] dev-libs/libgit2-1.9.7:0/1.9::gentoo  USE="ssh -examples -gssapi -test -trace" 7588 KiB
+[ebuild  N     ] dev-util/cargo-c-0.10.16::gentoo  USE="-debug" 33428 KiB
+[ebuild  N     ] dev-python/pyproject-metadata-0.12.1::gentoo  USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 48 KiB
+[ebuild  N     ] x11-base/xorg-proto-2025.1::gentoo  USE="-test" 749 KiB
+[ebuild  N     ] media-libs/lcms-2.19.1:2::gentoo  USE="-doc -jpeg -static-libs -test -tiff" ABI_X86="(64) -32 (-x32)" 5595 KiB
+[ebuild  N     ] dev-util/wayland-scanner-1.26.0::gentoo  599 KiB
+[ebuild  N     ] x11-libs/libICE-1.1.2::gentoo  ABI_X86="(64) -32 (-x32)" 335 KiB
+[ebuild  N     ] dev-libs/fribidi-1.0.16::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 1073 KiB
+[ebuild  N     ] dev-libs/wayland-1.26.0::gentoo  USE="-doc (-selinux) -test" ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] dev-libs/wayland-protocols-1.49::gentoo  USE="-test" 148 KiB
+[ebuild  N     ] app-text/iso-codes-4.20.1::gentoo  16024 KiB
+[ebuild  N     ] x11-libs/libSM-1.2.6::gentoo  USE="uuid -doc" ABI_X86="(64) -32 (-x32)" 307 KiB
+[ebuild  N     ] x11-libs/libXau-1.0.12::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 276 KiB
+[ebuild  N     ] x11-libs/libXdmcp-1.1.5::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 291 KiB
+[ebuild  N     ] x11-libs/libxcb-1.17.0:0/1.12::gentoo  USE="xkb -doc (-selinux) -test" ABI_X86="(64) -32 (-x32)" 445 KiB
+[ebuild  N     ] x11-misc/compose-tables-1.8.13::gentoo  1762 KiB
+[ebuild  N     ] x11-libs/libX11-1.8.13::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] x11-libs/libXext-1.3.7::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 339 KiB
+[ebuild  N     ] x11-libs/libXfixes-6.0.2::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 265 KiB
+[ebuild  N     ] x11-libs/libXrender-0.9.12::gentoo  ABI_X86="(64) -32 (-x32)" 304 KiB
+[ebuild  N     ] media-libs/libglvnd-1.7.0::gentoo  USE="X -test" ABI_X86="(64) -32 (-x32)" 560 KiB
+[ebuild  N     ] x11-libs/libXi-1.8.3::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 403 KiB
+[ebuild  N     ] x11-libs/libXrandr-1.5.5::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 283 KiB
+[ebuild  N     ] x11-libs/libXcursor-1.2.3::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 286 KiB
+[ebuild  N     ] x11-libs/libXxf86vm-1.1.7::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 267 KiB
+[ebuild  N     ] virtual/opengl-8::gentoo  USE="(X)" ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] x11-libs/libXt-1.3.1-r1::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 675 KiB
+[ebuild  N     ] x11-libs/libXmu-1.3.1::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 366 KiB
+[ebuild  N     ] media-libs/libepoxy-1.5.10-r3::gentoo  USE="X -test" ABI_X86="(64) -32 (-x32)" 325 KiB
+[ebuild  N     ] x11-libs/libXcomposite-0.4.7::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 267 KiB
+[ebuild  N     ] x11-libs/libXdamage-1.1.7::gentoo  ABI_X86="(64) -32 (-x32)" 260 KiB
+[ebuild  N     ] x11-misc/xkeyboard-config-2.48::gentoo  USE="-test" 931 KiB
+[ebuild  N     ] x11-libs/libxkbcommon-1.13.2::gentoo  USE="X wayland -doc -static-libs -test -tools" ABI_X86="(64) -32 (-x32)" 1215 KiB
+[ebuild  N     ] x11-libs/libxshmfence-1.3.3::gentoo  ABI_X86="(64) -32 (-x32)" 259 KiB
+[ebuild  N     ] x11-libs/xcb-util-keysyms-0.4.1::gentoo  ABI_X86="(64) -32 (-x32)" 254 KiB
+[ebuild  N     ] x11-libs/libpciaccess-0.19::gentoo  USE="zlib -static-libs" ABI_X86="(64) -32 (-x32)" 64 KiB
+[ebuild  N     ] x11-libs/libdrm-2.4.134::gentoo  USE="udev -doc -test -tools -valgrind" ABI_X86="(64) -32 (-x32)" VIDEO_CARDS="amdgpu intel nouveau radeon (-exynos) (-freedreno) (-omap) (-tegra) (-vc4) (-vivante) -vmware" 427 KiB
+[ebuild  N     ] x11-libs/pixman-0.46.4::gentoo  USE="(-loongson2f) -static-libs -test" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="mmxext sse2 -ssse3" 646 KiB
+[ebuild  N     ] dev-libs/inih-62::gentoo  USE="-test" ABI_X86="(64) -32 (-x32)" 22 KiB
+[ebuild  N     ] media-gfx/exiv2-0.28.9:0/0.28::gentoo  USE="bmff nls png xmp -doc -examples -jpegxl -test -webready" ABI_X86="(64) -32 (-x32)" 46084 KiB
+[ebuild  N     ] x11-libs/libXtst-1.2.5::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 285 KiB
+[ebuild  N     ] x11-libs/libfontenc-1.1.9::gentoo  275 KiB
+[ebuild  N     ] x11-apps/mkfontscale-1.2.4::gentoo  150 KiB
+[ebuild  N     ] media-fonts/encodings-1.1.0::gentoo  292 KiB
+[ebuild  N     ] media-fonts/liberation-fonts-2.1.5::gentoo  USE="X -fontforge" 2330 KiB
+[ebuild  N     ] virtual/ttf-fonts-1-r2::gentoo  0 KiB
+[ebuild  N     ] media-libs/fontconfig-2.18.3:1.0::gentoo  USE="nls -doc -test" ABI_X86="(64) -32 (-x32)" 1145 KiB
+[ebuild  N     ] x11-libs/libXft-2.3.9::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 307 KiB
+[ebuild  N     ] media-libs/glu-9.0.3::gentoo  ABI_X86="(64) -32 (-x32)" 214 KiB
+[ebuild  N     ] virtual/glu-9.0-r2::gentoo  ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] media-libs/freeglut-3.8.0::gentoo  ABI_X86="(64) -32 (-x32)" 527 KiB
+[ebuild  N     ] media-libs/tiff-4.7.1:0/6::gentoo  USE="cxx opengl zlib -jbig -jpeg -lerc -libdeflate -lzma -static-libs -test -verify-sig -webp -zstd" ABI_X86="(64) -32 (-x32)" 2304 KiB
+[ebuild  N     ] media-libs/openjpeg-2.5.4-r1:2/7::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 2107 KiB
+[ebuild  N     ] dev-util/itstool-2.0.7_p20250326::gentoo  PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 93 KiB
+[ebuild  N     ] dev-python/pygments-2.21.0::gentoo  USE="-test" PYTHON_TARGETS="python3_14 (-pypy3_12) -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 4889 KiB
+[ebuild  N     ] dev-python/mako-1.4.1::gentoo  USE="-doc -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 401 KiB
+[ebuild  N     ] dev-python/pyyaml-6.0.3::gentoo  USE="-debug -examples -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 122 KiB
+[ebuild  N     ] dev-python/olefile-0.47::gentoo  USE="-doc" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 100 KiB
+[ebuild  N     ] dev-python/scikit-build-core-1.0.3::gentoo  USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 467 KiB
+[ebuild  N     ] dev-python/pybind11-3.1.0::gentoo  USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 962 KiB
+[ebuild  N     ] dev-python/pillow-12.3.0::gentoo  USE="jpeg zlib -avif -debug -examples -imagequant -jpeg2k -lcms -raqm -test -tiff -tk -truetype -webp -xcb" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 46017 KiB
+[ebuild  N     ] dev-python/docutils-0.23::gentoo  PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 2250 KiB
+[ebuild  N     ] dev-util/glib-utils-2.88.2::gentoo  PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 5648 KiB
+[ebuild  N     ] dev-libs/glib-2.88.2:2::gentoo  USE="dbus elf introspection mime xattr -debug -doc (-selinux) -static-libs -sysprof -systemtap -test -utils" ABI_X86="(64) -32 (-x32)" 19 KiB
+[ebuild  N     ] x11-misc/shared-mime-info-2.4-r3::gentoo  USE="-test" 6931 KiB
+[ebuild  N     ] dev-util/desktop-file-utils-0.28-r1::gentoo  80 KiB
+[ebuild  N     ] dev-libs/gobject-introspection-1.86.0::gentoo  USE="-doctool -gtk-doc -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild  N     ] x11-libs/cairo-1.18.4-r1::gentoo  USE="X glib (-aqua) (-debug) -gtk-doc -lzo -test" ABI_X86="(64) -32 (-x32)" 41892 KiB
+[ebuild  N     ] media-libs/harfbuzz-12.3.2:0/6.0.0::gentoo  USE="cairo glib graphite icu introspection truetype -debug -doc -experimental -test" ABI_X86="(64) -32 (-x32)" 18832 KiB
+[ebuild  N     ] dev-util/gdbus-codegen-2.88.2::gentoo  PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild  N     ] gnome-base/dconf-0.49.0::gentoo  USE="-gtk-doc -test" 121 KiB
+[ebuild  N     ] x11-libs/gdk-pixbuf-2.44.7:2::gentoo  USE="introspection -gif -gtk-doc -jpeg -test -tiff" ABI_X86="(64) -32 (-x32)" 5897 KiB
+[ebuild  N     ] x11-libs/pango-1.57.1::gentoo  USE="X introspection -debug -examples -gtk-doc -libthai -sysprof -test" ABI_X86="(64) -32 (-x32)" 2528 KiB
+[ebuild  N     ] dev-libs/json-glib-1.10.8::gentoo  USE="introspection nls -gtk-doc -test" ABI_X86="(64) -32 (-x32)" 1264 KiB
+[ebuild  N     ] dev-python/pycairo-1.29.1::gentoo  USE="X -debug -doc -examples -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 651 KiB
+[ebuild  N     ] app-accessibility/at-spi2-core-2.58.8:2::gentoo  USE="X introspection systemd -dbus-broker -gtk-doc -test" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 576 KiB
+[ebuild  N     ] media-libs/babl-0.1.128::gentoo  USE="introspection lcms -gtk-doc -vala" CPU_FLAGS_X86="mmx sse sse2 -avx2 -f16c -sse4_1" 326 KiB
+[ebuild  N     ] dev-lang/vala-0.56.19:0.56::gentoo  USE="-test -valadoc" 0 KiB
+[ebuild  N     ] gnome-base/librsvg-2.62.3:2::gentoo  USE="introspection vala -debug -gtk-doc -test" ABI_X86="(64) -32 (-x32)" 25143 KiB
+[ebuild  N     ] dev-python/pygobject-3.58.0:3::gentoo  USE="cairo -debug -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 1376 KiB
+[ebuild  N     ] app-text/poppler-26.09.0:0/164::gentoo  USE="cairo cxx harfbuzz introspection jpeg jpeg2k lcms utils -boost -cjk -curl -debug -doc -gpg -nss -png -qt6 -test -tiff -verify-sig" 1994 KiB
+[ebuild  N     ] media-libs/gexiv2-0.14.7::gentoo  USE="introspection vala -gtk-doc -python -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 383 KiB
+[ebuild  N     ] media-libs/libmypaint-1.6.1-r3:0/0.0.0::gentoo  USE="nls openmp -gegl -introspection" 508 KiB
+[ebuild  N     ] dev-libs/libgudev-238-r2::gentoo  USE="-introspection -test" ABI_X86="(64) -32 (-x32)" 30 KiB
+[ebuild  N     ] media-libs/gegl-0.4.70:0.4::gentoo  USE="cairo introspection lcms openmp -debug -ffmpeg -gtk-doc -jpeg2k -openexr -pdf -raw -sdl -sdl2 -svg -test -tiff -umfpack -v4l -vala -webp" 6020 KiB
+[ebuild  N     ] dev-util/gtk-update-icon-cache-3.24.42::gentoo  91 KiB
+[ebuild  N     ] net-libs/libproxy-0.5.12-r1::gentoo  USE="introspection -duktape -gnome -gtk-doc -test -vala" ABI_X86="(64) -32 (-x32)" 60 KiB
+[ebuild  N     ] gnome-base/gsettings-desktop-schemas-49.1::gentoo  USE="introspection" 835 KiB
+[ebuild  N     ] net-libs/glib-networking-2.80.1::gentoo  USE="gnome libproxy ssl -test" ABI_X86="(64) -32 (-x32)" 285 KiB
+[ebuild  N     ] dev-libs/libxmlb-0.3.26:0/2::gentoo  USE="lzma zstd -doc -introspection -stemmer -test -verify-sig" 104 KiB
+[ebuild  N     ] dev-libs/appstream-glib-0.8.3:0/8::gentoo  USE="introspection -fonts -gtk-doc" 2268 KiB
+[ebuild  N     ] dev-libs/appstream-1.0.6:0/5::gentoo  USE="introspection systemd -apt -compose -doc -qt6 -test -vala" 2673 KiB
+[ebuild  N     ] llvm-core/llvm-22.1.8:22/22.1::gentoo  USE="binutils-plugin libffi zstd -debug (-debuginfod) -doc -exegesis -libedit -test -verify-sig -xml -z3" ABI_X86="(64) -32 (-x32)" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" 313 KiB
+[ebuild  N     ] llvm-core/llvm-toolchain-symlinks-22:22::gentoo  USE="-multilib-symlinks -native-symlinks" 0 KiB
+[ebuild  N     ] llvm-core/llvmgold-22::gentoo  0 KiB
+[ebuild  N     ] dev-util/spirv-llvm-translator-22.1.6:22::gentoo  USE="-test" ABI_X86="(64) -32 (-x32)" 2421 KiB
+[ebuild  N     ] llvm-core/clang-22.1.8:22/22.1::gentoo  USE="extra (pie) static-analyzer -debug -doc (-ieee-long-double) -test -verify-sig -xml" ABI_X86="(64) -32 (-x32)" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild  N     ] llvm-core/clang-toolchain-symlinks-22:22::gentoo  USE="-gcc-symlinks -multilib-symlinks -native-symlinks" 0 KiB
+[ebuild  N     ] llvm-runtimes/compiler-rt-22.1.8:22::gentoo  USE="atomic-builtins (clang) -debug -test -verify-sig" ABI_X86="32 (64)" 0 KiB
+[ebuild  N     ] llvm-runtimes/compiler-rt-sanitizers-22.1.8:22::gentoo  USE="asan cfi (clang) ctx-profile dfsan gwp-asan hwasan libfuzzer lsan memprof msan nsan orc profile rtsan safestack scudo tsan ubsan xray -debug (-shadowcallstack) -test -verify-sig" ABI_X86="32 (64)" 2 KiB
+[ebuild  N     ] llvm-runtimes/clang-runtime-22-r1:22::gentoo  USE="compiler-rt openmp sanitize -default-compiler-rt -default-libcxx -default-lld -libcxx -llvm-libunwind -polly" ABI_X86="32 (64) (-x32)" 0 KiB
+[ebuild  N     ] llvm-runtimes/libclc-22.1.8::gentoo  USE="spirv -verify-sig" VIDEO_CARDS="radeonsi -nvidia -r600" 0 KiB
+[ebuild  N     ] dev-util/mesa_clc-26.1.8::gentoo  USE="-debug" LLVM_SLOT="22 -18 -19 -20 -21" VIDEO_CARDS="-asahi -panfrost" 76004 KiB
+[ebuild  N     ] media-libs/mesa-26.1.8-r1::gentoo  USE="X llvm (opengl) proprietary-codecs wayland zstd -debug -lm-sensors -opencl -sysprof -test -unwind -vaapi -valgrind -vulkan" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="22 -18 -19 -20 -21" VIDEO_CARDS="intel nouveau radeon radeonsi -asahi -d3d12 (-freedreno) -i915 (-imagination) -lavapipe (-lima) -nvk (-panfrost) -r300 -r600 (-v3d) (-vc4) -virgl (-vivante) -vmware -zink" 0 KiB
+[ebuild  N     ] x11-libs/gtk+-3.24.52:3::gentoo  USE="X introspection wayland (-aqua) -broadway -cloudproviders -colord -cups -examples -gtk-doc -sysprof -test -vim-syntax -xinerama" ABI_X86="(64) -32 (-x32)" 13260 KiB
+[ebuild  N     ] x11-themes/adwaita-icon-theme-legacy-46.2::gentoo  2009 KiB
+[ebuild  N     ] x11-themes/adwaita-icon-theme-49.0::gentoo  USE="-branding" 4410 KiB
+[ebuild  N     ] media-gfx/gimp-3.2.4:0/3::gentoo  USE="X alsa openmp udev wayland -aalib -bash-completion -doc -fits -gnome -heif -javascript -jpeg2k -jpegxl (-lua) -mng -openexr -postscript -test -unwind -vala -vector-icons -webp -wmf -xpm" LUA_SINGLE_TARGET="luajit" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 34095 KiB
+
+Total: 183 packages (1 upgrade, 181 new, 1 in new slot), Size of downloads: 920248 KiB
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-lang/perl:0
+
+  (dev-lang/perl-5.42.2-1:0/5.42::gentoo, installed) USE="gdbm -berkdb -doc -minimal" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath" pulled in by
+    dev-lang/perl:0/5.42= required by (dev-perl/Locale-gettext-1.70.0_p20181130-2:0/0::gentoo, installed) USE="-test" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath"
+                 ^^^^^^^^                                                                                                                                                         
+    =dev-lang/perl-5.42* required by (virtual/perl-File-Path-2.180.0-r5-1:0/0::gentoo, installed) USE="" ABI_X86="(64)"
+    ^              ^^^^^                                                                                                
+    (and 67 more with the same problems)
+
+  (dev-lang/perl-5.44.0:0/5.44::gentoo, ebuild scheduled for merge) USE="gdbm -berkdb -doc -minimal" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath" pulled in by
+    =dev-lang/perl-5.44* required by (virtual/perl-XSLoader-0.320.0-r3-1:0/0::gentoo, installed) USE="" ABI_X86="(64)"
+    ^              ^^^^^                                                                                               
+    (and 13 more with the same problem)
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by media-gfx/gimp-3.2.4::gentoo
+# required by media-gfx/gimp (argument)
+>=app-text/poppler-26.09.0 cairo
+# required by media-gfx/gimp-3.2.4::gentoo
+# required by media-gfx/gimp (argument)
+>=media-libs/babl-0.1.128 lcms
+# required by media-gfx/gimp-3.2.4::gentoo
+# required by media-gfx/gimp (argument)
+>=media-libs/gegl-0.4.70 cairo lcms
+# required by x11-libs/pango-1.57.1::gentoo
+# required by dev-libs/appstream-glib-0.8.3::gentoo
+# required by dev-libs/appstream-1.0.6::gentoo
+# required by media-gfx/gimp-3.2.4::gentoo
+# required by media-gfx/gimp (argument)
+>=media-libs/freetype-2.14.3 harfbuzz
+
+ * In order to avoid wasting time, backtracking has terminated early
+ * due to the above autounmask change(s). The --autounmask-backtrack=y
+ * option can be used to force further backtracking, but there is no
+ * guarantee that it will produce a solution.
+
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

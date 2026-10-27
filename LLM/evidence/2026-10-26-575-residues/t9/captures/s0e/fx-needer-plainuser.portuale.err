@@ -1,0 +1,11 @@
+BT try=1 kind=Feedback:Config
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   conflict dev-libs/paired parents=[("1.0", "dev-libs/plainuser-1.0:0/0::testrepo", "dev-libs/paired"), ("2.0", "dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0")]
+BT   pullers dev-libs/paired -> [("dev-libs", "plainuser", "1.0", "dev-libs/paired"), ("dev-libs", "needer", "1.0", ">=dev-libs/paired-2.0")]
+BT try=2 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=3 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []

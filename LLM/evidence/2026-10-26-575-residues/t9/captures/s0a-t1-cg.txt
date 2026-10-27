@@ -1,0 +1,9 @@
+### argv: PORTAGE_CONFIGROOT=$W/swap.cfg ROOT=$W/swap PYTHONHASHSEED=0 T9_CP='p569virt' python3 t9/playground/views.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --complete-graph dev-libs/p569pull
+T9 ADD pass=0 pkg=dev-libs/p569virt-1 depth=1 deep=0 requested_depth=0 complete_mode=False parent=(dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$W/swap/') -> ignored
+T9 OR pass=0 parent=dev-libs/p569virt-1 depth=1 complete_mode=True trees=_graph_trees caller=_wrapped_add_pkg_dep_string<_pop_disjunction<_create_graph<_complete_graph<_resolve_conflicts priority=runtime depstring=[['||', Atom('=dev-libs/p569prov-5.40*'), Atom('=dev-libs/p569prov-5.42*'), Atom('=dev-libs/p569prov-5.38*'), Atom('~dev-libs/p569core-1.0')]] selected=['=dev-libs/p569prov-5.40*']
+T9 CG pass=0 complete_mode=True complete_param=True
+Dependency resolution took 5.03 s (backtrack: 0/20).
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $W/swap/ 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to $W/swap/ 0 KiB
+!!! The following installed packages are masked:
+### rc: 0

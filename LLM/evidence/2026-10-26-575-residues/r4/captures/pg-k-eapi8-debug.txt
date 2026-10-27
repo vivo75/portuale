@@ -1,0 +1,32 @@
+### spec shape_k.py, argv: PORTAGE_GNUPGHOME=gnupg PATH=3rdparty/portage/bin:$PATH PYTHONHASHSEED=0 python3 -I pg_handler_debug.py shape_k.py
+### ['sci-libs/L', 'sci-libs/M'] {'--backtrack': 0, '--debug': True} success=False
+Starting slot conflict handler
+New configuration:
+   (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge)
+All involved flags:
+   (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge)
+     foo: disabled
+Solution candidate: [{foo: disabled}]
+new conflict introduced: (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge) does not match sci-libs/K[-foo] from (sci-libs/M-1:0/0::test_repo, ebuild scheduled for merge)
+No viable solutions. Rejecting configuration.
+New configuration:
+   (sci-libs/K-1:0/0::test_repo, installed)
+(sci-libs/K-1:0/0::test_repo, installed) has pending USE changes. Rejecting configuration.
+  conflict pkg (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge) use ['foo'] parents [('(sci-libs/M-1:0/0::test_repo, ebuild scheduled for merge)', 'sci-libs/K[foo]')]
+  conflict pkg (sci-libs/K-1:0/0::test_repo, installed) use [] parents [('(sci-libs/L-1:0/0::test_repo, ebuild scheduled for merge)', 'sci-libs/K[-foo]')]
+  changes: [] solutions: 0
+  explanation: None
+### spec shape_k_up.py, argv: PORTAGE_GNUPGHOME=gnupg PATH=3rdparty/portage/bin:$PATH PYTHONHASHSEED=0 python3 -I pg_handler_debug.py shape_k_up.py
+### ['sci-libs/L', 'sci-libs/M'] {'--backtrack': 0} success=False
+Starting slot conflict handler
+New configuration:
+   (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge)
+All involved flags:
+   (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge)
+     foo: disabled
+Solution candidate: [{foo: disabled}]
+All-ebuild configuration has a solution. Aborting search.
+  conflict pkg (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge) use ['foo', 'x86'] parents [('(sci-libs/M-1:0/0::test_repo, ebuild scheduled for merge)', 'sci-libs/K[foo]')]
+  conflict pkg (sci-libs/K-1:0/0::test_repo, installed) use [] parents [('(sci-libs/L-1:0/0::test_repo, ebuild scheduled for merge)', 'sci-libs/K[-foo]')]
+  changes: [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}] solutions: 1
+  explanation: 'It might be possible to solve this slot collision\nby applying all of the following changes:\n   - sci-libs/K-1 (Change USE: -foo)\n   - sci-libs/M-1 (Change USE: -foo)\n\n'

@@ -1,0 +1,9 @@
+PYTHONHASHSEED=0 PORTAGE_CONFIGROOT=$W/cgp0.cfg ROOT=$W/cgp0 PORTAGE_RUNNING_ROOT=$W/cgp0 DISTDIR=$W/cgp0/distfiles PORTAGE_TMPDIR=$W/tmp python3 -I bt-trace.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n --pretend dev-libs/cgp0x
+rc 1
+S0B Backtracker.get -> runtime_pkg_mask={} (unexplored left 0)
+S0B _slot_conflict_backtrack_abi pkg=dev-libs/cgp0x-2.8.0(ebuild) -> False
+S0B _slot_confict_backtrack slot=dev-libs/cgp0x:2 all_parents=[dev-libs/cgp0q-4.8.2(installed,nomerge)->'dev-libs/cgp0x:2[-icu]', dev-libs/cgp0x->'dev-libs/cgp0x']
+S0B   choice[0] (explored first): mask dev-libs/cgp0x-2.8.0(ebuild) conflict_atoms=[dev-libs/cgp0q-4.8.2(installed,nomerge)->'dev-libs/cgp0x:2[-icu]']
+S0B need_config_change -> True (slot_conflict_handler changes=[{<Package ('ebuild', '$W/cgp0/', 'dev-libs/cgp0x-2.8.0', 'merge', 'testrepo')>: {'icu': False}}])
+Dependency resolution took 3.58 s (backtrack: 0/20).
+[ebuild   R    ] dev-libs/cgp0x-2.8.0 [2.8.0] to $W/cgp0/ USE="icu*" 

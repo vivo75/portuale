@@ -370,3 +370,31 @@ when a claim turns out false.
 - **Why it looks wrong**: it is not a bug -- just a marker with no reader. It matters because a reimplementation must pick its own value: copying Portage's `3.0.83` would claim a provenance the file does not have.
 - **First seen**: Portage 3.0.83 (source `3rdparty/portage`, plan 02.589 Task 2 S0).
 - **Portuale**: deliberate difference, not a copy. `portuale emerge` writes `portuale-<crate version>` (today `portuale-300.83.0`); the shape is otherwise Portage's (`t2/a-mtimedb`). `portuale mrg`: same.
+
+## Q19. Interned atoms leak one virtual's `||` choice into its siblings (suspect)
+
+- **What it does**: on the indirect-virtual path, `_select_atoms_highest_available` keeps a virtual's child atoms only when `id(atom)` is in `chosen_atom_ids`, the ids of the atoms `dep_zapdeps` chose anywhere under the same parent (`lib/_emerge/depgraph.py:6122-6133`, filter at `:6164-6167`). Since commit `9d109000e` ("dep: intern Atom instances", `lib/portage/dep/__init__.py:100-130`) equal atom strings are one object. So when one sibling virtual picks `=dev-lang/perl-5.42*`, every other virtual under that parent that lists the same atom gets it as a parent atom too, even when its own `||` picked `=dev-lang/perl-5.44*`.
+- **Why it looks wrong**: the identity test was written to tell this virtual's chosen atoms apart from equal atoms elsewhere; interning turns it into an equality test across siblings. On the bed's `dev-perl/XML-Parser` cell (Portage 3.0.83) nine installed perl virtuals that list `=5.44*` first still carry `=5.42*` and show it in the skip block. With interning switched off the same cell ends rc 1, 13/20, and upgrades perl (`LLM/evidence/2026-10-26-575-residues/t9/s0b.md`, `playground/no-intern.py`).
+- **First seen**: Portage 3.0.83, plan 02.589 Task 9 S0b. Not checked against 3.0.82.2.
+- **Portuale**: to be copied by plan 02.589 Task 10b: each virtual reached through a parent gets the atoms equal (by the intern key: text, EAPI, repo, USE, unevaluated form; `lib/portage/dep/__init__.py:1577-1595`) to an atom chosen anywhere in that parent's dep_check. Not copied yet.
+
+## Q20. A slot-conflict handler stop after the first try drops its own suggestion (suspect)
+
+- **What it does**: `need_config_change` returns True for the handler arm only in the call that builds the handler (`lib/_emerge/depgraph.py:11849-11865`). When that happens on a later try, the loop breaks (`:12407-12411`), but `need_display_problems()` (`:11827`, read at `:12420`) is False, so Portage reruns from `get_best_run()` with no masks and backtracking off, and the USE change it found is never shown.
+- **Why it looks wrong**: the comment says the handler's changes "are more likely to be useful", yet the run that found them throws them away unless it was try 0.
+- **First seen**: Portage 3.0.83, plan 02.589 R4 S0 (`LLM/evidence/2026-10-26-575-residues/r4/captures/pg-late-pass4.txt`).
+- **Portuale**: to be copied by plan 02.589 R4.
+
+## Q21. Asking to turn off a flag that is already off invalidates the candidate (suspect)
+
+- **What it does**: `_force_flag_for_package` (`lib/_emerge/resolver/slot_collision.py:984-1010`) records a "disabled" requirement on a flag the package already has off; `_check_solution` (`:1115-1122`) then treats the candidate as needing a change and Portage suggests a spurious `+flag` on another package.
+- **Why it looks wrong**: a requirement already met should not count as a change.
+- **First seen**: Portage 3.0.83, plan 02.589 R4 S0 (`r4/captures/pg-force-disabled.txt`).
+- **Portuale**: to be copied by plan 02.589 R4.
+
+## Q22. The handler's explanation header counts solutions, its body counts changes (suspect)
+
+- **What it does**: `get_explanation` (`lib/_emerge/resolver/slot_collision.py:728-784`) picks "by applying all of the following changes" or "by applying one of the following solutions" from `len(self.solutions)`, but prints `self.changes`, which `_add_change` (`:205-224`) has already minimised. Several solutions that minimise to one change print "one of the following solutions:" followed by a single change.
+- **Why it looks wrong**: the header and the list disagree.
+- **First seen**: Portage 3.0.83, upstream `testSlotCollision` case 7 (`r4/handler.md` §8).
+- **Portuale**: to be copied by plan 02.589 R4.

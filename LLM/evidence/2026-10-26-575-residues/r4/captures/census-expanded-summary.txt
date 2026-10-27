@@ -1,0 +1,71 @@
+70 jobs with a slot conflict or a handler
+x0091 --ignore-default-opts --pretend --emptytree dev-libs/btgp  | rc 0 0 | bt 4 4 | 
+x0098 --ignore-default-opts --pretend --emptytree dev-libs/btparent  | rc 0 0 | bt 5 5 | 
+x0220 --ignore-default-opts --pretend --emptytree dev-libs/mg2top  | rc 0 0 | bt 10 14 | 
+x0221 --ignore-default-opts --pretend --emptytree dev-libs/mgfa  | rc 0 0 | bt 4 4 | 
+x0224 --ignore-default-opts --pretend --emptytree dev-libs/mgxa  | rc 0 0 | bt 4 4 | 
+x0252 --ignore-default-opts --pretend --emptytree dev-libs/orbtblocked  | rc 0 0 | bt 2 2 | 
+x0362 --ignore-default-opts --pretend --emptytree dev-libs/scuseparent  | rc 1 1 | bt 6 5 | 
+x0369 --ignore-default-opts --pretend --emptytree dev-libs/slotconfgroup  | rc 1 1 | bt 6 5 | 
+x0380 --ignore-default-opts --pretend --emptytree dev-libs/slotconflictunsolvable  | rc 1 1 | bt 6 5 | 
+x0389 --ignore-default-opts --pretend --emptytree dev-libs/slotusegroup  | rc 1 1 | bt 4 3 | 
+x1535 --ignore-default-opts --pretend --quiet dev-libs/btgp  | rc 0 0 | bt - - | 
+x1542 --ignore-default-opts --pretend --quiet dev-libs/btparent  | rc 0 0 | bt - - | 
+x1666 --ignore-default-opts --pretend --quiet dev-libs/mg2top  | rc 0 0 | bt - - | 
+x1667 --ignore-default-opts --pretend --quiet dev-libs/mgfa  | rc 0 0 | bt - - | 
+x1670 --ignore-default-opts --pretend --quiet dev-libs/mgxa  | rc 0 0 | bt - - | 
+x1699 --ignore-default-opts --pretend --quiet dev-libs/orbtblocked  | rc 0 0 | bt - - | 
+x1809 --ignore-default-opts --pretend --quiet dev-libs/scuseparent  | rc 1 1 | bt - - | BT30-DIFF
+x1816 --ignore-default-opts --pretend --quiet dev-libs/slotconfgroup  | rc 1 1 | bt - - | BT30-DIFF
+x1827 --ignore-default-opts --pretend --quiet dev-libs/slotconflictunsolvable  | rc 1 1 | bt - - | BT30-DIFF
+x1836 --ignore-default-opts --pretend --quiet dev-libs/slotusegroup  | rc 1 1 | bt - - | BT30-DIFF
+x2023 --ignore-default-opts --pretend --tree dev-libs/btgp  | rc 0 0 | bt 4 4 | 
+x2030 --ignore-default-opts --pretend --tree dev-libs/btparent  | rc 0 0 | bt 5 5 | 
+x2152 --ignore-default-opts --pretend --tree dev-libs/mgfa  | rc 0 0 | bt 4 4 | 
+x2155 --ignore-default-opts --pretend --tree dev-libs/mgxa  | rc 0 0 | bt 4 4 | 
+x2291 --ignore-default-opts --pretend --tree dev-libs/scuseparent  | rc 1 1 | bt 6 5 | 
+x2298 --ignore-default-opts --pretend --tree dev-libs/slotconfgroup  | rc 1 1 | bt 6 5 | 
+x2309 --ignore-default-opts --pretend --tree dev-libs/slotconflictunsolvable  | rc 1 1 | bt 6 5 | 
+x2317 --ignore-default-opts --pretend --tree dev-libs/slotusegroup  | rc 1 1 | bt 4 3 | 
+x2505 --ignore-default-opts --pretend --update --deep --newuse dev-libs/btgp  | rc 0 0 | bt 4 4 | 
+x2512 --ignore-default-opts --pretend --update --deep --newuse dev-libs/btparent  | rc 0 0 | bt 5 5 | 
+x2636 --ignore-default-opts --pretend --update --deep --newuse dev-libs/mg2top  | rc 0 0 | bt 10 14 | 
+x2637 --ignore-default-opts --pretend --update --deep --newuse dev-libs/mgfa  | rc 0 0 | bt 4 4 | 
+x2640 --ignore-default-opts --pretend --update --deep --newuse dev-libs/mgxa  | rc 0 0 | bt 4 4 | 
+x2669 --ignore-default-opts --pretend --update --deep --newuse dev-libs/orbtblocked  | rc 0 0 | bt 2 2 | 
+x2779 --ignore-default-opts --pretend --update --deep --newuse dev-libs/scuseparent  | rc 1 1 | bt 6 5 | 
+x2786 --ignore-default-opts --pretend --update --deep --newuse dev-libs/slotconfgroup  | rc 1 1 | bt 6 5 | 
+x2797 --ignore-default-opts --pretend --update --deep --newuse dev-libs/slotconflictunsolvable  | rc 1 1 | bt 6 5 | 
+x2806 --ignore-default-opts --pretend --update --deep --newuse dev-libs/slotusegroup  | rc 1 1 | bt 4 3 | 
+x2994 --ignore-default-opts --pretend --update --deep dev-libs/btgp  | rc 0 0 | bt 4 4 | 
+x3001 --ignore-default-opts --pretend --update --deep dev-libs/btparent  | rc 0 0 | bt 5 5 | 
+x3124 --ignore-default-opts --pretend --update --deep dev-libs/mg2top  | rc 0 0 | bt 10 14 | 
+x3125 --ignore-default-opts --pretend --update --deep dev-libs/mgfa  | rc 0 0 | bt 4 4 | 
+x3128 --ignore-default-opts --pretend --update --deep dev-libs/mgxa  | rc 0 0 | bt 4 4 | 
+x3157 --ignore-default-opts --pretend --update --deep dev-libs/orbtblocked  | rc 0 0 | bt 2 2 | 
+x3267 --ignore-default-opts --pretend --update --deep dev-libs/scuseparent  | rc 1 1 | bt 6 5 | 
+x3274 --ignore-default-opts --pretend --update --deep dev-libs/slotconfgroup  | rc 1 1 | bt 6 5 | 
+x3285 --ignore-default-opts --pretend --update --deep dev-libs/slotconflictunsolvable  | rc 1 1 | bt 6 5 | 
+x3294 --ignore-default-opts --pretend --update --deep dev-libs/slotusegroup  | rc 1 1 | bt 4 3 | 
+x3480 --ignore-default-opts --pretend --update dev-libs/btgp  | rc 0 0 | bt 4 4 | 
+x3487 --ignore-default-opts --pretend --update dev-libs/btparent  | rc 0 0 | bt 5 5 | 
+x3610 --ignore-default-opts --pretend --update dev-libs/mg2top  | rc 0 0 | bt 10 14 | 
+x3611 --ignore-default-opts --pretend --update dev-libs/mgfa  | rc 0 0 | bt 4 4 | 
+x3614 --ignore-default-opts --pretend --update dev-libs/mgxa  | rc 0 0 | bt 4 4 | 
+x3642 --ignore-default-opts --pretend --update dev-libs/orbtblocked  | rc 0 0 | bt 2 2 | 
+x3748 --ignore-default-opts --pretend --update dev-libs/scuseparent  | rc 1 1 | bt 6 5 | 
+x3755 --ignore-default-opts --pretend --update dev-libs/slotconfgroup  | rc 1 1 | bt 6 5 | 
+x3766 --ignore-default-opts --pretend --update dev-libs/slotconflictunsolvable  | rc 1 1 | bt 6 5 | 
+x3775 --ignore-default-opts --pretend --update dev-libs/slotusegroup  | rc 1 1 | bt 4 3 | 
+x3959 --ignore-default-opts --pretend --verbose dev-libs/btgp  | rc 0 0 | bt 4 4 | 
+x3966 --ignore-default-opts --pretend --verbose dev-libs/btparent  | rc 0 0 | bt 5 5 | 
+x4090 --ignore-default-opts --pretend --verbose dev-libs/mg2top  | rc 0 0 | bt 10 14 | 
+x4091 --ignore-default-opts --pretend --verbose dev-libs/mgfa  | rc 0 0 | bt 4 4 | 
+x4094 --ignore-default-opts --pretend --verbose dev-libs/mgxa  | rc 0 0 | bt 4 4 | 
+x4122 --ignore-default-opts --pretend --verbose dev-libs/orbtblocked  | rc 0 0 | bt 2 2 | 
+x4232 --ignore-default-opts --pretend --verbose dev-libs/scuseparent  | rc 1 1 | bt 6 5 | 
+x4239 --ignore-default-opts --pretend --verbose dev-libs/slotconfgroup  | rc 1 1 | bt 6 5 | 
+x4250 --ignore-default-opts --pretend --verbose dev-libs/slotconflictunsolvable  | rc 1 1 | bt 6 5 | 
+x4259 --ignore-default-opts --pretend --verbose dev-libs/slotusegroup  | rc 1 1 | bt 4 3 | 
+x4424 --ignore-default-opts --pretend dev-libs/btgp  | rc 0 0 | bt 4 4 | 
+x4510 --ignore-default-opts --pretend dev-libs/mgxa  | rc 0 0 | bt 4 4 | 

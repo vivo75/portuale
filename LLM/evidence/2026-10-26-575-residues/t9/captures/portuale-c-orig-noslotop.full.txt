@@ -1,0 +1,34 @@
+BT try=1 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p569prov neg=!=dev-libs/p569prov-5.44 reason=SlotConflict { parents: [(("dev-libs", "p569virt", "1"), "=dev-libs/p569prov-5.42*")] }
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p569prov-5.44"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p569pull neg=!=dev-libs/p569pull-2 reason=MissingDependency { parent: ("dev-libs", "p569pull"), atom: "=dev-libs/p569prov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p569pull neg=!=dev-libs/p569pull-2 atom==dev-libs/p569prov-5.44*
+BT try=3 kind=Settle
+BT   masks-in ["!=dev-libs/p569prov-5.44", "!=dev-libs/p569pull-2"]
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 2/20).
+
+[ebuild  N     ] dev-libs/p569pull-1::testrepo to $W/orig-noslotop 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/p569prov:0
+
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$W/orig-noslotop') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop') USE=""
+    ^                  ^^^^ 
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/p569pull:0

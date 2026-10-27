@@ -1,0 +1,6 @@
+### argv: PORTAGE_CONFIGROOT=$W/swap.cfg ROOT=$W/swap PYTHONHASHSEED=0 T9_CP='p569virt' python3 t9/playground/views.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --deep =dev-libs/p569prov-5.44
+T9 CG pass=0 complete_mode=True complete_param=True
+Dependency resolution took 4.96 s (backtrack: 0/20).
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $W/swap/ 0 KiB
+!!! The following installed packages are masked:
+### rc: 0

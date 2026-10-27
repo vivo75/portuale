@@ -1,0 +1,22 @@
+
+
+
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/cgp0x:2 for <FX>/
+
+  (dev-libs/cgp0x-2.8.0:2/2::testrepo, ebuild scheduled for merge to '<FX>/') USE="icu" ELIBC="glibc" pulled in by
+    dev-libs/cgp0x (Argument)
+
+  (dev-libs/cgp0x-2.8.0:2/2::__unknown__, installed in '<FX>/') USE="-icu" pulled in by
+    dev-libs/cgp0x:2[-icu] required by (dev-libs/cgp0q-4.8.2:0/0::__unknown__, installed in '<FX>/') USE="-icu"
+                     ^^^^                                                                                                                
+
+
+It might be possible to solve this slot collision
+by applying all of the following changes:
+   - dev-libs/cgp0x-2.8.0 (Change USE: -icu)
+

@@ -1,0 +1,38 @@
+T9 Backtracker._add mask_steps=0 masks=[] -> ADD explore
+T9 === pass 0 runtime_pkg_mask=[]
+T9 _process_slot_conflict(slot=dev-libs/p569prov:0, pkgs=['dev-libs/p569prov-5.44(ebuild)', 'dev-libs/p569prov-5.42(installed)'])
+T9   parent_atoms[dev-libs/p569prov-5.44(ebuild)]=["(dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*')"] masked=False
+T9   parent_atoms[dev-libs/p569prov-5.42(installed)]=["(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*')"] masked=False
+T9 _slot_conflict_backtrack_abi(pkg=dev-libs/p569prov-5.44(ebuild), slot_nodes=['dev-libs/p569prov-5.44(ebuild)', 'dev-libs/p569prov-5.42(installed)'], conflict_atoms={(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*'):['dev-libs/p569prov-5.44(ebuild)'], (dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*'):['dev-libs/p569prov-5.42(installed)']}) -> False
+T9 _slot_conflict_backtrack_abi(pkg=dev-libs/p569prov-5.42(installed), slot_nodes=['dev-libs/p569prov-5.44(ebuild)', 'dev-libs/p569prov-5.42(installed)'], conflict_atoms={(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*'):['dev-libs/p569prov-5.44(ebuild)'], (dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*'):['dev-libs/p569prov-5.42(installed)']}) -> False
+T9 _slot_confict_backtrack(slot=dev-libs/p569prov:0, conflict_pkgs_in=['dev-libs/p569prov-5.44(ebuild)', 'dev-libs/p569prov-5.42(installed)'], all_parents=["(dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*')", "(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*')"])
+T9   choice[0] (DFS pops last first): mask dev-libs/p569prov-5.44(ebuild) conflict_atoms=["(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*')"]
+T9   choice[1] (DFS pops last first): mask dev-libs/p569prov-5.42(ebuild) conflict_atoms=["(dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*')"]; mask dev-libs/p569prov-5.42(installed) conflict_atoms=["(dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*')"]
+T9 --- pass end success=False need_restart=True infos=['slot conflict']
+T9 Backtracker._add mask_steps=1 masks=["dev-libs/p569prov-5.44(ebuild):['slot conflict']"] -> ADD explore
+T9 Backtracker._add mask_steps=1 masks=["dev-libs/p569prov-5.42(ebuild):['slot conflict']", "dev-libs/p569prov-5.42(installed):['slot conflict']"] -> ADD explore
+T9 === pass 1 runtime_pkg_mask=["dev-libs/p569prov-5.42(ebuild):['slot conflict']", "dev-libs/p569prov-5.42(installed):['slot conflict']"]
+T9 _process_slot_conflict(slot=dev-libs/p569prov:0, pkgs=['dev-libs/p569prov-5.44(ebuild)', 'dev-libs/p569prov-5.42(installed)'])
+T9   parent_atoms[dev-libs/p569prov-5.44(ebuild)]=["(dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*')"] masked=False
+T9   parent_atoms[dev-libs/p569prov-5.42(installed)]=["(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*')"] masked=True
+T9 _slot_conflict_backtrack_abi(pkg=dev-libs/p569prov-5.44(ebuild), slot_nodes=['dev-libs/p569prov-5.44(ebuild)', 'dev-libs/p569prov-5.42(installed)'], conflict_atoms={(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*'):['dev-libs/p569prov-5.44(ebuild)'], (dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*'):['dev-libs/p569prov-5.42(installed)']}) -> False
+T9 _slot_conflict_backtrack_abi(pkg=dev-libs/p569prov-5.42(installed), slot_nodes=['dev-libs/p569prov-5.44(ebuild)', 'dev-libs/p569prov-5.42(installed)'], conflict_atoms={(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*'):['dev-libs/p569prov-5.44(ebuild)'], (dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*'):['dev-libs/p569prov-5.42(installed)']}) -> False
+T9 _slot_confict_backtrack(slot=dev-libs/p569prov:0, conflict_pkgs_in=['dev-libs/p569prov-5.44(ebuild)', 'dev-libs/p569prov-5.42(installed)'], all_parents=["(dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*')", "(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*')"])
+T9   choice[0] (DFS pops last first): mask dev-libs/p569prov-5.44(ebuild) conflict_atoms=["(dev-libs/p569virt-1(installed), '=dev-libs/p569prov-5.42*')"]
+T9   choice[1] (DFS pops last first): mask dev-libs/p569prov-5.42(installed) conflict_atoms=["(dev-libs/p569pull-2(ebuild), '=dev-libs/p569prov-5.44*')"]
+T9 --- pass end success=False need_restart=True infos=['slot conflict']
+T9 Backtracker._add mask_steps=2 masks=["dev-libs/p569prov-5.42(ebuild):['slot conflict']", "dev-libs/p569prov-5.42(installed):['slot conflict']", "dev-libs/p569prov-5.44(ebuild):['slot conflict']"] -> ADD explore
+T9 Backtracker._add mask_steps=2 masks=["dev-libs/p569prov-5.42(ebuild):['slot conflict']", "dev-libs/p569prov-5.42(installed):['slot conflict']"] -> REJECT duplicate (B:126)
+T9 === pass 2 runtime_pkg_mask=["dev-libs/p569prov-5.42(ebuild):['slot conflict']", "dev-libs/p569prov-5.42(installed):['slot conflict']", "dev-libs/p569prov-5.44(ebuild):['slot conflict']"]
+T9 --- pass end success=0 need_restart=True infos=['missing dependency']
+T9 Backtracker._add mask_steps=3 masks=["dev-libs/p569prov-5.42(ebuild):['slot conflict']", "dev-libs/p569prov-5.42(installed):['slot conflict']", "dev-libs/p569prov-5.44(ebuild):['slot conflict']", "dev-libs/p569pull-2(ebuild):['missing dependency']"] -> REJECT _check_runtime_pkg_mask (B:123,B:173)
+T9 === pass 3 runtime_pkg_mask=["dev-libs/p569prov-5.44(ebuild):['slot conflict']"]
+T9 --- pass end success=0 need_restart=True infos=['missing dependency']
+T9 Backtracker._add mask_steps=2 masks=["dev-libs/p569prov-5.44(ebuild):['slot conflict']", "dev-libs/p569pull-2(ebuild):['missing dependency']"] -> ADD explore
+T9 === pass 4 runtime_pkg_mask=["dev-libs/p569prov-5.44(ebuild):['slot conflict']", "dev-libs/p569pull-2(ebuild):['missing dependency']"]
+T9 --- pass end success=True need_restart=False infos=[]
+Dependency resolution took 6.75 s (backtrack: 4/20).
+[ebuild  N     ] dev-libs/p569pull-1::testrepo to $W/orig-noslotop/ 0 KiB
+dev-libs/p569prov:0 for $W/orig-noslotop/
+    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/orig-noslotop/') USE=""
+dev-libs/p569pull:0 for $W/orig-noslotop/

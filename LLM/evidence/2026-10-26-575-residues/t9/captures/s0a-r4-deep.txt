@@ -1,0 +1,20 @@
+### argv: PORTAGE_CONFIGROOT=$W/r4.cfg ROOT=$W/r4 PYTHONHASHSEED=0 T9_CP='mllablgl' python3 t9/playground/views.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --update --deep @world
+T9 ADD pass=0 pkg=dev-libs/mllablgl-1.05 depth=0 deep=True requested_depth=True complete_mode=False parent=@selected -> dep_stack
+T9 OR pass=0 parent=dev-libs/mllablgl-1.05 depth=0 complete_mode=False trees=_filtered_trees caller=_wrapped_add_pkg_dep_string<_pop_disjunction<_create_graph<_resolve<_select_files priority=runtime depstring=[['||', Atom('dev-libs/mllabltk:='), Atom('<dev-libs/mlocaml-4.02')]] selected=['dev-libs/mllabltk:=']
+T9 ADD pass=0 pkg=dev-libs/mllablgl-1.05 depth=0 deep=True requested_depth=True complete_mode=True parent=@selected -> none(previously_added)
+T9 CG pass=0 complete_mode=True complete_param=True
+T9 CG pass=1 complete_mode=True complete_param=True
+Dependency resolution took 6.54 s (backtrack: 1/20).
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to $W/r4/ 0 KiB
+[ebuild  N     ] dev-libs/upgradepkg-2.0::testrepo to $W/r4/ 0 KiB
+[ebuild  N     ] dev-libs/systempkg-1.0::testrepo to $W/r4/ 0 KiB
+[ebuild  N     ] dev-libs/mlocaml-4.02.1:0/4.02.1::testrepo  0 KiB
+[ebuild  r  U  ] dev-libs/mlocaml-4.02.1:0/4.02.1::testrepo [4.01.0:0/4.01.0::testrepo] to $W/r4/ 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to $W/r4/ 0 KiB
+[ebuild  N     ] dev-libs/mllabltk-8.06.0:0/8.06.0::testrepo  0 KiB
+[ebuild  N     ] dev-libs/mllabltk-8.06.0:0/8.06.0::testrepo to $W/r4/ 0 KiB
+[ebuild  rR    ] dev-libs/mllablgl-1.05::testrepo to $W/r4/ 0 KiB
+T9 OR pass=1 parent=dev-libs/mllablgl-1.05 depth=0 complete_mode=True trees=_graph_trees caller=_select_atoms_probe<_select_atoms_probe<_compute_abi_rebuild_info priority=None depstring=>=dev-libs/mlocaml-3.10.2:= || ( dev-libs/mllabltk:= <dev-libs/mlocaml-4.02 ) >=dev-libs/mlocaml-3.10.2:0/4.01.0= selected=['>=dev-libs/mlocaml-3.10.2:=', 'dev-libs/mllabltk:=', '>=dev-libs/mlocaml-3.10.2:0/4.01.0=']
+T9 OR pass=1 parent=dev-libs/mllablgl-1.05 depth=0 complete_mode=True trees=_graph_trees caller=_select_atoms_probe<_select_atoms_probe<_compute_abi_rebuild_info priority=None depstring=>=dev-libs/mlocaml-3.10.2:= || ( dev-libs/mllabltk:= <dev-libs/mlocaml-4.02 ) >=dev-libs/mlocaml-3.10.2:0/4.01.0= selected=['>=dev-libs/mlocaml-3.10.2:=', 'dev-libs/mllabltk:=', '>=dev-libs/mlocaml-3.10.2:0/4.01.0=']
+!!! The following installed packages are masked:
+### rc: 0

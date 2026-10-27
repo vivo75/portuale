@@ -1,0 +1,2 @@
+portuale: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-cgpver ROOT=/var/tmp/claude-s0e/h-cgpver PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-cgpver PORTUALE_BT_TRACE=1 portuale emerge --pretend <dev-libs/cgp1x-1
+portage: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-cgpver.cfg ROOT=/var/tmp/claude-s0e/h-cgpver PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-cgpver PYTHONHASHSEED=0 emerge --pretend <dev-libs/cgp1x-1

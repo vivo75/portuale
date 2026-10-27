@@ -1,0 +1,40 @@
+PORTUALE_BT_TRACE=1 PYTHONHASHSEED=0 PORTAGE_CONFIGROOT=$W/cgp1 ROOT=$W/cgp1 PORTAGE_RUNNING_ROOT=$W/cgp1 DISTDIR=$W/cgp1/distfiles PORTAGE_TMPDIR=$W/tmp portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n --pretend >=dev-libs/cgp1x-2
+rc 1
+BT try=1 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=2 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/cgp1x-2 [1] to $W/cgp1
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/cgp1x:0
+
+  (dev-libs/cgp1x-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    >=dev-libs/cgp1x-2 (Argument)
+
+  (dev-libs/cgp1x-1:0/0::__unknown__, installed in '$W/cgp1') USE="" pulled in by
+    <dev-libs/cgp1x-2 required by (dev-libs/cgp1a-1:0/0::__unknown__, installed in '$W/cgp1') USE=""
+    ^               ^                                                                                                     
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+

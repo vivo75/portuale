@@ -1,0 +1,15 @@
+T9 === pass 0
+T9 _want_installed_pkg(dev-libs/p569prov-5.42) -> True
+T9 _add_pkg masked=False dev-libs/p569prov-5.42(installed) parent=dev-libs/p569virt-1 atom==dev-libs/p569prov-5.42* complete_mode=True select_package=_select_pkg_from_graph chain=_complete_graph:8834 <- _resolve_conflicts:9482 <- altlist:9354 <- _resolve:5696 <- _select_files:5471 <- select_files:5016 <- _backtrack_depgraph:12405 <- backtrack_depgraph:12345
+T9 _want_installed_pkg(dev-libs/p569prov-5.42) -> True
+T9 _want_installed_pkg(dev-libs/p569prov-5.42) -> True
+T9 === pass 1
+T9 _want_installed_pkg(dev-libs/p569prov-5.42) -> True
+T9 _add_pkg masked=True dev-libs/p569prov-5.42(installed) parent=dev-libs/p569virt-1 atom==dev-libs/p569prov-5.42* complete_mode=True select_package=_select_pkg_from_graph chain=_complete_graph:8834 <- _resolve_conflicts:9482 <- altlist:9354 <- _resolve:5696 <- _select_files:5471 <- select_files:5016 <- _backtrack_depgraph:12405 <- backtrack_depgraph:12345
+T9 _want_installed_pkg(dev-libs/p569prov-5.42) -> True
+T9 _want_installed_pkg(dev-libs/p569prov-5.42) -> True
+T9 === pass 2
+T9 === pass 3
+T9 === pass 4
+T9 _want_installed_pkg(dev-libs/p569prov-5.42) -> True
+T9 _add_pkg masked=False dev-libs/p569prov-5.42(installed) parent=dev-libs/p569pull-1 atom==dev-libs/p569prov-5.42* complete_mode=False select_package=_select_pkg_highest_available chain=_add_dep:3543 <- _wrapped_add_pkg_dep_string:4630 <- _add_pkg_dep_string:4432 <- _add_pkg_deps:4415 <- _create_graph:3276 <- _resolve:5691 <- _select_files:5471 <- select_files:5016 <- _backtrack_depgraph:12405 <- backtrack_depgraph:12345

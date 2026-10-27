@@ -1,0 +1,24 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 2/20).
+
+[ebuild  N     ] dev-libs/p569pull-1::testrepo to /var/tmp/claude-s0e/fx0 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/p569prov:0
+
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/claude-s0e/fx0') USE="" ELIBC="glibc" conflicts with
+    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '/var/tmp/claude-s0e/fx0') USE=""
+                     ^^^^^^^^
+    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '/var/tmp/claude-s0e/fx0') USE=""
+    ^                  ^^^^ 
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/p569pull:0

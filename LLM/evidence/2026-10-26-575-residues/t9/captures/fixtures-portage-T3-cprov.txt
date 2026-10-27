@@ -1,0 +1,15 @@
+### portage argv: --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/p589cpull
+### rc: 0
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took 4.83 s (backtrack: 4/20).
+[ebuild  N     ] dev-libs/p589cpull-1::testrepo to $W/f/ 0 KiB
+Total: 1 package (1 new), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+dev-libs/p589cprov:0 for $W/f/
+  (dev-libs/p589cprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$W/f/') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/p589cprov-5.42* required by (dev-libs/p589cvirt-1:0/0::testrepo, installed in '$W/f/') USE=""
+    ^                   ^^^^^
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+dev-libs/p589cpull:0 for $W/f/

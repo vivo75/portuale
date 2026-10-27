@@ -1,0 +1,75 @@
+### ['sci-libs/L', 'sci-libs/M'] {}: success=False mergelist=['sci-libs/K-1', 'sci-libs/L-1', 'sci-libs/M-1']
+   need_config_change {'ret': True, 'allow_bt': True, 'built_here': True, 'changes': [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}], 'runtime_pkg_mask': []}
+   backtrack_depgraph {'success': False, 'backtracked': 0, 'final_allow_bt': True, 'final_runtime_pkg_mask': []}
+   final handler changes: [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}] version: False unspecific: False
+   display_problems text:
+     |!!! Multiple package instances within a single package slot have been pulled
+     |!!! into the dependency graph, resulting in a slot conflict:
+     |sci-libs/K:0
+     |  ([32msci-libs/K-1:0/0::test_repo[39;49;00m, ebuild scheduled for merge) USE="[31;01mfoo[39;49;00m" pulled in by
+     |    sci-libs/K[[31;01mfoo=[39;49;00m] required by ([32msci-libs/M-1:0/0::test_repo[39;49;00m, ebuild scheduled for merge) USE="[31;01mfoo[39;49;00m"
+     |               ^^^^                                                                                                                                        
+     |  ([36msci-libs/K-1:0/0::test_repo[39;49;00m, installed) USE="[34;01m-foo[39;49;00m" pulled in by
+     |    sci-libs/K[[31;01m-foo[39;49;00m] required by ([32msci-libs/L-1:0/0::test_repo[39;49;00m, ebuild scheduled for merge) USE=""
+     |               ^^^^                                                                                                                  
+     |It might be possible to solve this slot collision
+     |by applying all of the following changes:
+     |   - sci-libs/K-1 (Change USE: -foo)
+     |   - sci-libs/M-1 (Change USE: -foo)
+### ['dev-libs/A', 'dev-libs/B'] {}: success=True mergelist=['dev-libs/T-1', 'dev-libs/A-1', 'dev-libs/B-1']
+   backtrack_depgraph {'success': True, 'backtracked': 0, 'final_allow_bt': True, 'final_runtime_pkg_mask': []}
+   display_problems text:
+### ['dev-libs/A', 'dev-libs/B', 'sci-libs/L', 'sci-libs/M'] {}: success=False mergelist=['dev-libs/T-1', 'sci-libs/K-1', 'dev-libs/A-1', 'dev-libs/B-1', 'sci-libs/L-1', 'sci-libs/M-1']
+   need_config_change {'ret': True, 'allow_bt': True, 'built_here': True, 'changes': [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}], 'runtime_pkg_mask': []}
+   backtrack_depgraph {'success': False, 'backtracked': 0, 'final_allow_bt': True, 'final_runtime_pkg_mask': []}
+   final handler changes: [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}] version: False unspecific: False
+   display_problems text:
+     |!!! Multiple package instances within a single package slot have been pulled
+     |!!! into the dependency graph, resulting in a slot conflict:
+     |sci-libs/K:0
+     |  (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge) USE="foo" pulled in by
+     |    sci-libs/K[foo=] required by (sci-libs/M-1:0/0::test_repo, ebuild scheduled for merge) USE="foo"
+     |               ^^^^                                                                                  
+     |  (sci-libs/K-1:0/0::test_repo, installed) USE="-foo" pulled in by
+     |    sci-libs/K[-foo] required by (sci-libs/L-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+     |               ^^^^                                                                               
+     |It might be possible to solve this slot collision
+     |by applying all of the following changes:
+     |   - sci-libs/K-1 (Change USE: -foo)
+     |   - sci-libs/M-1 (Change USE: -foo)
+### ['dev-libs/A', 'dev-libs/B', 'sci-libs/L', 'sci-libs/M'] {'--autounmask': 'n'}: success=False mergelist=['dev-libs/T-1', 'sci-libs/K-1', 'dev-libs/A-1', 'dev-libs/B-1', 'sci-libs/L-1', 'sci-libs/M-1']
+   need_config_change {'ret': True, 'allow_bt': True, 'built_here': True, 'changes': [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}], 'runtime_pkg_mask': []}
+   backtrack_depgraph {'success': False, 'backtracked': 0, 'final_allow_bt': True, 'final_runtime_pkg_mask': []}
+   final handler changes: [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}] version: False unspecific: False
+   display_problems text:
+     |!!! Multiple package instances within a single package slot have been pulled
+     |!!! into the dependency graph, resulting in a slot conflict:
+     |sci-libs/K:0
+     |  (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge) USE="foo" pulled in by
+     |    sci-libs/K[foo=] required by (sci-libs/M-1:0/0::test_repo, ebuild scheduled for merge) USE="foo"
+     |               ^^^^                                                                                  
+     |  (sci-libs/K-1:0/0::test_repo, installed) USE="-foo" pulled in by
+     |    sci-libs/K[-foo] required by (sci-libs/L-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+     |               ^^^^                                                                               
+     |It might be possible to solve this slot collision
+     |by applying all of the following changes:
+     |   - sci-libs/K-1 (Change USE: -foo)
+     |   - sci-libs/M-1 (Change USE: -foo)
+### ['dev-libs/A', 'dev-libs/B', 'sci-libs/L', 'sci-libs/M'] {'--backtrack': 0}: success=False mergelist=['dev-libs/T-1', 'sci-libs/K-1', 'dev-libs/A-1', 'dev-libs/B-1', 'sci-libs/L-1', 'sci-libs/M-1']
+   need_config_change {'ret': True, 'allow_bt': False, 'built_here': True, 'changes': [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}], 'runtime_pkg_mask': []}
+   backtrack_depgraph {'success': False, 'backtracked': 0, 'final_allow_bt': False, 'final_runtime_pkg_mask': []}
+   final handler changes: [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}] version: False unspecific: False
+   display_problems text:
+     |!!! Multiple package instances within a single package slot have been pulled
+     |!!! into the dependency graph, resulting in a slot conflict:
+     |sci-libs/K:0
+     |  (sci-libs/K-1:0/0::test_repo, ebuild scheduled for merge) USE="foo" pulled in by
+     |    sci-libs/K[foo=] required by (sci-libs/M-1:0/0::test_repo, ebuild scheduled for merge) USE="foo"
+     |               ^^^^                                                                                  
+     |  (sci-libs/K-1:0/0::test_repo, installed) USE="-foo" pulled in by
+     |    sci-libs/K[-foo] required by (sci-libs/L-1:0/0::test_repo, ebuild scheduled for merge) USE=""
+     |               ^^^^                                                                               
+     |It might be possible to solve this slot collision
+     |by applying all of the following changes:
+     |   - sci-libs/K-1 (Change USE: -foo)
+     |   - sci-libs/M-1 (Change USE: -foo)

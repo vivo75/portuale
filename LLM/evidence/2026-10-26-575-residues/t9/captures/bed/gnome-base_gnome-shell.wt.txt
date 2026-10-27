@@ -1,0 +1,642 @@
+### podman exec <own bed container> env PORTAGE_CONFIGROOT=/ ROOT=/ LC_ALL=C.UTF-8 TZ=UTC PYTHONHASHSEED=0 (world = tmux eix gentoolkit blake3) S0B_PARENT_RE=^virtual/perl- python3 -I which-trees-or.py -pv --color=n gnome-base/gnome-shell  (atom: see l0-resolve.txt; non-T9OR/S0B lines = Portage's own output)
+S0B _slot_conflict_backtrack_abi pkg=dev-lang/perl-5.42.2(installed,nomerge) -> False
+S0B _slot_conflict_backtrack_abi pkg=dev-lang/perl-5.44.0(ebuild) -> False
+S0B _slot_confict_backtrack slot=dev-lang/perl:0 all_parents=[app-admin/perl-cleaner-2.31-r3(installed,nomerge)->'dev-lang/perl', app-text/docbook-sgml-utils-0.6.14-r6(ebuild)->'>=dev-lang/perl-5', app-text/openjade-1.3.2-r9(ebuild)->'dev-lang/perl', app-text/po4a-0.74-r1(installed,nomerge)->'>=dev-lang/perl-5.38.2-r3[-perl_features_debug,-perl_features_ithreads,-perl_features_quadmath]', app-text
+S0B   choice[0]: mask dev-lang/perl-5.42.2(ebuild) conflict_atoms=[virtual/perl-CPAN-2.380.0-r1(installed,nomerge)->'=dev-lang/perl-5.44*', virtual/perl-Carp-1.540.0-r3(installed,nomerge)->'=dev-lang/perl-5.44*', virtual/perl-Compress-Raw-Bzip2-2.218.0(ebuild)->'=dev-lang/perl-5.44*', virtual/perl-Compress-Raw-Zlib-2.222.0-r1(ebuild)->'=dev-lang/perl-5.44*', virtual/perl-Data-Dumper-2.192.0-r1(ins
+S0B   choice[1] (explored first): mask dev-lang/perl-5.40.2(ebuild) conflict_atoms=[app-text/po4a-0.74-r1(installed,nomerge)->'dev-lang/perl:0/5.42=', dev-perl/Capture-Tiny-0.500.0-r1(installed,nomerge)->'dev-lang/perl:0/5.42=', dev-perl/Class-Inspector-1.360.0(installed,nomerge)->'dev-lang/perl:0/5.42=', dev-perl/Config-AutoConf-0.320.0(installed,nomerge)->'dev-lang/perl:0/5.42=', dev-perl/Export
+S0B need_config_change -> True (slot_conflict_handler changes=[])
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-IO-1.550.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/IO-1.550.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/IO-1.550.0', '!>perl-core/IO-1.550.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-CPAN-2.380.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/CPAN-2.380.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/CPAN-2.380.0', '!>perl-core/CPAN-2.380.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Data-Dumper-2.192.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Data-Dumper-2.192.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Data-Dumper-2.192.0', '!>perl-core/Data-Dumper-2.192.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Math-BigInt-2.5.2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Math-BigInt-2.5.2 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Math-BigInt-2.5.2', '!>perl-core/Math-BigInt-2.5.2-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Test-Harness-3.500.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Test-Harness-3.500.0 vdb=n'] selected=['~perl-core/Test-Harness-3.500.0', 'dev-lang/perl:=', '!<perl-core/Test-Harness-3.500.0', '!>perl-core/Test-Harness-3.500.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-IO-1.550.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/IO-1.550.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/IO-1.550.0', '!>perl-core/IO-1.550.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-IO-1.550.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/IO-1.550.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/IO-1.550.0', '!>perl-core/IO-1.550.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-XSLoader-0.320.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/XSLoader-0.320.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/XSLoader-0.320.0', '!>perl-core/XSLoader-0.320.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-IO-1.550.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/IO-1.550.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/IO-1.550.0', '!>perl-core/IO-1.550.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-XSLoader-0.320.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/XSLoader-0.320.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/XSLoader-0.320.0', '!>perl-core/XSLoader-0.320.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-File-Spec-3.940.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/File-Spec-3.940.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/File-Spec-3.940.0', '!>perl-core/File-Spec-3.940.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0', 'dev-lang/perl:=', '!<perl-core/Encode-3.210.0', '!>perl-core/Encode-3.210.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-File-Spec-3.940.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/File-Spec-3.940.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/File-Spec-3.940.0', '!>perl-core/File-Spec-3.940.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Carp-1.540.0', '!>perl-core/Carp-1.540.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/Scalar-List-Utils-1.680.100_rc', '!>perl-core/Scalar-List-Utils-1.680.100_rc-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*', 'dev-lang/perl:=', '!<perl-core/Exporter-5.790.0', '!>perl-core/Exporter-5.790.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/ExtUtils-MakeMaker-7.760.0', '!>perl-core/ExtUtils-MakeMaker-7.760.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-File-Spec-3.940.0 installed complete_mode=False trees=_filtered_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/File-Spec-3.940.0 vdb=n'] selected=['=dev-lang/perl-5.42*', 'dev-lang/perl:=', '!<perl-core/File-Spec-3.940.0', '!>perl-core/File-Spec-3.940.0-r999', 'dev-lang/perl:0/5.42=']
+T9OR parent=virtual/perl-File-Path-2.180.0-r5 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/File-Path-2.180.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-ExtUtils-CBuilder-0.280.242-r2 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-CBuilder-0.280.242 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-ExtUtils-ParseXS-3.570.0 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-ParseXS-3.570.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-CPAN-Meta-2.150.10-r11 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] =dev-lang/perl-5.38* vdb=n | [3] ~perl-core/CPAN-Meta-2.150.10 vdb=n'] selected=['=dev-lang/perl-5.42*', '=virtual/perl-JSON-PP-4.160.0-r4', '>=virtual/perl-JSON-PP-2.271.30']
+T9OR parent=virtual/perl-Module-Metadata-1.0.38-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Module-Metadata-1.0.38 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-podlators-6.0.2-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/podlators-6.0.2 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-version-0.993.300 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/version-0.993.300 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-JSON-PP-4.160.0-r4 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/JSON-PP-4.160.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Text-ParseWords-3.310.0-r5 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Text-ParseWords-3.310.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-ExtUtils-MakeMaker-7.760.0 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/ExtUtils-MakeMaker-7.760.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-IO-1.550.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/IO-1.550.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-CPAN-2.380.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/CPAN-2.380.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Encode-3.210.0-r2 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] =dev-lang/perl-5.40* vdb=n | [2] ~perl-core/Encode-3.210.0 vdb=n'] selected=['~perl-core/Encode-3.210.0']
+T9OR parent=virtual/perl-Data-Dumper-2.192.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Data-Dumper-2.192.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Math-BigInt-2.5.2 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Math-BigInt-2.5.2 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-Test-Harness-3.500.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Test-Harness-3.500.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-Carp-1.540.0-r3 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/Carp-1.540.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-Exporter-5.790.0-r1 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] ~perl-core/Exporter-5.790.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-XSLoader-0.320.0-r3 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.44* vdb=n | [1] =dev-lang/perl-5.42* vdb=Y | [2] =dev-lang/perl-5.40* vdb=n | [3] =dev-lang/perl-5.38* vdb=n | [4] ~perl-core/XSLoader-0.320.0 vdb=n'] selected=['=dev-lang/perl-5.44*']
+T9OR parent=virtual/perl-File-Spec-3.940.0 installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/File-Spec-3.940.0 vdb=n'] selected=['=dev-lang/perl-5.42*']
+T9OR parent=virtual/perl-Scalar-List-Utils-1.680.100_rc installed complete_mode=True trees=_graph_trees groups=['[0] =dev-lang/perl-5.42* vdb=Y | [1] ~perl-core/Scalar-List-Utils-1.680.100_rc vdb=n'] selected=['=dev-lang/perl-5.42*']
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ...S0B Backtracker._add mask_steps=0 ACCEPTED mask={}
+ done!
+Dependency resolution took 12.13 s (backtrack: 0/20).
+
+[ebuild  N     ] sys-apps/hwdata-0.401::gentoo  2477 KiB
+[ebuild  N     ] media-libs/libogg-1.3.6::gentoo  USE="-static-libs" ABI_X86="(64) -32 (-x32)" 430 KiB
+[ebuild  N     ] llvm-core/llvm-common-22.1.8::gentoo  USE="-emacs -verify-sig" 163147 KiB
+[ebuild  N     ] app-crypt/libmd-1.2.0::gentoo  USE="-verify-sig" ABI_X86="(64) -32 (-x32)" 282 KiB
+[ebuild  N     ] media-libs/alsa-topology-conf-1.2.5.1-r1::gentoo  USE="-verify-sig" 12 KiB
+[ebuild  N     ] media-libs/alsa-ucm-conf-1.2.16.1::gentoo  USE="-verify-sig" 83 KiB
+[ebuild  N     ] app-crypt/argon2-20190702-r1:0/1::gentoo  USE="-static-libs" 1471 KiB
+[ebuild  N     ] dev-libs/ell-0.83::gentoo  USE="-pie -test" 589 KiB
+[ebuild  N     ] app-text/libpaper-2.1.3:0/2::gentoo  1234 KiB
+[ebuild  N     ] net-wireless/wireless-regdb-20260530::gentoo  32 KiB
+[ebuild  N     ] net-dialup/ppp-scripts-0::gentoo  2 KiB
+[ebuild  N     ] app-i18n/unicode-emoji-17.0.0::gentoo  1257 KiB
+[ebuild  N     ] dev-lang/duktape-2.7.0-r3:0/2.7.0::gentoo  1003 KiB
+[ebuild  N     ] dev-util/unifdef-2.12-r2::gentoo  66 KiB
+[ebuild  N     ] net-libs/nghttp2-1.70.0:0/1.14::gentoo  USE="systemd -debug -hpack-tools -test -utils -verify-sig -xml" ABI_X86="(64) -32 (-x32)" 1972 KiB
+[ebuild  N     ] dev-libs/libltdl-2.5.4::gentoo  USE="-static-libs" ABI_X86="(64) -32 (-x32)" 1033 KiB
+[ebuild  N     ] dev-libs/gobject-introspection-common-1.86.0::gentoo  1058 KiB
+[ebuild  N     ] x11-themes/hicolor-icon-theme-0.17::gentoo  52 KiB
+[ebuild  N     ] dev-libs/vala-common-0.56.19::gentoo  3914 KiB
+[ebuild  N     ] app-text/xhtml1-20020801-r6::gentoo  227 KiB
+[ebuild  N     ] sys-apps/keyutils-1.6.3-r1:0/1.9::gentoo  USE="-static -static-libs -test" ABI_X86="(64) -32 (-x32)" 134 KiB
+[ebuild  N     ] sys-libs/mtdev-1.1.7::gentoo  295 KiB
+[ebuild  N     ] sys-libs/liburing-2.12:0/2::gentoo  USE="-examples -static-libs -test" ABI_X86="(64) -32 (-x32)" 432 KiB
+[ebuild  N     ] x11-libs/xtrans-1.6.0::gentoo  USE="-doc" 174 KiB
+[ebuild  N     ] media-libs/libpng-1.6.58:0/16::gentoo  USE="-apng -static-libs -test" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse" 1046 KiB
+[ebuild  N     ] dev-libs/libbsd-0.11.8::gentoo  USE="-static-libs -verify-sig" ABI_X86="(64) -32 (-x32)" 423 KiB
+[ebuild  N     ] dev-libs/libatomic_ops-7.10.0::gentoo  ABI_X86="(32) (64) (-x32)" 531 KiB
+[ebuild  N     ] media-fonts/font-util-1.4.2::gentoo  150 KiB
+[ebuild  N     ] dev-libs/libusb-1.0.29:1::gentoo  USE="udev -debug -doc -examples -static-libs -test -verify-sig" ABI_X86="(64) -32 (-x32)" 631 KiB
+[ebuild  N     ] dev-lang/yasm-1.3.0-r2::gentoo  USE="nls" 1458 KiB
+[ebuild  N     ] virtual/libusb-1-r2:1::gentoo  USE="udev" ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] sys-libs/binutils-libs-2.47:0/2.47::gentoo  USE="cet nls -64-bit-bfd -multitarget -static-libs -test -verify-sig" ABI_X86="(64) -32 (-x32)" 28364 KiB
+[ebuild  N     ] sys-libs/cracklib-2.10.3::gentoo  USE="nls zlib -debug -python (-split-usr) -static-libs -test" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 456 KiB
+[ebuild  N     ] media-libs/flac-1.5.0:0/11-14::gentoo  USE="cxx -debug -ogg -static-libs" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="-avx -avx2" 1054 KiB
+[ebuild  N     ] dev-libs/boehm-gc-8.2.12::gentoo  USE="large threads -cxx -static-libs" ABI_X86="(32) (64) (-x32)" 1204 KiB
+[ebuild  N     ] net-libs/ngtcp2-1.25.0::gentoo  USE="gnutls openssl ssl -verify-sig" ABI_X86="(64) -32 (-x32)" 693 KiB
+[ebuild  N     ] app-text/docbook-sgml-dtd-4.1-r5:4.1::gentoo  56 KiB
+[ebuild  N     ] app-text/docbook-sgml-dtd-3.0-r5:3.0::gentoo  43 KiB
+[ebuild  N     ] app-text/docbook-sgml-dtd-4.2-r4:4.2::gentoo  61 KiB
+[ebuild  N     ] app-text/docbook-sgml-dtd-3.1-r5:3.1::gentoo  55 KiB
+[ebuild  N     ] app-text/docbook-sgml-dtd-4.0-r5:4.0::gentoo  55 KiB
+[ebuild  N     ] app-text/docbook-sgml-dtd-4.4-r2:4.4::gentoo  66 KiB
+[ebuild  N     ] app-i18n/unicode-cldr-47.0::gentoo  33355 KiB
+[ebuild  N     ] app-i18n/unicode-data-17.0.0::gentoo  17208 KiB
+[ebuild  N     ] app-eselect/eselect-ruby-20241225::gentoo  2 KiB
+[ebuild  N     ] app-text/docbook-dsssl-stylesheets-1.79-r4::gentoo  272 KiB
+[ebuild  N     ] app-eselect/eselect-fontconfig-20220403::gentoo  2 KiB
+[ebuild  N     ] app-eselect/eselect-lua-4-r3::gentoo  0 KiB
+[ebuild  N     ] app-eselect/eselect-notify-send-0.1::gentoo  0 KiB
+[ebuild  N     ] dev-lang/lua-5.4.8:5.4::gentoo  USE="deprecated readline" 610 KiB
+[ebuild  N     ] app-eselect/eselect-mpg123-0.1-r1::gentoo  0 KiB
+[ebuild  N     ] llvm-core/clang-common-22.1.8::gentoo  USE="cet -bootstrap-prefix -default-compiler-rt -default-libcxx -default-lld -emacs -hardened -llvm-libunwind -verify-sig" 0 KiB
+[ebuild  N     ] x11-base/xorg-drivers-21.1-r2::gentoo  INPUT_DEVICES="libinput -elographics -evdev -joystick -synaptics -vmmouse -void -wacom" VIDEO_CARDS="amdgpu dummy fbdev intel nouveau radeon radeonsi vesa -ast (-freedreno) (-geode) -i915 -mga -nvidia -qxl -r128 -siliconmotion (-tegra) (-vc4)" 0 KiB
+[ebuild  N     ] perl-core/Encode-3.210.0::gentoo  PERL_FEATURES="(-debug) -ithreads -quadmath" 2038 KiB
+[ebuild  N     ] dev-perl/Encode-Locale-1.50.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+[ebuild  N     ] dev-perl/TimeDate-2.330.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 30 KiB
+[ebuild  N     ] dev-perl/common-sense-3.750.0::gentoo  PERL_FEATURES="(-debug) -ithreads -quadmath" 14 KiB
+[ebuild  N     ] sys-apps/lsb-release-3.3::gentoo  16 KiB
+[ebuild  N     ] dev-perl/Net-SSLeay-1.960.0-r1::gentoo  USE="-examples -minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 653 KiB
+[ebuild  N     ] dev-perl/IO-Socket-SSL-2.95.0::gentoo  USE="-examples -idn -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 270 KiB
+[ebuild  N     ] dev-perl/Regexp-IPv6-0.30.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 4 KiB
+[ebuild  N     ] dev-perl/Clone-0.470.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 136 KiB
+[ebuild  N     ] dev-perl/HTML-Tagset-3.240.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 8 KiB
+[ebuild  N     ] dev-perl/Parse-Yapp-1.210.0-r1::gentoo  USE="-examples -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 107 KiB
+[ebuild  N     ] dev-perl/Types-Serialiser-1.10.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 7 KiB
+[ebuild  N     ] dev-perl/Canary-Stability-2013.0.0::gentoo  PERL_FEATURES="(-debug) -ithreads -quadmath" 5 KiB
+[ebuild  N     ] dev-perl/JSON-XS-4.40.0::gentoo  USE="-examples -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 86 KiB
+[ebuild  N     ] dev-perl/JSON-4.100.0::gentoo  USE="xs -examples -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 93 KiB
+[ebuild  N     ] dev-libs/snowball-stemmer-3.1.1:0/3.1::gentoo  USE="-static-libs -test" 352 KiB
+[ebuild  N     ] dev-perl/Crypt-URandom-0.550.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 24 KiB
+[ebuild  N     ] llvm-runtimes/clang-rtlib-config-22:22::gentoo  USE="-default-compiler-rt" ABI_X86="32 (64)" 0 KiB
+[ebuild  N     ] llvm-runtimes/clang-stdlib-config-22:22::gentoo  USE="-default-libcxx" 0 KiB
+[ebuild  N     ] llvm-runtimes/clang-unwindlib-config-22:22::gentoo  USE="-default-compiler-rt -llvm-libunwind" 0 KiB
+[ebuild  N     ] llvm-runtimes/openmp-22.1.8:0/22.1::gentoo  USE="-debug -gdb-plugin -hwloc -ompt -test -verify-sig" ABI_X86="32 (64) (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild  N     ] media-libs/libjpeg-turbo-3.1.4.1:0/0.2::gentoo  USE="-java -static-libs -test -verify-sig" ABI_X86="(64) -32 (-x32)" 2484 KiB
+[ebuild  N     ] net-libs/libssh2-1.11.1-r2::gentoo  USE="zlib -gcrypt -mbedtls -test -verify-sig" ABI_X86="(64) -32 (-x32)" 705 KiB
+[ebuild  N     ] app-arch/brotli-1.2.0-r2:0/1::gentoo  USE="-debug -python -test" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 632 KiB
+[ebuild  N     ] dev-util/spirv-headers-1.4.357.0::gentoo  559 KiB
+[ebuild  N     ] media-gfx/graphite2-1.3.14_p20210810-r5::gentoo  USE="-perl -test" ABI_X86="(64) -32 (-x32)" PERL_FEATURES="(-debug) -ithreads -quadmath" 6501 KiB
+[ebuild  N     ] net-libs/llhttp-9.4.3:0/9.4::gentoo  40 KiB
+[ebuild  N     ] dev-cpp/eigen-3.4.1-r1:3/3.4::gentoo  USE="openmp -adolc (-blas) -boost -cholmod (-cuda) -cuda-clang -debug (-doc) -fftw (-hip) -klu (-lapack) -mathjax (-metis) (-opengl) (-pastix) -pocketfft -sparsehash -spqr -superlu (-test) -umfpack" CPU_FLAGS_X86="sse sse2 -avx -avx2 -avx512dq -avx512f -f16c -fma3 -popcnt -sse3 -sse4_1 -sse4_2 -ssse3" LLVM_SLOT="22 -21 (-23)" 2109 KiB
+[ebuild  N     ] media-libs/svt-av1-4.0.1:0/4::gentoo  USE="-pgo -test -tools" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="-avx512vl" 9986 KiB
+[ebuild  N     ] media-libs/woff2-1.0.2-r7::gentoo  39 KiB
+[ebuild  N     ] llvm-core/clang-linker-config-22:22::gentoo  USE="-default-lld" 0 KiB
+[ebuild  N     ] virtual/libelf-3-r1:0/1::gentoo  ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] media-libs/freetype-2.14.3:2::gentoo  USE="X adobe-cff bzip2 cleartype-hinting harfbuzz png -brotli -debug -doc -fontforge -static-libs -svg -utils -verify-sig" ABI_X86="(64) -32 (-x32)" 2608 KiB
+[ebuild  N     ] media-libs/alsa-lib-1.2.16.1::gentoo  USE="-debug -doc -python -verify-sig" ABI_X86="(64) -32 (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 (-python3_15)" 1104 KiB
+[ebuild  N     ] dev-libs/libyaml-0.2.5::gentoo  USE="-doc -static-libs -test" 84 KiB
+[ebuild  N     ] dev-libs/nspr-4.39::gentoo  USE="-debug" ABI_X86="(64) -32 (-x32)" 991 KiB
+[ebuild  N     ] media-libs/libvorbis-1.3.7-r2::gentoo  USE="-static-libs -test" ABI_X86="(64) -32 (-x32)" 1176 KiB
+[ebuild  N     ] net-libs/rpcsvc-proto-1.4.4-r1::gentoo  165 KiB
+[ebuild  N     ] net-libs/libasyncns-0.8-r5::gentoo  USE="-debug -doc" ABI_X86="(64) -32 (-x32)" 334 KiB
+[ebuild  N     ] dev-libs/nss-3.125::gentoo  USE="utils -cacert -test -test-full" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="-avx2 -sse3" 76727 KiB
+[ebuild  N     ] app-eselect/eselect-rust-20210703::gentoo  5 KiB
+[ebuild  N     ] dev-lang/rust-bin-1.98.1:1.98.1::gentoo  USE="clippy rustfmt (-big-endian) -doc (-prefix) -rust-analyzer -rust-src -verify-sig" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="(22)" 197813 KiB
+[ebuild  N     ] dev-perl/Socket6-0.290.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 64 KiB
+[ebuild  N     ] app-text/openjade-1.3.2-r9::gentoo  874 KiB
+[ebuild  N     ] dev-libs/libbytesize-2.12::gentoo  USE="-doc -python -test -tools" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 462 KiB
+[ebuild  N     ] sys-fs/lvm2-2.03.39::gentoo  USE="readline systemd udev -lvm -nvme -sanlock (-selinux) -static -static-libs -test -thin -valgrind -vdo -xfs" 2811 KiB
+[ebuild  N     ] sys-libs/libcap-ng-0.9.3::gentoo  USE="-bpf -deprecated -python -static-libs" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 124 KiB
+[ebuild  N     ] dev-libs/libsass-3.6.6:0/1::gentoo  335 KiB
+[ebuild  N     ] dev-lang/sassc-3.6.2::gentoo  27 KiB
+[ebuild  N     ] media-sound/lame-3.100-r3::gentoo  USE="frontend -debug -mp3rtp -sndfile -static-libs" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="(-mmx)" 1489 KiB
+[ebuild  N     ] media-sound/mpg123-base-1.33.3::gentoo  USE="alsa ipv6 (-coreaudio) -int-quality -jack -nas -oss -portaudio -pulseaudio -sdl" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse (-3dnow) (-3dnowext) (-mmx)" 1096 KiB
+[ebuild  N     ] dev-libs/jansson-2.15.1:0/4::gentoo  USE="-doc -static-libs" 478 KiB
+[ebuild  N     ] dev-libs/libnl-3.12.0:3::gentoo  USE="debug -python -test -utils -verify-sig" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 1164 KiB
+[ebuild  N     ] net-wireless/wpa_supplicant-2.11-r4::gentoo  USE="ap dbus fils mbo mesh readline -broadcom-sta -eap-sim -eapol-test -gui -macsec -p2p -privsep (-selinux) -smartcard -tkip -uncommon-eap-types -wep -wps" 3752 KiB
+[ebuild  N     ] dev-libs/libpcre-8.45-r4:3::gentoo  USE="bzip2 cxx jit readline (unicode) zlib -libedit -pcre16 -pcre32 -static-libs -valgrind" ABI_X86="(64) -32 (-x32)" 1542 KiB
+[ebuild  N     ] sys-libs/slang-2.3.3-r2::gentoo  USE="pcre readline zlib -cjk -png -static-libs" ABI_X86="(64) -32 (-x32)" 1608 KiB
+[ebuild  N     ] dev-libs/newt-0.52.25-r2::gentoo  USE="nls -gpm -python -tcl" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 126 KiB
+[ebuild  N     ] dev-util/cbindgen-0.29.4::gentoo  USE="-debug -test" 6453 KiB
+[ebuild  N     ] app-text/hunspell-1.7.2-r1:0/1.7::gentoo  USE="ncurses nls readline -static-libs" L10N="-af -bg -ca -cs -cy -da -de -de-1901 -el -en -eo -es -et -fo -fr -ga -gl -he -hr -hu -ia -id -is -it -kk -km -ku -lt -lv -mi -mk -ms -nb -nl -nn -pl -pt -pt-BR -ro -ru -sk -sl -sq -sv -sw -tn -uk -zu" 1501 KiB
+[ebuild  N     ] dev-libs/hyphen-2.8.8-r2::gentoo  USE="-static-libs" 624 KiB
+[ebuild  N     ] dev-util/colm-0.14.7-r4::gentoo  USE="-doc" 3038 KiB
+[ebuild  N     ] dev-util/ragel-7.0.4-r3::gentoo  USE="-doc" 1618 KiB
+[ebuild  N     ] dev-lang/rust-bin-1.94.1:1.94.1::gentoo  USE="clippy doc rustfmt (-big-endian) (-prefix) -rust-analyzer -rust-src -verify-sig" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="21" 187781 KiB
+[ebuild  N     ] media-libs/speexdsp-1.2.1::gentoo  ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse sse2" 901 KiB
+[ebuild  N     ] dev-libs/libev-4.33::gentoo  USE="-static-libs" ABI_X86="(64) -32 (-x32)" 557 KiB
+[ebuild  N     ] dev-libs/libverto-0.3.2::gentoo  USE="libev threads -glib -libevent" ABI_X86="(64) -32 (-x32)" 375 KiB
+[ebuild     U  ] dev-lang/perl-5.44.0:0/5.44::gentoo [5.42.2:0/5.42::gentoo] USE="gdbm -berkdb -doc -minimal" PERL_FEATURES="(-debug) -ithreads -quadmath" 14704 KiB
+[ebuild  N     ] virtual/perl-Time-Local-1.350.0-r2::gentoo  0 KiB
+[ebuild  N     ] dev-perl/HTTP-Date-6.80.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 35 KiB
+[ebuild  N     ] dev-perl/LWP-MediaTypes-6.40.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 40 KiB
+[ebuild  N     ] virtual/perl-libnet-3.150.0-r3::gentoo  USE="ssl" 0 KiB
+[ebuild  N     ] virtual/perl-Compress-Raw-Bzip2-2.218.0::gentoo  0 KiB
+[ebuild  N     ] virtual/perl-Compress-Raw-Zlib-2.222.0-r1::gentoo  0 KiB
+[ebuild  N     ] dev-perl/Devel-CheckLib-1.160.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 16 KiB
+[ebuild  N     ] dev-perl/File-Listing-6.160.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 77 KiB
+[ebuild  N     ] dev-perl/MIME-Base32-1.303.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 14 KiB
+[ebuild  N     ] dev-perl/URI-5.340.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 132 KiB
+[ebuild  N     ] dev-perl/WWW-RobotRules-6.20.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+[ebuild  N     ] dev-perl/IO-HTML-1.4.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 21 KiB
+[ebuild  N     ] dev-perl/MailTools-2.220.0::gentoo  USE="-examples -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 58 KiB
+[ebuild  N     ] virtual/perl-Digest-MD5-2.590.0-r1::gentoo  0 KiB
+[ebuild  N     ] virtual/perl-Digest-SHA-6.40.0-r3::gentoo  0 KiB
+[ebuild  N     ] dev-perl/Digest-HMAC-1.50.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 15 KiB
+[ebuild  N     ] dev-perl/Authen-SASL-2.200.0::gentoo  USE="-kerberos -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 41 KiB
+[ebuild  N     ] virtual/perl-IO-Compress-2.223.0-r1::gentoo  0 KiB
+[ebuild  N     ] virtual/perl-MIME-Base64-3.160.100_rc-r3::gentoo  0 KiB
+[ebuild  N     ] dev-perl/HTTP-Message-7.10.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 94 KiB
+[ebuild  N     ] dev-perl/HTML-Parser-3.830.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 148 KiB
+[ebuild  N     ] dev-perl/HTTP-Cookies-6.110.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 46 KiB
+[ebuild  N     ] dev-perl/HTTP-Negotiate-6.10.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+[ebuild  N     ] dev-perl/Sub-Name-0.280.0-r1::gentoo  USE="-suggested -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 156 KiB
+[ebuild  N     ] dev-perl/Try-Tiny-0.320.0::gentoo  USE="-minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 36 KiB
+[ebuild  N     ] dev-perl/IO-Socket-INET6-2.730.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 28 KiB
+[ebuild  N     ] dev-perl/Net-HTTP-6.240.0::gentoo  USE="-minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 43 KiB
+[ebuild  N     ] dev-perl/Error-0.170.300-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 33 KiB
+[ebuild  N     ] dev-lang/ruby-3.3.12:3.3::gentoo  USE="gdbm ssl -berkdb -debug -doc -examples -gmp (-jemalloc) -jit -socks5 (-static-libs) -systemtap -tk -valgrind -xemacs" 15519 KiB
+[ebuild  N     ] virtual/ruby-ssl-14::gentoo  RUBY_TARGETS="ruby33 -ruby32" 0 KiB
+[ebuild  N     ] dev-ruby/rubygems-3.6.9::gentoo  USE="-server -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34)" 12659 KiB
+[ebuild  N     ] virtual/rubygems-20::gentoo  RUBY_TARGETS="ruby33 -ruby32" 0 KiB
+[ebuild  N     ] dev-ruby/did_you_mean-2.0.0:2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 36 KiB
+[ebuild  N     ] dev-ruby/rake-13.3.1::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 124 KiB
+[ebuild  N     ] dev-ruby/json-2.19.4:2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 869 KiB
+[ebuild  N     ] dev-ruby/racc-1.8.1::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 449 KiB
+[ebuild  N     ] dev-ruby/matrix-0.4.2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34)" 42 KiB
+[ebuild  N     ] dev-ruby/minitest-5.27.0:5::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 100 KiB
+[ebuild  N     ] dev-ruby/power_assert-3.0.1:3::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 16 KiB
+[ebuild  N     ] dev-ruby/test-unit-3.7.7:2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 170 KiB
+[ebuild  N     ] dev-ruby/logger-1.7.0::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 22 KiB
+[ebuild  N     ] dev-ruby/rbs-3.10.2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 1360 KiB
+[ebuild  N     ] dev-ruby/strscan-3.1.7:3::gentoo  USE="-test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 38 KiB
+[ebuild  N     ] dev-ruby/rexml-3.4.4:3::gentoo  USE="-test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 464 KiB
+[ebuild  N     ] dev-ruby/rss-0.3.2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 106 KiB
+[ebuild  N     ] dev-vcs/git-2.55.0::gentoo  USE="curl gpg iconv nls pcre perl rust safe-directory webdav -cgi -cvs -debug -doc -highlight -keyring -perforce (-selinux) -subversion -test -tk -xinetd" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 8601 KiB
+[ebuild  N     ] dev-ruby/bundler-4.0.4:2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 440 KiB
+[ebuild  N     ] x11-base/xorg-proto-2025.1::gentoo  USE="-test" 749 KiB
+[ebuild  N     ] x11-libs/libpciaccess-0.19::gentoo  USE="zlib -static-libs" ABI_X86="(64) -32 (-x32)" 64 KiB
+[ebuild  N     ] x11-libs/libdrm-2.4.134::gentoo  USE="udev -doc -test -tools -valgrind" ABI_X86="(64) -32 (-x32)" VIDEO_CARDS="amdgpu intel nouveau radeon (-exynos) (-freedreno) (-omap) (-tegra) (-vc4) (-vivante) -vmware" 427 KiB
+[ebuild  N     ] x11-libs/libXau-1.0.12::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 276 KiB
+[ebuild  N     ] x11-misc/xkeyboard-config-2.48::gentoo  USE="-test" 931 KiB
+[ebuild  N     ] x11-libs/libXdmcp-1.1.5::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 291 KiB
+[ebuild  N     ] x11-libs/pixman-0.46.4::gentoo  USE="(-loongson2f) -static-libs -test" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="mmxext sse2 -ssse3" 646 KiB
+[ebuild  N     ] x11-libs/libxshmfence-1.3.3::gentoo  ABI_X86="(64) -32 (-x32)" 259 KiB
+[ebuild  N     ] x11-libs/libxcvt-0.1.3::gentoo  10 KiB
+[ebuild  N     ] dev-ruby/date-3.5.1::gentoo  USE="-test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 99 KiB
+[ebuild  N     ] x11-misc/xbitmaps-1.1.4::gentoo  112 KiB
+[ebuild  N     ] dev-ruby/erb-6.0.6:6::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 30 KiB
+[ebuild  N     ] dev-ruby/tsort-0.2.0-r1::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 7 KiB
+[ebuild  N     ] dev-ruby/kpeg-1.3.3:1::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 57 KiB
+[ebuild  N     ] dev-ruby/stringio-3.2.0::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 48 KiB
+[ebuild  N     ] dev-ruby/psych-5.2.6:5::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34)" 88 KiB
+[ebuild  N     ] dev-ruby/rdoc-7.1.0::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 911 KiB
+[ebuild  N     ] dev-ruby/io-console-0.8.2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 41 KiB
+[ebuild  N     ] dev-ruby/reline-0.6.3::gentoo  USE="-test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 92 KiB
+[ebuild  N     ] dev-ruby/prettyprint-0.2.0::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 10 KiB
+[ebuild  N     ] dev-ruby/pp-0.6.3-r1::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 14 KiB
+[ebuild  N     ] dev-ruby/irb-1.16.0::gentoo  USE="-test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 145 KiB
+[ebuild  N     ] dev-ruby/debug-1.11.0:1::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34)" 166 KiB
+[ebuild  N     ] dev-ruby/prism-1.9.0:1::gentoo  USE="-test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 1560 KiB
+[ebuild  N     ] dev-ruby/typeprof-0.31.1::gentoo  USE="-test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 100 KiB
+[ebuild  N     ] dev-ruby/forwardable-1.4.0::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 9 KiB
+[ebuild  N     ] dev-ruby/singleton-0.3.0::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 7 KiB
+[ebuild  N     ] dev-ruby/prime-0.1.4::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 13 KiB
+[ebuild  N     ] dev-ruby/time-0.4.2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 18 KiB
+[ebuild  N     ] dev-util/wayland-scanner-1.26.0::gentoo  599 KiB
+[ebuild  N     ] dev-libs/wayland-1.26.0::gentoo  USE="-doc (-selinux) -test" ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] dev-libs/wayland-protocols-1.49::gentoo  USE="-test" 148 KiB
+[ebuild  N     ] dev-libs/icu-78.3:0/78::gentoo  USE="-debug -doc -examples -static-libs -test -verify-sig" ABI_X86="(64) -32 (-x32)" 27322 KiB
+[ebuild  N     ] app-text/iso-codes-4.20.1::gentoo  16024 KiB
+[ebuild  N     ] dev-libs/fribidi-1.0.16::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 1073 KiB
+[ebuild  NS    ] app-text/docbook-xml-dtd-4.3-r2:4.3::gentoo [4.1.2-r7:4.1.2::gentoo, 4.2-r3:4.2::gentoo, 4.4-r3:4.4::gentoo, 4.5-r2:4.5::gentoo] 82 KiB
+[ebuild  N     ] sys-apps/bubblewrap-0.12.0::gentoo  USE="(-selinux) -test" 124 KiB
+[ebuild  N     ] x11-libs/libICE-1.1.2::gentoo  ABI_X86="(64) -32 (-x32)" 335 KiB
+[ebuild  N     ] x11-apps/iceauth-1.0.11::gentoo  138 KiB
+[ebuild  N     ] media-libs/lcms-2.19.1:2::gentoo  USE="-doc -jpeg -static-libs -test -tiff" ABI_X86="(64) -32 (-x32)" 5595 KiB
+[ebuild  N     ] net-misc/mobile-broadband-provider-info-20251101::gentoo  USE="-test" 43 KiB
+[ebuild  N     ] dev-util/spirv-tools-1.4.357.0::gentoo  USE="-test" ABI_X86="(64) -32 (-x32)" 3436 KiB
+[ebuild  N     ] sys-libs/talloc-2.4.4::gentoo  USE="python -compat -test -valgrind" ABI_X86="(64) -32 (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 669 KiB
+[ebuild  N     ] app-crypt/p11-kit-0.26.4::gentoo  USE="libffi nls systemd -gtk-doc -test -verify-sig" ABI_X86="(64) -32 (-x32)" 1057 KiB
+[ebuild  N     ] dev-lang/orc-0.4.42::gentoo  USE="-static-libs -test" ABI_X86="(64) -32 (-x32)" 275 KiB
+[ebuild  N     ] x11-libs/libSM-1.2.6::gentoo  USE="uuid -doc" ABI_X86="(64) -32 (-x32)" 307 KiB
+[ebuild  N     ] x11-libs/libfontenc-1.1.9::gentoo  275 KiB
+[ebuild  N     ] x11-libs/libXfont2-2.0.9::gentoo  USE="bzip2 -doc -truetype" 468 KiB
+[ebuild  N     ] x11-apps/mkfontscale-1.2.4::gentoo  150 KiB
+[ebuild  N     ] dev-libs/libevdev-1.13.7::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 462 KiB
+[ebuild  N     ] dev-libs/libinput-1.31.3:0/10::gentoo  USE="-doc -lua -test" INPUT_DEVICES="-wacom" LUA_SINGLE_TARGET="lua5-4" 916 KiB
+[ebuild  N     ] sys-block/parted-3.7::gentoo  USE="debug nls readline -device-mapper -static-libs -verify-sig" 1924 KiB
+[ebuild  N     ] acct-group/plugdev-0-r3::gentoo  0 KiB
+[ebuild  N     ] app-crypt/mit-krb5-1.22.2-r2::gentoo  USE="keyutils nls pkinit -doc -lmdb -openldap (-selinux) -test -xinetd" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="-aes" 8543 KiB
+[ebuild  N     ] acct-group/colord-0-r2::gentoo  0 KiB
+[ebuild  N     ] acct-group/gdm-0-r2::gentoo  0 KiB
+[ebuild  N     ] media-fonts/encodings-1.1.0::gentoo  292 KiB
+[ebuild  N     ] x11-misc/xdg-user-dirs-0.20::gentoo  USE="-gtk" 53 KiB
+[ebuild  N     ] media-libs/opus-1.5.2::gentoo  USE="-custom-modes -debug -deep-plc -doc -dred -hardened -osce -static-libs -test" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse" 7656 KiB
+[ebuild  N     ] media-libs/libsndfile-1.2.2-r2::gentoo  USE="alsa -minimal -sqlite -test" ABI_X86="(64) -32 (-x32)" 714 KiB
+[ebuild  N     ] media-fonts/adwaita-fonts-49.0::gentoo  USE="X" 2056 KiB
+[ebuild  N     ] dev-libs/libpwquality-1.4.5-r3::gentoo  USE="pam -debug -python -static-libs" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 424 KiB
+[ebuild  N     ] x11-base/xcb-proto-1.17.0::gentoo  PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 149 KiB
+[ebuild  N     ] x11-libs/libxcb-1.17.0:0/1.12::gentoo  USE="xkb -doc (-selinux) -test" ABI_X86="(64) -32 (-x32)" 445 KiB
+[ebuild  N     ] x11-misc/compose-tables-1.8.13::gentoo  1762 KiB
+[ebuild  N     ] x11-libs/libX11-1.8.13::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] x11-libs/libxkbfile-1.2.0::gentoo  ABI_X86="(64) -32 (-x32)" 57 KiB
+[ebuild  N     ] x11-apps/xkbcomp-1.5.0-r2::gentoo  243 KiB
+[ebuild  N     ] x11-libs/libXext-1.3.7::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 339 KiB
+[ebuild  N     ] media-libs/libglvnd-1.7.0::gentoo  USE="X -test" ABI_X86="(64) -32 (-x32)" 560 KiB
+[ebuild  N     ] media-libs/libepoxy-1.5.10-r3::gentoo  USE="X -test" ABI_X86="(64) -32 (-x32)" 325 KiB
+[ebuild  N     ] x11-libs/libXfixes-6.0.2::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 265 KiB
+[ebuild  N     ] x11-libs/libXi-1.8.3::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 403 KiB
+[ebuild  N     ] x11-libs/libxkbcommon-1.13.2::gentoo  USE="X wayland -doc -static-libs -test -tools" ABI_X86="(64) -32 (-x32)" 1215 KiB
+[ebuild  N     ] x11-libs/libXrender-0.9.12::gentoo  ABI_X86="(64) -32 (-x32)" 304 KiB
+[ebuild  N     ] x11-libs/libXrandr-1.5.5::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 283 KiB
+[ebuild  N     ] virtual/opengl-8::gentoo  USE="(X)" ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] x11-libs/libXcursor-1.2.3::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 286 KiB
+[ebuild  N     ] x11-libs/libXdamage-1.1.7::gentoo  ABI_X86="(64) -32 (-x32)" 260 KiB
+[ebuild  N     ] x11-libs/libXtst-1.2.5::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 285 KiB
+[ebuild  N     ] x11-libs/libXt-1.3.1-r1::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 675 KiB
+[ebuild  N     ] x11-libs/libXmu-1.3.1::gentoo  USE="-doc -test" ABI_X86="(64) -32 (-x32)" 366 KiB
+[ebuild  N     ] x11-apps/xauth-1.1.5::gentoo  162 KiB
+[ebuild  N     ] x11-libs/libXxf86vm-1.1.7::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 267 KiB
+[ebuild  N     ] x11-libs/libXcomposite-0.4.7::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 267 KiB
+[ebuild  N     ] x11-libs/libXinerama-1.1.6::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 263 KiB
+[ebuild  N     ] x11-apps/xrdb-1.2.3-r2::gentoo  141 KiB
+[ebuild  N     ] x11-apps/xinit-1.4.4::gentoo  USE="-twm" 159 KiB
+[ebuild  N     ] x11-libs/xcb-util-keysyms-0.4.1::gentoo  ABI_X86="(64) -32 (-x32)" 254 KiB
+[ebuild  N     ] app-text/docbook-xml-simple-dtd-4.1.2.4-r4:4.1.2.4::gentoo  35 KiB
+[ebuild  N     ] app-text/docbook-xml-simple-dtd-1.0-r3:1.0::gentoo  31 KiB
+[ebuild  N     ] sys-apps/gptfdisk-1.0.10-r1::gentoo  USE="ncurses -static" 216 KiB
+[ebuild  N     ] sys-fs/cryptsetup-2.8.8:0/12::gentoo  USE="argon2 nls openssl udev -fips -gcrypt -kernel -nettle -passwdqc -pwquality -ssh -static -static-libs -test -urandom -verify-sig" 11671 KiB
+[ebuild  N     ] sys-libs/tdb-1.4.15::gentoo  USE="-python -test" ABI_X86="(64) -32 (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 736 KiB
+[ebuild  N     ] sys-libs/tevent-0.17.1::gentoo  USE="-python -test" ABI_X86="(64) -32 (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 882 KiB
+[ebuild  N     ] acct-group/lpadmin-0-r3::gentoo  0 KiB
+[ebuild  N     ] acct-user/colord-0-r2::gentoo  0 KiB
+[ebuild  N     ] acct-user/gdm-0-r2::gentoo  0 KiB
+[ebuild  N     ] x11-apps/xhost-1.0.10::gentoo  134 KiB
+[ebuild  N     ] acct-group/cuse-0::gentoo  0 KiB
+[ebuild  N     ] sys-fs/fuse-common-3.10.4-r3::gentoo  2723 KiB
+[ebuild  N     ] sys-fs/fuse-3.18.3:3/4::gentoo  USE="suid -io-uring -systemtap -test" ABI_X86="(64) -32 (-x32)" 2520 KiB
+[ebuild  N     ] acct-group/pipewire-0-r2::gentoo  0 KiB
+[ebuild  N     ] x11-apps/xprop-1.2.8::gentoo  144 KiB
+[ebuild  N     ] x11-apps/xset-1.2.6::gentoo  143 KiB
+[ebuild  N     ] dev-libs/libgit2-1.9.7:0/1.9::gentoo  USE="ssh -examples -gssapi -test -trace" 7588 KiB
+[ebuild  N     ] dev-util/cargo-c-0.10.16::gentoo  USE="-debug" 33428 KiB
+[ebuild  N     ] acct-group/geoclue-0-r2::gentoo  0 KiB
+[ebuild  N     ] acct-user/geoclue-0-r2::gentoo  0 KiB
+[ebuild  N     ] sys-libs/pam_wrapper-1.1.8::gentoo  USE="-test" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 92 KiB
+[ebuild  N     ] net-dialup/ppp-2.5.4-r1:0/2.5.4::gentoo  USE="pam systemd -activefilter -atm (-selinux)" 990 KiB
+[ebuild  N     ] acct-group/polkitd-0-r3::gentoo  0 KiB
+[ebuild  N     ] acct-user/polkitd-0-r3::gentoo  0 KiB
+[ebuild  N     ] media-libs/libdisplay-info-0.3.0:0/3::gentoo  USE="-verify-sig" ABI_X86="(64) -32 (-x32)" 111 KiB
+[ebuild  N     ] x11-libs/xcb-util-0.4.1::gentoo  ABI_X86="(64) -32 (-x32)" 262 KiB
+[ebuild  N     ] x11-libs/startup-notification-0.12-r2::gentoo  347 KiB
+[ebuild  N     ] dev-lang/spidermonkey-140.16.0:140/140.11.0::gentoo  USE="jit -clang -debug -test" LLVM_SLOT="21 -20" 617775 KiB
+[ebuild  N     ] x11-libs/libXv-1.0.13::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 275 KiB
+[ebuild  N     ] dev-ruby/timeout-0.6.0::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 12 KiB
+[ebuild  N     ] dev-ruby/net-protocol-0.2.2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 8 KiB
+[ebuild  N     ] dev-ruby/net-pop-0.1.2::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 22 KiB
+[ebuild  N     ] dev-ruby/net-ftp-0.3.8::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34)" 30 KiB
+[ebuild  N     ] dev-ruby/net-smtp-0.5.1::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 27 KiB
+[ebuild  N     ] dev-ruby/net-imap-0.5.12:0.5::gentoo  USE="-doc -test" RUBY_TARGETS="ruby33 -ruby32 (-ruby34) (-ruby40)" 303 KiB
+[ebuild  N     ] media-libs/glu-9.0.3::gentoo  ABI_X86="(64) -32 (-x32)" 214 KiB
+[ebuild  N     ] virtual/glu-9.0-r2::gentoo  ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] media-libs/freeglut-3.8.0::gentoo  ABI_X86="(64) -32 (-x32)" 527 KiB
+[ebuild  N     ] media-libs/tiff-4.7.1:0/6::gentoo  USE="cxx opengl zlib -jbig -jpeg -lerc -libdeflate -lzma -static-libs -test -verify-sig -webp -zstd" ABI_X86="(64) -32 (-x32)" 2304 KiB
+[ebuild  N     ] media-libs/libwebp-1.6.0:0/7::gentoo  USE="jpeg opengl png -gif -static-libs -swap-16bit-csp -tiff" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse2 -avx2 -sse4_1" 4196 KiB
+[ebuild  N     ] dev-cpp/abseil-cpp-20250814.1:0/2508.1.0::gentoo  USE="-debug -test -test-helpers" ABI_X86="(64) -32 (-x32)" 2184 KiB
+[ebuild  N     ] media-libs/webrtc-audio-processing-1.3-r3:1::gentoo  ABI_X86="(64) -32 (-x32)" 641 KiB
+[ebuild  N     ] media-fonts/liberation-fonts-2.1.5::gentoo  USE="X -fontforge" 2330 KiB
+[ebuild  N     ] virtual/ttf-fonts-1-r2::gentoo  0 KiB
+[ebuild  N     ] media-libs/fontconfig-2.18.3:1.0::gentoo  USE="nls -doc -test" ABI_X86="(64) -32 (-x32)" 1145 KiB
+[ebuild  N     ] x11-libs/libXft-2.3.9::gentoo  USE="-doc" ABI_X86="(64) -32 (-x32)" 307 KiB
+[ebuild  N     ] www-client/w3m-0.5.6::gentoo  USE="X nls ssl unicode -fbcon -gdk-pixbuf -gpm -imlib -lynxkeymap -nntp -xface" L10N="-ja" 2268 KiB
+[ebuild  N     ] virtual/w3m-1::gentoo  0 KiB
+[ebuild  N     ] app-text/docbook-sgml-utils-0.6.14-r6::gentoo  USE="-jadetex" 123 KiB
+[ebuild   R    ] app-text/xmlto-0.0.28-r11::gentoo  USE="text* -latex" 125 KiB
+[ebuild  N     ] virtual/krb5-0-r1::gentoo  ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild   R    ] sys-apps/dbus-1.16.2::gentoo  USE="X* systemd -debug -doc (-elogind) (-selinux) -static-libs -test -valgrind" ABI_X86="(64) -32 (-x32)" 1090 KiB
+[ebuild  N     ] sys-libs/libnvme-1.16.2:0/1::gentoo  USE="dbus json ssl -debug -examples -io-uring -keyutils -python -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 820 KiB
+[ebuild  N     ] dev-python/pyproject-metadata-0.12.1::gentoo  USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 48 KiB
+[ebuild  N     ] dev-util/itstool-2.0.7_p20250326::gentoo  PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 93 KiB
+[ebuild  N     ] dev-libs/libei-1.6.0::gentoo  USE="systemd (-elogind) -test" 218 KiB
+[ebuild  N     ] dev-python/pygments-2.21.0::gentoo  USE="-test" PYTHON_TARGETS="python3_14 (-pypy3_12) -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 4889 KiB
+[ebuild  N     ] dev-python/mako-1.4.1::gentoo  USE="-doc -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 401 KiB
+[ebuild  N     ] dev-python/pyyaml-6.0.3::gentoo  USE="-debug -examples -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 122 KiB
+[ebuild  N     ] dev-python/olefile-0.47::gentoo  USE="-doc" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 100 KiB
+[ebuild  N     ] dev-python/scikit-build-core-1.0.3::gentoo  USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 467 KiB
+[ebuild  N     ] dev-python/pybind11-3.1.0::gentoo  USE="-test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 962 KiB
+[ebuild  N     ] dev-python/pillow-12.3.0::gentoo  USE="jpeg zlib -avif -debug -examples -imagequant -jpeg2k -lcms -raqm -test -tiff -tk -truetype -webp -xcb" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 46017 KiB
+[ebuild  N     ] dev-python/docutils-0.23::gentoo  PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 2250 KiB
+[ebuild  N     ] dev-util/glib-utils-2.88.2::gentoo  PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 5648 KiB
+[ebuild  N     ] dev-libs/glib-2.88.2:2::gentoo  USE="dbus elf introspection mime xattr -debug -doc (-selinux) -static-libs -sysprof -systemtap -test -utils" ABI_X86="(64) -32 (-x32)" 19 KiB
+[ebuild  N     ] x11-misc/shared-mime-info-2.4-r3::gentoo  USE="-test" 6931 KiB
+[ebuild  N     ] dev-util/desktop-file-utils-0.28-r1::gentoo  80 KiB
+[ebuild  N     ] dev-util/gdbus-codegen-2.88.2::gentoo  PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild  N     ] gnome-base/dconf-0.49.0::gentoo  USE="-gtk-doc -test" 121 KiB
+[ebuild  N     ] dev-libs/gobject-introspection-1.86.0::gentoo  USE="-doctool -gtk-doc -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild  N     ] x11-libs/cairo-1.18.4-r1::gentoo  USE="X glib (-aqua) (-debug) -gtk-doc -lzo -test" ABI_X86="(64) -32 (-x32)" 41892 KiB
+[ebuild  N     ] x11-libs/gdk-pixbuf-2.44.7:2::gentoo  USE="introspection -gif -gtk-doc -jpeg -test -tiff" ABI_X86="(64) -32 (-x32)" 5897 KiB
+[ebuild  N     ] gnome-base/gsettings-desktop-schemas-49.1::gentoo  USE="introspection" 835 KiB
+[ebuild  N     ] dev-libs/json-glib-1.10.8::gentoo  USE="introspection nls -gtk-doc -test" ABI_X86="(64) -32 (-x32)" 1264 KiB
+[ebuild  N     ] dev-lang/vala-0.56.19:0.56::gentoo  USE="-test -valadoc" 0 KiB
+[ebuild  N     ] dev-libs/libgudev-238-r2::gentoo  USE="-introspection -test" ABI_X86="(64) -32 (-x32)" 30 KiB
+[ebuild  N     ] media-libs/harfbuzz-12.3.2:0/6.0.0::gentoo  USE="cairo glib graphite icu introspection truetype -debug -doc -experimental -test" ABI_X86="(64) -32 (-x32)" 18832 KiB
+[ebuild  N     ] x11-libs/pango-1.57.1::gentoo  USE="X introspection -debug -examples -gtk-doc -libthai -sysprof -test" ABI_X86="(64) -32 (-x32)" 2528 KiB
+[ebuild  N     ] gnome-base/librsvg-2.62.3:2::gentoo  USE="introspection vala -debug -gtk-doc -test" ABI_X86="(64) -32 (-x32)" 25143 KiB
+[ebuild  N     ] app-accessibility/at-spi2-core-2.58.8:2::gentoo  USE="X introspection systemd -dbus-broker -gtk-doc -test" ABI_X86="(64) -32 (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 576 KiB
+[ebuild  N     ] media-libs/graphene-1.10.8-r1::gentoo  USE="introspection -doc -test" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse2" 175 KiB
+[ebuild  N     ] media-libs/gstreamer-1.26.11:1.0::gentoo  USE="caps introspection nls -ptp -test -unwind -verify-sig" ABI_X86="(64) -32 (-x32)" 1857 KiB
+[ebuild  N     ] dev-libs/libical-3.0.20-r2:0/3::gentoo  USE="glib introspection -doc -examples -static-libs -test -vala" 952 KiB
+[ebuild  N     ] x11-misc/xdg-utils-1.2.1-r11::gentoo  USE="X dbus -doc -gnome -perl -plasma" 287 KiB
+[ebuild  N     ] net-print/cups-2.4.19::gentoo  USE="X acl dbus pam systemd -debug -kerberos -openssl (-selinux) -static-libs -test -usb -verify-sig -xinetd -zeroconf" ABI_X86="(64) -32 (-x32)" 7764 KiB
+[ebuild  N     ] dev-python/pycairo-1.29.1::gentoo  USE="X -debug -doc -examples -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 651 KiB
+[ebuild  N     ] dev-python/pygobject-3.58.0:3::gentoo  USE="cairo -debug -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 1376 KiB
+[ebuild  N     ] net-libs/libmbim-1.34.0::gentoo  USE="-gtk-doc -introspection" 225 KiB
+[ebuild  N     ] net-libs/libqrtr-glib-1.4.0::gentoo  USE="-gtk-doc" 26 KiB
+[ebuild  N     ] dev-util/gtk-update-icon-cache-3.24.42::gentoo  91 KiB
+[ebuild  N     ] dev-libs/gjs-1.88.1::gentoo  USE="readline -examples -sysprof -test" 788 KiB
+[ebuild  N     ] app-arch/gnome-autoar-0.4.5::gentoo  USE="introspection -gtk -gtk-doc -test -vala" 51 KiB
+[ebuild  N     ] gnome-base/libgtop-2.41.3:2/11::gentoo  USE="introspection" 737 KiB
+[ebuild  N     ] dev-util/blueprint-compiler-0.22.2::gentoo  USE="-doc -test" PYTHON_SINGLE_TARGET="python3_14 -python3_13 (-python3_15)" 124 KiB
+[ebuild  N     ] dev-python/dbus-python-1.4.0-r1::gentoo  USE="-doc -examples -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_15)" 165 KiB
+[ebuild  N     ] dev-python/pycups-2.0.4::gentoo  USE="-debug -examples" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 64 KiB
+[ebuild  N     ] sys-libs/libblockdev-3.5.0:0/3::gentoo  USE="cryptsetup nvme tools -device-mapper -escrow -gtk-doc -introspection -lvm -python -smart -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 1164 KiB
+[ebuild  N     ] net-wireless/bluez-5.87:0/3::gentoo  USE="mesh obex readline systemd udev -btpclient -cups -debug -deprecated -doc -experimental -extra-tools -man -midi (-selinux) -test -test-programs" ABI_X86="(64) -32 (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 2265 KiB
+[ebuild  N     ] net-libs/libqmi-1.36.0:0/5.11::gentoo  USE="mbim qrtr -gtk-doc -introspection" 3649 KiB
+[ebuild  N     ] dev-libs/libgusb-0.4.9::gentoo  USE="introspection vala -gtk-doc -test -verify-sig" ABI_X86="(64) -32 (-x32)" 51 KiB
+[ebuild  N     ] dev-libs/libxmlb-0.3.26:0/2::gentoo  USE="lzma zstd -doc -introspection -stemmer -test -verify-sig" 104 KiB
+[ebuild  N     ] dev-libs/appstream-glib-0.8.3:0/8::gentoo  USE="introspection -fonts -gtk-doc" 2268 KiB
+[ebuild  N     ] dev-libs/appstream-1.0.6:0/5::gentoo  USE="introspection systemd -apt -compose -doc -qt6 -test -vala" 2673 KiB
+[ebuild  N     ] net-libs/libproxy-0.5.12-r1::gentoo  USE="introspection -duktape -gnome -gtk-doc -test -vala" ABI_X86="(64) -32 (-x32)" 60 KiB
+[ebuild  N     ] net-libs/glib-networking-2.80.1::gentoo  USE="gnome libproxy ssl -test" ABI_X86="(64) -32 (-x32)" 285 KiB
+[ebuild  N     ] net-libs/libsoup-3.6.6:3.0::gentoo  USE="brotli introspection ssl vala -gssapi -gtk-doc -samba -sysprof -test" ABI_X86="(64) -32 (-x32)" 1536 KiB
+[ebuild  N     ] sci-geosciences/geocode-glib-3.26.4-r201:2::gentoo  USE="introspection -gtk-doc -test" 74 KiB
+[ebuild  N     ] dev-libs/libgweather-4.4.4:4/4-0::gentoo  USE="introspection vala -gtk-doc -test" 2777 KiB
+[ebuild  N     ] net-libs/rest-0.10.2-r1:1.0::gentoo  USE="introspection -gtk-doc -test -vala" 72 KiB
+[ebuild  N     ] net-libs/libndp-1.9-r1::gentoo  ABI_X86="(64) -32 (-x32)" 367 KiB
+[ebuild  N     ] media-libs/glycin-loaders-2.2.1:2::gentoo  USE="-debug -heif -jpegxl -svg -test" 21637 KiB
+[ebuild  N     ] media-libs/glycin-2.1.1-r1:2::gentoo  USE="introspection -debug -doc -gtk -test -vala" 24797 KiB
+[ebuild  N     ] sys-apps/xdg-dbus-proxy-0.1.8::gentoo  USE="-test" 45 KiB
+[ebuild  N     ] llvm-core/llvm-22.1.8:22/22.1::gentoo  USE="binutils-plugin libffi zstd -debug (-debuginfod) -doc -exegesis -libedit -test -verify-sig -xml -z3" ABI_X86="(64) -32 (-x32)" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" 313 KiB
+[ebuild  N     ] llvm-core/llvm-toolchain-symlinks-22:22::gentoo  USE="-multilib-symlinks -native-symlinks" 0 KiB
+[ebuild  N     ] llvm-core/llvmgold-22::gentoo  0 KiB
+[ebuild  N     ] dev-util/spirv-llvm-translator-22.1.6:22::gentoo  USE="-test" ABI_X86="(64) -32 (-x32)" 2421 KiB
+[ebuild  N     ] app-crypt/libsecret-0.21.8.2-r1::gentoo  USE="crypt gcrypt introspection pam (test-rust) vala -gnutls -gtk-doc -test -tpm" ABI_X86="(64) -32 (-x32)" 209 KiB
+[ebuild  N     ] app-crypt/gcr-4.4.0.1-r1:4/gcr-4.4-gck-2.2::gentoo  USE="introspection systemd vala -gnutls -gtk -gtk-doc -test" 728 KiB
+[ebuild  N     ] llvm-core/clang-22.1.8:22/22.1::gentoo  USE="extra (pie) static-analyzer -debug -doc (-ieee-long-double) -test -verify-sig -xml" ABI_X86="(64) -32 (-x32)" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 0 KiB
+[ebuild  N     ] llvm-core/clang-toolchain-symlinks-22:22::gentoo  USE="-gcc-symlinks -multilib-symlinks -native-symlinks" 0 KiB
+[ebuild  N     ] llvm-runtimes/compiler-rt-22.1.8:22::gentoo  USE="atomic-builtins (clang) -debug -test -verify-sig" ABI_X86="32 (64)" 0 KiB
+[ebuild  N     ] llvm-runtimes/compiler-rt-sanitizers-22.1.8:22::gentoo  USE="asan cfi (clang) ctx-profile dfsan gwp-asan hwasan libfuzzer lsan memprof msan nsan orc profile rtsan safestack scudo tsan ubsan xray -debug (-shadowcallstack) -test -verify-sig" ABI_X86="32 (64)" 2 KiB
+[ebuild  N     ] llvm-runtimes/clang-runtime-22-r1:22::gentoo  USE="compiler-rt openmp sanitize -default-compiler-rt -default-libcxx -default-lld -libcxx -llvm-libunwind -polly" ABI_X86="32 (64) (-x32)" 0 KiB
+[ebuild  N     ] llvm-runtimes/libclc-22.1.8::gentoo  USE="spirv -verify-sig" VIDEO_CARDS="radeonsi -nvidia -r600" 0 KiB
+[ebuild  N     ] dev-util/mesa_clc-26.1.8::gentoo  USE="-debug" LLVM_SLOT="22 -18 -19 -20 -21" VIDEO_CARDS="-asahi -panfrost" 76004 KiB
+[ebuild  N     ] media-libs/mesa-26.1.8-r1::gentoo  USE="X llvm (opengl) proprietary-codecs wayland zstd -debug -lm-sensors -opencl -sysprof -test -unwind -vaapi -valgrind -vulkan" ABI_X86="(64) -32 (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="22 -18 -19 -20 -21" VIDEO_CARDS="intel nouveau radeon radeonsi -asahi -d3d12 (-freedreno) -i915 (-imagination) -lavapipe (-lima) -nvk (-panfrost) -r300 -r600 (-v3d) (-vc4) -virgl (-vivante) -vmware -zink" 0 KiB
+[ebuild  N     ] x11-base/xorg-server-21.1.24:0/21.1.24::gentoo  USE="systemd udev xorg -debug (-elogind) -minimal (-selinux) -suid -test -unwind -xcsecurity -xephyr -xnest -xvfb" 4954 KiB
+[ebuild  N     ] x11-drivers/xf86-video-vesa-2.6.0::gentoo  270 KiB
+[ebuild  N     ] x11-drivers/xf86-input-libinput-1.5.0::gentoo  323 KiB
+[ebuild  N     ] x11-drivers/xf86-video-nouveau-1.0.18::gentoo  537 KiB
+[ebuild  N     ] x11-drivers/xf86-video-ati-22.0.0::gentoo  USE="udev" 739 KiB
+[ebuild  N     ] x11-drivers/xf86-video-dummy-0.4.1::gentoo  257 KiB
+[ebuild  N     ] x11-drivers/xf86-video-amdgpu-25.0.0-r1::gentoo  USE="udev" 74 KiB
+[ebuild  N     ] x11-drivers/xf86-video-fbdev-0.5.1::gentoo  264 KiB
+[ebuild  N     ] media-libs/gst-plugins-base-1.26.11:1.0::gentoo  USE="X alsa egl gles2 introspection nls ogg opengl orc pango vorbis wayland -gbm -ivorbis -test -theora -verify-sig" ABI_X86="(64) -32 (-x32)" 2452 KiB
+[ebuild  N     ] media-plugins/gst-plugins-opus-1.26.11:1.0::gentoo  ABI_X86="(64) -32 (-x32)" 7616 KiB
+[ebuild  N     ] media-libs/gst-plugins-bad-1.26.11:1.0::gentoo  USE="X bzip2 introspection nls orc udev wayland -test -vaapi -verify-sig -vnc -vulkan" ABI_X86="(64) -32 (-x32)" 0 KiB
+[ebuild  N     ] x11-libs/gtk+-3.24.52:3::gentoo  USE="X introspection wayland (-aqua) -broadway -cloudproviders -colord -cups -examples -gtk-doc -sysprof -test -vim-syntax -xinerama" ABI_X86="(64) -32 (-x32)" 13260 KiB
+[ebuild  N     ] x11-themes/adwaita-icon-theme-legacy-46.2::gentoo  2009 KiB
+[ebuild  N     ] x11-themes/adwaita-icon-theme-49.0::gentoo  USE="-branding" 4410 KiB
+[ebuild  N     ] gui-libs/gtk-4.20.4-r1:4::gentoo  USE="X introspection wayland (-aqua) -broadway -cloudproviders -colord -cups -examples -gstreamer -gtk-doc -sysprof -test -vulkan" CPU_FLAGS_X86="-f16c" 15644 KiB
+[ebuild  N     ] gui-libs/libadwaita-1.8.7:1::gentoo  USE="introspection vala -examples -gtk-doc -test" 2639 KiB
+[ebuild  N     ] app-i18n/ibus-1.5.33::gentoo  USE="X emoji gtk3 gtk4 gui introspection nls python systemd unicode wayland -appindicator -libnotify -test -vala" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 4249 KiB
+[ebuild  N     ] net-libs/gnome-online-accounts-3.56.5:0/1::gentoo  USE="introspection vala -debug -doc -gnome -kerberos -ms365" 486 KiB
+[ebuild  N     ] gnome-base/gnome-desktop-44.5-r300:3/20::gentoo  USE="introspection (seccomp) systemd udev -debug" 748 KiB
+[ebuild  N     ] gnome-extra/tecla-49.0::gentoo  USE="wayland" 82 KiB
+[ebuild  N     ] x11-misc/xdg-user-dirs-gtk-0.16::gentoo  49 KiB
+[ebuild  N     ] net-libs/webkit-gtk-2.54.0-r411:4.1/0::gentoo  USE="X gstreamer introspection (seccomp) systemd wayland (-aqua) -avif -custom-cflags -examples -gamepad -jpegxl -keyring -lcms -pdf -spell" CPU_FLAGS_X86="sse sse2" 48546 KiB
+[ebuild  N     ] app-crypt/gcr-3.41.2-r2:0/1::gentoo  USE="X gtk introspection systemd vala wayland -gtk-doc -test" 1011 KiB
+[ebuild  N     ] gnome-base/gnome-keyring-48.0-r1::gentoo  USE="pam ssh-agent systemd -caps (-selinux) -test" 750 KiB
+[ebuild  N     ] virtual/secret-service-0-r2::gentoo  0 KiB
+[ebuild  N     ] x11-misc/notification-daemon-3.20.0-r1::gentoo  333 KiB
+[ebuild  N     ] virtual/freedesktop-icon-theme-0-r4::gentoo  0 KiB
+[ebuild  N     ] virtual/notification-daemon-0::gentoo  USE="-gnome -kde" 0 KiB
+[ebuild  N     ] x11-libs/libnotify-0.8.8::gentoo  USE="introspection -gtk-doc -test" ABI_X86="(64) -32 (-x32)" 113 KiB
+[ebuild  N     ] app-misc/geoclue-2.8.1:2.0::gentoo  USE="introspection -gtk-doc -modemmanager (-selinux) -vala -zeroconf" 111 KiB
+[ebuild     U  ] sys-apps/systemd-261.2:0/2::gentoo [260.1-r2:0/2::gentoo] USE="acl dns-over-tls gcrypt kernel-install kmod libarchive lz4 openssl pam pcre policykit* resolvconf seccomp sysv-utils zstd -apparmor -audit -boot -bpf -cryptsetup -curl -elfutils -fido2 -gnutls -homed -idn -imds% -importd -lzma -passwdqc -pkcs11 -pwquality -qrcode -remote -secureboot (-selinux) -test -tpm -ukify -vanilla -xkb" ABI_X86="(64) -32 (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 18024 KiB
+[ebuild  N     ] sys-auth/polkit-126-r3::gentoo  USE="introspection nls pam systemd (-elogind) -examples -gtk -kde (-selinux) -test" 446 KiB
+[ebuild  N     ] gnome-base/gnome-desktop-44.5-r400:4/2::gentoo  USE="(seccomp) systemd udev -debug -gtk-doc" 0 KiB
+[ebuild  N     ] x11-misc/colord-1.4.8-r1:0/2::gentoo  USE="introspection systemd -argyllcms -examples -extra-print-profiles -gtk-doc -scanner (-selinux) -test -vala" ABI_X86="(64) -32 (-x32)" 1872 KiB
+[ebuild  N     ] sys-power/upower-1.90.9:0/3::gentoo  USE="introspection policykit -doc -ios (-selinux) -test" 152 KiB
+[ebuild  N     ] sys-apps/accountsservice-26.27.3:0/1::gentoo  USE="introspection systemd -doc (-elogind) -gtk-doc (-selinux) -test -vala -xcrypt" 657 KiB
+[ebuild  N     ] net-misc/modemmanager-1.24.2:0/1::gentoo  USE="introspection mbim policykit qmi qrtr systemd udev (-elogind) -gtk-doc (-selinux) -test -vala" 1483 KiB
+[ebuild  N     ] net-print/cups-pk-helper-0.2.7-r1::gentoo  54 KiB
+[ebuild  N     ] sys-fs/udisks-2.11.2:2::gentoo  USE="acl daemon introspection nls systemd -debug (-elogind) -lvm (-selinux) -smart" 1932 KiB
+[ebuild  N     ] net-misc/networkmanager-1.58.1-r1::gentoo  USE="concheck introspection modemmanager nss policykit ppp systemd tools wext wifi -audit -bluetooth -clat -connection-sharing -debug -dhcpcd (-elogind) -gnutls -gtk-doc -iptables -iwd -libedit -nbft -nftables -ofono -ovs -psl -resolvconf (-selinux) -syslog -teamd -test -vala" ABI_X86="(64) -32 (-x32)" 6362 KiB
+[ebuild  N     ] x11-libs/colord-gtk-0.3.1:0/1::gentoo  USE="introspection -doc -vala" 22 KiB
+[ebuild  N     ] gnome-extra/gnome-color-manager-3.36.2-r1::gentoo  USE="-test" 2137 KiB
+[ebuild  N     ] net-libs/libnma-1.10.6-r2::gentoo  USE="X introspection pkcs11 -gtk-doc -vala" 687 KiB
+[ebuild  N     ] gnome-extra/nm-applet-1.36.0::gentoo  USE="modemmanager -appindicator (-selinux) -teamd" 1878 KiB
+[ebuild  N     ] dev-perl/libwww-perl-6.810.0::gentoo  USE="ssl -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 183 KiB
+[ebuild  N     ] dev-perl/LWP-Protocol-https-6.140.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 33 KiB
+[ebuild  N     ] dev-perl/XML-Parser-2.470.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 273 KiB
+[ebuild  N     ] dev-util/intltool-0.51.0-r3::gentoo  159 KiB
+[ebuild  N     ] app-admin/system-config-printer-1.5.18-r3::gentoo  USE="policykit -keyring" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 1365 KiB
+[ebuild  N     ] gnome-extra/evolution-data-server-3.60.2:0/67-11-21-5-3-27-2-27-4-0::gentoo  USE="gnome-online-accounts gtk introspection oauth-gtk3 weather -berkdb -gtk-doc -kerberos -ldap -oauth-gtk4 -sound -test -vala" 5115 KiB
+[ebuild  N     ] x11-themes/sound-theme-freedesktop-0.8-r1::gentoo  468 KiB
+[ebuild  N     ] media-libs/libpulse-17.0::gentoo  USE="X asyncns dbus glib systemd -doc -gtk (-selinux) -test -valgrind" ABI_X86="(64) -32 (-x32)" 1530 KiB
+[ebuild  N     ] media-sound/pulseaudio-daemon-17.0-r2::gentoo  USE="X alsa alsa-plugin asyncns dbus gdbm glib orc ssl systemd udev webrtc-aec -aptx -bluetooth (-elogind) -equalizer -fftw -gstreamer -jack -ldac -lirc -ofono-headset (-oss) (-selinux) -sox (-system-wide) -tcpd -test -valgrind -zeroconf" 0 KiB
+[ebuild  N     ] media-plugins/alsa-plugins-1.2.12::gentoo  USE="mix pulseaudio usb_stream -arcam_av -debug -ffmpeg -jack -libsamplerate -oss -speex -verify-sig" ABI_X86="(64) -32 (-x32)" 400 KiB
+[ebuild  N     ] media-libs/libcanberra-0.30-r8::gentoo  USE="alsa pulseaudio udev -gstreamer -oss -tdb" ABI_X86="(64) -32 (-x32)" 312 KiB
+[ebuild  N     ] gnome-base/gnome-settings-daemon-49.1-r1::gentoo  USE="X colord cups systemd xwayland -debug (-elogind) -modemmanager -networkmanager -smartcard (-test)" 1455 KiB
+[ebuild  N     ] media-libs/gsound-1.0.3::gentoo  USE="introspection vala -gtk-doc" 23 KiB
+[ebuild  N     ] gnome-base/gnome-session-49.3::gentoo  USE="X systemd -doc (-elogind)" 385 KiB
+[ebuild  N     ] net-wireless/gnome-bluetooth-47.2:3/13::gentoo  USE="introspection -gtk-doc -test" 292 KiB
+[ebuild  N     ] media-video/pipewire-1.6.8:0/0.4::gentoo  USE="X dbus readline ssl systemd -bluetooth -doc -echo-cancel (-elogind) -extra -ffmpeg -fftw -flatpak -gsettings -gstreamer -ieee1394 -jack-client -jack-sdk -libcamera -loudness -lv2 -man -modemmanager -pipewire-alsa -pulseaudio -roc (-selinux) -sofa -sound-server (-system-service) -test -v4l -zeroconf" ABI_X86="(64) -32 (-x32)" 2089 KiB
+[ebuild  N     ] media-video/wireplumber-0.5.15:0/0.5::gentoo  USE="systemd -doc (-elogind) (-system-service) -test" LUA_SINGLE_TARGET="lua5-4 -lua5-3" 467 KiB
+[ebuild  N     ] sys-apps/xdg-desktop-portal-1.20.4-r1::gentoo  USE="seccomp systemd udev -flatpak -geolocation -gstreamer -test" 1201 KiB
+[ebuild  N     ] sys-apps/xdg-desktop-portal-gtk-1.15.3::gentoo  USE="X wayland" 93 KiB
+[ebuild  N     ] x11-base/xwayland-24.1.13::gentoo  USE="libei systemd (-selinux) -test -unwind -xcsecurity" 1276 KiB
+[ebuild  N     ] x11-wm/mutter-49.6:0/17::gentoo  USE="X introspection systemd udev wayland (xwayland) -bash-completion -debug -devkit (-elogind) -gnome -gtk-doc -screencast (-selinux) -sysprof -test" INPUT_DEVICES="-wacom" VIDEO_CARDS="-nvidia" 8322 KiB
+[ebuild  N     ] sys-apps/xdg-desktop-portal-gnome-49.0::gentoo  USE="X wayland" 190 KiB
+[ebuild  N     ] gnome-base/gnome-shell-49.7::gentoo  USE="X ibus networkmanager systemd wayland (-elogind) -gtk-doc -pipewire (-selinux) -test" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 2258 KiB
+[ebuild  N     ] gnome-base/gdm-49.2-r4::gentoo  USE="X systemd -audit -bluetooth-sound -branding -debug (-elogind) -fprint -plymouth (-selinux) -tcpd -test" VIDEO_CARDS="-nvidia" 947 KiB
+[ebuild  N     ] net-fs/cifs-utils-7.5::gentoo  USE="acl ads caps pam python systemd -creds" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 414 KiB
+[ebuild  N     ] net-fs/samba-4.24.4:0/2.11.0::gentoo  USE="acl client pam regedit system-mitkrb5 systemd -addc -ads -ceph -cluster -cups -debug (-fam) -glusterfs -gpg -iprint -json -ldap -llvm-libunwind -lmdb -profiling-data -python -quota (-selinux) -snapper -spotlight -syslog (-system-heimdal) (-test) -unwind -winbind -zeroconf" ABI_X86="(64) -32 (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 42414 KiB
+[ebuild  N     ] gnome-base/gnome-control-center-49.9:2::gentoo  USE="X bluetooth cups geolocation gnome-online-accounts ibus networkmanager systemd -debug (-elogind) -kerberos -test" INPUT_DEVICES="-wacom" 6979 KiB
+
+Total: 455 packages (2 upgrades, 450 new, 1 in new slot, 2 reinstalls), Size of downloads: 2199783 KiB
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-lang/perl:0
+
+  (dev-lang/perl-5.42.2-1:0/5.42::gentoo, installed) USE="gdbm -berkdb -doc -minimal" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath" pulled in by
+    dev-lang/perl:0/5.42= required by (dev-perl/List-MoreUtils-XS-0.430.0-r1-2:0/0::gentoo, installed) USE="-test" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath"
+                 ^^^^^^^^                                                                                                                                                      
+    =dev-lang/perl-5.42* required by (virtual/perl-CPAN-Meta-2.150.10-r11-2:0/0::gentoo, installed) USE="" ABI_X86="(64)"
+    ^              ^^^^^                                                                                                  
+    (and 67 more with the same problems)
+
+  (dev-lang/perl-5.44.0:0/5.44::gentoo, ebuild scheduled for merge) USE="gdbm -berkdb -doc -minimal" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath" pulled in by
+    =dev-lang/perl-5.44* required by (virtual/perl-Digest-MD5-2.590.0-r1:0/0::gentoo, ebuild scheduled for merge) USE="" ABI_X86="(64)"
+    ^              ^^^^^                                                                                                                
+    (and 16 more with the same problem)
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by gnome-base/gnome-shell-49.7::gentoo
+# required by gnome-base/gdm-49.2-r4::gentoo
+>=gnome-base/gnome-control-center-49.9 networkmanager
+# required by gnome-base/gnome-control-center-49.9::gentoo[cups]
+# required by gnome-base/gnome-shell-49.7::gentoo
+# required by gnome-base/gdm-49.2-r4::gentoo
+>=net-fs/samba-4.24.4 client
+# required by gnome-base/gnome-control-center-49.9::gentoo
+# required by gnome-base/gnome-shell-49.7::gentoo
+# required by gnome-base/gdm-49.2-r4::gentoo
+>=media-libs/libcanberra-0.30-r8 pulseaudio
+# required by net-fs/samba-4.24.4::gentoo
+# required by net-fs/cifs-utils-7.5::gentoo[acl]
+>=net-libs/ngtcp2-1.25.0 gnutls
+# required by x11-libs/pango-1.57.1::gentoo
+# required by media-libs/gst-plugins-base-1.26.11::gentoo[pango]
+# required by media-plugins/gst-plugins-opus-1.26.11::gentoo
+# required by net-libs/webkit-gtk-2.54.0-r411::gentoo[gstreamer]
+# required by gnome-extra/evolution-data-server-3.60.2::gentoo[gtk,oauth-gtk3]
+# required by gnome-base/gnome-shell-49.7::gentoo
+# required by gnome-base/gdm-49.2-r4::gentoo
+>=media-libs/freetype-2.14.3 harfbuzz
+# required by x11-wm/mutter-49.6::gentoo[wayland]
+# required by gnome-base/gnome-shell-49.7::gentoo
+# required by gnome-base/gdm-49.2-r4::gentoo
+>=x11-base/xwayland-24.1.13 libei
+# required by gnome-base/gnome-keyring-48.0-r1::gentoo
+# required by virtual/secret-service-0-r2::gentoo
+# required by app-crypt/libsecret-0.21.8.2-r1::gentoo
+# required by gnome-extra/evolution-data-server-3.60.2::gentoo
+# required by gnome-base/gnome-shell-49.7::gentoo
+# required by gnome-base/gdm-49.2-r4::gentoo
+>=app-crypt/gcr-3.41.2-r2:0 gtk
+# required by media-sound/pulseaudio-daemon-17.0-r2::gentoo[alsa,alsa-plugin]
+# required by media-libs/libpulse-17.0::gentoo
+# required by gnome-base/gnome-settings-daemon-49.1-r1::gentoo
+# required by x11-wm/mutter-49.6::gentoo
+# required by gnome-base/gnome-shell-49.7::gentoo
+# required by gnome-base/gdm-49.2-r4::gentoo
+>=media-plugins/alsa-plugins-1.2.12 pulseaudio
+
+ * In order to avoid wasting time, backtracking has terminated early
+ * due to the above autounmask change(s). The --autounmask-backtrack=y
+ * option can be used to force further backtracking, but there is no
+ * guarantee that it will produce a solution.
+
+!!! All ebuilds that could satisfy ">=gnome-base/gnome-control-center-3.26[networkmanager(+)?]" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- gnome-base/gnome-control-center-50.4::gentoo (masked by: ~amd64 keyword)
+- gnome-base/gnome-control-center-49.9::gentoo (masked by: )
+
+(dependency required by "gnome-base/gnome-shell-49.7::gentoo" [ebuild])
+(dependency required by "gnome-base/gdm-49.2-r4::gentoo" [ebuild])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

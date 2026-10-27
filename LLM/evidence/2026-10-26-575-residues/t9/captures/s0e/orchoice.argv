@@ -1,0 +1,2 @@
+portuale: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/fx0 ROOT=/var/tmp/claude-s0e/h-orchoice PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-orchoice PORTUALE_BT_TRACE=1 portuale emerge --pretend --update --deep @world
+portage: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/fx0.cfg ROOT=/var/tmp/claude-s0e/h-orchoice PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-orchoice PYTHONHASHSEED=0 emerge --pretend --update --deep @world

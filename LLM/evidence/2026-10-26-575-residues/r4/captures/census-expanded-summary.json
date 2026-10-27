@@ -1,0 +1,3774 @@
+[
+ {
+  "id": "x0091",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/btgp"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/btgp",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/btgc:0",
+      [
+       "dev-libs/btgc-1:ebuild",
+       "dev-libs/btgc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x0098",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/btparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/btparent",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "5",
+  "bt_u": "5",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/bttarget:0",
+      [
+       "dev-libs/bttarget-1.0:ebuild",
+       "dev-libs/bttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   5
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x0220",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/mg2top"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/mg2top",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "10",
+  "bt_u": "14",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ],
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   10
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x0221",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/mgfa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/mgfa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x0224",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/mgxa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/mgxa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x0252",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/orbtblocked"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/orbtblocked",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/orbttool:0",
+      [
+       "dev-libs/orbttool-1.0:ebuild",
+       "dev-libs/orbttool-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x0362",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/scuseparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/scuseparent",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/scusetarget:0",
+      [
+       "dev-libs/scusetarget-1.0:ebuild",
+       "dev-libs/scusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x0369",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/slotconfgroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x0380",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/slotconflictunsolvable"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/slotconflictunsolvable",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x0389",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--emptytree",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --emptytree dev-libs/slotusegroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x1535",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/btgp"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/btgp",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/btgc:0",
+      [
+       "dev-libs/btgc-1:ebuild",
+       "dev-libs/btgc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x1542",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/btparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/btparent",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/bttarget:0",
+      [
+       "dev-libs/bttarget-1.0:ebuild",
+       "dev-libs/bttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   5
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x1666",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/mg2top"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/mg2top",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ],
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   10
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x1667",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/mgfa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/mgfa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x1670",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/mgxa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/mgxa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x1699",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/orbtblocked"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/orbtblocked",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/orbttool:0",
+      [
+       "dev-libs/orbttool-1.0:ebuild",
+       "dev-libs/orbttool-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x1809",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/scuseparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/scuseparent",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/scusetarget:0",
+      [
+       "dev-libs/scusetarget-1.0:ebuild",
+       "dev-libs/scusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": true
+ },
+ {
+  "id": "x1816",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/slotconfgroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": true
+ },
+ {
+  "id": "x1827",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/slotconflictunsolvable"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/slotconflictunsolvable",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": true
+ },
+ {
+  "id": "x1836",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--quiet",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --quiet dev-libs/slotusegroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "-",
+  "bt_u": "-",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": true,
+  "p_bt30": false,
+  "u_bt30": true
+ },
+ {
+  "id": "x2023",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/btgp"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --tree dev-libs/btgp",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/btgc:0",
+      [
+       "dev-libs/btgc-1:ebuild",
+       "dev-libs/btgc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2030",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/btparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --tree dev-libs/btparent",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "5",
+  "bt_u": "5",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/bttarget:0",
+      [
+       "dev-libs/bttarget-1.0:ebuild",
+       "dev-libs/bttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   5
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2152",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/mgfa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --tree dev-libs/mgfa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2155",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/mgxa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --tree dev-libs/mgxa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2291",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/scuseparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --tree dev-libs/scuseparent",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/scusetarget:0",
+      [
+       "dev-libs/scusetarget-1.0:ebuild",
+       "dev-libs/scusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x2298",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --tree dev-libs/slotconfgroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x2309",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/slotconflictunsolvable"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --tree dev-libs/slotconflictunsolvable",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x2317",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--tree",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --tree dev-libs/slotusegroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x2505",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/btgp"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/btgp",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/btgc:0",
+      [
+       "dev-libs/btgc-1:ebuild",
+       "dev-libs/btgc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2512",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/btparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/btparent",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "5",
+  "bt_u": "5",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/bttarget:0",
+      [
+       "dev-libs/bttarget-1.0:ebuild",
+       "dev-libs/bttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   5
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2636",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/mg2top"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/mg2top",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "10",
+  "bt_u": "14",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ],
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   10
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2637",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/mgfa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/mgfa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2640",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/mgxa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/mgxa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2669",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/orbtblocked"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/orbtblocked",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/orbttool:0",
+      [
+       "dev-libs/orbttool-1.0:ebuild",
+       "dev-libs/orbttool-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x2779",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/scuseparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/scuseparent",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/scusetarget:0",
+      [
+       "dev-libs/scusetarget-1.0:ebuild",
+       "dev-libs/scusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x2786",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/slotconfgroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x2797",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/slotconflictunsolvable"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/slotconflictunsolvable",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x2806",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "--newuse",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep --newuse dev-libs/slotusegroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x2994",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/btgp"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/btgp",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/btgc:0",
+      [
+       "dev-libs/btgc-1:ebuild",
+       "dev-libs/btgc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3001",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/btparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/btparent",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "5",
+  "bt_u": "5",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/bttarget:0",
+      [
+       "dev-libs/bttarget-1.0:ebuild",
+       "dev-libs/bttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   5
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3124",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/mg2top"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/mg2top",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "10",
+  "bt_u": "14",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ],
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   10
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3125",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/mgfa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/mgfa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3128",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/mgxa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/mgxa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3157",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/orbtblocked"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/orbtblocked",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/orbttool:0",
+      [
+       "dev-libs/orbttool-1.0:ebuild",
+       "dev-libs/orbttool-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3267",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/scuseparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/scuseparent",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/scusetarget:0",
+      [
+       "dev-libs/scusetarget-1.0:ebuild",
+       "dev-libs/scusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x3274",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/slotconfgroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x3285",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/slotconflictunsolvable"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/slotconflictunsolvable",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x3294",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "--deep",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update --deep dev-libs/slotusegroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x3480",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/btgp"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/btgp",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/btgc:0",
+      [
+       "dev-libs/btgc-1:ebuild",
+       "dev-libs/btgc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3487",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/btparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/btparent",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "5",
+  "bt_u": "5",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/bttarget:0",
+      [
+       "dev-libs/bttarget-1.0:ebuild",
+       "dev-libs/bttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   5
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3610",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/mg2top"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/mg2top",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "10",
+  "bt_u": "14",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ],
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   10
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3611",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/mgfa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/mgfa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3614",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/mgxa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/mgxa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3642",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/orbtblocked"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/orbtblocked",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/orbttool:0",
+      [
+       "dev-libs/orbttool-1.0:ebuild",
+       "dev-libs/orbttool-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3748",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/scuseparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/scuseparent",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/scusetarget:0",
+      [
+       "dev-libs/scusetarget-1.0:ebuild",
+       "dev-libs/scusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x3755",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/slotconfgroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x3766",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/slotconflictunsolvable"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/slotconflictunsolvable",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x3775",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--update",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --update dev-libs/slotusegroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x3959",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/btgp"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/btgp",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/btgc:0",
+      [
+       "dev-libs/btgc-1:ebuild",
+       "dev-libs/btgc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x3966",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/btparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/btparent",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "5",
+  "bt_u": "5",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/bttarget:0",
+      [
+       "dev-libs/bttarget-1.0:ebuild",
+       "dev-libs/bttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   5
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x4090",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/mg2top"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/mg2top",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "10",
+  "bt_u": "14",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ],
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   },
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   10
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x4091",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/mgfa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/mgfa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgfc:0",
+      [
+       "dev-libs/mgfc-1:ebuild",
+       "dev-libs/mgfc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x4094",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/mgxa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/mgxa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x4122",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/orbtblocked"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/orbtblocked",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "2",
+  "bt_u": "2",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/orbttool:0",
+      [
+       "dev-libs/orbttool-1.0:ebuild",
+       "dev-libs/orbttool-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   2
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x4232",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/scuseparent"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/scuseparent",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/scusetarget:0",
+      [
+       "dev-libs/scusetarget-1.0:ebuild",
+       "dev-libs/scusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x4239",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/slotconfgroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/slotconfgroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x4250",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/slotconflictunsolvable"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/slotconflictunsolvable",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "6",
+  "bt_u": "5",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotconflicttarget:0",
+      [
+       "dev-libs/slotconflicttarget-1.0:ebuild",
+       "dev-libs/slotconflicttarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   6
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x4259",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "--verbose",
+   "dev-libs/slotusegroup"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend --verbose dev-libs/slotusegroup",
+  "rc_p": "1",
+  "rc_u": "1",
+  "bt_p": "4",
+  "bt_u": "3",
+  "conflict_p": true,
+  "conflict_u": true,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/slotusetarget:0",
+      [
+       "dev-libs/slotusetarget-1.0:ebuild",
+       "dev-libs/slotusetarget-2.0:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [
+   {
+    "reused": false,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "changes": [],
+    "expl": null
+   }
+  ],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": true,
+  "u_pmask": true,
+  "p_bt30": true,
+  "u_bt30": true
+ },
+ {
+  "id": "x4424",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/btgp"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend dev-libs/btgp",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/btgc:0",
+      [
+       "dev-libs/btgc-1:ebuild",
+       "dev-libs/btgc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ },
+ {
+  "id": "x4510",
+  "args": [
+   "--ignore-default-opts",
+   "--pretend",
+   "dev-libs/mgxa"
+  ],
+  "world": [],
+  "env": {},
+  "name": "--pretend dev-libs/mgxa",
+  "rc_p": "0",
+  "rc_u": "0",
+  "bt_p": "4",
+  "bt_u": "4",
+  "conflict_p": false,
+  "conflict_u": false,
+  "stop": [],
+  "built": [
+   {
+    "allow_bt": true,
+    "v": true,
+    "u": false,
+    "nsol": 0,
+    "conflicts": [
+     [
+      "dev-libs/mgxc:0",
+      [
+       "dev-libs/mgxc-1:ebuild",
+       "dev-libs/mgxc-2:ebuild"
+      ]
+     ]
+    ]
+   }
+  ],
+  "shown": [],
+  "backtracked": [
+   4
+  ],
+  "p_explains": false,
+  "p_newuse": false,
+  "u_explains": false,
+  "u_newuse": false,
+  "p_pmask": false,
+  "u_pmask": false,
+  "p_bt30": false,
+  "u_bt30": false
+ }
+]

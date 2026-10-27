@@ -1,0 +1,30 @@
+PYTHONHASHSEED=0 PORTAGE_CONFIGROOT=$W/cgp1.cfg ROOT=$W/cgp1 PORTAGE_RUNNING_ROOT=$W/cgp1 DISTDIR=$W/cgp1/distfiles PORTAGE_TMPDIR=$W/tmp python3 -I bt-trace.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n --pretend >=dev-libs/cgp1x-2
+rc 1
+S0B Backtracker.get -> runtime_pkg_mask={} (unexplored left 0)
+S0B _slot_conflict_backtrack_abi pkg=dev-libs/cgp1x-2(ebuild) -> False
+S0B _slot_conflict_backtrack_abi pkg=dev-libs/cgp1x-1(installed,nomerge) -> False
+S0B _slot_confict_backtrack slot=dev-libs/cgp1x:0 all_parents=[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2', dev-libs/cgp1a-1(installed,nomerge)->'<dev-libs/cgp1x-2', dev-libs/cgp1a-1(installed,nomerge)->'>=dev-libs/cgp1x-1']
+S0B   choice[0]: mask dev-libs/cgp1x-2(ebuild) conflict_atoms=[dev-libs/cgp1a-1(installed,nomerge)->'<dev-libs/cgp1x-2']
+S0B   choice[1] (explored first): mask dev-libs/cgp1x-1(ebuild) conflict_atoms=[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; mask dev-libs/cgp1x-0.1(ebuild) conflict_atoms=[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; mask dev-libs/cgp1x-1(installed,nomerge) conflict_atoms=[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']
+S0B need_config_change -> False (slot_conflict_handler changes=[])
+S0B Backtracker.feedback keys=['slot conflict']
+S0B Backtracker._add mask_steps=1 ACCEPTED mask={dev-libs/cgp1x-2(ebuild): slot conflict[dev-libs/cgp1a-1(installed,nomerge)->'<dev-libs/cgp1x-2']}
+S0B Backtracker._add mask_steps=1 ACCEPTED mask={dev-libs/cgp1x-1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-0.1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-1(installed,nomerge): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']}
+S0B Backtracker.get -> runtime_pkg_mask={dev-libs/cgp1x-1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-0.1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-1(installed,nomerge): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']} (unexplored left 1)
+S0B _slot_conflict_backtrack_abi pkg=dev-libs/cgp1x-2(ebuild) -> False
+S0B _slot_conflict_backtrack_abi pkg=dev-libs/cgp1x-1(installed,nomerge) -> False
+S0B _slot_confict_backtrack slot=dev-libs/cgp1x:0 all_parents=[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2', dev-libs/cgp1a-1(installed,nomerge)->'<dev-libs/cgp1x-2', dev-libs/cgp1a-1(installed,nomerge)->'>=dev-libs/cgp1x-1']
+S0B   choice[0]: mask dev-libs/cgp1x-2(ebuild) conflict_atoms=[dev-libs/cgp1a-1(installed,nomerge)->'<dev-libs/cgp1x-2']
+S0B   choice[1] (explored first): mask dev-libs/cgp1x-1(installed,nomerge) conflict_atoms=[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']
+S0B need_config_change -> False (slot_conflict_handler changes=[])
+S0B Backtracker.feedback keys=['slot conflict']
+S0B Backtracker._add mask_steps=2 ACCEPTED mask={dev-libs/cgp1x-1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-0.1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-1(installed,nomerge): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-2(ebuild): slot conflict[dev-libs/cgp1a-1(installed,nomerge)->'<dev-libs/cgp1x-2']}
+S0B Backtracker._add mask_steps=2 REJECTED mask={dev-libs/cgp1x-1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-0.1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-1(installed,nomerge): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']}
+S0B Backtracker.get -> runtime_pkg_mask={dev-libs/cgp1x-1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-0.1(ebuild): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-1(installed,nomerge): slot conflict[>=dev-libs/cgp1x-2->'>=dev-libs/cgp1x-2']; dev-libs/cgp1x-2(ebuild): slot conflict[dev-libs/cgp1a-1(installed,nomerge)->'<dev-libs/cgp1x-2']} (unexplored left 1)
+S0B need_config_change -> False (slot_conflict_handler changes=None)
+S0B Backtracker.get -> runtime_pkg_mask={dev-libs/cgp1x-2(ebuild): slot conflict[dev-libs/cgp1a-1(installed,nomerge)->'<dev-libs/cgp1x-2']} (unexplored left 0)
+S0B need_config_change -> False (slot_conflict_handler changes=None)
+S0B need_config_change -> False (slot_conflict_handler changes=None)
+S0B get_best_run -> runtime_pkg_mask={}
+Dependency resolution took 6.20 s (backtrack: 3/20).
+[ebuild     U  ] dev-libs/cgp1x-2 [1] to $W/cgp1/

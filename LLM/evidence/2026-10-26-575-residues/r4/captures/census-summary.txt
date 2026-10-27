@@ -1,0 +1,41 @@
+40 jobs with a slot conflict or a handler
+j0029 --ignore-default-opts --pretend --autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0b dev-libs/aub0c  | rc 1 1 | bt 3 3 | 
+j0030 --ignore-default-opts --pretend --autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0c dev-libs/aub0b  | rc 1 1 | bt 2 2 | 
+j0031 --ignore-default-opts --pretend --autounmask-backtrack=y dev-libs/aub0b dev-libs/aub0a dev-libs/aub0c  | rc 1 1 | bt 0 0 | 
+j0032 --ignore-default-opts --pretend --autounmask-backtrack=y dev-libs/aub0b dev-libs/aub0c dev-libs/aub0a  | rc 1 1 | bt 0 0 | 
+j0033 --ignore-default-opts --pretend --autounmask-backtrack=y dev-libs/aub0c dev-libs/aub0a dev-libs/aub0b  | rc 1 1 | bt 2 2 | 
+j0070 --ignore-default-opts --pretend --backtrack 1 dev-libs/mgfa  | rc 1 1 | bt 1 1 | 
+j0081 --ignore-default-opts --pretend --backtrack=0 dev-libs/btparent  | rc 1 1 | bt 0 0 | 
+j0085 --ignore-default-opts --pretend --backtrack=0 dev-libs/orbtblocked  | rc 1 1 | bt 0 0 | 
+j0092 --ignore-default-opts --pretend --backtrack=30 dev-libs/slotconflictunsolvable  | rc 1 1 | bt 6 5 | 
+j0153 --ignore-default-opts --pretend --color=y dev-libs/slotconfgroup  | rc 1 1 | bt 6 5 | 
+j0175 --ignore-default-opts --pretend --debug dev-libs/slotconfgroup  | rc 1 1 | bt - 5 | 
+j0342 --ignore-default-opts --pretend --tree dev-libs/mg2top  | rc 0 0 | bt 10 14 | 
+j0344 --ignore-default-opts --pretend --tree dev-libs/orbtblocked  | rc 0 0 | bt 2 2 | 
+j0410 --ignore-default-opts --pretend --verbose-conflicts dev-libs/slotconfgroup  | rc 1 1 | bt 6 5 | 
+j0411 --ignore-default-opts --pretend --verbose-conflicts=n dev-libs/slotconfgroup  | rc 2 1 | bt - 5 | CONFLICT-PRESENCE-DIFF
+j0759 --ignore-default-opts --pretend dev-libs/btparent  | rc 0 0 | bt 5 5 | 
+j0832 --ignore-default-opts --pretend dev-libs/mg2top  | rc 0 0 | bt 10 14 | 
+j0833 --ignore-default-opts --pretend dev-libs/mgfa  | rc 0 0 | bt 4 4 | 
+j0838 --ignore-default-opts --pretend dev-libs/needer dev-libs/othermod  | rc 1 1 | bt 4 3 | 
+j0867 --ignore-default-opts --pretend dev-libs/orbtblocked  | rc 0 0 | bt 2 2 | 
+j0870 --ignore-default-opts --pretend dev-libs/othermod dev-libs/needer  | rc 1 1 | bt 4 3 | 
+j0881 --ignore-default-opts --pretend dev-libs/p569pull  | rc 0 0 | bt 2 2 | 
+j0917 --ignore-default-opts --pretend dev-libs/scm0a  | rc 0 0 | bt 4 4 | 
+j0918 --ignore-default-opts --pretend dev-libs/scuseparent  | rc 1 1 | bt 6 5 | 
+j0922 --ignore-default-opts --pretend dev-libs/slotconfgroup  | rc 1 1 | bt 6 5 | 
+j0924 --ignore-default-opts --pretend dev-libs/slotconflictnewpin dev-libs/slotconflictoldpin  | rc 1 1 | bt 4 3 | 
+j0926 --ignore-default-opts --pretend dev-libs/slotconflictunsolvable  | rc 1 1 | bt 6 5 | 
+j0929 --ignore-default-opts --pretend dev-libs/slotusegroup  | rc 1 1 | bt 4 3 | 
+k0004 --ignore-default-opts --pretend --backtrack=0 --update --deep --newuse --oneshot =dev-libs/r25lib-2.0 world+=dev-libs/r25consumer | rc 1 1 | bt 0 0 | 
+k0023 --ignore-default-opts --pretend --debug dev-libs/needer dev-libs/othermod  | rc 1 1 | bt - 3 | 
+k0050 --ignore-default-opts --pretend --tree -D dev-libs/slotusegroup  | rc 1 1 | bt 4 3 | 
+k0076 --ignore-default-opts --pretend -D dev-libs/slotusegroup  | rc 1 1 | bt 4 3 | 
+k0097 --ignore-default-opts --pretend <dev-libs/cgp1x-1 world+=dev-libs/cgp1a | rc 1 1 | bt 3 0 | 
+k0098 --ignore-default-opts --pretend <dev-libs/igw0x-1 world+=dev-libs/igw0a | rc 1 1 | bt 3 0 | 
+k0099 --ignore-default-opts --pretend =dev-libs/paired-2.0 world+=dev-libs/keeper | rc 1 1 | bt 3 0 | 
+k0100 --ignore-default-opts --pretend >=dev-libs/cgp1x-2 world+=dev-libs/cgp1a | rc 1 1 | bt 3 0 | 
+k0101 --ignore-default-opts --pretend >=dev-libs/igw0x-2 world+=dev-libs/igw0a | rc 1 1 | bt 3 0 | 
+k0105 --ignore-default-opts --pretend dev-libs/cgp0x world+=dev-libs/cgp0q | rc 1 1 | bt 0 0 | STOP,P-EXPLAIN,BT30-DIFF
+k0107 --ignore-default-opts --pretend dev-libs/needer dev-libs/othermod world+=dev-libs/keeper | rc 1 1 | bt 4 3 | 
+k0108 --ignore-default-opts --pretend dev-libs/needer world+=dev-libs/keeper | rc 1 1 | bt 4 1 | 

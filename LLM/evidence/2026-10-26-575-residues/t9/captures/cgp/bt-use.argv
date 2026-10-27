@@ -1,0 +1,2 @@
+PYTHONHASHSEED=0 PORTAGE_CONFIGROOT=$W/cgp0.cfg ROOT=$W/cgp0 PORTAGE_RUNNING_ROOT=$W/cgp0 DISTDIR=$W/cgp0/distfiles PORTAGE_TMPDIR=$W/tmp python3 -I bt-trace.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n --pretend dev-libs/cgp0x
+rc 1

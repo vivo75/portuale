@@ -1,0 +1,14 @@
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "mlocaml", "4.02.1")
+BT   choice ("dev-libs", "mlocaml", "4.01.0")
+BT   conflict dev-libs/mlocaml parents=[("4.02.1", "dev-libs/mllablgl-1.05:0/0::testrepo", ">=dev-libs/mlocaml-3.10.2:="), ("4.02.1", "", "dev-libs/mlocaml"), ("4.02.1", "dev-libs/mllabltk-8.06.0:0/8.06.0::testrepo", ">=dev-libs/mlocaml-4.02:="), ("4.01.0", "dev-libs/mllablgl-1.05:0/0::testrepo", ">=dev-libs/mlocaml-3.10.2:0/4.01.0="), ("4.01.0", "dev-libs/mllablgl-1.05:0/0::testrepo", ">=dev-libs/mlocaml-3.10.2:="), ("4.01.0", "", "dev-libs/mlocaml")]
+BT   pullers dev-libs/mlocaml -> [("dev-libs", "mllablgl", "1.05", ">=dev-libs/mlocaml-3.10.2:0/4.01.0="), ("dev-libs", "mllablgl", "1.05", ">=dev-libs/mlocaml-3.10.2:="), ("dev-libs", "mllablgl", "1.05", ">=dev-libs/mlocaml-3.10.2:0/4.01.0="), ("dev-libs", "mllablgl", "1.05", ">=dev-libs/mlocaml-3.10.2:="), ("", "", "", "dev-libs/mlocaml"), ("dev-libs", "mllabltk", "8.06.0", ">=dev-libs/mlocaml-4.02:="), ("dev-libs", "mllabltk", "8.06.0", ">=dev-libs/mlocaml-4.02:=")]
+BT try=2 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "mlocaml", "4.02.1")
+BT   choice ("dev-libs", "mlocaml", "4.01.0")
+BT   conflict dev-libs/mlocaml parents=[("4.02.1", "dev-libs/mllablgl-1.05:0/0::testrepo", ">=dev-libs/mlocaml-3.10.2:="), ("4.02.1", "", "dev-libs/mlocaml"), ("4.02.1", "dev-libs/mllabltk-8.06.0:0/8.06.0::testrepo", ">=dev-libs/mlocaml-4.02:="), ("4.01.0", "dev-libs/mllablgl-1.05:0/0::testrepo", ">=dev-libs/mlocaml-3.10.2:0/4.01.0="), ("4.01.0", "dev-libs/mllablgl-1.05:0/0::testrepo", ">=dev-libs/mlocaml-3.10.2:="), ("4.01.0", "", "dev-libs/mlocaml")]
+BT   pullers dev-libs/mlocaml -> [("dev-libs", "mllablgl", "1.05", ">=dev-libs/mlocaml-3.10.2:0/4.01.0="), ("dev-libs", "mllablgl", "1.05", ">=dev-libs/mlocaml-3.10.2:="), ("dev-libs", "mllablgl", "1.05", ">=dev-libs/mlocaml-3.10.2:0/4.01.0="), ("dev-libs", "mllablgl", "1.05", ">=dev-libs/mlocaml-3.10.2:="), ("", "", "", "dev-libs/mlocaml"), ("dev-libs", "mllabltk", "8.06.0", ">=dev-libs/mlocaml-4.02:="), ("dev-libs", "mllabltk", "8.06.0", ">=dev-libs/mlocaml-4.02:=")]

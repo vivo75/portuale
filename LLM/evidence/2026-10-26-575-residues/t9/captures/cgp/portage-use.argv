@@ -1,0 +1,1 @@
+PYTHONHASHSEED=0 PORTAGE_CONFIGROOT=$W/cgp0.cfg ROOT=$W/cgp0 PORTAGE_RUNNING_ROOT=$W/cgp0 DISTDIR=$W/cgp0/distfiles PORTAGE_TMPDIR=$W/tmp emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n --pretend --debug dev-libs/cgp0x

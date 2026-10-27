@@ -1,0 +1,15 @@
+### argv: PORTAGE_CONFIGROOT=$W/orig.cfg ROOT=$W/orig PYTHONHASHSEED=0 T9_CP='p569virt' python3 t9/playground/views.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/p569pull
+T9 ADD pass=0 pkg=dev-libs/p569virt-1 depth=1 deep=0 requested_depth=0 complete_mode=False parent=(dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$W/orig/') -> ignored
+T9 OR pass=0 parent=dev-libs/p569virt-1 depth=1 complete_mode=True trees=_graph_trees caller=_wrapped_add_pkg_dep_string<_pop_disjunction<_create_graph<_complete_graph<_resolve_conflicts priority=runtime depstring=[['||', Atom('=dev-libs/p569prov-5.42*'), Atom('=dev-libs/p569prov-5.40*'), Atom('=dev-libs/p569prov-5.38*'), Atom('~dev-libs/p569core-1.0')]] selected=['=dev-libs/p569prov-5.42*']
+T9 CG pass=0 complete_mode=True complete_param=True
+T9 ADD pass=1 pkg=dev-libs/p569virt-1 depth=1 deep=0 requested_depth=0 complete_mode=False parent=(dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$W/orig/') -> ignored
+T9 OR pass=1 parent=dev-libs/p569virt-1 depth=1 complete_mode=True trees=_graph_trees caller=_wrapped_add_pkg_dep_string<_pop_disjunction<_create_graph<_complete_graph<_resolve_conflicts priority=runtime depstring=[['||', Atom('=dev-libs/p569prov-5.42*'), Atom('=dev-libs/p569prov-5.40*'), Atom('=dev-libs/p569prov-5.38*'), Atom('~dev-libs/p569core-1.0')]] selected=['=dev-libs/p569prov-5.42*']
+T9 CG pass=1 complete_mode=True complete_param=True
+T9 ADD pass=2 pkg=dev-libs/p569virt-1 depth=1 deep=0 requested_depth=0 complete_mode=False parent=(dev-libs/p569pull-1:0/0::testrepo, ebuild scheduled for merge to '$W/orig/') -> ignored
+T9 CG pass=2 complete_mode=False complete_param=False
+Dependency resolution took 6.56 s (backtrack: 4/20).
+[ebuild  N     ] dev-libs/p569pull-1::testrepo to $W/orig/ 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+### rc: 0

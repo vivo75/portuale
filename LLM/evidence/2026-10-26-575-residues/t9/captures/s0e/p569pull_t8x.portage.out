@@ -1,0 +1,8 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 5.13 s (backtrack: 3/20).
+
+[ebuild  N     ] dev-libs/t8x-1 to /var/tmp/claude-s0e/fx0/
+[ebuild  N     ] dev-libs/p569pull-1 to /var/tmp/claude-s0e/fx0/

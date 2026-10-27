@@ -1,0 +1,9 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 5.24 s (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p589aprov-5.44 [5.42] to /var/tmp/claude-s0e/fx0/
+[ebuild  N     ] dev-libs/p589acore-1.0 to /var/tmp/claude-s0e/fx0/
+[ebuild  N     ] dev-libs/p589apull-2 to /var/tmp/claude-s0e/fx0/

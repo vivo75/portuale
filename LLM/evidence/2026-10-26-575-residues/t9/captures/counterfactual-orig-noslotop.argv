@@ -1,0 +1,1 @@
+PYTHONHASHSEED=0 PORTAGE_CONFIGROOT=$W/orig-noslotop.cfg ROOT=$W/orig-noslotop python3 -I counterfactual-hide-installed.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/p569pull

@@ -1,0 +1,76 @@
+### argv: PYTHONHASHSEED=0 PORTAGE_CONFIGROOT=$W/swap-slotop.cfg ROOT=$W/swap-slotop emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug dev-libs/p569pull
+### rc: 0
+103:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+104-   ebuild: dev-libs/p569prov-5.44::testrepo
+905:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+906-Depstring: || ( =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 ) dev-libs/p569prov:= dev-libs/p569prov:0/5.42=
+909:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+910-Depstring: dev-libs/p569prov:= dev-libs/p569prov:0/5.42=
+915:Parent Dep:    dev-libs/p569prov:= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+60008:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+60009-Depstring: || ( =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+60011:Candidates: ['=dev-libs/p569prov-5.40*']
+60016:Parent Dep:    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+60017-Slot Conflict: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$W/swap-slotop/') USE="" ELIBC="glibc"
+60082:backtracking due to slot conflict:
+60083-   first package:  (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$W/swap-slotop/')
+60084:  package(s) to mask: [<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569prov-5.42', 'merge', 'testrepo')>, <Package ('installed', '$W/swap-slotop/', 'dev-libs/p569prov-5.42', 'nomerge', 'installed')>]
+60085-      slot: dev-libs/p569prov:0
+70732:backtracking try 1 
+70734:[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $W/swap-slotop/ 0 KiB
+70735:[ebuild  N     ] dev-libs/p569pull-2::testrepo to $W/swap-slotop/ 0 KiB
+70737:Total: 2 packages (1 upgrade, 1 new), Size of downloads: 0 KiB
+70740:!!! into the dependency graph, resulting in a slot conflict:
+70749:    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/') USE=""
+70750-                     ^^^^^^^^                                                                                                              
+77220:runtime_pkg_mask: {<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569prov-5.42', 'merge', 'testrepo')>: {'slot conflict': {(<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, Atom('=dev-libs/p569prov-5.44*'))}}, <Package ('installed', '$W/swap-slotop/', 'dev-libs/p569prov-5.42', 'nomerge', 'installed')>: {'slot conflict': {(<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, Atom('=dev-libs/p569prov-5.44*'))}}} 
+77238:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+77239-   ebuild: dev-libs/p569prov-5.44::testrepo
+78040:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+78041-Depstring: || ( =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 ) dev-libs/p569prov:= dev-libs/p569prov:0/5.42=
+78044:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+78045-Depstring: dev-libs/p569prov:= dev-libs/p569prov:0/5.42=
+78050:Parent Dep:    dev-libs/p569prov:= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+137143:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+137144-Depstring: || ( =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+137146:Candidates: ['=dev-libs/p569prov-5.40*']
+137151:Parent Dep:    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/')
+137152-Slot Conflict: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$W/swap-slotop/') USE="" ELIBC="glibc"
+137187:!!! backtracking loop detected: (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$W/swap-slotop/') {'slot conflict': {(<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, Atom('=dev-libs/p569prov-5.44*'))}}
+137218:backtracking due to slot conflict:
+137219-   first package:  (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$W/swap-slotop/')
+137220:  package(s) to mask: [<Package ('installed', '$W/swap-slotop/', 'dev-libs/p569prov-5.42', 'nomerge', 'installed')>]
+137221-      slot: dev-libs/p569prov:0
+147868:backtracking try 2 
+147870:[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $W/swap-slotop/ 0 KiB
+147871:[ebuild  N     ] dev-libs/p569pull-2::testrepo to $W/swap-slotop/ 0 KiB
+147873:Total: 2 packages (1 upgrade, 1 new), Size of downloads: 0 KiB
+147876:!!! into the dependency graph, resulting in a slot conflict:
+147885:    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/') USE=""
+147886-                     ^^^^^^^^                                                                                                              
+154356:runtime_pkg_mask: {<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569prov-5.42', 'merge', 'testrepo')>: {'slot conflict': {(<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, Atom('=dev-libs/p569prov-5.44*'))}}, <Package ('installed', '$W/swap-slotop/', 'dev-libs/p569prov-5.42', 'nomerge', 'installed')>: {'slot conflict': {(<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, Atom('=dev-libs/p569prov-5.44*'))}}, <Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569prov-5.44', 'merge', 'testrepo')>: {'slot conflict': {(
+154374:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+154377:backtracking due to unsatisfied dep:
+154378-    parent: (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$W/swap-slotop/')
+154385:backtracking try 3 
+154388:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+154393:    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/') USE=""
+154394-                     ^^^^^^^^
+154417:runtime_pkg_mask: {<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569prov-5.44', 'merge', 'testrepo')>: {'slot conflict': {(<Package ('installed', '$W/swap-slotop/', 'dev-libs/p569virt-1', 'nomerge', 'installed')>, Atom('dev-libs/p569prov:0/5.42='))}}} 
+154435:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+154438:backtracking due to unsatisfied dep:
+154439-    parent: (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$W/swap-slotop/')
+154446:backtracking try 4 
+154449:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+154454:    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/') USE=""
+154455-                     ^^^^^^^^
+154478:runtime_pkg_mask: {<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569prov-5.44', 'merge', 'testrepo')>: {'slot conflict': {(<Package ('installed', '$W/swap-slotop/', 'dev-libs/p569virt-1', 'nomerge', 'installed')>, Atom('dev-libs/p569prov:0/5.42='))}}, <Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>: {'missing dependency': {(<Package ('ebuild', '$W/swap-slotop/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, '$W/swap-slotop/', Atom('=dev-libs/p569prov-5.44*'))}}} 
+154496:Candidates: ['=dev-libs/p569prov-5.42*', 'dev-libs/p569virt']
+154497-   ebuild: dev-libs/p569prov-5.42::testrepo
+154520:[ebuild  N     ] dev-libs/p569pull-1::testrepo to $W/swap-slotop/ 0 KiB
+154522:Total: 1 package (1 new), Size of downloads: 0 KiB
+154524:WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+154529:    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$W/swap-slotop/') USE=""
+154530-                     ^^^^^^^^
+154533:!!! The following update(s) have been skipped due to unsatisfied dependencies
+154534:!!! triggered by backtracking:

@@ -1,0 +1,9 @@
+### argv: PORTAGE_CONFIGROOT=$W/r4.cfg ROOT=$W/r4 PYTHONHASHSEED=0 T9_CP='mllablgl' python3 t9/playground/views.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --update --deep dev-libs/mlocaml
+T9 ADD pass=0 pkg=dev-libs/mllablgl-1.05 depth=UNREACHABLE deep=True requested_depth=True complete_mode=True parent=@selected -> dep_stack
+T9 OR pass=0 parent=dev-libs/mllablgl-1.05 depth=UNREACHABLE complete_mode=True trees=_graph_trees caller=_wrapped_add_pkg_dep_string<_pop_disjunction<_create_graph<_complete_graph<_resolve_conflicts priority=runtime depstring=[['||', Atom('dev-libs/mllabltk:='), Atom('<dev-libs/mlocaml-4.02')]] selected=['<dev-libs/mlocaml-4.02']
+T9 CG pass=0 complete_mode=True complete_param=True
+T9 OR pass=0 parent=dev-libs/mllablgl-1.05 depth=UNREACHABLE complete_mode=True trees=_graph_trees caller=_wrapped_add_pkg_dep_string<_pop_disjunction<_create_graph<_solve_non_slot_operator_slot_conflicts<_process_slot_conflicts priority=runtime depstring=[['||', Atom('dev-libs/mllabltk:='), Atom('<dev-libs/mlocaml-4.02')]] selected=['<dev-libs/mlocaml-4.02']
+Dependency resolution took 5.10 s (backtrack: 0/20).
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+!!! The following installed packages are masked:
+### rc: 0

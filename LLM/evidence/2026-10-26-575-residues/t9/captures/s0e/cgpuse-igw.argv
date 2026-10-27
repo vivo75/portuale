@@ -1,0 +1,2 @@
+portuale: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-cgpuse ROOT=/var/tmp/claude-s0e/h-cgpuse PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-cgpuse PORTUALE_BT_TRACE=1 portuale emerge --pretend --ignore-world dev-libs/cgp0x
+portage: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-cgpuse.cfg ROOT=/var/tmp/claude-s0e/h-cgpuse PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-cgpuse PYTHONHASHSEED=0 emerge --pretend --ignore-world dev-libs/cgp0x

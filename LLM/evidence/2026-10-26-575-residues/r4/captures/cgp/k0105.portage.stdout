@@ -1,0 +1,7 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 0.22 s (backtrack: 0/20).
+
+[ebuild   R    ] dev-libs/cgp0x-2.8.0 [2.8.0] to <FX>/ USE="icu*" 

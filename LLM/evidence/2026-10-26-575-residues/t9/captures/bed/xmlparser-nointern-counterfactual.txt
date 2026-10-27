@@ -1,0 +1,79 @@
+### COUNTERFACTUAL (not Portage behaviour): podman exec <own bed container> env PORTAGE_CONFIGROOT=/ ROOT=/ LC_ALL=C.UTF-8 TZ=UTC PYTHONHASHSEED=0 (world = tmux eix gentoolkit blake3) python3 -I no-intern.py -pv --color=n dev-perl/XML-Parser
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 8.38 s (backtrack: 13/20).
+
+[ebuild  N     ] perl-core/Encode-3.210.0::gentoo  PERL_FEATURES="(-debug) -ithreads -quadmath" 2038 KiB
+[ebuild  N     ] dev-perl/Net-SSLeay-1.960.0-r1::gentoo  USE="-examples -minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 653 KiB
+[ebuild  N     ] dev-perl/Regexp-IPv6-0.30.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 4 KiB
+[ebuild  N     ] dev-perl/TimeDate-2.330.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 30 KiB
+[ebuild  N     ] dev-perl/IO-Socket-SSL-2.95.0::gentoo  USE="-examples -idn -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 270 KiB
+[ebuild  N     ] dev-perl/Clone-0.470.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 136 KiB
+[ebuild  N     ] dev-perl/HTML-Tagset-3.240.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 8 KiB
+[ebuild  N     ] dev-perl/Encode-Locale-1.50.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+[ebuild  N     ] dev-perl/Socket6-0.290.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 64 KiB
+[ebuild     U  ] dev-lang/perl-5.44.0:0/5.44::gentoo [5.42.2:0/5.42::gentoo] USE="gdbm -berkdb -doc -minimal" PERL_FEATURES="(-debug) -ithreads -quadmath" 14704 KiB
+[ebuild  N     ] virtual/perl-Time-Local-1.350.0-r2::gentoo  0 KiB
+[ebuild  N     ] virtual/perl-Compress-Raw-Bzip2-2.218.0::gentoo  0 KiB
+[ebuild  N     ] virtual/perl-Compress-Raw-Zlib-2.222.0-r1::gentoo  0 KiB
+[ebuild  N     ] virtual/perl-MIME-Base64-3.160.100_rc-r3::gentoo  0 KiB
+[ebuild  N     ] dev-perl/HTTP-Date-6.80.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 35 KiB
+[ebuild  N     ] dev-perl/LWP-MediaTypes-6.40.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 40 KiB
+[ebuild  N     ] dev-perl/Devel-CheckLib-1.160.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 16 KiB
+[ebuild  N     ] dev-perl/MIME-Base32-1.303.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 14 KiB
+[ebuild  N     ] dev-perl/IO-HTML-1.4.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 21 KiB
+[ebuild  N     ] virtual/perl-IO-Compress-2.223.0-r1::gentoo  0 KiB
+[ebuild  N     ] dev-perl/Sub-Name-0.280.0-r1::gentoo  USE="-suggested -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 156 KiB
+[ebuild  N     ] dev-perl/URI-5.340.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 132 KiB
+[ebuild  N     ] dev-perl/File-Listing-6.160.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 77 KiB
+[ebuild  N     ] dev-perl/Try-Tiny-0.320.0::gentoo  USE="-minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 36 KiB
+[ebuild  N     ] dev-perl/HTTP-Message-7.10.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 94 KiB
+[ebuild  N     ] dev-perl/WWW-RobotRules-6.20.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+[ebuild  N     ] dev-perl/IO-Socket-INET6-2.730.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 28 KiB
+[ebuild  N     ] dev-perl/Net-HTTP-6.240.0::gentoo  USE="-minimal -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 43 KiB
+[ebuild  N     ] dev-perl/HTML-Parser-3.830.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 148 KiB
+[ebuild  N     ] dev-perl/HTTP-Cookies-6.110.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 46 KiB
+[ebuild  N     ] dev-perl/HTTP-Negotiate-6.10.0-r2::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 9 KiB
+[ebuild  N     ] dev-perl/libwww-perl-6.810.0::gentoo  USE="ssl -test" PERL_FEATURES="(-debug) -ithreads -quadmath" 183 KiB
+[ebuild  N     ] dev-perl/LWP-Protocol-https-6.140.0::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 33 KiB
+[ebuild  N     ] dev-perl/XML-Parser-2.470.0-r1::gentoo  USE="-test" PERL_FEATURES="(-debug) -ithreads -quadmath" 273 KiB
+
+Total: 34 packages (1 upgrade, 33 new), Size of downloads: 19296 KiB
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-lang/perl:0
+
+  (dev-lang/perl-5.42.2-1:0/5.42::gentoo, installed) USE="gdbm -berkdb -doc -minimal" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath" pulled in by
+    =dev-lang/perl-5.42* required by (virtual/perl-Encode-3.210.0-r2-2:0/0::gentoo, installed) USE="" ABI_X86="(64)"
+    ^              ^^^^^                                                                                             
+    dev-lang/perl:0/5.42= required by (dev-perl/YAML-Tiny-1.760.0-r1-2:0/0::gentoo, installed) USE="-minimal -test" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath"
+                 ^^^^^^^^                                                                                                                                                       
+    (and 58 more with the same problems)
+
+  (dev-lang/perl-5.44.0:0/5.44::gentoo, ebuild scheduled for merge) USE="gdbm -berkdb -doc -minimal" ABI_X86="(64)" PERL_FEATURES="(-debug) -ithreads -quadmath" pulled in by
+    =dev-lang/perl-5.44* required by (virtual/perl-podlators-6.0.2-r1-1:0/0::gentoo, installed) USE="" ABI_X86="(64)"
+    ^              ^^^^^                                                                                              
+    (and 13 more with the same problem)
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+ * IMPORTANT: 15 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

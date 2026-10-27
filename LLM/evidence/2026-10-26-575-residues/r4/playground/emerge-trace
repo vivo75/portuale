@@ -1,0 +1,2 @@
+#!/bin/bash
+exec /usr/bin/python3 -I /tmp/claude-1000/-home-vivo-repo-PORTUALE-portuale/34b4d99e-f3e7-4580-9dad-e69484b2a617/scratchpad/r4/playground/sc-trace.py "$@"

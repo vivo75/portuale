@@ -1,0 +1,8 @@
+PYTHONHASHSEED=0 PORTAGE_CONFIGROOT=$W/cgp0.cfg ROOT=$W/cgp0 PORTAGE_RUNNING_ROOT=$W/cgp0 DISTDIR=$W/cgp0/distfiles PORTAGE_TMPDIR=$W/tmp emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n --pretend --debug dev-libs/cgp0x
+rc 1
+60020:backtracking due to slot conflict:
+60021-   first package:  (dev-libs/cgp0x-2.8.0:2/2::testrepo, ebuild scheduled for merge to '$W/cgp0/')
+60022-  package(s) to mask: [<Package ('ebuild', '$W/cgp0/', 'dev-libs/cgp0x-2.8.0', 'merge', 'testrepo')>]
+60023-      slot: dev-libs/cgp0x:2
+60024-   parents: (dev-libs/cgp0x, 'dev-libs/cgp0x'), ((dev-libs/cgp0q-4.8.2:0/0::__unknown__, installed in '$W/cgp0/'), 'dev-libs/cgp0x:2[-icu]')
+70665:[ebuild   R    ] dev-libs/cgp0x-2.8.0 [2.8.0] to $W/cgp0/ USE="icu*" 

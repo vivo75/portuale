@@ -1,0 +1,72 @@
+### case 0 request=['dev-libs/A', 'dev-libs/B', 'dev-libs/C', 'dev-libs/D'] options={'--autounmask': 'n'}
+  expected slot_collision_solutions: [{'dev-libs/A-1': {'foo': True}, 'dev-libs/D-1': {'foo': True}}]
+  success: False backtracked: 0 need_config_change calls (handler_was_none, handler_now, ret, allow_bt): [(True, True, True, True)]
+  all_conflicts: [('dev-libs/A:0', ['(\x1b[32mdev-libs/A-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[36mdev-libs/A-1:0/0::test_repo\x1b[39;49;00m, installed)'])]
+  is_a_version_conflict: False conflict_is_unspecific: False
+  solutions: [{'(\x1b[32mdev-libs/A-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'foo': 'enabled'}, '(\x1b[32mdev-libs/D-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'foo': 'enabled'}}]
+  changes: [{'dev-libs/A-1': {'foo': True}, 'dev-libs/D-1': {'foo': True}}]
+  explanation repr: 'It might be possible to solve this slot collision\nby applying all of the following changes:\n   - dev-libs/A-1 (Change USE: \x1b[31;01m+foo\x1b[39;49;00m)\n   - dev-libs/D-1 (Change USE: \x1b[31;01m+foo\x1b[39;49;00m)\n\n'
+### case 1 request=['sys-libs/A', 'sys-libs/B', 'sys-libs/C', 'sys-libs/D', 'sys-libs/E', 'sys-libs/F'] options={'--autounmask': 'n'}
+  expected slot_collision_solutions: []
+  success: False backtracked: 2 need_config_change calls (handler_was_none, handler_now, ret, allow_bt): [(True, True, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True)]
+  all_conflicts: [('sys-libs/J:0', ['(\x1b[32msys-libs/J-2:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[32msys-libs/J-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)'])]
+  is_a_version_conflict: False conflict_is_unspecific: False
+  solutions: []
+  changes: []
+  explanation repr: None
+### case 2 request=['=app-misc/X-1', '=app-misc/Y-1'] options={}
+  expected slot_collision_solutions: []
+  success: False backtracked: 4 need_config_change calls (handler_was_none, handler_now, ret, allow_bt): [(True, True, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True)]
+  all_conflicts: [('app-misc/Z:0', ['(\x1b[32mapp-misc/Z-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[32mapp-misc/Z-2:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)'])]
+  is_a_version_conflict: True conflict_is_unspecific: False
+  solutions: []
+  changes: []
+  explanation repr: None
+### case 3 request=['=app-misc/X-2', '=app-misc/Y-2'] options={}
+  expected slot_collision_solutions: []
+  success: False backtracked: 4 need_config_change calls (handler_was_none, handler_now, ret, allow_bt): [(True, True, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True)]
+  all_conflicts: [('app-misc/Z:0', ['(\x1b[32mapp-misc/Z-2:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[32mapp-misc/Z-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)'])]
+  is_a_version_conflict: True conflict_is_unspecific: False
+  solutions: []
+  changes: []
+  explanation repr: None
+### case 4 request=['=app-misc/E-1', '=app-misc/F-1'] options={}
+  expected slot_collision_solutions: []
+  success: False backtracked: 3 need_config_change calls (handler_was_none, handler_now, ret, allow_bt): [(True, True, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True)]
+  all_conflicts: [('dev-libs/E:0', ['(\x1b[32mdev-libs/E-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[32mdev-libs/E-2:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)'])]
+  is_a_version_conflict: True conflict_is_unspecific: False
+  solutions: []
+  changes: []
+  explanation repr: None
+### case 5 request=['dev-lang/perl:0/5.12', 'dev-lang/perl:0/5.16', '=dev-lang/perl-5.12*'] options={}
+  expected slot_collision_solutions: []
+  success: False backtracked: 2 need_config_change calls (handler_was_none, handler_now, ret, allow_bt): [(True, True, False, True), (True, False, False, True), (True, False, False, True), (True, False, False, True)]
+  all_conflicts: [('dev-lang/perl:0', ['(\x1b[32mdev-lang/perl-5.12:0/5.12::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[32mdev-lang/perl-5.16:0/5.16::test_repo\x1b[39;49;00m, ebuild scheduled for merge)'])]
+  is_a_version_conflict: False conflict_is_unspecific: False
+  solutions: []
+  changes: []
+  explanation repr: None
+### case 6 request=['sci-libs/L', 'sci-libs/M'] options={}
+  expected slot_collision_solutions: [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}]
+  success: False backtracked: 0 need_config_change calls (handler_was_none, handler_now, ret, allow_bt): [(True, True, True, True)]
+  all_conflicts: [('sci-libs/K:0', ['(\x1b[32msci-libs/K-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[36msci-libs/K-1:0/0::test_repo\x1b[39;49;00m, installed)'])]
+  is_a_version_conflict: False conflict_is_unspecific: False
+  solutions: [{'(\x1b[32msci-libs/K-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'foo': 'disabled'}, '(\x1b[32msci-libs/M-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'foo': 'disabled'}}]
+  changes: [{'sci-libs/K-1': {'foo': False}, 'sci-libs/M-1': {'foo': False}}]
+  explanation repr: 'It might be possible to solve this slot collision\nby applying all of the following changes:\n   - sci-libs/K-1 (Change USE: \x1b[34;01m-foo\x1b[39;49;00m)\n   - sci-libs/M-1 (Change USE: \x1b[34;01m-foo\x1b[39;49;00m)\n\n'
+### case 7 request=['sci-libs/P', 'sci-libs/Q:2'] options={'--update': True, '--complete-graph': True, '--autounmask': 'n'}
+  expected slot_collision_solutions: [{'sci-libs/Q-1': {'foo': True}, 'sci-libs/P-1': {'foo': True}}]
+  success: False backtracked: 0 need_config_change calls (handler_was_none, handler_now, ret, allow_bt): [(True, True, True, True)]
+  all_conflicts: [('sci-libs/Q:1', ['(\x1b[32msci-libs/Q-1:1/1::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[36msci-libs/Q-1:1/1::test_repo\x1b[39;49;00m, installed)'])]
+  is_a_version_conflict: False conflict_is_unspecific: False
+  solutions: [{'(\x1b[32msci-libs/Q-1:1/1::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'bar': 'disabled', 'foo': 'enabled'}, '(\x1b[32msci-libs/P-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'foo': 'enabled'}, '(\x1b[36msci-libs/Q-2:2/2::test_repo\x1b[39;49;00m, installed)': {'bar': 'disabled'}}, {'(\x1b[32msci-libs/Q-1:1/1::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'bar': 'enabled', 'foo': 'enabled'}, '(\x1b[32msci-libs/P-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'foo': 'enabled'}}]
+  changes: [{'sci-libs/Q-1': {'foo': True}, 'sci-libs/P-1': {'foo': True}}]
+  explanation repr: 'It might be possible to solve this slot collision\nby applying one of the following solutions:\n   - sci-libs/Q-1 (Change USE: \x1b[31;01m+foo\x1b[39;49;00m)\n   - sci-libs/P-1 (Change USE: \x1b[31;01m+foo\x1b[39;49;00m)\n\n'
+### case 7 request=['sci-libs/Q:2', 'sci-libs/P'] options={'--update': True, '--complete-graph': True, '--autounmask': 'n'}
+  expected slot_collision_solutions: [{'sci-libs/Q-1': {'foo': True}, 'sci-libs/P-1': {'foo': True}}]
+  success: False backtracked: 0 need_config_change calls (handler_was_none, handler_now, ret, allow_bt): [(True, True, True, True)]
+  all_conflicts: [('sci-libs/Q:1', ['(\x1b[32msci-libs/Q-1:1/1::test_repo\x1b[39;49;00m, ebuild scheduled for merge)', '(\x1b[36msci-libs/Q-1:1/1::test_repo\x1b[39;49;00m, installed)'])]
+  is_a_version_conflict: False conflict_is_unspecific: False
+  solutions: [{'(\x1b[32msci-libs/Q-1:1/1::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'bar': 'disabled', 'foo': 'enabled'}, '(\x1b[32msci-libs/P-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'foo': 'enabled'}, '(\x1b[36msci-libs/Q-2:2/2::test_repo\x1b[39;49;00m, installed)': {'bar': 'disabled'}}, {'(\x1b[32msci-libs/Q-1:1/1::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'bar': 'enabled', 'foo': 'enabled'}, '(\x1b[32msci-libs/P-1:0/0::test_repo\x1b[39;49;00m, ebuild scheduled for merge)': {'foo': 'enabled'}}]
+  changes: [{'sci-libs/Q-1': {'foo': True}, 'sci-libs/P-1': {'foo': True}}]
+  explanation repr: 'It might be possible to solve this slot collision\nby applying one of the following solutions:\n   - sci-libs/Q-1 (Change USE: \x1b[31;01m+foo\x1b[39;49;00m)\n   - sci-libs/P-1 (Change USE: \x1b[31;01m+foo\x1b[39;49;00m)\n\n'

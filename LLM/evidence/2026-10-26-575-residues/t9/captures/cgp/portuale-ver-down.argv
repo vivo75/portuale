@@ -1,0 +1,1 @@
+PORTUALE_BT_TRACE=1 PYTHONHASHSEED=0 PORTAGE_CONFIGROOT=$W/cgp1 ROOT=$W/cgp1 PORTAGE_RUNNING_ROOT=$W/cgp1 DISTDIR=$W/cgp1/distfiles PORTAGE_TMPDIR=$W/tmp portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n --pretend <dev-libs/cgp1x-1

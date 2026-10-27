@@ -1,0 +1,57 @@
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/claude-s0e/fx0/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/claude-s0e/fx0/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/fx0/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/fx0/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/claude-s0e/fx0/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/claude-s0e/fx0/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/fx0/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/fx0/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/claude-s0e/fx0/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/claude-s0e/fx0/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/fx0/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/fx0/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/var/tmp/claude-s0e/fx0/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/var/tmp/claude-s0e/fx0/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/fx0/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/var/tmp/claude-s0e/fx0/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	/var/tmp/claude-s0e/fx0/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/mlocaml:0
+
+  (dev-libs/mlocaml-4.02.1:0/4.02.1::testrepo, ebuild scheduled for merge) USE="" ABI_X86="(64)" conflicts with
+    >=dev-libs/mlocaml-3.10.2:0/4.01.0= required by (dev-libs/mllablgl-1.05:0/0::testrepo, installed in '/var/tmp/claude-s0e/h-orchoice/') USE=""
+                             ^^^^^^^^^^
+    <dev-libs/mlocaml-4.02 required by (dev-libs/mllablgl-1.05:0/0::testrepo, installed in '/var/tmp/claude-s0e/h-orchoice/') USE=""
+    ^                 ^^^^
+
+dev-libs/mlocaml:0 for /var/tmp/claude-s0e/h-orchoice/
+
+  (dev-libs/mlocaml-4.02.1:0/4.02.1::testrepo, ebuild scheduled for merge to '/var/tmp/claude-s0e/h-orchoice/') USE="" ELIBC="glibc" conflicts with
+    <dev-libs/mlocaml-4.02 required by (dev-libs/mllablgl-1.05:0/0::testrepo, ebuild scheduled for merge to '/var/tmp/claude-s0e/h-orchoice/') USE="" ELIBC="glibc"
+    ^                 ^^^^
+

@@ -1,0 +1,4 @@
+Calculating dependencies ...T9 CF: hide masked dev-libs/p569prov-5.42(installed) for dev-libs/p569prov:0/5.42=
+Dependency resolution took 9.31 s (backtrack: 1/20).
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $W/swap-slotop/ 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to $W/swap-slotop/ 0 KiB

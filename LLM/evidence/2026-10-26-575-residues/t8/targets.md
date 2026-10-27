@@ -31,7 +31,8 @@ drift, and only to Portage's count:
 | k3 needer | 1/20 | 4/20 | M2 |
 | igw plain (`>=dev-libs/igw0x-2`) | 0/20 | 3/20 | M2 |
 
-**This list is incomplete** (review finding 9). Task 9 S0e completes it
+**Completed 2026-10-27 by Task 9 S0e** (`t9/s0e-counts.md`), see the
+next section. Original note: this list was incomplete (review finding 9). Task 9 S0e completes it
 with every CASES row whose pass reaches `dropped_pin_mask_restart` (the cgp
 rows, the igw contrast, the k3 hard-dependency pin, `=dev-libs/p563pull-2`,
 …), each with Portage's count. Only the completed list governs the 10a gate.
@@ -64,3 +65,37 @@ first version of this section took the bed-runner's summary, which called
 
 Any other move, or a move of a listed cell to anything but the allowed
 outcome, is a stop condition.
+
+## Full count list (Task 9 S0e, 2026-10-27)
+
+Every call in the pmtest suite whose pass reaches `dropped_pin_mask_restart`
+(heal fired, or a residual record held back by G0/G1/`--backtrack=0`), run
+side by side with host Portage 3.0.83 (`t9/s0e-counts.md`,
+`t9/captures/s0e/`). The rows are equal unless the table says otherwise.
+
+| Cell | portuale | Portage | Corpus line |
+|---|---|---|---|
+| `p569pull` (#568/#569 heal) | 2/20 | 2/20 | no |
+| `p563pull` | 2/20 | 2/20 | no |
+| T1 `p589apull` | 2/20 → after 10a probably 4/20 (`N pull-1`, allowed) → after 10b | 0/20, `U prov-5.44` + `N pull-2` | no |
+| T2 `p589bpull` | 2/20, two skip rows → after 10a still 2/20 with the extra `=5.42*` row → after 10b | 4/20, one row `:0/5.42=` | no |
+| T3 `p589cpull` | 2/20 | 4/20 | no |
+| keeper hard dependency `needer` | 1/20 | 4/20 | no |
+| `p569pull t8x` | 3/20 | 3/20 | no |
+| k3 argument `=paired-2.0` | 0/20 | 3/20 | no |
+| igw plain, `>=igw0x-2` and `<igw0x-1` | 0/20 | 3/20 | no |
+| cgp VER, both forms | 0/20 | 3/20 | no |
+| needer/othermod triangle, both argv orders | 3/20 | 4/20 | **yes** |
+| cgp USE | 0/20 | 0/20 (R4 keeps it) | no |
+| `test_oracle_209`, or-choice `--backtrack=0` | 0/0 | 0/0 (must not move) | no |
+
+**Allowed corpus drift in 10a:** only the two triangle CASES rows
+(`--pretend dev-libs/needer dev-libs/othermod` and the reversed order),
+`backtrack: 3/20` → `4/20`, with the rows byte-identical. The other cells
+have no corpus entry. Their Portage counts are 10a's RED targets, checked
+by the REDs and a recorded before/after `PORTUALE_BT_TRACE=1` run, not by
+the corpus. T1 and T2 reach Portage only after 10b (review C1).
+
+Separate finding (#598, plan R5): `--pretend --update --deep` on
+`p569pull` and on the three `p589*pull` aborts in portuale (rc 1, 0/20) where
+Portage merges (rc 0). It is not a 10a target.

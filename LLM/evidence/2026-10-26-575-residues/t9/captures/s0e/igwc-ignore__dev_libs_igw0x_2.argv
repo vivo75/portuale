@@ -1,0 +1,2 @@
+portuale: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-igwc ROOT=/var/tmp/claude-s0e/h-igwc PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-igwc PORTUALE_BT_TRACE=1 portuale emerge --pretend --ignore-world >=dev-libs/igw0x-2
+portage: PORTAGE_CONFIGROOT=/var/tmp/claude-s0e/h-igwc.cfg ROOT=/var/tmp/claude-s0e/h-igwc PORTAGE_RUNNING_ROOT=/var/tmp/claude-s0e/h-igwc PYTHONHASHSEED=0 emerge --pretend --ignore-world >=dev-libs/igw0x-2
