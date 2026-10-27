@@ -539,10 +539,12 @@ pub(crate) fn build_residual_slot_conflicts(
         .filter(|e| merge_bound_cpv(e).is_some())
         .map(|e| (e.category.as_str(), e.package.as_str()))
         .collect();
-    let dropped: Vec<&RevDepPin> = dropped
+    // Sorted, so a pin collected in a later pass cannot reorder the parents.
+    let mut dropped: Vec<&RevDepPin> = dropped
         .iter()
         .filter(|p| !replaced.contains(&(p.consumer.0.as_str(), p.consumer.1.as_str())))
         .collect();
+    dropped.sort();
     'pin: for pin in dropped.iter().copied() {
         if residual_conflict_for_pin(ResidualConflictForPinArgs {
             pin,
@@ -589,17 +591,25 @@ pub(crate) fn build_residual_slot_conflicts(
                 Some(r) => (r.slot.clone(), r.sub_slot.clone(), r.repo.clone()),
                 None => ("0".to_string(), "0".to_string(), "__unknown__".to_string()),
             };
-            let entry = SlotConflictParent {
-                // match-str-ok: slot_conflict_meta/installed ref fields, not a Candidate
-                parent_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
-                atom: pin.atom.clone(),
-                use_display: installed_use_display_for(root, config, cc, cp2, cv),
-                installed: true,
-            };
-            if let Some(inst) = record.instances.iter_mut().find(|i| i.installed)
-                && !inst.parents.contains(&entry)
-            {
-                inst.parents.push(entry);
+            // The consumer's built `:S/SS=` atoms are parents of the instance
+            // too, verbatim, after the pin's own atom.
+            let atoms = std::iter::once(&pin.atom).chain(pin.built_render.iter().filter(|built| {
+                portage_dep::match_from_list(built, &[inst_str.as_str()])
+                    .is_some_and(|m| !m.is_empty())
+            }));
+            for atom in atoms {
+                let entry = SlotConflictParent {
+                    // match-str-ok: slot_conflict_meta/installed ref fields, not a Candidate
+                    parent_cpv: format!("{cc}/{cp2}-{cv}:{cslot}/{csub}::{crepo}"),
+                    atom: atom.clone(),
+                    use_display: installed_use_display_for(root, config, cc, cp2, cv),
+                    installed: true,
+                };
+                if let Some(inst) = record.instances.iter_mut().find(|i| i.installed)
+                    && !inst.parents.contains(&entry)
+                {
+                    inst.parents.push(entry);
+                }
             }
         }
     }

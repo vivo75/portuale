@@ -9,69 +9,26 @@ Reverse-dependency pins: an upgrade breaking an installed consumer's recorded de
 - Backlog #205: Portage's "Record missed updates" tail (`lib/_emerge/depgraph.py:2085-2106`) -- a version the re-resolve drops for the enforced pin is reported through `_show_missed_update_slot_conflicts`. Record the rejection as a slot-conflict-style mask on the chosen version (parents = the enforcing consumer), so the existing `backtrack_missed_updates` derivation renders the `WARNING` row. The positive pin above still drives selection; the negative excludes nothing the pin does not already exclude. Gated on a live search like every mask (Portage `_allow_backtracking`); budget-free like the RevDep feedback it rides.
 - C1: enforced pins are positive enforcement atoms (the consumer's recorded atom must keep matching), not masks -- they stay in the positives bucket, exactly like the solvable-conflict wants above.
 - Backlog #568: the enforced-pin "Record missed updates" mask carries the
-  pin's `built_render` atoms as extra parents ahead of the pin's own, so
+  pin's `built_render` atoms as extra parents ahead of the pin's own (the consumer-pin record uses the same order, see `file_consumer_pin_conflicts`), so
   the skip block prints the built `:S/SS=` form first, like Portage's
   missed-update parents. Constraint path untouched (`slot_constraints`
   still takes `pin.atom` only).
 - Backlog #209: a distinct variant (see its own notes) so the driver can feed these pins back in-pass under `--backtrack=0`, where every other feedback kind still settles.
 
 ## fn live_reachable_consumers
-Backlog #490. Portage's `_complete_graph` pulls in an installed package only through a graph node's dependencies, and an installed package this run replaces is not a node. The pre-merge closure (`ResolveCtx::slot_op_reachable`) still walks through such packages, so an installed leaf that only a replaced parent needs (karchive's pin from `kdoctools-6.30.0` via `kded-6.30.0`) kept pinning the provider's old version; the dropped pin survived across passes and printed as a slot conflict at the end. The live closure re-closes the same seeds with `InstalledReachability::reachable_without`, skipping the cps the pass merges. Both pin scans (`step_reverse_dep_pins` and the slot-conflict feedback site in `feedback/mod.rs`) use it. The `ResolveCtx` stub in the unit tests passes `slot_op_seeds` derived from its reachable set.
+Backlog #490. Portage's `_complete_graph` pulls in an installed package only through a graph node's dependencies, and an installed package this run replaces is not a node. The pre-merge closure (`ResolveCtx::slot_op_reachable`) still walks through such packages, so an installed leaf that only a replaced parent needs (karchive's pin from `kdoctools-6.30.0` via `kded-6.30.0`) kept pinning the provider's old version; the dropped pin survived across passes and printed as a slot conflict at the end. The live closure re-closes the same seeds with `InstalledReachability::reachable_without`, skipping the cps the pass merges. The one per-pass scan (`scan_reverse_dependencies`) uses it. The `ResolveCtx` stub in the unit tests passes `slot_op_seeds` derived from its reachable set.
 
-## fn dropped_pin_mask_restart
-- Backlog #563 (perl-5.44 heal): a dropped pin the settled merge contradicts aborts today as a residual slot conflict (`build_residual_slot_conflicts` in assembly), while Portage backtracks over it (L0 `logs/l0-20261025T084209Z`, `dev-perl_XML-Parser`; S0 oracle `LLM/evidence/2026-10-25-563/captures/portage-pull-bare.*`: rc 0, backtrack 2/20, old puller merged, skip-block + `triggered by backtracking` notice). With backtracking live and no enforced restart pending, the first residual record whose merge version is not yet masked becomes one `BacktrackFeedback::MissingDep` mask so the retry re-picks around it. Portage: `depgraph.py`, `_slot_confict_backtrack` (mask over the conflict) + `_get_missed_updates` (the skip rendering).
-- The entry carries `MaskReason::SlotConflict` (parents = the contradicting dropped pins), NOT `MissingDependency`: only the slot-conflict reason derives the `WARNING` skip-block row via `backtrack_missed_updates`; a missing-dependency reason would derive the abbreviated/full `triggered by backtracking` row instead. Same reason shape as the enforced-pin "Record missed updates" tail above. The `MissingDep` *variant* still applies it (the variant is reason-agnostic; the driver files the entry and latches the neg).
-- Gate is the assembly report itself (`build_residual_slot_conflicts` over the pass): only a pin combination the settle path would abort on restarts, so clean resolves never mask. Parents must contradict the merge candidate (stale matches skipped) and their consumers must not be merge-bound (mirrors the builder's filter); no contradicting pin means no mask. One record per pass; the mask presence (runtime mask or `missing_dep_masked`) latches, so the search terminates even when the retry re-forms the record.
-- Backlog #568: each contradicting dropped pin contributes its
-  `built_render` atoms as extra parents ahead of its own, same rendering
-  rule as the enforced tail. Matching (`pin.atom` vs the merge) and G2
-  still see the stripped atom only.
-- p563 flow: pass 1 masks `!=dev-libs/p563prov-5.44` here; pass 2's `=dev-libs/p563prov-5.44*` dep then misses and the existing `maybe_missing_dep_backtrack` masks `!=dev-libs/p563pull-2`; pass 3 settles with `p563pull-1` + kept 5.42, deriving the skip-block and notice rows. A pinned-newver request (`=dev-libs/p563pull-2`) retries the same way, then fails its top-level select and falls back to the residual abort (see the driver fallback note).
-- Known divergence (D1), FIXED by #568/#569 (batch 2026-10-26-491-570):
-  the skip-block printed one conflict line (`=dev-libs/p563prov-5.42*`)
-  where Portage prints two (also `dev-libs/p563prov:0/5.42=`). The strip
-  itself was left alone (see `reverse_dep_constraint_atom`'s notes — it is
-  constraint-correct); instead the built atom rides to the printer as
-  `RevDepPin.built_render`, attached post-scan, and both mask sites
-  (enforced tail here, `dropped_pin_mask_restart`) prepend it to the
-  parents. Hermetic oracle `LLM/evidence/2026-10-26-568/`; bed C1
-  (48 real-only `:0/5.42=` lines) collapses in the Task 4 re-grade.
-- Fix round 1 (over-firing): the ungated arm fired wherever a residual
-  would abort, but Portage only heals the puller shape. Four contract
-  regressions (rc 1→0): #54 K3 keeper (`=paired-2.0` vs world keeper),
-  #222 cgp ver-break, #223 igw contrast, #35 R4 or-choice (bug 531656,
-  update wrongly skipped). Three gates, all default-deny:
-- G0 (doomed passes): fresh autounmask USE activity this pass
-  (`pass.autounmask_use_changes`/`use_overlay` -- accumulated config from
-  earlier passes must NOT block a later heal) or a hard masked/USE/plain
-  miss disclosure means Portage reports that abort before any backtrack
-  heal (backtrack 0/20 on the C3 libreoffice/gimp/plasma-meta/gnome-shell
-  probes); a mask excursion there only loses the abort's own rows.
-- G1 (third-party puller): the contradicted merge version must be
-  hard-wanted by a merge-bound non-argument puller
-  (`has_merge_bound_puller`: non-empty `parent_cpv`, `split_cpv` parses,
-  same-version merge-bound entry exists). A bare explicit-arg want
-  (keeper/igw/cgp: only `(Argument)` parents) cannot be re-picked --
-  masking strands the argument and Portage aborts loudly instead.
-- Backlog #570 (dedicated G0 pin): `g0_benign_disclosure_blocks_the_dropped_pin_heal`
-  (`tests/tests_p563.rs`) resolves healable `dev-libs/p569pull` together
-  with unrelated masked `dev-libs/abort-masked-mid` and asserts the loud
-  residual abort (MaskedDep outcome, the `p569prov` conflict still
-  recorded) with zero restarts and no skip rows — the heal never fires
-  through the disclosure. S0 oracle `LLM/evidence/2026-10-25-570/`
-  (`portage-g0combo`: rc 1, backtrack 1/20, masked disclosure only).
-  Passed first run: no predicate change, the pin just keeps G0.
-- G2 (non-selected `||` branch): a contradicting pin from a `||` branch the
-  merge satisfies elsewhere is a stale alternative (Portage demotes it via
-  dep_zapdeps, never backtrack-skips). `or_branch_superseded` re-reads the
-  consumer depstring with the scan's own layering, reduces it with the
-  shared `use_reduce_structured` parser and walks the shared `DepTree`
-  (`reduced_dep_tree`), and excludes the pin when a sibling alternative
-  targeting ANOTHER package matches a merge-bound entry. Same-package
-  version menus never count (bed virtuals re-pick `=5.42*` through exactly
-  this path, so the 9 bed heals keep firing). Task 15 retired the local
-  `DepItem`/`parse_dep_level` descent in favour of that shared parser;
-  behaviour-neutral (full gate + L0 bed, zero moved probes).
+## struct ReverseScan / fn scan_reverse_dependencies
+- One reverse-dependency scan per pass, run at the top of `collect_feedback_inner` and handed to the two consumers: the early dropped-pin collection (a pass with slot conflicts returns before the pin step, so its dropped pins would otherwise never reach the next pass) and `step_reverse_dep_pins`. Before the consumer-pin route there were two scans on a settling conflict pass.
+
+## fn file_consumer_pin_conflicts
+- Replaces `dropped_pin_mask_restart` and its gates G0 and G1 (the mask-and-restart over a dropped pin). Portage backtracks over a consumer atom the merge contradicts with `_slot_confict_backtrack` (`depgraph.py:2220-2304`): the conflict atoms are the parent atoms of every slot node, the installed consumer's included (D:2160-2165, D:2238-2245); one choice per package, highest version first (D:2235), then a stable ascending sort by conflict-atom count (D:2273); one backtrack node per choice, the last popped first (B:136, B:185-195). So a contradicted pin is now a residual slot-conflict record fed through the ordinary conflict steps.
+- The record is the one `build_residual_slot_conflicts` builds: merge instance and the installed instance, taken from the raw vdb whatever its backtracking mask (Portage re-adds it in `_complete_graph` without a mask check, D:8803-8834 -- that is what makes the same conflict form again after a "mask the installed instance" choice, and Portage's 4/20 on the T2/T3 shapes). The installed instance's parents are the consumer's selected atoms plus its built `:S/SS=` atoms verbatim, sub-slot kept (D:2189-2197); the pin's `built_render` supplies them.
+- Appended after the walker's own conflicts (`file_after_walker_conflicts`); `step_slot_conflict_backtrack` takes `slot_conflicts[0]`, Portage feeds back only the first conflict (B:180-185). A walker record of the same slot and instances keeps its place and takes the installed parents. The chain runs the ABI step once more when a record was filed (D:2208-2214).
+- Not filed in a pass with a missing, masked, USE-unsatisfied or plain-miss dependency, with a pending missing-dependency trigger, with a fresh autounmask change, or with a newly enforced pin (D:5691-5696, D:12407-12411; Portage solves the solvable conflicts first, D:2131). That is G0's predicate moved to this site; G1 is gone, since an argument-only want is now a conflict atom like any other.
+- `or_branch_superseded` (G2) stays as a filter on the pins that form the record, until the consumer's `||` is chosen the way `dep_zapdeps` chooses it. `dropped_pins` carries pins over from earlier passes, so the filter also keeps a stale alternative from an earlier pass out of the record.
+- `dropped_pins` and `reverse_dep_pins` do not grow in a loop pass: the pin is already there, and `params_equal` compares both, so a grown copy would make the duplicate node a new one. The record's parents are sorted for the same reason.
+- Counts, Portage 3.0.83 against the printed count (`backtrack: N/20`): the search makes Portage's tries on every cell of the plan's count list, but the driver's exit count (`passes - 1`) stays one short when the last pass is a failed walk with nothing left to explore. See `driver.md`, "exit count".
 
 ## fn or_branch_vdb_deselected_set
 - Backlog #569 (C1 portuale-only half): the pin scan fanned every `||`

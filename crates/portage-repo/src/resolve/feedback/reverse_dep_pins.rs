@@ -41,157 +41,135 @@ pub(crate) fn request_walk_consumers(
         .reachable_without(ctx.atoms, &[], &replaced)
 }
 
-/// Mask-and-restart over a dropped reverse-dep pin: the first residual
-/// record whose merge version is not yet masked becomes one
-/// [`BacktrackFeedback::MissingDep`] mask (`!=cp-ver`, opposed by the
-/// contradicting dropped pins), so the retry re-picks around it. `None`
-/// when the pass settles as it always did (no record, already masked, no
-/// contradicting pin to name, or a gate below holds).
-fn dropped_pin_mask_restart(
-    ctx: &ResolveCtx<'_>,
+/// The installed-consumer pins one pass's reverse-dependency scan found.
+pub(crate) struct ReverseScan {
+    /// Pins the merge still satisfies: enforced on the next pass.
+    pub(crate) enforced: Vec<RevDepPin>,
+    /// Pins jointly unsatisfiable with the pass's hard requirements.
+    pub(crate) dropped: Vec<RevDepPin>,
+}
+
+/// The pass's one reverse-dependency scan.
+// Portage: depgraph.py, _complete_graph reaching _slot_operator_check_reverse_dependencies.
+pub(crate) fn scan_reverse_dependencies(ctx: &ResolveCtx<'_>, pass: &PassResult) -> ReverseScan {
+    let live_reachable = live_reachable_consumers(ctx, &pass.entries);
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        root: ctx.root,
+        entries: &pass.entries,
+        with_bdeps: ctx.with_bdeps,
+        excluded: ctx.excluded,
+        hard_want: &pass.slot_want,
+        reachable: &live_reachable,
+        dynamic_deps: ctx.dynamic_deps,
+        ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
+        top_level_cps: &ctx.top_level_cps,
+        world_reachable: &ctx.world_reachable,
+        config: ctx.config,
+        complete: ctx.complete,
+        gate: ctx.gate(),
+    });
+    ReverseScan { enforced, dropped }
+}
+
+/// Whether this pass may feed a consumer-pin conflict back. Portage returns
+/// before it processes slot conflicts when a dependency is missing, masked,
+/// USE-unsatisfied or plainly absent (depgraph.py `_resolve`), and a fresh
+/// autounmask change restarts the run first. A newly enforced pin is solved
+/// before any backtracking over what is left.
+fn consumer_pin_conflict_may_feed_back(
     pass: &PassResult,
+    grown: &BacktrackParams,
+    scan: &ReverseScan,
+) -> bool {
+    scan.enforced.iter().all(|p| {
+        grown
+            .reverse_dep_masked
+            .contains(&(p.cp.clone(), p.atom.clone()))
+    }) && pass.autounmask_use_changes.is_empty()
+        && pass.use_overlay.is_empty()
+        && pass.masked_deps.is_empty()
+        && pass.use_unsat_deps.is_empty()
+        && pass.plain_miss_deps.is_empty()
+        && pass.missing_dep_trigger.is_none()
+        && !pass.autounmask_grew
+        && !(grown.autounmask_use_broke && !grown.autounmask_disabled)
+}
+
+/// Files the slot conflict a dropped installed-consumer pin leaves behind:
+/// the merge version and the installed instance in one slot, the consumer's
+/// atoms as parents of the installed one. Added after the walker's own
+/// conflicts, so the backtrack step, which feeds back the first conflict
+/// only, still takes theirs first. Returns whether a record was filed.
+/// Nothing is filed without a live search.
+// Portage: depgraph.py, _process_slot_conflicts
+pub(crate) fn file_consumer_pin_conflicts(
+    ctx: &ResolveCtx<'_>,
+    pass: &mut PassResult,
     grown: &mut BacktrackParams,
-) -> Option<PassDecision> {
-    // G0: the pass is already doomed by a non-residual abort driver --
-    // autounmask USE activity this pass, or a hard masked/USE/plain miss.
-    // Portage reports those before any backtrack heal (backtrack 0/20 on
-    // the C3 probes), so a mask excursion here only loses the abort's own
-    // rows. Only fresh pass activity gates: accumulated config from earlier
-    // passes must not block a later heal.
-    if !pass.autounmask_use_changes.is_empty()
-        || !pass.use_overlay.is_empty()
-        || !pass.masked_deps.is_empty()
-        || !pass.use_unsat_deps.is_empty()
-        || !pass.plain_miss_deps.is_empty()
-    {
-        return None;
+    scan: &ReverseScan,
+) -> bool {
+    if ctx.backtrack_max == 0 || !consumer_pin_conflict_may_feed_back(pass, grown, scan) {
+        return false;
     }
-    // The gate is the assembly report itself: only a pin combination the
-    // settle path would abort on restarts, so clean resolves never mask.
+    for pin in &scan.dropped {
+        if !grown.dropped_pins.contains(pin) {
+            grown.dropped_pins.push(pin.clone());
+        }
+    }
+    // A pin from a `||` branch the merge satisfies elsewhere is a stale
+    // alternative, not a break.
+    let kept: Vec<RevDepPin> = grown
+        .dropped_pins
+        .iter()
+        .filter(|pin| !or_branch_superseded(ctx, pass, pin))
+        .cloned()
+        .collect();
     let records = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
         config: ctx.config,
         root: ctx.root,
         entries: &pass.entries,
         slot_pullers: &pass.slot_pullers,
-        dropped: &grown.dropped_pins,
+        dropped: &kept,
         gate: ctx.gate(),
     });
-    // `dropped` accumulates across passes: a replaced consumer names no
-    // conflict (mirrors the builder's own filter).
-    let replaced: HashSet<(String, String)> = pass
-        .entries
-        .iter()
-        .filter(|e| merge_bound_cpv(e).is_some())
-        .map(|e| (e.category.clone(), e.package.clone()))
-        .collect();
-    for record in &records {
-        let owner = (record.category.clone(), record.package.clone());
-        let neg = format!(
-            "!={}/{}-{}",
-            record.category, record.package, record.resolved_version
-        );
-        // The mask itself latches: a re-formed record settles as before, so
-        // the search terminates.
-        if grown
-            .runtime_pkg_mask
-            .get(&owner)
-            .is_some_and(|bucket| bucket.iter().any(|m| m.neg == neg))
-            || grown.missing_dep_masked.contains(&neg)
-        {
-            continue;
-        }
-        let Some(merge) = record.instances.iter().find(|i| !i.installed) else {
-            continue;
-        };
-        // G1: the contradicted merge version must be hard-wanted by a
-        // merge-bound third-party puller -- only then can the retry re-pick
-        // around the mask. A bare explicit-arg want (keeper/igw/cgp) cannot
-        // be re-picked: masking strands the argument, the retry errors, and
-        // Portage aborts the residual loudly instead.
-        if !merge
-            .parents
-            .iter()
-            .any(|p| has_merge_bound_puller(pass, p))
-        {
-            continue;
-        }
-        let merge_match = format!(
-            // match-str-ok: merge-list entry (Option slot/repo), not a Candidate
-            "{}/{}-{}:{}/{}::{}",
-            record.category,
-            record.package,
-            record.resolved_version,
-            record.slot,
-            merge.sub_slot,
-            merge.repo_name
-        );
-        let mut parents: Vec<((String, String, String), String)> = Vec::new();
-        for pin in &grown.dropped_pins {
-            if pin.cp != owner
-                || replaced.contains(&(pin.consumer.0.clone(), pin.consumer.1.clone()))
-            {
-                continue;
-            }
-            // Only pins the merge contradicts oppose the mask; a stale match
-            // would print a nonsense conflict line.
-            if portage_dep::match_from_list(&pin.atom, &[merge_match.as_str()])
-                .is_some_and(|m| !m.is_empty())
-            {
-                continue;
-            }
-            // G2: a pin from a `||` branch the merge satisfies elsewhere is
-            // a stale alternative, not a break (Portage demotes it via
-            // dep_zapdeps instead of backtrack-skipping the update).
-            if or_branch_superseded(ctx, pass, pin) {
-                continue;
-            }
-            // The consumer's recorded built `:S/SS=` atoms render alongside
-            // the pin (Portage prints both forms); they never constrained.
-            for built in &pin.built_render {
-                let built_parent = (pin.consumer.clone(), built.clone());
-                if !parents.contains(&built_parent) {
-                    parents.push(built_parent);
-                }
-            }
-            let parent = (pin.consumer.clone(), pin.atom.clone());
-            if !parents.contains(&parent) {
-                parents.push(parent);
-            }
-        }
-        if parents.is_empty() {
-            continue;
-        }
-        return Some(PassDecision::Feedback(BacktrackFeedback::MissingDep {
-            base: Box::new(std::mem::take(grown)),
-            owner,
-            entry: MaskEntry {
-                neg,
-                reason: MaskReason::SlotConflict { parents },
-            },
-        }));
+    let mut filed = false;
+    for record in records {
+        filed |= file_after_walker_conflicts(&mut pass.slot_conflicts, record);
     }
-    None
+    filed
 }
 
-/// Whether a residual merge-instance parent is a merge-bound third-party
-/// puller: the top-level `(Argument)` pseudo-puller (empty `parent_cpv`)
-/// and non-merge-bound cps cannot be re-picked around, so a conflict they
-/// alone want must abort, never mask.
-fn has_merge_bound_puller(pass: &PassResult, parent: &SlotConflictParent) -> bool {
-    if parent.parent_cpv.is_empty() {
-        return false;
+/// Appends `record` after the existing conflicts. A conflict of the same
+/// slot and instances is kept in place and takes the record's installed
+/// parents. Returns whether the list changed.
+fn file_after_walker_conflicts(conflicts: &mut Vec<SlotConflict>, record: SlotConflict) -> bool {
+    let same = |c: &SlotConflict| {
+        c.category == record.category
+            && c.package == record.package
+            && c.slot == record.slot
+            && c.resolved_version == record.resolved_version
+            && c.instances.get(1).map(|i| &i.version) == record.instances.get(1).map(|i| &i.version)
+    };
+    let Some(existing) = conflicts.iter_mut().find(|c| same(c)) else {
+        conflicts.push(record);
+        return true;
+    };
+    let mut changed = false;
+    for added in record.instances.iter().filter(|i| i.installed) {
+        if let Some(inst) = existing
+            .instances
+            .iter_mut()
+            .find(|i| i.installed && i.version == added.version)
+        {
+            for parent in &added.parents {
+                if !inst.parents.contains(parent) {
+                    inst.parents.push(parent.clone());
+                    changed = true;
+                }
+            }
+        }
     }
-    let Some(head) = parent.parent_cpv.split(':').next() else {
-        return false;
-    };
-    let Some((pc, pp, pv)) = split_cpv(head) else {
-        return false;
-    };
-    pass.entries.iter().any(|e| {
-        e.category == pc
-            && e.package == pp
-            && merge_bound_version(&e.outcome).is_some_and(|v| v == &pv)
-    })
+    changed
 }
 
 /// Every `AnyOf` group anywhere in the tree (through conjunctions).
@@ -445,8 +423,9 @@ fn or_member_matches_pin_recursive(member: &DepTree, pin: &RevDepPin) -> bool {
 /// Installed reverse dependencies an upgrade breaks: pin or drop them.
 pub(crate) fn step_reverse_dep_pins(
     ctx: &ResolveCtx<'_>,
-    pass: &mut PassResult,
+    pass: &PassResult,
     grown: &mut BacktrackParams,
+    scan: ReverseScan,
 ) -> ControlFlow<PassDecision, Vec<RevDepPin>> {
     // Portage: depgraph.py, _complete_graph reaching _slot_operator_check_reverse_dependencies.
     // An upgrade this pass picked breaks a dep an *installed* package records against
@@ -461,22 +440,7 @@ pub(crate) fn step_reverse_dep_pins(
     // the broken consumer against the installed instance. Dropped pins accumulate for
     // that residual report; they never enter `slot_constraints`.
     let mut added = false;
-    let live_reachable = live_reachable_consumers(ctx, &pass.entries);
-    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-        root: ctx.root,
-        entries: &pass.entries,
-        with_bdeps: ctx.with_bdeps,
-        excluded: ctx.excluded,
-        hard_want: &pass.slot_want,
-        reachable: &live_reachable,
-        dynamic_deps: ctx.dynamic_deps,
-        ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
-        top_level_cps: &ctx.top_level_cps,
-        world_reachable: &ctx.world_reachable,
-        config: ctx.config,
-        complete: ctx.complete,
-        gate: ctx.gate(),
-    });
+    let ReverseScan { enforced, dropped } = scan;
     // Rule 4 of `_eliminate_rebuilds` reads every parent atom of the rebuilt pkg, and
     // the complete-graph nomerge consumers are part of `_parent_atoms`; these pins
     // carry their atoms. Cloned before the loops consume the vectors.
@@ -565,16 +529,6 @@ pub(crate) fn step_reverse_dep_pins(
         if !grown.dropped_pins.contains(&pin) {
             grown.dropped_pins.push(pin);
         }
-    }
-    // A dropped pin the settled merge contradicts would abort the run as a
-    // residual slot conflict: with backtracking live, mask the contradicted
-    // merge version and retry instead (no enforced restart pending here).
-    // Portage: depgraph.py, _slot_confict_backtrack (mask over the conflict)
-    if !added
-        && ctx.backtrack_max > 0
-        && let Some(decision) = dropped_pin_mask_restart(ctx, pass, grown)
-    {
-        return ControlFlow::Break(decision);
     }
     if added {
         // A distinct variant so the driver can feed these pins back in-pass under

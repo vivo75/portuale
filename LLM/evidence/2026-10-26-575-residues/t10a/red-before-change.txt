@@ -1,0 +1,63 @@
+test tests::tests_consumer_pin_conflict::walker_conflict_is_fed_back_before_a_consumer_pin_conflict ... FAILED
+test tests::tests_consumer_pin_conflict::first_popped_choice_masks_the_merge_version_opposed_by_the_consumer_atoms ... FAILED
+test tests::tests_consumer_pin_conflict::t3_choice_sequence_matches_portage ... FAILED
+test tests::tests_consumer_pin_conflict::masked_installed_instance_reforms_the_consumer_conflict ... FAILED
+test tests::tests_consumer_pin_conflict::t2_built_atom_is_a_conflict_parent ... FAILED
+test tests::tests_consumer_pin_conflict::consumer_pin_conflict_waits_for_a_missing_dependency ... FAILED
+test tests::tests_consumer_pin_conflict::cgp_version_break_down_follows_portage_try_by_try ... FAILED
+test tests::tests_consumer_pin_conflict::keeper_needer_reaches_the_portage_count ... FAILED
+test tests::tests_consumer_pin_conflict::contradicted_pin_backtracks_over_every_choice_like_portage ... FAILED
+test tests::tests_consumer_pin_conflict::igw_plain_reaches_the_portage_count_in_both_forms ... FAILED
+test tests::tests_consumer_pin_conflict::loop_pass_mask_installed_choice_is_a_duplicate ... FAILED
+test tests::tests_consumer_pin_conflict::cgp_version_break_up_follows_portage_try_by_try ... FAILED
+test tests::tests_consumer_pin_conflict::triangle_reaches_the_portage_count_in_both_argument_orders ... FAILED
+thread 'tests::tests_consumer_pin_conflict::walker_conflict_is_fed_back_before_a_consumer_pin_conflict' (2385831) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:567:5:
+assertion `left == right` failed: the consumer-pin conflict is filed after the walker's
+  left: ["walker"]
+ right: ["walker", "souprov"]
+thread 'tests::tests_consumer_pin_conflict::first_popped_choice_masks_the_merge_version_opposed_by_the_consumer_atoms' (2385823) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:298:5:
+assertion `left == right` failed: kinds: ["MissingDep", "MissingDep", "Settle"]
+  left: "MissingDep"
+ right: "SlotConflict"
+thread 'tests::tests_consumer_pin_conflict::t3_choice_sequence_matches_portage' (2385829) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:400:5:
+assertion `left == right` failed
+  left: ["MissingDep", "MissingDep", "Settle"]
+ right: ["SlotConflict", "SlotConflict", "MissingDep", "MissingDep", "Settle"]
+thread 'tests::tests_consumer_pin_conflict::masked_installed_instance_reforms_the_consumer_conflict' (2385827) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:443:10:
+thread 'tests::tests_consumer_pin_conflict::t2_built_atom_is_a_conflict_parent' (2385828) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:360:5:
+assertion `left == right` failed: kinds: ["MissingDep", "MissingDep", "Settle"]
+  left: "MissingDep"
+ right: "SlotConflict"
+thread 'tests::tests_consumer_pin_conflict::consumer_pin_conflict_waits_for_a_missing_dependency' (2385821) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:583:5:
+assertion `left == right` failed: the heal fires in a later pass: ["MissingDep", "MissingDep", "MissingDep", "Settle"]
+  left: "MissingDep"
+ right: "SlotConflict"
+thread 'tests::tests_consumer_pin_conflict::cgp_version_break_down_follows_portage_try_by_try' (2385819) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:605:5:
+assertion `left == right` failed: kinds: ["Settle"]
+  left: 1
+ right: 4
+thread 'tests::tests_consumer_pin_conflict::keeper_needer_reaches_the_portage_count' (2385825) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:682:5:
+assertion `left == right` failed: Portage prints 4/20
+  left: 1
+ right: 4
+thread 'tests::tests_consumer_pin_conflict::contradicted_pin_backtracks_over_every_choice_like_portage' (2385822) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:329:5:
+assertion `left == right` failed: Portage prints 3/20
+  left: 0
+ right: 3
+thread 'tests::tests_consumer_pin_conflict::igw_plain_reaches_the_portage_count_in_both_forms' (2385824) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:671:9:
+assertion `left == right` failed: >=dev-libs/igw0x-2: Portage prints 3/20
+  left: 0
+ right: 3
+thread 'tests::tests_consumer_pin_conflict::loop_pass_mask_installed_choice_is_a_duplicate' (2385826) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:474:5:
+assertion `left == right` failed: both choices are offered
+  left: 0
+ right: 2
+thread 'tests::tests_consumer_pin_conflict::cgp_version_break_up_follows_portage_try_by_try' (2385820) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:641:5:
+assertion `left == right` failed: kinds: ["Settle"]
+  left: 1
+ right: 4
+thread 'tests::tests_consumer_pin_conflict::triangle_reaches_the_portage_count_in_both_argument_orders' (2385830) panicked at crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:696:9:
+assertion `left == right` failed: ["dev-libs/needer", "dev-libs/othermod"]: Portage prints 4/20
+  left: 3
+ right: 4
+test result: FAILED. 0 passed; 13 failed; 0 ignored; 0 measured; 1251 filtered out; finished in 0.17s

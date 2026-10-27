@@ -1,0 +1,18 @@
+BT try=1 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/t8x neg=!=dev-libs/t8x-2 reason=MissingDependency { parent: ("dev-libs", "t8x"), atom: "dev-libs/maskeddep" }
+BT   missing_dep_trigger owner=dev-libs/t8x neg=!=dev-libs/t8x-2 atom=dev-libs/maskeddep
+BT try=2 kind=Feedback:SlotConflict
+BT   masks-in ["!=dev-libs/t8x-2"]
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "p569prov", "5.42")
+BT   choice ("dev-libs", "p569prov", "5.44")
+BT try=3 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p569prov-5.44", "!=dev-libs/t8x-2"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p569pull neg=!=dev-libs/p569pull-2 reason=MissingDependency { parent: ("dev-libs", "p569pull"), atom: "=dev-libs/p569prov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p569pull neg=!=dev-libs/p569pull-2 atom==dev-libs/p569prov-5.44*
+BT try=4 kind=Settle
+BT   masks-in ["!=dev-libs/p569prov-5.44", "!=dev-libs/p569pull-2", "!=dev-libs/t8x-2"]
+BT   replace-in 0 prune=false []

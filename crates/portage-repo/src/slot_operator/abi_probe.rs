@@ -301,27 +301,29 @@ pub(crate) fn slot_conflict_abi_probe(
                     }) else {
                         continue;
                     };
-                    let accepts = dep_keys
+                    // Every live atom on the provider must accept C: Portage
+                    // keeps only the replacement children all the replacement
+                    // parent's atoms agree on (an exact pin on the old
+                    // version leaves none).
+                    let provider_atoms: Vec<String> = dep_keys
                         .iter()
                         .filter_map(|k| {
                             flat_dep_atoms(live.get(*k).map(String::as_str).unwrap_or(""), &rep_use)
                         })
                         .flatten()
-                        .any(|tok| {
-                            let Some(la) = parse_dep_atom(&tok, "abi_probe_live_deps") else {
-                                return false;
-                            };
-                            if la.blocker != portage_dep::Blocker::None {
-                                return false;
-                            }
-                            if la.category != sc.category || la.package != sc.package {
-                                return false;
-                            }
-                            portage_dep::match_from_list(
-                                portage_dep::without_use(&tok),
-                                &[c_str.as_str()],
-                            )
-                            .is_some_and(|mt| !mt.is_empty())
+                        .filter(|tok| {
+                            parse_dep_atom(tok, "abi_probe_live_deps").is_some_and(|la| {
+                                la.blocker == portage_dep::Blocker::None
+                                    && la.category == sc.category
+                                    && la.package == sc.package
+                            })
+                        })
+                        .map(|tok| portage_dep::without_use(&tok).to_string())
+                        .collect();
+                    let accepts = !provider_atoms.is_empty()
+                        && provider_atoms.iter().all(|atom| {
+                            portage_dep::match_from_list(atom, &[c_str.as_str()])
+                                .is_some_and(|mt| !mt.is_empty())
                         });
                     if !accepts {
                         continue;

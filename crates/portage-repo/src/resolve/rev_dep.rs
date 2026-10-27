@@ -448,7 +448,11 @@ pub(crate) fn reverse_dependency_constraints(
         }
     }
     // The built atoms rode along untouched by every mask/restart decision
-    // above; attach them to their consumer's pins for the printer only.
+    // above; attach them to their consumer's pins for the printer only. The
+    // consumer's atoms come out of a hash set, so sort first: the same pin
+    // takes the atoms on every run.
+    enforced.sort();
+    dropped.sort();
     for pin in enforced.iter_mut().chain(dropped.iter_mut()) {
         if let Some(raws) = built_seen.remove(&(pin.cp.clone(), pin.consumer.clone())) {
             raws.into_iter().for_each(|raw| {

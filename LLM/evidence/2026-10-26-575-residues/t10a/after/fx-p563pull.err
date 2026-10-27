@@ -1,0 +1,13 @@
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "p563prov", "5.42")
+BT   choice ("dev-libs", "p563prov", "5.44")
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p563prov-5.44"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p563pull neg=!=dev-libs/p563pull-2 reason=MissingDependency { parent: ("dev-libs", "p563pull"), atom: "=dev-libs/p563prov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p563pull neg=!=dev-libs/p563pull-2 atom==dev-libs/p563prov-5.44*
+BT try=3 kind=Settle
+BT   masks-in ["!=dev-libs/p563prov-5.44", "!=dev-libs/p563pull-2"]
+BT   replace-in 0 prune=false []

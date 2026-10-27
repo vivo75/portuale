@@ -3787,6 +3787,7 @@ mod skipped;
 mod slot_conflict;
 mod slot_conflict_solutions;
 mod slot_undo;
+mod tests_consumer_pin_conflict;
 mod tests_p491;
 mod tests_p563;
 mod unsat_probe;

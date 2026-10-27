@@ -23,6 +23,13 @@ pub(crate) struct SimilarMask {
     pub(crate) parents: Vec<((String, String, String), String)>,
 }
 
+/// The `(category, package, version)` of a record parent's `cat/pkg-ver:slot/sub::repo`
+/// text; all empty for a top-level argument.
+pub(crate) fn conflict_parent_key(parent_cpv: &str) -> (String, String, String) {
+    let head = parent_cpv.split(':').next().unwrap_or_default();
+    split_cpv(head).unwrap_or_default()
+}
+
 /// Arguments of [`slot_conflict_mask_choices`].
 pub(crate) struct SlotConflictMaskChoicesArgs<'a> {
     pub(crate) excluded: &'a [String],
@@ -63,25 +70,49 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
     if !versions.contains(&sc.resolved_version) {
         versions.push(sc.resolved_version.clone());
     }
-    // All pulling parents, minus the top-level-argument pseudo-pullers
-    // (empty `cat`), which match every version and never discriminate.
+    // Every parent of every slot node: the hard pullers, then the parents the
+    // record itself carries (an installed consumer's atoms). Argument parents
+    // count: a versioned argument atom opposes the versions it misses.
     let mut all_parents: Vec<((String, String, String), String)> = Vec::new();
-    if let Some(pullers) = slot_pullers.get(&(sc.category.clone(), sc.package.clone())) {
-        for (pc, pp, pv, atom) in pullers {
-            if pc.is_empty() {
-                continue;
-            }
-            let parent = ((pc.clone(), pp.clone(), pv.clone()), atom.clone());
-            if !all_parents.contains(&parent) {
-                all_parents.push(parent);
-            }
+    let record_parents = sc
+        .instances
+        .iter()
+        .flat_map(|i| i.parents.iter())
+        .map(|p| (conflict_parent_key(&p.parent_cpv), p.atom.clone()));
+    let puller_parents = slot_pullers
+        .get(&(sc.category.clone(), sc.package.clone()))
+        .into_iter()
+        .flatten()
+        .map(|(pc, pp, pv, atom)| ((pc.clone(), pp.clone(), pv.clone()), atom.clone()));
+    for parent in puller_parents.chain(record_parents) {
+        if !all_parents.contains(&parent) {
+            all_parents.push(parent);
         }
     }
+    // The candidate string of one version: slot and sub-slot, so a built
+    // `:S/SS=` atom that misses the sub-slot counts against it.
+    let candidate_of = |ver: &str| -> String {
+        let sub = sc
+            .instances
+            .iter()
+            .find(|i| i.version == ver)
+            .map(|i| i.sub_slot.clone())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                Some(slot_conflict_meta(gate, &sc.category, &sc.package, ver).0)
+                    .filter(|s| !s.is_empty())
+            });
+        match sub {
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
+            Some(sub) => format!("{}/{}-{}:{}/{}", sc.category, sc.package, ver, sc.slot, sub),
+            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
+            None => format!("{}/{}-{}:{}", sc.category, sc.package, ver, sc.slot),
+        }
+    };
     let mut choices: Vec<MaskChoice> = versions
         .into_iter()
         .map(|ver| {
-            // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-            let candidate = format!("{}/{}-{}:{}", sc.category, sc.package, ver, sc.slot);
+            let candidate = candidate_of(&ver);
             let parents: Vec<((String, String, String), String)> = all_parents
                 .iter()
                 .filter(|(_, atom)| {
@@ -90,14 +121,29 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
                 })
                 .cloned()
                 .collect();
+            // The skip block prints a recorded built `:S/SS=` atom ahead of the
+            // plain ones.
+            let (built, plain): (Vec<_>, Vec<_>) = parents.into_iter().partition(|(_, atom)| {
+                parse_dep_atom(atom, "mask_choice_parents").is_some_and(|a| is_built_slot_op(&a))
+            });
+            let parents: Vec<((String, String, String), String)> =
+                built.into_iter().chain(plain).collect();
             // Missed-update siblings join the choice's mask group, each
             // sharing at least one conflict atom with the target (else
             // masking it is pointless). Skipped entirely when the target's
             // own conflict set is empty. Highest version first.
             let mut similar: Vec<SimilarMask> = Vec::new();
             if !parents.is_empty() {
-                let party_versions: Vec<&str> =
-                    sc.instances.iter().map(|i| i.version.as_str()).collect();
+                // Portage yields only ebuilds, so an installed instance's own
+                // ebuild is a sibling; the target's version is masked by its own
+                // entry already.
+                let party_versions: Vec<&str> = sc
+                    .instances
+                    .iter()
+                    .filter(|i| !i.installed)
+                    .map(|i| i.version.as_str())
+                    .chain(std::iter::once(ver.as_str()))
+                    .collect();
                 if let Ok(cands) = gate.repo_candidates(&sc.category, &sc.package) {
                     let mut sibs: Vec<&Candidate> = Vec::new();
                     for c in cands.iter() {
@@ -130,9 +176,11 @@ pub(crate) fn slot_conflict_mask_choices(args: SlotConflictMaskChoicesArgs<'_>) 
                     }
                     sibs.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
                     for c in sibs {
-                        let sim_cpv =
+                        let sim_cpv = format!(
                             // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-                            format!("{}/{}-{}:{}", sc.category, sc.package, c.version, sc.slot);
+                            "{}/{}-{}:{}/{}",
+                            sc.category, sc.package, c.version, sc.slot, c.sub_slot
+                        );
                         let subset: Vec<((String, String, String), String)> = parents
                             .iter()
                             .filter(|(_, atom)| {

@@ -275,31 +275,15 @@ fn collect_feedback_inner(
     }
     grown.autounmask_use_broke |= pass.use_broke;
 
-    // A pass that ends in slot-conflict mask feedback returns long before the
-    // reverse-dependency scan's own site, so those pins never reached `grown` and a
-    // later re-pass would report the collision without its installed consumers.
-    // Collected here for exactly that case, so the ordinary settle path pays for one
-    // scan, as it always did, not two.
+    // One reverse-dependency scan per pass. A pass that ends in slot-conflict
+    // mask feedback returns long before the pin step, so its dropped pins are
+    // collected here: a later re-pass would otherwise report the collision
+    // without its installed consumers.
+    let scan = scan_reverse_dependencies(ctx, pass);
     if !pass.slot_conflicts.is_empty() {
-        let live_reachable = live_reachable_consumers(ctx, &pass.entries);
-        let (_, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
-            root: ctx.root,
-            entries: &pass.entries,
-            with_bdeps: ctx.with_bdeps,
-            excluded: ctx.excluded,
-            hard_want: &pass.slot_want,
-            reachable: &live_reachable,
-            dynamic_deps: ctx.dynamic_deps,
-            ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
-            top_level_cps: &ctx.top_level_cps,
-            world_reachable: &ctx.world_reachable,
-            config: ctx.config,
-            complete: ctx.complete,
-            gate: ctx.gate(),
-        });
-        for pin in dropped {
-            if !grown.dropped_pins.contains(&pin) {
-                grown.dropped_pins.push(pin);
+        for pin in &scan.dropped {
+            if !grown.dropped_pins.contains(pin) {
+                grown.dropped_pins.push(pin.clone());
             }
         }
     }
@@ -322,6 +306,14 @@ fn collect_feedback_inner(
         return decision;
     }
 
+    // The contradicted consumer pins join the conflicts after the walker's, and
+    // the ABI step looks at their built atoms like it does at any other.
+    if file_consumer_pin_conflicts(ctx, pass, &mut grown, &scan)
+        && let Some(decision) = step_slot_conflict_abi(pass, ctx, &mut grown, config)
+    {
+        return decision;
+    }
+
     if let Some(decision) = step_slot_conflict_backtrack(pass, ctx, &mut grown, config) {
         return decision;
     }
@@ -341,7 +333,7 @@ fn collect_feedback_inner(
         return decision;
     }
 
-    let reverse_pins = match step_reverse_dep_pins(ctx, pass, &mut grown) {
+    let reverse_pins = match step_reverse_dep_pins(ctx, pass, &mut grown, scan) {
         ControlFlow::Continue(out) => out,
         ControlFlow::Break(decision) => return decision,
     };

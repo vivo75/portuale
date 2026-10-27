@@ -19914,3 +19914,28 @@ does. Check from pmtest: `python3 -m pytest
 pytests-contract-suite/test_emerge_pretend_contract.py -q -k
 prints_the_slot_conflict_explanation`. The expected text is host Portage
 3.0.83 on the fixtures: `dev-libs/cgp0x-2.8.0 (Change USE: -icu)`.
+
+**An installed package's dependency that a merge breaks is now backtracked
+over as a slot conflict, choice by choice, as Portage does (#580 part 1,
+2026-10-27).** When an upgrade breaks a dependency recorded by an installed
+package, Portage files the old and the new version as a slot conflict.
+- The installed package's atoms, including its built `:S/SS=` atoms, are
+  parents of the installed side, and argument atoms count too.
+- Portage then backtracks over one mask per conflicting version
+  (`_process_slot_conflicts` → `_slot_confict_backtrack`,
+  `lib/_emerge/depgraph.py:2123-2304`).
+- A pass with a missing dependency defers the heal (`:5691-5696`).
+
+portuale used to file a single mask behind two guards. That gave the wrong
+first choice on the T3 fixture (`dev-libs/p589cpull`), and on the keeper and
+argument shapes it never searched. Now the contradicted pin forms the same
+record and goes through the same choices. T3 prints Portage's `backtrack:
+4/20` with `N p589cpull-1`.
+
+On the bed's `@world` update (`MULTI_deep-update-world`) portuale no longer
+aborts on the perl 5.44 conflict. It lists the same 141 packages as Portage
+(`l0-20261027T141949Z`).
+
+Check: `cargo test --release -p portage-repo tests_consumer_pin_conflict`.
+The expected sequences are host Portage 3.0.83 on the pmtest fixtures
+(`LLM/evidence/2026-10-26-575-residues/t9/t3-sequence.md`, `t10a/counts.md`).

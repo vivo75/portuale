@@ -1,0 +1,23 @@
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "p589cprov", "5.44")
+BT   choice ("dev-libs", "p589cprov", "5.42")
+BT try=2 kind=Feedback:SlotConflict
+BT   masks-in ["!=dev-libs/p589cprov-5.42", "!=dev-libs/p589cprov-5.42[installed]"]
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "p589cprov", "5.44")
+BT   choice ("dev-libs", "p589cprov", "5.42")
+BT try=3 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p589cprov-5.42", "!=dev-libs/p589cprov-5.42[installed]", "!=dev-libs/p589cprov-5.44"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p589cpull neg=!=dev-libs/p589cpull-2 reason=MissingDependency { parent: ("dev-libs", "p589cpull"), atom: "=dev-libs/p589cprov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p589cpull neg=!=dev-libs/p589cpull-2 atom==dev-libs/p589cprov-5.44*
+BT try=4 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p589cprov-5.44"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p589cpull neg=!=dev-libs/p589cpull-2 reason=MissingDependency { parent: ("dev-libs", "p589cpull"), atom: "=dev-libs/p589cprov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p589cpull neg=!=dev-libs/p589cpull-2 atom==dev-libs/p589cprov-5.44*
+BT try=5 kind=Settle
+BT   masks-in ["!=dev-libs/p589cprov-5.44", "!=dev-libs/p589cpull-2"]
+BT   replace-in 0 prune=false []
