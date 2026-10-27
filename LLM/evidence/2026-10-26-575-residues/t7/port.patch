@@ -1,0 +1,514 @@
+diff --git a/LLM/code-notes/portuale/emerge_build/scheduler.md b/LLM/code-notes/portuale/emerge_build/scheduler.md
+index 0daf4bcb..c3f10713 100644
+--- a/LLM/code-notes/portuale/emerge_build/scheduler.md
++++ b/LLM/code-notes/portuale/emerge_build/scheduler.md
+@@ -57,7 +57,12 @@ capture. What stays here is the `stdout`-lock replay sink and the single
+   Ports Portage's up-front `_run_pkg_pretend` (commit `1c8b75d73`): every build-bound entry runs `clean` + the `pretend` chain (up to `max_jobs` threads, each captured to `pretend-<pid>-<idx>.log` under the run tmpdir), then the captures replay to the sink in merge-list order and are deleted — Portage's buffered-then-replayed shape, including unlinking. A failure aborts before any build starts (Portage returns `FAILURE` before `_add_packages`, regardless of `--keep-going`). The replay sink is `stdout` on a non-pretend run (`pkg_pretend` output bypasses `--quiet`/`--jobs`, like Portage) and an injectable `&mut dyn Write` otherwise, so the order pin does not need process-stdout capture. The build then starts at `setup` (`skip_pretend`, see `ebuild_phases/commands.md`); the serial merge loop keeps the whole chain (pre-3.0.83 serial divergence, out of scope). Binary entries never reach this scheduler (the mixed dispatcher routes them to `merge_binpkg`, whose own pretend stays as-is).
+ - `land_built_entry` is the old recv-arm merge extracted verbatim (slot-free `build_finished`, serialized `merge_one_built_entry`, `job_failed` only on merge failure). `note_landed` is the old success/failure bookkeeping extracted verbatim, plus clearing the merge-wait queue on a stopping failure: terminated runs never drain it (Portage `8ac550470`, bug 961044). SIGINT itself needs no queue handling — `ExitOnSignalGuard` exits the process, so no further merge can start; oracle shape `13-sigint`.
+ - Merge-wait wiring in `run_build_scheduler`: the wait set comes from `merge_wait_set` over the resolved `@system` set plus `features_hold_all_merges` for default `FEATURES`; a finished gated build always queues (no in-flight condition, `Scheduler.py:1833-1836`) and the queue drains whole, FIFO, per idle episode, before any dispatch (`Scheduler.py:2245-2280` plus the `_merge_wait_scheduled` build gate at `:2471`, `_build_exit` commit `3b1fc4238`). Portage's breaks before/after a system package only serialize queue-to-queue moves and are no-ops under portuale's always-serial merges. `StatusDisplay::set_merge_wait` feeds the `N merge wait` arm of `>>> Jobs:` (the pure `jobs_line` already rendered it; the display hardcoded `0` before). Dispatch reads `blocking_deps`, so only cyclic post-merge edges differ from the old `deps`.
+-- `_unsatisfied_system_deps` gating (`Scheduler.py:1686-1730`, `:2472`) is a deliberate cut: it only blocks new builds while other jobs run with unmerged runtime deps of a started system merge, a shape no scheduler test has (fixture runs start from an empty vdb; the wait-set members under test have no dependencies). Next free backlog number at filing time: #581 (verify with grep; #575-#580 are this plan's). The discriminating shape for the follow-up is a wait-set member with an unmerged runtime dep plus an unrelated build under `--jobs 2`. Evidence `LLM/evidence/2026-10-25-review/t2/S0.md` §4.
++- `_unsatisfied_system_deps` gating (`Scheduler.py:1686-1730`, `:2472`) is now ported (see below); the paragraph that called it a deliberate cut is superseded but kept for provenance: it only blocks new builds while other jobs run with unmerged runtime deps of a started system merge, a shape no scheduler test had (fixture runs start from an empty vdb; the wait-set members under test have no dependencies). The discriminating shape is a wait-set member with an unmerged runtime dep plus an unrelated build under `--jobs 2`. Evidence `LLM/evidence/2026-10-25-review/t2/S0.md` §4.
++
++## fn unsatisfied_system_runtime_deps, fn system_deps_hold_new_builds
++- Ports Portage's `_system_merge_started` (`Scheduler.py:1686-1730`), the `:2472` build gate and the `:1872` drain. `note_landed` fills the per-run set when a `wait_set` member lands and drains the landed entry on every merge (postinst-failed merges land too, like `_task_complete`); the dispatch loop starts nothing new while the set is non-empty and a build runs. The set is function-local, so returning drops it the way `_main_loop_cleanup` (`:1988`) clears Portage's.
++- Differences from Portage, all forced by the serial-merge shape: the fill runs when the system merge *lands* rather than on a start-listener (merges run one at a time on the main thread, so start and land are atomic — no concurrent merge can observe the difference); membership is the scheduler's own `wait_set` (the `_deep_system_deps` equivalent) rather than a separate flag; and merge-wait-off system merges are already queued by `merge_wait_set` (see `merge_wait.md`), so the fill sees them exactly as Portage's listener does. The `/`-only skip mirrors `:1699-1702` and reads the run's target root.
++- The runtime child edges come from the scheduler's own `deps` (the `required_by` inversion) narrowed by the entry's `deps` priorities: `runtime || runtime_post` and not satisfied. The `satisfied` bit lives on the merge-order digraph's edge copies only, so the check asks `dep_edge_satisfied_by_installed` against the target root's vdb at fill time (equivalent outcome: a child merged mid-run is already in `merged`; an installed-but-replaced match reads the same either way). `required_by`-only fallback edges count as runtime, like the digraph's synthesized edge; non-build entries (`scheduler_needs_build` false) and the system entry itself never enter the set.
+ 
+ ## display slot on queue (#512)
+ - A queued build frees its `running` slot at build exit (`build_finished` in the recv arm, before the gate), not at merge time: Portage's `_build_exit` tail drops `running` unconditionally, and the `>>> Jobs:` line would otherwise claim two builders while one builds. `land_built_entry` therefore never touches `running`; the drain path lands without it (already freed at queue time).
+diff --git a/crates/portuale/src/emerge_build/scheduler.rs b/crates/portuale/src/emerge_build/scheduler.rs
+index b3f90c4c..838baab3 100644
+--- a/crates/portuale/src/emerge_build/scheduler.rs
++++ b/crates/portuale/src/emerge_build/scheduler.rs
+@@ -1,7 +1,8 @@
+ //! The parallel build scheduler (`--jobs`).
+ 
+ use crate::emerge_build::*;
+-use std::collections::{HashMap, HashSet, VecDeque};
++use portage_repo::dep_edge_satisfied_by_installed;
++use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+ 
+ /// Arguments of [`build_one_source_entry`].
+ pub(crate) struct BuildOneSourceEntryArgs<'a> {
+@@ -583,6 +584,9 @@ pub(crate) struct NoteLandedArgs<'a, 'b> {
+     pub(crate) idx: usize,
+     pub(crate) failure: Option<(String, bool)>,
+     pub(crate) entries: &'a [GraphEntry],
++    pub(crate) deps: &'a [HashSet<usize>],
++    pub(crate) wait_set: &'a HashSet<usize>,
++    pub(crate) unsatisfied_system_deps: &'a mut BTreeSet<usize>,
+     pub(crate) cp_to_idx: &'a HashMap<(String, String), usize>,
+     pub(crate) root: &'a Path,
+     pub(crate) keep_going: bool,
+@@ -609,6 +613,9 @@ fn note_landed(args: NoteLandedArgs<'_, '_>) -> Landed {
+         idx,
+         failure,
+         entries,
++        deps,
++        wait_set,
++        unsatisfied_system_deps,
+         cp_to_idx,
+         root,
+         keep_going,
+@@ -627,6 +634,20 @@ fn note_landed(args: NoteLandedArgs<'_, '_>) -> Landed {
+     match failure {
+         None => {
+             merged.insert(idx);
++            // The system merge started: hold unrelated builds until its
++            // still-unmerged runtime children land; landing one drains it.
++            unsatisfied_system_deps.remove(&idx);
++            if wait_set.contains(&idx) {
++                unsatisfied_system_deps.extend(unsatisfied_system_runtime_deps(
++                    UnsatisfiedSystemDepsArgs {
++                        entries,
++                        deps,
++                        system_idx: idx,
++                        merged,
++                        root,
++                    },
++                ));
++            }
+             // Each successful merge leaves the saved resume list
+             // (removal by value, so completion order is fine).
+             if let Some(cpv) = resume_cpv(&entries[idx]) {
+@@ -650,6 +671,19 @@ fn note_landed(args: NoteLandedArgs<'_, '_>) -> Landed {
+                 pass_report
+                     .postinst_failed
+                     .push((entries[idx].category.clone(), entries[idx].package.clone()));
++                // The merge landed, so its children stop holding too.
++                unsatisfied_system_deps.remove(&idx);
++                if wait_set.contains(&idx) {
++                    unsatisfied_system_deps.extend(unsatisfied_system_runtime_deps(
++                        UnsatisfiedSystemDepsArgs {
++                            entries,
++                            deps,
++                            system_idx: idx,
++                            merged,
++                            root,
++                        },
++                    ));
++                }
+                 *halted = true;
+             }
+             if !ledger.failed(report, &entries[idx], &e) {
+@@ -673,6 +707,76 @@ fn note_landed(args: NoteLandedArgs<'_, '_>) -> Landed {
+     Landed::Continue
+ }
+ 
++/// Arguments of [`unsatisfied_system_runtime_deps`].
++pub(crate) struct UnsatisfiedSystemDepsArgs<'a> {
++    pub(crate) entries: &'a [GraphEntry],
++    pub(crate) deps: &'a [HashSet<usize>],
++    pub(crate) system_idx: usize,
++    pub(crate) merged: &'a HashSet<usize>,
++    pub(crate) root: &'a Path,
++}
++
++/// The direct runtime children of a landed system entry that still need a
++/// merge: while they land, unrelated builds hold, so nothing builds against
++/// a half-merged system. Only direct children (indirect ones are checked
++/// when their own parent merges), only `RDEPEND`/`PDEPEND` edges no
++/// installed package satisfies, and only entries still to merge. Empty off
++/// `/`, where such fragility does not matter.
++// Portage: _emerge/Scheduler.py, _system_merge_started
++pub(crate) fn unsatisfied_system_runtime_deps(
++    args: UnsatisfiedSystemDepsArgs<'_>,
++) -> BTreeSet<usize> {
++    let UnsatisfiedSystemDepsArgs {
++        entries,
++        deps,
++        system_idx,
++        merged,
++        root,
++    } = args;
++    if root != Path::new("/") {
++        return BTreeSet::new();
++    }
++    let system = &entries[system_idx];
++    let mut out = BTreeSet::new();
++    for &child_idx in &deps[system_idx] {
++        if child_idx == system_idx || merged.contains(&child_idx) {
++            continue;
++        }
++        let child = &entries[child_idx];
++        if !scheduler_needs_build(child) {
++            continue;
++        }
++        let mut known = false;
++        let mut held = false;
++        for edge in system
++            .deps
++            .iter()
++            .filter(|e| e.category == child.category && e.package == child.package)
++        {
++            known = true;
++            if (edge.priority.runtime || edge.priority.runtime_post)
++                && !dep_edge_satisfied_by_installed(root, edge, Some(child))
++            {
++                held = true;
++            }
++        }
++        // No `deps` record (a `required_by` fallback) counts as runtime,
++        // like the merge-order digraph's synthesized edge.
++        if held || !known {
++            out.insert(child_idx);
++        }
++    }
++    out
++}
++
++/// Whether the dispatch loop may start another build: while a system
++/// package waits on unmerged runtime deps, no new build starts once one
++/// already runs (the idle build keeps forward progress).
++// Portage: _emerge/Scheduler.py, _schedule_tasks_imp
++pub(crate) fn system_deps_hold_new_builds(in_flight: usize, unsatisfied: &BTreeSet<usize>) -> bool {
++    in_flight > 0 && !unsatisfied.is_empty()
++}
++
+ /// Runs up to `jobs` package *builds* concurrently, dispatching a build
+ /// only once every blocking dependency is already merged, and serializing
+ /// the vdb merge step. A `pkg_pretend` pass runs before any build, its
+@@ -795,6 +899,11 @@ pub(crate) fn run_build_scheduler(
+     // system merge never runs beside another merge or build.
+     // Portage: _emerge/Scheduler.py, _merge_wait_queue
+     let mut wait_queue: VecDeque<(usize, PathBuf)> = VecDeque::new();
++    // System merges' still-unmerged runtime children: while non-empty and
++    // builds run, no new build starts. Per-run state, dropped on return
++    // like Portage drops it in the merge-loop cleanup.
++    // Portage: _emerge/Scheduler.py, _unsatisfied_system_deps
++    let mut unsatisfied_system_deps: BTreeSet<usize> = BTreeSet::new();
+ 
+     // The up-front `pkg_pretend` pass runs before any build, its outputs
+     // replayed in merge-list order; a failure aborts before anything builds.
+@@ -860,6 +969,9 @@ pub(crate) fn run_build_scheduler(
+                         idx: qidx,
+                         failure,
+                         entries,
++                        deps: &deps,
++                        wait_set: &wait_set,
++                        unsatisfied_system_deps: &mut unsatisfied_system_deps,
+                         cp_to_idx: &cp_to_idx,
+                         root,
+                         keep_going,
+@@ -885,6 +997,12 @@ pub(crate) fn run_build_scheduler(
+                     if !policy.should_start(in_flight, system_loadavg_1min()) {
+                         break;
+                     }
++                    // While a system package waits on unmerged runtime deps,
++                    // start nothing new once a build runs; the idle build
++                    // keeps forward progress.
++                    if system_deps_hold_new_builds(in_flight, &unsatisfied_system_deps) {
++                        break;
++                    }
+                     let next = (0..n).find(|&i| {
+                         needs_work(i)
+                             && !started.contains(&i)
+@@ -995,6 +1113,9 @@ pub(crate) fn run_build_scheduler(
+                         idx,
+                         failure,
+                         entries,
++                        deps: &deps,
++                        wait_set: &wait_set,
++                        unsatisfied_system_deps: &mut unsatisfied_system_deps,
+                         cp_to_idx: &cp_to_idx,
+                         root,
+                         keep_going,
+diff --git a/crates/portuale/src/emerge_build/tests/scheduler.rs b/crates/portuale/src/emerge_build/tests/scheduler.rs
+index 8a8d116a..e9984cc2 100644
+--- a/crates/portuale/src/emerge_build/tests/scheduler.rs
++++ b/crates/portuale/src/emerge_build/tests/scheduler.rs
+@@ -1,5 +1,7 @@
+ use super::*;
+ 
++use std::collections::{BTreeSet, HashSet};
++
+ /// Backlog #197 fix round 1: one failed `-jN` build fires each
+ /// failure event exactly once. Real `_build_exit`'s failure arm
+ /// assigns absolutely (`Scheduler.py:1662`, `failed =
+@@ -596,6 +598,286 @@ fn queued_merges_land_before_a_freed_dependent_builds() {
+     let _ = std::fs::remove_dir_all(&portage_tmpdir);
+ }
+ 
++/// Portage holds unrelated builds while a system package waits on unmerged
++/// runtime deps: the system merge start records the still-unmerged runtime
++/// child, no new build starts while another runs, and the child's landing
++/// reopens dispatch.
++/// Portage: _emerge/Scheduler.py, _system_merge_started
++#[test]
++fn unrelated_build_waits_for_system_runtime_deps() {
++    use portage_repo::{DepEdge, DepPriority};
++    let runtime = |package: &str| DepEdge {
++        atom: format!("dev-libs/{package}"),
++        evaluated: format!("dev-libs/{package}"),
++        category: "dev-libs".into(),
++        package: package.into(),
++        priority: DepPriority {
++            runtime: true,
++            ..DepPriority::default()
++        },
++        disjunctive: false,
++        alt: None,
++        key: 0,
++    };
++    let runtime_post = |package: &str| DepEdge {
++        atom: format!("dev-libs/{package}"),
++        evaluated: format!("dev-libs/{package}"),
++        category: "dev-libs".into(),
++        package: package.into(),
++        priority: DepPriority {
++            runtime_post: true,
++            ..DepPriority::default()
++        },
++        disjunctive: false,
++        alt: None,
++        key: 2,
++    };
++    let new = |p: &str| {
++        source_entry(
++            p,
++            PretendOutcome::New {
++                version: "1.0".into(),
++            },
++        )
++    };
++    // S is the system package with an unmerged runtime child X (a cycle
++    // broken the way the merge order breaks it: S's post-merge edge does not
++    // gate its own build, X's runtime edge gates X's); U is unrelated.
++    let mut s = new("schedsys");
++    s.deps = vec![runtime_post("schedwait")];
++    s.required_by = vec![
++        ("dev-libs".into(), "schedwait".into()),
++        ("dev-libs".into(), "schedok".into()),
++    ];
++    let mut x = new("schedwait");
++    x.deps = vec![runtime("schedsys")];
++    x.required_by = vec![("dev-libs".into(), "schedsys".into())];
++    let mut u = new("schedok");
++    u.deps = vec![runtime("schedsys")];
++    let entries = vec![s, x, u];
++    let (si, xi) = (0usize, 1usize);
++    // The dispatch loop's own inversion: `d`'s `required_by` names the
++    // entries depending on `d`.
++    let deps: Vec<HashSet<usize>> = vec![
++        [xi].into_iter().collect(),
++        [si].into_iter().collect(),
++        [si].into_iter().collect(),
++    ];
++    let slash = Path::new("/");
++    // S landed on `/` with X still to merge: X is recorded, U is not.
++    let merged: HashSet<usize> = [si].into_iter().collect();
++    let held = unsatisfied_system_runtime_deps(UnsatisfiedSystemDepsArgs {
++        entries: &entries,
++        deps: &deps,
++        system_idx: si,
++        merged: &merged,
++        root: slash,
++    });
++    assert_eq!(held, [xi].into_iter().collect());
++    // While a build runs, nothing new starts; the idle build keeps forward
++    // progress, and an empty set never holds.
++    assert!(system_deps_hold_new_builds(1, &held));
++    assert!(!system_deps_hold_new_builds(0, &held));
++    assert!(!system_deps_hold_new_builds(1, &BTreeSet::new()));
++    // X landing drains the set and reopens dispatch.
++    let merged: HashSet<usize> = [si, xi].into_iter().collect();
++    let held = unsatisfied_system_runtime_deps(UnsatisfiedSystemDepsArgs {
++        entries: &entries,
++        deps: &deps,
++        system_idx: si,
++        merged: &merged,
++        root: slash,
++    });
++    assert!(held.is_empty());
++    assert!(!system_deps_hold_new_builds(1, &held));
++}
++
++/// Off `/` the set stays empty, so a freed unrelated build starts at once.
++/// Portage skips the whole registration there.
++#[test]
++fn system_deps_gate_skipped_off_root() {
++    use portage_repo::{DepEdge, DepPriority};
++    let runtime = |package: &str| DepEdge {
++        atom: format!("dev-libs/{package}"),
++        evaluated: format!("dev-libs/{package}"),
++        category: "dev-libs".into(),
++        package: package.into(),
++        priority: DepPriority {
++            runtime: true,
++            ..DepPriority::default()
++        },
++        disjunctive: false,
++        alt: None,
++        key: 0,
++    };
++    let runtime_post = |package: &str| DepEdge {
++        atom: format!("dev-libs/{package}"),
++        evaluated: format!("dev-libs/{package}"),
++        category: "dev-libs".into(),
++        package: package.into(),
++        priority: DepPriority {
++            runtime_post: true,
++            ..DepPriority::default()
++        },
++        disjunctive: false,
++        alt: None,
++        key: 2,
++    };
++    let new = |p: &str| {
++        source_entry(
++            p,
++            PretendOutcome::New {
++                version: "1.0".into(),
++            },
++        )
++    };
++    // S is the system package, X its slow runtime child, U an unrelated
++    // build freed by S's landing. If the `/` check broke, U would wait
++    // behind the slow X and land after it.
++    let mut s = new("schedsys");
++    s.deps = vec![runtime_post("schedwait")];
++    s.required_by = vec![
++        ("dev-libs".into(), "schedwait".into()),
++        ("dev-libs".into(), "schedok".into()),
++    ];
++    let mut x = new("schedwait");
++    x.deps = vec![runtime("schedsys")];
++    x.required_by = vec![("dev-libs".into(), "schedsys".into())];
++    let mut u = new("schedok");
++    u.deps = vec![runtime("schedsys")];
++    let entries = vec![s, x, u];
++    let (si, xi) = (0usize, 1usize);
++    let deps: Vec<HashSet<usize>> = vec![
++        [xi].into_iter().collect(),
++        [si].into_iter().collect(),
++        [si].into_iter().collect(),
++    ];
++    let config_root = fixtures_root();
++    let repos = find_repos(&config_root).unwrap();
++    let root = tempdir();
++    let portage_tmpdir = tempdir();
++    // The same landing that records X on `/` records nothing here.
++    let merged: HashSet<usize> = [si].into_iter().collect();
++    let held = unsatisfied_system_runtime_deps(UnsatisfiedSystemDepsArgs {
++        entries: &entries,
++        deps: &deps,
++        system_idx: si,
++        merged: &merged,
++        root: &root,
++    });
++    assert!(held.is_empty(), "{held:?}");
++    let options = scope_options(
++        &config_root,
++        &["*dev-libs/schedsys"],
++        crate::pretend::MergeWaitScope::Deep,
++    );
++    let display = scheduler_display(2);
++    let policy = mrg_director::LoadAwarePolicy::new(2, None);
++    run_build_scheduler(RunBuildSchedulerArgs {
++        entries: &entries,
++        repos: &repos,
++        root: &root,
++        portage_tmpdir: &portage_tmpdir,
++        options: &options,
++        keep_going: false,
++        buildpkg: None,
++        buildpkg_exclude: &[],
++        policy: &policy,
++        display: &display,
++    })
++    .expect("all entries merge");
++    assert!(
++        vdb_mtime(&root, "dev-libs/schedok-1.0") < vdb_mtime(&root, "dev-libs/schedwait-1.0"),
++        "U starts at once instead of waiting behind the slow X"
++    );
++    let _ = std::fs::remove_dir_all(&root);
++    let _ = std::fs::remove_dir_all(&portage_tmpdir);
++}
++
++/// A system package still goes to the merge-wait queue with merge-wait off:
++/// S's merge lands only after the slow unrelated build drains, even though
++/// no feature holds it.
++/// Portage: _emerge/Scheduler.py, _build_exit
++#[test]
++fn system_package_waits_even_without_merge_wait() {
++    use portage_repo::{DepEdge, DepPriority};
++    let runtime = |package: &str| DepEdge {
++        atom: format!("dev-libs/{package}"),
++        evaluated: format!("dev-libs/{package}"),
++        category: "dev-libs".into(),
++        package: package.into(),
++        priority: DepPriority {
++            runtime: true,
++            ..DepPriority::default()
++        },
++        disjunctive: false,
++        alt: None,
++        key: 0,
++    };
++    let runtime_post = |package: &str| DepEdge {
++        atom: format!("dev-libs/{package}"),
++        evaluated: format!("dev-libs/{package}"),
++        category: "dev-libs".into(),
++        package: package.into(),
++        priority: DepPriority {
++            runtime_post: true,
++            ..DepPriority::default()
++        },
++        disjunctive: false,
++        alt: None,
++        key: 2,
++    };
++    let new = |p: &str| {
++        source_entry(
++            p,
++            PretendOutcome::New {
++                version: "1.0".into(),
++            },
++        )
++    };
++    // S is the `@system` member with an unmerged runtime child X; U is a
++    // slow unrelated build. `scope_options` pins `FEATURES` without
++    // merge-wait, so only the system bit can queue S.
++    let mut s = new("schedsys");
++    s.deps = vec![runtime_post("schedok")];
++    s.required_by = vec![("dev-libs".into(), "schedok".into())];
++    let mut x = new("schedok");
++    x.deps = vec![runtime("schedsys")];
++    x.required_by = vec![("dev-libs".into(), "schedsys".into())];
++    let u = new("schedwait");
++    let entries = vec![s, x, u];
++    let config_root = fixtures_root();
++    let repos = find_repos(&config_root).unwrap();
++    let root = tempdir();
++    let portage_tmpdir = tempdir();
++    let options = scope_options(
++        &config_root,
++        &["*dev-libs/schedsys"],
++        crate::pretend::MergeWaitScope::Deep,
++    );
++    let display = scheduler_display(2);
++    let policy = mrg_director::LoadAwarePolicy::new(2, None);
++    run_build_scheduler(RunBuildSchedulerArgs {
++        entries: &entries,
++        repos: &repos,
++        root: &root,
++        portage_tmpdir: &portage_tmpdir,
++        options: &options,
++        keep_going: false,
++        buildpkg: None,
++        buildpkg_exclude: &[],
++        policy: &policy,
++        display: &display,
++    })
++    .expect("all entries merge");
++    assert!(
++        vdb_mtime(&root, "dev-libs/schedsys-1.0") > vdb_mtime(&root, "dev-libs/schedwait-1.0"),
++        "the system merge waits for the slow build to drain, without merge-wait"
++    );
++    let _ = std::fs::remove_dir_all(&root);
++    let _ = std::fs::remove_dir_all(&portage_tmpdir);
++}
++
+ /// A `package.env` `FEATURES=merge-wait` holds one package's merge even
+ /// when the run-wide list (and the scope) would let it through.
+ /// Portage: `_build_exit`, `"merge-wait" in build.settings.features`.
