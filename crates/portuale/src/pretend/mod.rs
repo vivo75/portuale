@@ -590,7 +590,7 @@ pub(crate) fn finish_run(args: FinishRunArgs<'_>) -> ExitCode {
         portage_repo::CategoryGate::new(repos, categories, config_root),
     );
 
-    show_skipped_missing_deps(opts.quiet, opts.debug, result, &color);
+    show_skipped_missing_deps(opts.quiet, opts.debug, result, &color, root);
 
     show_missing_args_and_aborts(ShowMissingArgsAndAbortsArgs {
         result,

@@ -271,3 +271,23 @@ fn explanation_is_absent_for_version_conflicts_and_empty_searches() {
         None
     );
 }
+
+#[test]
+fn skipped_header_root_suffix_is_a_plain_root_test() {
+    use std::path::Path;
+    // Portage: depgraph.py, _show_missed_update_slot_conflicts (ROOT != "/")
+    assert_eq!(
+        skipped_header_root_suffix(false, Path::new("/x/y"), None),
+        " for /x/y/"
+    );
+    assert_eq!(
+        skipped_header_root_suffix(false, Path::new("/x/y/"), None),
+        " for /x/y/"
+    );
+    assert_eq!(skipped_header_root_suffix(false, Path::new("/"), None), "");
+    // A node at the running root has its own root, not the target's.
+    assert_eq!(
+        skipped_header_root_suffix(true, Path::new("/x/y"), Some(Path::new("/"))),
+        ""
+    );
+}

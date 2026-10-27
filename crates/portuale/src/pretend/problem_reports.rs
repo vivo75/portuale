@@ -100,21 +100,9 @@ pub(crate) fn show_skipped_missing_deps(
     debug: bool,
     result: &GraphResult,
     color: &Colorizer,
+    root: &Path,
 ) {
-    // The abbreviated tail: slots whose higher masked version lost to an
-    // unsatisfied dependency under backtracking. Same `--quiet`-unless-`--debug`
-    // gate as the `WARNING` block; no `--columns` gate.
-    // Portage: depgraph.py, _show_missed_update_unsatisfied_dep
-    if !(quiet && !debug) && !result.skipped_missing_deps.is_empty() {
-        println!();
-        println!("!!! The following update(s) have been skipped due to unsatisfied dependencies");
-        println!("!!! triggered by backtracking:");
-        println!();
-        for s in &result.skipped_missing_deps {
-            println!("{}/{}:{}", s.category, s.package, s.slot);
-        }
-    }
-
+    let root_suffix = skipped_header_root_suffix(false, root, None);
     // The full per-update form: one block per masked higher version whose
     // missing atom bites nothing backtrack-masked. Same gate as above;
     // `--json` returns above, no `--columns` gate.
@@ -124,7 +112,7 @@ pub(crate) fn show_skipped_missing_deps(
             println!();
             println!("!!! The following update has been skipped due to unsatisfied dependencies:");
             println!();
-            println!("{}/{}:{}", f.category, f.package, f.slot);
+            println!("{}/{}:{}{root_suffix}", f.category, f.package, f.slot);
             println!();
             println!("  selected: {}", f.selected_display);
             println!(
@@ -191,6 +179,20 @@ pub(crate) fn show_skipped_missing_deps(
             }
         }
     }
+
+    // The abbreviated tail, after the full entries: slots whose higher masked
+    // version lost to an unsatisfied dependency under backtracking. Same
+    // `--quiet`-unless-`--debug` gate as the `WARNING` block; no `--columns` gate.
+    // Portage: depgraph.py, _show_missed_update_unsatisfied_dep
+    if !(quiet && !debug) && !result.skipped_missing_deps.is_empty() {
+        println!();
+        println!("!!! The following update(s) have been skipped due to unsatisfied dependencies");
+        println!("!!! triggered by backtracking:");
+        println!();
+        for s in &result.skipped_missing_deps {
+            println!("{}/{}:{}{root_suffix}", s.category, s.package, s.slot);
+        }
+    }
 }
 
 /// The ` in '<root>'` an installed package's description carries, empty at `/`.
@@ -234,7 +236,15 @@ pub(crate) fn show_skipped_updates(
                 continue;
             };
             println!();
-            println!("{}/{}:{}", header.category, header.package, header.slot);
+            let header_root = skipped_header_root_suffix(
+                header.missed_targets_running_root,
+                root,
+                root_deps_running_root.as_deref(),
+            );
+            println!(
+                "{}/{}:{}{header_root}",
+                header.category, header.package, header.slot
+            );
             println!();
             // Per-node destination and own-root USE paint, like the missed
             // line above.

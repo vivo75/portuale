@@ -396,6 +396,23 @@ pub(crate) fn skipped_node_suffix(
     }
 }
 
+/// The ` for <ROOT>/` that a skipped-update header carries when the node's own
+/// root is not `/`. A plain `ROOT != "/"` test, not the running-root rule.
+/// Portage: depgraph.py, _show_missed_update_slot_conflicts
+pub(crate) fn skipped_header_root_suffix(
+    running: bool,
+    root: &Path,
+    running_root: Option<&Path>,
+) -> String {
+    let own: Option<&Path> = if running { running_root } else { Some(root) };
+    match own {
+        Some(r) if r != Path::new("/") => {
+            format!(" for {}/", r.display().to_string().trim_end_matches('/'))
+        }
+        _ => String::new(),
+    }
+}
+
 /// The `^` marker line under a skip-conflict pin: operator chars plus version,
 /// plus a `:slot[/sub-slot][op]` span when the atom carries one the missed
 /// package lacks. USE-token spans are cut.
