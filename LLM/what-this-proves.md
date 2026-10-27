@@ -19886,3 +19886,16 @@ pmtest: `python3 -m pytest pytests-contract-suite/test_portuale.py -q -k
 pretends_a_remote_binary`. The order it pins (`>>> Running pre-merge
 checks`, the `;-) ... [ ok ]` line, then `>>> Emerging binary`) is the
 host Portage capture in `LLM/evidence/2026-10-26-575-residues/t6/`.
+
+**A running build no longer has company while a system package waits for
+its runtime deps (#581, 2026-10-27).** Portage records the unmerged
+runtime children of each `@system` package it merges at `ROOT=/`
+(`lib/_emerge/Scheduler.py:1686-1730`) and starts no new job while that
+set is non-empty and a job is running (`:2469-2476`). The set drains as
+those children merge. portuale had no such set. Now the scheduler fills it
+when a system entry lands, drains it in `note_landed`, and its dispatch
+loop waits on `system_deps_hold_new_builds`. Off `/` the gate is skipped,
+as in Portage. Check: `cargo test --release -p portuale --lib
+system_`. The grounding is Portage's source plus these unit tests. A
+bed capture of Portage's start order needs an overlay and an `@system`
+entry in an L3 cell, and is #596.

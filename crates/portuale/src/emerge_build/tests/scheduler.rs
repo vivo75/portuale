@@ -1,5 +1,7 @@
 use super::*;
 
+use std::collections::{BTreeSet, HashSet};
+
 /// Backlog #197 fix round 1: one failed `-jN` build fires each
 /// failure event exactly once. Real `_build_exit`'s failure arm
 /// assigns absolutely (`Scheduler.py:1662`, `failed =
@@ -592,6 +594,286 @@ fn queued_merges_land_before_a_freed_dependent_builds() {
             "the freed dependent merges only after the whole queue landed"
         );
     }
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// Portage holds unrelated builds while a system package waits on unmerged
+/// runtime deps: the system merge start records the still-unmerged runtime
+/// child, no new build starts while another runs, and the child's landing
+/// reopens dispatch.
+/// Portage: _emerge/Scheduler.py, _system_merge_started
+#[test]
+fn unrelated_build_waits_for_system_runtime_deps() {
+    use portage_repo::{DepEdge, DepPriority};
+    let runtime = |package: &str| DepEdge {
+        atom: format!("dev-libs/{package}"),
+        evaluated: format!("dev-libs/{package}"),
+        category: "dev-libs".into(),
+        package: package.into(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let runtime_post = |package: &str| DepEdge {
+        atom: format!("dev-libs/{package}"),
+        evaluated: format!("dev-libs/{package}"),
+        category: "dev-libs".into(),
+        package: package.into(),
+        priority: DepPriority {
+            runtime_post: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 2,
+    };
+    let new = |p: &str| {
+        source_entry(
+            p,
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )
+    };
+    // S is the system package with an unmerged runtime child X (a cycle
+    // broken the way the merge order breaks it: S's post-merge edge does not
+    // gate its own build, X's runtime edge gates X's); U is unrelated.
+    let mut s = new("schedsys");
+    s.deps = vec![runtime_post("schedwait")];
+    s.required_by = vec![
+        ("dev-libs".into(), "schedwait".into()),
+        ("dev-libs".into(), "schedok".into()),
+    ];
+    let mut x = new("schedwait");
+    x.deps = vec![runtime("schedsys")];
+    x.required_by = vec![("dev-libs".into(), "schedsys".into())];
+    let mut u = new("schedok");
+    u.deps = vec![runtime("schedsys")];
+    let entries = vec![s, x, u];
+    let (si, xi) = (0usize, 1usize);
+    // The dispatch loop's own inversion: `d`'s `required_by` names the
+    // entries depending on `d`.
+    let deps: Vec<HashSet<usize>> = vec![
+        [xi].into_iter().collect(),
+        [si].into_iter().collect(),
+        [si].into_iter().collect(),
+    ];
+    let slash = Path::new("/");
+    // S landed on `/` with X still to merge: X is recorded, U is not.
+    let merged: HashSet<usize> = [si].into_iter().collect();
+    let held = unsatisfied_system_runtime_deps(UnsatisfiedSystemDepsArgs {
+        entries: &entries,
+        deps: &deps,
+        system_idx: si,
+        merged: &merged,
+        root: slash,
+    });
+    assert_eq!(held, [xi].into_iter().collect());
+    // While a build runs, nothing new starts; the idle build keeps forward
+    // progress, and an empty set never holds.
+    assert!(system_deps_hold_new_builds(1, &held));
+    assert!(!system_deps_hold_new_builds(0, &held));
+    assert!(!system_deps_hold_new_builds(1, &BTreeSet::new()));
+    // X landing drains the set and reopens dispatch.
+    let merged: HashSet<usize> = [si, xi].into_iter().collect();
+    let held = unsatisfied_system_runtime_deps(UnsatisfiedSystemDepsArgs {
+        entries: &entries,
+        deps: &deps,
+        system_idx: si,
+        merged: &merged,
+        root: slash,
+    });
+    assert!(held.is_empty());
+    assert!(!system_deps_hold_new_builds(1, &held));
+}
+
+/// Off `/` the set stays empty, so a freed unrelated build starts at once.
+/// Portage skips the whole registration there.
+#[test]
+fn system_deps_gate_skipped_off_root() {
+    use portage_repo::{DepEdge, DepPriority};
+    let runtime = |package: &str| DepEdge {
+        atom: format!("dev-libs/{package}"),
+        evaluated: format!("dev-libs/{package}"),
+        category: "dev-libs".into(),
+        package: package.into(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let runtime_post = |package: &str| DepEdge {
+        atom: format!("dev-libs/{package}"),
+        evaluated: format!("dev-libs/{package}"),
+        category: "dev-libs".into(),
+        package: package.into(),
+        priority: DepPriority {
+            runtime_post: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 2,
+    };
+    let new = |p: &str| {
+        source_entry(
+            p,
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )
+    };
+    // S is the system package, X its slow runtime child, U an unrelated
+    // build freed by S's landing. If the `/` check broke, U would wait
+    // behind the slow X and land after it.
+    let mut s = new("schedsys");
+    s.deps = vec![runtime_post("schedwait")];
+    s.required_by = vec![
+        ("dev-libs".into(), "schedwait".into()),
+        ("dev-libs".into(), "schedok".into()),
+    ];
+    let mut x = new("schedwait");
+    x.deps = vec![runtime("schedsys")];
+    x.required_by = vec![("dev-libs".into(), "schedsys".into())];
+    let mut u = new("schedok");
+    u.deps = vec![runtime("schedsys")];
+    let entries = vec![s, x, u];
+    let (si, xi) = (0usize, 1usize);
+    let deps: Vec<HashSet<usize>> = vec![
+        [xi].into_iter().collect(),
+        [si].into_iter().collect(),
+        [si].into_iter().collect(),
+    ];
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    // The same landing that records X on `/` records nothing here.
+    let merged: HashSet<usize> = [si].into_iter().collect();
+    let held = unsatisfied_system_runtime_deps(UnsatisfiedSystemDepsArgs {
+        entries: &entries,
+        deps: &deps,
+        system_idx: si,
+        merged: &merged,
+        root: &root,
+    });
+    assert!(held.is_empty(), "{held:?}");
+    let options = scope_options(
+        &config_root,
+        &["*dev-libs/schedsys"],
+        crate::pretend::MergeWaitScope::Deep,
+    );
+    let display = scheduler_display(2);
+    let policy = mrg_director::LoadAwarePolicy::new(2, None);
+    run_build_scheduler(RunBuildSchedulerArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        policy: &policy,
+        display: &display,
+    })
+    .expect("all entries merge");
+    assert!(
+        vdb_mtime(&root, "dev-libs/schedok-1.0") < vdb_mtime(&root, "dev-libs/schedwait-1.0"),
+        "U starts at once instead of waiting behind the slow X"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+}
+
+/// A system package still goes to the merge-wait queue with merge-wait off:
+/// S's merge lands only after the slow unrelated build drains, even though
+/// no feature holds it.
+/// Portage: _emerge/Scheduler.py, _build_exit
+#[test]
+fn system_package_waits_even_without_merge_wait() {
+    use portage_repo::{DepEdge, DepPriority};
+    let runtime = |package: &str| DepEdge {
+        atom: format!("dev-libs/{package}"),
+        evaluated: format!("dev-libs/{package}"),
+        category: "dev-libs".into(),
+        package: package.into(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 0,
+    };
+    let runtime_post = |package: &str| DepEdge {
+        atom: format!("dev-libs/{package}"),
+        evaluated: format!("dev-libs/{package}"),
+        category: "dev-libs".into(),
+        package: package.into(),
+        priority: DepPriority {
+            runtime_post: true,
+            ..DepPriority::default()
+        },
+        disjunctive: false,
+        alt: None,
+        key: 2,
+    };
+    let new = |p: &str| {
+        source_entry(
+            p,
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )
+    };
+    // S is the `@system` member with an unmerged runtime child X; U is a
+    // slow unrelated build. `scope_options` pins `FEATURES` without
+    // merge-wait, so only the system bit can queue S.
+    let mut s = new("schedsys");
+    s.deps = vec![runtime_post("schedok")];
+    s.required_by = vec![("dev-libs".into(), "schedok".into())];
+    let mut x = new("schedok");
+    x.deps = vec![runtime("schedsys")];
+    x.required_by = vec![("dev-libs".into(), "schedsys".into())];
+    let u = new("schedwait");
+    let entries = vec![s, x, u];
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let options = scope_options(
+        &config_root,
+        &["*dev-libs/schedsys"],
+        crate::pretend::MergeWaitScope::Deep,
+    );
+    let display = scheduler_display(2);
+    let policy = mrg_director::LoadAwarePolicy::new(2, None);
+    run_build_scheduler(RunBuildSchedulerArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        policy: &policy,
+        display: &display,
+    })
+    .expect("all entries merge");
+    assert!(
+        vdb_mtime(&root, "dev-libs/schedsys-1.0") > vdb_mtime(&root, "dev-libs/schedwait-1.0"),
+        "the system merge waits for the slow build to drain, without merge-wait"
+    );
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
