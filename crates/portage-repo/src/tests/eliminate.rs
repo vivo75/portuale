@@ -6,7 +6,7 @@ use super::*;
 fn slot_operator_bridge_entries_run_the_new_slot_arm() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let dir = TempDir::new("portage-repo-slotop-bridge-newslot").keep();
+    let dir = TempDir::new("portage-repo-slotop-bridge-newslot");
     for (name, slot, rdepend) in [
         ("massb-1", "1", ""),
         ("massc-1", "0", "dev-libs/massb:1/1="),
@@ -515,7 +515,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
 #[test]
 fn required_set_reachable_cps_follows_the_forward_installed_dep_graph() {
     // Throwaway vdb: tail -> mid -> target chain, an island, and a @system half.
-    let dir = TempDir::new("portage-repo-reach").keep();
+    let dir = TempDir::new("portage-repo-reach");
     let mk = |name: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -549,7 +549,7 @@ fn required_set_reachable_cps_follows_the_forward_installed_dep_graph() {
 
 #[test]
 fn installed_reachability_walks_match_independent_calls() {
-    let dir = TempDir::new("portage-repo-reach-shared").keep();
+    let dir = TempDir::new("portage-repo-reach-shared");
     let mk = |name: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -586,7 +586,7 @@ fn installed_reachability_walks_match_independent_calls() {
 #[test]
 fn reachable_without_does_not_follow_a_replaced_package() {
     // Portage: depgraph.py, _complete_graph -- only graph nodes pull deps in.
-    let dir = TempDir::new("portage-repo-reach-without").keep();
+    let dir = TempDir::new("portage-repo-reach-without");
     let mk = |name: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();

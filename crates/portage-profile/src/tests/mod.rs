@@ -20,7 +20,7 @@ fn check_overlay_package_use_scoping(
     infix: &str,
     fields: impl Fn(&Config) -> (&PackageFlags, &PackageFlags),
 ) {
-    let root = TempDir::new("portage-profile-test-overlay-package-use-scoping").keep();
+    let root = TempDir::new("portage-profile-test-overlay-package-use-scoping");
     let repo = root.join("repo");
     let overlay = root.join("overlay");
     fs::create_dir_all(repo.join("profiles")).unwrap();

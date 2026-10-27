@@ -8,7 +8,7 @@ use super::*;
 /// exactly like a root with none.
 #[test]
 fn a_make_globals_under_the_config_root_is_ignored() {
-    let root = portage_util::TempDir::new("portage-profile-test-globals-ignored").keep();
+    let root = portage_util::TempDir::new("portage-profile-test-globals-ignored");
     let prof = root.join("repo/profiles/default");
     fs::create_dir_all(&prof).unwrap();
     fs::create_dir_all(root.join("etc/portage")).unwrap();
@@ -64,7 +64,7 @@ fn the_embedded_make_globals_is_upstream_plus_the_xattr_line() {
 /// A `<config root>/etc/make.globals` draws Portage's obsolete-file notice.
 #[test]
 fn an_obsolete_etc_make_globals_is_reported() {
-    let root = portage_util::TempDir::new("portage-profile-test-globals-obsolete").keep();
+    let root = portage_util::TempDir::new("portage-profile-test-globals-obsolete");
     let prof = root.join("repo/profiles/default");
     fs::create_dir_all(&prof).unwrap();
     fs::create_dir_all(root.join("etc/portage")).unwrap();

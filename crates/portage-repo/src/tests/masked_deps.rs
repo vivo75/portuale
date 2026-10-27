@@ -534,7 +534,7 @@ fn highest_available_candidate_ignoring_use_honours_extra_constraints() {
 fn binary_masked_rows_report_changed_deps_rejections() {
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
     let config = test_config();
-    let root = TempDir::new("portuale-420-changed-deps").keep();
+    let root = TempDir::new("portuale-420-changed-deps");
     let binary = Candidate {
         source: CandidateSource::Binary,
         binary_deps: HashMap::from([("RDEPEND".to_string(), "dev-libs/bcdepold".to_string())]),
@@ -597,7 +597,7 @@ fn binary_masked_rows_prefer_respect_use_over_changed_deps() {
     // mismatch shape), and its RDEPEND is stale too (the #420 shape).
     let mut config = test_config();
     config.package_use_user = vec![("=dev-libs/bcdeppkg-1.0".to_string(), vec!["x".to_string()])];
-    let root = TempDir::new("portuale-420-gate-order").keep();
+    let root = TempDir::new("portuale-420-gate-order");
     let binary = Candidate {
         source: CandidateSource::Binary,
         binary_deps: HashMap::from([("RDEPEND".to_string(), "dev-libs/bcdepold".to_string())]),

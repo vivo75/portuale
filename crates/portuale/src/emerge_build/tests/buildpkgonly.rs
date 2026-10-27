@@ -101,6 +101,7 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
 
     let entries = vec![GraphEntry {
         discovery: 0,
@@ -144,8 +145,8 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             shell: PackageOptions::default().shell,
             // Pinned to "bzip2" rather than the default "zstd", so the test
             // does not depend on the host having zstd installed.
@@ -193,6 +194,7 @@ fn run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_m
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
     let missing = portage_tmpdir.join("no-such-buildpkgonly-tmpdir");
 
     let entries = vec![source_entry(
@@ -220,8 +222,8 @@ fn run_buildpkgonly_recomputes_per_entry_portage_tmpdir_and_fails_on_a_missing_m
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir,
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             shell: PackageOptions::default().shell,
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
@@ -256,6 +258,7 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() 
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
 
     let entries = vec![
         source_entry(
@@ -293,8 +296,8 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_multi_instance_from_package_env() 
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             shell: PackageOptions::default().shell,
             binpkg_compress: "bzip2".to_string(),
             binpkg_multi_instance: true,
@@ -354,6 +357,7 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
 
     let entries = vec![
         source_entry(
@@ -388,8 +392,8 @@ fn run_buildpkgonly_resolves_per_entry_binpkg_compress_from_package_env() {
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             shell: PackageOptions::default().shell,
             binpkg_compress: "bzip2".to_string(),
             binpkg_format: "xpak".to_string(),
@@ -436,6 +440,7 @@ fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
     let mut config = portage_profile::Config::default();
     config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
     config.iuse_effective = ["abi_x86_64", "amd64", "elibc_glibc", "kernel_linux"]
@@ -460,8 +465,8 @@ fn buildpkgonly_with_resolved_config_writes_resolved_use_and_features() {
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             binpkg_format: "gpkg".to_string(),
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
@@ -519,6 +524,7 @@ fn buildpkgonly_post_cleans_the_builddir() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
 
     let entries = vec![source_entry(
         "packagepkg",
@@ -533,8 +539,8 @@ fn buildpkgonly_post_cleans_the_builddir() {
         root: &root,
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
         },
@@ -569,6 +575,7 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
 
     let entries = vec![GraphEntry {
         discovery: 0,
@@ -612,8 +619,8 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             shell: PackageOptions::default().shell,
             // Pinned to "bzip2" rather than the default "zstd", so the test
             // does not depend on the host having zstd installed.
@@ -644,6 +651,7 @@ fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
 
     // fetchpkg (always fails) listed *before* packagepkg (builds cleanly).
     let entries = vec![
@@ -659,8 +667,8 @@ fn real_buildpkgonly_without_keep_going_stops_at_the_first_failure() {
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             shell: PackageOptions::default().shell,
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
@@ -688,6 +696,7 @@ fn run_buildpkgonly_pretend_pass_uses_jobs_not_the_entry_count() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
     let new = |p: &str| buildpkgonly_entry("dev-libs", p, "1.0");
     let entries = vec![new("schedppseqa"), new("schedppseqb")];
     run_buildpkgonly(RunBuildpkgonlyArgs {
@@ -698,8 +707,8 @@ fn run_buildpkgonly_pretend_pass_uses_jobs_not_the_entry_count() {
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             config_root: config_root.clone(),
             shell: PackageOptions::default().shell,
             binpkg_compress: "bzip2".to_string(),
@@ -732,6 +741,7 @@ fn run_buildpkgonly_pretend_pass_stays_buffered_above_one_job() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
     let new = |p: &str| buildpkgonly_entry("dev-libs", p, "1.0");
     let entries = vec![new("schedppseqa"), new("schedppseqb")];
     let err = run_buildpkgonly(RunBuildpkgonlyArgs {
@@ -742,8 +752,8 @@ fn run_buildpkgonly_pretend_pass_stays_buffered_above_one_job() {
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             config_root: config_root.clone(),
             shell: PackageOptions::default().shell,
             binpkg_compress: "bzip2".to_string(),
@@ -779,6 +789,7 @@ fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
 
     let entries = vec![
         buildpkgonly_entry("dev-libs", "fetchpkg", "1.0"),
@@ -793,8 +804,8 @@ fn real_buildpkgonly_with_keep_going_builds_past_a_failure() {
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             shell: PackageOptions::default().shell,
             binpkg_compress: "bzip2".to_string(),
             ..PackageOptions::default()
@@ -898,6 +909,9 @@ fn expected_digests_file(patches: &[(&str, &[u8])]) -> Vec<u8> {
 /// Runs `--buildpkgonly` for `app-misc/ppatch-1.0` from the staged tree and
 /// returns the built multi-instance gpkg path.
 fn build_ppatch_binpkg(cfg: &std::path::Path, pkgdir: &std::path::Path) -> std::path::PathBuf {
+    let distdir = tempdir();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
     let repos = find_repos(cfg).unwrap();
     let entries = vec![GraphEntry {
         discovery: 0,
@@ -936,12 +950,12 @@ fn build_ppatch_binpkg(cfg: &std::path::Path, pkgdir: &std::path::Path) -> std::
         entries: &entries,
         config: &portage_profile::Config::default(),
         repos: &repos,
-        root: &tempdir(),
-        portage_tmpdir: &tempdir(),
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
             pkgdir: pkgdir.to_path_buf(),
-            distdir: tempdir(),
+            distdir: distdir.path().to_path_buf(),
             config_root: cfg.to_path_buf(),
             shell: PackageOptions::default().shell,
             binpkg_multi_instance: true,
@@ -1023,10 +1037,11 @@ fn merge_binpkg_copies_user_patch_files_into_the_vdb() {
 
     let root = tempdir();
     fs::create_dir_all(&root).unwrap();
+    let merge_tmpdir = tempdir();
     let outcome = crate::ebuild_merge::merge_binpkg(
         &gpkg,
         &root,
-        &tempdir(),
+        &merge_tmpdir,
         &crate::ebuild_merge::MergeOptions::default(),
     )
     .expect("merge succeeds");
@@ -1058,6 +1073,7 @@ fn run_buildpkgonly_pretend_failure_aborts_before_anything_builds() {
     let root = tempdir();
     let portage_tmpdir = tempdir();
     let pkgdir = tempdir();
+    let distdir = tempdir();
     let new = |p: &str| buildpkgonly_entry("dev-libs", p, "1.0");
     let entries = vec![new("schedppfail"), new("schedwait")];
     let err = run_buildpkgonly(RunBuildpkgonlyArgs {
@@ -1068,8 +1084,8 @@ fn run_buildpkgonly_pretend_failure_aborts_before_anything_builds() {
         portage_tmpdir: &portage_tmpdir,
         options: &PackageOptions {
             debug: false,
-            pkgdir: pkgdir.clone(),
-            distdir: tempdir(),
+            pkgdir: pkgdir.path().to_path_buf(),
+            distdir: distdir.path().to_path_buf(),
             config_root: config_root.clone(),
             shell: PackageOptions::default().shell,
             binpkg_compress: "bzip2".to_string(),

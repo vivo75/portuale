@@ -7,7 +7,7 @@
 
 use super::*;
 
-fn p571_repos() -> (std::path::PathBuf, Vec<portage_repo::RepoConfig>) {
+fn p571_repos() -> (TempDir, Vec<portage_repo::RepoConfig>) {
     let fixtures = fixtures_root();
     let repo = |name: &str, dir: &str, priority: i32, is_main: bool| portage_repo::RepoConfig {
         name: name.to_string(),
@@ -23,7 +23,7 @@ fn p571_repos() -> (std::path::PathBuf, Vec<portage_repo::RepoConfig>) {
         volatile: false,
         module_specific_options: Vec::new(),
     };
-    let cfg = TempDir::new("portuale-571-expand").keep();
+    let cfg = TempDir::new("portuale-571-expand");
     let _ = std::fs::remove_dir_all(&cfg);
     std::fs::create_dir_all(&cfg).unwrap();
     (

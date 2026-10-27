@@ -20,8 +20,8 @@ const PATCH2: &[u8] = b"\x11\xaf";
 const PATCH3: &[u8] = b"\xb4\x19\x0e";
 const PATCH4: &[u8] = b"\x74\xba\x25\x21";
 
-fn populated_root() -> std::path::PathBuf {
-    let tmp = TempDir::new("portage-profile-test-user-patches").keep();
+fn populated_root() -> TempDir {
+    let tmp = TempDir::new("portage-profile-test-user-patches");
     let foo = tmp.join("etc/portage/patches/app-misc/foo");
     write_patch(&foo, "user.patch", PATCH1);
     write_patch(&foo, "random.diff", PATCH2);
@@ -131,11 +131,11 @@ fn stray_files_outside_pkg_dirs_are_ignored() {
         "05f0b2d539792008c12ef9993a5d27ab85837c2b34317e423b0fd9322a9d6918"
     );
     // `patches` itself a file: no patch sets at all.
-    let tmp2 = TempDir::new("portage-profile-test-user-patches-file").keep();
+    let tmp2 = TempDir::new("portage-profile-test-user-patches-file");
     std::fs::create_dir_all(tmp2.join("etc/portage")).unwrap();
     std::fs::write(tmp2.join("etc/portage/patches"), b"x").unwrap();
     assert!(UserPatchSet::load(&tmp2).is_none());
     // Missing entirely: none as well.
-    let tmp3 = TempDir::new("portage-profile-test-user-patches-missing").keep();
+    let tmp3 = TempDir::new("portage-profile-test-user-patches-missing");
     assert!(UserPatchSet::load(&tmp3).is_none());
 }

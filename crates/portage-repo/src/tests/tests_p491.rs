@@ -19,7 +19,7 @@ use super::*;
 /// Temp vdb: installed `p491lib-1` (`lib_slot`), `p491con-1` (`:6`, baked
 /// `>=dev-libs/p491lib-1:6/7=`), `p491keep-1` (`:6`, `keep_rdepend`).
 /// Built fresh per test: the vdb backend snapshots file content.
-fn p491_vdb(lib_slot: &str, keep_rdepend: &str) -> PathBuf {
+fn p491_vdb(lib_slot: &str, keep_rdepend: &str) -> TempDir {
     let dir = slotundo_temp_dir("p491-seed");
     for (pf, slot, rdepend) in [
         ("p491lib-1", lib_slot, None),
@@ -167,7 +167,7 @@ fn p491_pass0_seed_stays_quiet_when_the_child_already_moved() {
 
 /// Temp vdb for the `||` probe: the installed parent's slot-operator atom
 /// sits in a `||` branch the installed set does not select, while the
-/// sibling branch names an installed package. TempDir-guarded (no `.keep()`).
+/// sibling branch names an installed package. TempDir-guarded, never relinquished.
 fn p491or_vdb() -> (TempDir, PathBuf) {
     let guard = TempDir::new("p491-or-seed");
     let root = guard.path().to_path_buf();

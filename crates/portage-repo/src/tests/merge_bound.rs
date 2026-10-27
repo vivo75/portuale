@@ -7,7 +7,7 @@ fn cross_root_depend_forms_the_running_root_cycle() {
     let root = fixtures_root();
     // Hermetic running root: nothing installed, so build deps select from
     // the tree.
-    let running = TempDir::new("portuale-242-xb-empty-running-root").keep();
+    let running = TempDir::new("portuale-242-xb-empty-running-root");
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
         main_repo_location: &root.join("repo"),
@@ -59,7 +59,7 @@ fn cross_root_depend_forms_the_running_root_cycle() {
 #[test]
 fn cross_root_bdepend_self_branch_backtrack0_reports_the_self_cycle() {
     let root = fixtures_root();
-    let running = TempDir::new("portuale-242-xc-empty-running-root-b0").keep();
+    let running = TempDir::new("portuale-242-xc-empty-running-root-b0");
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
         main_repo_location: &root.join("repo"),

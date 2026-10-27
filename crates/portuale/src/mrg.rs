@@ -2585,7 +2585,7 @@ mod tests {
             .join("../../fixtures")
             .canonicalize()
             .unwrap();
-        let tmp = portage_util::TempDir::new("vdb_make_conf_select").keep();
+        let tmp = portage_util::TempDir::new("vdb_make_conf_select");
         let _ = std::fs::remove_dir_all(&tmp);
         let sh = |cmd: &str| {
             let ok = std::process::Command::new("sh")
@@ -2744,7 +2744,7 @@ mod tests {
     #[test]
     fn pretend_plan_is_identical_on_files_sqlite_and_redb() {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
-        let tmp = portage_util::TempDir::new("mrg_vdb_parity").keep();
+        let tmp = portage_util::TempDir::new("mrg_vdb_parity");
         // A scratch copy of the fixture tree as ROOT: the updates run
         // moves entries and records mtimes on the target root, so the
         // shared fixtures must not serve as one. (`fixtures` itself is a

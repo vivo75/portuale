@@ -6,7 +6,7 @@ use super::*;
 fn live_metadata_for_installed_prefers_the_recorded_repo() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portuale-live-meta").keep();
+    let base = TempDir::new("portuale-live-meta");
     // Two scratch repos, same cpv, different RDEPEND.
     for (repo, rdepend) in [("lowrepo", ""), ("highrepo", "dev-libs/blocked")] {
         let dir = base.join(repo).join("dev-libs").join("twounit");

@@ -746,8 +746,8 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/var")
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        portage_util::TempDir::new(&format!("vdbcmd-{tag}")).keep()
+    fn scratch(tag: &str) -> portage_util::TempDir {
+        portage_util::TempDir::new(&format!("vdbcmd-{tag}"))
     }
 
     /// `cp -a` (modes and mtimes kept, symlinks kept).
@@ -768,7 +768,7 @@ mod tests {
     }
 
     /// A temp ROOT holding a copy of the fixture var tree.
-    fn fixture_root(tag: &str) -> PathBuf {
+    fn fixture_root(tag: &str) -> portage_util::TempDir {
         let root = scratch(tag);
         copy_tree(&fixtures(), &root.join("var"));
         root
@@ -1003,9 +1003,9 @@ mod tests {
             |p: &Path| FilesDb::from_cli_path(p).and_then(|d| d.root().map(Path::to_path_buf));
         assert_eq!(
             root_of(&root.join("var/db/pkg")).as_deref(),
-            Some(root.as_path())
+            Some(root.path())
         );
-        assert_eq!(root_of(&root).as_deref(), Some(root.as_path()));
+        assert_eq!(root_of(&root).as_deref(), Some(root.path()));
         // A plain directory is a bare VDB directory (no root); a missing path is none.
         assert!(FilesDb::from_cli_path(&root.join("var")).is_some_and(|d| d.root().is_none()));
         assert!(FilesDb::from_cli_path(&root.join("nope")).is_none());

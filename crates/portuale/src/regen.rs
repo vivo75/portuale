@@ -567,7 +567,7 @@ mod tests {
     /// cp_all(categories=settings.categories), porttree.py:1097-1128.
     #[test]
     fn regen_traversal_drops_cps_in_unlisted_categories() {
-        let dir = TempDir::new("portuale-regen-categories").keep();
+        let dir = TempDir::new("portuale-regen-categories");
         let _ = std::fs::remove_dir_all(&dir);
         let repo = dir.join("repo");
         for (category, package) in [("dev-libs", "listedpkg"), ("zz-unlisted", "droppedpkg")] {
@@ -666,7 +666,7 @@ mod tests {
     /// Portage: EbuildMetadataPhase.
     #[test]
     fn render_entry_writes_the_eclass_shape_of_each_rung() {
-        let dir = TempDir::new("portuale-regen-render").keep();
+        let dir = TempDir::new("portuale-regen-render");
         let _ = std::fs::remove_dir_all(&dir);
         let repo = dir.join("repo");
         let ebuild = repo.join("dev-libs/pkg/pkg-1.0.ebuild");
@@ -704,7 +704,7 @@ mod tests {
     /// Portage: MetadataRegen._iter_metadata_processes (MetadataRegen.py:114-120).
     #[test]
     fn regen_one_skips_the_depend_phase_for_a_valid_cache_entry() {
-        let dir = TempDir::new("portuale-regen-skip").keep();
+        let dir = TempDir::new("portuale-regen-skip");
         let _ = std::fs::remove_dir_all(&dir);
         let repo = dir.join("repo");
         let ebuild = repo.join("dev-libs/pkg/pkg-1.0.ebuild");

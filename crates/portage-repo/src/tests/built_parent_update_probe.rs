@@ -2,7 +2,7 @@ use super::*;
 
 /// An installed `dev-libs/mbabilib-1.0` whose vdb `SLOT` is `slot`
 /// (`main/sub`); the fixture tree has `mbabilib-2.0` in `0/2`.
-fn mbabilib_vdb(slot: &str) -> PathBuf {
+fn mbabilib_vdb(slot: &str) -> TempDir {
     let dir = slotundo_temp_dir("built-parent");
     let d = dir.join("var/db/pkg/dev-libs/mbabilib-1.0");
     fs::create_dir_all(&d).unwrap();

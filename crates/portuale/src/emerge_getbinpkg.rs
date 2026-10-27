@@ -2143,8 +2143,8 @@ mod tests {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
     }
 
-    fn tempdir() -> std::path::PathBuf {
-        TempDir::new("portuale-getbinpkg").keep()
+    fn tempdir() -> TempDir {
+        TempDir::new("portuale-getbinpkg")
     }
 
     /// Serves each `routes` entry over loopback HTTP, one response per
@@ -2618,7 +2618,7 @@ mod tests {
 
     /// A writable copy of the committed GnuPG test keyring (see `binpkg.rs`).
     /// `gpg` refuses a homedir it doesn't own, so the tree itself is never used.
-    fn test_gpg_home() -> std::path::PathBuf {
+    fn test_gpg_home() -> (TempDir, std::path::PathBuf) {
         fn copy_dir(src: &std::path::Path, dest: &std::path::Path) {
             std::fs::create_dir_all(dest).unwrap();
             for entry in portage_util::read_dir_entries(src).unwrap() {
@@ -2630,7 +2630,8 @@ mod tests {
                 }
             }
         }
-        let dest = tempdir().join("gpg-home");
+        let tmp = tempdir();
+        let dest = tmp.join("gpg-home");
         copy_dir(
             &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../fixtures/helpers/gpg-keyring"),
@@ -2638,7 +2639,7 @@ mod tests {
         );
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o700)).unwrap();
-        dest
+        (tmp, dest)
     }
 
     fn test_gpg_verify(home: &std::path::Path) -> crate::binpkg::GpgVerify {
@@ -2657,7 +2658,7 @@ mod tests {
         let tmp = tempdir();
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
-        let home = test_gpg_home();
+        let (_guard, home) = test_gpg_home();
         let options = MergeOptions {
             gpg_verify: test_gpg_verify(&home),
             ..MergeOptions::default()
@@ -2722,7 +2723,7 @@ mod tests {
 
         let root = tmp.join("root");
         std::fs::create_dir_all(&root).unwrap();
-        let home = test_gpg_home();
+        let (_guard, home) = test_gpg_home();
         let options = MergeOptions {
             gpg_verify: test_gpg_verify(&home),
             ..MergeOptions::default()
@@ -5462,8 +5463,8 @@ mod mixed_pretend_tests {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
     }
 
-    fn tempdir() -> std::path::PathBuf {
-        portage_util::TempDir::new("portuale-mixed-pretend").keep()
+    fn tempdir() -> portage_util::TempDir {
+        portage_util::TempDir::new("portuale-mixed-pretend")
     }
 
     fn graph_entry(package: &str, source: CandidateSource, version: &str) -> GraphEntry {

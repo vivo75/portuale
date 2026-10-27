@@ -58,7 +58,7 @@ fn custom_set_drops_invalid_lines_with_portage_line_numbers() {
     // data X`. The eight lines are S0's sets/world set (oracle run5);
     // `isvalidatom(line, allow_repo=True)` live on this host (Portage
     // 3.0.82.2, 2026-10-12) keeps only lines 3 and 8.
-    let dir = TempDir::new("portuale-s8-sets").keep();
+    let dir = TempDir::new("portuale-s8-sets");
     let sets = dir.join("etc/portage/sets");
     std::fs::create_dir_all(&sets).expect("mkdir");
     std::fs::write(
@@ -93,8 +93,8 @@ fn custom_set_drops_invalid_lines_with_portage_line_numbers() {
 fn usersets_world_candidate_honors_only_an_explicit_usersets_override() {
     // Portage: _sets/__init__.py. File sets are candidates unless `sets.conf` says otherwise.
     // Option names are case-insensitive, section names are not; later lines win.
-    fn cfg(tag: &str) -> std::path::PathBuf {
-        let dir = TempDir::new(&format!("portuale-usersets-{tag}")).keep();
+    fn cfg(tag: &str) -> TempDir {
+        let dir = TempDir::new(&format!("portuale-usersets-{tag}"));
         std::fs::create_dir_all(dir.join("etc/portage")).expect("mkdir");
         dir
     }
@@ -160,7 +160,7 @@ fn usersets_world_candidate_honors_only_an_explicit_usersets_override() {
 
 #[test]
 fn update_world_file_records_a_new_target_and_skips_deps_and_oneshot() {
-    let tmp = TempDir::new("portuale-world").keep();
+    let tmp = TempDir::new("portuale-world");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
     std::fs::write(root.join("var/lib/portage/world"), "dev-libs/existing\n").unwrap();
@@ -232,7 +232,7 @@ fn update_world_file_records_a_new_target_and_skips_deps_and_oneshot() {
 fn update_world_file_slot_qualifies_a_slotted_target() {
     // A cp is "slotted" with several SLOTs, or one non-`"0"` SLOT.
     let repos = portage_repo::find_repos(&fixtures_root()).expect("repos");
-    let tmp = TempDir::new("portuale-worldslot").keep();
+    let tmp = TempDir::new("portuale-worldslot");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
 
@@ -290,7 +290,7 @@ fn update_world_file_slot_qualifies_a_slotted_target() {
 
 #[test]
 fn update_world_sets_file_records_a_new_set_and_skips_oneshot() {
-    let tmp = TempDir::new("portuale-worldsets").keep();
+    let tmp = TempDir::new("portuale-worldsets");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
     std::fs::write(
@@ -320,7 +320,7 @@ fn update_world_sets_file_records_a_new_set_and_skips_oneshot() {
 #[test]
 fn installed_set_atoms_are_slot_qualified_sorted_and_deduped() {
     // Always slot-qualified, main slot only; sorted and deduplicated.
-    let tmp = TempDir::new("portuale-instset").keep();
+    let tmp = TempDir::new("portuale-instset");
     let mk = |cat: &str, dir: &str, slot: &str| {
         let d = tmp.join("var/db/pkg").join(cat).join(dir);
         std::fs::create_dir_all(&d).unwrap();
@@ -346,7 +346,7 @@ fn installed_set_atoms_are_slot_qualified_sorted_and_deduped() {
 fn record_world_atoms_returns_the_recording_lines_one_entry_at_a_time() {
     // Portage `Scheduler._world_atom` records each package right after its
     // install, so the scheduler prints one `Recording` line per merged entry.
-    let tmp = TempDir::new("portuale-world-one").keep();
+    let tmp = TempDir::new("portuale-world-one");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
     let entries = [

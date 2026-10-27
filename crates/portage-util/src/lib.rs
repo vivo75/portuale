@@ -147,7 +147,7 @@ mod tests {
     // seeded half lives in `tests/shuffle_seed_freeze.rs`.
     #[test]
     fn shuffle_seed_is_frozen_at_first_use_and_read_dir_is_sorted_by_default() {
-        let dir = TempDir::new("portage-util").keep();
+        let dir = TempDir::new("portage-util");
         for name in ["g", "a", "h", "c", "b", "f", "d", "e"] {
             std::fs::write(dir.join(name), b"").unwrap();
         }
@@ -177,7 +177,7 @@ mod tests {
     // Expected value from Portage's `_recursive_file_list` (staged oracle tree).
     #[test]
     fn recursive_config_files_matches_portages_traversal_and_filters() {
-        let root = TempDir::new("portage-util-recursive").keep();
+        let root = TempDir::new("portage-util-recursive");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("aa")).unwrap();
         std::fs::create_dir_all(root.join("zz")).unwrap();

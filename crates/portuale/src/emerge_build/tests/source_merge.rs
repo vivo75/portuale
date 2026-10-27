@@ -13,6 +13,7 @@ fn source_merge_with_resolved_config_threads_use_and_slot_into_the_phase() {
         let config_root = fixtures_root();
         let repos = find_repos(&config_root).unwrap();
         let root = tempdir();
+        let distdir = tempdir();
         let portage_tmpdir = tempdir();
         let mut config = portage_profile::Config::default();
         config.use_tokens = vec!["abi_x86_64 amd64 elibc_glibc kernel_linux".to_string()];
@@ -26,7 +27,7 @@ fn source_merge_with_resolved_config_threads_use_and_slot_into_the_phase() {
             "resolved features token".to_string(),
         );
         let mut options = ebuild_merge::MergeOptions {
-            distdir: tempdir(),
+            distdir: distdir.path().to_path_buf(),
             config_root: config_root.clone(),
             shell,
             ..ebuild_merge::MergeOptions::default()
@@ -106,13 +107,14 @@ fn source_merge_second_package_sees_env_d_installed_by_the_first() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     let mut config = portage_profile::Config::default();
     config.use_tokens = vec!["amd64".to_string()];
     config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
-    config.envd_eroot = root.clone();
+    config.envd_eroot = root.path().to_path_buf();
     let mut options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -164,6 +166,7 @@ fn source_merge_protects_the_config_fold_and_env_d_added_paths() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     for (dir, name) in [("usr/share/cfgprotme", "x"), ("usr/share/cfgprotlate", "y")] {
         fs::create_dir_all(root.join(dir)).unwrap();
@@ -172,13 +175,13 @@ fn source_merge_protects_the_config_fold_and_env_d_added_paths() {
     let mut config = portage_profile::Config::default();
     config.use_tokens = vec!["amd64".to_string()];
     config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
-    config.envd_eroot = root.clone();
+    config.envd_eroot = root.path().to_path_buf();
     config.incremental_sources.insert(
         "CONFIG_PROTECT".to_string(),
         vec![vec!["/etc".to_string(), "/usr/share/cfgprotme".to_string()]],
     );
     let mut options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -228,9 +231,10 @@ fn source_merge_omits_a_vdb_aux_file_the_ebuild_unset_in_an_earlier_phase() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     let mut options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         shell: ebuild_phases::ShellBackend::Bash,
         ..ebuild_merge::MergeOptions::default()
@@ -303,9 +307,10 @@ fn reinstall_leaves_a_byte_identical_file_a_preinst_helper_would_remove() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -364,6 +369,7 @@ fn run_source_merge_builds_and_merges_a_new_package_end_to_end() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
 
     // `samepkg` is already installed, so it is skipped silently.
@@ -383,7 +389,7 @@ fn run_source_merge_builds_and_merges_a_new_package_end_to_end() {
     ];
 
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -499,6 +505,7 @@ fn run_build_scheduler_builds_two_leaves_in_parallel_then_the_parent() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
 
     // schedparent depends on both leaves; the scheduler builds the leaves
@@ -527,7 +534,7 @@ fn run_build_scheduler_builds_two_leaves_in_parallel_then_the_parent() {
     let entries = vec![leaf_a, leaf_b, parent];
 
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -563,6 +570,7 @@ fn run_build_scheduler_with_a_high_load_average_never_throttles() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
 
     let mut leaf_a = source_entry(
@@ -588,7 +596,7 @@ fn run_build_scheduler_with_a_high_load_average_never_throttles() {
     let entries = vec![leaf_a, leaf_b, parent];
 
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -624,6 +632,7 @@ fn run_build_scheduler_keep_going_skips_a_failed_builds_dependents() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
 
     // schedbad's install fails; schedbaddep depends on it (must be skipped);
@@ -650,7 +659,7 @@ fn run_build_scheduler_keep_going_skips_a_failed_builds_dependents() {
     let entries = vec![bad, baddep, ok];
 
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -693,6 +702,7 @@ fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
 
     let bad = source_entry(
@@ -710,7 +720,7 @@ fn a_hard_failure_kills_still_running_builds_instead_of_waiting_them_out() {
     let entries = vec![bad, slow];
 
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -989,9 +999,10 @@ fn run_source_merge_upgrade_replaces_the_installed_version() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -1079,9 +1090,10 @@ fn run_source_merge_postinst_failure_matches_the_portage_endgame() {
         let config_root = fixtures_root();
         let repos = find_repos(&config_root).unwrap();
         let root = tempdir();
+        let distdir = tempdir();
         let portage_tmpdir = tempdir();
         let options = ebuild_merge::MergeOptions {
-            distdir: tempdir(),
+            distdir: distdir.path().to_path_buf(),
             config_root: config_root.clone(),
             ..ebuild_merge::MergeOptions::default()
         };
@@ -1157,9 +1169,10 @@ fn run_source_merge_postinst_failure_keep_going_merges_dependents() {
         let config_root = fixtures_root();
         let repos = find_repos(&config_root).unwrap();
         let root = tempdir();
+        let distdir = tempdir();
         let portage_tmpdir = tempdir();
         let options = ebuild_merge::MergeOptions {
-            distdir: tempdir(),
+            distdir: distdir.path().to_path_buf(),
             config_root: config_root.clone(),
             ..ebuild_merge::MergeOptions::default()
         };
@@ -1227,6 +1240,7 @@ fn serial_pretend_failure_aborts_before_anything_builds() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     let new = |p: &str| {
         source_entry(
@@ -1238,7 +1252,7 @@ fn serial_pretend_failure_aborts_before_anything_builds() {
     };
     let entries = vec![new("schedppfail"), new("schedwait")];
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -1282,7 +1296,9 @@ fn merge_one_source_entry_skip_pretend_skips_a_dying_pretend() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
+    let portage_tmpdir2 = tempdir();
     let entry = source_entry(
         "schedppfail",
         PretendOutcome::New {
@@ -1290,7 +1306,7 @@ fn merge_one_source_entry_skip_pretend_skips_a_dying_pretend() {
         },
     );
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -1311,7 +1327,7 @@ fn merge_one_source_entry_skip_pretend_skips_a_dying_pretend() {
         entry: &entry,
         repos: &repos,
         root: &root,
-        portage_tmpdir: &tempdir(),
+        portage_tmpdir: &portage_tmpdir2,
         options: &options,
         buildpkg: None,
         progress: mrg_director::MergeProgress::single(),

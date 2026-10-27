@@ -13,8 +13,8 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         tag: &str,
         vdb: &[(&str, &str)],
         pars: &[(&str, &str, &str)],
-    ) -> (std::path::PathBuf, Vec<RepoConfig>) {
-        let base = TempDir::new(&format!("portage-repo-slotop-unsat-{tag}")).keep();
+    ) -> (TempDir, Vec<RepoConfig>) {
+        let base = TempDir::new(&format!("portage-repo-slotop-unsat-{tag}"));
         for (pkg, rdepend) in vdb {
             // EAPI-bearing vdb, like the bed fragment.
             let d = base.join(format!("var/db/pkg/app-misc/{pkg}-1"));

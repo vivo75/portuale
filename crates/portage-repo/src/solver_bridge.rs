@@ -5127,7 +5127,7 @@ mod tests {
     #[test]
     fn pg_trace_emits_the_installed_line() {
         use std::io::Write as _;
-        let dir = TempDir::new("portage-bridge-pgtrace").keep();
+        let dir = TempDir::new("portage-bridge-pgtrace");
         let _ = std::fs::remove_dir_all(&dir);
         let d = dir.join("var/db/pkg/dev-libs/pgtrecord-1.0");
         std::fs::create_dir_all(&d).unwrap();
@@ -5345,7 +5345,7 @@ mod tests {
     #[test]
     fn bridge_plans_schedule_stale_equals_consumer_reinstalls() {
         use std::io::Write as _;
-        let dir = TempDir::new("portage-bridge-slotop").keep();
+        let dir = TempDir::new("portage-bridge-slotop");
         let _ = std::fs::remove_dir_all(&dir);
         let mk = |name: &str, files: &[(&str, &str)]| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
@@ -7915,8 +7915,8 @@ mod tests {
     /// members (`capp-1`, `capp-99` resolve against the fixture repo) and
     /// the installed children they pressure. Tests select their actors
     /// through the member plan and the kept set.
-    fn s6_temp_vdb() -> std::path::PathBuf {
-        let dir = portage_util::TempDir::new("portage-bridge-s6").keep();
+    fn s6_temp_vdb() -> TempDir {
+        let dir = portage_util::TempDir::new("portage-bridge-s6");
         let _ = std::fs::remove_dir_all(&dir);
         s6_mk_vdb(&dir, "pg34-capp-1", "0", "", "", "");
         s6_mk_vdb(&dir, "pg34-capp-99", "0", "", "", "");
@@ -7997,7 +7997,7 @@ mod tests {
         use super::super::{Deep, find_repos};
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/newpkg"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.deep = Deep::Unlimited;
         let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
@@ -8311,7 +8311,7 @@ mod tests {
     fn s6_or_member_view_reads_vdb_strings_under_deep() {
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/pg34-ulib"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         let repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
@@ -8455,7 +8455,7 @@ mod tests {
     fn s6_parent_use_reinstalls_deep_expands_installed_strings() {
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/pg34-g2p"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.deep = super::super::Deep::Unlimited;
         req.config
             .package_use
@@ -8494,7 +8494,7 @@ mod tests {
     fn s6_parent_use_reinstalls_leaf_members_stay_silent_without_deep() {
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/pg34-capp"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.config
             .package_use
             .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
@@ -8540,7 +8540,7 @@ mod tests {
     fn s6_parent_use_reinstalls_repo_record_selects_the_expansion_source() {
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/pg34-capp"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.config
             .package_use
             .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
@@ -8587,7 +8587,7 @@ mod tests {
     fn s6_parent_use_reinstalls_unmatched_installed_versions_do_not_expand() {
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/pg34-ulib"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.deep = super::super::Deep::Unlimited;
         req.config
             .package_use
@@ -8629,7 +8629,7 @@ mod tests {
         let root = s6_temp_vdb();
         s6_mk_vdb(&root, "pg34-g2multi-1", "0", "", "", "");
         let mut req = fixture_request(&["dev-libs/pg34-g2multi"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.config
             .package_use
             .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
@@ -8668,7 +8668,7 @@ mod tests {
     fn s6_parent_use_reinstalls_blocker_atoms_exert_no_use_pressure() {
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/pg34-g2p2"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.deep = super::super::Deep::Unlimited;
         req.config
             .package_use
@@ -8700,7 +8700,7 @@ mod tests {
     fn s6_parent_use_reinstalls_unsatisfied_conditionals_contribute_nothing() {
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/pg34-g2p3"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.deep = super::super::Deep::Unlimited;
         req.config
             .package_use
@@ -8732,7 +8732,7 @@ mod tests {
     fn s6_parent_use_reinstalls_rebuilt_children_are_not_repressured() {
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/pg34-capp"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.config
             .package_use
             .push(("dev-libs/pg34-clib".to_string(), vec!["f".to_string()]));
@@ -8765,7 +8765,7 @@ mod tests {
     fn s6_parent_use_reinstalls_same_slot_wrong_version_records_do_not_satisfy() {
         let root = s6_temp_vdb();
         let mut req = fixture_request(&["dev-libs/pg34-g2p"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.deep = super::super::Deep::Unlimited;
         req.config
             .package_use
@@ -8990,7 +8990,7 @@ mod tests {
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
         let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
         let mut req = req;
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         let lazy =
             super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
         // The only edge onto `pg34-cdep` is the `!` block: no parent.
@@ -9052,7 +9052,7 @@ mod tests {
     /// reinstalls, even over entries that rebuild without it.
     #[test]
     fn s6_bridge_slot_operator_rebuilds_honours_the_ignore_gate() {
-        let dir = portage_util::TempDir::new("portage-bridge-s6slotop").keep();
+        let dir = portage_util::TempDir::new("portage-bridge-s6slotop");
         let _ = std::fs::remove_dir_all(&dir);
         let mk = |name: &str, files: &[(&str, &str)]| {
             let d = dir.join("var/db/pkg/dev-libs").join(name);
@@ -9202,10 +9202,8 @@ mod tests {
     /// A throwaway repo with the S6 slot/`||` shapes, appended after the
     /// fixture repos. Returns the directory (for cleanup) and the extra
     /// `RepoConfig` cloned off the fixture main repo.
-    fn s6_temp_repo(
-        repos: &[super::super::RepoConfig],
-    ) -> (std::path::PathBuf, super::super::RepoConfig) {
-        let dir = portage_util::TempDir::new("portage-bridge-s6repo").keep();
+    fn s6_temp_repo(repos: &[super::super::RepoConfig]) -> (TempDir, super::super::RepoConfig) {
+        let dir = portage_util::TempDir::new("portage-bridge-s6repo");
         let _ = std::fs::remove_dir_all(&dir);
         let repo = dir.join("repo");
         // Two slots racing at the top: slot 1 holds 1.0 and 2.0, slot 2
@@ -9366,7 +9364,7 @@ mod tests {
         let root = s6_temp_vdb();
         s6_mk_vdb(&root, "pg34-g2max-1.0", "1", "", "", "");
         let mut req = fixture_request(&["dev-libs/pg34-g2max"]);
-        req.root = root.clone();
+        req.root = root.path().to_path_buf();
         req.selective = false;
         let mut repos =
             super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");

@@ -75,7 +75,7 @@ fn preflight_script_reports_candidates_dirs_and_uname() {
     // Render level with temp dirs: the script's candidate digests,
     // writability and mode facts must match `sha256sum` / `stat` run
     // directly.
-    let tmp = TempDir::new("portuale-remote-binscript").keep();
+    let tmp = TempDir::new("portuale-remote-binscript");
     let dir = tmp.join("bin");
     std::fs::create_dir_all(&dir).unwrap();
     let present = dir.join("portuale");
@@ -139,7 +139,7 @@ fn preflight_script_reports_candidates_dirs_and_uname() {
 /// anything: byte-count gate first, tar never runs on short input.
 #[test]
 fn unpack_script_rejects_a_truncated_bundle() {
-    let tmp = TempDir::new("portuale-remote-trunc").keep();
+    let tmp = TempDir::new("portuale-remote-trunc");
     let staging = tmp.join("staging");
     std::fs::create_dir_all(&staging).unwrap();
     let staged = crate::remote_bundle::build_bundle(crate::remote_bundle::BuildBundleArgs {
@@ -193,7 +193,7 @@ fn unpack_script_rejects_a_truncated_bundle() {
 fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
     use md5::Digest as _;
 
-    let tmp = TempDir::new("portuale-remote-mask").keep();
+    let tmp = TempDir::new("portuale-remote-mask");
     let binpkg = fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2");
     let staging = tmp.join("staging");
     std::fs::create_dir_all(&staging).unwrap();
@@ -269,7 +269,7 @@ fn remote_merge_masks_image_and_lands_aux_files_in_vdb() {
 fn unpack_then_merge_preserves_special_mode_bits() {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
-    let tmp = TempDir::new("portuale-remote-setuid").keep();
+    let tmp = TempDir::new("portuale-remote-setuid");
     let pf = "probe-1.0";
     // Stage the unit the way `build_bundle` lays it out (`<pf>/` with
     // image/, build-info/, remote-manifest, filemeta).

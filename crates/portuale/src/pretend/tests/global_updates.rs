@@ -9,15 +9,18 @@ use std::os::unix::fs::MetadataExt;
 /// `AUTOCLEAN=yes` iff a changed updates file yields >=1 valid
 /// directive (`lib/portage/_global_updates.py:139`); files with parse
 /// errors are applied but their mtime stays unrecorded (`:131-135`).
-fn updates_test_repo(tag: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
-    let base = portage_util::TempDir::new(&format!("updates_force_{tag}")).keep();
+fn updates_test_repo(
+    tag: &str,
+    files: &[(&str, &str)],
+) -> (portage_util::TempDir, std::path::PathBuf) {
+    let base = portage_util::TempDir::new(&format!("updates_force_{tag}"));
     let repo = base.join("repo");
     let upd = repo.join("profiles").join("updates");
     std::fs::create_dir_all(&upd).unwrap();
     for (name, content) in files {
         std::fs::write(upd.join(name), content).unwrap();
     }
-    repo
+    (base, repo)
 }
 
 fn updates_test_repo_config(repo: &std::path::Path) -> portage_repo::RepoConfig {
@@ -37,8 +40,8 @@ fn updates_test_repo_config(repo: &std::path::Path) -> portage_repo::RepoConfig 
     }
 }
 
-fn updates_test_root(tag: &str) -> std::path::PathBuf {
-    portage_util::TempDir::new(&format!("updates_force_root_{tag}")).keep()
+fn updates_test_root(tag: &str) -> portage_util::TempDir {
+    portage_util::TempDir::new(&format!("updates_force_root_{tag}"))
 }
 
 fn updates_test_config() -> portage_profile::Config {
@@ -87,7 +90,7 @@ fn applied_updates_force_fires_on_a_fresh_root_and_records() {
     // updates file is new; the fixture-style file below yields two
     // valid directives, forcing AUTOCLEAN even though it is set
     // nowhere (make.globals default `no`).
-    let repo = updates_test_repo(
+    let (_guard, repo) = updates_test_repo(
         "fresh",
         &[(
             "2Q-2024",
@@ -117,7 +120,7 @@ fn applied_updates_force_fires_on_a_fresh_root_and_records() {
 fn applied_updates_force_is_silent_on_a_repeat_run() {
     // Portage Control 2: a second merge into the same ROOT finds the
     // record current, so no force and no tail.
-    let repo = updates_test_repo(
+    let (_guard, repo) = updates_test_repo(
         "repeat",
         &[("2Q-2024", "move dev-libs/oldmovepkg dev-libs/newmovepkg\n")],
     );
@@ -143,7 +146,7 @@ fn applied_updates_force_is_silent_on_a_repeat_run() {
 fn applied_updates_force_skips_package_moves_n() {
     // Portage Control 1: `--package-moves=n` never calls
     // `_global_updates` -- silent, and nothing recorded.
-    let repo = updates_test_repo(
+    let (_guard, repo) = updates_test_repo(
         "movesn",
         &[("2Q-2024", "move dev-libs/oldmovepkg dev-libs/newmovepkg\n")],
     );
@@ -176,7 +179,7 @@ fn applied_updates_force_skips_info_sync_and_version() {
     // Portage: no `_global_updates` for the help/info/sync/version
     // actions (`actions.py:3944-3948`; `--help` returns before any
     // config load, so only the other three need pins here).
-    let repo = updates_test_repo(
+    let (_guard, repo) = updates_test_repo(
         "actions",
         &[("2Q-2024", "move dev-libs/oldmovepkg dev-libs/newmovepkg\n")],
     );
@@ -235,7 +238,7 @@ fn applied_updates_error_file_fires_but_stays_unrecorded() {
     // Portage `_global_updates.py:131-135`: a file with parse errors
     // still contributes its valid directives to the force, but its
     // mtime is never recorded -- so it forces again on every run.
-    let repo = updates_test_repo(
+    let (_guard, repo) = updates_test_repo(
         "errorfile",
         &[(
             "2Q-2024",
@@ -274,7 +277,7 @@ fn applied_updates_directiveless_file_stays_silent() {
         ("blanks", "\n   \n"),
         ("unknown", "frob dev-libs/a dev-libs/b\n"),
     ] {
-        let repo = updates_test_repo(tag, &[("9Q-2099", content)]);
+        let (_guard, repo) = updates_test_repo(tag, &[("9Q-2099", content)]);
         let root = updates_test_root(tag);
         let repos = vec![updates_test_repo_config(&repo)];
         let mut config = updates_test_config();
@@ -301,7 +304,7 @@ fn applied_updates_running_root_record_never_forces_the_tail() {
     // settings (`action_build`, unpacked from `emerge_config`), so a
     // running-root-only force stays silent on the tail -- but its
     // record is still maintained.
-    let repo = updates_test_repo(
+    let (_guard, repo) = updates_test_repo(
         "running",
         &[("2Q-2024", "move dev-libs/oldmovepkg dev-libs/newmovepkg\n")],
     );
@@ -336,7 +339,7 @@ fn applied_updates_force_survives_an_unwritable_root() {
     // Portage's `MtimeDB.__write_to_disk` swallows `OSError`
     // (`util/mtimedb.py`): a non-writable record still forces, and the
     // run never fails on the record.
-    let repo = updates_test_repo(
+    let (_guard, repo) = updates_test_repo(
         "readonly",
         &[("2Q-2024", "move dev-libs/oldmovepkg dev-libs/newmovepkg\n")],
     );
@@ -375,7 +378,7 @@ fn applied_updates_check_leaves_a_portage_written_mtimedb_untouched() {
     // keys included, comes back byte-identical. `grab_updates`
     // (`lib/portage/update.py`) is what treats a record-mismatched
     // file as changed.
-    let repo = updates_test_repo("readonly", &[("1Q-2026", "move a/old a/new\n")]);
+    let (_guard, repo) = updates_test_repo("readonly", &[("1Q-2026", "move a/old a/new\n")]);
     let root = updates_test_root("readonly");
     // An installed `a/old`: the entry Portage would move (and only
     // then record for).

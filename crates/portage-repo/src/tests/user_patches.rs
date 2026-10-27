@@ -5,7 +5,7 @@
 use super::*;
 
 fn patch_config(tag: &str, content: &[u8]) -> portage_profile::Config {
-    let dir = TempDir::new(&format!("portage-repo-test-user-patches-{tag}")).keep();
+    let dir = TempDir::new(&format!("portage-repo-test-user-patches-{tag}"));
     let patch_dir = dir.join("etc/portage/patches/app-misc/up");
     std::fs::create_dir_all(&patch_dir).expect("patch dir");
     std::fs::write(patch_dir.join("user.patch"), content).expect("patch file");

@@ -7,7 +7,7 @@ fn env_over_config_scalar_follows_the_calling_env_over_make_conf_chain() {
     // (real `config.regenerate()`'s `env` `USE_ORDER` layer on top of
     // the file stack). The scratch root carries no `make.globals`
     // (the fixture shape), so the file side is `make.conf` here.
-    let root = TempDir::new("portage-profile-test-binpkg-format").keep();
+    let root = TempDir::new("portage-profile-test-binpkg-format");
     let repo = root.join("repo");
     let prof = repo.join("profiles/default");
     let portage_dir = root.join("etc/portage");
@@ -79,7 +79,7 @@ fn the_embedded_make_globals_seeds_the_unmerge_defaults_under_the_stack() {
     // fold as on a real system. Expected behaviour from Portage 3.0.82.2
     // (`cnf/make.globals:77-84` `unmerge-orphans`, `:93`
     // `UNINSTALL_IGNORE=/lib/modules/*`).
-    let root = TempDir::new("portage-profile-test-synthetic-unmerge-base").keep();
+    let root = TempDir::new("portage-profile-test-synthetic-unmerge-base");
     let repo = root.join("repo");
     let prof = repo.join("profiles/default");
     let portage_dir = root.join("etc/portage");

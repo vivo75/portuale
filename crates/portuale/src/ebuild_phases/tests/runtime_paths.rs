@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn remove_bin_overlay_dir_is_idempotent() {
     // Double exit paths must never fail: remove, then tolerate missing.
-    let dir = TempDir::new("portuale-bin-overlay-test").keep();
+    let dir = TempDir::new("portuale-bin-overlay-test");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     std::fs::write(dir.join("sub").join("f"), "x").unwrap();
@@ -135,7 +135,7 @@ fn pym_path_and_pythonpath_values_follow_the_checkout() {
 fn phase_setup_script_exports_extra_env_features_last() {
     let ebuild = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/repo/dev-libs/phaseenvpkg/phaseenvpkg-1.0.ebuild");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-setup-script").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-setup-script");
     let env = compute_environment(&ebuild, &portage_tmpdir).unwrap();
     let script = phase_setup_script(PhaseSetupScriptArgs {
         env: &env,
@@ -162,7 +162,7 @@ fn phase_setup_script_exports_extra_env_features_last() {
 
 #[test]
 fn repo_root_for_finds_the_nearest_ancestor_repo_root() {
-    let tmp = TempDir::new("ebuild-phases-test-repo_root_for_finds").keep();
+    let tmp = TempDir::new("ebuild-phases-test-repo_root_for_finds");
     let _ = std::fs::remove_dir_all(&tmp);
     let repo = tmp.join("myrepo");
     let pkg_dir = repo.join("dev-libs/foo");
@@ -175,7 +175,7 @@ fn repo_root_for_finds_the_nearest_ancestor_repo_root() {
 
 #[test]
 fn repo_root_for_is_none_when_no_ancestor_has_one() {
-    let tmp = TempDir::new("ebuild-phases-test-repo_root_for_none").keep();
+    let tmp = TempDir::new("ebuild-phases-test-repo_root_for_none");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("dev-libs/foo");
     std::fs::create_dir_all(&pkg_dir).unwrap();

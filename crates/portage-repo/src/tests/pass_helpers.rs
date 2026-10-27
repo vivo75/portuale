@@ -107,7 +107,7 @@ fn idepend_walks_presence_based_whatever_the_cached_eapi() {
 fn minimize_children_collapses_like_portage() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-236-minimize").keep();
+    let base = TempDir::new("portage-repo-236-minimize");
     let d = base.join("var/db/pkg/dev-libs/minlib-1.0");
     fs::create_dir_all(&d).unwrap();
     fs::write(d.join("SLOT"), "0/1\n").unwrap();
@@ -241,7 +241,7 @@ fn minimize_children_collapses_like_portage() {
 fn minimize_children_matches_use_deps_against_candidate_use() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-266-minimize").keep();
+    let base = TempDir::new("portage-repo-266-minimize");
     let repo = base.join("repo");
     for (pv, slot, iuse) in [
         ("1.0", "1", "-bar"),

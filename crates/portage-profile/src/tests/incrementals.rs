@@ -5,7 +5,7 @@ fn use_tokens_capture_the_ordered_raw_use_values_that_produced_use_flags() {
     // `use_tokens` keeps each raw USE contribution separately, in accumulation
     // order (profile chain, then conf tier), so callers can replay them onto
     // a different seed (e.g. a package's IUSE defaults) via apply_incremental.
-    let root = TempDir::new("portage-profile-test-use-tokens").keep();
+    let root = TempDir::new("portage-profile-test-use-tokens");
     let repo = root.join("repo");
     let repo_profiles = repo.join("profiles");
     let base = repo_profiles.join("base");

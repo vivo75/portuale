@@ -5,7 +5,7 @@ fn resume_pretend_end_notice_prints_once_like_portage() {
     // Portage: actions.py, post_emerge.py. `--resume --pretend` prints the end notice exactly once.
     let portuale_bin = built_portuale_bin();
     let (root, _) = stale_resume_root("news_pretend");
-    let tmp = TempDir::new("resume_news_pretend").keep();
+    let tmp = TempDir::new("resume_news_pretend");
     let output = std::process::Command::new(&portuale_bin)
         .args(["emerge", "--resume", "--pretend"])
         .stdin(std::process::Stdio::null())
@@ -37,7 +37,7 @@ fn resume_skipfirst_empty_list_prints_only_the_pre_notice_like_portage() {
     // the post notice needs a changed vdb.
     let portuale_bin = built_portuale_bin();
     let root = single_resume_root("news_empty");
-    let tmp = TempDir::new("resume_news_empty").keep();
+    let tmp = TempDir::new("resume_news_empty");
     let output = std::process::Command::new(&portuale_bin)
         .args(["emerge", "--resume", "--skipfirst"])
         .stdin(std::process::Stdio::null())
@@ -70,7 +70,7 @@ fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
     // its mtimes (the S0 oracle: host Portage commits `mtimedb["updates"]`
     // on a run whose resolve never happened).
     let portuale_bin = built_portuale_bin();
-    let tmp = TempDir::new("resume_no_write_pretend").keep();
+    let tmp = TempDir::new("resume_no_write_pretend");
 
     let bare = tmp.join("bare");
     let output = std::process::Command::new(&portuale_bin)
@@ -149,7 +149,7 @@ fn pretend_writes_no_resume_list_even_with_a_stale_list_present() {
 #[test]
 fn entries_not_merged_tags_and_includes_both_source_and_binary_entries() {
     // The resume list can hold source and binary entries together; both are tagged.
-    let root = TempDir::new("pretend-test-entries_not_merged_binary").keep();
+    let root = TempDir::new("pretend-test-entries_not_merged_binary");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
 
@@ -198,7 +198,7 @@ fn entries_not_merged_tags_and_includes_both_source_and_binary_entries() {
 #[test]
 fn up_front_save_covers_exactly_the_failure_path_tail_when_nothing_merged() {
     // The up-front save and the failure-path tail agree when nothing merged yet.
-    let root = TempDir::new("pretend-test-up_front_matches_failure_tail").keep();
+    let root = TempDir::new("pretend-test-up_front_matches_failure_tail");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let entries = vec![
@@ -235,7 +235,7 @@ fn resume_display_marks_an_installed_cpv_as_reinstall() {
     // (a failed `pkg_postinst` lands the vdb entry) and an uninstalled one
     // `[ebuild N]`. The saved list pins `=cpv`, so one `CONTENTS` check is
     // the whole re-resolution.
-    let root = TempDir::new("pretend-test-resume_display_reinstall").keep();
+    let root = TempDir::new("pretend-test-resume_display_reinstall");
     let _ = std::fs::remove_dir_all(&root);
     let landed = root.join("var/db/pkg/dev-libs/landed-1.0");
     std::fs::create_dir_all(&landed).unwrap();

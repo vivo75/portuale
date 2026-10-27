@@ -28,7 +28,7 @@ fn restrict_fetch_from_restrict_matches_the_fetch_token_only() {
 fn depend_phase_reduces_restrict_on_the_config_use_set() {
     // A conditional RESTRICT reduces on the config USE set for depend,
     // but drops its gated tokens on the empty set; see notes for the fixture.
-    let tmp = TempDir::new("ebuild-phases-test-depend_use_set").keep();
+    let tmp = TempDir::new("ebuild-phases-test-depend_use_set");
     let _ = std::fs::remove_dir_all(&tmp);
     let repo = tmp.join("repo");
     std::fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -89,7 +89,7 @@ fn flat_field_on_dedups_and_sorts_like_portage_flatten() {
 fn depend_phase_standalone_base_env_stays_empty_with_a_real_repo() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/repo/dev-libs/phaseenvpkg/phaseenvpkg-1.0.ebuild");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-depend-base").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-depend-base");
     let env = compute_environment(&ebuild_path, &portage_tmpdir).unwrap();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let (use_str, flags) =
@@ -132,7 +132,7 @@ fn per_package_portage_tmpdir_feeds_the_build_directory() {
     let out =
         resolve_entry_portage_tmpdir(&[], cpv, run, None).expect("no entry keeps the run tmpdir");
     assert_eq!(out, run);
-    let probe = TempDir::new("ebuild-phases-test-per_package_portage_tmpdir").keep();
+    let probe = TempDir::new("ebuild-phases-test-per_package_portage_tmpdir");
     let out = resolve_entry_portage_tmpdir(
         &files(probe.to_str().expect("probe path is UTF-8")),
         cpv,
@@ -140,7 +140,7 @@ fn per_package_portage_tmpdir_feeds_the_build_directory() {
         None,
     )
     .expect("matched dir resolves");
-    assert_eq!(out, probe);
+    assert_eq!(out.as_path(), probe.path());
     let probe2 = probe.join("second");
     std::fs::create_dir_all(&probe2).expect("second probe tmpdir is creatable");
     let mut two = files(probe.to_str().expect("probe path is UTF-8"));
@@ -243,7 +243,7 @@ fn resolve_standalone_chain_scalar_reads_the_fixture_make_conf() {
 /// `FEATURES=unmerge-backup` quickpkg; see notes for the full contract.
 #[test]
 fn resolve_unmerge_config_reads_binpkg_format_from_make_conf() {
-    let probe = TempDir::new("ebuild-phases-test-unmerge_binpkg_format").keep();
+    let probe = TempDir::new("ebuild-phases-test-unmerge_binpkg_format");
     std::fs::remove_dir_all(&probe).ok();
     let repo = probe.join("repo");
     let prof = repo.join("profiles/default");
@@ -313,7 +313,7 @@ fn resolve_unmerge_config_reads_binpkg_format_from_make_conf() {
 /// E5: `md5_slot` reads the cache `SLOT` verbatim (`None` outside a repo).
 #[test]
 fn md5_slot_reads_the_cache_slot_verbatim() {
-    let tmp = TempDir::new("ebuild-phases-test-s2-md5slot").keep();
+    let tmp = TempDir::new("ebuild-phases-test-s2-md5slot");
     let _ = std::fs::remove_dir_all(&tmp);
     let repo = tmp.join("repo");
     std::fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -350,7 +350,7 @@ fn md5_slot_reads_the_cache_slot_verbatim() {
 /// packages never leak in.
 #[test]
 fn phase_replacing_versions_lists_the_installed_same_slot_versions() {
-    let tmp = TempDir::new("ebuild-phases-test-s2-replacing").keep();
+    let tmp = TempDir::new("ebuild-phases-test-s2-replacing");
     let _ = std::fs::remove_dir_all(&tmp);
     let root = tmp.join("root");
     assert_eq!(
@@ -428,13 +428,13 @@ fn required_use_message_matches_portage_validate_deps_text() {
 /// carrying `DISTDIR`/`PORTAGE_TMPDIR`/`FEATURES`. Expected values from
 /// Portage 3.0.82.2 (S0 cells `e01-full`, `e04-nofeatures`).
 struct S4Root {
-    tmp: std::path::PathBuf,
+    tmp: portage_util::TempDir,
     cfg: std::path::PathBuf,
     ebuild: std::path::PathBuf,
 }
 
 fn s4_root(tag: &str, make_conf: &str) -> S4Root {
-    let tmp = TempDir::new(&format!("ebuild-phases-test-s4-{tag}")).keep();
+    let tmp = TempDir::new(&format!("ebuild-phases-test-s4-{tag}"));
     let _ = std::fs::remove_dir_all(&tmp);
     let repo = tmp.join("repo");
     let prof = repo.join("profiles/default");
@@ -477,8 +477,8 @@ fn s4_root(tag: &str, make_conf: &str) -> S4Root {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&prof, portage_dir.join("make.profile")).unwrap();
     S4Root {
-        tmp: tmp.clone(),
         cfg: tmp.join("cfg"),
+        tmp,
         ebuild,
     }
 }

@@ -114,7 +114,7 @@ fn built_slot_operator_rebuild_trigger_only_forgives_rebuilds() {
 fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
     // A pin is found only when its cp is reachable or itself a graph
     // entry -- not merely because it is installed.
-    let dir = TempDir::new("portage-repo-revdep").keep();
+    let dir = TempDir::new("portage-repo-revdep");
     let mk = |name: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -198,7 +198,7 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
     // map (Portage `_complete_graph`), so the recorded pin is found.
     // Both pin flavours fire verbatim; a `slot_changed: false`
     // reinstall still yields nothing.
-    let dir = TempDir::new("portage-repo-revdep-210").keep();
+    let dir = TempDir::new("portage-repo-revdep-210");
     let mk = |name: &str, slot: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -290,7 +290,7 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
 fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
     // A no-op top-level request is never a constraint source, even
     // though it carries a graph entry and is reachable (Portage).
-    let dir = TempDir::new("portage-repo-revdep-210-gate").keep();
+    let dir = TempDir::new("portage-repo-revdep-210-gate");
     let mk = |name: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();

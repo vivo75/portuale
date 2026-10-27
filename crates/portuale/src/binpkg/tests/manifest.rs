@@ -11,7 +11,7 @@ fn verify_gpkg_manifest_accepts_the_real_fixture() {
 
 #[test]
 fn verify_gpkg_manifest_rejects_a_missing_manifest() {
-    let g = build_gpkg("foo-1.0", &[("gpkg-1", b""), ("image.tar", b"img")], None);
+    let (_guard, g) = build_gpkg("foo-1.0", &[("gpkg-1", b""), ("image.tar", b"img")], None);
     let err = verify_gpkg_manifest(&g, &GpgVerify::default()).unwrap_err();
     assert!(err.contains("Manifest not found"), "{err}");
 }
@@ -25,7 +25,7 @@ fn verify_gpkg_manifest_rejects_a_size_mismatch_without_hashing() {
         // Deliberately wrong size: caught before any hashing.
         "DATA image.tar 999999 BLAKE2B dead SHA512 beef\n",
     );
-    let g = build_gpkg(
+    let (_guard, g) = build_gpkg(
         "foo-1.0",
         &[("gpkg-1", b""), ("image.tar", img)],
         Some(&manifest),
@@ -43,7 +43,7 @@ fn verify_gpkg_manifest_rejects_a_tampered_member() {
         data_line("gpkg-1", b""),
         data_line("image.tar", b"some other bytes entirely"),
     );
-    let g = build_gpkg(
+    let (_guard, g) = build_gpkg(
         "foo-1.0",
         &[("gpkg-1", b""), ("image.tar", img)],
         Some(&manifest),
@@ -55,7 +55,7 @@ fn verify_gpkg_manifest_rejects_a_tampered_member() {
 #[test]
 fn verify_gpkg_manifest_rejects_an_unlisted_member() {
     let manifest = data_line("gpkg-1", b"");
-    let g = build_gpkg(
+    let (_guard, g) = build_gpkg(
         "foo-1.0",
         &[("gpkg-1", b""), ("image.tar", b"img")],
         Some(&manifest),
@@ -71,7 +71,7 @@ fn verify_gpkg_manifest_rejects_a_manifest_only_file() {
         data_line("gpkg-1", b""),
         data_line("image.tar", b"img"),
     );
-    let g = build_gpkg("foo-1.0", &[("gpkg-1", b"")], Some(&manifest));
+    let (_guard, g) = build_gpkg("foo-1.0", &[("gpkg-1", b"")], Some(&manifest));
     let err = verify_gpkg_manifest(&g, &GpgVerify::default()).unwrap_err();
     assert!(err.contains("not present in the container"), "{err}");
 }
@@ -123,7 +123,7 @@ fn verify_gpkg_manifest_rejects_an_unsigned_container_under_request_signature() 
 fn verify_gpkg_manifest_rejects_a_tampered_signed_member() {
     let home = test_gpg_home("tampered");
     // A flipped byte breaks the detached `.sig` before digests compare.
-    let g = repack_gpkg_with_mutation(
+    let (_guard, g) = repack_gpkg_with_mutation(
         &fixture("pkgdir/dev-libs/gpgsignedpkg-1.0.gpkg.tar"),
         "tampered",
         |outer| {
@@ -145,7 +145,7 @@ fn verify_gpkg_manifest_rejects_a_member_without_its_sig_sidecar() {
     let home = test_gpg_home("missing-sidecar");
     // Clear-signed Manifest but no `payload.bin.sig`.
     // Portage: gpkg.py, MissingSignature
-    let g = build_signed_gpkg(&home, GPG_TRUSTED_KEY, false, None);
+    let (_scratch, g) = build_signed_gpkg(&home, GPG_TRUSTED_KEY, false, None);
     let err = verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true)).unwrap_err();
     assert!(err.contains("signature not found"), "{err}");
     kill_gpg_agent(&home);
@@ -158,7 +158,7 @@ fn verify_gpkg_manifest_rejects_a_signature_from_an_untrusted_key() {
     let home = test_gpg_home("untrusted");
     // Valid crypto from the untrusted key: trust check demands
     // `TRUST_ULTIMATE`/`TRUST_FULLY`.
-    let g = build_signed_gpkg(&home, GPG_UNTRUSTED_KEY, true, None);
+    let (_scratch, g) = build_signed_gpkg(&home, GPG_UNTRUSTED_KEY, true, None);
     let err = verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true)).unwrap_err();
     assert!(err.contains("GnuPG verification failed"), "{err}");
     assert!(err.contains("undefined trust"), "{err}");
@@ -172,7 +172,7 @@ fn verify_gpkg_manifest_rejects_a_sidecar_from_an_untrusted_key() {
     let home = test_gpg_home("untrusted-sidecar");
     // Manifest signed by the trusted key, member sidecar by the
     // untrusted one -- the Manifest passes, the member fails.
-    let g = build_signed_gpkg(&home, GPG_TRUSTED_KEY, true, Some(GPG_UNTRUSTED_KEY));
+    let (_scratch, g) = build_signed_gpkg(&home, GPG_TRUSTED_KEY, true, Some(GPG_UNTRUSTED_KEY));
     let err = verify_gpkg_manifest(&g, &test_gpg_verify(&home, false, true)).unwrap_err();
     assert!(err.contains("GnuPG verification failed"), "{err}");
     assert!(err.contains("undefined trust"), "{err}");

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn merge_driver_protects_a_modified_config() {
-    let tmp = TempDir::new("portuale-remote-protect").keep();
+    let tmp = TempDir::new("portuale-remote-protect");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("etc")).unwrap();
     std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -63,7 +63,7 @@ fn merge_driver_never_writes_the_existing_inode() {
     use std::io::Read;
     use std::os::unix::fs::MetadataExt as _;
 
-    let tmp = TempDir::new("portuale-remote-atomic-fd").keep();
+    let tmp = TempDir::new("portuale-remote-atomic-fd");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("lib")).unwrap();
     std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -121,7 +121,7 @@ fn merge_driver_replaces_a_running_executable_atomically() {
         .find(|p| p.is_file())
         .expect("a system true binary");
 
-    let tmp = TempDir::new("portuale-remote-atomic-exec").keep();
+    let tmp = TempDir::new("portuale-remote-atomic-exec");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("bin")).unwrap();
     std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -185,7 +185,7 @@ fn merge_driver_replaces_a_running_executable_atomically() {
 
 #[test]
 fn merge_driver_aborts_on_unowned_collision() {
-    let tmp = TempDir::new("portuale-remote-collide").keep();
+    let tmp = TempDir::new("portuale-remote-collide");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("usr/share")).unwrap();
     std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -234,7 +234,7 @@ fn merge_driver_aborts_on_unowned_collision() {
 /// (backlog #419; Portage's `_contents_re` keeps the whole path).
 #[test]
 fn merge_driver_ownership_scan_keeps_spaces_in_foreign_paths() {
-    let tmp = TempDir::new("portuale-remote-space-collide").keep();
+    let tmp = TempDir::new("portuale-remote-space-collide");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("usr/share")).unwrap();
     std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
@@ -902,7 +902,7 @@ fn old_hook_uses_server_decompressed_env_without_client_bzip2() {
 #[test]
 fn merge_driver_removes_an_old_file_with_a_space_in_its_path() {
     use std::os::unix::fs::MetadataExt as _;
-    let tmp = TempDir::new("portuale-remote-space-unmerge").keep();
+    let tmp = TempDir::new("portuale-remote-space-unmerge");
     let root = tmp.join("root");
     std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
     // Old instance owning a spaced path, with matching md5+mtime.

@@ -44,9 +44,12 @@ fn make_xpak_binpkg(prefix: &[u8], entries: &[(&str, &[u8])]) -> Vec<u8> {
 
 /// Assemble a plain-outer-tar gpkg container from `<prefix>/<name>`
 /// members plus a `Manifest` body, in gpkg member order.
-fn build_gpkg(prefix: &str, members: &[(&str, &[u8])], manifest: Option<&str>) -> PathBuf {
-    // outlives the call; the next test process's stale sweep reclaims it
-    let root = portage_util::TempDir::new("gpkg-build").keep();
+fn build_gpkg(
+    prefix: &str,
+    members: &[(&str, &[u8])],
+    manifest: Option<&str>,
+) -> (portage_util::TempDir, PathBuf) {
+    let root = portage_util::TempDir::new("gpkg-build");
     let pkgdir = root.join(prefix);
     fs::create_dir_all(&pkgdir).unwrap();
     let mut argv: Vec<String> = vec![
@@ -65,7 +68,8 @@ fn build_gpkg(prefix: &str, members: &[(&str, &[u8])], manifest: Option<&str>) -
     }
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     run_tar(&refs).unwrap();
-    root.join("out.gpkg.tar")
+    let built = root.join("out.gpkg.tar");
+    (root, built)
 }
 
 /// One member of a crafted test container.
@@ -84,9 +88,8 @@ enum GpkgEntry<'a> {
 
 /// `build_gpkg`'s typed sibling: stage one filesystem object per entry
 /// and let GNU `tar` write the headers.
-fn build_gpkg_entries(entries: &[(&str, GpkgEntry)]) -> PathBuf {
-    // outlives the call; the next test process's stale sweep reclaims it
-    let root = portage_util::TempDir::new("gpkg-build-typed").keep();
+fn build_gpkg_entries(entries: &[(&str, GpkgEntry)]) -> (portage_util::TempDir, PathBuf) {
+    let root = portage_util::TempDir::new("gpkg-build-typed");
     let mut argv: Vec<String> = vec![
         "-cf".into(),
         lossy(&root.join("out.gpkg.tar")),
@@ -126,7 +129,8 @@ fn build_gpkg_entries(entries: &[(&str, GpkgEntry)]) -> PathBuf {
     }
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     run_tar(&refs).unwrap();
-    root.join("out.gpkg.tar")
+    let built = root.join("out.gpkg.tar");
+    (root, built)
 }
 
 /// Every one of the three outer-container sites must reject `g`, and
@@ -148,7 +152,7 @@ fn assert_rejects_everywhere(g: &Path, needles: &[&str]) {
         "verify_gpkg_manifest",
         &verify_gpkg_manifest(g, &GpgVerify::default()).unwrap_err(),
     );
-    let dest = TempDir::new("portuale-56-reject").keep();
+    let dest = TempDir::new("portuale-56-reject");
     let _ = fs::remove_dir_all(&dest);
     fs::create_dir_all(&dest).unwrap();
     check(
@@ -198,7 +202,7 @@ const GPG_PASSPHRASE: &str = "GentooTest";
 /// A writable copy of the committed keyring under a fresh tempdir
 /// (`gpg` refuses a homedir it doesn't own; the committed tree stays
 /// read-only). `chmod 700`.
-fn test_gpg_home(tag: &str) -> std::path::PathBuf {
+fn test_gpg_home(tag: &str) -> TempDir {
     fn copy_dir(src: &Path, dest: &Path) {
         fs::create_dir_all(dest).unwrap();
         for entry in portage_util::read_dir_entries(src).unwrap() {
@@ -210,7 +214,7 @@ fn test_gpg_home(tag: &str) -> std::path::PathBuf {
             }
         }
     }
-    let dest = TempDir::new(&format!("portuale-gpg-{tag}")).keep();
+    let dest = TempDir::new(&format!("portuale-gpg-{tag}"));
     copy_dir(
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/helpers/gpg-keyring"),
         &dest,
@@ -288,8 +292,8 @@ fn gpg_sign(home: &Path, key: &str, data: &[u8], clearsign: bool) -> Vec<u8> {
 /// Copy a `.gpkg.tar` fixture to a tempdir, unpack its outer tar, let
 /// `mutate` alter the unpacked tree, and repack. Packed-byte flips
 /// would only corrupt the tar framing.
-fn repack_gpkg_with_mutation(src: &Path, tag: &str, mutate: impl Fn(&Path)) -> PathBuf {
-    let root = TempDir::new(&format!("portuale-gpg-{tag}")).keep();
+fn repack_gpkg_with_mutation(src: &Path, tag: &str, mutate: impl Fn(&Path)) -> (TempDir, PathBuf) {
+    let root = TempDir::new(&format!("portuale-gpg-{tag}"));
     let outer = root.join("outer");
     fs::create_dir_all(&outer).unwrap();
     run_tar(&["-xf", &lossy(src), "-C", &lossy(&outer)]).unwrap();
@@ -318,19 +322,21 @@ fn repack_gpkg_with_mutation(src: &Path, tag: &str, mutate: impl Fn(&Path)) -> P
     }
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     run_tar(&refs).unwrap();
-    root.join("out.gpkg.tar")
+    let built = root.join("out.gpkg.tar");
+    (root, built)
 }
 
 /// Build a signed container around a fixed payload whose Manifest
 /// is clear-signed with `manifest_key`, and whose payload `.sig`
 /// sidecar is present only when `with_sidecar` (signed with
-/// `member_key`, defaulting to the manifest key).
+/// `member_key`, defaulting to the manifest key). The guard owns the
+/// build directory; the caller keeps it alive while it reads the file.
 fn build_signed_gpkg(
     home: &Path,
     manifest_key: &str,
     with_sidecar: bool,
     member_key: Option<&str>,
-) -> PathBuf {
+) -> (ScratchDir, PathBuf) {
     let payload: &[u8] = b"signed payload bytes";
     let manifest = format!(
         "{}{}",
@@ -346,7 +352,6 @@ fn build_signed_gpkg(
     }
     let scratch = ScratchDir::new("gpkg-signed-build").unwrap();
     let root = scratch.path().to_path_buf();
-    std::mem::forget(scratch);
     let prefix = "sigtest-1.0";
     let pkgdir = root.join(prefix);
     fs::create_dir_all(&pkgdir).unwrap();
@@ -368,7 +373,7 @@ fn build_signed_gpkg(
     argv.push(format!("{prefix}/Manifest"));
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     run_tar(&refs).unwrap();
-    root.join("out.gpkg.tar")
+    (scratch, root.join("out.gpkg.tar"))
 }
 
 // The in-process inner metadata.tar reader.
@@ -471,7 +476,10 @@ fn inner_values(metadata: &InnerMetadata) -> HashMap<&str, &[u8]> {
 /// A valid outer gpkg whose inner `metadata.tar` carries
 /// `inner_entries` and whose Manifest is recomputed, so `verify`
 /// passes and a metadata error can only come from the inner check.
-fn build_gpkg_with_inner_entries(prefix: &str, inner_entries: &[InnerTestEntry<'_>]) -> PathBuf {
+fn build_gpkg_with_inner_entries(
+    prefix: &str,
+    inner_entries: &[InnerTestEntry<'_>],
+) -> (portage_util::TempDir, PathBuf) {
     build_gpkg_with_inner_tars(
         prefix,
         inner_entries,
@@ -484,7 +492,7 @@ fn build_gpkg_with_inner_tars(
     prefix: &str,
     metadata_entries: &[InnerTestEntry<'_>],
     image_entries: &[InnerTestEntry<'_>],
-) -> PathBuf {
+) -> (portage_util::TempDir, PathBuf) {
     build_gpkg_with_tar_bytes(
         prefix,
         &build_inner_tar(metadata_entries),
@@ -494,7 +502,11 @@ fn build_gpkg_with_inner_tars(
 
 /// The outer-container builder for raw inner-tar bytes (the
 /// sparse/xattr image comes from GNU `tar`, not `tar::Builder`).
-fn build_gpkg_with_tar_bytes(prefix: &str, meta: &[u8], image: &[u8]) -> PathBuf {
+fn build_gpkg_with_tar_bytes(
+    prefix: &str,
+    meta: &[u8],
+    image: &[u8],
+) -> (portage_util::TempDir, PathBuf) {
     let gpkg1: &[u8] = b"";
     let manifest = format!(
         "{}{}{}",

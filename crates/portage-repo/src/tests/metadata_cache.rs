@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn has_usable_md5_cache_is_the_presence_of_the_cache_dir() {
     assert!(has_usable_md5_cache(&fixtures_root().join("repo")));
-    let bare = TempDir::new("portage-repo-has-usable-md5-cache-test").keep();
+    let bare = TempDir::new("portage-repo-has-usable-md5-cache-test");
     assert!(!has_usable_md5_cache(&bare));
 }
 

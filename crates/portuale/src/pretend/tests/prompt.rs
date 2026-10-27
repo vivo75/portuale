@@ -8,7 +8,7 @@ fn ask_read_news_eof_exits_before_resolve_like_portage() {
     // or the slave stops being a tty and the run dies in the isatty gate.
     use std::io::Write;
     let portuale_bin = built_portuale_bin();
-    let base = TempDir::new("ask_read_news_eof").keep();
+    let base = TempDir::new("ask_read_news_eof");
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let env = news_resolve_env(&root, &base.join("pt"));
@@ -104,7 +104,7 @@ fn ask_config_select_sigint_prints_interrupted_and_exits_130_like_portage() {
     use std::io::Write;
     use std::os::unix::process::ExitStatusExt;
     let portuale_bin = built_portuale_bin();
-    let base = TempDir::new("ask_config_select_sigint").keep();
+    let base = TempDir::new("ask_config_select_sigint");
     let root = base.join("root");
     for v in ["1.0", "2.0"] {
         std::fs::create_dir_all(root.join(format!("var/db/pkg/dev-libs/seltest-{v}"))).unwrap();
@@ -165,7 +165,7 @@ fn sigint_during_merge_exits_130_after_exiting_on_signal_like_portage() {
     use std::io::Write;
     use std::os::unix::process::ExitStatusExt;
     let portuale_bin = built_portuale_bin();
-    let base = TempDir::new("merge_sigint_dies_by_signal").keep();
+    let base = TempDir::new("merge_sigint_dies_by_signal");
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let env = fixture_resolve_env(&root, &base.join("pt"));
@@ -215,7 +215,7 @@ fn ask_merge_eof_prints_interrupted_without_quitting_like_portage() {
     // Portage: UserQuery.py, query. EOF at the merge prompt prints only `Interrupted.`.
     use std::io::Write;
     let portuale_bin = built_portuale_bin();
-    let base = TempDir::new("ask_merge_eof").keep();
+    let base = TempDir::new("ask_merge_eof");
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let env = fixture_resolve_env(&root, &base.join("pt"));
@@ -270,7 +270,7 @@ fn ask_pretend_offer_prompts_on_stdout_for_a_write_action() {
     let Some(unowned) = ask_pretend_unowned_root() else {
         return;
     };
-    let base = TempDir::new("ask_pretend_offer").keep();
+    let base = TempDir::new("ask_pretend_offer");
     let env = fixture_resolve_env(&unowned, &base.join("pt"));
     let (mut master, slave_stdio) = pty_pair();
     let child = std::process::Command::new(&portuale_bin)
@@ -318,7 +318,7 @@ fn ask_pretend_offer_no_exits_130_like_portage() {
     let Some(unowned) = ask_pretend_unowned_root() else {
         return;
     };
-    let base = TempDir::new("ask_pretend_offer_no").keep();
+    let base = TempDir::new("ask_pretend_offer_no");
     let env = fixture_resolve_env(&unowned, &base.join("pt"));
     let (mut master, slave_stdio) = pty_pair();
     let child = std::process::Command::new(&portuale_bin)
@@ -366,8 +366,8 @@ fn ask_read_news_without_eselect_prints_portages_hint() {
     // Portage: actions.py. A failed eselect spawn prints the install hint.
     use std::io::Write;
     let portuale_bin = built_portuale_bin();
-    let emptydir = TempDir::new("ask_read_news_empty_path").keep();
-    let base = TempDir::new("ask_read_news_missing").keep();
+    let emptydir = TempDir::new("ask_read_news_empty_path");
+    let base = TempDir::new("ask_read_news_missing");
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let mut env = news_resolve_env(&root, &base.join("pt"));
@@ -520,7 +520,7 @@ fn ask_declined_writes_no_resume_list() {
     use std::io::Write;
     let portuale_bin = built_portuale_bin();
     let (root, _) = stale_resume_root("ask");
-    let tmp = TempDir::new("resume_no_write_ask").keep();
+    let tmp = TempDir::new("resume_no_write_ask");
 
     let (mut master, slave_stdio) = pty_pair();
     let child = std::process::Command::new(&portuale_bin)
@@ -584,7 +584,7 @@ fn ask_pretend_offer_yes_continues_as_pretend_like_portage() {
     let Some(unowned) = ask_pretend_unowned_root() else {
         return;
     };
-    let base = TempDir::new("ask_pretend_offer_yes").keep();
+    let base = TempDir::new("ask_pretend_offer_yes");
     let env = fixture_resolve_env(&unowned, &base.join("pt"));
     let (mut master, slave_stdio) = pty_pair();
     let child = std::process::Command::new(&portuale_bin)

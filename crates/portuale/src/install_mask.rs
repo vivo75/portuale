@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn install_mask_dir_removes_matched_files_and_empty_dirs_only() {
-        let tmp = TempDir::new("im-test").keep();
+        let tmp = TempDir::new("im-test");
         let ed = tmp.join("image");
         std::fs::create_dir_all(ed.join("usr/share/info")).unwrap();
         std::fs::create_dir_all(ed.join("usr/share/fonts/noto")).unwrap();

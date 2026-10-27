@@ -509,7 +509,7 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
 fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-236-force").keep();
+    let base = TempDir::new("portage-repo-236-force");
     for (name, slot, rdepend) in [
         ("forceprov-1.0", "0/1", ""),
         ("forcecons-1.0", "0", ">=dev-libs/forceprov-1.0:0/1="),
@@ -650,7 +650,7 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
 #[test]
 fn replacement_accepts_follows_the_consumers_tree_atoms() {
     use md5::Digest as _;
-    let base = TempDir::new("portage-repo-482-accepts").keep();
+    let base = TempDir::new("portage-repo-482-accepts");
     let d = base.join("var/db/pkg/dev-libs/accons-1.0");
     fs::create_dir_all(&d).unwrap();
     fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();

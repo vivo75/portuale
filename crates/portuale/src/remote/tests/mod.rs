@@ -352,8 +352,8 @@ fn regen_unit(
     (unit.to_str().unwrap().to_string(), staged)
 }
 
-fn regen_tmp(tag: &str) -> std::path::PathBuf {
-    TempDir::new(&format!("portuale-remote-regen-{tag}")).keep()
+fn regen_tmp(tag: &str) -> TempDir {
+    TempDir::new(&format!("portuale-remote-regen-{tag}"))
 }
 
 /// Decompress a vdb `environment.bz2` for content assertions.
@@ -671,7 +671,7 @@ fn s8_sha256(path: &std::path::Path) -> String {
 /// One end-to-end tree: a client root + workdir, a `--remote-portuale-dir`
 /// bin dir, and a minimal `server:` config.
 struct S8Tree {
-    tmp: std::path::PathBuf,
+    tmp: TempDir,
     root: std::path::PathBuf,
     work: std::path::PathBuf,
     bindir: std::path::PathBuf,
@@ -680,7 +680,7 @@ struct S8Tree {
 
 impl S8Tree {
     fn fresh(tag: &str) -> Self {
-        let tmp = TempDir::new(&format!("portuale-remote-s8-{tag}")).keep();
+        let tmp = TempDir::new(&format!("portuale-remote-s8-{tag}"));
         let root = tmp.join("root");
         let work = tmp.join("work");
         let bindir = tmp.join("bin");

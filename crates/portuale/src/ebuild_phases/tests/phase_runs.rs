@@ -73,7 +73,7 @@ fn ebuild_test_forces_src_test_without_features_test() {
     // (pinned by the S3 contract test on the phasert probe instead).
     // A subprocess per invocation: mutating process-global env vars is
     // unsound from parallel test threads.
-    let tmp = TempDir::new("ebuild-phases-test-forced_src_test").keep();
+    let tmp = TempDir::new("ebuild-phases-test-forced_src_test");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("pkg/dev-libs/srctestpkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -134,7 +134,7 @@ fn ebuild_test_forces_src_test_without_features_test() {
 fn phase_has_version_uses_native_portageq() {
     let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let fx = fx.canonicalize().unwrap();
-    let tmp = TempDir::new("ebuild-phases-test-native-portageq").keep();
+    let tmp = TempDir::new("ebuild-phases-test-native-portageq");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("pkg/dev-libs/hvpkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -231,7 +231,7 @@ fn phase_has_version_uses_native_portageq() {
 fn replacing_the_running_binary_mid_run_keeps_later_phases_working() {
     let fx = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let fx = fx.canonicalize().unwrap();
-    let tmp = TempDir::new("ebuild-phases-test-self-replace").keep();
+    let tmp = TempDir::new("ebuild-phases-test-self-replace");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("pkg/dev-libs/selfreplacepkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -297,7 +297,7 @@ fn replacing_the_running_binary_mid_run_keeps_later_phases_working() {
 /// the phase, so `has_version` keeps going through `portageq-wrapper`.
 #[test]
 fn portage_ipc_daemon_in_the_calling_env_never_reaches_a_phase() {
-    let tmp = TempDir::new("ebuild-phases-test-no-ipc-daemon").keep();
+    let tmp = TempDir::new("ebuild-phases-test-no-ipc-daemon");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("pkg/dev-libs/ipcpkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -339,7 +339,7 @@ fn portage_ipc_daemon_in_the_calling_env_never_reaches_a_phase() {
 /// token, proving it is a working binary.
 #[test]
 fn portuale_bin_runs_helper_ping_inside_a_phase() {
-    let tmp = TempDir::new("ebuild-phases-test-ping").keep();
+    let tmp = TempDir::new("ebuild-phases-test-ping");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("pkg/dev-libs/pingpkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -374,7 +374,7 @@ fn portuale_bin_runs_helper_ping_inside_a_phase() {
 /// `/usr/bin/python` with `PORTUALE_PYTHON_HELPERS` set (also forwarded).
 #[test]
 fn portage_python_is_the_shim_unless_real_mode() {
-    let tmp = TempDir::new("ebuild-phases-test-portage-python").keep();
+    let tmp = TempDir::new("ebuild-phases-test-portage-python");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("pkg/dev-libs/pypkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -433,7 +433,7 @@ fn portage_python_is_the_shim_unless_real_mode() {
 /// and `docompress`, with no checkout present.
 #[test]
 fn relocated_unpack_and_docompress_use_only_native_or_vendored_helpers() {
-    let tmp = TempDir::new("ebuild-phases-test-relocated-helpers").keep();
+    let tmp = TempDir::new("ebuild-phases-test-relocated-helpers");
     let _ = std::fs::remove_dir_all(&tmp);
     let bin = tmp.join("rt/bin");
     crate::embedded_runtime::extract("bin", &bin).unwrap();
@@ -556,7 +556,7 @@ fn ebuild_setup_without_a_checkout_has_no_pym_path_complaint() {
     // A subprocess per run: each gets its own environment.
     // `PORTUALE_BIN_DIR` is left unset so
     // the normal runtime (build tree or embedded) is used.
-    let tmp = TempDir::new("ebuild-phases-test-setup-without-checkout").keep();
+    let tmp = TempDir::new("ebuild-phases-test-setup-without-checkout");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("pkg/dev-libs/setuppkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();

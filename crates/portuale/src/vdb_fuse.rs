@@ -883,7 +883,7 @@ mod tests {
             eprintln!("portuale vdb mount: imported nothing");
             return;
         }
-        let dir = portage_util::TempDir::new("portuale-detach-test").keep();
+        let dir = portage_util::TempDir::new("portuale-detach-test");
         let log = dir.join("mount.log");
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([

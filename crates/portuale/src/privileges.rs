@@ -66,8 +66,8 @@ mod tests {
     use super::*;
     use portage_util::TempDir;
 
-    fn tempdir() -> std::path::PathBuf {
-        TempDir::new("portuale-privileges-test").keep()
+    fn tempdir() -> TempDir {
+        TempDir::new("portuale-privileges-test")
     }
 
     #[test]

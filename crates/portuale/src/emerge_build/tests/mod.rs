@@ -10,8 +10,8 @@ fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
 }
 
-fn tempdir() -> std::path::PathBuf {
-    let dir = TempDir::new("emerge_build_test").keep();
+fn tempdir() -> TempDir {
+    let dir = TempDir::new("emerge_build_test");
     fs::create_dir_all(&dir).unwrap();
     dir
 }

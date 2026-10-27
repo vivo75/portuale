@@ -413,7 +413,7 @@ fn s8_pretend_installs_nothing() {
     }
 
     let fixtures = s8_fixtures();
-    let base = TempDir::new("portuale-remote-s8-pretend").keep();
+    let base = TempDir::new("portuale-remote-s8-pretend");
     let root = base.join("root");
     copy_tree(&fixtures.join("var"), &root.join("var"));
     let bindir = base.join("bin");

@@ -376,8 +376,8 @@ fn abort_outcome_cycle_idx_keeps_both_root_instances_of_one_cpv() {
 /// Fresh unique scratch dir per test (vdb + repo live under it, so
 /// the per-root memo caches never see a reused path). Mirrors
 /// `tests_162::dir_162`, which must stay untouched.
-fn dir_163(tag: &str) -> std::path::PathBuf {
-    TempDir::new(&format!("portuale-163-{tag}")).keep()
+fn dir_163(tag: &str) -> TempDir {
+    TempDir::new(&format!("portuale-163-{tag}"))
 }
 
 /// Fixed "amd64"-only, no-overrides config, mirroring `tests_162`'
@@ -493,7 +493,7 @@ fn use_unsat_parent_row_suggests_enabling_an_off_flag() {
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            root: dir.as_path(),
+            root: dir.path(),
             entries: &entries,
             display_atom: "dev-libs/child[flipme=]",
             owner: Some(&owner_163("dev-libs", "parent")),
@@ -524,7 +524,7 @@ fn use_unsat_parent_row_suggests_disabling_an_on_flag() {
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            root: dir.as_path(),
+            root: dir.path(),
             entries: &entries,
             display_atom: "dev-libs/child[keepoff?]",
             owner: Some(&owner_163("dev-libs", "parent")),
@@ -559,7 +559,7 @@ fn use_unsat_parent_row_suggests_enabling_an_installed_parents_off_flag() {
     let entries = vec![entry_163("dev-libs", "parent", installed_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            root: dir.as_path(),
+            root: dir.path(),
             entries: &entries,
             display_atom: "dev-libs/child[flip=]",
             owner: Some(&owner_163("dev-libs", "parent")),
@@ -610,7 +610,7 @@ fn chain_suffix_qualifies_a_flag_gated_merge_bound_edge() {
             package: "leaf",
             atoms: &atoms,
             argument_sets: &HashMap::new(),
-            root: dir.as_path(),
+            root: dir.path(),
             atom: ""
         }),
         vec![(
@@ -657,7 +657,7 @@ fn chain_suffix_stays_bare_on_an_ungated_edge() {
             package: "leaf",
             atoms: &atoms,
             argument_sets: &HashMap::new(),
-            root: dir.as_path(),
+            root: dir.path(),
             atom: ""
         }),
         vec![(
@@ -716,7 +716,7 @@ fn chain_suffix_qualifies_a_gated_installed_edge_from_the_vdb() {
             package: "leaf",
             atoms: &atoms,
             argument_sets: &HashMap::new(),
-            root: dir.as_path(),
+            root: dir.path(),
             atom: ""
         }),
         vec![(
@@ -737,7 +737,7 @@ fn use_unsat_parent_row_returns_none_without_an_owner_or_conditional_flags() {
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            root: dir.as_path(),
+            root: dir.path(),
             entries: &entries,
             display_atom: "dev-libs/child[flipme?]",
             owner: None,
@@ -748,7 +748,7 @@ fn use_unsat_parent_row_returns_none_without_an_owner_or_conditional_flags() {
     );
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            root: dir.as_path(),
+            root: dir.path(),
             entries: &entries,
             display_atom: "dev-libs/child[flipme]",
             owner: Some(&owner_163("dev-libs", "parent")),
@@ -781,7 +781,7 @@ fn use_unsat_parent_row_notes_a_newly_violated_required_use() {
     let config = cfg_163();
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
-        use_unsat_parent_row(UseUnsatParentRowArgs { root: dir.as_path(), entries: &entries, display_atom: "dev-libs/child[flipme=]", owner: Some(&owner_163("dev-libs", "parent")), config: &config, gate: crate::test_gate(&repos) }),
+        use_unsat_parent_row(UseUnsatParentRowArgs { root: dir.path(), entries: &entries, display_atom: "dev-libs/child[flipme=]", owner: Some(&owner_163("dev-libs", "parent")), config: &config, gate: crate::test_gate(&repos) }),
         Some((
             "dev-libs/parent-1.0::testrepo".to_string(),
             vec!["Change USE: +flipme, this change violates use flag constraints defined by dev-libs/parent-1.0: 'flipme? ( other )'".to_string()],
@@ -812,7 +812,7 @@ fn use_unsat_parent_row_omits_the_note_when_required_use_stays_satisfied() {
     let entries = vec![entry_163("dev-libs", "parent", new_163("1.0"), &[])];
     assert_eq!(
         use_unsat_parent_row(UseUnsatParentRowArgs {
-            root: dir.as_path(),
+            root: dir.path(),
             entries: &entries,
             display_atom: "dev-libs/child[flipme=]",
             owner: Some(&owner_163("dev-libs", "parent")),

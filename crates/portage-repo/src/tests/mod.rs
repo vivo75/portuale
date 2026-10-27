@@ -20,8 +20,8 @@ fn test_config() -> portage_profile::Config {
     }
 }
 
-fn masters_test_root(name: &str) -> std::path::PathBuf {
-    TempDir::new(&format!("portage-repo-masters-test-{name}")).keep()
+fn masters_test_root(name: &str) -> TempDir {
+    TempDir::new(&format!("portage-repo-masters-test-{name}"))
 }
 
 /// [`find_repos`] with a nonexistent global file and no
@@ -179,8 +179,8 @@ fn resolve_empty(category: &str, package: &str) -> PretendOutcome {
 
 /// A minimal ad-hoc vdb entry: `var/db/pkg/<cat>/<pf>/` with a
 /// `SLOT` file plus whatever extra files the test writes.
-fn tmp_vdb(cat: &str, pf: &str, files: &[(&str, &[u8])]) -> std::path::PathBuf {
-    let root = TempDir::new("portuale-vdb").keep();
+fn tmp_vdb(cat: &str, pf: &str, files: &[(&str, &[u8])]) -> TempDir {
+    let root = TempDir::new("portuale-vdb");
     let dir = root.join("var/db/pkg").join(cat).join(pf);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("SLOT"), "0\n").unwrap();
@@ -1419,10 +1419,10 @@ fn assert_aub0_fails_on_a(result: &GraphResult, order: &str) {
 /// ABI probe harness: installed `abicons-1` recording `app-misc/abiprov:0/1=`,
 /// tree `abiprov-1`/`abiprov-2` + consumer (live `:=`) + forcer. `with_consumer`
 /// controls whether the consumer's same-version ebuild is visible in the tree.
-fn abi_probe_harness(with_consumer: bool) -> (std::path::PathBuf, Vec<RepoConfig>) {
+fn abi_probe_harness(with_consumer: bool) -> (TempDir, Vec<RepoConfig>) {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-abi-probe").keep();
+    let base = TempDir::new("portage-repo-abi-probe");
     for (name, slot, rdepend) in [
         ("abiprov-1", "0/1", ""),
         ("abicons-1", "0", "app-misc/abiprov:0/1="),
@@ -2181,8 +2181,8 @@ fn slotundo_provider_entry() -> GraphEntry {
     }
 }
 
-fn slotundo_temp_dir(tag: &str) -> std::path::PathBuf {
-    TempDir::new(&format!("portage-repo-{tag}")).keep()
+fn slotundo_temp_dir(tag: &str) -> TempDir {
+    TempDir::new(&format!("portage-repo-{tag}"))
 }
 
 /// One shared assertion for the triangle's conflict record: installed

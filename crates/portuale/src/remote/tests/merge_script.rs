@@ -175,7 +175,7 @@ fn phase_exports_gates_merge_type_on_eapi() {
 /// under local bash; the ebuild/env being synthetic is the only gap.
 #[test]
 fn phase_script_runs_pkg_pretend_from_saved_env() {
-    let tmp = TempDir::new("portuale-remote-pretend").keep();
+    let tmp = TempDir::new("portuale-remote-pretend");
     let unit = tmp.join("work/probe-1.0");
     let build_info = unit.join("build-info");
     std::fs::create_dir_all(&build_info).unwrap();

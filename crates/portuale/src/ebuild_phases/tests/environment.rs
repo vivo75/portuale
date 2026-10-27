@@ -4,7 +4,7 @@ use super::*;
 fn restrict_and_properties_reads_and_use_reduces_the_real_md5_cache_entry() {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
     let portage_tmpdir =
-        TempDir::new("ebuild-phases-test-restrict_and_properties_reads_real_md5_cache").keep();
+        TempDir::new("ebuild-phases-test-restrict_and_properties_reads_real_md5_cache");
     let env = compute_environment(
         &repo_root.join("dev-libs/propertiespkg/propertiespkg-1.0.ebuild"),
         &portage_tmpdir,
@@ -17,7 +17,7 @@ fn restrict_and_properties_reads_and_use_reduces_the_real_md5_cache_entry() {
 
 #[test]
 fn restrict_and_properties_is_empty_outside_any_repo_checkout() {
-    let tmp = TempDir::new("ebuild-phases-test-restrict_and_properties_outside_repo").keep();
+    let tmp = TempDir::new("ebuild-phases-test-restrict_and_properties_outside_repo");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("standalone");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -39,7 +39,7 @@ fn compute_environment_reads_inherited_from_the_md5_cache() {
     let env = compute_environment(&ebuild_path, Path::new("/var/tmp/portage")).unwrap();
     assert_eq!(env.inherited.as_deref(), Some("pilotcheck"));
 
-    let tmp = TempDir::new("ebuild-phases-test-inherited-none").keep();
+    let tmp = TempDir::new("ebuild-phases-test-inherited-none");
     let pkg_dir = tmp.join("dev-libs/standalone");
     std::fs::create_dir_all(&pkg_dir).unwrap();
     let solo = pkg_dir.join("standalone-1.0.ebuild");
@@ -53,7 +53,7 @@ fn compute_environment_reads_inherited_from_the_md5_cache() {
 fn compute_environment_links_builddir_files_to_the_repo_filesdir() {
     // Portage: _prepare_fake_filesdir. Without the link every
     // ebuild patch via `eapply` dies.
-    let tmp = TempDir::new("ebuild-phases-test-filesdir").keep();
+    let tmp = TempDir::new("ebuild-phases-test-filesdir");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("repo/dev-libs/patchpkg");
     std::fs::create_dir_all(pkg_dir.join("files")).unwrap();
@@ -75,7 +75,7 @@ fn compute_environment_links_builddir_files_to_the_repo_filesdir() {
 fn compute_environment_links_builddir_files_even_without_a_repo_filesdir() {
     // A missing repo `files/` yields a dangling symlink, never a
     // plain directory (whose cleanup aborts under `set -e`).
-    let tmp = TempDir::new("ebuild-phases-test-filesdir-missing").keep();
+    let tmp = TempDir::new("ebuild-phases-test-filesdir-missing");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("repo/sys-libs/notimezonefiles");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -112,7 +112,7 @@ fn compute_environment_links_builddir_files_even_without_a_repo_filesdir() {
 #[test]
 fn compute_environment_replaces_a_stale_plain_filesdir_with_the_link() {
     // A stale plain dir left at builddir/files becomes the symlink again.
-    let tmp = TempDir::new("ebuild-phases-test-filesdir-stale-dir").keep();
+    let tmp = TempDir::new("ebuild-phases-test-filesdir-stale-dir");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("repo/dev-libs/dirpkg");
     std::fs::create_dir_all(pkg_dir.join("files")).unwrap();
@@ -175,7 +175,7 @@ fn prepare_fake_distdir_prunes_and_relinks_like_portage() {
 /// per-package tmpdir moves the whole build tree under it.
 #[test]
 fn compute_environment_builds_the_builddir_under_the_given_tmpdir() {
-    let probe = TempDir::new("ebuild-phases-test-compute_environment_builddir").keep();
+    let probe = TempDir::new("ebuild-phases-test-compute_environment_builddir");
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/repo");
     let env = compute_environment(
         &repo_root.join("dev-libs/envdumppkg/envdumppkg-1.0.ebuild"),
@@ -187,7 +187,8 @@ fn compute_environment_builds_the_builddir_under_the_given_tmpdir() {
         probe.join("portage/dev-libs/envdumppkg-1.0")
     );
     assert_eq!(
-        env.portage_tmpdir, probe,
+        env.portage_tmpdir.as_path(),
+        probe.path(),
         "the resolved tmpdir is what the phase exports as PORTAGE_TMPDIR"
     );
     std::fs::remove_dir_all(&probe).ok();

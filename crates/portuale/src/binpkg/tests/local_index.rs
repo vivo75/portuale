@@ -77,7 +77,7 @@ fn populate_local_pkgdir_skips_invalid_files_and_keeps_the_pool() {
         pkgdir.join("dev-libs/packagepkg-1.0.tbz2"),
     )
     .unwrap();
-    let invalid =
+    let (_guard, invalid) =
         build_gpkg_with_inner_entries("invalidpkg-1.0", &[inner_entry("other/KEY", b"outside\n")]);
     fs::copy(&invalid, pkgdir.join("dev-libs/invalidpkg-1.0.gpkg.tar")).unwrap();
 

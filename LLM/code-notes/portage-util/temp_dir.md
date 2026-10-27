@@ -8,7 +8,21 @@ A scratch directory that removes itself, plus a process-level stale sweep.
 
 ## struct TempDir
 - Derefs to `Path`, so the existing `tmp.join(..)` / `&tmp` call shapes keep working unchanged.
-- `keep` is for the rare test that leaves the tree to a subprocess outliving it (or deliberately plants a leftover for a later assertion).
+- Tests never `keep`: each test binds the guard and uses `dir.path()`, so the
+  directory is removed on drop even under `panic = "abort"`-adjacent unwinds
+  and kills (the sweep reclaims the rest on the next run). The only test-side
+  keep was the guard's own self-test.
+- Helpers that build trees return the guard (`TempDir`, or a tuple with the
+  derived path); binding a bare `helper().join(..)` temporary drops the guard
+  at once, and recreating the path then leaks it, so call sites bind first.
+- The deliberate keeps left are product code only: two `tempfile` staging
+  keeps removed after use, and four remote-path keeps with explicit cleanup
+  (guard-equivalent `Drop`, remove-on-every-exit, documented forensics).
+  `temp_dir_keep_scan` (portage-util integration test) enforces the list.
+
+## tests: only_allowlisted_calls_may_keep_a_scratch_guard
+- Source scan over `crates/`: any `.keep()` outside the allowlist fails. The
+  needle is built by concatenation so the scan's own source never matches.
 
 ## fn stale_sweep_once
 - Conservative in the safe direction: never delete a live run's scratch out from under it.

@@ -1584,8 +1584,8 @@ mod tests {
     use super::*;
     use portage_util::TempDir;
 
-    fn tempdir() -> std::path::PathBuf {
-        TempDir::new("portuale-ebuild-package-test").keep()
+    fn tempdir() -> TempDir {
+        TempDir::new("portuale-ebuild-package-test")
     }
 
     /// Expected value from Portage (container bed): `make.conf MAKEOPTS=-j5`

@@ -94,7 +94,7 @@ fn ebuild_visible_at_and_binary_reinstall_warranted_match_portage_identical_bina
 
     // Portage `identical_binary` vs `identical_binary`+`_equiv_ebuild_visible`:
     // the latter only fires under `--update`.
-    let root = TempDir::new("portuale-btre").keep();
+    let root = TempDir::new("portuale-btre");
     let vdb = root.join("var/db/pkg/dev-libs/rebuiltbinarypkg-1.0");
     std::fs::create_dir_all(&vdb).unwrap();
     std::fs::write(vdb.join("BUILD_TIME"), "1000\n").unwrap();

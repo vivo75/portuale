@@ -377,8 +377,8 @@ mod tests {
         Colorizer::new(false)
     }
 
-    fn tmproot() -> std::path::PathBuf {
-        TempDir::new("info_files_test").keep()
+    fn tmproot() -> TempDir {
+        TempDir::new("info_files_test")
     }
 
     fn install_info_present() -> bool {
@@ -423,7 +423,7 @@ mod tests {
         .unwrap();
     }
 
-    fn scratch_root_with_infopath() -> (std::path::PathBuf, String) {
+    fn scratch_root_with_infopath() -> (TempDir, String) {
         let root = tmproot();
         std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
         std::fs::write(

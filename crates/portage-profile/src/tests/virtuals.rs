@@ -17,7 +17,7 @@ fn write(path: &Path, content: &str) {
 /// and a value is enough (Portage `util/__init__.py`, `grabdict`).
 #[test]
 fn grabdict_nonempty_needs_a_key_and_a_value() {
-    let root = TempDir::new("portage-profile-test-virtuals-grabdict").keep();
+    let root = TempDir::new("portage-profile-test-virtuals-grabdict");
     let file = root.join("virtuals");
     let check = |content: &str| {
         write(&file, content);
@@ -39,7 +39,7 @@ fn grabdict_nonempty_needs_a_key_and_a_value() {
 #[test]
 fn unreadable_profile_virtuals_aborts_with_permission_denied() {
     use std::os::unix::fs::PermissionsExt;
-    let root = TempDir::new("portage-profile-test-virtuals-unreadable").keep();
+    let root = TempDir::new("portage-profile-test-virtuals-unreadable");
     let dir = root.join("prof");
     let file = dir.join("virtuals");
     write(&file, "virtual/editor app-editors/vim\n");
@@ -58,7 +58,7 @@ fn unreadable_profile_virtuals_aborts_with_permission_denied() {
 /// One warning per non-empty profile, in the order given (parent first).
 #[test]
 fn profile_virtuals_warn_once_per_non_empty_profile_in_chain_order() {
-    let root = TempDir::new("portage-profile-test-virtuals-chain").keep();
+    let root = TempDir::new("portage-profile-test-virtuals-chain");
     let parent = root.join("parent");
     let leaf = root.join("leaf");
     let empty = root.join("empty");
@@ -86,7 +86,7 @@ fn profile_virtuals_warn_once_per_non_empty_profile_in_chain_order() {
 /// sets the user flag; the user block itself is not a config warning.
 #[test]
 fn resolve_config_reports_virtuals_files() {
-    let root = TempDir::new("portage-profile-test-virtuals-resolve").keep();
+    let root = TempDir::new("portage-profile-test-virtuals-resolve");
     let prof = root.join("repo/profiles/default");
     fs::create_dir_all(&prof).unwrap();
     fs::write(prof.join("make.defaults"), "ARCH=\"amd64\"\n").unwrap();
@@ -126,7 +126,7 @@ fn resolve_config_reports_virtuals_files() {
 /// `self.profiles` is non-empty), and no user file means no flag.
 #[test]
 fn user_profile_virtuals_need_a_profile_chain() {
-    let root = TempDir::new("portage-profile-test-virtuals-no-chain").keep();
+    let root = TempDir::new("portage-profile-test-virtuals-no-chain");
     write(
         &root.join("etc/portage/profile/virtuals"),
         "virtual/x app-misc/a\n",

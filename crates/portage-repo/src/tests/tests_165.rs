@@ -9,8 +9,8 @@ use super::{hermetic_find_repos, make_repo_dirs};
 /// Fresh unique scratch dir per test (vdb + repo live under it, so
 /// the per-root memo caches -- `all_installed_packages`,
 /// `installed_candidates` -- never see a reused path).
-fn dir_165(tag: &str) -> std::path::PathBuf {
-    TempDir::new(&format!("portuale-165-{tag}")).keep()
+fn dir_165(tag: &str) -> TempDir {
+    TempDir::new(&format!("portuale-165-{tag}"))
 }
 
 fn install_165(root: &Path, cat: &str, pf: &str, slot: &str, files: &[(&str, &str)]) {

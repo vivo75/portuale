@@ -60,8 +60,8 @@ fn repo_config_571(name: &str, location: std::path::PathBuf, is_main: bool) -> R
 /// ebuilds too) plus an overlay listing only `shared`: the allow-list
 /// shape in miniature. Returns the base dir, the repos, and the config root
 /// (no user categories file).
-fn mini_571() -> (std::path::PathBuf, Vec<RepoConfig>, std::path::PathBuf) {
-    let base = TempDir::new("portuale-571-mini").keep();
+fn mini_571() -> (TempDir, Vec<RepoConfig>, std::path::PathBuf) {
+    let base = TempDir::new("portuale-571-mini");
     let _ = std::fs::remove_dir_all(&base);
     let main = base.join("main");
     let overlay = base.join("overlay");

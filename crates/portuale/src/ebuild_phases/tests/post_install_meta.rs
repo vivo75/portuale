@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn bind_slot_operator_binds_a_matched_equals_dep_and_leaves_the_rest_alone() {
-    let root = TempDir::new("portuale-slotbind").keep();
+    let root = TempDir::new("portuale-slotbind");
     let vdb = root.join("var/db/pkg/dev-libs/foo-1.2");
     std::fs::create_dir_all(&vdb).unwrap();
     std::fs::write(vdb.join("CATEGORY"), "dev-libs\n").unwrap();

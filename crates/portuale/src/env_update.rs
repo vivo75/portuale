@@ -306,8 +306,8 @@ mod tests {
     use portage_util::TempDir;
     use std::os::unix::fs::MetadataExt;
 
-    fn tempdir() -> std::path::PathBuf {
-        TempDir::new("portuale-env-update-test").keep()
+    fn tempdir() -> TempDir {
+        TempDir::new("portuale-env-update-test")
     }
 
     #[test]

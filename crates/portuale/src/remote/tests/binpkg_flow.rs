@@ -37,7 +37,7 @@ fn shadow_parsers_read_contents_and_filemeta_shapes() {
 
 #[test]
 fn shadow_precheck_fails_only_foreign_owners() {
-    let dir = TempDir::new("portuale-remote-shadow").keep();
+    let dir = TempDir::new("portuale-remote-shadow");
     let vdb = dir.join("vdb");
     std::fs::create_dir_all(vdb.join("dev-libs/oldpkg-1.0")).unwrap();
     std::fs::write(
@@ -120,7 +120,7 @@ fn binary_plan_check_accepts_binaries_and_names_sources() {
 /// -- real `vardbapi._excluded_dirs` (`vartree.py`).
 #[test]
 fn shadow_ignores_a_stale_merging_entry() {
-    let dir = TempDir::new("portuale-remote-shadow-merging").keep();
+    let dir = TempDir::new("portuale-remote-shadow-merging");
     let vdb = dir.join("vdb");
     std::fs::create_dir_all(vdb.join("dev-libs/-MERGING-stalepkg-1.0")).unwrap();
     std::fs::write(

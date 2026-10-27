@@ -140,6 +140,7 @@ fn buildpkgonly_entry_build_env_folds_matched_features() {
 fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
+    let distdir = tempdir();
     let mut config = portage_profile::Config::default();
     // The profile layers `effective_use_flags` replays: implicit
     // arch/elibc/kernel flags no package declares in IUSE.
@@ -159,7 +160,7 @@ fn entry_build_env_resolves_full_use_expand_and_entry_identity() {
         .other_vars
         .insert("FEATURES".to_string(), "sandbox".to_string());
     let mut options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -287,12 +288,13 @@ fn entry_build_env_rereads_profile_env_changed_after_resolve() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let eroot = tempdir();
+    let distdir = tempdir();
     fs::create_dir_all(eroot.join("etc")).unwrap();
     fs::write(eroot.join("etc/profile.env"), "export ENVDRELOAD_OLD='x'\n").unwrap();
     let mut config = portage_profile::Config::default();
     config.use_tokens = vec!["amd64".to_string()];
     config.iuse_effective = ["amd64"].iter().map(|s| s.to_string()).collect();
-    config.envd_eroot = eroot.clone();
+    config.envd_eroot = eroot.path().to_path_buf();
     config.envd_raw = "export ENVDRELOAD_OLD='x'\n".to_string();
     config
         .envd_vars
@@ -301,7 +303,7 @@ fn entry_build_env_rereads_profile_env_changed_after_resolve() {
         .other_vars
         .insert("ENVDRELOAD_OLD".to_string(), "x".to_string());
     let mut options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };

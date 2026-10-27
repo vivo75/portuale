@@ -19858,3 +19858,17 @@ digest list on the success line, so `--fetchonly` and merges print what
 was checked (`RMD160 SHA512 WHIRLPOOL size`). Check:
 `cargo test --release -p portuale --bin portuale digest` (the known-answer
 rows come from host Portage `perform_checksum`).
+
+**`cargo test` no longer leaves scratch directories behind (#588,
+2026-10-27).** About 300 test helpers called `TempDir::new(..).keep()`,
+which hands the directory over and skips the cleanup, so every test run
+left directories in the temp root. The helpers now return the guard and
+each test holds it. The sweep also fixed helpers that returned paths into
+guards already dropped. A source scan,
+`crates/portage-util/tests/temp_dir_keep_scan.rs`, fails on any new
+`keep` outside a seven-entry allowlist (the guard's own self-test plus
+six runtime sites that clean up on their own or keep a directory on
+purpose). Check: `T=$(mktemp -d /tmp/l-XXXX); TMPDIR=$T cargo test
+--release --workspace; ls -A $T; rm -rf $T` lists nothing (3158 tests,
+2026-10-27). A `TMPDIR` longer than about 13 characters still breaks the
+`vdb_ipc` tests' socket path (#595).

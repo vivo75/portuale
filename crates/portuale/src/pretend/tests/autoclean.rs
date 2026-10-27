@@ -8,8 +8,8 @@ use super::*;
 /// Portage: `_emerge/actions.py`, `action_build` (`>>> Auto-cleaning
 /// packages...` then `unmerge(..., "clean", [], autoclean=1)`), gated on
 /// `settings.get("AUTOCLEAN") == "yes"` (make.globals default `no`).
-fn autoclean_leftover_root(tag: &str) -> std::path::PathBuf {
-    let root = TempDir::new(&format!("autoclean_{tag}")).keep();
+fn autoclean_leftover_root(tag: &str) -> portage_util::TempDir {
+    let root = TempDir::new(&format!("autoclean_{tag}"));
     for (pf, counter) in [("old-1", "7"), ("old-2", "8")] {
         let entry = root.join("var/db/pkg/dev-libs").join(pf);
         std::fs::create_dir_all(&entry).unwrap();
@@ -71,7 +71,7 @@ fn autoclean_no_outdated_arm_changes_nothing() {
     // Portage: `>>> No outdated packages were found on your system.`
     // (S404 oracle cells cl02/cl05).
     let color = crate::color::Colorizer::new(false);
-    let root = TempDir::new("autoclean_no_outdated").keep();
+    let root = TempDir::new("autoclean_no_outdated");
     let entry = root.join("var/db/pkg/dev-libs/solo-1");
     std::fs::create_dir_all(&entry).unwrap();
     std::fs::write(entry.join("SLOT"), "0\n").unwrap();
@@ -111,7 +111,7 @@ fn autoclean_no_outdated_arm_changes_nothing() {
 fn autoclean_tail_prints_the_using_system_header_exactly_once() {
     if std::env::var_os("PORTUALE_AUTOCLEAN_TAIL_CHILD").is_some() {
         let color = crate::color::Colorizer::new(false);
-        let root = TempDir::new("autoclean_tail_once").keep();
+        let root = TempDir::new("autoclean_tail_once");
         let entry = root.join("var/db/pkg/dev-libs/solo-1");
         std::fs::create_dir_all(&entry).unwrap();
         std::fs::write(entry.join("SLOT"), "0\n").unwrap();

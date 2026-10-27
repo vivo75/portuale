@@ -158,6 +158,7 @@ fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
 
     let entries = vec![source_entry(
@@ -167,7 +168,7 @@ fn capture_log_also_captures_pkg_preinst_and_pkg_postinst_output() {
         },
     )];
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         // The `${T}/build.log` this test reads is removed by the post-merge
         // clean; keep it via `FEATURES=noclean` (the clean itself is pinned

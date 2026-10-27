@@ -195,7 +195,7 @@ fn install_qa_check_docompress_compresses_docs_and_repairs_symlinks() {
     }
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/repo/dev-libs/doccompresspkg/doccompresspkg-1.0.ebuild");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-docompress").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-docompress");
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 
     let extra_env = vec![
@@ -256,7 +256,7 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
     }
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/repo/dev-libs/doccompresspkg/doccompresspkg-1.0.ebuild");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-instprep").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-instprep");
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
     let no_root = Path::new("/dev/null/no-config-root");
     let env_with = |features: &str| {
@@ -334,8 +334,7 @@ fn run_instprep_applies_only_the_complement_of_the_install_qa_gate() {
 /// while a `keepdir`'d one survives.
 #[test]
 fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_dir() {
-    let tmp =
-        TempDir::new("ebuild-phases-test-install_runs_the_portage_post_install_qa_check").keep();
+    let tmp = TempDir::new("ebuild-phases-test-install_runs_the_portage_post_install_qa_check");
     let _ = std::fs::remove_dir_all(&tmp);
     let repo_root = tmp.join("repo");
     let pkg_dir = repo_root.join("dev-libs/qacheckpkg");
@@ -402,7 +401,7 @@ fn install_runs_the_portage_post_install_qa_check_and_strips_a_genuinely_empty_d
 /// here (a host `ebuild ... install` runs `95empty-dirs` the same way).
 #[test]
 fn install_qa_spawn_pops_ebuild_phase_so_use_test_does_not_die() {
-    let tmp = TempDir::new("ebuild-phases-test-516-noiuse-qa").keep();
+    let tmp = TempDir::new("ebuild-phases-test-516-noiuse-qa");
     let _ = std::fs::remove_dir_all(&tmp);
     let repo_root = tmp.join("repo");
     let pkg_dir = repo_root.join("dev-libs/noiuseqa");
@@ -580,7 +579,7 @@ fn features_xattr_routes_phase_installs_through_the_xattr_wrapper() {
         eprintln!("skipped: no setfattr");
         return;
     }
-    let tmp = TempDir::new("ebuild-phases-test-xattr-install").keep();
+    let tmp = TempDir::new("ebuild-phases-test-xattr-install");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("pkg/dev-libs/xattrinstpkg");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -901,7 +900,7 @@ fn expanded_name_export_assigns_in_both_backends() {
 /// an eclass existing only in the overlay's master repo.
 #[test]
 fn install_inherits_a_real_eclass_that_only_exists_in_the_overlays_own_master_repo() {
-    let tmp = TempDir::new("ebuild-phases-test-eclass_masters_e2e").keep();
+    let tmp = TempDir::new("ebuild-phases-test-eclass_masters_e2e");
     let _ = std::fs::remove_dir_all(&tmp);
     let main = tmp.join("main");
     let overlay = tmp.join("overlay");
@@ -1198,7 +1197,7 @@ fn pretend_alone_succeeds_with_no_explicit_phase_functions() {
 #[test]
 fn open_log_file_gzip_pump_round_trips() {
     use std::io::{Read, Write};
-    let dir = TempDir::new("ebuild-phases-gzlog").keep();
+    let dir = TempDir::new("ebuild-phases-gzlog");
     let _ = std::fs::remove_dir_all(&dir);
     let gz = dir.join("build.log.gz");
     let plain = dir.join("build.log");
@@ -1321,7 +1320,7 @@ fn stamped_unpack_prints_the_skip_pair_and_does_not_rerun_the_body() {
 #[test]
 fn open_tee_log_writes_to_the_file_what_the_child_writes() {
     use std::io::Write as _;
-    let tmp = TempDir::new("ebuild-phases-test-tee").keep();
+    let tmp = TempDir::new("ebuild-phases-test-tee");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
     let log = tmp.join("build.log");
@@ -1360,7 +1359,7 @@ fn phase_log_capture_maps_an_absent_path_to_inherit() {
 fn foreground_unpack_tees_portages_markers_to_stdout_and_build_log() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let ebuild_path = fixtures.join("repo-348/app-misc/t348-b-phases/t348-b-phases-8.ebuild");
-    let tmp = TempDir::new("ebuild-phases-test-s6-unpack").keep();
+    let tmp = TempDir::new("ebuild-phases-test-s6-unpack");
     let _ = std::fs::remove_dir_all(&tmp);
     let cfg = tmp.join("cfg/etc/portage");
     std::fs::create_dir_all(&cfg).unwrap();

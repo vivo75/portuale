@@ -847,8 +847,8 @@ mod tests {
         db: Arc<dyn InstalledDb>,
     }
 
-    fn scratch(tag: &str) -> PathBuf {
-        portage_util::TempDir::new(&format!("vdbview-{tag}")).keep()
+    fn scratch(tag: &str) -> portage_util::TempDir {
+        portage_util::TempDir::new(&format!("vdbview-{tag}"))
     }
 
     fn cp_a(from: &Path, to: &Path) {
@@ -897,7 +897,7 @@ mod tests {
 
     /// A files ROOT with the fixture var tree, one stamped entry and the
     /// fixture's stale-stamp entry, plus a sqlite and a redb copy of it.
-    fn envs(tag: &str) -> Vec<Env> {
+    fn envs(tag: &str) -> (portage_util::TempDir, Vec<Env>) {
         let root = scratch(tag);
         cp_a(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/var"),
@@ -911,7 +911,7 @@ mod tests {
         )]
         let mut out = vec![Env {
             label: "files",
-            root: root.clone(),
+            root: root.path().to_path_buf(),
             db: Arc::new(files),
         }];
         let convert = |kind: &str, file: &str| {
@@ -934,7 +934,7 @@ mod tests {
             convert("sqlite", "vdb.sqlite");
             out.push(Env {
                 label: "sqlite",
-                root: root.clone(),
+                root: root.path().to_path_buf(),
                 db: Arc::new(portage_vdb::SqliteDb::open(root.join("vdb.sqlite")).unwrap()),
             });
         }
@@ -943,21 +943,20 @@ mod tests {
             convert("redb", "vdb.redb");
             out.push(Env {
                 label: "redb",
-                root: root.clone(),
+                root: root.path().to_path_buf(),
                 db: Arc::new(portage_vdb::RedbDb::open(root.join("vdb.redb")).unwrap()),
             });
         }
         let _ = &convert;
-        out
+        (root, out)
     }
 
     /// The database backends (their `generation` counter moves on every
     /// commit; `files` only moves it with a directory mtime).
-    fn db_envs(tag: &str) -> Vec<Env> {
-        envs(tag)
-            .into_iter()
-            .filter(|e| e.label != "files")
-            .collect()
+    fn db_envs(tag: &str) -> (portage_util::TempDir, Vec<Env>) {
+        let (root, envs) = envs(tag);
+        let envs: Vec<Env> = envs.into_iter().filter(|e| e.label != "files").collect();
+        (root, envs)
     }
 
     fn vdb_dir(env: &Env) -> PathBuf {
@@ -1016,7 +1015,7 @@ mod tests {
 
     #[test]
     fn tree_listing_and_attributes_match_the_files_tree() {
-        for env in envs("tree") {
+        for env in envs("tree").1 {
             let v = View::new(env.db.clone());
             let label = env.label;
             let root_attr = v.getattr(ROOT_INO).unwrap();
@@ -1117,7 +1116,7 @@ mod tests {
 
     #[test]
     fn a_valid_stamp_is_rewritten_to_the_mtime_shown_and_the_portage_reader_accepts_it() {
-        for env in envs("stamp") {
+        for env in envs("stamp").1 {
             let label = env.label;
             let v = View::new(env.db.clone());
             let cat = v.lookup(ROOT_INO, "app-misc").unwrap().ino;
@@ -1149,7 +1148,7 @@ mod tests {
 
     #[test]
     fn a_stale_stamp_stays_stale_and_an_absent_one_has_no_file() {
-        for env in envs("stale") {
+        for env in envs("stale").1 {
             let label = env.label;
             let v = View::new(env.db.clone());
             let cat = v.lookup(ROOT_INO, "dev-libs").unwrap().ino;
@@ -1182,7 +1181,7 @@ mod tests {
         // number than the directory mtime it stores (an import from a
         // tree whose directory mtime was touched afterwards). The view
         // shows the stored mtime and rewrites the stamp to it.
-        for env in db_envs("rewrite") {
+        for env in db_envs("rewrite").1 {
             let k = key("app-misc", "restamp-1");
             let shown = 1_700_000_000_123_456_789i128;
             let file = |name: &str, data: &[u8]| EntryFile {
@@ -1253,7 +1252,7 @@ mod tests {
         let pattern: Vec<u8> = (0..200_001u32)
             .map(|i| (i.wrapping_mul(131) / 7) as u8)
             .collect();
-        for env in envs("offset") {
+        for env in envs("offset").1 {
             let k = key("app-misc", "bigfile-1");
             add_entry(&*env.db, &k, &[("BIG", &pattern), ("SLOT", b"0\n")]);
             let v = View::with_pin_max(env.db.clone(), 1024);
@@ -1305,7 +1304,7 @@ mod tests {
 
     #[test]
     fn a_handle_keeps_the_generation_it_opened() {
-        for env in db_envs("pin") {
+        for env in db_envs("pin").1 {
             let label = env.label;
             let v = View::with_pin_max(env.db.clone(), 64);
             let big_old = vec![b'o'; 5000];
@@ -1401,10 +1400,8 @@ mod tests {
     /// big handle (which goes stale instead of mixing bytes).
     #[test]
     fn an_in_place_rewrite_on_files_is_seen_by_getattr_and_by_an_open_big_handle() {
-        let env = envs("inplace")
-            .into_iter()
-            .find(|e| e.label == "files")
-            .unwrap();
+        let (_guard, envs) = envs("inplace");
+        let env = envs.into_iter().find(|e| e.label == "files").unwrap();
         let v = View::with_pin_max(env.db.clone(), 64);
         let big_old = vec![b'o'; 5000];
         let big_new = vec![b'n'; 6000];
@@ -1441,7 +1438,7 @@ mod tests {
 
     #[test]
     fn inodes_are_stable_across_generations_and_unique() {
-        for env in db_envs("ino") {
+        for env in db_envs("ino").1 {
             let label = env.label;
             let v = View::new(env.db.clone());
             let walk = |v: &View| -> Vec<(String, u64)> {
@@ -1548,7 +1545,7 @@ mod tests {
             assert_eq!(e.errno(), n);
         }
 
-        for env in envs("erofs") {
+        for env in envs("erofs").1 {
             let v = View::new(env.db.clone());
             let cat = v.lookup(ROOT_INO, "dev-libs").unwrap().ino;
             let e = v.lookup(cat, "oldmovepkg-1.0").unwrap().ino;

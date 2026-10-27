@@ -4,7 +4,7 @@ use super::*;
 /// any read.
 #[test]
 fn regular_outer_member_check_rejects_a_symlinked_manifest() {
-    let g = build_gpkg_entries(&[
+    let (_guard, g) = build_gpkg_entries(&[
         ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
         ("pkg-1.0/metadata.tar.zst", GpkgEntry::File(b"meta")),
         ("pkg-1.0/Manifest", GpkgEntry::Symlink("/etc/hostname")),
@@ -15,7 +15,7 @@ fn regular_outer_member_check_rejects_a_symlinked_manifest() {
 /// A symlinked `metadata.tar.zst`: all three sites reject it by type.
 #[test]
 fn regular_outer_member_check_rejects_a_symlinked_metadata_member() {
-    let g = build_gpkg_entries(&[
+    let (_guard, g) = build_gpkg_entries(&[
         ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
         (
             "pkg-1.0/metadata.tar.zst",
@@ -34,7 +34,7 @@ fn regular_outer_member_check_rejects_a_symlinked_metadata_member() {
 /// check.
 #[test]
 fn regular_outer_member_check_rejects_a_symlinked_prefix_directory() {
-    let g = build_gpkg_entries(&[
+    let (_guard, g) = build_gpkg_entries(&[
         ("pkg-1.0", GpkgEntry::Symlink("/etc")),
         ("pkg-1.0-members/gpkg-1", GpkgEntry::File(b"")),
         ("pkg-1.0-members/metadata.tar.zst", GpkgEntry::File(b"meta")),
@@ -46,7 +46,7 @@ fn regular_outer_member_check_rejects_a_symlinked_prefix_directory() {
 /// the test returns rather than hangs).
 #[test]
 fn regular_outer_member_check_rejects_a_fifo_metadata_member() {
-    let g = build_gpkg_entries(&[
+    let (_guard, g) = build_gpkg_entries(&[
         ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
         ("pkg-1.0/metadata.tar.zst", GpkgEntry::Fifo),
         (
@@ -65,7 +65,7 @@ fn regular_outer_member_check_still_rejects_a_hardlinked_metadata_member() {
         "{}DATA metadata.tar.zst 471 BLAKE2B x SHA512 y\n",
         data_line("gpkg-1", b"")
     );
-    let g = build_gpkg_entries(&[
+    let (_guard, g) = build_gpkg_entries(&[
         ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
         (
             "pkg-1.0/metadata.tar.zst",
@@ -79,7 +79,7 @@ fn regular_outer_member_check_still_rejects_a_hardlinked_metadata_member() {
 /// A symlinked `gpkg-1` marker.
 #[test]
 fn regular_outer_member_check_rejects_a_symlinked_gpkg_marker() {
-    let g = build_gpkg_entries(&[
+    let (_guard, g) = build_gpkg_entries(&[
         ("pkg-1.0/gpkg-1", GpkgEntry::Symlink("Manifest")),
         ("pkg-1.0/metadata.tar.zst", GpkgEntry::File(b"meta")),
         (
@@ -101,7 +101,7 @@ fn regular_outer_member_check_rejects_a_char_device_image_member_when_root() {
         );
         return;
     }
-    let g = build_gpkg_entries(&[
+    let (_guard, g) = build_gpkg_entries(&[
         ("pkg-1.0/gpkg-1", GpkgEntry::File(b"")),
         ("pkg-1.0/metadata.tar.zst", GpkgEntry::File(b"meta")),
         (

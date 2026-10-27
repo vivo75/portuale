@@ -1185,8 +1185,8 @@ mod tests {
     use super::*;
     use portage_util::TempDir;
 
-    fn tmpdir() -> std::path::PathBuf {
-        let d = TempDir::new("elog_test").keep();
+    fn tmpdir() -> TempDir {
+        let d = TempDir::new("elog_test");
         std::fs::create_dir_all(d.join("logging")).unwrap();
         d
     }
@@ -1299,7 +1299,7 @@ mod tests {
 
     #[test]
     fn echo_logfile_for_returns_portage_logdir_target_only_when_configured() {
-        let d = TempDir::new("elog_logfile_test").keep();
+        let d = TempDir::new("elog_logfile_test");
         let builddir = d.join("portage/dev-libs/foo-1.0");
         let t_dir = builddir.join("temp");
         let logdir = d.join("logs");
@@ -1671,7 +1671,7 @@ mod tests {
     #[test]
     fn mail_modules_deliver_through_a_sendmail_binary() {
         use std::os::unix::fs::PermissionsExt as _;
-        let dir = TempDir::new("elog-mail-test").keep();
+        let dir = TempDir::new("elog-mail-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let sendmail = dir.join("sendmail");

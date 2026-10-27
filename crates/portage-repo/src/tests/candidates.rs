@@ -47,7 +47,7 @@ fn list_candidates_keeps_unsupported_eapi_ebuilds_as_masked() {
     // No `metadata/md5-cache` dir at all (and no depend-phase provider in
     // this test binary), so `repo_aux_metadata` fails outright and the
     // head-EAPI fallback decides.
-    let base = TempDir::new("portage-repo-348-list").keep();
+    let base = TempDir::new("portage-repo-348-list");
     let repo = base.join("repo");
     let dir = repo.join("app-misc/eapi99pkg");
     std::fs::create_dir_all(&dir).unwrap();

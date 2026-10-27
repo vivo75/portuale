@@ -25,8 +25,8 @@ fn raw_chown(path: &Path, uid: u32, gid: u32, is_symlink: bool) {
     );
 }
 
-fn tempdir() -> std::path::PathBuf {
-    TempDir::new("portuale-ebuild-merge-test").keep()
+fn tempdir() -> TempDir {
+    TempDir::new("portuale-ebuild-merge-test")
 }
 
 fn collision_fixture(name: &str) -> PathBuf {

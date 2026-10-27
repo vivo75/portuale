@@ -501,8 +501,6 @@ fn dep_expand(source: &Lookup, root: &Path, raw: &str) -> Result<String, ExpandE
 mod tests {
     use super::*;
     use std::process::{Command, Output};
-    #[cfg(feature = "vdb-sqlite")]
-    use std::sync::OnceLock;
 
     fn fixtures() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
@@ -512,28 +510,34 @@ mod tests {
         crate::self_exe::built_portuale_bin()
     }
 
-    /// A sqlite conversion of the fixture VDB (`copy_all`), made once.
+    /// One sqlite conversion of the fixture VDB (`copy_all`), owned by
+    /// the calling test: the guard outlives the spawned `portageq`.
+    struct SqliteSeed {
+        _guard: portage_util::TempDir,
+        path: PathBuf,
+    }
+
     #[cfg(feature = "vdb-sqlite")]
-    fn sqlite_db() -> &'static Path {
-        static DB: OnceLock<PathBuf> = OnceLock::new();
-        DB.get_or_init(|| {
-            let tmp = portage_util::TempDir::new("portageq_sqlite").keep();
-            let path = tmp.join("vdb.sqlite");
-            let src = portage_vdb::FilesDb::new(&fixtures());
-            let dst = portage_vdb::SqliteDb::open(&path).unwrap();
-            portage_vdb::copy_all(&src, &dst, false).unwrap();
-            path
-        })
+    fn sqlite_seed() -> SqliteSeed {
+        let guard = portage_util::TempDir::new("portageq_sqlite");
+        let path = guard.join("vdb.sqlite");
+        let src = portage_vdb::FilesDb::new(&fixtures());
+        let dst = portage_vdb::SqliteDb::open(&path).unwrap();
+        portage_vdb::copy_all(&src, &dst, false).unwrap();
+        SqliteSeed {
+            _guard: guard,
+            path,
+        }
     }
 
     #[derive(Clone, Copy)]
-    enum Backend {
+    enum Backend<'a> {
         Files,
         #[cfg(feature = "vdb-sqlite")]
-        Sqlite,
+        Sqlite(&'a Path),
     }
 
-    fn portageq(backend: Backend, args: &[&str], env: &[(&str, &str)]) -> Output {
+    fn portageq(backend: Backend<'_>, args: &[&str], env: &[(&str, &str)]) -> Output {
         let fx = fixtures();
         let mut c = Command::new(binary());
         c.arg("portageq")
@@ -545,9 +549,9 @@ mod tests {
         match backend {
             Backend::Files => {}
             #[cfg(feature = "vdb-sqlite")]
-            Backend::Sqlite => {
+            Backend::Sqlite(path) => {
                 c.env("PORTUALE_VDB_BACKEND", "sqlite")
-                    .env("PORTUALE_VDB_PATH", sqlite_db())
+                    .env("PORTUALE_VDB_PATH", path)
                     .env("PORTUALE_VDB_ROOT", &fx);
             }
         }
@@ -576,7 +580,12 @@ mod tests {
         let files = res(&portageq(Backend::Files, &[cmd, fx, atom], env));
         #[cfg(feature = "vdb-sqlite")]
         {
-            let sqlite = res(&portageq(Backend::Sqlite, &[cmd, fx, atom], env));
+            let seed = sqlite_seed();
+            let sqlite = res(&portageq(
+                Backend::Sqlite(&seed.path),
+                &[cmd, fx, atom],
+                env,
+            ));
             assert_eq!(
                 files, sqlite,
                 "{cmd} {atom} {env:?}: files vs sqlite differ"
@@ -756,7 +765,7 @@ mod tests {
     /// The QA notice goes through `$PORTAGE_BIN_PATH/isolated-functions.sh`.
     #[test]
     fn qa_notice_goes_through_isolated_functions_eqawarn() {
-        let tmp = portage_util::TempDir::new("portageq_eqawarn").keep();
+        let tmp = portage_util::TempDir::new("portageq_eqawarn");
         std::fs::write(
             tmp.join("isolated-functions.sh"),
             "eqawarn() { echo \"EQAWARN[$*]\" >&2; }\n",
@@ -876,7 +885,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn argv0_dispatch() {
-        let tmp = portage_util::TempDir::new("portageq_argv0").keep();
+        let tmp = portage_util::TempDir::new("portageq_argv0");
         let link = tmp.join("portageq");
         std::os::unix::fs::symlink(binary(), &link).unwrap();
         let fx = fixtures();
@@ -898,7 +907,7 @@ mod tests {
     #[cfg(feature = "vdb-sqlite")]
     #[test]
     fn database_is_used_only_for_its_own_root() {
-        let tmp = portage_util::TempDir::new("portageq_root").keep();
+        let tmp = portage_util::TempDir::new("portageq_root");
         let empty = tmp.join("empty.sqlite");
         portage_vdb::SqliteDb::open(&empty).unwrap();
         let fx = fixtures();
@@ -958,7 +967,7 @@ mod tests {
     #[cfg(feature = "vdb-redb")]
     #[test]
     fn redb_is_read_when_free_and_exit_4_when_held() {
-        let tmp = portage_util::TempDir::new("portageq_redb").keep();
+        let tmp = portage_util::TempDir::new("portageq_redb");
         let path = tmp.join("vdb.redb");
         let fx = fixtures();
         let fxs = fx.to_str().unwrap();

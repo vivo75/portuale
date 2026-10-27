@@ -5,7 +5,7 @@ use super::*;
 /// Portage: depgraph.py, _slot_operator_update_probe
 #[test]
 fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update() {
-    let dir = TempDir::new("portage-repo-slotop-303").keep();
+    let dir = TempDir::new("portage-repo-slotop-303");
     let mk = |name: &str, slot: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -79,7 +79,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     // `bar:2/2=`, a `fresh` consumer bound `bar:2/9=`, an
     // `otherslot` consumer bound `bar:1/1=`, and a `nonop` consumer
     // with a plain (no `=`) `bar:2` dep.
-    let dir = TempDir::new("portage-repo-slotop").keep();
+    let dir = TempDir::new("portage-repo-slotop");
     let mk = |name: &str, slot: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -267,7 +267,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
 fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-slotop-newslot").keep();
+    let base = TempDir::new("portage-repo-slotop-newslot");
     // vdb: provider `massb-1` in slot 1, consumer `massc-1` bound
     // `massb:1/1=`.
     for (name, slot, rdepend) in [
@@ -450,7 +450,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         "a graph downgrade does not veto the available upgrade"
     );
     // Pure downgrade: no higher version anywhere, so nothing probes.
-    let old_base = TempDir::new("portage-repo-slotop-downgrade").keep();
+    let old_base = TempDir::new("portage-repo-slotop-downgrade");
     let old_repo = old_base.join("repo");
     let write_old = |pkg: &str, pv: &str, slot: &str| {
         let dir = old_repo.join("dev-libs").join(pkg);
@@ -544,7 +544,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
 fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-slotop-pingate").keep();
+    let base = TempDir::new("portage-repo-slotop-pingate");
     for (name, slot, rdepend) in [
         ("massb-1", "1", ""),
         ("massc-1", "0", "dev-libs/massb:1/1="),
@@ -668,7 +668,7 @@ fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
 fn slot_operator_update_probe_refusal_vetoes_both_arms() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-slotop-refusal").keep();
+    let base = TempDir::new("portage-repo-slotop-refusal");
     // vdb: provider `massb-1` in slot 1, consumer `massc-1` bound
     // `massb:1/1=`, veto parent `massv-1` pinning `<massb-2`.
     for (name, slot, rdepend) in [
@@ -819,7 +819,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
 fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-slotop-mismatch").keep();
+    let base = TempDir::new("portage-repo-slotop-mismatch");
     // vdb: provider `massm` installed in slots 0 (`1`) and 1 (`2`),
     // consumer `massn-1` bound `massm:0/1=`, consumer `masso-1`
     // bound `massm:1/1=`.
@@ -923,7 +923,7 @@ fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
 fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-slotop-304").keep();
+    let base = TempDir::new("portage-repo-slotop-304");
     for (name, slot, rdepend) in [
         ("massm-1", "0", ""),
         ("massm-2", "1", ""),
@@ -1021,7 +1021,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
     // DEPEND/BDEPEND read only with `with_bdeps` (Portage empties them
     // otherwise); RDEPEND/PDEPEND/IDEPEND stay unconditional.
     // Portage: lib/_emerge/depgraph.py
-    let dir = TempDir::new("portage-repo-slotop-bdeps").keep();
+    let dir = TempDir::new("portage-repo-slotop-bdeps");
     let mk = |name: &str, key: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -1301,7 +1301,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
 fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
     use md5::Digest as _;
     use std::fmt::Write as _;
-    let base = TempDir::new("portage-repo-slotop-269").keep();
+    let base = TempDir::new("portage-repo-slotop-269");
     // vdb: provider instances in both slots, consumer bound to slot 0.
     for (name, slot, rdepend) in [
         ("mmprov-1", "0/1", ""),
@@ -1429,8 +1429,8 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
 /// vdb with installed `rebuildtrigger-1.0` + `rebuildconsumer-1.0` (the
 /// `#394` oracle shape; the consumer's walked edge lives on its entry's
 /// `deps`, like the walk records it).
-fn rebuild_if_394_vdb(tag: &str) -> PathBuf {
-    let dir = TempDir::new(&format!("portage-repo-rebuild-if-{tag}")).keep();
+fn rebuild_if_394_vdb(tag: &str) -> TempDir {
+    let dir = TempDir::new(&format!("portage-repo-rebuild-if-{tag}"));
     for name in ["rebuildtrigger-1.0", "rebuildconsumer-1.0"] {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -1567,7 +1567,7 @@ fn rebuild_if_restart_splits_new_rev_from_new_ver() {
     // Merged `2.0-r1` over installed `2.0`: new-rev fires (cpv not
     // installed), new-ver does not (norev equal). Merged `2.0` over
     // installed `1.0`: both fire.
-    let dir = TempDir::new("portage-repo-rebuild-if-rev").keep();
+    let dir = TempDir::new("portage-repo-rebuild-if-rev");
     for name in ["rebuildtrigger-2.0", "rebuildconsumer-1.0"] {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();

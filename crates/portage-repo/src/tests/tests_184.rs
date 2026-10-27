@@ -9,8 +9,8 @@ use portage_util::TempDir;
 
 /// Fresh unique scratch dir per test (vdb lives under it, so the
 /// per-root aux caches never see a reused path).
-fn dir_184(tag: &str) -> std::path::PathBuf {
-    TempDir::new(&format!("portuale-184-{tag}")).keep()
+fn dir_184(tag: &str) -> TempDir {
+    TempDir::new(&format!("portuale-184-{tag}"))
 }
 
 /// One scratch ebuild plus a valid md5-cache entry (the md5-cache

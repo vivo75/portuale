@@ -905,8 +905,8 @@ mod tests {
     use super::*;
     use portage_util::TempDir;
 
-    fn tmproot() -> std::path::PathBuf {
-        TempDir::new("mtimedb_test").keep()
+    fn tmproot() -> TempDir {
+        TempDir::new("mtimedb_test")
     }
 
     #[test]

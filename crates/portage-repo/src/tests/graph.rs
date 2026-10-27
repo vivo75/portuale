@@ -1990,7 +1990,7 @@ fn cross_root_bdepend_self_branch_merges_in_both_roots() {
     let root = fixtures_root();
     // Hermetic running root: nothing installed there, so every build dep
     // selects from the tree.
-    let running = TempDir::new("portuale-242-xc-empty-running-root").keep();
+    let running = TempDir::new("portuale-242-xc-empty-running-root");
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &root,
         main_repo_location: &root.join("repo"),
@@ -4028,7 +4028,7 @@ fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
     // Complete mode: `slotbindconsumer` is in `@world`, so the
     // slot-op scan considers it (see `required_set_reachable_cps`).
     config.complete_seed_atoms = vec!["dev-libs/slotbindconsumer".to_string()];
-    let dir = TempDir::new("portage-repo-ignoreslotop").keep();
+    let dir = TempDir::new("portage-repo-ignoreslotop");
     let mk = |name: &str, slot: &str, rdepend: &str| {
         let d = dir.join("var/db/pkg/dev-libs").join(name);
         fs::create_dir_all(&d).unwrap();
@@ -4139,7 +4139,7 @@ fn dependency_avoid_update_candidate_is_slot_aware() {
         eroot: &cfg_root,
     })
     .expect("fixture config resolves");
-    let dir = TempDir::new("portage-repo-avoidslot").keep();
+    let dir = TempDir::new("portage-repo-avoidslot");
     let d = dir.join("var/db/pkg/dev-libs/avoidslotpkg-1.0");
     fs::create_dir_all(&d).unwrap();
     fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
@@ -4347,7 +4347,7 @@ fn fixture_unrelated_packages_report_no_blockers() {
 /// instead of upgrading).
 #[test]
 fn exact_version_update_keeps_arg_pinned_provider() {
-    let base = TempDir::new("portage-repo-285-exact-update").keep();
+    let base = TempDir::new("portage-repo-285-exact-update");
     for (name, slot, rdepend) in [
         ("mmprov-1", "0/1", ""),
         ("mmprov-2", "1/1", ""),
@@ -4370,7 +4370,7 @@ fn exact_version_update_keeps_arg_pinned_provider() {
     let resolve = |atoms: &[&str]| {
         let req = ResolveRequest {
             config_root: root.clone(),
-            root: base.clone(),
+            root: base.path().to_path_buf(),
             atoms: atoms.iter().map(|a| a.to_string()).collect(),
             argument_sets: HashMap::new(),
             config: test_config(),

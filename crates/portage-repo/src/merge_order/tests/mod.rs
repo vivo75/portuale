@@ -227,8 +227,8 @@ type VdbFile<'a> = (&'a str, &'a str);
 
 type VdbEntry<'a> = (&'a str, &'a str, &'a [VdbFile<'a>]);
 
-fn mo_tmp_vdb(tag: &str, entries: &[VdbEntry<'_>]) -> std::path::PathBuf {
-    let root = TempDir::new(&format!("portuale-mo-vdb-{}-{}", std::process::id(), tag)).keep();
+fn mo_tmp_vdb(tag: &str, entries: &[VdbEntry<'_>]) -> TempDir {
+    let root = TempDir::new(&format!("portuale-mo-vdb-{}-{}", std::process::id(), tag));
     for (cat, pf, files) in entries {
         let dir = root.join("var/db/pkg").join(cat).join(pf);
         std::fs::create_dir_all(&dir).unwrap();

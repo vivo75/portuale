@@ -29,7 +29,7 @@ fn shuffle_seed_is_frozen_at_first_use_and_still_shuffles() {
 
     assert_eq!(shuffle_seed(), Some(7), "first use reads the variable");
 
-    let dir = TempDir::new("portage-util-freeze").keep();
+    let dir = TempDir::new("portage-util-freeze");
     for name in ["g", "a", "h", "c", "b", "f", "d", "e"] {
         std::fs::write(dir.join(name), b"").unwrap();
     }

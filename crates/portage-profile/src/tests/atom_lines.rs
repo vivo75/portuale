@@ -201,7 +201,7 @@ fn repo_and_build_id_flags_come_from_formats() {
 // Portage: LocationsManager.py:216-242
 #[test]
 fn node_eapi_reads_the_eapi_file_then_the_repo_default() {
-    let root = TempDir::new("portage-profile-test-node-eapi").keep();
+    let root = TempDir::new("portage-profile-test-node-eapi");
     let node = root.join("profiles/t341/noeapi");
     fs::create_dir_all(&node).unwrap();
     let formats: Vec<String> = vec![];
@@ -235,7 +235,7 @@ fn node_eapi_reads_the_eapi_file_then_the_repo_default() {
 // Portage: util/__init__.py:441-475
 #[test]
 fn adjacent_eapi_file_needs_exactly_one_line() {
-    let root = TempDir::new("portage-profile-test-adjacent-eapi").keep();
+    let root = TempDir::new("portage-profile-test-adjacent-eapi");
     let dir = root.join("profiles");
     fs::create_dir_all(&dir).unwrap();
     let mut warn = Vec::new();
@@ -263,7 +263,7 @@ fn adjacent_eapi_file_needs_exactly_one_line() {
 // Portage: repository/config.py:524-547, :1688-1727
 #[test]
 fn repo_eapi_prefers_top_level_default_then_gated_key() {
-    let root = TempDir::new("portage-profile-test-repo-eapi").keep();
+    let root = TempDir::new("portage-profile-test-repo-eapi");
     let loc = root.join("repo");
     fs::create_dir_all(loc.join("profiles")).unwrap();
     let mut warn = Vec::new();

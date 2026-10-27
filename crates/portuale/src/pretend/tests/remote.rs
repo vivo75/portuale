@@ -7,7 +7,7 @@ fn remote_success_prints_no_post_merge_notice_like_portage() {
     // vdb never changes, so the post notice stays silent. Exactly one notice fires.
     let portuale_bin = built_portuale_bin();
     let fixtures = fixtures_root();
-    let base = TempDir::new("remote_news").keep();
+    let base = TempDir::new("remote_news");
     let root = base.join("root");
     copy_tree(&fixtures.join("var"), &root.join("var"));
     let binhost = base.join("binhost");

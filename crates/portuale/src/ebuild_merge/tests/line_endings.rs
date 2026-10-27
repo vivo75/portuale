@@ -3,27 +3,28 @@
 
 use super::*;
 
-fn image(files: &[&str], links: &[(&str, &str)], dirs: &[&str]) -> PathBuf {
-    let root = tempdir().join("image");
+fn image(files: &[&str], links: &[(&str, &str)], dirs: &[&str]) -> (TempDir, PathBuf) {
+    let root = tempdir();
+    let image = root.join("image");
     for d in dirs {
-        std::fs::create_dir_all(root.join(d)).unwrap();
+        std::fs::create_dir_all(image.join(d)).unwrap();
     }
     for f in files {
-        let p = root.join(f);
+        let p = image.join(f);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, "").unwrap();
     }
     for (name, target) in links {
-        let p = root.join(name);
+        let p = image.join(name);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(target, p).unwrap();
     }
-    root
+    (root, image)
 }
 
 #[test]
 fn files_with_a_newline_or_return_are_reported_sorted_and_escaped() {
-    let img = image(&["usr/c\rd", "usr/a\nb", "usr/plain"], &[], &[]);
+    let (_guard, img) = image(&["usr/c\rd", "usr/a\nb", "usr/plain"], &[], &[]);
     assert_eq!(
         image_paths_with_line_endings(&img).unwrap(),
         vec!["/usr/a\\nb", "/usr/c\\rd"]
@@ -32,7 +33,7 @@ fn files_with_a_newline_or_return_are_reported_sorted_and_escaped() {
 
 #[test]
 fn a_symlink_whose_target_has_a_newline_is_reported_by_its_own_path() {
-    let img = image(&["usr/plain"], &[("usr/lnk", "x\ny")], &[]);
+    let (_guard, img) = image(&["usr/plain"], &[("usr/lnk", "x\ny")], &[]);
     assert_eq!(
         image_paths_with_line_endings(&img).unwrap(),
         vec!["/usr/lnk"]
@@ -42,13 +43,13 @@ fn a_symlink_whose_target_has_a_newline_is_reported_by_its_own_path() {
 #[test]
 fn an_empty_directory_with_a_newline_is_not_checked() {
     // Portage lists only the `files` of `os.walk`; the `dir` capture merges.
-    let img = image(&["usr/plain"], &[], &["usr/d\ne"]);
+    let (_guard, img) = image(&["usr/plain"], &[], &["usr/d\ne"]);
     assert!(image_paths_with_line_endings(&img).unwrap().is_empty());
 }
 
 #[test]
 fn a_file_inside_a_directory_with_a_newline_is_reported() {
-    let img = image(&["usr/d\ne/f"], &[], &[]);
+    let (_guard, img) = image(&["usr/d\ne/f"], &[], &[]);
     assert_eq!(
         image_paths_with_line_endings(&img).unwrap(),
         vec!["/usr/d\\ne/f"]
@@ -57,7 +58,7 @@ fn a_file_inside_a_directory_with_a_newline_is_reported() {
 
 #[test]
 fn a_symlink_to_a_directory_is_not_checked() {
-    let img = image(&[], &[("usr/lnk", "d\ne")], &["usr/d\ne"]);
+    let (_guard, img) = image(&[], &[("usr/lnk", "d\ne")], &["usr/d\ne"]);
     assert!(image_paths_with_line_endings(&img).unwrap().is_empty());
 }
 

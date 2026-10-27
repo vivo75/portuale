@@ -661,7 +661,7 @@ fn prune_cleanlist_removes_superseded_versions_only() {
 }
 
 /// Installs `(package, RDEPEND)` pairs under `dev-libs` in a fresh root.
-fn install_dev_libs_root(name: &str, installed: &[(&str, &str)]) -> std::path::PathBuf {
+fn install_dev_libs_root(name: &str, installed: &[(&str, &str)]) -> TempDir {
     let root = masters_test_root(name);
     for (package, rdepend) in installed {
         let d = root

@@ -24,7 +24,7 @@ fn xpak_xattr_tar_options_match_portages_extractor() {
 
 #[test]
 fn extract_binpkg_unpacks_an_xpak_image_and_build_info() {
-    let tmp = TempDir::new("binpkg-xpak").keep();
+    let tmp = TempDir::new("binpkg-xpak");
     let image = tmp.join("image");
     let bi = tmp.join("build-info");
     extract_binpkg(
@@ -64,7 +64,7 @@ fn extract_binpkg_unpacks_an_xpak_image_and_build_info() {
 #[test]
 fn extract_binpkg_writes_xpak_members_verbatim_like_portage_unpackinfo() {
     let real = fs::read(fixture("pkgdir/dev-libs/packagepkg-1.0.tbz2")).unwrap();
-    let tmp = TempDir::new("binpkg-xpak-verbatim").keep();
+    let tmp = TempDir::new("binpkg-xpak-verbatim");
     // The image payload ends where the trailer's `infosize + 8` starts.
     let n = real.len();
     let infosize = u32::from_be_bytes(real[n - 8..n - 4].try_into().unwrap()) as usize;
@@ -110,7 +110,7 @@ fn extract_binpkg_writes_xpak_members_verbatim_like_portage_unpackinfo() {
 
 #[test]
 fn extract_binpkg_unpacks_a_real_gpkg_image_and_build_info() {
-    let tmp = TempDir::new("binpkg-gpkg").keep();
+    let tmp = TempDir::new("binpkg-gpkg");
     let image = tmp.join("image");
     let bi = tmp.join("build-info");
     extract_binpkg(
@@ -148,12 +148,12 @@ fn extract_binpkg_rejects_a_gpkg_with_a_bad_manifest() {
         data_line("gpkg-1", b""),
         "DATA image.tar 3 BLAKE2B x SHA512 y\n",
     );
-    let g = build_gpkg(
+    let (_guard, g) = build_gpkg(
         "foo-1.0",
         &[("gpkg-1", b""), ("image.tar", img)],
         Some(&manifest),
     );
-    let tmp = TempDir::new("binpkg-gpkg-bad").keep();
+    let tmp = TempDir::new("binpkg-gpkg-bad");
     let err = extract_binpkg(
         &g,
         &tmp.join("image"),
@@ -172,7 +172,7 @@ fn extract_binpkg_rejects_a_gpkg_with_a_bad_manifest() {
 fn extract_binpkg_refuses_an_inner_metadata_symlink_and_writes_nothing() {
     // Portage refuses a link member whatever it points at; the image side
     // is not unpacked either (both halves are validated before any write).
-    let g = build_gpkg_with_inner_tars(
+    let (_guard, g) = build_gpkg_with_inner_tars(
         "gen-1.0",
         &[
             inner_entry("metadata/SLOT", b"0\n"),
@@ -180,7 +180,7 @@ fn extract_binpkg_refuses_an_inner_metadata_symlink_and_writes_nothing() {
         ],
         &[inner_entry("image/usr/bin/x", b"x\n")],
     );
-    let tmp = TempDir::new("binpkg-gpkg-meta").keep();
+    let tmp = TempDir::new("binpkg-gpkg-meta");
     let image = tmp.join("image");
     let bi = tmp.join("build-info");
     let err = extract_binpkg(
@@ -209,9 +209,9 @@ fn extract_binpkg_refuses_an_inner_metadata_symlink_and_writes_nothing() {
 #[test]
 fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
     let check = |entries: &[InnerTestEntry<'_>], needle: &str| {
-        let g = build_gpkg_with_inner_entries("gen-1.0", entries);
+        let (_guard, g) = build_gpkg_with_inner_entries("gen-1.0", entries);
         verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
-        let tmp = TempDir::new("binpkg-gpkg-reject").keep();
+        let tmp = TempDir::new("binpkg-gpkg-reject");
         let err = extract_binpkg(
             &g,
             &tmp.join("image"),
@@ -260,7 +260,7 @@ fn extract_binpkg_rejects_unsafe_inner_metadata_archives() {
 fn extract_binpkg_keeps_extracting_image_symlinks() {
     // A legitimate relative image symlink still lands as a symlink;
     // only devices/dups/abs/traversal/escaping hardlinks are rejected.
-    let g = build_gpkg_with_inner_tars(
+    let (_guard, g) = build_gpkg_with_inner_tars(
         "gen-1.0",
         &[inner_entry("metadata/SLOT", b"0\n")],
         &[
@@ -268,7 +268,7 @@ fn extract_binpkg_keeps_extracting_image_symlinks() {
             inner_symlink("image/usr/lib/liblink.so", "libreal.so"),
         ],
     );
-    let tmp = TempDir::new("binpkg-gpkg-imgsym").keep();
+    let tmp = TempDir::new("binpkg-gpkg-imgsym");
     let image = tmp.join("image");
     let bi = tmp.join("build-info");
     extract_binpkg(
@@ -293,10 +293,10 @@ fn extract_binpkg_keeps_extracting_image_symlinks() {
 #[test]
 fn extract_binpkg_rejects_unsafe_image_tars_before_unpacking() {
     let check = |image: &[InnerTestEntry<'_>], needle: &str| {
-        let g =
+        let (_guard, g) =
             build_gpkg_with_inner_tars("gen-1.0", &[inner_entry("metadata/SLOT", b"0\n")], image);
         verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
-        let tmp = TempDir::new("binpkg-gpkg-imgreject").keep();
+        let tmp = TempDir::new("binpkg-gpkg-imgreject");
         let err = extract_binpkg(
             &g,
             &tmp.join("image"),
@@ -457,9 +457,9 @@ fn extract_binpkg_refuses_the_portage_hostile_image_shapes() {
     ];
     for (what, extra, needle) in cases {
         let image: Vec<_> = base().into_iter().chain(extra).collect();
-        let g =
+        let (_guard, g) =
             build_gpkg_with_inner_tars("gen-1.0", &[inner_entry("metadata/SLOT", b"0\n")], &image);
-        let tmp = TempDir::new("binpkg-gpkg-hostile").keep();
+        let tmp = TempDir::new("binpkg-gpkg-hostile");
         let err = extract_binpkg(
             &g,
             &tmp.join("image"),
@@ -497,7 +497,7 @@ fn extract_binpkg_refuses_the_portage_hostile_image_shapes() {
 fn extract_binpkg_accepts_a_symlink_climbing_to_the_temp_root_like_portage() {
     let meta = [inner_entry("metadata/SLOT", b"0\n")];
     // The bare link: accepted before and after, target byte-preserved.
-    let g = build_gpkg_with_inner_tars(
+    let (_guard, g) = build_gpkg_with_inner_tars(
         "gen-1.0",
         &meta,
         &[
@@ -505,7 +505,7 @@ fn extract_binpkg_accepts_a_symlink_climbing_to_the_temp_root_like_portage() {
             inner_symlink("image/opt/link", "../.."),
         ],
     );
-    let tmp = TempDir::new("binpkg-gpkg-temproot").keep();
+    let tmp = TempDir::new("binpkg-gpkg-temproot");
     let image = tmp.join("image");
     extract_binpkg(
         &g,
@@ -528,7 +528,7 @@ fn extract_binpkg_accepts_a_symlink_climbing_to_the_temp_root_like_portage() {
     let _ = fs::remove_dir_all(&tmp);
     // A member under the link: Portage extracts it into its temp root and
     // discards it with the temp dir; GNU tar stops after a partial unpack.
-    let g = build_gpkg_with_inner_tars(
+    let (_guard, g) = build_gpkg_with_inner_tars(
         "gen-1.0",
         &meta,
         &[
@@ -537,7 +537,7 @@ fn extract_binpkg_accepts_a_symlink_climbing_to_the_temp_root_like_portage() {
             inner_entry("image/opt/link/tool", b"t\n"),
         ],
     );
-    let tmp = TempDir::new("binpkg-gpkg-temproot-member").keep();
+    let tmp = TempDir::new("binpkg-gpkg-temproot-member");
     let image = tmp.join("image");
     let err = extract_binpkg(
         &g,
@@ -569,7 +569,7 @@ fn extract_binpkg_accepts_a_symlink_climbing_to_the_temp_root_like_portage() {
 /// directory left empty.
 #[test]
 fn extract_binpkg_reports_the_gnu_tar_truncation_for_a_dotdot_hardlink_shape() {
-    let g = build_gpkg_with_inner_tars(
+    let (_guard, g) = build_gpkg_with_inner_tars(
         "gen-1.0",
         &[inner_entry("metadata/SLOT", b"0\n")],
         &[
@@ -579,7 +579,7 @@ fn extract_binpkg_reports_the_gnu_tar_truncation_for_a_dotdot_hardlink_shape() {
             inner_entry("image/deep/hard/x", b"x\n"),
         ],
     );
-    let tmp = TempDir::new("binpkg-gpkg-hardlink-trunc").keep();
+    let tmp = TempDir::new("binpkg-gpkg-hardlink-trunc");
     let image = tmp.join("image");
     let err = extract_binpkg(
         &g,
@@ -608,7 +608,7 @@ fn extract_binpkg_reports_the_gnu_tar_truncation_for_a_dotdot_hardlink_shape() {
 /// row `u-relocated-out-of-place`).
 #[test]
 fn extract_binpkg_accepts_contained_symlink_parents() {
-    let g = build_gpkg_with_inner_tars(
+    let (_guard, g) = build_gpkg_with_inner_tars(
         "gen-1.0",
         &[inner_entry("metadata/SLOT", b"0\n")],
         &[
@@ -621,7 +621,7 @@ fn extract_binpkg_accepts_contained_symlink_parents() {
             inner_hardlink("image/opt/hard2", "image/opt/deep/link"),
         ],
     );
-    let tmp = TempDir::new("binpkg-gpkg-contained").keep();
+    let tmp = TempDir::new("binpkg-gpkg-contained");
     let image = tmp.join("image");
     extract_binpkg(
         &g,
@@ -643,12 +643,12 @@ fn extract_binpkg_keeps_a_valid_sparse_xattr_image_working() {
     // The regression shape: legitimate symlink, hardlink-to-earlier,
     // sparse file and PAX xattr records must still extract (the
     // pre-scan only rejects).
-    let tmp = TempDir::new("binpkg-gpkg-i19").keep();
+    let tmp = TempDir::new("binpkg-gpkg-i19");
     let stage = tmp.join("stage");
     fs::create_dir_all(&stage).unwrap();
     let image_bytes = build_gnu_sparse_image(&stage);
     let meta = build_inner_tar(&[inner_entry("metadata/SLOT", b"0\n")]);
-    let g = build_gpkg_with_tar_bytes("gen-1.0", &meta, &image_bytes);
+    let (_guard, g) = build_gpkg_with_tar_bytes("gen-1.0", &meta, &image_bytes);
     verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
     let image = tmp.join("image");
     let bi = tmp.join("build-info");

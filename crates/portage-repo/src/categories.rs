@@ -128,7 +128,7 @@ mod tests {
     /// Portage: config.py:948-960.
     #[test]
     fn repo_categories_unions_repo_and_user_files() {
-        let dir = TempDir::new("portuale-repo-categories").keep();
+        let dir = TempDir::new("portuale-repo-categories");
         let _ = std::fs::remove_dir_all(&dir);
         let main = dir.join("main");
         let overlay = dir.join("overlay");
@@ -158,7 +158,7 @@ mod tests {
     /// are silent. Portage: stack_lists(incremental=1).
     #[test]
     fn repo_categories_stacks_removals_incrementally() {
-        let dir = TempDir::new("portuale-repo-categories-removal").keep();
+        let dir = TempDir::new("portuale-repo-categories-removal");
         let _ = std::fs::remove_dir_all(&dir);
         let main = dir.join("main");
         let overlay = dir.join("overlay");
@@ -180,7 +180,7 @@ mod tests {
     /// Portage: grabfile on absent files, dbapi._category_re.
     #[test]
     fn repo_categories_tolerates_missing_files_and_filters_names() {
-        let dir = TempDir::new("portuale-repo-categories-names").keep();
+        let dir = TempDir::new("portuale-repo-categories-names");
         let _ = std::fs::remove_dir_all(&dir);
         let main = dir.join("main");
         let cfg = dir.join("cfg");
@@ -207,7 +207,7 @@ mod tests {
     /// Portage: config.py:948-960.
     #[test]
     fn repo_categories_stacks_the_user_file() {
-        let dir = TempDir::new("portuale-repo-categories-local").keep();
+        let dir = TempDir::new("portuale-repo-categories-local");
         let _ = std::fs::remove_dir_all(&dir);
         let main = dir.join("main");
         let cfg = dir.join("cfg");

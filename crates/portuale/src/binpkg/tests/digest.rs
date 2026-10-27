@@ -18,7 +18,7 @@ fn read_gpkg_metadata_rejects_a_non_gpkg_tar() {
 
     // A structurally valid container with no `gpkg-1` marker fails the
     // inner-tar lookup guard.
-    let g = build_gpkg("foo-1.0", &[("metadata.tar", b"x")], None);
+    let (_guard, g) = build_gpkg("foo-1.0", &[("metadata.tar", b"x")], None);
     let err = read_gpkg_metadata(&g).unwrap_err();
     assert!(err.is_invalid(), "{err:?}");
     assert!(err.message().contains("gpkg-1"), "{err}");
@@ -34,7 +34,7 @@ fn extract_binpkg_restores_xpak_xattrs_under_features_xattr() {
         eprintln!("skipped: tar has no --xattrs");
         return;
     }
-    let tmp = TempDir::new("binpkg-xpak-xattrs").keep();
+    let tmp = TempDir::new("binpkg-xpak-xattrs");
     let _ = fs::remove_dir_all(&tmp);
     let stage = tmp.join("stage");
     fs::create_dir_all(stage.join("usr/share/xa")).unwrap();

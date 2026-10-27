@@ -1,0 +1,312 @@
+# Task 5 S0: every `.keep()` call
+
+Source: `grep -rn '.keep()' crates --include=*.rs`, excluding
+`portage-util/src/temp_dir.rs` (its own keep test). 304 calls in 92 files.
+`pretend_pass.rs:159,200` are `tempfile::NamedTempFile::keep`, not `TempDir::keep`.
+
+- `crates/mrg-director/src/lib.rs:1123` [test (#[cfg(test)] mod tests)] `TempDir::new(prefix).keep()`
+- `crates/portage-fetch/src/lib.rs:949` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new(&format!("portage_fetch_test_{}_{}", std::process::id(), n)).keep();`
+- `crates/portage-profile/src/phase_environ.rs:574` [test (#[cfg(test)] mod tests)] `let root = TempDir::new(&format!("portage-profile-phase-environ-{name}")).keep();`
+- `crates/portage-profile/src/tests/atom_lines.rs:204` [test (under tests/)] `let root = TempDir::new("portage-profile-test-node-eapi").keep();`
+- `crates/portage-profile/src/tests/atom_lines.rs:238` [test (under tests/)] `let root = TempDir::new("portage-profile-test-adjacent-eapi").keep();`
+- `crates/portage-profile/src/tests/atom_lines.rs:266` [test (under tests/)] `let root = TempDir::new("portage-profile-test-repo-eapi").keep();`
+- `crates/portage-profile/src/tests/env_layer.rs:10` [test (under tests/)] `let root = TempDir::new("portage-profile-test-binpkg-format").keep();`
+- `crates/portage-profile/src/tests/env_layer.rs:82` [test (under tests/)] `let root = TempDir::new("portage-profile-test-synthetic-unmerge-base").keep();`
+- `crates/portage-profile/src/tests/incrementals.rs:8` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-tokens").keep();`
+- `crates/portage-profile/src/tests/make_globals.rs:11` [test (under tests/)] `let root = portage_util::TempDir::new("portage-profile-test-globals-ignored").keep();`
+- `crates/portage-profile/src/tests/make_globals.rs:67` [test (under tests/)] `let root = portage_util::TempDir::new("portage-profile-test-globals-obsolete").keep();`
+- `crates/portage-profile/src/tests/mod.rs:23` [test (under tests/)] `let root = TempDir::new("portage-profile-test-overlay-package-use-scoping").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:26` [test (under tests/)] `let bare = TempDir::new("portage-profile-test-eroot").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:37` [test (under tests/)] `let root = TempDir::new("portage-profile-test-envd-reload").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:143` [test (under tests/)] `let root = TempDir::new("portage-profile-test-envd-profile-only").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:302` [test (under tests/)] `let empty_root = TempDir::new("portage-profile-test-empty-root").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:328` [test (under tests/)] `let root = TempDir::new("portage-profile-test-cross-repo-named").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:368` [test (under tests/)] `let root = TempDir::new("portage-profile-test-cross-repo-alias").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:420` [test (under tests/)] `let root = TempDir::new("portage-profile-test-cross-repo-unknown").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:452` [test (under tests/)] `let root = TempDir::new("portage-profile-test-same-repo-colon").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:495` [test (under tests/)] `let root = TempDir::new("portage-profile-test-colon-no-portage2").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:524` [test (under tests/)] `let root = TempDir::new("portage-profile-test-same-repo-colon-outside").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:555` [test (under tests/)] `let root = TempDir::new("portage-profile-test-diamond").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:589` [test (under tests/)] `let root = TempDir::new("portage-profile-test-package-star").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:638` [test (under tests/)] `let root = TempDir::new("portage-profile-test-cross-source-mask").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:688` [test (under tests/)] `let root = TempDir::new("portage-profile-test-mask-sources").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:777` [test (under tests/)] `let root = TempDir::new("portage-profile-test-overlay-mask").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:803` [test (under tests/)] `let root = TempDir::new("portage-profile-test-overlay-mask-unmask").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:834` [test (under tests/)] `let root = TempDir::new("portage-profile-test-overlay-masters-mask").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:868` [test (under tests/)] `let root = TempDir::new("portage-profile-test-overlay-masters-unmask").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:897` [test (under tests/)] `let root = TempDir::new("portage-profile-test-explicit-masters-empty").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:929` [test (under tests/)] `let root = TempDir::new("portage-profile-test-explicit-masters-chain").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:971` [test (under tests/)] `let root = TempDir::new("portage-profile-test-overlay-package-use").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1000` [test (under tests/)] `let root = TempDir::new("portage-profile-test-system-packages").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1036` [test (under tests/)] `let root = TempDir::new("portage-profile-test-profile-packages").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1094` [test (under tests/)] `let root = TempDir::new("portage-profile-test-no-profile-set").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1145` [test (under tests/)] `let root = TempDir::new("portage-profile-test-package-provided").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1192` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-mask-force").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1240` [test (under tests/)] `let root = TempDir::new("portage-profile-test-archlist").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1279` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-expand-names-stack").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1328` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-expand-negation").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1367` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-expand-per-level-fold").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1429` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-expand-two-level-stack").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1477` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-expand-prefix-wildcard").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1520` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-expand-unprefixed").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1561` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-expand-unprefixed-negation").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1599` [test (under tests/)] `let root = TempDir::new("portage-profile-test-accept-keywords-stack").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1643` [test (under tests/)] `let root = TempDir::new("portage-profile-test-accept-keywords-defaults").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1682` [test (under tests/)] `let root = TempDir::new("portage-profile-test-accept-keywords-defaults-filter").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1725` [test (under tests/)] `let root = TempDir::new("portage-profile-test-package-use-stack").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1771` [test (under tests/)] `let root = TempDir::new("portage-profile-test-env-layer").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1845` [test (under tests/)] `let root = TempDir::new("portage-profile-test-info-incrementals").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1927` [test (under tests/)] `let root = TempDir::new("portage-profile-test-global-puse").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:1973` [test (under tests/)] `let root = TempDir::new("portage-profile-test-profile-use-layers").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2023` [test (under tests/)] `let root = TempDir::new("portage-profile-test-repo-make-defaults").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2077` [test (under tests/)] `let root = TempDir::new("portage-profile-test-envd").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2125` [test (under tests/)] `let root = TempDir::new("portage-profile-test-package-env").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2199` [test (under tests/)] `let root = TempDir::new("portage-profile-test-package-env-expand").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2256` [test (under tests/)] `let root = TempDir::new("portage-profile-test-package-use-expand-shorthand").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2294` [test (under tests/)] `let root = TempDir::new("portage-profile-test-package-use-expand-reset").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2332` [test (under tests/)] `let root = TempDir::new("portage-profile-test-package-use-expand-user-only").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2374` [test (under tests/)] `let root = TempDir::new(dir_name).keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2439` [test (under tests/)] `let root = TempDir::new("portage-profile-test-use-stable-mask-force").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2506` [test (under tests/)] `let root = TempDir::new("portage-profile-test-package-use").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2549` [test (under tests/)] `let root = TempDir::new(tag).keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2583` [test (under tests/)] `let root = TempDir::new("portage-profile-test-user-node-gate").keep();`
+- `crates/portage-profile/src/tests/resolve.rs:2862` [test (under tests/)] `let root = TempDir::new("portage-profile-test-user-parent").keep();`
+- `crates/portage-profile/src/tests/user_patches.rs:24` [test (under tests/)] `let tmp = TempDir::new("portage-profile-test-user-patches").keep();`
+- `crates/portage-profile/src/tests/user_patches.rs:134` [test (under tests/)] `let tmp2 = TempDir::new("portage-profile-test-user-patches-file").keep();`
+- `crates/portage-profile/src/tests/user_patches.rs:139` [test (under tests/)] `let tmp3 = TempDir::new("portage-profile-test-user-patches-missing").keep();`
+- `crates/portage-profile/src/tests/virtuals.rs:20` [test (under tests/)] `let root = TempDir::new("portage-profile-test-virtuals-grabdict").keep();`
+- `crates/portage-profile/src/tests/virtuals.rs:42` [test (under tests/)] `let root = TempDir::new("portage-profile-test-virtuals-unreadable").keep();`
+- `crates/portage-profile/src/tests/virtuals.rs:61` [test (under tests/)] `let root = TempDir::new("portage-profile-test-virtuals-chain").keep();`
+- `crates/portage-profile/src/tests/virtuals.rs:89` [test (under tests/)] `let root = TempDir::new("portage-profile-test-virtuals-resolve").keep();`
+- `crates/portage-profile/src/tests/virtuals.rs:129` [test (under tests/)] `let root = TempDir::new("portage-profile-test-virtuals-no-chain").keep();`
+- `crates/portage-repo/src/categories.rs:131` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portuale-repo-categories").keep();`
+- `crates/portage-repo/src/categories.rs:161` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portuale-repo-categories-removal").keep();`
+- `crates/portage-repo/src/categories.rs:183` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portuale-repo-categories-names").keep();`
+- `crates/portage-repo/src/categories.rs:210` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portuale-repo-categories-local").keep();`
+- `crates/portage-repo/src/merge_order/tests/mod.rs:231` [test (under tests/)] `let root = TempDir::new(&format!("portuale-mo-vdb-{}-{}", std::process::id(), tag)).keep();`
+- `crates/portage-repo/src/solver_bridge.rs:5130` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portage-bridge-pgtrace").keep();`
+- `crates/portage-repo/src/solver_bridge.rs:5348` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portage-bridge-slotop").keep();`
+- `crates/portage-repo/src/solver_bridge.rs:7919` [test (#[cfg(test)] mod tests)] `let dir = portage_util::TempDir::new("portage-bridge-s6").keep();`
+- `crates/portage-repo/src/solver_bridge.rs:9055` [test (#[cfg(test)] mod tests)] `let dir = portage_util::TempDir::new("portage-bridge-s6slotop").keep();`
+- `crates/portage-repo/src/solver_bridge.rs:9208` [test (#[cfg(test)] mod tests)] `let dir = portage_util::TempDir::new("portage-bridge-s6repo").keep();`
+- `crates/portage-repo/src/tests/candidates.rs:50` [test (under tests/)] `let base = TempDir::new("portage-repo-348-list").keep();`
+- `crates/portage-repo/src/tests/cycles.rs:417` [test (under tests/)] `let root = TempDir::new("portuale-selfloop").keep();`
+- `crates/portage-repo/src/tests/cycles.rs:492` [test (under tests/)] `let root = TempDir::new("portuale-restartable").keep();`
+- `crates/portage-repo/src/tests/eliminate.rs:9` [test (under tests/)] `let dir = TempDir::new("portage-repo-slotop-bridge-newslot").keep();`
+- `crates/portage-repo/src/tests/eliminate.rs:518` [test (under tests/)] `let dir = TempDir::new("portage-repo-reach").keep();`
+- `crates/portage-repo/src/tests/eliminate.rs:552` [test (under tests/)] `let dir = TempDir::new("portage-repo-reach-shared").keep();`
+- `crates/portage-repo/src/tests/eliminate.rs:589` [test (under tests/)] `let dir = TempDir::new("portage-repo-reach-without").keep();`
+- `crates/portage-repo/src/tests/force_scan.rs:512` [test (under tests/)] `let base = TempDir::new("portage-repo-236-force").keep();`
+- `crates/portage-repo/src/tests/force_scan.rs:653` [test (under tests/)] `let base = TempDir::new("portage-repo-482-accepts").keep();`
+- `crates/portage-repo/src/tests/graph.rs:1993` [test (under tests/)] `let running = TempDir::new("portuale-242-xc-empty-running-root").keep();`
+- `crates/portage-repo/src/tests/graph.rs:4031` [test (under tests/)] `let dir = TempDir::new("portage-repo-ignoreslotop").keep();`
+- `crates/portage-repo/src/tests/graph.rs:4142` [test (under tests/)] `let dir = TempDir::new("portage-repo-avoidslot").keep();`
+- `crates/portage-repo/src/tests/graph.rs:4350` [test (under tests/)] `let base = TempDir::new("portage-repo-285-exact-update").keep();`
+- `crates/portage-repo/src/tests/installed_meta.rs:9` [test (under tests/)] `let base = TempDir::new("portuale-live-meta").keep();`
+- `crates/portage-repo/src/tests/masked_deps.rs:537` [test (under tests/)] `let root = TempDir::new("portuale-420-changed-deps").keep();`
+- `crates/portage-repo/src/tests/masked_deps.rs:600` [test (under tests/)] `let root = TempDir::new("portuale-420-gate-order").keep();`
+- `crates/portage-repo/src/tests/merge_bound.rs:10` [test (under tests/)] `let running = TempDir::new("portuale-242-xb-empty-running-root").keep();`
+- `crates/portage-repo/src/tests/merge_bound.rs:62` [test (under tests/)] `let running = TempDir::new("portuale-242-xc-empty-running-root-b0").keep();`
+- `crates/portage-repo/src/tests/metadata_cache.rs:7` [test (under tests/)] `let bare = TempDir::new("portage-repo-has-usable-md5-cache-test").keep();`
+- `crates/portage-repo/src/tests/mod.rs:24` [test (under tests/)] `TempDir::new(&format!("portage-repo-masters-test-{name}")).keep()`
+- `crates/portage-repo/src/tests/mod.rs:183` [test (under tests/)] `let root = TempDir::new("portuale-vdb").keep();`
+- `crates/portage-repo/src/tests/mod.rs:1425` [test (under tests/)] `let base = TempDir::new("portage-repo-abi-probe").keep();`
+- `crates/portage-repo/src/tests/mod.rs:2185` [test (under tests/)] `TempDir::new(&format!("portage-repo-{tag}")).keep()`
+- `crates/portage-repo/src/tests/pass_helpers.rs:110` [test (under tests/)] `let base = TempDir::new("portage-repo-236-minimize").keep();`
+- `crates/portage-repo/src/tests/pass_helpers.rs:244` [test (under tests/)] `let base = TempDir::new("portage-repo-266-minimize").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:8` [test (under tests/)] `let dir = TempDir::new("portage-repo-slotop-303").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:82` [test (under tests/)] `let dir = TempDir::new("portage-repo-slotop").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:270` [test (under tests/)] `let base = TempDir::new("portage-repo-slotop-newslot").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:453` [test (under tests/)] `let old_base = TempDir::new("portage-repo-slotop-downgrade").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:547` [test (under tests/)] `let base = TempDir::new("portage-repo-slotop-pingate").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:671` [test (under tests/)] `let base = TempDir::new("portage-repo-slotop-refusal").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:822` [test (under tests/)] `let base = TempDir::new("portage-repo-slotop-mismatch").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:926` [test (under tests/)] `let base = TempDir::new("portage-repo-slotop-304").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:1024` [test (under tests/)] `let dir = TempDir::new("portage-repo-slotop-bdeps").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:1304` [test (under tests/)] `let base = TempDir::new("portage-repo-slotop-269").keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:1433` [test (under tests/)] `let dir = TempDir::new(&format!("portage-repo-rebuild-if-{tag}")).keep();`
+- `crates/portage-repo/src/tests/rebuild_scan.rs:1570` [test (under tests/)] `let dir = TempDir::new("portage-repo-rebuild-if-rev").keep();`
+- `crates/portage-repo/src/tests/reinstall.rs:97` [test (under tests/)] `let root = TempDir::new("portuale-btre").keep();`
+- `crates/portage-repo/src/tests/rev_dep.rs:117` [test (under tests/)] `let dir = TempDir::new("portage-repo-revdep").keep();`
+- `crates/portage-repo/src/tests/rev_dep.rs:201` [test (under tests/)] `let dir = TempDir::new("portage-repo-revdep-210").keep();`
+- `crates/portage-repo/src/tests/rev_dep.rs:293` [test (under tests/)] `let dir = TempDir::new("portage-repo-revdep-210-gate").keep();`
+- `crates/portage-repo/src/tests/tests_162.rs:43` [test (under tests/)] `TempDir::new(&format!("portuale-162-{tag}")).keep()`
+- `crates/portage-repo/src/tests/tests_163.rs:380` [test (under tests/)] `TempDir::new(&format!("portuale-163-{tag}")).keep()`
+- `crates/portage-repo/src/tests/tests_165.rs:13` [test (under tests/)] `TempDir::new(&format!("portuale-165-{tag}")).keep()`
+- `crates/portage-repo/src/tests/tests_166.rs:123` [test (under tests/)] `TempDir::new(&format!("portuale-166-{tag}")).keep()`
+- `crates/portage-repo/src/tests/tests_184.rs:13` [test (under tests/)] `TempDir::new(&format!("portuale-184-{tag}")).keep()`
+- `crates/portage-repo/src/tests/tests_571.rs:64` [test (under tests/)] `let base = TempDir::new("portuale-571-mini").keep();`
+- `crates/portage-repo/src/tests/tests_p491.rs:170` [test (under tests/)] `/// sibling branch names an installed package. TempDir-guarded (no `.keep()`).`
+- `crates/portage-repo/src/tests/unsat_probe.rs:17` [test (under tests/)] `let base = TempDir::new(&format!("portage-repo-slotop-unsat-{tag}")).keep();`
+- `crates/portage-repo/src/tests/user_patches.rs:8` [test (under tests/)] `let dir = TempDir::new(&format!("portage-repo-test-user-patches-{tag}")).keep();`
+- `crates/portage-util/src/lib.rs:150` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portage-util").keep();`
+- `crates/portage-util/src/lib.rs:180` [test (#[cfg(test)] mod tests)] `let root = TempDir::new("portage-util-recursive").keep();`
+- `crates/portage-util/tests/shuffle_seed_freeze.rs:32` [test (under tests/)] `let dir = TempDir::new("portage-util-freeze").keep();`
+- `crates/portuale/src/binpkg/tests/digest.rs:37` [test (under tests/)] `let tmp = TempDir::new("binpkg-xpak-xattrs").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:27` [test (under tests/)] `let tmp = TempDir::new("binpkg-xpak").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:67` [test (under tests/)] `let tmp = TempDir::new("binpkg-xpak-verbatim").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:113` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:156` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-bad").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:183` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-meta").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:214` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-reject").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:271` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-imgsym").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:299` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-imgreject").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:462` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-hostile").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:508` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-temproot").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:540` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-temproot-member").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:582` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-hardlink-trunc").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:624` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-contained").keep();`
+- `crates/portuale/src/binpkg/tests/extract.rs:646` [test (under tests/)] `let tmp = TempDir::new("binpkg-gpkg-i19").keep();`
+- `crates/portuale/src/binpkg/tests/mod.rs:49` [test (under tests/)] `let root = portage_util::TempDir::new("gpkg-build").keep();`
+- `crates/portuale/src/binpkg/tests/mod.rs:89` [test (under tests/)] `let root = portage_util::TempDir::new("gpkg-build-typed").keep();`
+- `crates/portuale/src/binpkg/tests/mod.rs:151` [test (under tests/)] `let dest = TempDir::new("portuale-56-reject").keep();`
+- `crates/portuale/src/binpkg/tests/mod.rs:213` [test (under tests/)] `let dest = TempDir::new(&format!("portuale-gpg-{tag}")).keep();`
+- `crates/portuale/src/binpkg/tests/mod.rs:292` [test (under tests/)] `let root = TempDir::new(&format!("portuale-gpg-{tag}")).keep();`
+- `crates/portuale/src/ebuild_merge/tests/mod.rs:29` [test (under tests/)] `TempDir::new("portuale-ebuild-merge-test").keep()`
+- `crates/portuale/src/ebuild_package.rs:1588` [test (#[cfg(test)] mod tests)] `TempDir::new("portuale-ebuild-package-test").keep()`
+- `crates/portuale/src/ebuild_phases/tests/commands.rs:198` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-docompress").keep();`
+- `crates/portuale/src/ebuild_phases/tests/commands.rs:259` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-instprep").keep();`
+- `crates/portuale/src/ebuild_phases/tests/commands.rs:338` [test (under tests/)] `TempDir::new("ebuild-phases-test-install_runs_the_portage_post_install_qa_check").keep();`
+- `crates/portuale/src/ebuild_phases/tests/commands.rs:405` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-516-noiuse-qa").keep();`
+- `crates/portuale/src/ebuild_phases/tests/commands.rs:583` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-xattr-install").keep();`
+- `crates/portuale/src/ebuild_phases/tests/commands.rs:904` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-eclass_masters_e2e").keep();`
+- `crates/portuale/src/ebuild_phases/tests/commands.rs:1201` [test (under tests/)] `let dir = TempDir::new("ebuild-phases-gzlog").keep();`
+- `crates/portuale/src/ebuild_phases/tests/commands.rs:1324` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-tee").keep();`
+- `crates/portuale/src/ebuild_phases/tests/commands.rs:1363` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-s6-unpack").keep();`
+- `crates/portuale/src/ebuild_phases/tests/environment.rs:7` [test (under tests/)] `TempDir::new("ebuild-phases-test-restrict_and_properties_reads_real_md5_cache").keep();`
+- `crates/portuale/src/ebuild_phases/tests/environment.rs:20` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-restrict_and_properties_outside_repo").keep();`
+- `crates/portuale/src/ebuild_phases/tests/environment.rs:42` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-inherited-none").keep();`
+- `crates/portuale/src/ebuild_phases/tests/environment.rs:56` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-filesdir").keep();`
+- `crates/portuale/src/ebuild_phases/tests/environment.rs:78` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-filesdir-missing").keep();`
+- `crates/portuale/src/ebuild_phases/tests/environment.rs:115` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-filesdir-stale-dir").keep();`
+- `crates/portuale/src/ebuild_phases/tests/environment.rs:178` [test (under tests/)] `let probe = TempDir::new("ebuild-phases-test-compute_environment_builddir").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_env.rs:94` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-eclass_locations_value_none").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_env.rs:108` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-eclass_locations_masters_order").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_env.rs:153` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-eclass_locations_no_dup").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_env.rs:181` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-standalone-penv").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_env.rs:299` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-env").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_env.rs:409` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-s2-eapi4").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_env.rs:467` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-drop-phase").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_env.rs:522` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-brush").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_runs.rs:76` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-forced_src_test").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_runs.rs:137` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-native-portageq").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_runs.rs:234` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-self-replace").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_runs.rs:300` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-no-ipc-daemon").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_runs.rs:342` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-ping").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_runs.rs:377` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-portage-python").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_runs.rs:436` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-relocated-helpers").keep();`
+- `crates/portuale/src/ebuild_phases/tests/phase_runs.rs:559` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-setup-without-checkout").keep();`
+- `crates/portuale/src/ebuild_phases/tests/post_install_meta.rs:5` [test (under tests/)] `let root = TempDir::new("portuale-slotbind").keep();`
+- `crates/portuale/src/ebuild_phases/tests/runtime_paths.rs:6` [test (under tests/)] `let dir = TempDir::new("portuale-bin-overlay-test").keep();`
+- `crates/portuale/src/ebuild_phases/tests/runtime_paths.rs:138` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-setup-script").keep();`
+- `crates/portuale/src/ebuild_phases/tests/runtime_paths.rs:165` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-repo_root_for_finds").keep();`
+- `crates/portuale/src/ebuild_phases/tests/runtime_paths.rs:178` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-repo_root_for_none").keep();`
+- `crates/portuale/src/ebuild_phases/tests/single_phase.rs:9` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-run-clean").keep();`
+- `crates/portuale/src/ebuild_phases/tests/single_phase.rs:56` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-run-clean-keepwork").keep();`
+- `crates/portuale/src/ebuild_phases/tests/standalone_config.rs:31` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-depend_use_set").keep();`
+- `crates/portuale/src/ebuild_phases/tests/standalone_config.rs:92` [test (under tests/)] `let portage_tmpdir = TempDir::new("ebuild-phases-test-depend-base").keep();`
+- `crates/portuale/src/ebuild_phases/tests/standalone_config.rs:135` [test (under tests/)] `let probe = TempDir::new("ebuild-phases-test-per_package_portage_tmpdir").keep();`
+- `crates/portuale/src/ebuild_phases/tests/standalone_config.rs:246` [test (under tests/)] `let probe = TempDir::new("ebuild-phases-test-unmerge_binpkg_format").keep();`
+- `crates/portuale/src/ebuild_phases/tests/standalone_config.rs:316` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-s2-md5slot").keep();`
+- `crates/portuale/src/ebuild_phases/tests/standalone_config.rs:353` [test (under tests/)] `let tmp = TempDir::new("ebuild-phases-test-s2-replacing").keep();`
+- `crates/portuale/src/ebuild_phases/tests/standalone_config.rs:437` [test (under tests/)] `let tmp = TempDir::new(&format!("ebuild-phases-test-s4-{tag}")).keep();`
+- `crates/portuale/src/ebuild_unmerge.rs:1322` [test (#[cfg(test)] mod tests)] `TempDir::new("portuale-ebuild-unmerge-test").keep()`
+- `crates/portuale/src/elog.rs:1189` [test (#[cfg(test)] mod tests)] `let d = TempDir::new("elog_test").keep();`
+- `crates/portuale/src/elog.rs:1302` [test (#[cfg(test)] mod tests)] `let d = TempDir::new("elog_logfile_test").keep();`
+- `crates/portuale/src/elog.rs:1674` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("elog-mail-test").keep();`
+- `crates/portuale/src/emerge_build/pretend_pass.rs:159` [product (tempfile NamedTempFile::keep, not TempDir; staging file removed after read in run_staged_pretend) legitimate: removed on the read path] `.keep()`
+- `crates/portuale/src/emerge_build/pretend_pass.rs:200` [product (tempfile NamedTempFile::keep, not TempDir; log removed by replay_pretend_log after replay) legitimate: removed on the replay path] `log.keep()`
+- `crates/portuale/src/emerge_build/tests/mod.rs:14` [test (under tests/)] `let dir = TempDir::new("emerge_build_test").keep();`
+- `crates/portuale/src/emerge_getbinpkg.rs:2147` [test (#[cfg(test)] mod tests)] `TempDir::new("portuale-getbinpkg").keep()`
+- `crates/portuale/src/emerge_getbinpkg.rs:5466` [test (#[cfg(test)] mod mixed_pretend_tests)] `portage_util::TempDir::new("portuale-mixed-pretend").keep()`
+- `crates/portuale/src/env_update.rs:310` [test (#[cfg(test)] mod tests)] `TempDir::new("portuale-env-update-test").keep()`
+- `crates/portuale/src/fetch.rs:794` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portuale_fetch_test").keep();`
+- `crates/portuale/src/info_files.rs:381` [test (#[cfg(test)] mod tests)] `TempDir::new("info_files_test").keep()`
+- `crates/portuale/src/install_mask.rs:249` [test (#[cfg(test)] mod tests)] `let tmp = TempDir::new("im-test").keep();`
+- `crates/portuale/src/mrg.rs:2588` [test (#[cfg(test)] mod tests)] `let tmp = portage_util::TempDir::new("vdb_make_conf_select").keep();`
+- `crates/portuale/src/mrg.rs:2747` [test (#[cfg(test)] mod tests)] `let tmp = portage_util::TempDir::new("mrg_vdb_parity").keep();`
+- `crates/portuale/src/mtimedb.rs:909` [test (#[cfg(test)] mod tests)] `TempDir::new("mtimedb_test").keep()`
+- `crates/portuale/src/needed_elf.rs:1326` [test (#[cfg(test)] mod tests)] `TempDir::new("portuale-needed-elf-test").keep()`
+- `crates/portuale/src/portageq.rs:520` [test (#[cfg(test)] mod tests)] `let tmp = portage_util::TempDir::new("portageq_sqlite").keep();`
+- `crates/portuale/src/portageq.rs:759` [test (#[cfg(test)] mod tests)] `let tmp = portage_util::TempDir::new("portageq_eqawarn").keep();`
+- `crates/portuale/src/portageq.rs:879` [test (#[cfg(test)] mod tests)] `let tmp = portage_util::TempDir::new("portageq_argv0").keep();`
+- `crates/portuale/src/portageq.rs:901` [test (#[cfg(test)] mod tests)] `let tmp = portage_util::TempDir::new("portageq_root").keep();`
+- `crates/portuale/src/portageq.rs:961` [test (#[cfg(test)] mod tests)] `let tmp = portage_util::TempDir::new("portageq_redb").keep();`
+- `crates/portuale/src/pretend/tests/autoclean.rs:12` [test (under tests/)] `let root = TempDir::new(&format!("autoclean_{tag}")).keep();`
+- `crates/portuale/src/pretend/tests/autoclean.rs:74` [test (under tests/)] `let root = TempDir::new("autoclean_no_outdated").keep();`
+- `crates/portuale/src/pretend/tests/autoclean.rs:114` [test (under tests/)] `let root = TempDir::new("autoclean_tail_once").keep();`
+- `crates/portuale/src/pretend/tests/autounmask.rs:18` [test (under tests/)] `let base = TempDir::new("autounmask_masked_dep").keep();`
+- `crates/portuale/src/pretend/tests/autounmask.rs:97` [test (under tests/)] `let base = TempDir::new("autounmask_masked_dep_negative").keep();`
+- `crates/portuale/src/pretend/tests/expand.rs:26` [test (under tests/)] `let cfg = TempDir::new("portuale-571-expand").keep();`
+- `crates/portuale/src/pretend/tests/global_updates.rs:13` [test (under tests/)] `let base = portage_util::TempDir::new(&format!("updates_force_{tag}")).keep();`
+- `crates/portuale/src/pretend/tests/global_updates.rs:41` [test (under tests/)] `portage_util::TempDir::new(&format!("updates_force_root_{tag}")).keep()`
+- `crates/portuale/src/pretend/tests/mod.rs:33` [test (under tests/)] `let base = TempDir::new(&format!("pretend-test-news_notice_{tag}")).keep();`
+- `crates/portuale/src/pretend/tests/mod.rs:67` [test (under tests/)] `let root = TempDir::new(&format!("resume_single_{tag}")).keep();`
+- `crates/portuale/src/pretend/tests/mod.rs:151` [test (under tests/)] `let dir = TempDir::new(&format!("eselect_stub_{tag}")).keep();`
+- `crates/portuale/src/pretend/tests/mod.rs:174` [test (under tests/)] `let base = TempDir::new(&format!("ask_read_news_{label}")).keep();`
+- `crates/portuale/src/pretend/tests/mod.rs:349` [test (under tests/)] `let base = TempDir::new(label).keep();`
+- `crates/portuale/src/pretend/tests/mod.rs:408` [test (under tests/)] `let base = TempDir::new("true_y_or_n").keep();`
+- `crates/portuale/src/pretend/tests/mod.rs:457` [test (under tests/)] `let root = TempDir::new(&format!("resume_no_write_{tag}")).keep();`
+- `crates/portuale/src/pretend/tests/news.rs:49` [test (under tests/)] `let base = TempDir::new("pretend-test-filesystem_news").keep();`
+- `crates/portuale/src/pretend/tests/news.rs:100` [test (under tests/)] `let root = TempDir::new("pretend-test-news_restrictions").keep();`
+- `crates/portuale/src/pretend/tests/news.rs:201` [test (under tests/)] `let base = TempDir::new("pretend-test-news_gates").keep();`
+- `crates/portuale/src/pretend/tests/news.rs:265` [test (under tests/)] `let base = TempDir::new("pretend-test-news_perms").keep();`
+- `crates/portuale/src/pretend/tests/news.rs:308` [test (under tests/)] `let base = TempDir::new("pretend-test-news_counts").keep();`
+- `crates/portuale/src/pretend/tests/news.rs:435` [test (under tests/)] `let base = TempDir::new("ask_read_news_yes").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:11` [test (under tests/)] `let base = TempDir::new("ask_read_news_eof").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:107` [test (under tests/)] `let base = TempDir::new("ask_config_select_sigint").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:168` [test (under tests/)] `let base = TempDir::new("merge_sigint_dies_by_signal").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:218` [test (under tests/)] `let base = TempDir::new("ask_merge_eof").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:273` [test (under tests/)] `let base = TempDir::new("ask_pretend_offer").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:321` [test (under tests/)] `let base = TempDir::new("ask_pretend_offer_no").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:369` [test (under tests/)] `let emptydir = TempDir::new("ask_read_news_empty_path").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:370` [test (under tests/)] `let base = TempDir::new("ask_read_news_missing").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:523` [test (under tests/)] `let tmp = TempDir::new("resume_no_write_ask").keep();`
+- `crates/portuale/src/pretend/tests/prompt.rs:587` [test (under tests/)] `let base = TempDir::new("ask_pretend_offer_yes").keep();`
+- `crates/portuale/src/pretend/tests/remote.rs:10` [test (under tests/)] `let base = TempDir::new("remote_news").keep();`
+- `crates/portuale/src/pretend/tests/resume.rs:8` [test (under tests/)] `let tmp = TempDir::new("resume_news_pretend").keep();`
+- `crates/portuale/src/pretend/tests/resume.rs:40` [test (under tests/)] `let tmp = TempDir::new("resume_news_empty").keep();`
+- `crates/portuale/src/pretend/tests/resume.rs:73` [test (under tests/)] `let tmp = TempDir::new("resume_no_write_pretend").keep();`
+- `crates/portuale/src/pretend/tests/resume.rs:152` [test (under tests/)] `let root = TempDir::new("pretend-test-entries_not_merged_binary").keep();`
+- `crates/portuale/src/pretend/tests/resume.rs:201` [test (under tests/)] `let root = TempDir::new("pretend-test-up_front_matches_failure_tail").keep();`
+- `crates/portuale/src/pretend/tests/resume.rs:238` [test (under tests/)] `let root = TempDir::new("pretend-test-resume_display_reinstall").keep();`
+- `crates/portuale/src/pretend/tests/unmerge.rs:8` [test (under tests/)] `let root = TempDir::new(&format!("unmerge_info_wiring_{tag}")).keep();`
+- `crates/portuale/src/pretend/tests/unmerge.rs:152` [test (under tests/)] `let root = TempDir::new(&format!("unmerge_features_{tag}")).keep();`
+- `crates/portuale/src/pretend/tests/world.rs:61` [test (under tests/)] `let dir = TempDir::new("portuale-s8-sets").keep();`
+- `crates/portuale/src/pretend/tests/world.rs:97` [test (under tests/)] `let dir = TempDir::new(&format!("portuale-usersets-{tag}")).keep();`
+- `crates/portuale/src/pretend/tests/world.rs:163` [test (under tests/)] `let tmp = TempDir::new("portuale-world").keep();`
+- `crates/portuale/src/pretend/tests/world.rs:235` [test (under tests/)] `let tmp = TempDir::new("portuale-worldslot").keep();`
+- `crates/portuale/src/pretend/tests/world.rs:293` [test (under tests/)] `let tmp = TempDir::new("portuale-worldsets").keep();`
+- `crates/portuale/src/pretend/tests/world.rs:323` [test (under tests/)] `let tmp = TempDir::new("portuale-instset").keep();`
+- `crates/portuale/src/pretend/tests/world.rs:349` [test (under tests/)] `let tmp = TempDir::new("portuale-world-one").keep();`
+- `crates/portuale/src/privileges.rs:70` [test (#[cfg(test)] mod tests)] `TempDir::new("portuale-privileges-test").keep()`
+- `crates/portuale/src/regen.rs:570` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portuale-regen-categories").keep();`
+- `crates/portuale/src/regen.rs:669` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portuale-regen-render").keep();`
+- `crates/portuale/src/regen.rs:707` [test (#[cfg(test)] mod tests)] `let dir = TempDir::new("portuale-regen-skip").keep();`
+- `crates/portuale/src/remote/binpkg_flow.rs:136` [product (TempDir in load_vdb_shadow; call-site comment: left for forensics) legitimate: deliberate, documented at the call site] `let tmp = TempDir::new("portuale-remote-vdb").keep();`
+- `crates/portuale/src/remote/binpkg_flow.rs:211` [product (TempDir staging in run_binpkg_flow; remove_dir_all on every exit path) legitimate: explicit cleanup on all paths] `let staging = TempDir::new("portuale-remote-bundle").keep();`
+- `crates/portuale/src/remote/config_place.rs:203` [product (TempDir in place_config_root; owned by PlacedConfig.tmp, removed on Drop) legitimate: guard-equivalent via Drop] `let tmp = TempDir::new("portuale-remote-etc").keep();`
+- `crates/portuale/src/remote/stages.rs:327` [product (TempDir in install_file_atomic ssh path; remove_dir_all after send) legitimate: explicit cleanup] `let server_dir = TempDir::new("portuale-regen-install").keep();`
+- `crates/portuale/src/remote/tests/binpkg_flow.rs:40` [test (under tests/)] `let dir = TempDir::new("portuale-remote-shadow").keep();`
+- `crates/portuale/src/remote/tests/binpkg_flow.rs:123` [test (under tests/)] `let dir = TempDir::new("portuale-remote-shadow-merging").keep();`
+- `crates/portuale/src/remote/tests/client_binary.rs:416` [test (under tests/)] `let base = TempDir::new("portuale-remote-s8-pretend").keep();`
+- `crates/portuale/src/remote/tests/ledger.rs:5` [test (under tests/)] `let dir = TempDir::new("portuale-remote-ledger").keep();`
+- `crates/portuale/src/remote/tests/merge_script.rs:178` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-pretend").keep();`
+- `crates/portuale/src/remote/tests/mod.rs:356` [test (under tests/)] `TempDir::new(&format!("portuale-remote-regen-{tag}")).keep()`
+- `crates/portuale/src/remote/tests/mod.rs:683` [test (under tests/)] `let tmp = TempDir::new(&format!("portuale-remote-s8-{tag}")).keep();`
+- `crates/portuale/src/remote/tests/preflight.rs:78` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-binscript").keep();`
+- `crates/portuale/src/remote/tests/preflight.rs:142` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-trunc").keep();`
+- `crates/portuale/src/remote/tests/preflight.rs:196` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-mask").keep();`
+- `crates/portuale/src/remote/tests/preflight.rs:272` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-setuid").keep();`
+- `crates/portuale/src/remote/tests/stages.rs:5` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-protect").keep();`
+- `crates/portuale/src/remote/tests/stages.rs:66` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-atomic-fd").keep();`
+- `crates/portuale/src/remote/tests/stages.rs:124` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-atomic-exec").keep();`
+- `crates/portuale/src/remote/tests/stages.rs:188` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-collide").keep();`
+- `crates/portuale/src/remote/tests/stages.rs:237` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-space-collide").keep();`
+- `crates/portuale/src/remote/tests/stages.rs:905` [test (under tests/)] `let tmp = TempDir::new("portuale-remote-space-unmerge").keep();`
+- `crates/portuale/src/remote_bundle.rs:498` [test (#[cfg(test)] mod tests)] `.keep()`
+- `crates/portuale/src/vdb_cmd.rs:750` [test (#[cfg(test)] mod tests)] `portage_util::TempDir::new(&format!("vdbcmd-{tag}")).keep()`
+- `crates/portuale/src/vdb_fuse.rs:886` [test (#[cfg(test)] mod tests)] `let dir = portage_util::TempDir::new("portuale-detach-test").keep();`
+- `crates/portuale/src/vdb_view.rs:851` [test (#[cfg(test)] mod tests)] `portage_util::TempDir::new(&format!("vdbview-{tag}")).keep()`
+
+Test calls: 298. Product calls: 6 (2 tempfile, 4 TempDir, all legitimate). Product leaks: none.

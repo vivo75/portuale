@@ -91,7 +91,7 @@ fn eclass_locations_value_quotes_the_containing_repo_root() {
 
 #[test]
 fn eclass_locations_value_is_empty_outside_any_repo_checkout() {
-    let tmp = TempDir::new("ebuild-phases-test-eclass_locations_value_none").keep();
+    let tmp = TempDir::new("ebuild-phases-test-eclass_locations_value_none");
     let _ = std::fs::remove_dir_all(&tmp);
     let pkg_dir = tmp.join("dev-libs/standalone");
     std::fs::create_dir_all(&pkg_dir).unwrap();
@@ -105,7 +105,7 @@ fn eclass_locations_value_is_empty_outside_any_repo_checkout() {
 #[test]
 fn eclass_locations_value_puts_the_own_repo_first_then_masters_in_declared_order() {
     // Portage: config.py, eclass_locations (own repo first, then masters).
-    let tmp = TempDir::new("ebuild-phases-test-eclass_locations_masters_order").keep();
+    let tmp = TempDir::new("ebuild-phases-test-eclass_locations_masters_order");
     let _ = std::fs::remove_dir_all(&tmp);
     let main = tmp.join("main");
     let secondary = tmp.join("secondary");
@@ -150,7 +150,7 @@ fn eclass_locations_value_puts_the_own_repo_first_then_masters_in_declared_order
 #[test]
 fn eclass_locations_value_does_not_duplicate_the_own_repo_when_it_is_also_a_master() {
     // The own repo is not duplicated when it is also a master.
-    let tmp = TempDir::new("ebuild-phases-test-eclass_locations_no_dup").keep();
+    let tmp = TempDir::new("ebuild-phases-test-eclass_locations_no_dup");
     let _ = std::fs::remove_dir_all(&tmp);
     let main = tmp.join("main");
     std::fs::create_dir_all(main.join("profiles")).unwrap();
@@ -178,7 +178,7 @@ fn eclass_locations_value_does_not_duplicate_the_own_repo_when_it_is_also_a_mast
 fn standalone_phase_env_layers_matching_package_env_build_vars() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let repo = fixtures.join("repo");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-standalone-penv").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-standalone-penv");
     let bin_dir = bin_dir().unwrap().to_path_buf();
     let vars_for = |pkg: &str, pf: &str, phase: &str| {
         let env = compute_environment(
@@ -296,7 +296,7 @@ fn phase_func_name_maps_exactly_portages_phase_func_map() {
 fn standalone_setup_exports_the_eapi_phase_environment() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let repo = fixtures.join("repo");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-env").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-env");
     let bin_dir = bin_dir().unwrap().to_path_buf();
     let vars_for = |phase: &str, extra_env: &[(String, String)]| {
         let env = compute_environment(
@@ -406,7 +406,7 @@ fn standalone_setup_exports_the_eapi_phase_environment() {
 // Portage: eapi.py, _get_eapi_attrs; config.py, environ
 #[test]
 fn old_eapi_closes_the_gated_phase_exports() {
-    let tmp = TempDir::new("ebuild-phases-test-s2-eapi4").keep();
+    let tmp = TempDir::new("ebuild-phases-test-s2-eapi4");
     let _ = std::fs::remove_dir_all(&tmp);
     let repo = tmp.join("repo");
     std::fs::create_dir_all(repo.join("profiles")).unwrap();
@@ -464,7 +464,7 @@ fn old_eapi_closes_the_gated_phase_exports() {
 fn drop_ebuild_phase_pops_only_the_phase_var() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let repo = fixtures.join("repo");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-drop-phase").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-drop-phase");
     let bin_dir = bin_dir().unwrap().to_path_buf();
     let env = compute_environment(
         &repo.join("dev-libs/usebuildpkg/usebuildpkg-1.0.ebuild"),
@@ -519,7 +519,7 @@ fn drop_ebuild_phase_pops_only_the_phase_var() {
 fn brush_setup_script_defines_in_portage_iuse_as_a_function() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
     let repo = fixtures.join("repo");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-brush").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-s2-brush");
     let bin_dir = bin_dir().unwrap().to_path_buf();
     let env = compute_environment(
         &repo.join("dev-libs/usebuildpkg/usebuildpkg-1.0.ebuild"),

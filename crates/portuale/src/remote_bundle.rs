@@ -489,13 +489,12 @@ mod tests {
             .join(name)
     }
 
-    fn tempdir(tag: &str) -> std::path::PathBuf {
+    fn tempdir(tag: &str) -> portage_util::TempDir {
         TempDir::new(&format!(
             "portuale-remote-bundle-{}-{}",
             std::process::id(),
             tag
         ))
-        .keep()
     }
 
     #[test]

@@ -73,7 +73,7 @@ fn read_xpak_metadata_rejects_a_file_with_no_xpak_trailer() {
 #[test]
 fn binpkg_error_classes_mirror_portages_caller() {
     // A trusted outer member that is not a regular file.
-    let g = build_gpkg_entries(&[
+    let (_guard, g) = build_gpkg_entries(&[
         ("pre/gpkg-1", GpkgEntry::File(b"")),
         ("pre/metadata.tar", GpkgEntry::Fifo),
     ]);
@@ -82,7 +82,7 @@ fn binpkg_error_classes_mirror_portages_caller() {
     assert!(err.message().contains("not a regular file"), "{err}");
 
     // A container with no `metadata.tar` member.
-    let g = build_gpkg_entries(&[
+    let (_guard, g) = build_gpkg_entries(&[
         ("pre/gpkg-1", GpkgEntry::File(b"")),
         ("pre/image.tar", GpkgEntry::File(b"x")),
     ]);
@@ -153,7 +153,7 @@ fn read_gpkg_metadata_refuses_inner_links_and_special_members() {
         inner_hardlink("metadata/DESCRIPTION", "metadata/SLOT"),
         inner_special("metadata/DESCRIPTION", tar::EntryType::Fifo),
     ] {
-        let g =
+        let (_guard, g) =
             build_gpkg_with_inner_entries("gen-1.0", &[inner_entry("metadata/SLOT", b"0\n"), bad]);
         verify_gpkg_manifest(&g, &GpgVerify::default()).expect("the crafted container verifies");
         let err = read_gpkg_metadata(&g).unwrap_err();
@@ -173,7 +173,8 @@ fn read_gpkg_metadata_refuses_inner_links_and_special_members() {
 #[test]
 fn read_gpkg_metadata_rejects_outside_names() {
     // An outside name: the old walk ignored the member entirely.
-    let g = build_gpkg_with_inner_entries("gen-1.0", &[inner_entry("other/KEY", b"outside\n")]);
+    let (_guard, g) =
+        build_gpkg_with_inner_entries("gen-1.0", &[inner_entry("other/KEY", b"outside\n")]);
     verify_gpkg_manifest(&g, &GpgVerify::default()).expect("verifies");
     let err = read_gpkg_metadata(&g).unwrap_err();
     assert!(err.is_invalid(), "{err:?}");
@@ -183,7 +184,7 @@ fn read_gpkg_metadata_rejects_outside_names() {
 #[test]
 fn read_gpkg_metadata_reads_nested_keys_and_last_wins_duplicates() {
     // Nested keys read; last duplicate wins (the merge path refuses it).
-    let g = build_gpkg_with_inner_entries(
+    let (_guard, g) = build_gpkg_with_inner_entries(
         "gen-1.0",
         &[
             inner_entry("metadata/sub/KEY", b"nested\n"),

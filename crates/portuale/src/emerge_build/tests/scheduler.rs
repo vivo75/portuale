@@ -16,6 +16,7 @@ fn run_build_scheduler_single_failure_counts_failed_exactly_once() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
 
     let bad = source_entry(
@@ -27,7 +28,7 @@ fn run_build_scheduler_single_failure_counts_failed_exactly_once() {
     let entries = vec![bad];
 
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -101,8 +102,9 @@ fn scope_options(
     system: &[&str],
     scope: crate::pretend::MergeWaitScope,
 ) -> ebuild_merge::MergeOptions {
+    let distdir = tempdir();
     ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.to_path_buf(),
         resolved_config: Some(std::sync::Arc::new(portage_profile::Config {
             system_packages: system.iter().map(|s| s.to_string()).collect(),
@@ -266,9 +268,10 @@ fn cycle_post_merge_dep_does_not_gate_the_build() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -301,6 +304,7 @@ fn pkg_pretend_replays_in_merge_list_order() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     let new = |p: &str| {
         source_entry(
@@ -312,7 +316,7 @@ fn pkg_pretend_replays_in_merge_list_order() {
     };
     let entries = [new("schedppa"), new("schedppb")];
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -352,6 +356,7 @@ fn pkg_pretend_failure_aborts_before_anything_builds() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     let new = |p: &str| {
         source_entry(
@@ -363,7 +368,7 @@ fn pkg_pretend_failure_aborts_before_anything_builds() {
     };
     let entries = vec![new("schedppfail"), new("schedwait")];
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -853,7 +858,7 @@ fn pretend_pass_ignores_a_planted_symlink_and_logs_o_excl_under_t() {
             logged.display()
         );
         assert!(
-            logged.parent() != Some(portage_tmpdir.as_path()),
+            logged.parent() != Some(portage_tmpdir.path()),
             "{name} log is not at the old predictable path: {}",
             logged.display()
         );
@@ -893,6 +898,7 @@ fn pretend_log_is_created_o_excl_under_the_entry_t_dir() {
     let config_root = fixtures_root();
     let repos = find_repos(&config_root).unwrap();
     let root = tempdir();
+    let distdir = tempdir();
     let portage_tmpdir = tempdir();
     let entry = source_entry(
         "schedppa",
@@ -901,7 +907,7 @@ fn pretend_log_is_created_o_excl_under_the_entry_t_dir() {
         },
     );
     let options = ebuild_merge::MergeOptions {
-        distdir: tempdir(),
+        distdir: distdir.path().to_path_buf(),
         config_root: config_root.clone(),
         ..ebuild_merge::MergeOptions::default()
     };
@@ -1135,6 +1141,7 @@ fn pretend_pass_replays_a_real_failing_pretend_output() {
         let config_root = fixtures_root();
         let repos = find_repos(&config_root).unwrap();
         let root = tempdir();
+        let distdir = tempdir();
         let portage_tmpdir = tempdir();
         let new = |p: &str| {
             source_entry(
@@ -1146,7 +1153,7 @@ fn pretend_pass_replays_a_real_failing_pretend_output() {
         };
         let entries = [new("schedppseqa"), new("schedppfail")];
         let options = ebuild_merge::MergeOptions {
-            distdir: tempdir(),
+            distdir: distdir.path().to_path_buf(),
             config_root: config_root.clone(),
             ..ebuild_merge::MergeOptions::default()
         };

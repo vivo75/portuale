@@ -941,13 +941,13 @@ mod tests {
         SPAWN_SERIAL.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn tempdir() -> std::path::PathBuf {
+    fn tempdir() -> TempDir {
         // Unique per call across parallel test threads (pid + counter);
         // the timestamp is a run marker only (see notes).
         static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let dir = TempDir::new(&format!("portage_fetch_test_{}_{}", std::process::id(), n)).keep();
-        fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new(&format!("portage_fetch_test_{}_{}", std::process::id(), n));
+        fs::create_dir_all(dir.path()).unwrap();
         dir
     }
 

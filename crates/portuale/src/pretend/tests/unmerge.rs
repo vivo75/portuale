@@ -4,8 +4,8 @@ use super::*;
 fn execute_unmerge_forwards_quiet_and_noinfo_to_the_info_regen() {
     // Portage: post_emerge.py. `--quiet` and the resolved `noinfo` reach the info regen.
     // Hermetic: an empty removal and a `dir`-only info dir need no host binary.
-    fn scratch_info_root(tag: &str) -> (std::path::PathBuf, String) {
-        let root = TempDir::new(&format!("unmerge_info_wiring_{tag}")).keep();
+    fn scratch_info_root(tag: &str) -> (TempDir, String) {
+        let root = TempDir::new(&format!("unmerge_info_wiring_{tag}"));
         std::fs::create_dir_all(root.join("etc/env.d")).unwrap();
         std::fs::write(
             root.join("etc/env.d/50-test"),
@@ -148,8 +148,8 @@ impl Drop for RestoreFeatures {
 
 /// A scratch config root resolving `FEATURES` from a `make.globals` carrying
 /// `binpkg-multi-instance` plus `make_conf` as `make.conf`.
-fn unmerge_features_probe_root(tag: &str, make_conf: &str) -> std::path::PathBuf {
-    let root = TempDir::new(&format!("unmerge_features_{tag}")).keep();
+fn unmerge_features_probe_root(tag: &str, make_conf: &str) -> TempDir {
+    let root = TempDir::new(&format!("unmerge_features_{tag}"));
     let _ = std::fs::remove_dir_all(&root);
     let repo = root.join("repo");
     let prof = repo.join("profiles/default");

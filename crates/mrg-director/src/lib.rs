@@ -1119,8 +1119,8 @@ mod tests {
 
     /// A fresh scratch dir per test (process id + nanos, so parallel
     /// `cargo test` workers never share one).
-    fn tempdir(prefix: &str) -> std::path::PathBuf {
-        TempDir::new(prefix).keep()
+    fn tempdir(prefix: &str) -> TempDir {
+        TempDir::new(prefix)
     }
 
     /// Arguments of [`write_vdb_entry`].

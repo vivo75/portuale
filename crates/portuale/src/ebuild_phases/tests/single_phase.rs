@@ -6,7 +6,7 @@ use super::*;
 fn run_clean_removes_a_stale_installed_marker_image_and_temp() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-run-clean").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-run-clean");
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
     let builddir = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0");
     std::fs::create_dir_all(builddir.join("image/usr/share/phasepkg")).unwrap();
@@ -53,7 +53,7 @@ fn run_clean_removes_a_stale_installed_marker_image_and_temp() {
 fn run_clean_with_keepwork_keeps_temp_and_workdir_but_still_drops_the_marker() {
     let ebuild_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/repo/dev-libs/phasepkg/phasepkg-1.0.ebuild");
-    let portage_tmpdir = TempDir::new("ebuild-phases-test-run-clean-keepwork").keep();
+    let portage_tmpdir = TempDir::new("ebuild-phases-test-run-clean-keepwork");
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
     let builddir = portage_tmpdir.join("portage/dev-libs/phasepkg-1.0");
     std::fs::create_dir_all(builddir.join("image/usr/share/phasepkg")).unwrap();

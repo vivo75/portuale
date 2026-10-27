@@ -46,7 +46,7 @@ fn filesystem_news_selector_evaluates_one_repo_through_the_seam() {
     // One `FilesystemNews` per repo evaluates validity and relevance over
     // `metadata/news`. Relevant items land in `unread` and `skip`.
     use mrg_director::NewsSelector;
-    let base = TempDir::new("pretend-test-filesystem_news").keep();
+    let base = TempDir::new("pretend-test-filesystem_news");
     let _ = std::fs::remove_dir_all(&base);
     let repo = base.join("repo");
     let root = base.join("root");
@@ -97,7 +97,7 @@ fn filesystem_news_selector_evaluates_one_repo_through_the_seam() {
 #[test]
 fn news_profile_and_keyword_restrictions_match_like_portage() {
     // Portage: news.py, DisplayProfileRestriction and DisplayKeywordRestriction.
-    let root = TempDir::new("pretend-test-news_restrictions").keep();
+    let root = TempDir::new("pretend-test-news_restrictions");
     let context = NewsContext {
         profile: Some("default/linux/amd64/23.0/systemd".to_string()),
         ..test_news_context()
@@ -198,7 +198,7 @@ fn news_profile_path_strips_the_main_repo_profiles_prefix() {
 fn news_counts_follow_portage_count_unread_news_gates() {
     // Portage: news.py. No profile counts nothing; an unusable state dir returns
     // early; the count reads `.unread` as it stands.
-    let base = TempDir::new("pretend-test-news_gates").keep();
+    let base = TempDir::new("pretend-test-news_gates");
     let _ = std::fs::remove_dir_all(&base);
     let root = base.join("root");
     let repo = portage_repo::RepoConfig {
@@ -262,7 +262,7 @@ fn news_counts_follow_portage_count_unread_news_gates() {
 fn news_state_files_get_the_group_write_bit_like_portage() {
     // Portage: news.py. The group-write bits are OR'd onto whatever the umask left.
     use std::os::unix::fs::PermissionsExt;
-    let base = TempDir::new("pretend-test-news_perms").keep();
+    let base = TempDir::new("pretend-test-news_perms");
     let _ = std::fs::remove_dir_all(&base);
     let dir = base.join("var/lib/gentoo/news");
     let context = test_news_context();
@@ -305,7 +305,7 @@ fn unread_news_counts_reuses_the_check_news_evaluation() {
     // Counts reuse the `--check-news` evaluation, over an isolated ROOT sharing
     // the fixture vdb read-only. Nothing is written into the fixtures tree itself.
     let fixtures = fixtures_root();
-    let base = TempDir::new("pretend-test-news_counts").keep();
+    let base = TempDir::new("pretend-test-news_counts");
     let _ = std::fs::remove_dir_all(&base);
     let root = base.join("root");
     std::fs::create_dir_all(root.join("var/lib")).unwrap();
@@ -432,7 +432,7 @@ fn ask_read_news_yes_spawns_eselect_and_continues() {
     );
     use std::io::Write;
     let portuale_bin = built_portuale_bin();
-    let base = TempDir::new("ask_read_news_yes").keep();
+    let base = TempDir::new("ask_read_news_yes");
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let mut env = news_resolve_env(&root, &base.join("pt"));

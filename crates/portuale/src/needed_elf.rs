@@ -1322,8 +1322,8 @@ mod tests {
         );
     }
 
-    fn tempdir() -> std::path::PathBuf {
-        TempDir::new("portuale-needed-elf-test").keep()
+    fn tempdir() -> TempDir {
+        TempDir::new("portuale-needed-elf-test")
     }
 
     #[test]

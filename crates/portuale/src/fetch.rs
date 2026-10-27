@@ -790,8 +790,8 @@ mod tests {
     use portage_util::TempDir;
     use std::fs;
 
-    fn tempdir() -> std::path::PathBuf {
-        let dir = TempDir::new("portuale_fetch_test").keep();
+    fn tempdir() -> TempDir {
+        let dir = TempDir::new("portuale_fetch_test");
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -959,7 +959,7 @@ mod tests {
             &pkg_dir,
             "",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 ..FetchOptions::default()
             },
@@ -985,7 +985,7 @@ mod tests {
             &pkg_dir,
             "https://192.0.2.1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 ..FetchOptions::default()
             },
@@ -1005,7 +1005,7 @@ mod tests {
         let src_uri = "eselect? ( https://192.0.2.1/hello-1.0.tar.gz ) \
                        !eselect? ( https://192.0.2.1/unlisted-1.0.tar.gz )";
         let with_use = |flags: &[&str]| FetchOptions {
-            distdir: distdir.clone(),
+            distdir: distdir.path().to_path_buf(),
             gentoo_mirrors: vec![],
             use_flags: flags.iter().map(|f| f.to_string()).collect(),
             ..FetchOptions::default()
@@ -1058,7 +1058,7 @@ mod tests {
             &pkg_dir,
             &uri,
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 fetch_commands: Some(fetch_commands),
                 ..FetchOptions::default()
@@ -1138,7 +1138,7 @@ mod tests {
             &pkg_dir,
             &uri,
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 fetch_commands: Some(fetch_commands_from_config(&config)),
                 ..FetchOptions::default()
@@ -1165,9 +1165,9 @@ mod tests {
             &pkg_dir,
             "https://192.0.2.1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
-                ro_distdirs: vec![ro.clone()],
+                ro_distdirs: vec![ro.path().to_path_buf()],
                 ..FetchOptions::default()
             },
         )
@@ -1184,13 +1184,15 @@ mod tests {
         assert_eq!(fs::read(&dest).unwrap(), b"hello world");
         // A non-existent RO entry is skipped, not an error. The fallback
         // fetch goes to a closed loopback port, which refuses at once.
+        // A fresh empty distdir: the first one already holds the symlinked file.
+        let fresh = tempdir();
         let err = fetch_src_uri(
             &pkg_dir,
             "http://127.0.0.1:1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: tempdir(),
+                distdir: fresh.path().to_path_buf(),
                 gentoo_mirrors: vec![],
-                ro_distdirs: vec![distdir.join("does-not-exist")],
+                ro_distdirs: vec![fresh.join("does-not-exist")],
                 ..FetchOptions::default()
             },
         );
@@ -1206,7 +1208,7 @@ mod tests {
             &pkg_dir,
             "https://192.0.2.1/nowhere-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 ..FetchOptions::default()
             },
@@ -1229,7 +1231,7 @@ mod tests {
             &pkg_dir,
             &uri,
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 ..FetchOptions::default()
             },
@@ -1305,7 +1307,7 @@ mod tests {
             &pkg_dir,
             &uri,
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 ..FetchOptions::default()
             },
@@ -1333,7 +1335,7 @@ mod tests {
             &pkg_dir,
             &uri,
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 ..FetchOptions::default()
             },
@@ -1375,7 +1377,7 @@ mod tests {
             &pkg_dir,
             "mirror://testmirror/foo-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 ..FetchOptions::default()
             },
@@ -1412,9 +1414,9 @@ mod tests {
             &pkg_dir,
             "mirror://testmirror/foo-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
-                config_root: config_root.clone(),
+                config_root: config_root.path().to_path_buf(),
                 ..FetchOptions::default()
             },
         )
@@ -1439,7 +1441,7 @@ mod tests {
             &pkg_dir,
             "mirror://unknown-name/foo-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 ..FetchOptions::default()
             },
@@ -1465,7 +1467,7 @@ mod tests {
             &pkg_dir,
             "http://127.0.0.1:1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![mirror_root],
                 ..FetchOptions::default()
             },
@@ -1511,7 +1513,7 @@ mod tests {
             &pkg_dir,
             "http://127.0.0.1:1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![mirror_root.clone()],
                 mirror_cache_now: Some(1800000000.5),
                 ..FetchOptions::default()
@@ -1562,7 +1564,7 @@ mod tests {
                 &pkg_dir,
                 "http://127.0.0.1:1/hello-1.0.tar.gz",
                 &FetchOptions {
-                    distdir: distdir.clone(),
+                    distdir: distdir.path().to_path_buf(),
                     gentoo_mirrors: vec![mirror_root.clone()],
                     mirror_cache_now: Some(now),
                     ..FetchOptions::default()
@@ -1600,7 +1602,7 @@ mod tests {
             &pkg_dir,
             &format!("{literal_root}/hello-1.0.tar.gz"),
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![mirror_root.clone()],
                 restrict_primaryuri: true,
                 ..FetchOptions::default()
@@ -1633,7 +1635,7 @@ mod tests {
             &pkg_dir,
             "http://127.0.0.1:1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![mirror_root],
                 restrict_mirror: true,
                 ..FetchOptions::default()
@@ -1667,7 +1669,7 @@ mod tests {
             &pkg_dir,
             "mirror+http://127.0.0.1:1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![mirror_root],
                 restrict_mirror: true,
                 ..FetchOptions::default()
@@ -1705,9 +1707,9 @@ mod tests {
             &pkg_dir,
             "mirror://testmirror/foo-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
-                config_root: config_root.clone(),
+                config_root: config_root.path().to_path_buf(),
                 restrict_mirror: true,
                 ..FetchOptions::default()
             },
@@ -1747,7 +1749,7 @@ mod tests {
                     &pkg_dir,
                     "http://127.0.0.1:1/hello-1.0.tar.gz",
                     &FetchOptions {
-                        distdir: distdir.clone(),
+                        distdir: distdir.path().to_path_buf(),
                         gentoo_mirrors: vec![format!("{}/", mirror_dir.display())],
                         restrict_fetch,
                         ..FetchOptions::default()
@@ -1788,9 +1790,9 @@ mod tests {
             &pkg_dir,
             "http://127.0.0.1:1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![public.display().to_string()],
-                config_root,
+                config_root: config_root.path().to_path_buf(),
                 ..FetchOptions::default()
             },
         )
@@ -1807,12 +1809,13 @@ mod tests {
     fn fetch_src_uri_never_downloads_from_a_slash_rooted_gentoo_mirror() {
         let mirror_dir = tempdir();
         let pkg_dir = tempdir();
+        let distdir = tempdir();
         write_manifest(&pkg_dir, "hello-1.0.tar.gz", 11);
         let err = fetch_src_uri(
             &pkg_dir,
             "http://127.0.0.1:1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: tempdir(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![mirror_dir.display().to_string()],
                 ..FetchOptions::default()
             },
@@ -1853,7 +1856,7 @@ mod tests {
             &pkg_dir,
             "http://127.0.0.1:999/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![mirror.display().to_string()],
                 ..FetchOptions::default()
             },
@@ -1890,7 +1893,7 @@ mod tests {
             // gate, not a connection failure, that stops the fetch.
             &format!("{uri_base} -> hello-1.0.tar.gz"),
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![mirror_root],
                 restrict_fetch: true,
                 ..FetchOptions::default()
@@ -1917,7 +1920,7 @@ mod tests {
             &pkg_dir,
             "https://192.0.2.1/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 restrict_fetch: true,
                 ..FetchOptions::default()
@@ -1941,7 +1944,7 @@ mod tests {
             &pkg_dir,
             &uri,
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 restrict_fetch: true,
                 ..FetchOptions::default()
@@ -1966,8 +1969,9 @@ mod tests {
     }
 
     fn test_options() -> FetchOptions {
+        let distdir = tempdir();
         FetchOptions {
-            distdir: tempdir(),
+            distdir: distdir.path().to_path_buf(),
             gentoo_mirrors: vec![
                 "https://public1.example.com".to_string(),
                 "https://public2.example.com".to_string(),
@@ -2180,7 +2184,7 @@ mod tests {
                 &pkg_dir,
                 &format!("{literal_root}/hello-1.0.tar.gz"),
                 &FetchOptions {
-                    distdir: distdir.clone(),
+                    distdir: distdir.path().to_path_buf(),
                     gentoo_mirrors: vec![m1, m2, m3.clone()],
                     checksum_failure_max_tries: cap,
                     ..FetchOptions::default()
@@ -2251,7 +2255,7 @@ mod tests {
             &pkg_dir,
             &format!("{m1}/distfiles/bad-1.0.tar.gz"),
             &FetchOptions {
-                distdir: distdir.clone(),
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![m2],
                 checksum_failure_max_tries: 2,
                 ..FetchOptions::default()
@@ -2334,7 +2338,7 @@ mod tests {
             &pkg_dir,
             "http://a.example/hello-1.0.tar.gz http://b.example/hello-1.0.tar.gz",
             &FetchOptions {
-                distdir,
+                distdir: distdir.path().to_path_buf(),
                 gentoo_mirrors: vec![],
                 ..FetchOptions::default()
             },
@@ -2389,7 +2393,7 @@ mod tests {
                 &pkg_dir,
                 &literal,
                 &FetchOptions {
-                    distdir,
+                    distdir: distdir.path().to_path_buf(),
                     gentoo_mirrors: vec![public.clone()],
                     restrict_primaryuri,
                     ..FetchOptions::default()
@@ -2432,11 +2436,12 @@ mod tests {
             fs::create_dir_all(&pkg_dir).unwrap();
             write_manifest(&pkg_dir, "foo-1.0.tar.gz", 11);
 
+            let distdir = tempdir();
             let err = fetch_src_uri(
                 &pkg_dir,
                 "mirror://testmirror/foo-1.0.tar.gz",
                 &FetchOptions {
-                    distdir: tempdir(),
+                    distdir: distdir.path().to_path_buf(),
                     gentoo_mirrors: vec![],
                     restrict_primaryuri,
                     ..FetchOptions::default()

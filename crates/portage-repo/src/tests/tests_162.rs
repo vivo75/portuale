@@ -39,8 +39,8 @@ fn bare_cp_rejects_every_non_bare_form() {
 
 /// Fresh unique scratch dir per test (vdb + repo live under it, so
 /// the per-root memo caches never see a reused path).
-fn dir_162(tag: &str) -> std::path::PathBuf {
-    TempDir::new(&format!("portuale-162-{tag}")).keep()
+fn dir_162(tag: &str) -> TempDir {
+    TempDir::new(&format!("portuale-162-{tag}"))
 }
 
 /// One installed instance under `<root>/var/db/pkg` with the given
@@ -63,7 +63,7 @@ fn atoms_162(atoms: &[&str]) -> Vec<String> {
 /// Scratch vdb for the `clean_selection` legs: `multi` spans two
 /// versions in one slot, `single` has one (skipped), `spread`
 /// spans two versions in each of two slots.
-fn clean_root_162() -> std::path::PathBuf {
+fn clean_root_162() -> TempDir {
     let root = dir_162("clean");
     install_162(&root, "dev-libs", "multi-1.0", "0", &[]);
     install_162(&root, "dev-libs", "multi-2.0", "0", &[]);

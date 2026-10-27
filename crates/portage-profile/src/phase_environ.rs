@@ -570,8 +570,8 @@ mod tests {
     /// A synthetic amd64-shaped profile under a temp `config_root` (no
     /// `make.globals`; everything from there is seeded in `make.conf`).
     /// Expected values from Portage (oracle env).
-    fn synthetic_root(name: &str, make_conf: &str) -> (std::path::PathBuf, PathBuf) {
-        let root = TempDir::new(&format!("portage-profile-phase-environ-{name}")).keep();
+    fn synthetic_root(name: &str, make_conf: &str) -> (TempDir, PathBuf) {
+        let root = TempDir::new(&format!("portage-profile-phase-environ-{name}"));
         let _ = fs::remove_dir_all(&root);
         let repo = root.join("repo");
         let prof = repo.join("profiles/default");

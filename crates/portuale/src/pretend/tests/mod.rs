@@ -24,13 +24,13 @@ fn test_news_context() -> NewsContext {
 fn news_notice_test_tree(
     tag: &str,
 ) -> (
-    std::path::PathBuf,
+    TempDir,
     std::path::PathBuf,
     Vec<portage_repo::RepoConfig>,
     portage_profile::Config,
 ) {
     let fixtures = fixtures_root();
-    let base = TempDir::new(&format!("pretend-test-news_notice_{tag}")).keep();
+    let base = TempDir::new(&format!("pretend-test-news_notice_{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let root = base.join("root");
     std::fs::create_dir_all(root.join("var/lib")).unwrap();
@@ -63,8 +63,8 @@ fn news_notice_test_tree(
 
 /// A scratch `ROOT` with a single-item stale resume list, so
 /// `--resume --skipfirst` exits with nothing to do and no merge.
-fn single_resume_root(tag: &str) -> std::path::PathBuf {
-    let root = TempDir::new(&format!("resume_single_{tag}")).keep();
+fn single_resume_root(tag: &str) -> TempDir {
+    let root = TempDir::new(&format!("resume_single_{tag}"));
     crate::mtimedb::write_resume_list(
         &root,
         &["dev-libs/stale-a"],
@@ -146,9 +146,9 @@ fn fixture_repos_conf_text() -> String {
 /// A stub `eselect` on `PATH`, logging its argv to a marker file. Returns the
 /// stub dir (to prepend to `PATH`) and the marker path.
 #[cfg(unix)]
-fn eselect_stub(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+fn eselect_stub(tag: &str) -> (TempDir, std::path::PathBuf) {
     use std::os::unix::fs::PermissionsExt;
-    let dir = TempDir::new(&format!("eselect_stub_{tag}")).keep();
+    let dir = TempDir::new(&format!("eselect_stub_{tag}"));
     let marker = dir.join("eselect.log");
     std::fs::write(
         dir.join("eselect"),
@@ -171,7 +171,7 @@ fn ask_read_news_declined(label: &str, ask_flags: [&str; 2]) -> String {
         stubdir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let base = TempDir::new(&format!("ask_read_news_{label}")).keep();
+    let base = TempDir::new(&format!("ask_read_news_{label}"));
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let mut env = news_resolve_env(&root, &base.join("pt"));
@@ -346,7 +346,7 @@ fn ctrl_c_at_prompt(
     use std::io::Write;
     use std::os::unix::process::ExitStatusExt;
     let portuale_bin = built_portuale_bin();
-    let base = TempDir::new(label).keep();
+    let base = TempDir::new(label);
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let env = make_env(&root, &base.join("pt"));
@@ -405,7 +405,7 @@ fn ask_pretend_unowned_root() -> Option<std::path::PathBuf> {
 /// Portage `true_y_or_n` admits `=True` for these options.
 fn true_spelling_matches_bare(flag_eq_true: &str, flag_bare: &str, atom: &str, expected_rc: i32) {
     let portuale_bin = built_portuale_bin();
-    let base = TempDir::new("true_y_or_n").keep();
+    let base = TempDir::new("true_y_or_n");
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let env = fixture_resolve_env(&root, &base.join("pt"));
@@ -453,8 +453,8 @@ fn built_portuale_bin() -> std::path::PathBuf {
 
 /// A scratch `ROOT` with a stale multi-item resume list. Returns the root plus
 /// the file's bytes before the run under test.
-fn stale_resume_root(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
-    let root = TempDir::new(&format!("resume_no_write_{tag}")).keep();
+fn stale_resume_root(tag: &str) -> (TempDir, Vec<u8>) {
+    let root = TempDir::new(&format!("resume_no_write_{tag}"));
     let stale = vec![
         (
             crate::mtimedb::ResumeEntryKind::Ebuild,

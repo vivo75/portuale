@@ -119,8 +119,8 @@ fn usepkg_dropped_report_lists_only_the_dropped_matches_without_a_reason() {
 
 /// Fresh unique scratch dir per test (vdb lives under it, so the
 /// per-root aux caches never see a reused path).
-fn dir_166(tag: &str) -> std::path::PathBuf {
-    TempDir::new(&format!("portuale-166-{tag}")).keep()
+fn dir_166(tag: &str) -> TempDir {
+    TempDir::new(&format!("portuale-166-{tag}"))
 }
 
 /// One installed instance with the given `BUILD_TIME` (plus `SLOT`,

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn ledger_append_keeps_the_last_ten_lines() {
-    let dir = TempDir::new("portuale-remote-ledger").keep();
+    let dir = TempDir::new("portuale-remote-ledger");
     let path = dir.join("ledger");
     for n in 0..14 {
         ledger_append(&path, &format!("line{n}")).unwrap();

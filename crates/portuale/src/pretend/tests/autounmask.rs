@@ -15,7 +15,7 @@ use super::*;
 #[test]
 fn autounmask_proposes_unmask_for_masked_dep() {
     let portuale_bin = built_portuale_bin();
-    let base = TempDir::new("autounmask_masked_dep").keep();
+    let base = TempDir::new("autounmask_masked_dep");
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     let env = fixture_resolve_env(&root, &base.join("pt"));
@@ -94,7 +94,7 @@ fn autounmask_proposes_unmask_for_masked_dep() {
 fn autounmask_n_and_keep_masks_y_keep_the_plain_masked_block() {
     let portuale_bin = built_portuale_bin();
     for flag in ["--autounmask=n", "--autounmask-keep-masks=y"] {
-        let base = TempDir::new("autounmask_masked_dep_negative").keep();
+        let base = TempDir::new("autounmask_masked_dep_negative");
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let env = fixture_resolve_env(&root, &base.join("pt"));

@@ -414,7 +414,7 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
 
     // An installed instance keeps a self-loop invisible (out of scope: reporting it
     // would flip an outcome-correct resolve into a spurious abort).
-    let root = TempDir::new("portuale-selfloop").keep();
+    let root = TempDir::new("portuale-selfloop");
     let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
     std::fs::create_dir_all(&inst_dir).unwrap();
     std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
@@ -489,7 +489,7 @@ fn cycle_restartable_gates_the_retry_to_fresh_branch_self_loops() {
     ));
 
     // An installed instance of the owner never retries.
-    let root = TempDir::new("portuale-restartable").keep();
+    let root = TempDir::new("portuale-restartable");
     let inst_dir = root.join("var/db/pkg/dev-libs/hcs-1.0");
     std::fs::create_dir_all(&inst_dir).unwrap();
     std::fs::write(inst_dir.join("SLOT"), "0\n").unwrap();
