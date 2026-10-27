@@ -707,6 +707,11 @@ fn print_verified_line(filename: &str, digests: &portage_fetch::DistfileDigests)
 
 /// [`print_verified_line`] for an already-sorted list of checked digest names.
 pub(crate) fn print_verified_names(filename: &str, names: &[&str]) {
+    print!("{}", verified_names_line(filename, names));
+}
+
+/// [`print_verified_names`] as a string, for the pretend pass's staged log.
+pub(crate) fn verified_names_line(filename: &str, names: &[&str]) -> String {
     let color = crate::color::Colorizer::new(crate::color::resolve_havecolor(None));
     let msg = format!("{filename} {} ;-) ...", names.join(" "));
     let columns = std::env::var("COLUMNS")
@@ -715,14 +720,14 @@ pub(crate) fn print_verified_names(filename: &str, names: &[&str]) {
         .filter(|c| *c > 0)
         .unwrap_or(80);
     let pad = columns.saturating_sub(msg.len() + 3 + 7);
-    println!(
-        "{}{msg}{}{}{}{}",
+    format!(
+        "{}{msg}{}{}{}{}\n",
         color.c("INFORM", " * "),
         " ".repeat(pad),
         color.c("BRACKET", "[ "),
         color.c("GOOD", "ok"),
         color.c("BRACKET", " ]"),
-    );
+    )
 }
 
 /// What `fetch(..., listonly=1)` prints for `src_uri`: per file, in `SRC_URI` order, the candidate URIs (mirrors

@@ -1,0 +1,63 @@
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+!!! CONFIG_PROTECT is empty
+emerge: incomplete set configuration, missing set(s): "selected", "system", and "world"
+        This usually means that '/var/tmp/s0-t6-portage-ok/root/usr/share/portage/config/sets/portage.conf'
+        is missing or corrupt.
+        Falling back to default world and system set configuration!!!
+!!! PORTAGE_WORKDIR_MODE is unset, using 0o700.
+!!! PORTAGE_WORKDIR_MODE is unset, using 0o700.
+[ERROR] Exception in callback AsynchronousTask._exit_listener_cb()
+handle: <Handle AsynchronousTask._exit_listener_cb()>
+Traceback (most recent call last):
+  File "/usr/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py", line 208, in _exit_listener_cb
+    listener(self)
+    ~~~~~~~~^^^^^^
+  File "/usr/lib/python3.14/site-packages/_emerge/Binpkg.py", line 173, in _start_fetcher
+    if self.opts.getbinpkg and self._bintree.download_required(pkg.cpv):
+                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/portage/dbapi/bintree.py", line 2727, in download_required
+    or int(remote_metadata["_mtime_"]) != st[stat.ST_MTIME]
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^
+KeyError: '_mtime_'

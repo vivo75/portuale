@@ -31,3 +31,11 @@ the verifier runs before every binary merge): runner rc 0;
 `sys-libs/glibc-2.43-r4` and `app-shells/bash-5.3_p20` merged by both
 PMs, merge_rc 0 both sides; hard findings 0, UNEXPLAINED 0, payload
 diffs 0. Verdict: PASSED.
+
+## Task 6 — remote-binary pkg_pretend in the pass (emerge_getbinpkg.rs, pretend_pass.rs, fetch.rs)
+
+Run `l1-20261027T012438Z` (tree 280e5c5d + Task 6 working-tree change;
+this runner merges with `emerge -k --getbinpkg`, so remote binaries go
+through the new pass fetch): runner rc 0; `sys-libs/glibc-2.43-r4` and
+`app-shells/bash-5.3_p20` merged by both PMs, merge_rc 0 both sides;
+hard findings 0, UNEXPLAINED 0, payload diffs 0. Verdict: PASSED.

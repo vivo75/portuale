@@ -1,0 +1,11 @@
+
+>>> Emerging binary (1 of 1) dev-libs/binpkgpretendpkg-1.0::testrepo for /var/tmp/s0-t6-portuale-ok/root/
+ * binpkgpretendpkg-1.0.tbz2 MD5 SHA1 size ;-) ...                       [ ok ]
+>>> Extracting info
+>>> Extracting dev-libs/binpkgpretendpkg-1.0
+
+>>> Installing (1 of 1) dev-libs/binpkgpretendpkg-1.0::testrepo to /var/tmp/s0-t6-portuale-ok/root/
+
+>>> Completed (1 of 1) dev-libs/binpkgpretendpkg-1.0::testrepo to /var/tmp/s0-t6-portuale-ok/root/
+
+ * GNU info directory index is up-to-date.

@@ -104,8 +104,8 @@ Superseded by `emerge_build/pretend_pass.md` (#577): the mixed pass is
 the shared generic pass over `MixedPretendEntry` now, and the old
 `entries.len().max(1)` became the `--jobs` clamp. The contract below is
 unchanged: source entries via the scheduler helper, local binaries via
-`pretend_binary_entry` on a cloned options, remote/missing binaries
-silent up front (the #579 gap). Pre-#577 shape kept for provenance:
+`pretend_binary_entry` on a cloned options, remote binaries fetched and
+verified up front like Portage (the #579 port). Pre-#577 shape kept for provenance:
 unified parallel pass (threads + merge-list-order replay, same shape as
 `run_pretend_pass`) over `pretend_needs_run` entries; failures abort via
 `Ledger`/`finish` before any merge; on success the merges run on a
@@ -116,16 +116,60 @@ and the `>>> Running pre-merge checks for <cpv>` line (Portage's
 see `emerge_build/pretend_pass.md`.
 - Pins: `mixed_pretend_pass_replays_binary_and_source_in_merge_list_order` (local `.tbz2` + ebuild, both ran, no vdb written), `mixed_pretend_pass_binary_failure_aborts_before_anything_merges` (forced hook death aborts the pass).
 
-## remote-binary pretend gap (#579)
-- Portage fetches a remote binary *inside* the pretend pass
-  (`_run_pkg_pretend_one`, `Scheduler.py:1147-1180`: `download_required`
-  gates a `BinpkgFetcher` + `BinpkgVerifier`, then the metadata unpacks
-  to `build-info` before the `pretend` phase runs), so a remote binary
-  pretends up front in merge-list order like everything else. portuale
-  stays silent for entries with no local file and pretends them inline
-  at merge time instead (the fetch-then-pretend ordering for remote
-  binaries is not ported). No suite shape covers it; porting it is a
-  separate slice, not this one.
+## remote-binary pretend (#579, ported 2026-10-27)
+- Portage fetches and verifies a remote binary *inside* the pretend pass
+  (`lib/_emerge/Scheduler.py:1147-1180`: `download_required` starts a
+  `BinpkgFetcher` and then a `BinpkgVerifier`; the metadata is unpacked to
+  `build-info` before the `pretend` phase), so a remote binary pretends up
+  front, in merge-list order, like every other package. portuale now does
+  the same: `binary_entry_needs_pretend` gates a remote entry on its
+  **remote index record** (`DEFINED_PHASES`, as Portage's `_pkg_needs_pretend`
+  reads `x.metadata`); the pass fetches and verifies it
+  (`fetch_remote_binpkg_for_pretend`), unpacks `build-info` and runs the
+  pretend (`pretend_binary_entry_from_path`); the merge reuses the fetched
+  file (no second download). A verify failure in the pass ends it with
+  Portage's verify-failure block (`Scheduler.py:1206-1212`: `finish(verifier.returncode)`
+  returns before the metadata step): no `build-info`, no pretend phase, no
+  merge, no second download. Order and both failure shapes pinned live
+  against Portage 3.0.83 with a `file://` binhost (`t6/portage-ok`,
+  `t6/portage-fail-pretend`, `t6/portage-bad-digest`).
+- Buffering follows #577: at one job the staged log replays status, then
+  the fetch's verify line (or the failure block with its tail), then the
+  hook output -- Portage's unbuffered order. Above one job the blocks
+  replay in merge-list order at the end, like the rest of the pass.
+- `fetchonly`'s existing `if dest.is_file()` reuse trusts the file without
+  re-verifying; the pass and merge reuse here re-verify (cheap, and a
+  corrupt leftover falls back to a fresh download).
+
+## fn index_record_needs_pretend
+- The shared EAPI/`DEFINED_PHASES` gate for the local stanza and the remote
+  index record alike: EAPI 4+ with `pretend` in `DEFINED_PHASES`, read from
+  the record, never the file -- like Portage's `_pkg_needs_pretend` reading
+  `x.metadata` (`Scheduler.py:938-944`).
+
+## fn fetch_remote_binpkg_for_pretend
+- The pass-side fetch+verify, reusing an already-verified destination file
+  (the merge finds the same file, so nothing is fetched twice). A record
+  without `SIZE` and a checksum is refused after the download with
+  `missing_digests_block`, like `download_and_verify`'s
+  `MissingDigests` arm; a mismatch renames via `checksum_failure_rename`
+  and fails with `digest_failure_block`, like the merge-time local branch.
+  Both print Portage's block plus the `>>> Failed to emerge` tail (no
+  `, Log file`: the pass has no build log, as in the S0 capture) into the
+  staging capture, ahead of any hook output, and return the silent
+  `binpkg_digest_failure` sentinel the pass reports without a second tail.
+
+## fn remote_binpkg_target
+- The download target shared by the pass and the merge (owning binrepo,
+  index record, download directory + destination): one lookup, so the two
+  can never disagree about where the file lands. The errors stay the
+  merge's own missing-file texts.
+
+## fn fetch_binpkg_bytes
+- The fetch half split out of `download_and_verify`: copy/wget to
+  `<dest>.partial` with resume. Verification, the missing-digests guard
+  and the rename stay with each caller (the merge flattens mismatches to
+  one line; the pass prints the block).
 
 ## fn missing_binpkg_block
 - Portage `_emerge/BinpkgVerifier._start`'s `os.stat` ENOENT text (`BinpkgVerifier.py:40-60`, backlog #187), as one block (each line `\n`-terminated, no surrounding blanks -- the bed oracle's bytes): the stale-index arm when the cpv is still in the `<pkgdir>/Packages` index (the file was removed without refreshing it), else Portage's `!!! Fetching Binary failed` arm. Pure shaper, for tests and the `build.log` write alike.

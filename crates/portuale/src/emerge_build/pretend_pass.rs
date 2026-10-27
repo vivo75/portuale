@@ -1,10 +1,10 @@
 //! The up-front `pkg_pretend` pass shared by every merge plan.
 //!
 //! Each merging entry's `pretend` runs before anything builds or merges
-//! (Portage fetches remote binaries here too; portuale still defers that
-//! to the merge). With one job each entry's block replays before the next
-//! starts; with more, the outputs buffer and replay in merge-list order.
-//! A failure aborts before anything builds.
+//! (a remote binary is fetched and verified here first). With one job each
+//! entry's block replays before the next starts; with more, the outputs
+//! buffer and replay in merge-list order. A failure aborts before
+//! anything builds.
 
 use crate::emerge_build::*;
 
@@ -29,10 +29,9 @@ pub(crate) trait PretendEntry: Sync {
 }
 
 /// One entry's pretend run: the replayable `${T}` log with the status
-/// line first (`None` when the entry stays silent, a remote binary with
-/// no file) plus the entry's outcome. The log replays whether the
-/// pretend succeeded or failed; the failure still aborts the pass
-/// before anything builds.
+/// line first (`None` when the entry stays silent) plus the entry's
+/// outcome. The log replays whether the pretend succeeded or failed; the
+/// failure still aborts the pass before anything builds.
 pub(crate) struct PretendRun {
     /// The composed log for the runner to replay and remove.
     pub log: Option<PathBuf>,

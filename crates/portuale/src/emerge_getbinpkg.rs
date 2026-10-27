@@ -848,15 +848,39 @@ fn http_or_summary(failures: &[portage_fetch::QuietFetchError]) -> String {
         })
 }
 
+/// Whether an index record carries a `pkg_pretend` the pass must run:
+/// EAPI 4+ with `pretend` in `DEFINED_PHASES`.
+fn index_record_needs_pretend(record: &std::collections::HashMap<String, String>) -> bool {
+    let get = |key: &str| record.get(key).map(|s| s.trim().to_string());
+    let eapi_ok = !matches!(get("EAPI").as_deref(), Some("0" | "1" | "2" | "3"));
+    let pretend_defined =
+        get("DEFINED_PHASES").is_some_and(|d| d.split_whitespace().any(|p| p == "pretend"));
+    eapi_ok && pretend_defined
+}
+
+/// Arguments of [`binary_entry_needs_pretend`].
+pub(crate) struct BinaryEntryNeedsPretendArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) pkgdir: &'a Path,
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+}
+
 /// Portage's `_pkg_needs_pretend` EAPI/`DEFINED_PHASES` half for a binary
-/// entry with a local `$PKGDIR` file: EAPI 4+ with `pretend` in the
-/// binpkg's `DEFINED_PHASES`. A binary with no local file is not filtered
-/// here (it stays silent up front and pretends inline at merge time);
-/// unreadable metadata fails open so the pretend itself reports. Without
-/// this gate the pass prints `>>> Running pre-merge checks` for binaries
-/// Portage never pretends.
+/// entry: a local `$PKGDIR` file is gated on its `<pkgdir>/Packages`
+/// stanza; a remote entry with no local file is gated on the remote index
+/// record (Portage reads `x.metadata`, the bintree record), like the file
+/// the pass is about to fetch. Unreadable local metadata fails open so the
+/// pretend itself reports; a remote entry with no record stays silent (the
+/// merge reports the missing file).
 // Portage: _emerge/Scheduler.py, `_pkg_needs_pretend`
-fn binary_entry_needs_pretend(entry: &GraphEntry, pkgdir: &Path) -> bool {
+fn binary_entry_needs_pretend(args: BinaryEntryNeedsPretendArgs<'_>) -> bool {
+    let BinaryEntryNeedsPretendArgs {
+        entry,
+        pkgdir,
+        config,
+        root,
+    } = args;
     let Some(version) = crate::emerge_build::entry_version(entry) else {
         return false;
     };
@@ -867,7 +891,27 @@ fn binary_entry_needs_pretend(entry: &GraphEntry, pkgdir: &Path) -> bool {
         version,
         entry.build_id.as_deref(),
     ) else {
-        return false;
+        // No local file: only a remote entry may still pretend, from its
+        // index record. A resumed or fresh local entry with no file fails
+        // at merge, never in the pass.
+        if !entry.remote_binary {
+            return false;
+        }
+        let local = portage_repo::BinaryIndex::from_pkgdir(pkgdir);
+        let remote = mrg_director::RemoteBinhostIndex {
+            config,
+            root,
+            local: &local,
+        };
+        let Some((_, record)) = remote.metadata_with_source_instance(
+            &entry.category,
+            &entry.package,
+            version,
+            entry.build_id.as_deref(),
+        ) else {
+            return false;
+        };
+        return index_record_needs_pretend(&record);
     };
     // The gate reads the `<pkgdir>/Packages` stanza, never the file: a
     // truncated archive still filters exactly like Portage (whose
@@ -885,16 +929,13 @@ fn binary_entry_needs_pretend(entry: &GraphEntry, pkgdir: &Path) -> bool {
         binpkg_path: &binpkg_path,
     });
     let Some(record) = record else { return true };
-    let get = |key: &str| record.get(key).map(|s| s.trim().to_string());
-    let eapi_ok = !matches!(get("EAPI").as_deref(), Some("0" | "1" | "2" | "3"));
-    let pretend_defined =
-        get("DEFINED_PHASES").is_some_and(|d| d.split_whitespace().any(|p| p == "pretend"));
-    eapi_ok && pretend_defined
+    index_record_needs_pretend(&record)
 }
 
 /// Arguments of [`pretend_one_mixed_entry`].
 pub(crate) struct PretendOneMixedEntryArgs<'a> {
     pub(crate) entry: &'a GraphEntry,
+    pub(crate) config: &'a Config,
     pub(crate) repos: &'a [RepoConfig],
     pub(crate) root: &'a Path,
     pub(crate) pkgdir: &'a Path,
@@ -903,15 +944,56 @@ pub(crate) struct PretendOneMixedEntryArgs<'a> {
     pub(crate) log_path: &'a Path,
 }
 
+/// Arguments of [`pretend_binary_entry_from_path`].
+struct PretendBinaryEntryFromPathArgs<'a> {
+    entry: &'a GraphEntry,
+    binpkg_path: &'a Path,
+    version: &'a str,
+    root: &'a Path,
+    portage_tmpdir: &'a Path,
+    merge_options: &'a MergeOptions,
+    log_path: &'a Path,
+}
+
+/// Run one binary entry's up-front `pkg_pretend` from an already-located
+/// (local or just-fetched remote) binpkg file.
+fn pretend_binary_entry_from_path(args: PretendBinaryEntryFromPathArgs<'_>) -> Result<(), String> {
+    let PretendBinaryEntryFromPathArgs {
+        entry,
+        binpkg_path,
+        version,
+        root,
+        portage_tmpdir,
+        merge_options,
+        log_path,
+    } = args;
+    let entry_tmpdir = crate::emerge_build::binary_entry_portage_tmpdir(
+        merge_options,
+        entry,
+        version,
+        portage_tmpdir,
+    );
+    let mut pretend_options = merge_options.clone();
+    pretend_options.log_file = Some(log_path.to_path_buf());
+    crate::ebuild_merge::pretend_binary_entry(crate::ebuild_merge::PretendBinaryEntryArgs {
+        binpkg_path,
+        root,
+        portage_tmpdir: &entry_tmpdir,
+        options: &pretend_options,
+    })
+}
+
 /// One mixed-plan entry's up-front `pkg_pretend`, captured to
 /// `log_path`. Source entries pretend from their ebuild (the scheduler's
 /// own helper); binary entries with a local `$PKGDIR` file pretend from
-/// the extracted binpkg metadata. A binary with no local file (remote or
-/// missing) stays silent here and pretends inline at merge time instead.
+/// the extracted binpkg metadata; a remote entry is fetched and verified
+/// first (the merge reuses the fetched file). A resumed or fresh local
+/// entry with no file stays silent here and fails at merge instead.
 // Portage: _emerge/Scheduler.py, _run_pkg_pretend_one
 fn pretend_one_mixed_entry(args: PretendOneMixedEntryArgs<'_>) -> Result<(), String> {
     let PretendOneMixedEntryArgs {
         entry,
+        config,
         repos,
         root,
         pkgdir,
@@ -939,31 +1021,48 @@ fn pretend_one_mixed_entry(args: PretendOneMixedEntryArgs<'_>) -> Result<(), Str
         version,
         entry.build_id.as_deref(),
     ) else {
-        // Remote or missing: the merge fetches (or errors) and pretends
-        // inline there, like before this pass existed.
-        return Ok(());
+        // No local file: only a remote entry may still pretend, fetched
+        // and verified up front like Portage; the merge reuses the file.
+        // A resumed or fresh local entry with no file fails at merge.
+        if !entry.remote_binary {
+            return Ok(());
+        }
+        let fetched = fetch_remote_binpkg_for_pretend(FetchRemoteBinpkgArgs {
+            entry,
+            version,
+            config,
+            root,
+            pkgdir,
+            log_path,
+            merge_options,
+        })?;
+        return pretend_binary_entry_from_path(PretendBinaryEntryFromPathArgs {
+            entry,
+            binpkg_path: &fetched,
+            version,
+            root,
+            portage_tmpdir,
+            merge_options,
+            log_path,
+        });
     };
-    let entry_tmpdir = crate::emerge_build::binary_entry_portage_tmpdir(
-        merge_options,
+    pretend_binary_entry_from_path(PretendBinaryEntryFromPathArgs {
         entry,
-        version,
-        portage_tmpdir,
-    );
-    let mut pretend_options = merge_options.clone();
-    pretend_options.log_file = Some(log_path.to_path_buf());
-    crate::ebuild_merge::pretend_binary_entry(crate::ebuild_merge::PretendBinaryEntryArgs {
         binpkg_path: &binpkg_path,
+        version,
         root,
-        portage_tmpdir: &entry_tmpdir,
-        options: &pretend_options,
+        portage_tmpdir,
+        merge_options,
+        log_path,
     })
 }
 
 /// One mixed-plan entry plus everything the pretend pass needs for it.
-/// A binary with no local `$PKGDIR` file stays silent up front and
-/// pretends inline at merge time instead (a follow-up owns that gap).
+/// A binary with no local `$PKGDIR` file stays silent up front and fails
+/// at merge instead, unless it is a remote entry (fetched in the pass).
 struct MixedPretendEntry<'a> {
     entry: &'a GraphEntry,
+    config: &'a Config,
     repos: &'a [RepoConfig],
     root: &'a Path,
     pkgdir: &'a Path,
@@ -980,7 +1079,12 @@ impl crate::emerge_build::PretendEntry for MixedPretendEntry<'_> {
             return false;
         }
         if self.entry.source == portage_repo::CandidateSource::Binary {
-            binary_entry_needs_pretend(self.entry, self.pkgdir)
+            binary_entry_needs_pretend(BinaryEntryNeedsPretendArgs {
+                entry: self.entry,
+                pkgdir: self.pkgdir,
+                config: self.config,
+                root: self.root,
+            })
         } else {
             crate::emerge_build::source_entry_needs_pretend(self.entry, self.repos)
         }
@@ -1040,6 +1144,7 @@ impl crate::emerge_build::PretendEntry for MixedPretendEntry<'_> {
                     run: &|staging| {
                         pretend_one_mixed_entry(PretendOneMixedEntryArgs {
                             entry: self.entry,
+                            config: self.config,
                             repos: self.repos,
                             root: self.root,
                             pkgdir: self.pkgdir,
@@ -1145,8 +1250,9 @@ pub fn run_merge_plan(
     };
     // The up-front `pkg_pretend` pass runs before any merge, its outputs
     // replayed in merge-list order; a failure aborts before anything merges.
-    // Source entries and local binaries pretend here; a remote/missing
-    // binary stays silent and pretends inline at merge time.
+    // Source entries and binaries pretend here (a remote binary is fetched
+    // and verified first); a resumed or fresh local entry with no file
+    // fails at merge instead.
     // Portage: _emerge/Scheduler.py, _run_pkg_pretend
     //
     // The pass borrows `merge_options` read-only; the merges below run on a
@@ -1159,6 +1265,7 @@ pub fn run_merge_plan(
             .iter()
             .map(|entry| MixedPretendEntry {
                 entry,
+                config,
                 repos,
                 root,
                 pkgdir,
@@ -1312,44 +1419,37 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
     let binpkg_path = match local {
         Some(path) => path,
         None if entry.remote_binary => {
-            // The remote `Packages` lookup goes through the director's `BinpkgIndex`
-            // seam, which scans the configured binrepos in order; the record travels
-            // with the owning binrepo's name, recovering `sync-uri` and policy below.
-            let local_index = portage_repo::BinaryIndex::from_pkgdir(pkgdir);
-            let remote = mrg_director::RemoteBinhostIndex {
+            let target = remote_binpkg_target(RemoteBinpkgLocationArgs {
+                entry,
+                version: &version,
                 config,
                 root,
-                local: &local_index,
-            };
-            let (binrepo_name, record) = remote
-                .metadata_with_source_instance(
-                    &entry.category,
-                    &entry.package,
-                    &version,
-                    entry.build_id.as_deref(),
+                pkgdir,
+            })?;
+            // The pass fetched and verified this file already (or an
+            // earlier run left it): reuse it instead of downloading again.
+            let filter = checksum_filter_from_config(config);
+            let verified = target.dest.is_file()
+                && crate::binpkg::index_has_size_and_checksum(&target.record)
+                && crate::binpkg::verify_binpkg_against_index(
+                    &target.dest,
+                    &target.record,
+                    filter.as_deref(),
                 )
-                .ok_or_else(|| {
-                    format!(
-                        "{cp}-{version}: no binpkg file under {} and not in any binhost `Packages` index",
-                        pkgdir.display()
-                    )
-                })?;
-            let binrepo = config
-                .binrepos
-                .iter()
-                .find(|b| b.name == binrepo_name)
-                .ok_or_else(|| {
-                    format!("{cp}-{version}: binhost record names unknown repo {binrepo_name:?}")
-                })?;
-            let downloaded = download_and_verify(DownloadAndVerifyArgs {
-                sync_uri: &binrepo.sync_uri,
-                record: &record,
-                category: &entry.category,
-                package: &entry.package,
-                version: &version,
-                pkgdir: &binrepo_download_dir(config, binrepo, &eprefix_from_env(), pkgdir),
-                config,
-            });
+                .is_ok();
+            let downloaded = if verified {
+                Ok(target.dest.clone())
+            } else {
+                download_and_verify(DownloadAndVerifyArgs {
+                    sync_uri: &target.binrepo.sync_uri,
+                    record: &target.record,
+                    category: &entry.category,
+                    package: &entry.package,
+                    version: &version,
+                    pkgdir: &target.dest_dir,
+                    config,
+                })
+            };
             let path = match downloaded {
                 Ok(path) => path,
                 Err(DownloadError::MissingDigests { partial }) => {
@@ -1368,16 +1468,10 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
                 }
                 Err(DownloadError::Other(e)) => return Err(e),
             };
-            let portage_quiet = merge_options
-                .build_env
-                .iter()
-                .rev()
-                .find(|(k, _)| k == "PORTAGE_QUIET")
-                .is_some_and(|(_, v)| v == "1")
-                || std::env::var("PORTAGE_QUIET").as_deref() == Ok("1");
-            let filter = checksum_filter_from_config(config);
+            let portage_quiet = portage_quiet_enabled(merge_options);
             if !portage_quiet
-                && let Some(names) = verified_digest_names_filtered(&record, filter.as_deref())
+                && let Some(names) =
+                    verified_digest_names_filtered(&target.record, filter.as_deref())
             {
                 let names: Vec<&str> = names.iter().map(String::as_str).collect();
                 let file = path
@@ -1391,7 +1485,7 @@ pub(crate) fn merge_one_binary_entry(args: MergeOneBinaryEntryArgs<'_>) -> Resul
                 merge_options.features.clone()
             };
             fetched_verify = Some(crate::binpkg::GpgVerify::from_binrepo(
-                binrepo.verify_signature,
+                target.binrepo.verify_signature,
                 &features,
             ));
             path
@@ -2025,28 +2119,37 @@ impl std::fmt::Display for DownloadError {
     }
 }
 
-/// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into `$PKGDIR`,
-/// then verify it against the index `SIZE` and the `MD5`/`SHA1` fields present.
-/// A mismatch removes the file and fails.
-// Portage: lib/portage/dbapi/bintree.py, gettbz2
-pub(crate) fn download_and_verify(
-    args: DownloadAndVerifyArgs<'_>,
-) -> Result<std::path::PathBuf, DownloadError> {
-    let DownloadAndVerifyArgs {
+/// The default binpkg file name when the index carries no `PATH`.
+fn default_binpkg_rel(category: &str, package: &str, version: &str) -> String {
+    format!("{category}/{package}-{version}.tbz2")
+}
+
+/// Arguments of [`fetch_binpkg_bytes`].
+pub(crate) struct FetchBinpkgBytesArgs<'a> {
+    /// The owning binrepo's `sync-uri`.
+    pub(crate) sync_uri: &'a str,
+    /// The index `PATH` (or the default `<cat>/<pf>.tbz2` name).
+    pub(crate) rel: &'a str,
+    /// The directory the file lands in.
+    pub(crate) dest_dir: &'a Path,
+    /// The resolved `FETCHCOMMAND` family and `PORTAGE_SSH_OPTS`, from the config.
+    pub(crate) config: &'a portage_profile::Config,
+}
+
+/// Copy/wget `<sync_uri>/<rel>` to `<dest_dir>/<rel>.partial` (resuming a
+/// leftover `.partial`), creating the parent dirs. Returns the `.partial`
+/// path; verification and the rename stay with the caller, which differs
+/// between the pass fetch and the merge download.
+pub(crate) fn fetch_binpkg_bytes(
+    args: FetchBinpkgBytesArgs<'_>,
+) -> Result<std::path::PathBuf, String> {
+    let FetchBinpkgBytesArgs {
         sync_uri,
-        record,
-        category,
-        package,
-        version,
-        pkgdir,
+        rel,
+        dest_dir,
         config,
     } = args;
-    let rel = record
-        .get("PATH")
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .unwrap_or_else(|| format!("{category}/{package}-{version}.tbz2"));
-    let final_dest = pkgdir.join(&rel);
+    let final_dest = dest_dir.join(rel);
     if let Some(parent) = final_dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -2081,7 +2184,7 @@ pub(crate) fn download_and_verify(
             uri: &uri,
             dest: &dest,
             resume,
-            distdir: dest.parent().unwrap_or(pkgdir),
+            distdir: dest.parent().unwrap_or(dest_dir),
             vars: portage_fetch::FetchCommandVars {
                 digests: None,
                 portage_ssh_opts: ssh_opts.as_deref(),
@@ -2089,6 +2192,37 @@ pub(crate) fn download_and_verify(
             commands: &commands,
         })?;
     }
+    Ok(dest)
+}
+
+/// Fetch `<sync_uri>/<PATH>` (or the default `<cat>/<pf>.tbz2`) into `$PKGDIR`,
+/// then verify it against the index `SIZE` and the `MD5`/`SHA1` fields present.
+/// A mismatch removes the file and fails.
+// Portage: lib/portage/dbapi/bintree.py, gettbz2
+pub(crate) fn download_and_verify(
+    args: DownloadAndVerifyArgs<'_>,
+) -> Result<std::path::PathBuf, DownloadError> {
+    let DownloadAndVerifyArgs {
+        sync_uri,
+        record,
+        category,
+        package,
+        version,
+        pkgdir,
+        config,
+    } = args;
+    let rel = record
+        .get("PATH")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_else(|| default_binpkg_rel(category, package, version));
+    let final_dest = pkgdir.join(&rel);
+    let dest = fetch_binpkg_bytes(FetchBinpkgBytesArgs {
+        sync_uri,
+        rel: &rel,
+        dest_dir: pkgdir,
+        config,
+    })?;
 
     // A remote record needs both a SIZE and a checksum; one without leaves
     // nothing to compare against. Refused after the download, with the
@@ -2126,6 +2260,246 @@ pub(crate) fn download_and_verify(
     }
     std::fs::rename(&dest, &final_dest).map_err(|e| format!("{}: {e}", final_dest.display()))?;
     Ok(final_dest)
+}
+
+/// Arguments of [`remote_binpkg_target`].
+pub(crate) struct RemoteBinpkgLocationArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) version: &'a str,
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) pkgdir: &'a Path,
+}
+
+/// A remote entry's download target: the owning binrepo (cloned), its
+/// index record, and the destination file (the binrepo's download
+/// directory plus the index `PATH`, else the default name). The `Packages`
+/// lookup goes through the director's `BinpkgIndex` seam, which scans the
+/// configured binrepos in order; the record travels with the owning
+/// binrepo's name. Shared by the pass fetch and the merge download, so the
+/// merge reuses the pass's file instead of downloading a second time. The
+/// errors are the merge's own missing-file texts.
+// Portage: _emerge/Binpkg.py, _start_fetcher; bintree, getname
+pub(crate) struct RemoteBinpkgTarget {
+    pub(crate) binrepo: BinRepo,
+    pub(crate) record: std::collections::HashMap<String, String>,
+    /// The binrepo's download directory (`location`, `$PKGDIR` for a
+    /// `PORTAGE_BINHOST` repo, else the `var/cache/binhost` dir).
+    pub(crate) dest_dir: std::path::PathBuf,
+    pub(crate) dest: std::path::PathBuf,
+}
+
+/// The download target of a remote entry (see [`RemoteBinpkgTarget`]).
+// Portage: _emerge/Binpkg.py, _start_fetcher
+pub(crate) fn remote_binpkg_target(
+    args: RemoteBinpkgLocationArgs<'_>,
+) -> Result<RemoteBinpkgTarget, String> {
+    let RemoteBinpkgLocationArgs {
+        entry,
+        version,
+        config,
+        root,
+        pkgdir,
+    } = args;
+    let cp = format!("{}/{}", entry.category, entry.package);
+    let local = portage_repo::BinaryIndex::from_pkgdir(pkgdir);
+    let remote = mrg_director::RemoteBinhostIndex {
+        config,
+        root,
+        local: &local,
+    };
+    let (binrepo_name, record) = remote
+        .metadata_with_source_instance(
+            &entry.category,
+            &entry.package,
+            version,
+            entry.build_id.as_deref(),
+        )
+        .ok_or_else(|| {
+            format!(
+                "{cp}-{version}: no binpkg file under {} and not in any binhost `Packages` index",
+                pkgdir.display()
+            )
+        })?;
+    let binrepo = config
+        .binrepos
+        .iter()
+        .find(|b| b.name == binrepo_name)
+        .cloned()
+        .ok_or_else(|| {
+            format!("{cp}-{version}: binhost record names unknown repo {binrepo_name:?}")
+        })?;
+    let rel = record
+        .get("PATH")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_else(|| default_binpkg_rel(&entry.category, &entry.package, version));
+    let dest_dir = binrepo_download_dir(config, &binrepo, &eprefix_from_env(), pkgdir);
+    let dest = dest_dir.join(&rel);
+    Ok(RemoteBinpkgTarget {
+        binrepo,
+        record,
+        dest_dir,
+        dest,
+    })
+}
+
+/// Whether `PORTAGE_QUIET=1` silences the verifier's success line: the
+/// merge env first, then the process env.
+// Portage: _emerge/BinpkgVerifier.py, _digester_exit
+pub(crate) fn portage_quiet_enabled(merge_options: &MergeOptions) -> bool {
+    merge_options
+        .build_env
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "PORTAGE_QUIET")
+        .is_some_and(|(_, v)| v == "1")
+        || std::env::var("PORTAGE_QUIET").as_deref() == Ok("1")
+}
+
+/// Append `text` to a pretend pass staging capture (created by the runner
+/// before the entry runs).
+fn append_pretend_log(log_path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .and_then(|mut file| file.write_all(text.as_bytes()))
+        .map_err(|e| format!("{}: {e}", log_path.display()))
+}
+
+/// Arguments of [`fetch_remote_binpkg_for_pretend`].
+pub(crate) struct FetchRemoteBinpkgArgs<'a> {
+    pub(crate) entry: &'a GraphEntry,
+    pub(crate) version: &'a str,
+    pub(crate) config: &'a Config,
+    pub(crate) root: &'a Path,
+    pub(crate) pkgdir: &'a Path,
+    /// This entry's staging capture: the verifier's success line (or the
+    /// failure block with its tail) lands here, ahead of the hook output.
+    pub(crate) log_path: &'a Path,
+    /// Merge options, for the `PORTAGE_QUIET` check on the success line.
+    pub(crate) merge_options: &'a MergeOptions,
+}
+
+/// Fetch and verify a remote binary for the up-front pretend pass, reusing
+/// an already-verified file the pass (or an earlier run) left in the
+/// binrepo download directory, so the hook pretends from the fetched
+/// bytes. The verifier's success line -- or, on failure, Portage's
+/// failure block with the `>>> Failed to emerge` tail -- is appended to
+/// the staging capture; a failure returns the silent sentinel the pass
+/// reports without a second tail.
+// Portage: _emerge/Scheduler.py, _run_pkg_pretend_one (the `x.built` arm:
+// BinpkgFetcher, then BinpkgVerifier, then the metadata unpack)
+pub(crate) fn fetch_remote_binpkg_for_pretend(
+    args: FetchRemoteBinpkgArgs<'_>,
+) -> Result<std::path::PathBuf, String> {
+    let FetchRemoteBinpkgArgs {
+        entry,
+        version,
+        config,
+        root,
+        pkgdir,
+        log_path,
+        merge_options,
+    } = args;
+    let cpv = format!("{}/{}-{version}", entry.category, entry.package);
+    let failed = |output: String| -> Result<std::path::PathBuf, String> {
+        append_pretend_log(log_path, &output)?;
+        Err(binpkg_digest_failure(&cpv))
+    };
+    let target = match remote_binpkg_target(RemoteBinpkgLocationArgs {
+        entry,
+        version,
+        config,
+        root,
+        pkgdir,
+    }) {
+        Ok(target) => target,
+        Err(_) => {
+            // The gate saw a record, so the index lost it mid-run; report
+            // it like the merge reports a missing file (no build log in
+            // the pass).
+            let block = missing_binpkg_block(
+                &cpv,
+                local_index_lists_cpv(
+                    pkgdir,
+                    &entry.category,
+                    &entry.package,
+                    version,
+                    entry.build_id.as_deref(),
+                ),
+            );
+            let mut output = block;
+            output.push_str(&failed_pkg_msg(&cpv, root, None));
+            return failed(output);
+        }
+    };
+    let filter = checksum_filter_from_config(config);
+    let success_line = |dest: &Path| -> Result<(), String> {
+        if portage_quiet_enabled(merge_options) {
+            return Ok(());
+        }
+        let Some(names) = verified_digest_names_filtered(&target.record, filter.as_deref()) else {
+            return Ok(());
+        };
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let file = dest
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        append_pretend_log(log_path, &crate::fetch::verified_names_line(&file, &names))
+    };
+    // A verified file the pass (or an earlier run) left behind is reused:
+    // the merge finds the same file, so nothing is fetched twice.
+    if crate::binpkg::index_has_size_and_checksum(&target.record)
+        && target.dest.is_file()
+        && crate::binpkg::verify_binpkg_against_index(
+            &target.dest,
+            &target.record,
+            filter.as_deref(),
+        )
+        .is_ok()
+    {
+        success_line(&target.dest)?;
+        return Ok(target.dest);
+    }
+    let rel = target
+        .record
+        .get("PATH")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_else(|| default_binpkg_rel(&entry.category, &entry.package, version));
+    // A fetch failure carries the merge's one-line text, with no block:
+    // the merge reports it the same way.
+    let partial = fetch_binpkg_bytes(FetchBinpkgBytesArgs {
+        sync_uri: &target.binrepo.sync_uri,
+        rel: &rel,
+        dest_dir: &target.dest_dir,
+        config,
+    })?;
+    // A remote record needs both a SIZE and a checksum; one without leaves
+    // nothing to compare against. Refused after the download, with the
+    // `.partial` left in place.
+    // Portage: _emerge/BinpkgVerifier.py, _start
+    if !crate::binpkg::index_has_size_and_checksum(&target.record) {
+        let mut output = crate::binpkg::missing_digests_block(&partial);
+        output.push_str(&failed_pkg_msg(&cpv, root, None));
+        return failed(output);
+    }
+    if let Err(mismatch) =
+        crate::binpkg::verify_binpkg_against_index(&partial, &target.record, filter.as_deref())
+    {
+        let renamed =
+            crate::binpkg::checksum_failure_rename(&partial).unwrap_or_else(|| partial.clone());
+        let mut output = crate::binpkg::digest_failure_block(&partial, &mismatch, &renamed);
+        output.push_str(&failed_pkg_msg(&cpv, root, None));
+        return failed(output);
+    }
+    std::fs::rename(&partial, &target.dest)
+        .map_err(|e| format!("{}: {e}", target.dest.display()))?;
+    success_line(&target.dest)?;
+    Ok(target.dest)
 }
 
 #[cfg(test)]
@@ -5156,6 +5530,172 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// A digest mismatch on the file the pass fetched ends the pass with
+    /// Portage's verify-failure block: no `build-info` is unpacked, no
+    /// `pretend` phase runs, nothing merges, and nothing is downloaded a
+    /// second time. Ground: `t6/portage-bad-digest` (the `!!!
+    /// Digest verification failed:` block naming the `.partial` path,
+    /// `Got`/`Expected`, the `File renamed to ...` line, then
+    /// `>>> Failed to emerge ... for <root>/` with no `, Log file:` tail,
+    /// rc 1, nothing merged) and `lib/_emerge/Scheduler.py:1206-1212`
+    /// (`finish(verifier.returncode)` returns before the metadata step).
+    #[test]
+    fn remote_binary_verify_failure_aborts_before_anything_merges() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&pkgdir).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+
+        let tbz2 = std::fs::read(fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"))
+            .unwrap();
+        // The index lies about the size (S0(c) used 12345 for these bytes),
+        // so the pass's verify fails like Portage's `BinpkgVerifier`.
+        let index = "TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 1\n\n\
+             CPV: dev-libs/binpkgpretendpkg-1.0\nDEFINED_PHASES: install postinst preinst pretend setup\n\
+             EAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgpretendpkg-1.0.tbz2\nREPO: testrepo\n\
+             SIZE: 12345\nMD5: 2891327f6efd7961432a0a2434431ade\nSHA1: e4d92ef1d47b305068a4efcc32a21abf27ace619\nSLOT: 0\nUSE:\n\n"
+            .to_string();
+        let mut routes = HashMap::new();
+        routes.insert("/Packages".to_string(), index.into_bytes());
+        routes.insert("/dev-libs/binpkgpretendpkg-1.0.tbz2".to_string(), tbz2);
+        // Refresh tries Packages.gz + Packages.zst (both 404 here) before
+        // the plain Packages, then one binpkg download per pass run = 5
+        // connections: the explicit pass below plus the plan's own pass.
+        // Any merge download would hit a closed stub.
+        let (base, _h) = serve(routes, 5);
+
+        let cache = tmp.join("cache");
+        let binrepos = vec![BinRepo {
+            name: "test".into(),
+            sync_uri: base.clone(),
+            priority: 1,
+            location: Some(cache.to_string_lossy().to_string()),
+            // `false`: the tests serve a `.tbz2`, which Portage 3.0.83
+            // ignores from a verifying repo (`gpkg_only`).
+            verify_signature: false,
+            frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
+        }];
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: &binrepos,
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
+
+        let config = Config {
+            binrepos: binrepos.clone(),
+            pkgdir: pkgdir.to_string_lossy().to_string(),
+            ..Config::default()
+        };
+        let mut entry = graph_entry("binpkgpretendpkg", CandidateSource::Binary, "1.0");
+        entry.remote_binary = true;
+
+        let config_root = fixtures_root();
+        let repos = portage_repo::find_repos(&config_root).unwrap();
+        let options = MergeOptions {
+            distdir: tmp.join("distdir"),
+            config_root: config_root.clone(),
+            ..MergeOptions::default()
+        };
+        let wrapped = [MixedPretendEntry {
+            entry: &entry,
+            config: &config,
+            repos: &repos,
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            options: &options,
+        }];
+        let mut replay: Vec<u8> = Vec::new();
+        let failures =
+            crate::emerge_build::run_pretend_pass(crate::emerge_build::RunPretendPassArgs {
+                entries: &wrapped,
+                jobs: 1,
+                replay: &mut replay,
+            });
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].0, 0);
+        assert!(
+            is_binpkg_digest_failure(&failures[0].1),
+            "the silent sentinel, got: {}",
+            failures[0].1
+        );
+        let text = String::from_utf8_lossy(&replay);
+        assert!(
+            text.contains(">>> Running pre-merge checks for dev-libs/binpkgpretendpkg-1.0"),
+            "the pass got that far:\n{text}"
+        );
+        assert!(
+            text.contains("!!! Digest verification failed:"),
+            "Portage's block:\n{text}"
+        );
+        assert!(text.contains("!!! Got: 3394"), "actual size:\n{text}");
+        assert!(text.contains("!!! Expected: 12345"), "index size:\n{text}");
+        assert!(
+            text.contains(">>> Failed to emerge dev-libs/binpkgpretendpkg-1.0 for "),
+            "the tail:\n{text}"
+        );
+        assert!(
+            !text.contains("Log file:"),
+            "no build log, like Portage:\n{text}"
+        );
+        // The whole plan aborts: the merge never runs, so nothing is
+        // downloaded a second time (the stub served exactly 4 connections).
+        let err = run_merge_plan(RunMergePlanArgs {
+            entries: &[entry],
+            config: &config,
+            repos: &repos,
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            merge_options: &options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            jobs: 1,
+            mode: crate::emerge_build::StatusMode::for_tests(),
+        })
+        .expect_err("a verify failure in the pass aborts the plan");
+        assert_eq!(err.to_string(), "failed packages already reported");
+        assert!(
+            !root
+                .join("var/db/pkg/dev-libs/binpkgpretendpkg-1.0")
+                .exists(),
+            "nothing merged"
+        );
+        assert!(
+            !root.join("usr/share/binpkgpretendpkg/payload.txt").exists(),
+            "the image never landed"
+        );
+        let leftovers: Vec<_> = portage_util::read_dir_paths(&cache.join("dev-libs")).unwrap();
+        assert!(
+            leftovers.len() == 1
+                && leftovers[0]
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(
+                        |n| n.starts_with("binpkgpretendpkg-1.0.tbz2.partial._checksum_failure_.")
+                    ),
+            "renamed, not re-downloaded: {leftovers:?}"
+        );
+        assert!(
+            portage_util::read_dir_entries(&pkgdir).unwrap().is_empty(),
+            "nothing was fetched into $PKGDIR"
+        );
+        portage_repo::set_remote_binary_index_override(
+            &config.binrepos[0].packages_dir(&root),
+            None,
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn run_merge_plan_upgrades_over_an_installed_binpkg() {
         let tmp = tempdir();
@@ -5527,6 +6067,10 @@ mod mixed_pretend_tests {
             config_root: config_root.clone(),
             ..MergeOptions::default()
         };
+        let config = Config {
+            pkgdir: pkgdir.to_string_lossy().to_string(),
+            ..Config::default()
+        };
         let entries = [
             graph_entry("binpkgpretendpkg", CandidateSource::Binary, "1.0"),
             graph_entry("schedppa", CandidateSource::Ebuild, "1.0"),
@@ -5537,6 +6081,7 @@ mod mixed_pretend_tests {
             .iter()
             .map(|entry| MixedPretendEntry {
                 entry,
+                config: &config,
                 repos: &repos,
                 root: &root,
                 pkgdir: &pkgdir,
@@ -5610,6 +6155,10 @@ mod mixed_pretend_tests {
             config_root: config_root.clone(),
             ..MergeOptions::default()
         };
+        let config = Config {
+            pkgdir: pkgdir.to_string_lossy().to_string(),
+            ..Config::default()
+        };
         let entries = [
             graph_entry("binpkgpretendpkg", CandidateSource::Binary, "1.0"),
             graph_entry("schedppa", CandidateSource::Ebuild, "1.0"),
@@ -5620,6 +6169,7 @@ mod mixed_pretend_tests {
             .iter()
             .map(|entry| MixedPretendEntry {
                 entry,
+                config: &config,
                 repos: &repos,
                 root: &root,
                 pkgdir: &pkgdir,
@@ -5639,6 +6189,364 @@ mod mixed_pretend_tests {
             failures[0].1.contains("pkg_pretend failed"),
             "{}",
             failures[0].1
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A `file://` binhost serving the `binpkgpretendpkg` fixture: the
+    /// committed `.tbz2` bytes with the stanza a live index would carry
+    /// (`pretend` in `DEFINED_PHASES`, like the binpkg's own metadata).
+    /// The `SIZE`/`MD5`/`SHA1` are the fixture's own (`md5sum`/`sha1sum`,
+    /// not invented); `size_override` stands in for a corrupt index row.
+    fn pretend_binhost(binhost: &Path, size_override: Option<u64>) {
+        std::fs::create_dir_all(binhost.join("dev-libs")).unwrap();
+        std::fs::copy(
+            fixtures_root().join("pkgdir/dev-libs/binpkgpretendpkg-1.0.tbz2"),
+            binhost.join("dev-libs/binpkgpretendpkg-1.0.tbz2"),
+        )
+        .unwrap();
+        let size = size_override.unwrap_or(3394);
+        let stanza = format!(
+            "CPV: dev-libs/binpkgpretendpkg-1.0\nDEFINED_PHASES: install postinst preinst pretend setup\n\
+             EAPI: 8\nKEYWORDS: amd64\nPATH: dev-libs/binpkgpretendpkg-1.0.tbz2\nREPO: testrepo\n\
+             SIZE: {size}\nMD5: 2891327f6efd7961432a0a2434431ade\nSHA1: e4d92ef1d47b305068a4efcc32a21abf27ace619\nSLOT: 0\nUSE:"
+        );
+        std::fs::write(
+            binhost.join("Packages"),
+            format!("TIMESTAMP: 0\nVERSION: 0\nPACKAGES: 1\n\n{stanza}\n\n"),
+        )
+        .unwrap();
+    }
+
+    fn remote_graph_entry(package: &str, version: &str) -> GraphEntry {
+        let mut entry = graph_entry(package, CandidateSource::Binary, version);
+        entry.remote_binary = true;
+        entry
+    }
+
+    fn pretend_binrepo(binhost: &Path, cache: &Path) -> BinRepo {
+        BinRepo {
+            name: "test".into(),
+            sync_uri: format!("file://{}", binhost.display()),
+            priority: 1,
+            location: Some(cache.to_string_lossy().to_string()),
+            // `false`: a verifying repo would drop the `.tbz2` under
+            // `gpkg_only`; policy is covered by the `gpkg_only` unit tests.
+            verify_signature: false,
+            frozen: false,
+            fetchcommand: None,
+            resumecommand: None,
+            getbinpkg_exclude: Vec::new(),
+            getbinpkg_include: Vec::new(),
+        }
+    }
+
+    /// A remote binary whose index record carries `pretend` pretends up
+    /// front in the pass, in merge-list order, before anything merges: the
+    /// pass fetches and verifies it (the `MD5 SHA1 size` line) and runs its
+    /// hook from the fetched metadata. Ground: `t6/portage-ok` (Portage's
+    /// `>>> Running pre-merge checks`, then the verifier's `;-) ...
+    /// [ ok ]`, then `>>> Emerging binary`) and
+    /// `lib/_emerge/Scheduler.py:1147-1180` (fetch, then verify, then
+    /// unpack to `build-info` before the `pretend` phase).
+    #[test]
+    fn remote_binary_pretends_in_the_pass_before_any_merge() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        let binhost = tmp.join("binhost");
+        let cache = tmp.join("cache");
+        pretend_binhost(&binhost, None);
+
+        let binrepos = vec![pretend_binrepo(&binhost, &cache)];
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: &binrepos,
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
+        let config = Config {
+            binrepos,
+            pkgdir: pkgdir.to_string_lossy().to_string(),
+            ..Config::default()
+        };
+
+        let config_root = fixtures_root();
+        let repos = portage_repo::find_repos(&config_root).unwrap();
+        let options = MergeOptions {
+            distdir: tmp.join("distdir"),
+            config_root: config_root.clone(),
+            ..MergeOptions::default()
+        };
+        let entries = [
+            remote_graph_entry("binpkgpretendpkg", "1.0"),
+            graph_entry("schedppa", CandidateSource::Ebuild, "1.0"),
+        ];
+        let mut replay: Vec<u8> = Vec::new();
+        let portage_tmpdir = tmp.join("portage_tmpdir");
+        let wrapped: Vec<MixedPretendEntry<'_>> = entries
+            .iter()
+            .map(|entry| MixedPretendEntry {
+                entry,
+                config: &config,
+                repos: &repos,
+                root: &root,
+                pkgdir: &pkgdir,
+                portage_tmpdir: &portage_tmpdir,
+                options: &options,
+            })
+            .collect();
+        let failures =
+            crate::emerge_build::run_pretend_pass(crate::emerge_build::RunPretendPassArgs {
+                entries: &wrapped,
+                jobs: 2,
+                replay: &mut replay,
+            });
+        assert!(failures.is_empty(), "{failures:?}");
+        let text = String::from_utf8_lossy(&replay);
+        // Portage's pass order: the status line, then the fetch's verify
+        // line, then the pretend output -- binary before source.
+        let status = text
+            .find(">>> Running pre-merge checks for dev-libs/binpkgpretendpkg-1.0")
+            .expect("binary status line replays");
+        let verified = text
+            .find("binpkgpretendpkg-1.0.tbz2 MD5 SHA1 size ;-)")
+            .expect("verify line replays");
+        assert!(status < verified, "status before verify:\n{text}");
+        assert!(text.contains("[ ok ]"), "verify ok:\n{text}");
+        let source = text
+            .find(">>> Running pre-merge checks for dev-libs/schedppa-1.0")
+            .expect("source status line replays");
+        assert!(verified < source, "merge-list order, binary first:\n{text}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("var/lib/binpkgpretendpkg.log")).unwrap(),
+            "pretend\n",
+            "the hook ran up front, from the fetched metadata"
+        );
+        assert!(
+            cache.join("dev-libs/binpkgpretendpkg-1.0.tbz2").is_file(),
+            "the pass fetched the remote binary"
+        );
+        assert!(
+            !root
+                .join("var/db/pkg/dev-libs/binpkgpretendpkg-1.0")
+                .exists(),
+            "the pass pretends without merging"
+        );
+        portage_repo::set_remote_binary_index_override(
+            &config.binrepos[0].packages_dir(&root),
+            None,
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A dying remote pretend aborts the plan before anything merges.
+    /// Ground: `t6/portage-fail-pretend` (Portage's `* ERROR ... failed
+    /// (pretend phase)`, then `>>> Failed to emerge ... Log file:`, rc 1,
+    /// no `>>> Emerging binary`) and `lib/_emerge/Scheduler.py:1310-1315`
+    /// (the pretend phase runs before any merge).
+    #[test]
+    fn remote_binary_pretend_failure_aborts_before_anything_merges() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        let binhost = tmp.join("binhost");
+        let cache = tmp.join("cache");
+        pretend_binhost(&binhost, None);
+        // The fixture's `pkg_pretend` dies when the payload is already
+        // visible: pre-create it to force the failure.
+        let payload = root.join("usr/share/binpkgpretendpkg/payload.txt");
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(&payload, "already here\n").unwrap();
+
+        let binrepos = vec![pretend_binrepo(&binhost, &cache)];
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: &binrepos,
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
+        let config = Config {
+            binrepos,
+            pkgdir: pkgdir.to_string_lossy().to_string(),
+            ..Config::default()
+        };
+
+        let config_root = fixtures_root();
+        let repos = portage_repo::find_repos(&config_root).unwrap();
+        let options = MergeOptions {
+            distdir: tmp.join("distdir"),
+            config_root: config_root.clone(),
+            ..MergeOptions::default()
+        };
+        let entries = [remote_graph_entry("binpkgpretendpkg", "1.0")];
+        let mut replay: Vec<u8> = Vec::new();
+        let portage_tmpdir = tmp.join("portage_tmpdir");
+        let wrapped: Vec<MixedPretendEntry<'_>> = entries
+            .iter()
+            .map(|entry| MixedPretendEntry {
+                entry,
+                config: &config,
+                repos: &repos,
+                root: &root,
+                pkgdir: &pkgdir,
+                portage_tmpdir: &portage_tmpdir,
+                options: &options,
+            })
+            .collect();
+        let failures =
+            crate::emerge_build::run_pretend_pass(crate::emerge_build::RunPretendPassArgs {
+                entries: &wrapped,
+                jobs: 1,
+                replay: &mut replay,
+            });
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].0, 0);
+        assert!(
+            failures[0].1.contains("pkg_pretend failed"),
+            "{}",
+            failures[0].1
+        );
+        let text = String::from_utf8_lossy(&replay);
+        assert!(
+            text.contains(">>> Running pre-merge checks for dev-libs/binpkgpretendpkg-1.0"),
+            "status line replays:\n{text}"
+        );
+        assert!(
+            text.contains("pkg_pretend ran after the image was merged"),
+            "the hook's death replays:\n{text}"
+        );
+        // The whole plan aborts: the merge never runs.
+        let err = run_merge_plan(RunMergePlanArgs {
+            entries: &entries,
+            config: &config,
+            repos: &repos,
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            merge_options: &options,
+            keep_going: false,
+            buildpkg: None,
+            buildpkg_exclude: &[],
+            jobs: 1,
+            mode: crate::emerge_build::StatusMode::for_tests(),
+        })
+        .expect_err("a failing remote pretend aborts the plan");
+        assert!(
+            err.to_string().contains("pkg_pretend failed"),
+            "the failure, not a silent sentinel, got: {err}"
+        );
+        assert!(
+            !root
+                .join("var/db/pkg/dev-libs/binpkgpretendpkg-1.0")
+                .exists(),
+            "nothing merged"
+        );
+        assert!(
+            !root.join("var/lib/binpkgpretendpkg.log").exists(),
+            "the hook died before appending"
+        );
+        portage_repo::set_remote_binary_index_override(
+            &config.binrepos[0].packages_dir(&root),
+            None,
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The merge reuses the file the pass fetched: no second download.
+    /// Ground: `t6/portage-ok` (one fetch in the pass, then the merge goes
+    /// straight to `>>> Emerging binary`) and
+    /// `lib/_emerge/Scheduler.py:1154-1180` (the pass owns the fetch; the
+    /// merge finds the file local).
+    #[test]
+    fn remote_binary_is_fetched_once() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let pkgdir = tmp.join("pkgdir");
+        std::fs::create_dir_all(&pkgdir).unwrap();
+        let binhost = tmp.join("binhost");
+        let cache = tmp.join("cache");
+        pretend_binhost(&binhost, None);
+
+        let binrepos = vec![pretend_binrepo(&binhost, &cache)];
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: &binrepos,
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
+        let config = Config {
+            binrepos,
+            pkgdir: pkgdir.to_string_lossy().to_string(),
+            ..Config::default()
+        };
+
+        let config_root = fixtures_root();
+        let repos = portage_repo::find_repos(&config_root).unwrap();
+        let options = MergeOptions {
+            distdir: tmp.join("distdir"),
+            config_root: config_root.clone(),
+            ..MergeOptions::default()
+        };
+        let entry = remote_graph_entry("binpkgpretendpkg", "1.0");
+        let wrapped = [MixedPretendEntry {
+            entry: &entry,
+            config: &config,
+            repos: &repos,
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("portage_tmpdir"),
+            options: &options,
+        }];
+        let mut replay: Vec<u8> = Vec::new();
+        let failures =
+            crate::emerge_build::run_pretend_pass(crate::emerge_build::RunPretendPassArgs {
+                entries: &wrapped,
+                jobs: 1,
+                replay: &mut replay,
+            });
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(
+            cache.join("dev-libs/binpkgpretendpkg-1.0.tbz2").is_file(),
+            "the pass fetched the remote binary"
+        );
+        // The binhost file vanishes: any second fetch would fail. The merge
+        // must reuse the pass's file.
+        std::fs::remove_file(binhost.join("dev-libs/binpkgpretendpkg-1.0.tbz2")).unwrap();
+        merge_one_binary_entry(MergeOneBinaryEntryArgs {
+            entry: &entry,
+            config: &config,
+            root: &root,
+            pkgdir: &pkgdir,
+            portage_tmpdir: &tmp.join("pt"),
+            merge_options: &MergeOptions::default(),
+            progress: mrg_director::MergeProgress::single(),
+            display: &crate::emerge_build::StatusDisplay::for_tests(),
+        })
+        .expect("the merge reuses the pass's fetched file");
+        assert!(
+            root.join("usr/share/binpkgpretendpkg/payload.txt")
+                .is_file(),
+            "the binpkg image was merged"
+        );
+        assert!(
+            root.join("var/db/pkg/dev-libs/binpkgpretendpkg-1.0/CONTENTS")
+                .is_file(),
+            "the vdb entry is live"
+        );
+        assert!(
+            portage_util::read_dir_entries(&pkgdir).unwrap().is_empty(),
+            "nothing was fetched into $PKGDIR"
+        );
+        portage_repo::set_remote_binary_index_override(
+            &config.binrepos[0].packages_dir(&root),
+            None,
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }

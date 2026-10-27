@@ -19872,3 +19872,17 @@ purpose). Check: `T=$(mktemp -d /tmp/l-XXXX); TMPDIR=$T cargo test
 --release --workspace; ls -A $T; rm -rf $T` lists nothing (3158 tests,
 2026-10-27). A `TMPDIR` longer than about 13 characters still breaks the
 `vdb_ipc` tests' socket path (#595).
+
+**A remote binary runs `pkg_pretend` up front, before anything merges
+(#579, 2026-10-27).** Portage fetches and verifies a remote binary inside
+the pretend pass (`lib/_emerge/Scheduler.py:1147-1180`), unpacks its
+metadata and runs `pretend` there. portuale left remote binaries out of
+the pass and merged them with the pretend skipped, so the hook never ran.
+Now the pass reads the binhost index record (`DEFINED_PHASES`) and
+fetches and verifies the file. Then it runs the hook, and the merge
+reuses the fetched file without a second download. A failing pretend or
+a digest mismatch stops the run before anything merges. Check from
+pmtest: `python3 -m pytest pytests-contract-suite/test_portuale.py -q -k
+pretends_a_remote_binary`. The order it pins (`>>> Running pre-merge
+checks`, the `;-) ... [ ok ]` line, then `>>> Emerging binary`) is the
+host Portage capture in `LLM/evidence/2026-10-26-575-residues/t6/`.
