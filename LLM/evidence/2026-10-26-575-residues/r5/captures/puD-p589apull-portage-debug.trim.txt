@@ -1,0 +1,55 @@
+# trimmed from a full --debug capture (77033 lines): 'N:' prefixes are line numbers in the full capture; host-root (::gentoo) and unrelated fixture lines dropped
+1:### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug --update --deep dev-libs/p589apull
+20:   ebuild: dev-libs/p589apull-2::testrepo
+21:   ebuild: dev-libs/p589apull-2::testrepo
+24:      Arg: dev-libs/p589apull
+25:     Atom: dev-libs/p589apull
+26:   ebuild: dev-libs/p589apull-2::testrepo
+28:Child:         (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+29:Parent Dep:    dev-libs/p589apull
+31:Parent:    (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+32:Depstring: =dev-libs/p589aprov-5.44* dev-libs/p589avirt
+35:Parent:    (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+36:Depstring: =dev-libs/p589aprov-5.44* dev-libs/p589avirt
+38:Candidates: ['=dev-libs/p589aprov-5.44*', 'dev-libs/p589avirt']
+39:   ebuild: dev-libs/p589aprov-5.44::testrepo
+40:   ebuild: dev-libs/p589avirt-1::testrepo
+41:installed: dev-libs/p589avirt-1::testrepo
+43:Child:         (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+44:Parent Dep:    =dev-libs/p589aprov-5.44* required by (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+46:Child:         (dev-libs/p589avirt-1:0/0::testrepo, installed in '$S/fx/') USE=""
+47:Parent Dep:    dev-libs/p589avirt required by (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+49:Exiting... (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+51:Parent:    (dev-libs/p589avirt-1:0/0::testrepo, installed in '$S/fx/')
+52:Depstring: || ( =dev-libs/p589aprov-5.40* =dev-libs/p589aprov-5.42* =dev-libs/p589aprov-5.38* ~dev-libs/p589acore-1.0 )
+55:Parent:    (dev-libs/p589avirt-1:0/0::testrepo, installed in '$S/fx/')
+56:Depstring: || ( =dev-libs/p589aprov-5.40* =dev-libs/p589aprov-5.42* =dev-libs/p589aprov-5.38* ~dev-libs/p589acore-1.0 )
+58:   ebuild: dev-libs/p589aprov-5.42::testrepo
+59:installed: dev-libs/p589aprov-5.42::testrepo
+60:   ebuild: dev-libs/p589aprov-5.44::testrepo
+61:   ebuild: dev-libs/p589acore-1.0::testrepo
+62:   ebuild: dev-libs/p589acore-1.0::testrepo
+63:Candidates: ['~dev-libs/p589acore-1.0']
+64:   ebuild: dev-libs/p589acore-1.0::testrepo
+66:Child:         (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+67:Parent Dep:    ~dev-libs/p589acore-1.0 required by (dev-libs/p589avirt-1:0/0::testrepo, installed in '$S/fx/')
+69:Exiting... (dev-libs/p589avirt-1:0/0::testrepo, installed in '$S/fx/')
+71:Child:         (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+72:Parent Dep:    dev-libs/p589apull
+59951:(dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') depends on
+59952:  (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+59953:  (dev-libs/p589avirt-1:0/0::testrepo, installed in '$S/fx/') (runtime)
+59954:dev-libs/p589apull depends on
+59955:  (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (soft)
+59956:(dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+59957:(dev-libs/p589avirt-1:0/0::testrepo, installed in '$S/fx/') depends on
+59958:  (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+59959:(dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+70578:[ebuild     U  ] dev-libs/p589aprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fx/ 0 KiB
+70579:[ebuild  N     ] dev-libs/p589acore-1.0::testrepo to $S/fx/ 0 KiB
+70580:[ebuild  N     ] dev-libs/p589apull-2::testrepo to $S/fx/ 0 KiB
+70582:Total: 3 packages (1 upgrade, 2 new), Size of downloads: 0 KiB
+70583:forced reinstall atoms:
+70586:slot operator dependencies:
+77019:forced rebuilds:
+77033:### rc: 0

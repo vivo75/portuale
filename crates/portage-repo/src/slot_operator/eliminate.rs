@@ -201,6 +201,7 @@ pub(crate) fn slot_operator_rebuild_entries(
             entries: &combined,
             reachable,
             scope: None,
+            walked_installed: &HashSet::new(),
             already: &scheduled,
             undone: &BTreeSet::new(),
             with_bdeps,

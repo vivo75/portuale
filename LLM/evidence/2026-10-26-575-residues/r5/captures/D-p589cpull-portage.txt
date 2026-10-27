@@ -1,0 +1,32 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --deep dev-libs/p589cpull
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took N s (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p589cprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/p589ccore-1.0::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/p589cpull-2::testrepo to $S/fx/ 0 KiB
+
+Total: 3 packages (1 upgrade, 2 new), Size of downloads: 0 KiB
+
+!!! The following installed packages are masked:
+- dev-python/entrypoints-0.4::gentoo (masked by: package.mask)
+/.gentoo/repos/gentoo/profiles/package.mask:
+# Sam James <sam@gentoo.org> (2026-10-22)
+# Replaced by importlib, no reverse dependencies (bug #984696). Removal
+# on 2026-11-22.
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+### rc: 0

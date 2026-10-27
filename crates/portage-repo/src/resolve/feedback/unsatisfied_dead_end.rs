@@ -45,6 +45,7 @@ pub(crate) fn step_unsatisfied_dead_end(
                 entries: &pass.entries,
                 reachable: &ctx.slot_op_reachable,
                 scope: Some(&scan_scope),
+                walked_installed: &installed_walked_cps(&pass.installed_walked),
                 already: &grown.slot_operator_replace_installed,
                 undone: &grown.slot_operator_undone,
                 with_bdeps: ctx.with_bdeps,

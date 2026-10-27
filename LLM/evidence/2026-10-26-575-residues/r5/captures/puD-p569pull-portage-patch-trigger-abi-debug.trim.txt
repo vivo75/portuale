@@ -1,0 +1,263 @@
+# trimmed from a full --debug capture (231242 lines): 'N:' prefixes are line numbers in the full capture; host-root (::gentoo) and unrelated fixture lines dropped
+1:### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PYTHONHASHSEED=0 python3 $S/bin/emerge-patched.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug --update --deep dev-libs/p569pull
+20:   ebuild: dev-libs/p569pull-2::testrepo
+21:   ebuild: dev-libs/p569pull-2::testrepo
+24:      Arg: dev-libs/p569pull
+25:     Atom: dev-libs/p569pull
+26:   ebuild: dev-libs/p569pull-2::testrepo
+28:Child:         (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+29:Parent Dep:    dev-libs/p569pull
+31:Parent:    (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+32:Depstring: =dev-libs/p569prov-5.44* dev-libs/p569virt
+35:Parent:    (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+36:Depstring: =dev-libs/p569prov-5.44* dev-libs/p569virt
+38:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+39:   ebuild: dev-libs/p569prov-5.44::testrepo
+40:   ebuild: dev-libs/p569virt-1::testrepo
+41:installed: dev-libs/p569virt-1::testrepo
+43:Child:         (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+44:Parent Dep:    =dev-libs/p569prov-5.44* required by (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+46:Child:         (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/') USE=""
+47:Parent Dep:    dev-libs/p569virt required by (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+49:Exiting... (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+51:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+52:Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 ) dev-libs/p569prov:= dev-libs/p569prov:0/5.42=
+55:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+56:Depstring: dev-libs/p569prov:= dev-libs/p569prov:0/5.42=
+58:Candidates: ['dev-libs/p569prov:=', 'dev-libs/p569prov:0/5.42=']
+59:   ebuild: dev-libs/p569prov-5.44::testrepo
+60:   ebuild: dev-libs/p569prov-5.42::testrepo
+61:installed: dev-libs/p569prov-5.42::testrepo
+63:Child:         (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') USE=""
+64:Parent Dep:    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+65:Slot Conflict: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+67:Child:         (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') USE=""
+68:Parent Dep:    dev-libs/p569prov:= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+70:Exiting... (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+72:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+73:Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+75:   ebuild: dev-libs/p569prov-5.42::testrepo
+76:installed: dev-libs/p569prov-5.42::testrepo
+77:   ebuild: dev-libs/p569prov-5.44::testrepo
+78:   ebuild: dev-libs/p569core-1.0::testrepo
+79:   ebuild: dev-libs/p569core-1.0::testrepo
+80:Candidates: ['~dev-libs/p569core-1.0']
+81:   ebuild: dev-libs/p569core-1.0::testrepo
+83:Child:         (dev-libs/p569core-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+84:Parent Dep:    ~dev-libs/p569core-1.0 required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+86:Exiting... (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+88:Child:         (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+89:Parent Dep:    dev-libs/p569pull
+59966:!!! Slot conflict handler started.
+59968:      root: $S/fx/
+59969:      atom: dev-libs/p569prov:0
+59970:      pkg: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+59971:      pkg: (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+59972:      parent: (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+59974:         atom: dev-libs/p569prov:=
+59975:         match: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+59976:         match: (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+59977:      parent: (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+59979:         atom: =dev-libs/p569prov-5.44*
+59980:         match: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+59981:      parent: (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+59983:         atom: dev-libs/p569prov:0/5.42=
+59984:         match: (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+59986:!!! Slot conflict graph:
+59988:  ((dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/'),(dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/')) (0)
+59989:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (0)
+59990:  (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') (0)
+59991:(dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') (no children)
+59992:(dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+59993:((dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/'),(dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/')) (no children)
+59995:!!! Slot conflict solution:
+59996:   Conflict: ($S/fx/, dev-libs/p569prov:0)
+59997:      keep:   (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+59998:      keep:   (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60001:backtracking due to slot conflict:
+60002:   first package:  (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60003:  package(s) to mask: [<Package ('ebuild', '$S/fx/', 'dev-libs/p569prov-5.42', 'merge', 'testrepo')>, <Package ('installed', '$S/fx/', 'dev-libs/p569prov-5.42', 'nomerge', 'installed')>]
+60004:      slot: dev-libs/p569prov:0
+60005:   parents: ((dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/'), 'dev-libs/p569prov:='), ((dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/'), '=dev-libs/p569prov-5.44*'), ((dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/'), 'dev-libs/p569prov:0/5.42=')
+60010:(dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') depends on
+60011:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+60012:  (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/') (runtime)
+60013:dev-libs/p569pull depends on
+60014:  (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (soft)
+60015:(dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+60016:(dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/') depends on
+60017:  (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') (runtime_slot_op)
+60018:  (dev-libs/p569core-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+60019:(dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') (no children)
+60020:(dev-libs/p569core-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+70641:New configuration:
+70642:   (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+70644:(dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') does not satify all version requirements. Rejecting configuration.
+70646:New configuration:
+70647:   (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+70649:(dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') has pending USE changes. Rejecting configuration.
+70652:backtracking try 1 
+70654:[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fx/ 0 KiB
+70655:[ebuild  N     ] dev-libs/p569core-1.0::testrepo to $S/fx/ 0 KiB
+70656:[ebuild  N     ] dev-libs/p569pull-2::testrepo to $S/fx/ 0 KiB
+70658:Total: 3 packages (1 upgrade, 2 new), Size of downloads: 0 KiB
+70663:dev-libs/p569prov:0 for $S/fx/
+70665:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc" pulled in by
+70666:    =dev-libs/p569prov-5.44* required by (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+70669:  (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') USE="" pulled in by
+70670:    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/') USE=""
+70684:forced reinstall atoms:
+70687:slot operator dependencies:
+70688:   ($S/fx/, dev-libs/p569prov:0)
+70689:      parent: (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+70690:        child: (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') (runtime_slot_op)
+70691:      parent: (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+70692:        child: (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fx/') (runtime_slot_op)
+77125:forced rebuilds:
+77141:runtime_pkg_mask: {<Package ('ebuild', '$S/fx/', 'dev-libs/p569prov-5.42', 'merge', 'testrepo')>: {'slot conflict': {(<Package ('ebuild', '$S/fx/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, Atom('=dev-libs/p569prov-5.44*'))}}, <Package ('installed', '$S/fx/', 'dev-libs/p569prov-5.42', 'nomerge', 'installed')>: {'slot conflict': {(<Package ('ebuild', '$S/fx/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, Atom('=dev-libs/p569prov-5.44*'))}}} 
+77143:   ebuild: dev-libs/p569pull-2::testrepo
+77144:   ebuild: dev-libs/p569pull-2::testrepo
+77147:      Arg: dev-libs/p569pull
+77148:     Atom: dev-libs/p569pull
+77149:   ebuild: dev-libs/p569pull-2::testrepo
+77151:Child:         (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77152:Parent Dep:    dev-libs/p569pull
+77154:Parent:    (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77155:Depstring: =dev-libs/p569prov-5.44* dev-libs/p569virt
+77158:Parent:    (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77159:Depstring: =dev-libs/p569prov-5.44* dev-libs/p569virt
+77161:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+77162:   ebuild: dev-libs/p569prov-5.44::testrepo
+77163:   ebuild: dev-libs/p569virt-1::testrepo
+77164:installed: dev-libs/p569virt-1::testrepo
+77166:Child:         (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77167:Parent Dep:    =dev-libs/p569prov-5.44* required by (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77169:Child:         (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/') USE=""
+77170:Parent Dep:    dev-libs/p569virt required by (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77172:Exiting... (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77174:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+77175:Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 ) dev-libs/p569prov:= dev-libs/p569prov:0/5.42=
+77178:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+77179:Depstring: dev-libs/p569prov:= dev-libs/p569prov:0/5.42=
+77181:Candidates: ['dev-libs/p569prov:=', 'dev-libs/p569prov:0/5.42=']
+77182:   ebuild: dev-libs/p569prov-5.44::testrepo
+77183:   ebuild: dev-libs/p569prov-5.44::testrepo
+77187:   existing parent package: (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+77188:   existing parent atom: dev-libs/p569prov:0/5.42=
+77189:   new parent package: (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77190:   new child package:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+77193:backtracking due to unsatisfied built slot-operator dep:
+77194:   parent package: (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+77195:   atom: dev-libs/p569prov:0/5.42=
+77197:Child:         (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77198:Parent Dep:    dev-libs/p569prov:= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+77200:Exiting... (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+77202:Parent:    (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+77203:Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+77205:   ebuild: dev-libs/p569core-1.0::testrepo
+77206:   ebuild: dev-libs/p569core-1.0::testrepo
+77207:Candidates: ['~dev-libs/p569core-1.0']
+77208:   ebuild: dev-libs/p569core-1.0::testrepo
+77210:Child:         (dev-libs/p569core-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77211:Parent Dep:    ~dev-libs/p569core-1.0 required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+77213:Exiting... (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+77215:Child:         (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77216:Parent Dep:    dev-libs/p569pull
+137095:(dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') depends on
+137096:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+137097:  (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/') (runtime)
+137098:dev-libs/p569pull depends on
+137099:  (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (soft)
+137100:(dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+137101:(dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/') depends on
+137102:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime_slot_op)
+137103:  (dev-libs/p569core-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+137104:(dev-libs/p569core-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+147725:backtracking try 2 
+147727:forced reinstall atoms:
+147730:slot operator dependencies:
+147731:   ($S/fx/, dev-libs/p569prov:0)
+147732:      parent: (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fx/')
+147733:        child: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime_slot_op)
+154166:forced rebuilds:
+154181:!!! All ebuilds that could satisfy "dev-libs/p569prov:0/5.42=" for $S/fx/ have been masked.
+154183:- dev-libs/p569prov-5.42::testrepo (masked by: backtracking: slot conflict)
+154185:(dependency required by "dev-libs/p569virt-1::testrepo" [installed])
+154186:(dependency required by "dev-libs/p569pull-2::testrepo" [ebuild])
+154187:(dependency required by "dev-libs/p569pull" [argument])
+154193:runtime_pkg_mask: {<Package ('ebuild', '$S/fx/', 'dev-libs/p569prov-5.42', 'merge', 'testrepo')>: {'slot conflict': {(<Package ('ebuild', '$S/fx/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, Atom('=dev-libs/p569prov-5.44*'))}}, <Package ('installed', '$S/fx/', 'dev-libs/p569prov-5.42', 'nomerge', 'installed')>: {'slot conflict': {(<Package ('ebuild', '$S/fx/', 'dev-libs/p569pull-2', 'merge', 'testrepo')>, Atom('=dev-libs/p569prov-5.44*'))}}} 
+154195:   ebuild: dev-libs/p569pull-2::testrepo
+154196:   ebuild: dev-libs/p569pull-2::testrepo
+154199:      Arg: dev-libs/p569pull
+154200:     Atom: dev-libs/p569pull
+154201:   ebuild: dev-libs/p569pull-2::testrepo
+154203:Child:         (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+154204:Parent Dep:    dev-libs/p569pull
+154207:     Atom: dev-libs/p569virt:0
+154208:   ebuild: dev-libs/p569virt-1::testrepo
+154210:Child:         (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+154211:Parent Dep:    dev-libs/p569virt:0 required by @__auto_slot_operator_replace_installed__
+154213:Parent:    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154214:Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 ) dev-libs/p569prov:=
+154217:Parent:    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154218:Depstring: dev-libs/p569prov:=
+154220:Candidates: ['dev-libs/p569prov:=']
+154221:   ebuild: dev-libs/p569prov-5.44::testrepo
+154223:Child:         (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+154224:Parent Dep:    dev-libs/p569prov:= required by (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154226:Exiting... (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154228:Parent:    (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154229:Depstring: =dev-libs/p569prov-5.44* dev-libs/p569virt
+154232:Parent:    (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154233:Depstring: =dev-libs/p569prov-5.44* dev-libs/p569virt
+154235:Candidates: ['=dev-libs/p569prov-5.44*', 'dev-libs/p569virt']
+154236:   ebuild: dev-libs/p569prov-5.44::testrepo
+154237:   ebuild: dev-libs/p569virt-1::testrepo
+154239:Child:         (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+154240:Parent Dep:    =dev-libs/p569prov-5.44* required by (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154242:Child:         (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+154243:Parent Dep:    dev-libs/p569virt required by (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154245:Exiting... (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154247:Parent:    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154248:Depstring: || ( =dev-libs/p569prov-5.42* =dev-libs/p569prov-5.40* =dev-libs/p569prov-5.38* ~dev-libs/p569core-1.0 )
+154250:   ebuild: dev-libs/p569core-1.0::testrepo
+154251:   ebuild: dev-libs/p569core-1.0::testrepo
+154252:Candidates: ['~dev-libs/p569core-1.0']
+154253:   ebuild: dev-libs/p569core-1.0::testrepo
+154255:Child:         (dev-libs/p569core-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+154256:Parent Dep:    ~dev-libs/p569core-1.0 required by (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154258:Exiting... (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154260:Child:         (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+154261:Parent Dep:    dev-libs/p569pull
+154263:Child:         (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+154264:Parent Dep:    dev-libs/p569virt:0 required by @__auto_slot_operator_replace_installed__
+214143:(dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') depends on
+214144:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+214145:  (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+214146:dev-libs/p569pull depends on
+214147:  (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (soft)
+214149:  (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+214150:(dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') depends on
+214151:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime_slot_op)
+214152:  (dev-libs/p569core-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+214153:(dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+214154:(dev-libs/p569core-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+224773:[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fx/ 0 KiB
+224774:[ebuild  N     ] dev-libs/p569core-1.0::testrepo to $S/fx/ 0 KiB
+224775:[ebuild  rR    ] dev-libs/p569virt-1::testrepo to $S/fx/ 0 KiB
+224776:[ebuild  N     ] dev-libs/p569pull-2::testrepo to $S/fx/ 0 KiB
+224778:Total: 4 packages (1 upgrade, 2 new, 1 reinstall), Size of downloads: 0 KiB
+224779:forced reinstall atoms:
+224780:   root: $S/fx/
+224781:      atom: dev-libs/p569virt:0
+224784:slot operator dependencies:
+224785:   ($S/fx/, dev-libs/p569prov:0)
+224786:      parent: (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+224787:        child: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime_slot_op)
+231220:forced rebuilds:
+231221:   root: $S/fx/
+231222:      child: (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+231223:         parent: (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+231229:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') causes rebuilds for:
+231230:    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+231242:### rc: 0

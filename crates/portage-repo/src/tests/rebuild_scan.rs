@@ -40,6 +40,7 @@ fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update()
             entries: std::slice::from_ref(&bar_downgrade),
             reachable: &reach,
             scope: None,
+            walked_installed: &HashSet::new(),
             already: &empty,
             undone: &empty,
             with_bdeps: true,
@@ -120,6 +121,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -152,6 +154,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         entries: &[],
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -173,6 +176,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -214,6 +218,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         entries: &[bar_upgrade.clone(), stale_rebuild],
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &already,
         undone: &empty,
         with_bdeps: true,
@@ -339,6 +344,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         entries: &entries,
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -367,6 +373,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         entries: &entries,
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -386,6 +393,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         entries: &entries,
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -405,6 +413,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         entries: &entries,
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -434,6 +443,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         entries: &[older.clone(), consumer.clone()],
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -488,6 +498,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         entries: &[older, consumer.clone()],
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -507,6 +518,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         entries: &entries,
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -524,6 +536,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         entries: std::slice::from_ref(&fresh),
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -620,6 +633,7 @@ fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
             entries: &entries,
             reachable: &HashSet::new(),
             scope: None,
+            walked_installed: &HashSet::new(),
             already: &empty,
             undone: &empty,
             with_bdeps: true,
@@ -737,6 +751,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
             entries,
             reachable: &HashSet::new(),
             scope: None,
+            walked_installed: &HashSet::new(),
             already: &empty,
             undone: &empty,
             with_bdeps: true,
@@ -779,6 +794,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
         entries: &[upgrade.clone(), consumer.clone(), veto_parent.clone()],
         reachable: &reach_massc,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -795,6 +811,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
         entries: &[upgrade, consumer, veto_parent],
         reachable: &reach_massc,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -896,6 +913,7 @@ fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
         entries: &[upgrade, walked_consumer("massn"), walked_consumer("masso")],
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -998,6 +1016,7 @@ fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot
         entries: &[upgrade, walked_consumer("pinned"), walked_consumer("open")],
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1081,6 +1100,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: false,
@@ -1107,6 +1127,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1133,6 +1154,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         entries: &walked,
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1177,6 +1199,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         entries: &walked,
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: false,
@@ -1232,6 +1255,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
         entries: std::slice::from_ref(&bar_reinstall),
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1260,6 +1284,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
         entries: std::slice::from_ref(&bar_reinstall),
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &undone,
         with_bdeps: true,
@@ -1280,6 +1305,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
         entries: std::slice::from_ref(&bar_reinstall),
         reachable: &elsewhere,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1371,6 +1397,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
         entries: &entries,
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1399,6 +1426,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
         entries: &entries,
         reachable: &HashSet::new(),
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
         with_bdeps: true,
@@ -1704,4 +1732,73 @@ fn deep_scan_scope_is_the_walked_set_narrowed_by_the_closure() {
         crate::resolve::scan_scope(Deep::NotRequested, &closure, &entries),
         closure
     );
+}
+
+/// An installed consumer the `--deep` walk recursed into is scheduled by the
+/// same-slot arm even when it is outside the reachable scope (#598); the same
+/// consumer unwalked is not.
+/// Portage: depgraph.py, _add_pkg (recurse under --deep)
+#[test]
+fn slot_operator_rebuild_scan_schedules_a_walked_installed_consumer_outside_reachable() {
+    let dir = TempDir::new("portage-repo-slotop-598");
+    for (name, slot, rdepend) in [
+        ("bar-1.0", "0/1", ""),
+        ("holder-1.0", "0", "dev-libs/bar:0/1="),
+    ] {
+        let d = dir.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    let bar_upgrade = GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("dev-libs", "bar", "2.0")
+    };
+    let holder = ("dev-libs".to_string(), "holder".to_string());
+    let empty: BTreeSet<(String, String)> = BTreeSet::new();
+    let scan = |walked: &HashSet<(String, String)>| {
+        slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+            root: &dir,
+            entries: std::slice::from_ref(&bar_upgrade),
+            reachable: &HashSet::new(),
+            scope: None,
+            walked_installed: walked,
+            already: &empty,
+            undone: &empty,
+            with_bdeps: true,
+            update: true,
+            top_level_cps: &HashSet::new(),
+            top_level_atoms: &HashSet::new(),
+            excluded: &[],
+            config: &test_config(),
+            gate: crate::test_gate(&[]),
+        })
+    };
+    let (scheduled, abi, ..) = scan(&HashSet::from([holder.clone()]));
+    assert_eq!(
+        scheduled,
+        BTreeSet::from([("dev-libs".to_string(), "bar".to_string()), holder])
+    );
+    assert_eq!(
+        abi,
+        vec![(
+            "dev-libs/bar-2.0".to_string(),
+            "dev-libs/holder-1.0".to_string()
+        )],
+        "provider and consumer display pair"
+    );
+    let (unwalked, abi, ..) = scan(&HashSet::new());
+    assert!(
+        unwalked.is_empty() && abi.is_empty(),
+        "not walked, not reachable: skipped"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }

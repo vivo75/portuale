@@ -495,6 +495,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         entries: &[provider, entry],
         reachable: &reach,
         scope: None,
+        walked_installed: &HashSet::new(),
         already: &BTreeSet::new(),
         undone: &latched,
         with_bdeps: true,

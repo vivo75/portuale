@@ -19,6 +19,9 @@ pub(crate) struct SlotOperatorRebuildScanArgs<'a> {
     /// Narrower consumer scope (`ResolveCtx::scan_reachable`); `None` is `reachable`.
     /// Veto parents keep the full `reachable` closure.
     pub(crate) scope: Option<&'a HashSet<(String, String)>>,
+    /// Installed consumers this request's own walk recursed into (`--deep`);
+    /// the same-slot arm schedules them outside `scope` too.
+    pub(crate) walked_installed: &'a HashSet<(String, String)>,
     pub(crate) already: &'a BTreeSet<(String, String)>,
     pub(crate) undone: &'a BTreeSet<(String, String)>,
     pub(crate) with_bdeps: bool,
@@ -43,6 +46,7 @@ pub(crate) fn slot_operator_rebuild_scan(
         entries,
         reachable,
         scope,
+        walked_installed,
         already,
         undone,
         with_bdeps,
@@ -154,8 +158,10 @@ pub(crate) fn slot_operator_rebuild_scan(
             if undone.contains(&cp) || (in_graph.contains(&cp) && !already.contains(&cp)) {
                 continue;
             }
-            // Same-slot arm scope (frozen): complete-mode reachability only.
-            let same_slot_scope = !new_slot.is_empty() && scope.unwrap_or(reachable).contains(&cp);
+            // Same-slot arm scope: reachability, or an installed consumer the walk recursed into.
+            // Portage: depgraph.py, _add_pkg (recurse under --deep)
+            let same_slot_scope = !new_slot.is_empty()
+                && (scope.unwrap_or(reachable).contains(&cp) || walked_installed.contains(&cp));
             // New-slot arm scope: reachability or walked this pass.
             // Merge-bound consumers stay skipped by the `in_graph` rule:
             // their live `:=` re-binds through their own walk.

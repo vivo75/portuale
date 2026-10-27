@@ -1,0 +1,228 @@
+# trimmed from a full --debug capture (154240 lines): 'N:' prefixes are line numbers in the full capture; host-root (::gentoo) and unrelated fixture lines dropped
+1:### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug --update --deep dev-libs/p589bpull
+20:   ebuild: dev-libs/p589bpull-2::testrepo
+21:   ebuild: dev-libs/p589bpull-2::testrepo
+24:      Arg: dev-libs/p589bpull
+25:     Atom: dev-libs/p589bpull
+26:   ebuild: dev-libs/p589bpull-2::testrepo
+28:Child:         (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+29:Parent Dep:    dev-libs/p589bpull
+31:Parent:    (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+32:Depstring: =dev-libs/p589bprov-5.44* dev-libs/p589bvirt
+35:Parent:    (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+36:Depstring: =dev-libs/p589bprov-5.44* dev-libs/p589bvirt
+38:Candidates: ['=dev-libs/p589bprov-5.44*', 'dev-libs/p589bvirt']
+39:   ebuild: dev-libs/p589bprov-5.44::testrepo
+40:   ebuild: dev-libs/p589bvirt-1::testrepo
+41:installed: dev-libs/p589bvirt-1::testrepo
+43:Child:         (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+44:Parent Dep:    =dev-libs/p589bprov-5.44* required by (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+46:Child:         (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/') USE=""
+47:Parent Dep:    dev-libs/p589bvirt required by (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+49:Exiting... (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+51:Parent:    (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+52:Depstring: || ( =dev-libs/p589bprov-5.40* =dev-libs/p589bprov-5.42* =dev-libs/p589bprov-5.38* ~dev-libs/p589bcore-1.0 ) dev-libs/p589bprov:= dev-libs/p589bprov:0/5.42=
+55:Parent:    (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+56:Depstring: dev-libs/p589bprov:= dev-libs/p589bprov:0/5.42=
+58:Candidates: ['dev-libs/p589bprov:=', 'dev-libs/p589bprov:0/5.42=']
+59:   ebuild: dev-libs/p589bprov-5.44::testrepo
+60:   ebuild: dev-libs/p589bprov-5.42::testrepo
+61:installed: dev-libs/p589bprov-5.42::testrepo
+63:Child:         (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') USE=""
+64:Parent Dep:    dev-libs/p589bprov:0/5.42= required by (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+65:Slot Conflict: (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+67:Child:         (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') USE=""
+68:Parent Dep:    dev-libs/p589bprov:= required by (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+70:Exiting... (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+72:Parent:    (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+73:Depstring: || ( =dev-libs/p589bprov-5.40* =dev-libs/p589bprov-5.42* =dev-libs/p589bprov-5.38* ~dev-libs/p589bcore-1.0 )
+75:   ebuild: dev-libs/p589bprov-5.42::testrepo
+76:installed: dev-libs/p589bprov-5.42::testrepo
+77:   ebuild: dev-libs/p589bprov-5.44::testrepo
+78:   ebuild: dev-libs/p589bcore-1.0::testrepo
+79:   ebuild: dev-libs/p589bcore-1.0::testrepo
+80:Candidates: ['~dev-libs/p589bcore-1.0']
+81:   ebuild: dev-libs/p589bcore-1.0::testrepo
+83:Child:         (dev-libs/p589bcore-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+84:Parent Dep:    ~dev-libs/p589bcore-1.0 required by (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+86:Exiting... (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+88:Child:         (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+89:Parent Dep:    dev-libs/p589bpull
+59966:!!! Slot conflict handler started.
+59968:      root: $S/fx/
+59969:      atom: dev-libs/p589bprov:0
+59970:      pkg: (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+59971:      pkg: (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+59972:      parent: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+59974:         atom: dev-libs/p589bprov:=
+59975:         match: (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+59976:         match: (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+59977:      parent: (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+59979:         atom: =dev-libs/p589bprov-5.44*
+59980:         match: (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+59981:      parent: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+59983:         atom: dev-libs/p589bprov:0/5.42=
+59984:         match: (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+59986:!!! Slot conflict graph:
+59988:  ((dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/'),(dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')) (0)
+59989:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (0)
+59990:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') (0)
+59991:(dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') (no children)
+59992:(dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+59993:((dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/'),(dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')) (no children)
+59995:!!! Slot conflict solution:
+59996:   Conflict: ($S/fx/, dev-libs/p589bprov:0)
+59997:      keep:   (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+59998:      keep:   (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60001:slot_operator_update_probe:
+60002:   existing child package:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60003:   existing parent package: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+60004:   new child package:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+60005:   new parent package: (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+60008:backtracking due to missed slot abi update:
+60009:   child package:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60010:   parent package: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+60011:   new parent pkg: (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+60012:   atom: dev-libs/p589bprov:0/5.42=
+60015:slot_operator_update_probe:
+60016:   existing child package:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60017:   existing parent package: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+60018:   new child package:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+60019:   new parent package: (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+60022:backtracking due to missed slot abi update:
+60023:   child package:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60024:   parent package: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+60025:   new parent pkg: (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+60026:   atom: dev-libs/p589bprov:0/5.42=
+60029:slot_operator_update_probe:
+60030:   existing child package:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60031:   existing parent package: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+60036:slot_operator_update_probe:
+60037:   existing child package:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60038:   existing parent package: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+60039:   new child package:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+60040:   new parent package: (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+60043:backtracking due to missed slot abi update:
+60044:   child package:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+60045:   parent package: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+60046:   atom: dev-libs/p589bprov:0/5.42=
+60050:(dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') depends on
+60051:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+60052:  (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/') (runtime)
+60053:dev-libs/p589bpull depends on
+60054:  (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (soft)
+60055:(dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+60056:(dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/') depends on
+60057:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') (runtime_slot_op)
+60058:  (dev-libs/p589bcore-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+60059:(dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') (no children)
+60060:(dev-libs/p589bcore-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+70681:New configuration:
+70682:   (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+70684:(dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') does not satify all version requirements. Rejecting configuration.
+70686:New configuration:
+70687:   (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/')
+70689:(dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') has pending USE changes. Rejecting configuration.
+70692:backtracking try 1 
+70694:[ebuild     U  ] dev-libs/p589bprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fx/ 0 KiB
+70695:[ebuild  N     ] dev-libs/p589bcore-1.0::testrepo to $S/fx/ 0 KiB
+70696:[ebuild  N     ] dev-libs/p589bpull-2::testrepo to $S/fx/ 0 KiB
+70698:Total: 3 packages (1 upgrade, 2 new), Size of downloads: 0 KiB
+70703:dev-libs/p589bprov:0 for $S/fx/
+70705:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc" pulled in by
+70706:    =dev-libs/p589bprov-5.44* required by (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+70709:  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') USE="" pulled in by
+70710:    dev-libs/p589bprov:0/5.42= required by (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/') USE=""
+70724:forced reinstall atoms:
+70727:slot operator dependencies:
+70728:   ($S/fx/, dev-libs/p589bprov:0)
+70729:      parent: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+70730:        child: (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') (runtime_slot_op)
+70731:      parent: (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx/')
+70732:        child: (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed in '$S/fx/') (runtime_slot_op)
+77165:forced rebuilds:
+77179:   ebuild: dev-libs/p589bpull-2::testrepo
+77180:   ebuild: dev-libs/p589bpull-2::testrepo
+77183:      Arg: dev-libs/p589bpull
+77184:     Atom: dev-libs/p589bpull
+77185:   ebuild: dev-libs/p589bpull-2::testrepo
+77187:Child:         (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77188:Parent Dep:    dev-libs/p589bpull
+77191:     Atom: dev-libs/p589bprov:0
+77192:   ebuild: dev-libs/p589bprov-5.44::testrepo
+77194:Child:         (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77195:Parent Dep:    dev-libs/p589bprov:0 required by @__auto_slot_operator_replace_installed__
+77198:     Atom: dev-libs/p589bvirt:0
+77199:   ebuild: dev-libs/p589bvirt-1::testrepo
+77201:Child:         (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77202:Parent Dep:    dev-libs/p589bvirt:0 required by @__auto_slot_operator_replace_installed__
+77204:Parent:    (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77205:Depstring: || ( =dev-libs/p589bprov-5.40* =dev-libs/p589bprov-5.42* =dev-libs/p589bprov-5.38* ~dev-libs/p589bcore-1.0 ) dev-libs/p589bprov:=
+77208:Parent:    (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77209:Depstring: dev-libs/p589bprov:=
+77211:Candidates: ['dev-libs/p589bprov:=']
+77212:   ebuild: dev-libs/p589bprov-5.44::testrepo
+77214:Child:         (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77215:Parent Dep:    dev-libs/p589bprov:= required by (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77217:Exiting... (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77219:Parent:    (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77220:Depstring: =dev-libs/p589bprov-5.44* dev-libs/p589bvirt
+77223:Parent:    (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77224:Depstring: =dev-libs/p589bprov-5.44* dev-libs/p589bvirt
+77226:Candidates: ['=dev-libs/p589bprov-5.44*', 'dev-libs/p589bvirt']
+77227:   ebuild: dev-libs/p589bprov-5.44::testrepo
+77228:   ebuild: dev-libs/p589bvirt-1::testrepo
+77230:Child:         (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77231:Parent Dep:    =dev-libs/p589bprov-5.44* required by (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77233:Child:         (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77234:Parent Dep:    dev-libs/p589bvirt required by (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77236:Exiting... (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77238:Parent:    (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77239:Depstring: || ( =dev-libs/p589bprov-5.40* =dev-libs/p589bprov-5.42* =dev-libs/p589bprov-5.38* ~dev-libs/p589bcore-1.0 )
+77241:   ebuild: dev-libs/p589bprov-5.42::testrepo
+77242:   ebuild: dev-libs/p589bprov-5.44::testrepo
+77243:   ebuild: dev-libs/p589bcore-1.0::testrepo
+77244:   ebuild: dev-libs/p589bcore-1.0::testrepo
+77245:Candidates: ['~dev-libs/p589bcore-1.0']
+77246:   ebuild: dev-libs/p589bcore-1.0::testrepo
+77248:Child:         (dev-libs/p589bcore-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77249:Parent Dep:    ~dev-libs/p589bcore-1.0 required by (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77251:Exiting... (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77253:Child:         (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77254:Parent Dep:    dev-libs/p589bpull
+77256:Child:         (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77257:Parent Dep:    dev-libs/p589bprov:0 required by @__auto_slot_operator_replace_installed__
+77259:Child:         (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+77260:Parent Dep:    dev-libs/p589bvirt:0 required by @__auto_slot_operator_replace_installed__
+137139:(dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') depends on
+137140:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+137141:  (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+137142:dev-libs/p589bpull depends on
+137143:  (dev-libs/p589bpull-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (soft)
+137145:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime_slot_op)
+137146:  (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+137147:(dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+137148:(dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') depends on
+137149:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime_slot_op)
+137150:  (dev-libs/p589bcore-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime)
+137151:(dev-libs/p589bcore-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (no children)
+147770:[ebuild  r  U  ] dev-libs/p589bprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fx/ 0 KiB
+147771:[ebuild  N     ] dev-libs/p589bcore-1.0::testrepo to $S/fx/ 0 KiB
+147772:[ebuild  rR    ] dev-libs/p589bvirt-1::testrepo to $S/fx/ 0 KiB
+147773:[ebuild  N     ] dev-libs/p589bpull-2::testrepo to $S/fx/ 0 KiB
+147775:Total: 4 packages (1 upgrade, 2 new, 1 reinstall), Size of downloads: 0 KiB
+147776:forced reinstall atoms:
+147777:   root: $S/fx/
+147778:      atom: dev-libs/p589bprov:0
+147779:      atom: dev-libs/p589bvirt:0
+147782:slot operator dependencies:
+147783:   ($S/fx/, dev-libs/p589bprov:0)
+147784:      parent: (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+147785:        child: (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') (runtime_slot_op)
+154218:forced rebuilds:
+154219:   root: $S/fx/
+154220:      child: (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+154221:         parent: (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154227:  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') causes rebuilds for:
+154228:    (dev-libs/p589bvirt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+154240:### rc: 0

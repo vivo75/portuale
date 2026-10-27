@@ -1,0 +1,162 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug --update --deep dev-libs/p589apull
+
+      Arg: dev-libs/p589apull
+     Atom: dev-libs/p589apull
+   ebuild: dev-libs/p589apull-1::testrepo
+   ebuild: dev-libs/p589apull-2::testrepo
+   ebuild: dev-libs/p589avirt-1::testrepo
+installed: dev-libs/p589avirt-1::testrepo
+   ebuild: dev-libs/p589aprov-5.44::testrepo
+   ebuild: dev-libs/p589acore-1.0::testrepo
+BT try=1 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+# resolution walk (portuale BFS order, not Portage's LIFO _create_graph order)
+
+Child:         (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/p589apull
+
+Parent:    (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge)
+Depstring: =dev-libs/p589aprov-5.44* dev-libs/p589avirt (RDEPEND)
+Priority:  runtime
+Candidates: ['=dev-libs/p589aprov-5.44*', 'dev-libs/p589avirt']
+
+Exiting... (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge)
+
+Child:         (dev-libs/p589avirt-1:0/0::testrepo, installed) USE=""
+Parent Dep:    dev-libs/p589avirt required by (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/p589avirt-1:0/0::testrepo, installed)
+Depstring: =dev-libs/p589aprov-5.40* =dev-libs/p589aprov-5.42* =dev-libs/p589aprov-5.38* ~dev-libs/p589acore-1.0 (RDEPEND)
+Priority:  runtime
+Candidates: ['=dev-libs/p589aprov-5.40*', '=dev-libs/p589aprov-5.42*', '=dev-libs/p589aprov-5.38*', '~dev-libs/p589acore-1.0']
+
+Exiting... (dev-libs/p589avirt-1:0/0::testrepo, installed)
+
+Child:         (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    =dev-libs/p589aprov-5.44* required by (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge)
+
+Child:         (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    ~dev-libs/p589acore-1.0 required by (dev-libs/p589avirt-1:0/0::testrepo, installed)
+
+Exiting... (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+digraph:
+
+(dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) (runtime)
+  (dev-libs/p589avirt-1:0/0::testrepo, installed) (runtime)
+(dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/p589avirt-1:0/0::testrepo, installed) depends on
+  (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/p589aprov-5.42:0/5.42::testrepo, installed) (no children)
+(dev-libs/systempkg-1.0:0/0::testrepo, installed) (no children)
+dev-libs/p589apull depends on
+  (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) (soft)
+
+digraph:
+
+(dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/p589avirt-1:0/0::testrepo, installed) depends on
+  (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) (runtime)
+  (dev-libs/p589avirt-1:0/0::testrepo, installed) (runtime)
+dev-libs/p589apull depends on
+  (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) (soft)
+
+      Arg: dev-libs/p589apull
+     Atom: dev-libs/p589apull
+   ebuild: dev-libs/p589apull-1::testrepo
+   ebuild: dev-libs/p589apull-2::testrepo
+   ebuild: dev-libs/p589avirt-1::testrepo
+installed: dev-libs/p589avirt-1::testrepo
+   ebuild: dev-libs/p589aprov-5.44::testrepo
+   ebuild: dev-libs/p589acore-1.0::testrepo
+BT try=2 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+# resolution walk (portuale BFS order, not Portage's LIFO _create_graph order)
+
+Child:         (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/p589apull
+
+Parent:    (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge)
+Depstring: =dev-libs/p589aprov-5.44* dev-libs/p589avirt (RDEPEND)
+Priority:  runtime
+Candidates: ['=dev-libs/p589aprov-5.44*', 'dev-libs/p589avirt']
+
+Exiting... (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge)
+
+Child:         (dev-libs/p589avirt-1:0/0::testrepo, installed) USE=""
+Parent Dep:    dev-libs/p589avirt required by (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/p589avirt-1:0/0::testrepo, installed)
+Depstring: =dev-libs/p589aprov-5.40* =dev-libs/p589aprov-5.42* =dev-libs/p589aprov-5.38* ~dev-libs/p589acore-1.0 (RDEPEND)
+Priority:  runtime
+Candidates: ['=dev-libs/p589aprov-5.40*', '=dev-libs/p589aprov-5.42*', '=dev-libs/p589aprov-5.38*', '~dev-libs/p589acore-1.0']
+
+Exiting... (dev-libs/p589avirt-1:0/0::testrepo, installed)
+
+Child:         (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    =dev-libs/p589aprov-5.44* required by (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge)
+
+Child:         (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    ~dev-libs/p589acore-1.0 required by (dev-libs/p589avirt-1:0/0::testrepo, installed)
+
+Exiting... (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+digraph:
+
+(dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) (runtime)
+  (dev-libs/p589avirt-1:0/0::testrepo, installed) (runtime)
+(dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/p589avirt-1:0/0::testrepo, installed) depends on
+  (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/p589aprov-5.42:0/5.42::testrepo, installed) (no children)
+(dev-libs/systempkg-1.0:0/0::testrepo, installed) (no children)
+dev-libs/p589apull depends on
+  (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) (soft)
+
+digraph:
+
+(dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/p589avirt-1:0/0::testrepo, installed) depends on
+  (dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/p589acore-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/p589aprov-5.44:0/5.44::testrepo, ebuild scheduled for merge) (runtime)
+  (dev-libs/p589avirt-1:0/0::testrepo, installed) (runtime)
+dev-libs/p589apull depends on
+  (dev-libs/p589apull-2:0/0::testrepo, ebuild scheduled for merge) (soft)
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p589aprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/p589acore-1.0::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/p589apull-2::testrepo to $S/fxp 0 KiB
+
+Total: 3 packages (1 upgrade, 2 new), Size of downloads: 0 KiB
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+### rc: 0

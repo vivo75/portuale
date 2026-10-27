@@ -59,6 +59,14 @@ pub(crate) struct PassResult {
 /// its `||` groups chose: `(category, package, version)` to chosen atom texts.
 pub(crate) type InstalledWalked = HashMap<(String, String, String), HashSet<String>>;
 
+/// The `(category, package)` of every installed package the walk recursed into.
+pub(crate) fn installed_walked_cps(walked: &InstalledWalked) -> HashSet<(String, String)> {
+    walked
+        .keys()
+        .map(|(c, p, _)| (c.clone(), p.clone()))
+        .collect()
+}
+
 /// The walk's per-pass `let mut`s, moved out of the loop body so the `'queue` walk
 /// can live in `run_pass`. The walk writes the cross-pass autounmask accumulators
 /// through the overlay trio and reads them back overlay-then-`bp` within the same

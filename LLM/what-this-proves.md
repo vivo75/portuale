@@ -19973,3 +19973,20 @@ Check:
 
 The expected rows are host Portage 3.0.83 captures in
 `LLM/evidence/2026-10-26-575-residues/t10b/captures/`.
+
+## #598 R5: `--update --deep` rebuilds the installed virtual the walk reached
+
+`emerge -pvuD dev-libs/p569pull` (and `p589bpull`) on the pmtest fixtures now
+prints Portage's four rows: `[ebuild  r  U  ] p569prov-5.44`, `N p569core-1.0`,
+`[ebuild  rR    ] p569virt-1`, `N p569pull-2`, then the "causes rebuilds
+for:" block. Under `--deep` Portage recurses into the installed virtual,
+whose built `prov:=` atom conflicts with the new provider, and files its
+rebuild; portuale scheduled that rebuild only for packages reachable from
+`@world`, and now also for installed packages the request's own walk
+recursed into (not under `--backtrack=0`, as in Portage). The bed is
+unchanged (`l0-20261027T195839Z` equals `l0-20261027T191115Z` cell by cell).
+
+Check, from pmtest: `python3 -m pytest
+pytests-contract-suite/test_emerge_pretend_contract.py -q -k 598`. Expected
+rows are Portage 3.0.83 captures in
+`LLM/evidence/2026-10-26-575-residues/r5/captures/`.

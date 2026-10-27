@@ -1,0 +1,44 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxwp ROOT=$S/fxwp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --update --deep @world
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+$S/fxwp/repo/profiles/updates/2Q-2024..
+@s
+
+BT try=1 kind=Feedback:Config
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=2 kind=Settle
+BT   masks-in []
+BT   replace-in 2 prune=false ["dev-libs/p569prov", "dev-libs/p569virt"]
+BT try=3 kind=Feedback:Config
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=4 kind=Settle
+BT   masks-in []
+BT   replace-in 2 prune=false ["dev-libs/p569prov", "dev-libs/p569virt"]
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to $S/fxwp 0 KiB
+[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo] to $S/fxwp 0 KiB
+[ebuild  r  U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fxwp 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to $S/fxwp 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to $S/fxwp 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to $S/fxwp 0 KiB
+[ebuild  rR    ] dev-libs/p569virt-1::testrepo to $S/fxwp 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to $S/fxwp 0 KiB
+
+Total: 8 packages (2 upgrades, 5 new, 1 reinstall), Size of downloads: 0 KiB
+
+The following packages are causing rebuilds:
+
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fxwp') causes rebuilds for:
+    (dev-libs/p569virt-1:0/0::testrepo, ebuild scheduled for merge to '$S/fxwp')
+### rc: 0

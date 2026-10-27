@@ -23,11 +23,18 @@ pub(crate) fn assemble_result(
             let top_atoms: HashSet<String> =
                 ctx.top_level.iter().map(|s| (*s).to_string()).collect();
             let scan_scope = ctx.scan_reachable(&pass.entries);
+            // Portage files the walked-consumer rebuild only while it may backtrack.
+            // Portage: depgraph.py, _slot_conflict_backtrack_abi (_allow_backtracking)
+            let walked = match ctx.backtrack_max {
+                0 => HashSet::new(),
+                _ => installed_walked_cps(&pass.installed_walked),
+            };
             slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
                 root: ctx.root,
                 entries: &pass.entries,
                 reachable: &ctx.slot_op_reachable,
                 scope: Some(&scan_scope),
+                walked_installed: &walked,
                 already: &params.slot_operator_replace_installed,
                 undone: &params.slot_operator_undone,
                 with_bdeps: ctx.with_bdeps,

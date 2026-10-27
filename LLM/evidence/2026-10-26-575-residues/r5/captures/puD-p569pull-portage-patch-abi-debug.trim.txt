@@ -1,0 +1,15 @@
+# trimmed: grep -n of the --debug capture for the backtrack messages only
+1:### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PYTHONHASHSEED=0 python3 $S/bin/emerge-patched.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug --update --deep dev-libs/p569pull
+60001:backtracking due to slot conflict:
+60012:   new child package:  None
+60019:   new child package:  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/')
+60023:backtracking due to missed slot abi update:
+70672:backtracking try 1 
+70674:[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fx/ 0 KiB
+70675:[ebuild  N     ] dev-libs/p569core-1.0::testrepo to $S/fx/ 0 KiB
+70676:[ebuild  N     ] dev-libs/p569pull-2::testrepo to $S/fx/ 0 KiB
+147752:[ebuild  r  U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fx/ 0 KiB
+147753:[ebuild  N     ] dev-libs/p569core-1.0::testrepo to $S/fx/ 0 KiB
+147754:[ebuild  rR    ] dev-libs/p569virt-1::testrepo to $S/fx/ 0 KiB
+147755:[ebuild  N     ] dev-libs/p569pull-2::testrepo to $S/fx/ 0 KiB
+154222:### rc: 0
