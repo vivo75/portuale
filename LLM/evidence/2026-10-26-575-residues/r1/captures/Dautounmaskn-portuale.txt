@@ -1,0 +1,50 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/r592dtop
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "r592ds", "2")
+BT   choice ("dev-libs", "r592ds", "1")
+BT   conflict dev-libs/r592ds parents=[("2", "dev-libs/r592dy-2:0/0::testrepo", "=dev-libs/r592ds-2"), ("1", "dev-libs/r592dx-2:0/0::testrepo", "=dev-libs/r592ds-1")]
+BT   pullers dev-libs/r592ds -> [("dev-libs", "r592dy", "2", "=dev-libs/r592ds-2"), ("dev-libs", "r592dx", "2", "=dev-libs/r592ds-1")]
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/r592ds-1"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r592dx neg=!=dev-libs/r592dx-2 reason=MissingDependency { parent: ("dev-libs", "r592dx"), atom: "=dev-libs/r592ds-1" }
+BT   missing_dep_trigger owner=dev-libs/r592dx neg=!=dev-libs/r592dx-2 atom==dev-libs/r592ds-1
+BT try=3 kind=DeadEnd
+BT   masks-in ["!=dev-libs/r592ds-1", "!=dev-libs/r592dx-2"]
+BT   replace-in 0 prune=false []
+BT try=4 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/r592ds-2"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r592dy neg=!=dev-libs/r592dy-2 reason=MissingDependency { parent: ("dev-libs", "r592dy"), atom: "=dev-libs/r592ds-2" }
+BT   missing_dep_trigger owner=dev-libs/r592dy neg=!=dev-libs/r592dy-2 atom==dev-libs/r592ds-2
+BT try=5 kind=Settle
+BT   masks-in ["!=dev-libs/r592ds-2", "!=dev-libs/r592dy-2"]
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 4/20).
+
+[ebuild  N     ] dev-libs/r592ds-1::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r592dx-2::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r592dy-1::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r592dtop-1::testrepo to $S/fxp 0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/r592ds:0
+
+  (dev-libs/r592ds-2:0/0::testrepo, ebuild scheduled for merge to '$S/fxp') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/r592ds-1 required by (dev-libs/r592dx-2:0/0::testrepo, ebuild scheduled for merge to '$S/fxp') USE="" ELIBC="glibc"
+    ^                ^
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/r592dy:0
+### rc: 0

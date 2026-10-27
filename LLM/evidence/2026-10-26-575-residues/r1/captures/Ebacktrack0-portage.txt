@@ -1,0 +1,46 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --backtrack=0 dev-libs/r592etop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took N s (backtrack: 0/0).
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/r592es:0 for $S/fx/
+
+  (dev-libs/r592es-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc" pulled in by
+    =dev-libs/r592es-2 required by (dev-libs/r592ey-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+    ^                ^                                                                                                                            
+
+  (dev-libs/r592es-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc" pulled in by
+    =dev-libs/r592es-1 required by (dev-libs/r592ex-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+    ^                ^                                                                                                                            
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+emerge: there are no ebuilds to satisfy "dev-libs/r592egone" for $S/fx/.
+(dependency required by "dev-libs/r592em-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r592etop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r592etop" [argument])
+### rc: 1

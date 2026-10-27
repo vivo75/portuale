@@ -298,11 +298,17 @@ fn collect_feedback_inner(
         return decision;
     }
 
-    if let Some(decision) = step_slot_conflict_abi(pass, ctx, &mut grown, config) {
+    // Portage's walk stopped at an unsatisfied dependency, so it processed no
+    // slot conflict in this pass.
+    let walk_stopped = !ctx.complete && reverse_dep_pins::pass_has_unsatisfied_dep(pass);
+
+    if !walk_stopped && let Some(decision) = step_slot_conflict_abi(pass, ctx, &mut grown, config) {
         return decision;
     }
 
-    if let Some(decision) = step_solvable_slot_conflicts(pass, ctx, config, &mut grown) {
+    if !walk_stopped
+        && let Some(decision) = step_solvable_slot_conflicts(pass, ctx, config, &mut grown)
+    {
         return decision;
     }
 
@@ -314,7 +320,9 @@ fn collect_feedback_inner(
         return decision;
     }
 
-    if let Some(decision) = step_slot_conflict_backtrack(pass, ctx, &mut grown, config) {
+    if !walk_stopped
+        && let Some(decision) = step_slot_conflict_backtrack(pass, ctx, &mut grown, config)
+    {
         return decision;
     }
 

@@ -1,0 +1,73 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/r592ftop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took N s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/r592fs-2::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592fs-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592fflag-1::testrepo to $S/fx/ USE="r592flag" 0 KiB
+[ebuild  N     ] dev-libs/r592fm-2::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592fx-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592fy-2::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592ftop-1::testrepo to $S/fx/ 0 KiB
+
+Total: 7 packages (7 new), Size of downloads: 0 KiB
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/r592fs:0 for $S/fx/
+
+  (dev-libs/r592fs-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc" pulled in by
+    =dev-libs/r592fs-2 required by (dev-libs/r592fy-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+    ^                ^                                                                                                                            
+
+  (dev-libs/r592fs-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc" pulled in by
+    =dev-libs/r592fs-1 required by (dev-libs/r592fx-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+    ^                ^                                                                                                                            
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/r592fm-2::testrepo
+# required by dev-libs/r592ftop-1::testrepo
+# required by dev-libs/r592ftop (argument)
+>=dev-libs/r592fflag-1 r592flag
+
+ * In order to avoid wasting time, backtracking has terminated early
+ * due to the above autounmask change(s). The --autounmask-backtrack=y
+ * option can be used to force further backtracking, but there is no
+ * guarantee that it will produce a solution.
+
+!!! The following installed packages are masked:
+- dev-python/entrypoints-0.4::gentoo (masked by: package.mask)
+/.gentoo/repos/gentoo/profiles/package.mask:
+# Sam James <sam@gentoo.org> (2026-10-22)
+# Replaced by importlib, no reverse dependencies (bug #984696). Removal
+# on 2026-11-22.
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+### rc: 1

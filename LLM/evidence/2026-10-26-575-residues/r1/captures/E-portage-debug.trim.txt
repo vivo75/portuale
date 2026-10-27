@@ -1,0 +1,29 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug dev-libs/r592etop
+79:Slot Conflict: (dev-libs/r592es-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+93:backtracking due to unsatisfied dep:
+94:    parent: (dev-libs/r592em-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+97:      atom: dev-libs/r592egone
+112:backtracking try 1 
+155:runtime_pkg_mask: {dev-libs/r592em-2: {'missing dependency': {(dev-libs/r592em-2, '$S/fx/', Atom('dev-libs/r592egone'))}}} 
+216:Slot Conflict: (dev-libs/r592es-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+60101:      atom: dev-libs/r592es:0
+60126:backtracking due to slot conflict:
+70779:backtracking try 2 
+77266:runtime_pkg_mask: {dev-libs/r592em-2: {'missing dependency': {(dev-libs/r592em-2, '$S/fx/', Atom('dev-libs/r592egone'))}}, dev-libs/r592es-1: {'slot conflict': {(dev-libs/r592ey-2, Atom('=dev-libs/r592es-2'))}}} 
+77325:backtracking due to unsatisfied dep:
+77326:    parent: (dev-libs/r592ex-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77329:      atom: =dev-libs/r592es-1
+77333:backtracking try 3 
+77368:runtime_pkg_mask: {dev-libs/r592em-2: {'missing dependency': {(dev-libs/r592em-2, '$S/fx/', Atom('dev-libs/r592egone'))}}, dev-libs/r592es-1: {'slot conflict': {(dev-libs/r592ey-2, Atom('=dev-libs/r592es-2'))}}, dev-libs/r592ex-1: {'missing dependency': {(dev-libs/r592ex-1, '$S/fx/', Atom('=dev-libs/r592es-1'))}}} 
+77390:backtracking due to unsatisfied dep:
+77391:    parent: (dev-libs/r592etop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77394:      atom: dev-libs/r592ex
+77398:backtracking try 4 
+77421:runtime_pkg_mask: {dev-libs/r592em-2: {'missing dependency': {(dev-libs/r592em-2, '$S/fx/', Atom('dev-libs/r592egone'))}}, dev-libs/r592es-1: {'slot conflict': {(dev-libs/r592ey-2, Atom('=dev-libs/r592es-2'))}}, dev-libs/r592ex-1: {'missing dependency': {(dev-libs/r592ex-1, '$S/fx/', Atom('=dev-libs/r592es-1'))}}, dev-libs/r592etop-1: {'missing dependency': {(dev-libs/r592etop-1, '$S/fx/', A
+77429:backtracking try 5 
+77450:runtime_pkg_mask: {dev-libs/r592em-2: {'missing dependency': {(dev-libs/r592em-2, '$S/fx/', Atom('dev-libs/r592egone'))}}, dev-libs/r592es-2: {'slot conflict': {(dev-libs/r592ex-1, Atom('=dev-libs/r592es-1'))}}} 
+77494:backtracking due to unsatisfied dep:
+77495:    parent: (dev-libs/r592ey-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+77498:      atom: =dev-libs/r592es-2
+77502:backtracking try 6 
+77537:runtime_pkg_mask: {dev-libs/r592em-2: {'missing dependency': {(dev-libs/r592em-2, '$S/fx/', Atom('dev-libs/r592egone'))}}, dev-libs/r592es-2: {'slot conflict': {(dev-libs/r592ex-1, Atom('=dev-libs/r592es-1'))}}, dev-libs/r592ey-2: {'missing dependency': {(dev-libs/r592ey-2, '$S/fx/', Atom('=dev-libs/r592es-2'))}}} 

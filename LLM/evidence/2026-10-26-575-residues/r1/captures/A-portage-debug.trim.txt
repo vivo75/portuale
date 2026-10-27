@@ -1,0 +1,8 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --debug dev-libs/r592atop
+59:backtracking due to unsatisfied dep:
+60:    parent: (dev-libs/r592ay-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+63:      atom: dev-libs/r592agone
+67:backtracking try 1 
+85:runtime_pkg_mask: {dev-libs/r592ay-2: {'missing dependency': {(dev-libs/r592ay-2, '$S/fx/', Atom('dev-libs/r592agone'))}}} 
+142:Slot Conflict: (dev-libs/r592as-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+60027:      atom: dev-libs/r592as:0

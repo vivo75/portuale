@@ -1,0 +1,59 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/r592ctop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took N s (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/r592cs-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592cx-2::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592cy-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592ctop-1::testrepo to $S/fx/ 0 KiB
+
+Total: 4 packages (4 new), Size of downloads: 0 KiB
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/r592cs:0 for $S/fx/
+
+  (dev-libs/r592cs-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/r592cs-1 required by (dev-libs/r592cx-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+    ^                ^
+
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+dev-libs/r592cy:0 for $S/fx/
+
+  selected: (dev-libs/r592cy-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+  skipped: (dev-libs/r592cy-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (see unsatisfied dependency below)
+
+!!! All ebuilds that could satisfy "dev-libs/r592cmasked" for $S/fx/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/r592cmasked-1::testrepo (masked by: ~amd64 keyword)
+
+(dependency required by "dev-libs/r592cy-2::testrepo" [ebuild])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+
+
+!!! The following installed packages are masked:
+- dev-python/entrypoints-0.4::gentoo (masked by: package.mask)
+/.gentoo/repos/gentoo/profiles/package.mask:
+# Sam James <sam@gentoo.org> (2026-10-22)
+# Replaced by importlib, no reverse dependencies (bug #984696). Removal
+# on 2026-11-22.
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+### rc: 0

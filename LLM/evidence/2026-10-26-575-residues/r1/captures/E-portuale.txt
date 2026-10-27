@@ -1,0 +1,70 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/r592etop
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "r592es", "2")
+BT   choice ("dev-libs", "r592es", "1")
+BT   conflict dev-libs/r592es parents=[("2", "dev-libs/r592ey-2:0/0::testrepo", "=dev-libs/r592es-2"), ("1", "dev-libs/r592ex-1:0/0::testrepo", "=dev-libs/r592es-1")]
+BT   pullers dev-libs/r592es -> [("dev-libs", "r592ey", "2", "=dev-libs/r592es-2"), ("dev-libs", "r592ex", "1", "=dev-libs/r592es-1")]
+BT   missing_dep_trigger owner=dev-libs/r592em neg=!=dev-libs/r592em-2 atom=dev-libs/r592egone
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/r592es-1"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r592ex neg=!=dev-libs/r592ex-1 reason=MissingDependency { parent: ("dev-libs", "r592ex"), atom: "=dev-libs/r592es-1" }
+BT   missing_dep_trigger owner=dev-libs/r592ex neg=!=dev-libs/r592ex-1 atom==dev-libs/r592es-1
+BT try=3 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/r592es-1", "!=dev-libs/r592ex-1"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r592etop neg=!=dev-libs/r592etop-1 reason=MissingDependency { parent: ("dev-libs", "r592etop"), atom: "dev-libs/r592ex" }
+BT   missing_dep_trigger owner=dev-libs/r592etop neg=!=dev-libs/r592etop-1 atom=dev-libs/r592ex
+BT try=4 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/r592es-2"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r592ey neg=!=dev-libs/r592ey-2 reason=MissingDependency { parent: ("dev-libs", "r592ey"), atom: "=dev-libs/r592es-2" }
+BT   missing_dep_trigger owner=dev-libs/r592ey neg=!=dev-libs/r592ey-2 atom==dev-libs/r592es-2
+BT try=5 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/r592es-2", "!=dev-libs/r592ey-2"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r592em neg=!=dev-libs/r592em-2 reason=MissingDependency { parent: ("dev-libs", "r592em"), atom: "dev-libs/r592egone" }
+BT   missing_dep_trigger owner=dev-libs/r592em neg=!=dev-libs/r592em-2 atom=dev-libs/r592egone
+BT try=6 kind=Settle
+BT   masks-in ["!=dev-libs/r592em-2", "!=dev-libs/r592es-2", "!=dev-libs/r592ey-2"]
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 6/20).
+
+[ebuild  N     ] dev-libs/r592es-1::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r592em-1::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r592ex-1::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r592ey-1::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r592etop-1::testrepo to $S/fxp 0 KiB
+
+Total: 5 packages (5 new), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/r592es:0
+
+  (dev-libs/r592es-2:0/0::testrepo, ebuild scheduled for merge to '$S/fxp') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/r592es-1 required by (dev-libs/r592ex-1:0/0::testrepo, ebuild scheduled for merge to '$S/fxp') USE="" ELIBC="glibc"
+    ^                ^
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/r592ey:0
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+dev-libs/r592em:0
+
+  selected: (dev-libs/r592em-1:0/0::testrepo, ebuild scheduled for merge)
+  skipped: (dev-libs/r592em-2:0/0::testrepo, ebuild scheduled for merge) (see unsatisfied dependency below)
+
+emerge: there are no ebuilds to satisfy "dev-libs/r592egone".
+(dependency required by "dev-libs/r592em-2::testrepo" [ebuild])
+
+### rc: 0

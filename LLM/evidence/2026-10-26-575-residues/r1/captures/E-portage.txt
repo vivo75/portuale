@@ -1,0 +1,48 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/r592etop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took N s (backtrack: 6/20).
+
+[ebuild  N     ] dev-libs/r592es-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592em-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592ex-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592ey-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r592etop-1::testrepo to $S/fx/ 0 KiB
+
+Total: 5 packages (5 new), Size of downloads: 0 KiB
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/r592es:0 for $S/fx/
+
+  (dev-libs/r592es-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/r592es-1 required by (dev-libs/r592ex-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+    ^                ^
+
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+dev-libs/r592em:0 for $S/fx/
+
+  selected: (dev-libs/r592em-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+  skipped: (dev-libs/r592em-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (see unsatisfied dependency below)
+
+emerge: there are no ebuilds to satisfy "dev-libs/r592egone" for $S/fx/.
+(dependency required by "dev-libs/r592em-2::testrepo" [ebuild])
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/r592ey:0 for $S/fx/
+### rc: 0

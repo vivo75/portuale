@@ -1,0 +1,21 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --backtrack=0 dev-libs/r592atop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took N s (backtrack: 0/0).
+
+
+emerge: there are no ebuilds to satisfy "dev-libs/r592agone" for $S/fx/.
+(dependency required by "dev-libs/r592ay-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r592atop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r592atop" [argument])
+### rc: 1

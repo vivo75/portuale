@@ -1,0 +1,60 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n --backtrack=1 dev-libs/r592dtop
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "r592ds", "2")
+BT   choice ("dev-libs", "r592ds", "1")
+BT   conflict dev-libs/r592ds parents=[("2", "dev-libs/r592dy-2:0/0::testrepo", "=dev-libs/r592ds-2"), ("1", "dev-libs/r592dx-2:0/0::testrepo", "=dev-libs/r592ds-1")]
+BT   pullers dev-libs/r592ds -> [("dev-libs", "r592dy", "2", "=dev-libs/r592ds-2"), ("dev-libs", "r592dx", "2", "=dev-libs/r592ds-1")]
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/r592ds-1"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r592dx neg=!=dev-libs/r592dx-2 reason=MissingDependency { parent: ("dev-libs", "r592dx"), atom: "=dev-libs/r592ds-1" }
+BT   missing_dep_trigger owner=dev-libs/r592dx neg=!=dev-libs/r592dx-2 atom==dev-libs/r592ds-1
+BT try=3 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "r592ds", "2")
+BT   choice ("dev-libs", "r592ds", "1")
+BT   conflict dev-libs/r592ds parents=[("2", "dev-libs/r592dy-2:0/0::testrepo", "=dev-libs/r592ds-2"), ("1", "dev-libs/r592dx-2:0/0::testrepo", "=dev-libs/r592ds-1")]
+BT   pullers dev-libs/r592ds -> [("dev-libs", "r592dy", "2", "=dev-libs/r592ds-2"), ("dev-libs", "r592dx", "2", "=dev-libs/r592ds-1")]
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/1).
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/r592ds:0
+
+  (dev-libs/r592ds-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    =dev-libs/r592ds-2 required by (dev-libs/r592dy-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^                ^                                                                                                
+
+  (dev-libs/r592ds-1:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    =dev-libs/r592ds-1 required by (dev-libs/r592dx-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^                ^                                                                                                
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/r592dflag[r592flag]".
+!!! One of the following packages is required to complete your request:
+- dev-libs/r592dflag-1::testrepo (Change USE: +r592flag)
+(dependency required by "dev-libs/r592dy-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r592dtop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r592dtop" [argument])
+### rc: 1

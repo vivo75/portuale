@@ -78,6 +78,16 @@ pub(crate) fn scan_reverse_dependencies(ctx: &ResolveCtx<'_>, pass: &PassResult)
     ReverseScan { enforced, dropped }
 }
 
+/// Whether the pass met a masked, USE-unsatisfied or absent dependency.
+/// Portage's walk stops there and processes no slot conflict (depgraph.py
+/// `_create_graph`, `_resolve`); the `_complete_graph` re-walk does not stop.
+pub(super) fn pass_has_unsatisfied_dep(pass: &PassResult) -> bool {
+    !pass.masked_deps.is_empty()
+        || !pass.use_unsat_deps.is_empty()
+        || !pass.plain_miss_deps.is_empty()
+        || pass.missing_dep_trigger.is_some()
+}
+
 /// Whether this pass may feed a consumer-pin conflict back. Portage returns
 /// before it processes slot conflicts when a dependency is missing, masked,
 /// USE-unsatisfied or plainly absent (depgraph.py `_resolve`), and a fresh
@@ -94,10 +104,7 @@ fn consumer_pin_conflict_may_feed_back(
             .contains(&(p.cp.clone(), p.atom.clone()))
     }) && pass.autounmask_use_changes.is_empty()
         && pass.use_overlay.is_empty()
-        && pass.masked_deps.is_empty()
-        && pass.use_unsat_deps.is_empty()
-        && pass.plain_miss_deps.is_empty()
-        && pass.missing_dep_trigger.is_none()
+        && !pass_has_unsatisfied_dep(pass)
         && !pass.autounmask_grew
         && !(grown.autounmask_use_broke && !grown.autounmask_disabled)
 }
