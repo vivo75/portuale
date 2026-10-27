@@ -1,0 +1,17 @@
+### portuale argv: emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --deep =dev-libs/p589aprov-5.44
+BT try=1 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=2 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p589aprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fxw 0 KiB
+
+Total: 1 package (1 upgrade), Size of downloads: 0 KiB
+### rc: 0

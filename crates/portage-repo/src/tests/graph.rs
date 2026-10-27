@@ -4413,6 +4413,8 @@ fn exact_version_update_keeps_arg_pinned_provider() {
             backtrack_max: 3,
             reinstall_atoms: Vec::new(),
             rebuild_if_new_slot: true,
+            complete_if_new_use: true,
+            complete_if_new_ver: true,
             rebuild_if_unbuilt: false,
             rebuild_if_new_rev: false,
             rebuild_if_new_ver: false,

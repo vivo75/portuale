@@ -134,6 +134,7 @@
 - [crates/portage-repo/src/resolve/installed_meta.rs](portage-repo/resolve/installed_meta.md) — Installed packages' metadata as the resolver sees it: raw vdb records vs the dynamic-deps overlay.
 - [crates/portage-repo/src/resolve/merge_bound.rs](portage-repo/resolve/merge_bound.md) — Lookups over the entries a run will merge.
 - [crates/portage-repo/src/resolve/or_preference.rs](portage-repo/resolve/or_preference.md) — Which alternative of an `||` group to prefer: Portage `dep_zapdeps`'s choice bins and in-bin ordering.
+- [crates/portage-repo/src/resolve/or_view.rs](portage-repo/resolve/or_view.md) — The package set a `||` choice is judged against (#580 10b).
 - [crates/portage-repo/src/resolve/outcome.rs](portage-repo/resolve/outcome.md) — The outcome of resolving one atom.
 - [crates/portage-repo/src/resolve/pass/assemble_pass.rs](portage-repo/resolve/pass/assemble_pass.md) — The pass result from the finished walk state.
 - [crates/portage-repo/src/resolve/pass/candidate_pool.rs](portage-repo/resolve/pass/candidate_pool.md) — Re-derives the source (ebuild, PKGDIR or binhost binary) of the resolved version.
@@ -171,6 +172,7 @@
 - [crates/portage-repo/src/resolve/resolver.rs](portage-repo/resolve/resolver.md) — The resolver trait and solver selection.
 - [crates/portage-repo/src/resolve/result.rs](portage-repo/resolve/result.md) — The resolver's result and how a run aborts.
 - [crates/portage-repo/src/resolve/rev_dep.rs](portage-repo/resolve/rev_dep.md) — Constraints that installed reverse dependencies put on an upgrade.
+- [crates/portage-repo/src/resolve/rev_dep_or.rs](portage-repo/resolve/rev_dep_or.md) — Which `||` arms of an installed consumer become parent atoms (#580 10b).
 - [crates/portage-repo/src/resolve/root_deps.rs](portage-repo/resolve/root_deps.md) — `--root-deps` build entries for the running root.
 - [crates/portage-repo/src/resolve/skipped.rs](portage-repo/resolve/skipped.md) — Skipped-update records (withheld upgrades, backtrack-mask rows) and their grouping.
 - [crates/portage-repo/src/resolve/slot_conflict.rs](portage-repo/resolve/slot_conflict.md) — Slot conflicts: records, merging and rendering.
@@ -236,6 +238,7 @@
 - [crates/portage-repo/src/tests/tests_184.rs](portage-repo/tests/tests_184.md) — Shadowed-arm order legs for `direct_solve_instance_use` / `direct_solve_atom_matches`.
 - [crates/portage-repo/src/tests/tests_195d.rs](portage-repo/tests/tests_195d.md) — Operator-level pins for `violated_parent_flags` against Portage's `Atom.violated_conditionals`.
 - [crates/portage-repo/src/tests/tests_571.rs](portage-repo/tests/tests_571.md) — Task 12 (#571): the category allow-list at every consumer.
+- [crates/portage-repo/src/tests/tests_consumer_or_view.rs](portage-repo/tests/tests_consumer_or_view.md) — An installed consumer's `||` is chosen the way `dep_zapdeps` chooses it, in the view Portage uses (#580 10b).
 - [crates/portage-repo/src/tests/tests_p491.rs](portage-repo/tests/tests_p491.md) — The installed-parent update probe (#491 pass-0 seed), hermetically.
 - [crates/portage-repo/src/tests/tests_p563.rs](portage-repo/tests/tests_p563.md) — The perl-5.44 stabilization shape (#563 heal) and the skip-block pin forms (#568/#569), hermetically.
 - [crates/portage-repo/src/tests/unsat_probe.rs](portage-repo/tests/unsat_probe.md) — Dead-end pass seeding a replacement parent for an unsatisfiable built `:=` dep.

@@ -93,6 +93,11 @@ pub struct ResolveRequest {
     /// `--rebuild-if-new-slot` (default on): the slot-operator (`:=`)
     /// auto-rebuild pass. `false` skips it.
     pub rebuild_if_new_slot: bool,
+    /// `--complete-graph-if-new-use` / `--complete-graph-if-new-ver` (default on): whether
+    /// a USE or version change of an installed package turns complete mode on.
+    // Portage: depgraph.py, _complete_graph
+    pub complete_if_new_use: bool,
+    pub complete_if_new_ver: bool,
     /// `--rebuild-if-unbuilt` / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`
     /// (all off by default): rebuild an installed package whose build-time dep
     /// merges this run. The caller resolves the `unbuilt > new_rev > new_ver`
@@ -203,6 +208,8 @@ impl ResolveRequest {
             backtrack_max: 10,
             reinstall_atoms: Vec::new(),
             rebuild_if_new_slot: true,
+            complete_if_new_use: true,
+            complete_if_new_ver: true,
             rebuild_if_unbuilt: false,
             rebuild_if_new_rev: false,
             rebuild_if_new_ver: false,

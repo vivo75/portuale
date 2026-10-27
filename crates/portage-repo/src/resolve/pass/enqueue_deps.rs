@@ -440,6 +440,7 @@ pub(crate) fn flatten_dep_string(args: FlattenDepStringArgs<'_>) -> ControlFlow<
                     alts,
                     queued: queued_view,
                     gate: ctx.gate(),
+                    view: OrView::Normal,
                 })
             },
         },
@@ -491,6 +492,7 @@ pub(crate) fn flatten_dep_string(args: FlattenDepStringArgs<'_>) -> ControlFlow<
                 gate: ctx.gate(),
                 gate_entries: entries,
                 gate_queued: queued,
+                view: OrView::Normal,
             })
         },
     ) else {

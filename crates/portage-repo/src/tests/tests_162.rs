@@ -738,6 +738,7 @@ fn disj_162_circ(args: Disj162CircArgs<'_>) -> portage_use_reduce::AltPreference
         gate_entries: entries,
         gate_queued: queued,
         gate: crate::test_gate(repos),
+        view: OrView::Normal,
     })
 }
 
@@ -1291,6 +1292,7 @@ fn disj_circ_162(args: DisjCirc162Args<'_>) -> portage_use_reduce::AltPreference
         gate_entries: entries,
         gate_queued: queued,
         gate: crate::test_gate(repos),
+        view: OrView::Normal,
     })
 }
 
@@ -1482,6 +1484,7 @@ fn promote_162(args: Promote162Args<'_>) -> usize {
         alts: &owned,
         queued,
         gate: crate::test_gate(repos),
+        view: OrView::Normal,
     })
 }
 
@@ -1819,6 +1822,7 @@ fn demote_162(args: Demote162Args<'_>) -> bool {
         queued,
         update,
         gate: crate::test_gate(repos),
+        view: OrView::Normal,
     })
 }
 

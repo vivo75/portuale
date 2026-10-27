@@ -1,0 +1,42 @@
+### portuale argv: emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/p590vpull
+BT try=1 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=2 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "p590vprov", "5.42")
+BT   choice ("dev-libs", "p590vprov", "5.44")
+BT try=3 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p590vprov-5.44"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p590vpull neg=!=dev-libs/p590vpull-2 reason=MissingDependency { parent: ("dev-libs", "p590vpull"), atom: "=dev-libs/p590vprov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p590vpull neg=!=dev-libs/p590vpull-2 atom==dev-libs/p590vprov-5.44*
+BT try=4 kind=Settle
+BT   masks-in ["!=dev-libs/p590vprov-5.44", "!=dev-libs/p590vpull-2"]
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 2/20).
+
+[ebuild  N     ] dev-libs/p590vpull-1::testrepo to $S/fxw 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/p590vprov:0
+
+  (dev-libs/p590vprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fxw') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/p590vprov-5.42* required by (virtual/p590vva-1:0/0::testrepo, installed in '$S/fxw') USE=""
+    ^                   ^^^^ 
+    =dev-libs/p590vprov-5.42* required by (virtual/p590vvb-1:0/0::testrepo, installed in '$S/fxw') USE=""
+    ^                   ^^^^ 
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/p590vpull:0
+### rc: 0

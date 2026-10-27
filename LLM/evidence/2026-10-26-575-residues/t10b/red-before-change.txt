@@ -1,0 +1,146 @@
+# RED run: tests/tests_consumer_or_view.rs (behavior tests only; the API-level tests below the marker need the new functions and cannot compile on HEAD) against HEAD 1a4c3117, 2026-10-27
+# command: cargo test --release -p portage-repo --lib tests_consumer_or_view -- --include-ignored  (worktree of HEAD, fixtures = pmtest 4bbc77e + p590v*)
+# note: the --complete-graph-if-new-* switches do not exist on HEAD's ResolveRequest, so consumer_or_without_complete_mode_forms_no_pin only sets rebuild_if_new_slot=false here
+
+   --> crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:180:1
+    |
+180 | pub(super) fn trace_search(req: &ResolveRequest) -> Vec<TracedPass> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `trace_search` is reachable at visibility `pub(in crate::tests)`
+    |
+note: but type `TracedPass` is only usable at visibility `pub(self)`
+   --> crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:151:1
+    |
+151 | struct TracedPass {
+    | ^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+   --> crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:295:1
+    |
+295 | pub(super) fn portage_tries(trace: &[TracedPass]) -> usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `portage_tries` is reachable at visibility `pub(in crate::tests)`
+    |
+note: but type `TracedPass` is only usable at visibility `pub(self)`
+   --> crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:151:1
+    |
+151 | struct TracedPass {
+    | ^^^^^^^^^^^^^^^^^
+
+   --> crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:299:1
+    |
+299 | pub(super) fn kinds(trace: &[TracedPass]) -> Vec<&'static str> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `kinds` is reachable at visibility `pub(in crate::tests)`
+    |
+note: but type `TracedPass` is only usable at visibility `pub(self)`
+   --> crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:151:1
+    |
+151 | struct TracedPass {
+    | ^^^^^^^^^^^^^^^^^
+
+   --> crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:303:1
+    |
+303 | pub(super) fn atoms_of(choice: &TracedChoice) -> Vec<(&str, &str)> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `atoms_of` is reachable at visibility `pub(in crate::tests)`
+    |
+note: but type `TracedChoice` is only usable at visibility `pub(self)`
+   --> crates/portage-repo/src/tests/tests_consumer_pin_conflict.rs:142:1
+    |
+142 | struct TracedChoice {
+    | ^^^^^^^^^^^^^^^^^^^
+
+    Finished `release` profile [optimized] target(s) in 35.64s
+     Running unittests src/lib.rs (/var/tmp/claude-10b/base-target/release/deps/portage_repo-46aec43afa94a88c)
+
+running 8 tests
+test tests::tests_consumer_or_view::deep_rewalk_keeps_the_walkers_pick_for_a_recursed_consumer ... FAILED
+test tests::tests_consumer_or_view::t2_swap_slotop_matches_portage ... FAILED
+test tests::tests_consumer_or_view::consumer_or_without_complete_mode_forms_no_pin ... FAILED
+test tests::tests_consumer_or_view::t3_keeps_the_pin_of_a_selected_arm_the_vdb_matches ... ok
+test tests::tests_consumer_or_view::t1_swap_noslotop_merges_the_update_like_portage ... FAILED
+test tests::tests_consumer_or_view::explicit_complete_graph_chooses_the_consumer_or_postmerge ... FAILED
+test tests::tests_consumer_or_view::world_only_consumer_under_deep_is_chosen_postmerge ... FAILED
+test tests::tests_consumer_or_view::sibling_virtuals_share_the_atom_a_sibling_chose ... ok
+
+failures:
+
+---- tests::tests_consumer_or_view::deep_rewalk_keeps_the_walkers_pick_for_a_recursed_consumer stdout ----
+
+thread 'tests::tests_consumer_or_view::deep_rewalk_keeps_the_walkers_pick_for_a_recursed_consumer' (1873991) panicked at crates/portage-repo/src/tests/tests_consumer_or_view.rs:78:5:
+[SlotConflict { category: "dev-libs", package: "p589aprov", slot: "0", resolved_version: "5.44", conflicting_atom: "=dev-libs/p589aprov-5.42*", instances: [SlotConflictInstance { version: "5.44", sub_slot: "5.44", repo_name: "testrepo", use_display: [("USE", ""), ("ELIBC", "glibc")], parents: [SlotConflictParent { parent_cpv: "dev-libs/p589apull-2:0/0::testrepo", atom: "=dev-libs/p589aprov-5.44*", use_display: [("USE", ""), ("ELIBC", "glibc")], installed: false }], installed: false }, SlotConflictInstance { version: "5.42", sub_slot: "5.42", repo_name: "testrepo", use_display: [("USE", "")], parents: [SlotConflictParent { parent_cpv: "dev-libs/p589avirt-1:0/0::testrepo", atom: "=dev-libs/p589aprov-5.42*", use_display: [("USE", "")], installed: true }], installed: true }] }]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::tests_consumer_or_view::t2_swap_slotop_matches_portage stdout ----
+
+thread 'tests::tests_consumer_or_view::t2_swap_slotop_matches_portage' (1873995) panicked at crates/portage-repo/src/tests/tests_consumer_or_view.rs:167:5:
+assertion `left == right` failed
+  left: 2
+ right: 4
+
+---- tests::tests_consumer_or_view::consumer_or_without_complete_mode_forms_no_pin stdout ----
+
+thread 'tests::tests_consumer_or_view::consumer_or_without_complete_mode_forms_no_pin' (1873990) panicked at crates/portage-repo/src/tests/tests_consumer_or_view.rs:109:9:
+assertion `left == right` failed: dev-libs/p589cpull
+  left: 4
+ right: 0
+
+---- tests::tests_consumer_or_view::t1_swap_noslotop_merges_the_update_like_portage stdout ----
+
+thread 'tests::tests_consumer_or_view::t1_swap_noslotop_merges_the_update_like_portage' (1873994) panicked at crates/portage-repo/src/tests/tests_consumer_or_view.rs:149:5:
+assertion `left == right` failed
+  left: 4
+ right: 0
+
+---- tests::tests_consumer_or_view::explicit_complete_graph_chooses_the_consumer_or_postmerge stdout ----
+
+thread 'tests::tests_consumer_or_view::explicit_complete_graph_chooses_the_consumer_or_postmerge' (1873992) panicked at crates/portage-repo/src/tests/tests_consumer_or_view.rs:135:5:
+assertion `left == right` failed
+  left: [("dev-libs/p589apull", "2")]
+ right: [("dev-libs/p589aprov", "5.44"), ("dev-libs/p589apull", "2")]
+
+---- tests::tests_consumer_or_view::world_only_consumer_under_deep_is_chosen_postmerge stdout ----
+
+thread 'tests::tests_consumer_or_view::world_only_consumer_under_deep_is_chosen_postmerge' (1873997) panicked at crates/portage-repo/src/tests/tests_consumer_or_view.rs:213:5:
+assertion `left == right` failed
+  left: 2
+ right: 0
+
+
+failures:
+    tests::tests_consumer_or_view::consumer_or_without_complete_mode_forms_no_pin
+    tests::tests_consumer_or_view::deep_rewalk_keeps_the_walkers_pick_for_a_recursed_consumer
+    tests::tests_consumer_or_view::explicit_complete_graph_chooses_the_consumer_or_postmerge
+    tests::tests_consumer_or_view::t1_swap_noslotop_merges_the_update_like_portage
+    tests::tests_consumer_or_view::t2_swap_slotop_matches_portage
+    tests::tests_consumer_or_view::world_only_consumer_under_deep_is_chosen_postmerge
+
+test result: FAILED. 2 passed; 6 failed; 0 ignored; 0 measured; 1265 filtered out; finished in 0.11s
+
+error: test failed, to rerun pass `-p portage-repo --lib`
+
+# API-level tests (second half of the file) on HEAD: they do not compile (the functions and fields are the slice's)
+error[E0422]: cannot find struct, variant or union type `InstalledConsumerOrSelectionArgs` in this scope
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:283:37
+error[E0422]: cannot find struct, variant or union type `OrScan` in this scope
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:342:16
+error[E0422]: cannot find struct, variant or union type `ConsumerOrDemotionsArgs` in this scope
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:355:27
+error[E0609]: no field `complete_if_new_ver` on type `request::ResolveRequest`
+  --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:59:9
+error[E0609]: no field `complete_if_new_use` on type `request::ResolveRequest`
+  --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:60:9
+error[E0425]: cannot find function `split_or_groups` in this scope
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:281:17
+error[E0433]: cannot find type `PostMergeSet` in this scope
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:282:15
+error[E0433]: cannot find type `OrView` in this scope
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:293:15
+error[E0425]: cannot find function `installed_consumer_or_selection` in this scope
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:283:5
+error[E0433]: cannot find type `PostMergeSet` in this scope
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:347:21
+error[E0425]: cannot find function `consumer_or_demotions` in this scope
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:355:5
+error[E0609]: no field `installed_walked` on type `pass_state::PassResult`
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:425:14
+error[E0609]: no field `installed_walked` on type `pass_state::PassResult`
+   --> crates/portage-repo/src/tests/tests_consumer_or_view.rs:431:18
+error: could not compile `portage-repo` (lib test) due to 13 previous errors

@@ -1,0 +1,16 @@
+BT try=1 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=2 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "p590vprov", "5.42")
+BT   choice ("dev-libs", "p590vprov", "5.44")
+BT try=3 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p590vprov-5.44"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p590vpull neg=!=dev-libs/p590vpull-2 reason=MissingDependency { parent: ("dev-libs", "p590vpull"), atom: "=dev-libs/p590vprov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p590vpull neg=!=dev-libs/p590vpull-2 atom==dev-libs/p590vprov-5.44*
+BT try=4 kind=Settle
+BT   masks-in ["!=dev-libs/p590vprov-5.44", "!=dev-libs/p590vpull-2"]
+BT   replace-in 0 prune=false []

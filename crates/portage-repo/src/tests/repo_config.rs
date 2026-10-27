@@ -249,6 +249,13 @@ fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_tim
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&repos),
     });
     assert_eq!(

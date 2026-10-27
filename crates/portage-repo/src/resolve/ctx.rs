@@ -130,6 +130,8 @@ pub(crate) struct ResolveCtx<'a> {
     pub(crate) backtrack_max: u32,
     pub(crate) reinstall_atoms: &'a [String],
     pub(crate) rebuild_if_new_slot: bool,
+    pub(crate) complete_if_new_use: bool,
+    pub(crate) complete_if_new_ver: bool,
     pub(crate) rebuild_if_unbuilt: bool,
     pub(crate) rebuild_if_new_rev: bool,
     pub(crate) rebuild_if_new_ver: bool,
@@ -215,6 +217,24 @@ impl<'a> ResolveCtx<'a> {
     pub(crate) fn cross_root(&self) -> Option<&'a Path> {
         self.root_deps_running_root
             .filter(|r| r.as_os_str() != self.root.as_os_str())
+    }
+
+    /// Whether Portage is in complete mode on a pass with these `entries`: the
+    /// explicit `--complete-graph`, or its auto-detection (a version, slot or USE
+    /// change of an installed package, honoring the `--complete-graph-if-new-*` switches).
+    // Portage: depgraph.py, _complete_graph (D:8635-8691)
+    pub(crate) fn portage_complete(&self, entries: &[GraphEntry]) -> bool {
+        !self.nodeps
+            && (self.complete
+                || complete_graph_auto_enable(CompleteGraphAutoEnableArgs {
+                    entries,
+                    if_new_use: self.complete_if_new_use,
+                    if_new_ver: self.complete_if_new_ver,
+                    if_new_slot: self.rebuild_if_new_slot,
+                    root: self.root,
+                    config: self.config,
+                    gate: self.gate(),
+                }))
     }
 
     /// This walk's [`CategoryGate`]: the shared allow-list, the config root
@@ -326,6 +346,8 @@ impl<'a> ResolveCtx<'a> {
             backtrack_max: req.backtrack_max,
             reinstall_atoms: &req.reinstall_atoms,
             rebuild_if_new_slot: req.rebuild_if_new_slot,
+            complete_if_new_use: req.complete_if_new_use,
+            complete_if_new_ver: req.complete_if_new_ver,
             rebuild_if_unbuilt: req.rebuild_if_unbuilt,
             rebuild_if_new_rev: req.rebuild_if_new_rev,
             rebuild_if_new_ver: req.rebuild_if_new_ver,

@@ -267,6 +267,13 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                     world_reachable: &rctx.world_reachable,
                     config,
                     complete: rctx.complete,
+                    portage_complete: rctx.portage_complete(&naked.entries),
+                    installed_walked: &naked.installed_walked,
+                    update: rctx.update,
+                    selective: rctx.selective && !rctx.empty,
+                    backtrack_allowed: rctx.backtrack_max > 0,
+                    arg_atoms: rctx.atoms,
+                    root_deps_running_root: rctx.root_deps_running_root,
                     gate: rctx.gate(),
                 });
             for pin in enforced {

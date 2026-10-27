@@ -1,0 +1,33 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/var/tmp/claude-10b/h-cgpuse/repo/profiles/updates/2Q-2024..
+@s
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild   R    ] dev-libs/cgp0x-2.8.0 [2.8.0] to /var/tmp/claude-10b/h-cgpuse USE="icu*" 
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/cgp0x:2
+
+  (dev-libs/cgp0x-2.8.0:2/2::testrepo, ebuild scheduled for merge) USE="icu" ELIBC="glibc" pulled in by
+    dev-libs/cgp0x (Argument)
+
+  (dev-libs/cgp0x-2.8.0:2/2::__unknown__, installed in '/var/tmp/claude-10b/h-cgpuse') USE="-icu" pulled in by
+    dev-libs/cgp0x:2[-icu] required by (dev-libs/cgp0q-4.8.2:0/0::__unknown__, installed in '/var/tmp/claude-10b/h-cgpuse') USE="-icu"
+                     ^^^^                                                                                                              
+
+It might be possible to solve this slot collision
+by applying all of the following changes:
+   - dev-libs/cgp0x-2.8.0 (Change USE: -icu)
+

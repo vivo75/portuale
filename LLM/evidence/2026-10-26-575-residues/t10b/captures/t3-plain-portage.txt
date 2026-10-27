@@ -1,0 +1,49 @@
+### portage argv: --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/p589cpull
+!!! Repository 'overlay' is missing masters attribute in '$S/fx/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '$S/fx/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '$S/fx/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '$S/fx/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '$S/fx/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '$S/fx/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '$S/fx/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '$S/fx/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took N s (backtrack: 4/20).
+
+[ebuild  N     ] dev-libs/p589cpull-1::testrepo to $S/fx/ 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/p589cprov:0 for $S/fx/
+
+  (dev-libs/p589cprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/p589cprov-5.42* required by (dev-libs/p589cvirt-1:0/0::testrepo, installed in '$S/fx/') USE=""
+    ^                   ^^^^^
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/p589cpull:0 for $S/fx/
+### rc: 0

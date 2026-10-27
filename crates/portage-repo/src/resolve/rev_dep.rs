@@ -280,6 +280,18 @@ pub(crate) struct ReverseDependencyConstraintsArgs<'a> {
     pub(crate) world_reachable: &'a HashSet<(String, String)>,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) complete: bool,
+    /// Portage entered complete mode in this pass: the `||` of a consumer the walk did
+    /// not recurse into is evaluated only then.
+    pub(crate) portage_complete: bool,
+    /// The installed packages the walk recursed into, with the atoms its `||` groups chose.
+    pub(crate) installed_walked: &'a InstalledWalked,
+    pub(crate) update: bool,
+    /// `selective` as `_want_installed_pkg` reads it: `--emptytree` already removed.
+    pub(crate) selective: bool,
+    pub(crate) backtrack_allowed: bool,
+    /// The argument atoms (command line), for `_want_installed_pkg`.
+    pub(crate) arg_atoms: &'a [String],
+    pub(crate) root_deps_running_root: Option<&'a Path>,
     pub(crate) gate: CategoryGate<'a>,
 }
 
@@ -312,6 +324,13 @@ pub(crate) fn reverse_dependency_constraints(
         world_reachable,
         config,
         complete,
+        portage_complete,
+        installed_walked,
+        update,
+        selective,
+        backtrack_allowed,
+        arg_atoms,
+        root_deps_running_root,
         gate,
     } = args;
     // (`cat/pkg`, slot) -> candidate string this run would install.
@@ -417,17 +436,55 @@ pub(crate) fn reverse_dependency_constraints(
     let mut seen: HashSet<SeenPin> = HashSet::new();
     let mut built_seen: BuiltSeenMap = HashMap::new();
     // Per-pass `Effective`-layer cache (one overlay per instance).
-    let mut meta_memo: HashMap<(String, String, String, String), String> = HashMap::new();
+    let mut meta_memo: MetaMemo = HashMap::new();
+    let or_scan = OrScan {
+        portage_complete,
+        installed_walked,
+        update,
+        selective,
+        backtrack_allowed,
+        excluded,
+        arg_atoms,
+        root_deps_running_root,
+        post_merge: PostMergeSet::build(root, entries),
+    };
+    let scope = ConsumerScope {
+        being_replaced: &being_replaced,
+        being_removed: &being_removed,
+        reachable,
+        graph_cps: &graph_cps,
+        already_installed_top_level: &already_installed_top_level,
+        world_reachable,
+        excluded,
+    };
+    let leaked = if or_scan.portage_complete || !installed_walked.is_empty() {
+        sibling_virtual_leaks(SiblingVirtualLeaksArgs {
+            scan: &or_scan,
+            deps: DepSource {
+                root,
+                gate,
+                dep_keys,
+                dynamic_deps,
+                ignore_built_slot_operator_deps,
+            },
+            meta_memo: &mut meta_memo,
+            in_scope: &|c: &InstalledPackage| consumer_in_scope(&scope, c),
+            entries,
+            root,
+            config,
+            gate,
+        })
+    } else {
+        HashMap::new()
+    };
     'consumer: for consumer in all_installed_packages(root).iter() {
         if constraints_from_consumer(ConstraintsFromConsumerArgs {
             consumer,
-            being_replaced: &being_replaced,
-            being_removed: &being_removed,
-            reachable,
-            graph_cps: &graph_cps,
-            already_installed_top_level: &already_installed_top_level,
-            world_reachable,
-            excluded,
+            scope: &scope,
+            or_scan: &or_scan,
+            leaked: &leaked,
+            entries,
+            config,
             root,
             dep_keys,
             dynamic_deps,
@@ -471,18 +528,17 @@ pub(crate) fn reverse_dependency_constraints(
 /// The values [`constraints_from_consumer`] reads from its caller.
 pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     pub(crate) consumer: &'a InstalledPackage,
-    pub(crate) being_replaced: &'a HashSet<(String, String)>,
-    pub(crate) being_removed: &'a HashSet<(String, String)>,
-    pub(crate) reachable: &'a HashSet<(String, String)>,
-    pub(crate) graph_cps: &'a HashSet<(String, String)>,
-    pub(crate) already_installed_top_level: &'a HashSet<(String, String)>,
-    pub(crate) world_reachable: &'a HashSet<(String, String)>,
-    pub(crate) excluded: &'a [String],
+    pub(crate) scope: &'a ConsumerScope<'a>,
+    pub(crate) or_scan: &'a OrScan<'a>,
+    /// Per installed virtual: the atoms a sibling's choice leaked into it.
+    pub(crate) leaked: &'a HashMap<(String, String, String), HashSet<String>>,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) config: &'a portage_profile::Config,
     pub(crate) root: &'a Path,
     pub(crate) dep_keys: &'a [&'a str],
     pub(crate) dynamic_deps: bool,
     pub(crate) ignore_built_slot_operator_deps: bool,
-    pub(crate) meta_memo: &'a mut HashMap<(String, String, String, String), String>,
+    pub(crate) meta_memo: &'a mut MetaMemo,
     pub(crate) upgrading: &'a UpgradingMap,
     pub(crate) use_breaks: &'a HashMap<((String, String), String), UseBreakSource>,
     pub(crate) seen: &'a mut HashSet<SeenPin>,
@@ -493,17 +549,52 @@ pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     pub(crate) gate: CategoryGate<'a>,
 }
 
+/// The sets that say which installed consumers a pass's scan reads.
+pub(crate) struct ConsumerScope<'a> {
+    pub(crate) being_replaced: &'a HashSet<(String, String)>,
+    pub(crate) being_removed: &'a HashSet<(String, String)>,
+    pub(crate) reachable: &'a HashSet<(String, String)>,
+    pub(crate) graph_cps: &'a HashSet<(String, String)>,
+    pub(crate) already_installed_top_level: &'a HashSet<(String, String)>,
+    pub(crate) world_reachable: &'a HashSet<(String, String)>,
+    pub(crate) excluded: &'a [String],
+}
+
+/// Whether the consumer is a source of reverse-dependency pins at all.
+pub(crate) fn consumer_in_scope(scope: &ConsumerScope<'_>, consumer: &InstalledPackage) -> bool {
+    let consumer_cp = (consumer.category.clone(), consumer.package.clone());
+    if scope.being_replaced.contains(&consumer_cp) || scope.being_removed.contains(&consumer_cp) {
+        return false;
+    }
+    // Only required-set-reachable or in-graph consumers.
+    if !scope.reachable.contains(&consumer_cp) && !scope.graph_cps.contains(&consumer_cp) {
+        return false;
+    }
+    // A no-op top-level argument is never a source (unless required-set-reachable).
+    if scope.already_installed_top_level.contains(&consumer_cp)
+        && !scope.world_reachable.contains(&consumer_cp)
+    {
+        return false;
+    }
+    let consumer_str = format!(
+        "{}/{}-{}",
+        consumer.category, consumer.package, consumer.version
+    );
+    !scope
+        .excluded
+        .iter()
+        .any(|ex| matches_cli_option_atom(ex, &consumer_str))
+}
+
 /// Collect the reverse-dependency pins one installed consumer places on the packages being upgraded.
 pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -> ControlFlow<()> {
     let ConstraintsFromConsumerArgs {
         consumer,
-        being_replaced,
-        being_removed,
-        reachable,
-        graph_cps,
-        already_installed_top_level,
-        world_reachable,
-        excluded,
+        scope,
+        or_scan,
+        leaked,
+        entries,
+        config,
         root,
         dep_keys,
         dynamic_deps,
@@ -518,80 +609,62 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         enforced,
         gate,
     } = args;
-    let consumer_cp = (consumer.category.clone(), consumer.package.clone());
-    if being_replaced.contains(&consumer_cp) || being_removed.contains(&consumer_cp) {
+    if !consumer_in_scope(scope, consumer) {
         return ControlFlow::Break(());
     }
-    // Only required-set-reachable or in-graph consumers.
-    if !reachable.contains(&consumer_cp) && !graph_cps.contains(&consumer_cp) {
-        return ControlFlow::Break(());
-    }
-    // A no-op top-level argument is never a source (unless required-set-reachable).
-    if already_installed_top_level.contains(&consumer_cp) && !world_reachable.contains(&consumer_cp)
-    {
-        return ControlFlow::Break(());
-    }
-    let consumer_str = format!(
-        "{}/{}-{}",
-        consumer.category, consumer.package, consumer.version
-    );
-    if excluded
-        .iter()
-        .any(|ex| matches_cli_option_atom(ex, &consumer_str))
-    {
-        return ControlFlow::Break(());
-    }
-    let use_flags = read_vdb_flag_set(
-        root,
-        &consumer.category,
-        &consumer.package,
-        &consumer.version,
-        "USE",
-    );
-    // An installed consumer's *effective* deps: live metadata when still in
-    // the tree, the raw vdb record otherwise.
-    let live = live_metadata_for_installed(
-        gate.repos,
-        root,
-        &consumer.category,
-        &consumer.package,
-        &consumer.version,
-    );
-    for dep_key in dep_keys {
-        let layer = if dynamic_deps {
-            InstalledMetaLayer::Effective
-        } else {
-            InstalledMetaLayer::Raw
-        };
-        let depstr = installed_dep_string(InstalledDepStringArgs {
+    let deps = consumer_deps(
+        DepSource {
             root,
+            gate,
+            dep_keys,
             dynamic_deps,
             ignore_built_slot_operator_deps,
-            category: &consumer.category,
-            package: &consumer.package,
-            version: &consumer.version,
-            live: live.as_deref(),
-            key: dep_key,
-            layer,
-            memo: &mut *meta_memo,
-        });
-        if depstr.trim().is_empty() {
-            continue;
-        }
-        let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
+        },
+        meta_memo,
+        &consumer.category,
+        &consumer.package,
+        &consumer.version,
+    );
+    let leaked_here = leaked.get(&(
+        consumer.category.clone(),
+        consumer.package.clone(),
+        consumer.version.clone(),
+    ));
+    for (dep_key, depstr) in &deps.strings {
+        let dep_key = &dep_key.as_str();
+        let use_flags = &deps.use_flags;
+        let Some(atoms) = flat_dep_atoms(depstr, use_flags) else {
             continue;
         };
-        // A `||` branch Portage's `dep_zapdeps` demotes (not the
-        // vdb-selected arm) is no parent atom at all: it never pins.
-        let demoted = or_branch_vdb_deselected_set(root, &depstr, &use_flags);
+        // A `||` arm `dep_zapdeps` does not select is no parent atom at all.
+        let post_merge = (or_scan.portage_complete
+            && !or_scan.installed_walked.contains_key(&(
+                consumer.category.clone(),
+                consumer.package.clone(),
+                consumer.version.clone(),
+            )))
+        .then_some(or_scan);
+        let demoted = consumer_or_demotions(ConsumerOrDemotionsArgs {
+            scan: or_scan,
+            consumer,
+            depstr,
+            use_flags,
+            leaked: leaked_here,
+            entries,
+            root,
+            config,
+            gate,
+        });
         'atom: for atom_str in atoms {
             if constraints_from_atom(ConstraintsFromAtomArgs {
                 atom_str: &atom_str,
                 demoted: &demoted,
+                post_merge,
+                config,
                 upgrading,
                 dep_key,
                 use_breaks,
-                use_flags: &use_flags,
+                use_flags,
                 consumer,
                 seen,
                 built_seen,
@@ -613,9 +686,13 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
 /// The values [`constraints_from_atom`] reads from its caller.
 pub(crate) struct ConstraintsFromAtomArgs<'a> {
     pub(crate) atom_str: &'a str,
-    /// `||`-branch texts (verbatim and constraint-normalised) demoted by
-    /// `or_branch_vdb_deselected_set`: never parent atoms, never pins.
+    /// `||`-arm texts `dep_zapdeps` does not select for this consumer
+    /// (`consumer_or_demotions`): never parent atoms, never pins.
     pub(crate) demoted: &'a HashSet<String>,
+    /// The post-merge set when the consumer is a complete-graph one (not walked, no
+    /// `--update`): a built slot-operator atom it cannot satisfy conflicts.
+    pub(crate) post_merge: Option<&'a OrScan<'a>>,
+    pub(crate) config: &'a portage_profile::Config,
     pub(crate) upgrading: &'a UpgradingMap,
     pub(crate) dep_key: &'a &'a str,
     pub(crate) use_breaks: &'a HashMap<((String, String), String), UseBreakSource>,
@@ -635,6 +712,8 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     let ConstraintsFromAtomArgs {
         atom_str,
         demoted,
+        post_merge,
+        config,
         upgrading,
         dep_key,
         use_breaks,
@@ -681,6 +760,21 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     // reinstalls probe the verbatim atom; Upgrade/Downgrade the
     // stripped constraint (built bindings are rebuild triggers).
     let verbatim_head = atom_str.split('[').next().unwrap_or(atom_str);
+    // A built atom the merge leaves unsatisfied while an installed instance matches it:
+    // Portage adds that instance to the graph, a slot conflict (D:8803-8834), unless the
+    // rebuild probe applies (backtracking allowed, `_want_installed_pkg` false).
+    // A stripped constraint that the merge already breaks keeps its old pin text.
+    let stripped_breaks = upgrading.iter().any(|((ucp, _), (candidate, _))| {
+        *ucp == cp
+            && portage_dep::match_from_list(constraint.as_str(), &[candidate.as_str()])
+                .is_none_or(|m| m.is_empty())
+    });
+    let built_conflict = built_slot_op
+        && !stripped_breaks
+        && post_merge.is_some_and(|scan| !scan.post_merge.matches(atom_str))
+        && best_installed_matching(root, atom_str, config).is_some_and(|version| {
+            !(scan_rebuild_probe_applies(post_merge, root, &atom.category, &atom.package, &version))
+        });
     let mut failing: Vec<(String, bool)> = Vec::new();
     for ((ucp, slot), (candidate, reinstall_slot_change)) in upgrading {
         if *ucp != cp {
@@ -690,7 +784,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         if atom.slot.as_deref().is_some_and(|ps| ps != slot.as_str()) {
             continue;
         }
-        let probe = if *reinstall_slot_change {
+        let probe = if *reinstall_slot_change || built_conflict {
             verbatim_head
         } else {
             constraint.as_str()
@@ -756,9 +850,10 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     }
     // Verbatim for built bindings via slot-change reinstalls, else stripped.
     let pin_atom = if built_slot_op
-        && failing
-            .iter()
-            .any(|(_, reinstall_slot_change)| *reinstall_slot_change)
+        && (built_conflict
+            || failing
+                .iter()
+                .any(|(_, reinstall_slot_change)| *reinstall_slot_change))
     {
         verbatim_head.to_string()
     } else {
@@ -810,4 +905,18 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         dropped.push(pin);
     }
     ControlFlow::Continue(())
+}
+
+/// Whether Portage tries the slot-operator rebuild probe instead of adding the installed
+/// instance: backtracking is allowed and the instance is not wanted (D:8816-8832).
+fn scan_rebuild_probe_applies(
+    scan: Option<&OrScan<'_>>,
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> bool {
+    scan.is_some_and(|s| {
+        s.backtrack_allowed && !s.want_installed_pkg(root, category, package, version)
+    })
 }

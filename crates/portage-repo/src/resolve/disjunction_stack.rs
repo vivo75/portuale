@@ -39,7 +39,7 @@ pub(crate) fn split_off_disjunctions(
 
 /// Recursive body of [`split_off_disjunctions`]: `None` is "bail out, the
 /// caller keeps the input unsplit".
-fn split_tokens(
+pub(crate) fn split_tokens(
     tokens: &[String],
     uselist: &HashSet<String>,
 ) -> Option<(Vec<String>, Vec<Vec<String>>)> {
@@ -260,6 +260,17 @@ pub(crate) fn pop_disjunction(args: PopDisjunctionArgs<'_>) -> bool {
         let ControlFlow::Continue(chosen) = chosen else {
             continue;
         };
+        if matches!(entry.site, DeferredSite::Installed { .. }) {
+            state
+                .installed_walked
+                .entry((
+                    entry.owner.0.clone(),
+                    entry.owner.1.clone(),
+                    entry.owner_version.clone(),
+                ))
+                .or_default()
+                .extend(chosen.iter().cloned());
+        }
         enqueue_chosen_atoms(EnqueueChosenAtomsArgs {
             chosen,
             entry: &entry,
@@ -397,6 +408,7 @@ fn resolve_target_scope_group(
                     alts,
                     queued: queued_view,
                     gate: ctx.gate(),
+                    view: OrView::Normal,
                 })
             },
         },
@@ -415,6 +427,7 @@ fn resolve_target_scope_group(
                 gate: ctx.gate(),
                 gate_entries: &state.entries,
                 gate_queued: queued,
+                view: OrView::Normal,
             })
         },
     ) else {
@@ -586,6 +599,7 @@ fn resolve_installed_group(args: ResolveInstalledGroupArgs<'_>) -> ControlFlow<(
                     alts,
                     queued: queued_view,
                     gate: ctx.gate(),
+                    view: OrView::Normal,
                 })
             },
         },
@@ -627,6 +641,7 @@ fn resolve_installed_group(args: ResolveInstalledGroupArgs<'_>) -> ControlFlow<(
                 gate: ctx.gate(),
                 gate_entries: &state.entries,
                 gate_queued: queued,
+                view: OrView::Normal,
             })
         },
     ) else {

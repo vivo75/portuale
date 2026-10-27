@@ -144,6 +144,8 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         rebuild_if_unbuilt,
         rebuild_if_new_rev,
         rebuild_if_new_ver,
+        complete_if_new_use,
+        complete_if_new_ver,
         dynamic_deps,
         ..
     } = plan;
@@ -246,6 +248,8 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         backtrack_max,
         reinstall_atoms: reinstall_atoms.to_vec(),
         rebuild_if_new_slot,
+        complete_if_new_use,
+        complete_if_new_ver,
         rebuild_if_unbuilt,
         rebuild_if_new_rev,
         rebuild_if_new_ver,

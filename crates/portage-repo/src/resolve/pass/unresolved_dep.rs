@@ -419,6 +419,10 @@ pub(crate) fn enqueue_installed_deps(args: EnqueueInstalledDepsArgs<'_>) -> Vec<
         && !ctx.nodeps
         && ctx.deep.recurses_at(depth)
     {
+        state
+            .installed_walked
+            .entry((key.0.clone(), key.1.clone(), version.clone()))
+            .or_default();
         // `deps` reads the same installed-metadata view the recursion walks, so
         // `--debug`/`--tree` can't contradict the queued child: the live ebuild
         // view while the version still has an ebuild, else the vdb-recorded

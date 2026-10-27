@@ -1,0 +1,47 @@
+### portuale argv: emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --update dev-libs/p589bpull
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "p589bprov", "5.44")
+BT   choice ("dev-libs", "p589bprov", "5.42")
+BT try=2 kind=Feedback:SlotConflict
+BT   masks-in ["!=dev-libs/p589bprov-5.42", "!=dev-libs/p589bprov-5.42[installed]"]
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "p589bprov", "5.44")
+BT   choice ("dev-libs", "p589bprov", "5.42")
+BT try=3 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p589bprov-5.42", "!=dev-libs/p589bprov-5.42[installed]", "!=dev-libs/p589bprov-5.44"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p589bpull neg=!=dev-libs/p589bpull-2 reason=MissingDependency { parent: ("dev-libs", "p589bpull"), atom: "=dev-libs/p589bprov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p589bpull neg=!=dev-libs/p589bpull-2 atom==dev-libs/p589bprov-5.44*
+BT try=4 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p589bprov-5.44"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/p589bpull neg=!=dev-libs/p589bpull-2 reason=MissingDependency { parent: ("dev-libs", "p589bpull"), atom: "=dev-libs/p589bprov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p589bpull neg=!=dev-libs/p589bpull-2 atom==dev-libs/p589bprov-5.44*
+BT try=5 kind=Settle
+BT   masks-in ["!=dev-libs/p589bprov-5.44", "!=dev-libs/p589bpull-2"]
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 4/20).
+
+[ebuild  N     ] dev-libs/p589bpull-1::testrepo to $S/fx 0 KiB
+
+Total: 1 package (1 new), Size of downloads: 0 KiB
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/p589bprov:0
+
+  (dev-libs/p589bprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '$S/fx') USE="" ELIBC="glibc" conflicts with
+    dev-libs/p589bprov:0/5.42= required by (dev-libs/p589bvirt-1:0/0::testrepo, installed in '$S/fx') USE=""
+                      ^^^^^^^^
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/p589bpull:0
+### rc: 0

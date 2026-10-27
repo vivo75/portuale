@@ -1,0 +1,22 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 2/20).
+
+[ebuild  N     ] dev-libs/p590vpull-1 to /var/tmp/claude-10b/w-vpar
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/p590vprov:0
+
+  (dev-libs/p590vprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/claude-10b/w-vpar') USE="" ELIBC="glibc" conflicts with
+    =dev-libs/p590vprov-5.42* required by (virtual/p590vva-1:0/0::testrepo, installed in '/var/tmp/claude-10b/w-vpar') USE=""
+    ^                   ^^^^ 
+    =dev-libs/p590vprov-5.42* required by (virtual/p590vvb-1:0/0::testrepo, installed in '/var/tmp/claude-10b/w-vpar') USE=""
+    ^                   ^^^^ 
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/p590vpull:0

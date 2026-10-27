@@ -1,0 +1,31 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/var/tmp/claude-10b/fx0/repo/profiles/updates/2Q-2024..
+@s
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 2/20).
+
+[ebuild  N     ] dev-libs/p563pull-1 to /var/tmp/claude-10b/fx0
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/p563prov:0
+
+  (dev-libs/p563prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/claude-10b/fx0') USE="" ELIBC="glibc" conflicts with
+    dev-libs/p563prov:0/5.42= required by (dev-libs/p563con-1:0/0::testrepo, installed in '/var/tmp/claude-10b/fx0') USE=""
+                     ^^^^^^^^
+    =dev-libs/p563prov-5.42* required by (dev-libs/p563con-1:0/0::testrepo, installed in '/var/tmp/claude-10b/fx0') USE=""
+    ^                  ^^^^ 
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/p563pull:0

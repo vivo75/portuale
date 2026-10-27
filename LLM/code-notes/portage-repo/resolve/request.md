@@ -103,3 +103,6 @@ A resolve request: the atoms and the emerge options.
 
 ## field verbose
 - `--verbose`: the ignored-user-patches block also names the triggering patch files (#509 oracle shape 11).
+
+## fields complete_if_new_use, complete_if_new_ver
+- #580 10b: `--complete-graph-if-new-use` / `--complete-graph-if-new-ver` (default on), carried so the resolver can run Portage's complete-mode auto-detection itself (`ResolveCtx::portage_complete`). The CLI used them only to decide a second resolve.

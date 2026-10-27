@@ -574,6 +574,7 @@ pub(crate) fn flatten_deps_for_enqueue(
                     alts,
                     queued: queued_view,
                     gate,
+                    view: OrView::Normal,
                 })
             },
         },
@@ -615,6 +616,7 @@ pub(crate) fn flatten_deps_for_enqueue(
                 gate,
                 gate_entries: entries,
                 gate_queued: &queued,
+                view: OrView::Normal,
             })
         },
     ) else {

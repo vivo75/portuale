@@ -19939,3 +19939,37 @@ aborts on the perl 5.44 conflict. It lists the same 141 packages as Portage
 Check: `cargo test --release -p portage-repo tests_consumer_pin_conflict`.
 The expected sequences are host Portage 3.0.83 on the pmtest fixtures
 (`LLM/evidence/2026-10-26-575-residues/t9/t3-sequence.md`, `t10a/counts.md`).
+
+**An installed package's `||` dependency is now chosen the way Portage's
+`dep_zapdeps` chooses it, after the merge, instead of "keep the installed
+arm" (#580 part 2, 2026-10-27).**
+
+In complete mode Portage evaluates an installed package's `||` against the
+graph after the merge (`_graph_trees`, `lib/_emerge/depgraph.py:764-771`).
+There an installed package that the merge replaces is hidden
+(`lib/_emerge/resolver/package_tracker.py:230-252`), so the first available
+arm wins. Only the chosen arm becomes a parent atom. If no installed package
+matches the chosen arm, it pins nothing (`:8803-8809`). A built `:S/SS=` atom
+that the merge leaves unmatched puts the installed package back as a slot
+conflict (`:8803-8834`).
+
+portuale used to keep the arm that matched an installed package. Now:
+- an installed package the walk went into keeps the walk's own choice;
+- one reached only through the complete graph gets the post-merge choice;
+- sibling virtuals share an atom a sibling chose, as Portage's interned
+  atoms make them (quirk Q19).
+
+On the fixtures:
+- T1 (`dev-libs/p589apull`) now upgrades `p589aprov` to 5.44 with 0/20;
+- T2 (`p589bpull`) keeps 5.42 with Portage's 4/20 and one skip row.
+
+On the bed (`l0-20261027T191115Z`) three perl cells became clean, and the
+perl skip blocks list the same 21 `=5.42*` and 48 `:0/5.42=` rows as Portage.
+
+Check:
+- `cargo test --release -p portage-repo tests_consumer_or_view`;
+- from pmtest: `python3 -m pytest
+  pytests-contract-suite/test_emerge_pretend_contract.py -q -k p589`.
+
+The expected rows are host Portage 3.0.83 captures in
+`LLM/evidence/2026-10-26-575-residues/t10b/captures/`.

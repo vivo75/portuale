@@ -2597,6 +2597,7 @@ fn pass_163() -> PassResult {
         abi_rebuilds: None,
         suppressed_nvc: false,
         parent_atoms: Vec::new(),
+        installed_walked: HashMap::new(),
     }
 }
 
@@ -2670,6 +2671,8 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         backtrack_max: 10,
         reinstall_atoms: no_strings,
         rebuild_if_new_slot: rebuild_new_slot,
+        complete_if_new_use: true,
+        complete_if_new_ver: true,
         rebuild_if_unbuilt: false,
         rebuild_if_new_rev: false,
         rebuild_if_new_ver: false,

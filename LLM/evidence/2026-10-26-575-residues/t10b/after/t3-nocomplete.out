@@ -1,0 +1,8 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p589cprov-5.44 [5.42] to /var/tmp/claude-10b/fx0
+[ebuild  N     ] dev-libs/p589cpull-2 to /var/tmp/claude-10b/fx0

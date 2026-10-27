@@ -1,0 +1,19 @@
+### portuale argv: emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --update --deep dev-libs/p569pull
+BT try=1 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=2 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild     U  ] dev-libs/p569prov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to $S/fx 0 KiB
+[ebuild  N     ] dev-libs/p569core-1.0::testrepo to $S/fx 0 KiB
+[ebuild  N     ] dev-libs/p569pull-2::testrepo to $S/fx 0 KiB
+
+Total: 3 packages (1 upgrade, 2 new), Size of downloads: 0 KiB
+### rc: 0

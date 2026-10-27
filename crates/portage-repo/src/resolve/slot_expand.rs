@@ -537,6 +537,7 @@ pub(crate) fn flatten_deps_for_flip(
                     alts,
                     queued: queued_view,
                     gate: ctx.gate(),
+                    view: OrView::Normal,
                 })
             },
         },
@@ -585,6 +586,7 @@ pub(crate) fn flatten_deps_for_flip(
                 gate: ctx.gate(),
                 gate_entries: &state.entries,
                 gate_queued: &queued,
+                view: OrView::Normal,
             })
         },
     ) else {

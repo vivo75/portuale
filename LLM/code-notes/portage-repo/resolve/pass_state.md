@@ -90,3 +90,6 @@ The state and result of one resolver pass.
 
 ## field PassState::use_overlay
 - This pass's `--autounmask-use` flips (`(cat, pkg) -> {flag -> desired}`), overlaying `bp.autounmask_use_config` (see `overlay_use_want`).
+
+## field installed_walked
+- #580 10b: `(category, package, version)` of every installed package the walk recursed into (`enqueue_installed_deps`, `Deep::recurses_at`, the predicate of `_add_pkg`'s `recurse`, D:3834) with the atoms its `||` groups chose at pop time (`pop_disjunction`, installed site). A package with no `||` has an empty set. Carried into `PassResult` and read by the reverse-dependency scan: a consumer in this map keeps the walker's pick (Portage's `Normal` view); one not in it is a `PostMerge` consumer (or not evaluated). Portage keeps `pkg.depth` as the minimum over all paths but does not re-push a node; first-visit-wins dedup gives the same result.

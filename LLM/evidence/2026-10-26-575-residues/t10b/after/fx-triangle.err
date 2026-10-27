@@ -1,0 +1,48 @@
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "paired", "2.0")
+BT   choice ("dev-libs", "paired", "1.0")
+BT   conflict dev-libs/paired parents=[("1.0", "dev-libs/othermod-1.0:0/0::testrepo", "<dev-libs/paired-2.0"), ("2.0", "dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0")]
+BT   pullers dev-libs/paired -> [("dev-libs", "othermod", "1.0", "<dev-libs/paired-2.0"), ("dev-libs", "needer", "1.0", ">=dev-libs/paired-2.0")]
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/paired-1.0", "!=dev-libs/paired-1.0[installed]"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/othermod neg=!=dev-libs/othermod-1.0 reason=MissingDependency { parent: ("dev-libs", "othermod"), atom: "<dev-libs/paired-2.0" }
+BT   missing_dep_trigger owner=dev-libs/othermod neg=!=dev-libs/othermod-1.0 atom=<dev-libs/paired-2.0
+BT try=3 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/paired-2.0"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/needer neg=!=dev-libs/needer-1.0 reason=MissingDependency { parent: ("dev-libs", "needer"), atom: ">=dev-libs/paired-2.0" }
+BT   missing_dep_trigger owner=dev-libs/needer neg=!=dev-libs/needer-1.0 atom=>=dev-libs/paired-2.0
+BT try=4 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "paired", "2.0")
+BT   choice ("dev-libs", "paired", "1.0")
+BT   conflict dev-libs/paired parents=[("1.0", "dev-libs/othermod-1.0:0/0::testrepo", "<dev-libs/paired-2.0"), ("2.0", "dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0")]
+BT   pullers dev-libs/paired -> [("dev-libs", "othermod", "1.0", "<dev-libs/paired-2.0"), ("dev-libs", "needer", "1.0", ">=dev-libs/paired-2.0")]
+BT try=5 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "paired", "2.0")
+BT   choice ("dev-libs", "paired", "1.0")
+BT   conflict dev-libs/paired parents=[("1.0", "dev-libs/othermod-1.0:0/0::testrepo", "<dev-libs/paired-2.0"), ("2.0", "dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0")]
+BT   pullers dev-libs/paired -> [("dev-libs", "othermod", "1.0", "<dev-libs/paired-2.0"), ("dev-libs", "needer", "1.0", ">=dev-libs/paired-2.0")]
+BT try=6 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/paired-1.0", "!=dev-libs/paired-1.0[installed]"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/othermod neg=!=dev-libs/othermod-1.0 reason=MissingDependency { parent: ("dev-libs", "othermod"), atom: "<dev-libs/paired-2.0" }
+BT   missing_dep_trigger owner=dev-libs/othermod neg=!=dev-libs/othermod-1.0 atom=<dev-libs/paired-2.0
+BT try=7 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/paired-2.0"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/needer neg=!=dev-libs/needer-1.0 reason=MissingDependency { parent: ("dev-libs", "needer"), atom: ">=dev-libs/paired-2.0" }
+BT   missing_dep_trigger owner=dev-libs/needer neg=!=dev-libs/needer-1.0 atom=>=dev-libs/paired-2.0
+BT try=8 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-libs", "paired", "2.0")
+BT   choice ("dev-libs", "paired", "1.0")
+BT   conflict dev-libs/paired parents=[("1.0", "dev-libs/othermod-1.0:0/0::testrepo", "<dev-libs/paired-2.0"), ("2.0", "dev-libs/needer-1.0:0/0::testrepo", ">=dev-libs/paired-2.0")]
+BT   pullers dev-libs/paired -> [("dev-libs", "othermod", "1.0", "<dev-libs/paired-2.0"), ("dev-libs", "needer", "1.0", ">=dev-libs/paired-2.0")]

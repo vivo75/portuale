@@ -710,6 +710,8 @@ fn graph_onlydeps(
         backtrack_max: 10,
         reinstall_atoms: Vec::new(),
         rebuild_if_new_slot: true,
+        complete_if_new_use: true,
+        complete_if_new_ver: true,
         rebuild_if_unbuilt: false,
         rebuild_if_new_rev: false,
         rebuild_if_new_ver: false,
@@ -1670,6 +1672,8 @@ fn ctx_161<'a>(
         backtrack_max: o.backtrack_max,
         reinstall_atoms: &NO_STRINGS_161,
         rebuild_if_new_slot: true,
+        complete_if_new_use: true,
+        complete_if_new_ver: true,
         rebuild_if_unbuilt: false,
         rebuild_if_new_rev: false,
         rebuild_if_new_ver: false,
@@ -1737,6 +1741,7 @@ fn pass_161() -> PassResult {
         abi_rebuilds: None,
         suppressed_nvc: false,
         parent_atoms: Vec::new(),
+        installed_walked: HashMap::new(),
     }
 }
 
@@ -3787,6 +3792,7 @@ mod skipped;
 mod slot_conflict;
 mod slot_conflict_solutions;
 mod slot_undo;
+mod tests_consumer_or_view;
 mod tests_consumer_pin_conflict;
 mod tests_p491;
 mod tests_p563;

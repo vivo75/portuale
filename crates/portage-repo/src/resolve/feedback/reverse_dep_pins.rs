@@ -66,6 +66,13 @@ pub(crate) fn scan_reverse_dependencies(ctx: &ResolveCtx<'_>, pass: &PassResult)
         world_reachable: &ctx.world_reachable,
         config: ctx.config,
         complete: ctx.complete,
+        portage_complete: ctx.portage_complete(&pass.entries),
+        installed_walked: &pass.installed_walked,
+        update: ctx.update,
+        selective: ctx.selective && !ctx.empty,
+        backtrack_allowed: ctx.backtrack_max > 0,
+        arg_atoms: ctx.atoms,
+        root_deps_running_root: ctx.root_deps_running_root,
         gate: ctx.gate(),
     });
     ReverseScan { enforced, dropped }
@@ -116,20 +123,12 @@ pub(crate) fn file_consumer_pin_conflicts(
             grown.dropped_pins.push(pin.clone());
         }
     }
-    // A pin from a `||` branch the merge satisfies elsewhere is a stale
-    // alternative, not a break.
-    let kept: Vec<RevDepPin> = grown
-        .dropped_pins
-        .iter()
-        .filter(|pin| !or_branch_superseded(ctx, pass, pin))
-        .cloned()
-        .collect();
     let records = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
         config: ctx.config,
         root: ctx.root,
         entries: &pass.entries,
         slot_pullers: &pass.slot_pullers,
-        dropped: &kept,
+        dropped: &grown.dropped_pins,
         gate: ctx.gate(),
     });
     let mut filed = false;
@@ -186,65 +185,6 @@ fn collect_any_groups<'a>(items: &'a [DepTree], out: &mut Vec<&'a Vec<DepTree>>)
     }
 }
 
-/// Whether a member's atom names the pin: verbatim, or normalised the way
-/// the scan normalised it into the pin.
-fn or_member_matches_pin(member_atom: &str, pin: &RevDepPin) -> bool {
-    if member_atom == pin.atom || member_atom == pin.raw_atom {
-        return true;
-    }
-    parse_dep_atom(member_atom, "dropped_pin_or_branch")
-        .is_some_and(|a| reverse_dep_constraint_atom(member_atom, &a) == pin.atom)
-}
-
-/// Whether a member is satisfied by the settled merge graph: a plain atom
-/// matching a merge-bound entry (USE stripped, version+slot), a
-/// conjunction only when all of it is, a nested `||` when any of it is.
-fn or_member_satisfied(member: &DepTree, merge_candidates: &[String]) -> bool {
-    match member {
-        DepTree::Atom(atom) => {
-            let probe = portage_dep::without_use(atom).to_string();
-            let candidates: Vec<&str> = merge_candidates.iter().map(String::as_str).collect();
-            portage_dep::match_from_list(&probe, &candidates).is_some_and(|m| !m.is_empty())
-        }
-        DepTree::AllOf(members) => members
-            .iter()
-            .all(|m| or_member_satisfied(m, merge_candidates)),
-        DepTree::AnyOf(members) => members
-            .iter()
-            .any(|m| or_member_satisfied(m, merge_candidates)),
-    }
-}
-
-/// Whether the member gives the consumer a merge-satisfied route avoiding
-/// the pin's package: a plain atom of another package matching a
-/// merge-bound entry; a conjunction only when all of it holds and some leg
-/// routes around; a nested `||` when some alternative does both. A version
-/// menu of the pin's own package never counts.
-fn or_member_alternate_route(
-    member: &DepTree,
-    pin_cp: &(String, String),
-    merge_candidates: &[String],
-) -> bool {
-    match member {
-        DepTree::Atom(atom) => parse_dep_atom(atom, "dropped_pin_or_branch").is_some_and(|a| {
-            a.blocker == portage_dep::Blocker::None
-                && (a.category.clone(), a.package.clone()) != *pin_cp
-                && or_member_satisfied(member, merge_candidates)
-        }),
-        DepTree::AllOf(members) => {
-            members
-                .iter()
-                .all(|m| or_member_satisfied(m, merge_candidates))
-                && members
-                    .iter()
-                    .any(|m| or_member_alternate_route(m, pin_cp, merge_candidates))
-        }
-        DepTree::AnyOf(members) => members
-            .iter()
-            .any(|m| or_member_alternate_route(m, pin_cp, merge_candidates)),
-    }
-}
-
 /// Whether the member is satisfied by what is installed right now: a plain
 /// atom matching an installed instance of its own package, a conjunction
 /// only when every leg is, a nested `||` when any leg is. Blockers and
@@ -284,13 +224,11 @@ fn or_member_flat_atoms(member: &DepTree) -> Vec<&String> {
     }
 }
 
-/// `||`-branch texts of `depstr` that Portage's `dep_zapdeps` demotes: a
-/// member that does not match its own installed instance while a sibling
-/// member does (the installed-preferred arm wins, and only it ever becomes
-/// a parent atom). Returned verbatim plus constraint-normalised, so both
-/// the flat token and the stripped pin text compare equal. Empty when
-/// `depstr` holds no `||` group, fails to parse, or selects nothing (then
-/// every arm stays, today's behaviour).
+/// `||`-branch texts of `depstr` that do not match an installed instance while a
+/// sibling branch does. An approximation of `dep_zapdeps` kept only for the
+/// slot-operator probe of an installed parent; the pin scan chooses with
+/// `consumer_or_demotions`. Verbatim plus constraint-normalised. Empty when
+/// `depstr` holds no `||` group, fails to parse, or no branch matches.
 // Portage: dep_check.py, dep_zapdeps (installed-preference bins)
 pub(crate) fn or_branch_vdb_deselected_set(
     root: &Path,
@@ -324,100 +262,6 @@ pub(crate) fn or_branch_vdb_deselected_set(
         }
     }
     demoted
-}
-
-/// Whether the pin comes from a `||` branch the merge satisfies elsewhere:
-/// the consumer's recorded depstring (same layering the scan read) holds a
-/// group containing the pin whose sibling alternative -- targeting another
-/// package -- matches the settled merge graph. Portage demotes such a
-/// branch via dep_zapdeps instead of backtrack-skipping the update, so the
-/// pin must not drive a mask.
-fn or_branch_superseded(ctx: &ResolveCtx<'_>, pass: &PassResult, pin: &RevDepPin) -> bool {
-    let (cc, cp2, cv) = &pin.consumer;
-    let use_flags = read_vdb_flag_set(ctx.root, cc, cp2, cv, "USE");
-    let live = live_metadata_for_installed(&ctx.repos, ctx.root, cc, cp2, cv);
-    let dep_keys: &[&str] = if ctx.with_bdeps {
-        &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
-    } else {
-        &["RDEPEND", "IDEPEND", "PDEPEND"]
-    };
-    let mut memo = HashMap::new();
-    let merge_candidates: Vec<String> = pass
-        .entries
-        .iter()
-        .filter_map(|e| {
-            let version = merge_bound_version(&e.outcome)?;
-            let slot = e.slot.as_deref().unwrap_or("0");
-            Some(match e.sub_slot.as_deref().unwrap_or("") {
-                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-                "" => format!("{}/{}-{version}:{slot}", e.category, e.package),
-                sub => format!(
-                    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-                    "{}/{}-{version}:{slot}/{sub}",
-                    e.category, e.package
-                ),
-            })
-        })
-        .collect();
-    for key in dep_keys {
-        // Same layering the pin scan read (see `constraints_from_consumer`).
-        let layer = if ctx.dynamic_deps {
-            InstalledMetaLayer::Effective
-        } else {
-            InstalledMetaLayer::Raw
-        };
-        let depstr = installed_dep_string(InstalledDepStringArgs {
-            root: ctx.root,
-            dynamic_deps: ctx.dynamic_deps,
-            ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
-            category: cc,
-            package: cp2,
-            version: cv,
-            live: live.as_deref(),
-            key,
-            layer,
-            memo: &mut memo,
-        });
-        let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
-        let Some(items) = reduced_dep_tree(&tokens, &use_flags) else {
-            continue;
-        };
-        let mut groups: Vec<&Vec<DepTree>> = Vec::new();
-        collect_any_groups(&items, &mut groups);
-        for group in groups {
-            // The alternative holding the pin (a conjunction subgroup counts
-            // whole: its conjuncts are not alternatives of each other).
-            let mut container: Option<usize> = None;
-            for (idx, member) in group.iter().enumerate() {
-                if or_member_matches_pin_recursive(member, pin) {
-                    container = Some(idx);
-                    break;
-                }
-            }
-            let Some(held) = container else {
-                continue;
-            };
-            if group
-                .iter()
-                .enumerate()
-                .filter(|(idx, _)| *idx != held)
-                .any(|(_, sib)| or_member_alternate_route(sib, &pin.cp, &merge_candidates))
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Whether the pin's atom occurs anywhere inside the member.
-fn or_member_matches_pin_recursive(member: &DepTree, pin: &RevDepPin) -> bool {
-    match member {
-        DepTree::Atom(atom) => or_member_matches_pin(atom, pin),
-        DepTree::AllOf(members) | DepTree::AnyOf(members) => members
-            .iter()
-            .any(|m| or_member_matches_pin_recursive(m, pin)),
-    }
 }
 
 /// Installed reverse dependencies an upgrade breaks: pin or drop them.

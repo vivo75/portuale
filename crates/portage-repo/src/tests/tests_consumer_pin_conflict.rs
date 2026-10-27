@@ -11,7 +11,7 @@ use super::*;
 /// A scratch ROOT: the fixtures' `var/` (vdb and world) with `world` atoms
 /// appended, beside an empty `distfiles/`. Repositories and config stay the
 /// shared fixtures'.
-fn hermetic_root(world: &[&str]) -> TempDir {
+pub(super) fn hermetic_root(world: &[&str]) -> TempDir {
     fn copy_tree(from: &Path, to: &Path) {
         fs::create_dir_all(to).unwrap();
         for entry in fs::read_dir(from).unwrap() {
@@ -46,7 +46,7 @@ fn hermetic_root(world: &[&str]) -> TempDir {
 
 /// The request `emerge --pretend <atoms>` makes against `root`, with the
 /// command line's `--backtrack=20`.
-fn request_in(root: &Path, atoms: &[&str]) -> ResolveRequest {
+pub(super) fn request_in(root: &Path, atoms: &[&str]) -> ResolveRequest {
     let config_root = fixtures_root();
     let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &config_root,
@@ -71,7 +71,7 @@ fn request_in(root: &Path, atoms: &[&str]) -> ResolveRequest {
     }
 }
 
-fn resolve_in(root: &Path, atoms: &[&str]) -> GraphResult {
+pub(super) fn resolve_in(root: &Path, atoms: &[&str]) -> GraphResult {
     request_in(root, atoms)
         .resolve()
         .unwrap_or_else(|e| panic!("resolving {atoms:?} failed: {e}"))
@@ -81,7 +81,7 @@ fn resolve_in(root: &Path, atoms: &[&str]) -> GraphResult {
 /// first walk's merges are locked and reused, and the world atoms seed the
 /// required-set walk. The installed-consumer pins of the keeper, igw, cgp
 /// and triangle shapes act only here.
-fn complete_request_in(root: &Path, atoms: &[&str]) -> ResolveRequest {
+pub(super) fn complete_request_in(root: &Path, atoms: &[&str]) -> ResolveRequest {
     let first = resolve_in(root, atoms);
     let merges: Vec<&GraphEntry> = first
         .entries
@@ -129,7 +129,7 @@ fn complete_request_in(root: &Path, atoms: &[&str]) -> ResolveRequest {
     req
 }
 
-fn resolve_complete_in(root: &Path, atoms: &[&str]) -> GraphResult {
+pub(super) fn resolve_complete_in(root: &Path, atoms: &[&str]) -> GraphResult {
     complete_request_in(root, atoms)
         .resolve()
         .unwrap_or_else(|e| panic!("complete walk of {atoms:?} failed: {e}"))
@@ -139,7 +139,7 @@ fn resolve_complete_in(root: &Path, atoms: &[&str]) -> GraphResult {
 /// empty for an argument.
 type TracedParent = (String, String);
 
-struct TracedChoice {
+pub(super) struct TracedChoice {
     /// `cat/pkg-ver`, with ` [installed]` when the mask hides the installed instance.
     target: String,
     /// The extra versions masked in the same node.
@@ -148,7 +148,7 @@ struct TracedChoice {
     atoms: Vec<TracedParent>,
 }
 
-struct TracedPass {
+pub(super) struct TracedPass {
     /// The runtime masks this pass ran with, sorted.
     masks_in: Vec<String>,
     kind: &'static str,
@@ -177,7 +177,7 @@ fn parent_text(((cat, pkg, ver), atom): &((String, String, String), String)) -> 
 
 /// Runs the backtracking search the way the driver does, pass by pass, and
 /// records what each pass fed back.
-fn trace_search(req: &ResolveRequest) -> Vec<TracedPass> {
+pub(super) fn trace_search(req: &ResolveRequest) -> Vec<TracedPass> {
     let req = req.clone();
     let ctx = ResolveCtx::new(&req).expect("ctx");
     let mut bt = Backtracker::new(
@@ -292,15 +292,15 @@ fn trace_search(req: &ResolveRequest) -> Vec<TracedPass> {
 }
 
 /// The tries Portage prints as `backtrack: N/20` for this search.
-fn portage_tries(trace: &[TracedPass]) -> usize {
+pub(super) fn portage_tries(trace: &[TracedPass]) -> usize {
     trace.iter().filter(|p| p.counted).count()
 }
 
-fn kinds(trace: &[TracedPass]) -> Vec<&'static str> {
+pub(super) fn kinds(trace: &[TracedPass]) -> Vec<&'static str> {
     trace.iter().map(|p| p.kind).collect()
 }
 
-fn atoms_of(choice: &TracedChoice) -> Vec<(&str, &str)> {
+pub(super) fn atoms_of(choice: &TracedChoice) -> Vec<(&str, &str)> {
     choice
         .atoms
         .iter()
@@ -375,45 +375,6 @@ fn contradicted_pin_backtracks_over_every_choice_like_portage() {
             .map(|i| (i.version.as_str(), i.installed))
             .collect::<Vec<_>>(),
         vec![("2.0", false), ("1.0", true)]
-    );
-}
-
-#[test]
-fn t2_built_atom_is_a_conflict_parent() {
-    // The T2 shape (`dev-libs/p589bpull`, installed `p589bvirt-1` with a built
-    // `p589bprov:0/5.42=` and a `||` arm `=p589bprov-5.42*`). The built atom
-    // misses 5.44 by sub-slot (D:2189-2197), so it is a conflict atom of the
-    // 5.44 choice beside `=5.42*`: two atoms against the puller's one, and the
-    // 5.44 choice is popped first (D:2273, B:136). Portage's 4/20 with one skip
-    // row needs the `||` choice too; until then the count is 2/20 and the
-    // `=5.42*` row stays. Capture: Portage 3.0.83
-    // `emerge --debug -pv dev-libs/p589bpull` on a scratch copy of the fixtures.
-    // Portage: depgraph.py, _slot_confict_backtrack.
-    let root = hermetic_root(&[]);
-    let trace = trace_search(&request_in(&root, &["dev-libs/p589bpull"]));
-    let first = &trace[0];
-    assert_eq!(first.kind, "SlotConflict", "kinds: {:?}", kinds(&trace));
-    let popped_first = first.choices.last().unwrap();
-    assert_eq!(popped_first.target, "dev-libs/p589bprov-5.44");
-    let virt = "dev-libs/p589bvirt-1";
-    assert_eq!(
-        atoms_of(popped_first),
-        vec![
-            (virt, "=dev-libs/p589bprov-5.42*"),
-            (virt, "dev-libs/p589bprov:0/5.42="),
-        ]
-    );
-    assert_eq!(first.choices[0].atoms.len(), 1);
-    let result = resolve_in(&root, &["dev-libs/p589bpull"]);
-    assert_eq!(result.backtrack_restarts, 2);
-    let rows: Vec<&str> = result
-        .skipped_updates
-        .iter()
-        .map(|r| r.atom.as_str())
-        .collect();
-    assert!(
-        rows.contains(&"dev-libs/p589bprov:0/5.42="),
-        "the built atom is among the skip rows verbatim: {rows:?}"
     );
 }
 

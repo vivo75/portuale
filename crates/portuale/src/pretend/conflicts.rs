@@ -422,7 +422,13 @@ pub(crate) fn skip_conflict_caret_line(
     if highlight_version && let Some(ver) = parsed.as_ref().and_then(|a| a.version.clone()) {
         // Last occurrence: a package name itself may hold digits (`foo-2-bar-1.0`).
         if let Some(start) = atom.rfind(ver.as_str()) {
-            spans.push((start, start + ver.len()));
+            // The `*` of an `=...*` atom rides with the version (Portage `op == "=*"`).
+            let glob = usize::from(
+                parsed
+                    .as_ref()
+                    .is_some_and(|a| a.operator == portage_dep::Operator::EqGlob),
+            );
+            spans.push((start, start + ver.len() + glob));
         }
     }
     // The span covers `:slot`, the `/sub-slot` half, and a trailing operator.

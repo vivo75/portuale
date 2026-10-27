@@ -51,6 +51,7 @@ pub(crate) fn assemble_pass_result(
         use_broke: state.use_broke,
         abi_rebuilds: None,
         parent_atoms: state.parent_atoms,
+        installed_walked: state.installed_walked,
     };
     Ok(pass)
 }

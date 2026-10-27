@@ -456,6 +456,7 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
                         alts,
                         queued: &[],
                         gate,
+                        view: OrView::Normal,
                     })
                 },
             },
@@ -474,6 +475,7 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
                     gate,
                     gate_entries: entries,
                     gate_queued: &[],
+                    view: OrView::Normal,
                 })
             },
         ) else {

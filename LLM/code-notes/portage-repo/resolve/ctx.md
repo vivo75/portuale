@@ -70,3 +70,6 @@ The per-run resolver context: BFS request fields plus the derived required-set c
 
 ## fn gate / fn repo_candidates (#571)
 - `gate()` borrows the three fields as a `CategoryGate`; `repo_candidates` is the walk's ebuild lookup, replacing every `list_candidates(&ctx.repos, …)` call.
+
+## fn portage_complete / fields complete_if_new_use, complete_if_new_ver
+- #580 10b: whether Portage is in complete mode on a pass: the explicit `--complete-graph` (`complete`), or the auto-detection of `_complete_graph` (D:8635-8691) over the pass's entries, honouring `--complete-graph-if-new-use/ver` and `--rebuild-if-new-slot` (`complete_graph_auto_enable`); never under `--nodeps`. Do not use `ctx.complete`: it is a phase flag, false in the `--deep` re-walk that Portage runs in complete mode. Computed per pass from the entries, so phase 1 gets the same answer Portage would. Not modelled: complete mode entered by a slot conflict while backtracking (D:9473-9480). Backlog item filed by 10b.

@@ -51,7 +51,13 @@ pub(crate) struct PassResult {
     /// The walk's per-instance `Parent Dep:` rows, rendered by `resolver_trace`.
     // Portage: depgraph.py, _add_parent_atom
     pub(crate) parent_atoms: Vec<resolver_trace::ParentAtom>,
+    /// See `PassState::installed_walked`.
+    pub(crate) installed_walked: InstalledWalked,
 }
+
+/// The installed packages the walk recursed into this pass, with the atoms
+/// its `||` groups chose: `(category, package, version)` to chosen atom texts.
+pub(crate) type InstalledWalked = HashMap<(String, String, String), HashSet<String>>;
 
 /// The walk's per-pass `let mut`s, moved out of the loop body so the `'queue` walk
 /// can live in `run_pass`. The walk writes the cross-pass autounmask accumulators
@@ -228,4 +234,9 @@ pub(crate) struct PassState {
     /// item resolves.
     // Portage: depgraph.py, _add_parent_atom
     pub(crate) parent_atoms: Vec<resolver_trace::ParentAtom>,
+    /// Installed packages the walk recursed into (`Deep::recurses_at`), each with the
+    /// atoms its `||` groups chose at pop time. The reverse-dependency scan keeps
+    /// these picks for a `Normal`-view consumer instead of choosing again.
+    // Portage: depgraph.py, _add_pkg (recurse), _wrapped_add_pkg_dep_string
+    pub(crate) installed_walked: InstalledWalked,
 }

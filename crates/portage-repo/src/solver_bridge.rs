@@ -5108,6 +5108,8 @@ mod tests {
             backtrack_max: 10,
             reinstall_atoms: Vec::new(),
             rebuild_if_new_slot: false,
+            complete_if_new_use: true,
+            complete_if_new_ver: true,
             rebuild_if_unbuilt: false,
             rebuild_if_new_rev: false,
             rebuild_if_new_ver: false,

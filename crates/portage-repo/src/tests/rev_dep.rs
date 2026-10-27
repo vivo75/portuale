@@ -157,6 +157,13 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&[]),
     });
     assert!(
@@ -181,6 +188,13 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&[]),
     });
     assert_eq!(
@@ -246,6 +260,13 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&[]),
     });
     let mut atoms: Vec<String> = enforced
@@ -276,6 +297,13 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&[]),
     });
     assert!(
@@ -351,6 +379,13 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&[]),
     });
     assert!(
@@ -375,6 +410,13 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
         world_reachable: &world,
         config: &portage_profile::Config::default(),
         complete: false,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&[]),
     });
     assert_eq!(
@@ -428,6 +470,13 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         world_reachable: &reachable,
         config: &portage_profile::Config::default(),
         complete: false,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&repos),
     });
     assert!(
@@ -449,6 +498,13 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         world_reachable: &reachable,
         config: &portage_profile::Config::default(),
         complete: true,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&repos),
     });
     assert!(
@@ -492,6 +548,13 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         world_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: true,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
         gate: crate::test_gate(&repos),
     });
     assert!(

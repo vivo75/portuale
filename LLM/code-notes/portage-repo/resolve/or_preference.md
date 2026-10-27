@@ -46,5 +46,17 @@ Which alternative of an `||` group to prefer: Portage `dep_zapdeps`'s choice bin
 - Reached choice_1's own current position without a promotion firing -- Portage's `if choice_1 is choice_2: break`.
 - `pos2 < pos1` always (the scan breaks the moment it would reach `pos1`), so removing `pos1` first never shifts `pos2`.
 
+## view threading (#580 10b)
+- `DisjunctionPreferenceArgs`, `PromoteTiedAlternativeArgs` and `AlternativeDowngradeDemotedArgs` carry a **required** `view: OrView` (see `or_view.md`). Every probe of the choice bins goes through it: `Normal` calls the functions that were there before (`atom_currently_satisfiable`, `atom_matches_installed`, `atom_cp_installed`, `installed_candidates`, `atoms_all_in_graph`, `atom_installed_in_slot_of`, `highest_available_candidate_ignoring_use`) in the same order, so the forward walk is byte-identical; all seven walker sites and `tests_162.rs` pass `OrView::Normal`. `PostMerge` reads the package set after the merge (`PostMergeSet`).
+- `alternative_downgrade_demoted` in `PostMerge`: `avail_pkg` is the highest set member that matches the atom and `highest_in_slot` the highest set member in its slot (DC:480-490, DC:531-541; `t9/views.md` item 6). An arm that only a replaced installed version satisfies is not in the set, so it leaves at DC:475 before either guard. The `queued` stand-in for a pending update is `Normal`-only: the scan has no queue.
+- `[use]` deps in `PostMerge` (`OrView::use_satisfiable`): a graph node carries no USE state in the set, so the tree and the vdb stand in for it (same test as `Normal`). Approximation, reached only by an atom with a `[use]` block.
+
+## struct OrSplit / fn split_or_groups
+- #580 10b: a dependency string split into plain atoms and `||` groups (`split_tokens`, the walker's own splitter), USE already applied. `arms_outside(chosen)` is the arm texts a pick leaves out, minus any text that is also a plain atom (a plain atom is always a parent atom). Texts are the tokens of the string, which are the atoms `flat_dep_atoms` and the walker's `chosen` hold, so the comparison is exact.
+
+## fn installed_consumer_or_selection
+- #580 10b: the atoms `dep_zapdeps` selects from each `||` group of an installed consumer's dependency string, judged against the given view. The same `use_reduce_flat_disjunctive` call `resolve_installed_group` makes, with `promote_tied_alternative` as the tie-break and `disjunction_preference` as the rank; nothing is queued (`queued` empty), no `runtime_pkg_mask` constraints apply, the circular map is empty (an installed parent is never a merge-bound cycle node). A group that fails to flatten selects every arm (the conservative direction). Returns the **selected** arm texts, not the unselected set the plan sketched; `OrSplit::arms_outside` derives the unselected set.
+- Used by the reverse-dependency scan (`rev_dep_or.rs`) with `PostMerge` only. A consumer the walk recursed into keeps the walker's recorded pick (`PassState::installed_walked`) and never reaches this function. Portage decides that pick at pop time against the graph as it stood then; the final `entries` differ.
+
 ## gate threading (#571)
 - `AlternativeDowngradeDemotedArgs`, `DisjunctionPreferenceArgs` and `PromoteTiedAlternativeArgs` carry the gate; the `||`-preference tree lookups gate with it.

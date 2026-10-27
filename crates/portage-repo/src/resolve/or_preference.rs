@@ -13,6 +13,7 @@ pub(crate) struct AlternativeDowngradeDemotedArgs<'a> {
     pub(crate) queued: &'a [QueueItem],
     pub(crate) update: bool,
     pub(crate) gate: CategoryGate<'a>,
+    pub(crate) view: OrView<'a>,
 }
 
 /// An otherwise-available `||` alternative is demoted when one of its atoms would pull
@@ -34,6 +35,7 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
         queued,
         update,
         gate,
+        view,
     } = args;
     atoms.iter().any(|a| {
         let Some(at) = parse_dep_atom(a, "or_preference") else {
@@ -47,6 +49,21 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
         let extra = constraints
             .get(&(at.category.clone(), at.package.clone()))
             .map_or(&[][..], Vec::as_slice);
+        if let OrView::PostMerge(set) = view {
+            // The set holds the graph: the best member is `avail_pkg`, the highest
+            // member of its slot is `highest_in_slot`.
+            let Some((avail_version, avail_slot)) = set.best_matching(a) else {
+                return false;
+            };
+            let Some(highest) = set.highest_in_slot(&at.category, &at.package, &avail_slot) else {
+                return false;
+            };
+            if vercmp_ordering(&avail_version, &highest) != Ordering::Less {
+                return false;
+            }
+            let slot_atom = format!("{}/{}:{avail_slot}", at.category, at.package);
+            return !downgrade_probe(gate, config, &slot_atom, &avail_version, extra);
+        }
         let Some((avail_version, avail_slot)) = visible_tree_matches(gate, a, config, extra)
             .into_iter()
             .max_by(|x, y| vercmp_ordering(&x.0, &y.0))
@@ -146,6 +163,8 @@ pub(crate) struct DisjunctionPreferenceArgs<'a> {
     /// same-root call -- a strict no-op there.
     pub(crate) gate_entries: &'a [GraphEntry],
     pub(crate) gate_queued: &'a [QueueItem],
+    /// The package set the choice is judged against.
+    pub(crate) view: OrView<'a>,
 }
 
 /// The single probe closure `use_reduce_flat_disjunctive` calls for every `||`
@@ -182,7 +201,9 @@ pub(crate) fn disjunction_preference(
         gate,
         gate_entries,
         gate_queued,
+        view,
     } = args;
+    let probe = OrProbe { gate, root, config };
     let constraints_for = |a: &str| -> &[String] {
         parse_dep_atom(a, "or_preference")
             .and_then(|at| constraints.get(&(at.category, at.package)))
@@ -208,7 +229,7 @@ pub(crate) fn disjunction_preference(
                 && at.package == self_cp.2
         });
         if self_naming
-            && !atom_cp_installed(root, a)
+            && !view.cp_installed(root, a)
             && !atom_cp_present_in_graph(
                 a,
                 gate_entries,
@@ -231,7 +252,7 @@ pub(crate) fn disjunction_preference(
         let stripped = portage_dep::without_use(a);
         let extra_constraints = constraints_for(a);
         // USE settings never affect `||` preference evaluation at this stage.
-        let avail = atom_currently_satisfiable(gate, stripped, config, extra_constraints)
+        let avail = view.satisfiable(gate, stripped, config, extra_constraints)
             || root_deps_running_root
                 .is_some_and(|running_root| running_root_satisfies_atom(a, running_root, config));
         if !avail {
@@ -243,11 +264,10 @@ pub(crate) fn disjunction_preference(
         let use_ok = if stripped.len() == a.len() {
             true
         } else {
-            atom_currently_satisfiable(gate, a, config, extra_constraints)
+            view.use_satisfiable(probe, a, extra_constraints)
                 // A *built* package's `[use]` deps match its recorded vdb USE, not the
                 // tree candidate's profile USE; without this, installed-satisfied
                 // alternatives are wrongly demoted.
-                || atom_matches_installed(root, a, config)
                 || root_deps_running_root
                     .is_some_and(|running_root| running_root_satisfies_atom(a, running_root, config))
         };
@@ -274,13 +294,13 @@ pub(crate) fn disjunction_preference(
             .collect();
         let all_installed = non_blocker
             .iter()
-            .all(|a| atom_matches_installed(root, a, config));
+            .all(|a| view.matches_installed(root, a, config));
         if all_installed {
             return portage_use_reduce::AltPreference::OtherInstalled;
         }
         let some_installed = non_blocker
             .iter()
-            .any(|a| atom_matches_installed(root, a, config));
+            .any(|a| view.matches_installed(root, a, config));
         if some_installed {
             return portage_use_reduce::AltPreference::OtherInstalledSome;
         }
@@ -288,7 +308,7 @@ pub(crate) fn disjunction_preference(
         // `atom_cp_installed` (that helper's `virtual/` exemption doesn't apply here).
         let any_cp_installed = non_blocker.iter().any(|a| {
             parse_dep_atom(a, "or_preference")
-                .is_some_and(|at| !installed_candidates(root, &at.category, &at.package).is_empty())
+                .is_some_and(|at| view.any_cp_installed(root, &at.category, &at.package))
         });
         return if any_cp_installed {
             portage_use_reduce::AltPreference::OtherInstalledAnySlot
@@ -308,6 +328,7 @@ pub(crate) fn disjunction_preference(
         queued,
         update,
         gate,
+        view,
     }) {
         return portage_use_reduce::AltPreference::Other;
     }
@@ -324,7 +345,7 @@ pub(crate) fn disjunction_preference(
             if atom.blocker != portage_dep::Blocker::None {
                 return false;
             }
-            if atom_matches_installed(root, a, config) {
+            if view.matches_installed(root, a, config) {
                 return false;
             }
             children.iter().any(|child| {
@@ -341,8 +362,8 @@ pub(crate) fn disjunction_preference(
         // Choice bin 0: an alternative every non-blocker atom of which is either
         // already installed (cp-level) OR already a merge-bound node this run
         // (`[use]`-checked) ranks above one that would need a fresh merge.
-        return if atoms.iter().all(|a| atom_cp_installed(root, a))
-            || atoms_all_in_graph(atoms, entries, config, queued)
+        return if atoms.iter().all(|a| view.cp_installed(root, a))
+            || view.all_in_graph(atoms, entries, config, queued)
         {
             portage_use_reduce::AltPreference::Installed
         } else {
@@ -355,15 +376,15 @@ pub(crate) fn disjunction_preference(
     if !all_use_unmasked {
         return portage_use_reduce::AltPreference::Other;
     }
-    if atoms_all_in_graph(atoms, entries, config, queued) {
+    if view.all_in_graph(atoms, entries, config, queued) {
         return portage_use_reduce::AltPreference::UnsatUseInGraph;
     }
     // Cp-level installed is not enough: the *slot* the best USE-ignoring candidate
     // pulls in must also be installed, else `unsat_use_non_installed`.
-    if atoms.iter().all(|a| atom_cp_installed(root, a))
+    if atoms.iter().all(|a| view.cp_installed(root, a))
         && atoms
             .iter()
-            .all(|a| atom_installed_in_slot_of(gate, root, config, a, constraints_for(a)))
+            .all(|a| view.installed_in_slot_of(probe, a, constraints_for(a)))
     {
         portage_use_reduce::AltPreference::UnsatUseInstalled
     } else {
@@ -391,6 +412,7 @@ pub(crate) struct PromoteTiedAlternativeArgs<'a> {
     pub(crate) alts: &'a [Vec<String>],
     pub(crate) queued: &'a [QueueItem],
     pub(crate) gate: CategoryGate<'a>,
+    pub(crate) view: OrView<'a>,
 }
 
 /// Portage's in-bin upgrade-preference pass as `use_reduce_flat_disjunctive`'s
@@ -410,7 +432,9 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
         alts,
         queued,
         gate,
+        view,
     } = args;
+    let probe = OrProbe { gate, root, config };
     struct Choice {
         id: usize,
         all_installed_slots: bool,
@@ -435,17 +459,8 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
                     continue;
                 }
                 let cp = format!("{}/{}", atom.category, atom.package);
-                if let Some((candidate_str, .., _slot)) = highest_available_candidate_ignoring_use(
-                    HighestAvailableCandidateIgnoringUseArgs {
-                        atom_str: a,
-                        category: &atom.category,
-                        package: &atom.package,
-                        config,
-                        extra_constraints: constraints_for(a),
-                        gate,
-                    },
-                ) && let Some(version) =
-                    candidate_version(&candidate_str, &atom.category, &atom.package)
+                if let Some((version, _slot)) =
+                    view.highest_available(probe, &atom, a, constraints_for(a))
                 {
                     let better = cp_map
                         .get(&cp)
@@ -457,11 +472,11 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
             }
             Choice {
                 id,
-                all_installed_slots: atoms.iter().all(|a| atom_cp_installed(root, a))
-                    && atoms.iter().all(|a| {
-                        atom_installed_in_slot_of(gate, root, config, a, constraints_for(a))
-                    }),
-                all_in_graph: atoms_all_in_graph(atoms, entries, config, queued),
+                all_installed_slots: atoms.iter().all(|a| view.cp_installed(root, a))
+                    && atoms
+                        .iter()
+                        .all(|a| view.installed_in_slot_of(probe, a, constraints_for(a))),
+                all_in_graph: view.all_in_graph(atoms, entries, config, queued),
                 cp_map,
             }
         })
@@ -516,4 +531,133 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
         }
     }
     choices[0].id
+}
+
+/// A dependency string's plain atoms and its `||` groups, USE already applied.
+pub(crate) struct OrSplit {
+    plain: HashSet<String>,
+    /// Each `||` group's tokens, with the atoms of all its arms.
+    groups: Vec<(Vec<String>, HashSet<String>)>,
+}
+
+/// Splits `depstr` into plain atoms and `||` groups. `None` when it does not parse.
+pub(crate) fn split_or_groups(depstr: &str, use_flags: &HashSet<String>) -> Option<OrSplit> {
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    let (plains, groups) = split_tokens(&tokens, use_flags)?;
+    let plain = flat_dep_atoms(&plains.join(" "), use_flags)?;
+    let groups = groups
+        .into_iter()
+        .map(|g| {
+            let atoms = flat_dep_atoms(&g.join(" "), use_flags)?;
+            Some((g, atoms))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(OrSplit { plain, groups })
+}
+
+impl OrSplit {
+    /// The atoms of `||` arms that are not in `chosen` and not plain atoms elsewhere.
+    pub(crate) fn arms_outside(&self, chosen: &HashSet<String>) -> HashSet<String> {
+        self.groups
+            .iter()
+            .flat_map(|(_, atoms)| atoms.iter())
+            .filter(|a| !chosen.contains(*a) && !self.plain.contains(*a))
+            .cloned()
+            .collect()
+    }
+
+    /// Whether the string holds no `||` group.
+    pub(crate) fn is_flat(&self) -> bool {
+        self.groups.is_empty()
+    }
+
+    /// Every plain atom of the string.
+    pub(crate) fn plain_atoms(&self) -> &HashSet<String> {
+        &self.plain
+    }
+}
+
+/// Arguments of [`installed_consumer_or_selection`].
+pub(crate) struct InstalledConsumerOrSelectionArgs<'a> {
+    pub(crate) split: &'a OrSplit,
+    pub(crate) use_flags: &'a HashSet<String>,
+    /// The consumer's `(category, package)`.
+    pub(crate) consumer: &'a (String, String),
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) update: bool,
+    pub(crate) root_deps_running_root: Option<&'a Path>,
+    pub(crate) gate: CategoryGate<'a>,
+    pub(crate) view: OrView<'a>,
+}
+
+/// The atoms `dep_zapdeps` selects from each `||` group of an installed consumer's
+/// dependency string, judged against `view`. A group that fails to flatten selects
+/// every arm.
+// Portage: dep_check.py, dep_zapdeps
+pub(crate) fn installed_consumer_or_selection(
+    args: InstalledConsumerOrSelectionArgs<'_>,
+) -> HashSet<String> {
+    let InstalledConsumerOrSelectionArgs {
+        split,
+        use_flags,
+        consumer,
+        config,
+        root,
+        entries,
+        update,
+        root_deps_running_root,
+        gate,
+        view,
+    } = args;
+    let no_constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let no_circular: HashMap<RootCp, Vec<CircularDepChild>> = HashMap::new();
+    let self_node: RootCp = (false, consumer.0.clone(), consumer.1.clone());
+    let mut selected: HashSet<String> = HashSet::new();
+    for (group, arms) in &split.groups {
+        let flat = portage_use_reduce::use_reduce_flat_disjunctive(
+            portage_use_reduce::UseReduceFlatDisjunctiveArgs {
+                tokens: group,
+                uselist: use_flags,
+                mode: portage_use_reduce::MatchMode::Normal,
+                empty_groups_always_true: false,
+                tie_break: &mut |alts: &[Vec<String>]| {
+                    promote_tied_alternative(PromoteTiedAlternativeArgs {
+                        config,
+                        root,
+                        entries,
+                        constraints: &no_constraints,
+                        alts,
+                        queued: &[],
+                        gate,
+                        view,
+                    })
+                },
+            },
+            &mut |atoms: &[String]| {
+                disjunction_preference(DisjunctionPreferenceArgs {
+                    config,
+                    root,
+                    entries,
+                    self_cp: &self_node,
+                    constraints: &no_constraints,
+                    circular_dependency: &no_circular,
+                    root_deps_running_root,
+                    atoms,
+                    queued: &[],
+                    update,
+                    gate,
+                    gate_entries: entries,
+                    gate_queued: &[],
+                    view,
+                })
+            },
+        );
+        match flat {
+            Ok(chosen) => selected.extend(chosen),
+            Err(_) => selected.extend(arms.iter().cloned()),
+        }
+    }
+    selected
 }
