@@ -59,3 +59,9 @@ Missing arguments, and the abort reports for cycles and unsatisfied dependencies
 
 ## allow-list wiring (#571)
 - `ShowSlotConflictsArgs`, `ShowConflictInstanceArgs` and `SelectConflictParentsArgs` carry `config_root`; each report builds its gate once. Displayed entries are merge-bound (listed), so these gates pass everything through.
+
+## struct ConflictFlags (#597)
+- `is_a_version_conflict`: set while rendering when a *selected* package parent has a version or slot reason (SC:639-664; argument parents never set it). `conflict_is_unspecific`: an instance has parents and none is selected for display (SC:681-686). Computed per instance in `show_conflict_instance` and read by `show_slot_conflicts`.
+
+## fn show_slot_conflicts: explanation (#597)
+- After the conflict block, Portage writes the handler's explanation and returns (`depgraph.py:1744-1750`): no package.mask paragraph, no `--backtrack=30` sentence, no "For more information". `--quiet` skips those three too (`:1752-1753`) but not the explanation.

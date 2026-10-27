@@ -383,18 +383,18 @@ when a claim turns out false.
 - **What it does**: `need_config_change` returns True for the handler arm only in the call that builds the handler (`lib/_emerge/depgraph.py:11849-11865`). When that happens on a later try, the loop breaks (`:12407-12411`), but `need_display_problems()` (`:11827`, read at `:12420`) is False, so Portage reruns from `get_best_run()` with no masks and backtracking off, and the USE change it found is never shown.
 - **Why it looks wrong**: the comment says the handler's changes "are more likely to be useful", yet the run that found them throws them away unless it was try 0.
 - **First seen**: Portage 3.0.83, plan 02.589 R4 S0 (`LLM/evidence/2026-10-26-575-residues/r4/captures/pg-late-pass4.txt`).
-- **Portuale**: to be copied by plan 02.589 R4.
+- **Portuale**: copied by plan 02.589 R4.
 
 ## Q21. Asking to turn off a flag that is already off invalidates the candidate (suspect)
 
 - **What it does**: `_force_flag_for_package` (`lib/_emerge/resolver/slot_collision.py:984-1010`) records a "disabled" requirement on a flag the package already has off; `_check_solution` (`:1115-1122`) then treats the candidate as needing a change and Portage suggests a spurious `+flag` on another package.
 - **Why it looks wrong**: a requirement already met should not count as a change.
 - **First seen**: Portage 3.0.83, plan 02.589 R4 S0 (`r4/captures/pg-force-disabled.txt`).
-- **Portuale**: to be copied by plan 02.589 R4.
+- **Portuale**: copied by plan 02.589 R4.
 
 ## Q22. The handler's explanation header counts solutions, its body counts changes (suspect)
 
 - **What it does**: `get_explanation` (`lib/_emerge/resolver/slot_collision.py:728-784`) picks "by applying all of the following changes" or "by applying one of the following solutions" from `len(self.solutions)`, but prints `self.changes`, which `_add_change` (`:205-224`) has already minimised. Several solutions that minimise to one change print "one of the following solutions:" followed by a single change.
 - **Why it looks wrong**: the header and the list disagree.
 - **First seen**: Portage 3.0.83, upstream `testSlotCollision` case 7 (`r4/handler.md` §8).
-- **Portuale**: to be copied by plan 02.589 R4.
+- **Portuale**: copied by plan 02.589 R4.

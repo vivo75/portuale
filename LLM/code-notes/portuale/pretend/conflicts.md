@@ -39,3 +39,6 @@ Slot-conflict text helpers. Context moved out of the code comments (#336 Phase 7
 
 ## struct SlotConflictNeedRebuildArgs (allow-list, #571)
 - Carries `config_root`; the `ebuild_visible_at` check builds its gate once per report.
+
+## fn slot_conflict_explanation (#597)
+- Port of `get_explanation` (`resolver/slot_collision.py:728-784`). Returns `None` for a version or slot conflict, `None` without solutions, the `--newuse and --update` text for an unspecific conflict unless both options are set (that text needs no solution). The header line counts solutions while the body prints the minimised changes (quirk Q22). Flags print red for `+` and blue for `-` (`colorize("red"/"blue")`).

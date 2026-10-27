@@ -486,3 +486,85 @@ pub(crate) fn skip_conflict_caret_line(
     }
     line
 }
+
+/// Arguments of [`slot_conflict_explanation`].
+pub(crate) struct SlotConflictExplanationArgs<'a> {
+    pub(crate) solutions: &'a portage_repo::SlotConflictSolutions,
+    /// A displayed package parent was rejected for its version or slot.
+    pub(crate) is_a_version_conflict: bool,
+    /// Some conflicting instance has parents but none to show.
+    pub(crate) conflict_is_unspecific: bool,
+    /// Both `--newuse` and `--update` were given.
+    pub(crate) newuse_and_update: bool,
+    pub(crate) color: &'a Colorizer,
+}
+
+/// The text the slot-conflict handler adds after the conflict block, or
+/// `None` when it has nothing to say.
+// Portage: resolver/slot_collision.py, get_explanation
+pub(crate) fn slot_conflict_explanation(args: SlotConflictExplanationArgs<'_>) -> Option<String> {
+    let SlotConflictExplanationArgs {
+        solutions,
+        is_a_version_conflict,
+        conflict_is_unspecific,
+        newuse_and_update,
+        color,
+    } = args;
+    if is_a_version_conflict {
+        return None;
+    }
+    if conflict_is_unspecific && !newuse_and_update {
+        return Some(
+            "!!! Enabling --newuse and --update might solve this conflict.\n\
+             !!! If not, it might help emerge to give a more specific suggestion.\n\n"
+                .to_string(),
+        );
+    }
+    if solutions.solution_count == 0 {
+        return None;
+    }
+    let slot_noun = if solutions.conflict_count == 1 {
+        "this slot collision"
+    } else {
+        "these slot collisions"
+    };
+    let mut msg = format!("It might be possible to solve {slot_noun}\n");
+    // The header counts solutions, the body counts the minimised changes.
+    if solutions.solution_count == 1 {
+        msg.push_str("by applying all of the following changes:\n");
+    } else {
+        msg.push_str("by applying one of the following solutions:\n");
+    }
+    let print_change = |change: &[portage_repo::UseChange], indent: &str| -> String {
+        let mut out = String::new();
+        for pkg in change {
+            let flags: Vec<String> = pkg
+                .flags
+                .iter()
+                .map(|(flag, on)| {
+                    if *on {
+                        color.c("red", &format!("+{flag}"))
+                    } else {
+                        color.c("blue", &format!("-{flag}"))
+                    }
+                })
+                .collect();
+            out.push_str(&format!(
+                "{indent}- {} (Change USE: {})\n",
+                pkg.cpv,
+                flags.join(" ")
+            ));
+        }
+        out.push('\n');
+        out
+    };
+    if let [only] = solutions.changes.as_slice() {
+        msg.push_str(&print_change(only, "   "));
+    } else {
+        for change in &solutions.changes {
+            msg.push_str("  Solution: Apply all of:\n");
+            msg.push_str(&print_change(change, "     "));
+        }
+    }
+    Some(msg)
+}

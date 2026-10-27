@@ -35,3 +35,9 @@ The backtracking loop: one pass per node, settle or feed back.
 
 ## gate threading (#571)
 - The naked re-run's `ReverseDependencyConstraintsArgs` and the `BacktrackMissedUpdatesArgs` sites use the owning ctx's gate.
+
+## fn slot_conflict_handler_stops (#597)
+- Portage's `need_config_change` handler arm (`_emerge/depgraph.py:11849-11865`) with the loop break at `:12401-12418`. The handler is built once per pass, on that pass's slot conflicts, so the check runs once per pass and a stop is only ever caused by the pass that found the change.
+- Portage skips the arm when blocker conflicts are accepted: `--backtrack=0` together with `--buildpkgonly` or `--nodeps` (`_accept_blocker_conflicts`, `:9302-9315`; `--fetchonly` and `--fetch-all-uri` are not known to the resolver).
+- Stop on the root pass: that pass is the report (`settled_with_backtracking` set, so the generic advice's `--backtrack=30` sentence stays out when it prints). Stop on a later pass: the loop breaks and the best-run pass with backtracking off follows, which drops the suggestion (quirk Q20: `need_display_problems()` is false for the stopped pass because the arm only returns True in the call that builds the handler). The final pass's own handler runs at assembly time on its own conflicts.
+- Only conflicts the walk recorded are visible here. The residual installed-instance conflicts are added at assembly (`build_residual_slot_conflicts`), so a keeper like the cgp USE break (settles on the root pass) is explained by the assembly-time search, not by this stop.

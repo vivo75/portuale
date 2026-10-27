@@ -663,6 +663,7 @@ fn graph_result_from_order(
         // Always `Complete`: an engine plan cannot abort the way the walk can.
         outcome: super::ResolveOutcome::Complete,
         slot_conflicts: Vec::new(),
+        slot_conflict_solutions: super::SlotConflictSolutions::default(),
         skipped_updates: Vec::new(),
         // No backtrack loop: no trial masks, nothing for either notice.
         skipped_missing_deps: Vec::new(),

@@ -118,3 +118,156 @@ fn skip_caret_line_pads_to_the_atom_and_marks_a_violated_use_dep() {
     assert_eq!(line.trim(), "");
     assert_eq!(line.len(), "a/b[nginx]".len());
 }
+
+/// How the conflict was rendered: the two flags the explanation reads.
+#[derive(Clone, Copy, PartialEq)]
+enum Shown {
+    Plain,
+    VersionConflict,
+    Unspecific,
+}
+
+fn explanation_for(
+    solutions: &portage_repo::SlotConflictSolutions,
+    shown: Shown,
+    color: bool,
+) -> Option<String> {
+    let color = Colorizer::new(color);
+    slot_conflict_explanation(SlotConflictExplanationArgs {
+        solutions,
+        is_a_version_conflict: shown == Shown::VersionConflict,
+        conflict_is_unspecific: shown == Shown::Unspecific,
+        newuse_and_update: false,
+        color: &color,
+    })
+}
+
+fn use_change(cpv: &str, flags: &[(&str, bool)]) -> portage_repo::UseChange {
+    portage_repo::UseChange {
+        cpv: cpv.to_string(),
+        flags: flags.iter().map(|(f, v)| ((*f).to_string(), *v)).collect(),
+    }
+}
+
+/// Portage 3.0.83 `get_explanation` (`slot_collision.py:728-784`), upstream
+/// `testSlotCollision` case 6 (`sci-libs/L sci-libs/M`): one solution, one
+/// conflict, plain text with `--color=n`.
+#[test]
+fn explanation_lists_the_one_change_with_three_space_indent() {
+    let sols = portage_repo::SlotConflictSolutions {
+        conflict_count: 1,
+        solution_count: 1,
+        changes: vec![vec![
+            use_change("sci-libs/K-1", &[("foo", false)]),
+            use_change("sci-libs/M-1", &[("foo", false)]),
+        ]],
+    };
+    assert_eq!(
+        explanation_for(&sols, Shown::Plain, false).as_deref(),
+        Some(
+            "It might be possible to solve this slot collision\n\
+             by applying all of the following changes:\n   \
+             - sci-libs/K-1 (Change USE: -foo)\n   \
+             - sci-libs/M-1 (Change USE: -foo)\n\n"
+        )
+    );
+}
+
+/// The flags are `red` for `+` and `blue` for `-` (`slot_collision.py:766`),
+/// as the host `emerge --color=y` capture of the cgp keeper shows.
+#[test]
+fn explanation_colours_the_flags() {
+    let sols = portage_repo::SlotConflictSolutions {
+        conflict_count: 1,
+        solution_count: 1,
+        changes: vec![vec![use_change(
+            "dev-libs/cgp0x-2.8.0",
+            &[("icu", false), ("bar", true)],
+        )]],
+    };
+    let text = explanation_for(&sols, Shown::Plain, true).unwrap();
+    assert!(
+        text.contains(
+            "   - dev-libs/cgp0x-2.8.0 (Change USE: \x1b[34;01m-icu\x1b[39;49;00m \
+             \x1b[31;01m+bar\x1b[39;49;00m)\n"
+        ),
+        "{text:?}"
+    );
+}
+
+/// Quirk Q22, upstream case 7: two solutions that minimise to one change keep
+/// the "one of the following solutions" header over a single change.
+#[test]
+fn explanation_header_counts_solutions_but_body_counts_changes() {
+    let sols = portage_repo::SlotConflictSolutions {
+        conflict_count: 1,
+        solution_count: 2,
+        changes: vec![vec![use_change("sci-libs/Q-1", &[("foo", true)])]],
+    };
+    assert_eq!(
+        explanation_for(&sols, Shown::Plain, false).as_deref(),
+        Some(
+            "It might be possible to solve this slot collision\n\
+             by applying one of the following solutions:\n   \
+             - sci-libs/Q-1 (Change USE: +foo)\n\n"
+        )
+    );
+}
+
+/// With several minimal changes each prints under `Solution: Apply all of:`,
+/// and several conflicts say "these slot collisions".
+#[test]
+fn explanation_lists_each_of_several_changes() {
+    let sols = portage_repo::SlotConflictSolutions {
+        conflict_count: 2,
+        solution_count: 2,
+        changes: vec![
+            vec![use_change("a/b-1", &[("x", true)])],
+            vec![use_change("a/c-1", &[("y", false)])],
+        ],
+    };
+    assert_eq!(
+        explanation_for(&sols, Shown::Plain, false).as_deref(),
+        Some(
+            "It might be possible to solve these slot collisions\n\
+             by applying one of the following solutions:\n  \
+             Solution: Apply all of:\n     \
+             - a/b-1 (Change USE: +x)\n\n  \
+             Solution: Apply all of:\n     \
+             - a/c-1 (Change USE: -y)\n\n"
+        )
+    );
+}
+
+/// A version or slot conflict gets no explanation (`:731-732`); no solution
+/// gets none either (`:741-743`); an unspecific conflict gets the `--newuse`
+/// hint even without solutions (`:734-739`), unless both options are given.
+#[test]
+fn explanation_is_absent_for_version_conflicts_and_empty_searches() {
+    let sols = portage_repo::SlotConflictSolutions {
+        conflict_count: 1,
+        solution_count: 1,
+        changes: vec![vec![use_change("a/b-1", &[("x", true)])]],
+    };
+    assert_eq!(explanation_for(&sols, Shown::VersionConflict, false), None);
+    let none = portage_repo::SlotConflictSolutions::default();
+    assert_eq!(explanation_for(&none, Shown::Plain, false), None);
+    assert_eq!(
+        explanation_for(&none, Shown::Unspecific, false).as_deref(),
+        Some(
+            "!!! Enabling --newuse and --update might solve this conflict.\n\
+             !!! If not, it might help emerge to give a more specific suggestion.\n\n"
+        )
+    );
+    let color = Colorizer::new(false);
+    assert_eq!(
+        slot_conflict_explanation(SlotConflictExplanationArgs {
+            solutions: &none,
+            is_a_version_conflict: false,
+            conflict_is_unspecific: true,
+            newuse_and_update: true,
+            color: &color,
+        }),
+        None
+    );
+}

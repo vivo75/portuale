@@ -100,6 +100,31 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
             return run_breakage_clean_pass(&ctx, &initial, restarts);
         }
         let decision = collect_feedback(&ctx, &params, &mut pass, config);
+        // The slot-conflict handler stops the search when a USE change would
+        // solve this pass's conflicts. The root pass is then the report; a
+        // later pass's stop is followed by a final pass from the best run
+        // that no longer shows the suggestion.
+        // Portage: depgraph.py, need_config_change (handler arm), _backtrack_depgraph
+        if slot_conflict_handler_stops(&ctx, &pass, config) {
+            if restarts > 0 {
+                break;
+            }
+            let grown: BacktrackParams = match decision {
+                PassDecision::Settle { params } | PassDecision::DeadEnd { params } => *params,
+                PassDecision::Feedback(
+                    BacktrackFeedback::Config { params }
+                    | BacktrackFeedback::RevDep { params }
+                    | BacktrackFeedback::Circular { params },
+                ) => *params,
+                PassDecision::Feedback(
+                    BacktrackFeedback::SlotConflict { base, .. }
+                    | BacktrackFeedback::MissingDep { base, .. },
+                ) => *base,
+            };
+            let mut result = assemble_result(&ctx, &grown, pass, config, restarts);
+            result.settled_with_backtracking = ctx.backtrack_max > 0;
+            return Ok(result);
+        }
         // With `--autounmask-backtrack` off, a pass whose graph carries an
         // autounmask change ends the loop: the pass is the report.
         let decision = match decision {
@@ -311,4 +336,28 @@ pub(crate) fn prune_unresolved_after_backtrack(
                 || !full.is_empty()
                 || !pass.skipped_updates.is_empty()
         }
+}
+
+/// Whether the slot-conflict handler finds a USE change for the conflicts of
+/// `pass`, which ends the backtracking search. The handler only runs when the
+/// pass may not accept its blocker conflicts.
+// Portage: depgraph.py, need_config_change; _accept_blocker_conflicts
+fn slot_conflict_handler_stops(
+    ctx: &ResolveCtx<'_>,
+    pass: &PassResult,
+    config: &portage_profile::Config,
+) -> bool {
+    if pass.slot_conflicts.is_empty()
+        || (ctx.backtrack_max == 0 && (ctx.buildpkgonly || ctx.nodeps))
+    {
+        return false;
+    }
+    !solve_slot_conflict_records(SolveRecordsArgs {
+        conflicts: &pass.slot_conflicts,
+        config,
+        root: ctx.root,
+        gate: ctx.gate(),
+    })
+    .changes
+    .is_empty()
 }

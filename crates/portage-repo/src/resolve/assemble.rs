@@ -250,12 +250,19 @@ pub(crate) fn assemble_result(
             config,
             merging: &merging,
         });
+    let slot_conflict_solutions = solve_slot_conflict_records(SolveRecordsArgs {
+        conflicts: &pass.slot_conflicts,
+        config,
+        root: ctx.root,
+        gate: ctx.gate(),
+    });
     GraphResult {
         entries: pass.entries,
         backtrack_restarts,
         backtrack_max: ctx.backtrack_max,
         outcome,
         slot_conflicts: pass.slot_conflicts,
+        slot_conflict_solutions,
         skipped_updates: pass.skipped_updates,
         skipped_missing_deps,
         skipped_missing_dep_full,

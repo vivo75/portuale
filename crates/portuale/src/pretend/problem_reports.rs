@@ -478,6 +478,9 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
         verbose_conflicts,
         ref excluded,
         backtrack_max,
+        quiet,
+        newuse,
+        update,
         ..
     } = opts;
     // The slot-conflict notice: the preamble, one block per conflicting
@@ -497,6 +500,7 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                 .iter()
                 .map(|p| (p.category.clone(), p.package.clone(), p.version.clone()))
                 .collect();
+        let mut flags = ConflictFlags::default();
         println!();
         println!("!!! Multiple package instances within a single package slot have been pulled");
         println!("!!! into the dependency graph, resulting in a slot conflict:");
@@ -520,6 +524,7 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                     need_rebuild: &mut need_rebuild,
                     color,
                     any_omitted: &mut any_omitted,
+                    flags: &mut flags,
                 });
             }
         }
@@ -548,6 +553,21 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
             }
         }
         println!();
+        // When the handler has something to say it replaces the generic advice.
+        // Portage: _emerge/depgraph.py, _show_slot_collision_notice
+        if let Some(text) = slot_conflict_explanation(SlotConflictExplanationArgs {
+            solutions: &result.slot_conflict_solutions,
+            is_a_version_conflict: flags.is_a_version_conflict,
+            conflict_is_unspecific: flags.conflict_is_unspecific,
+            newuse_and_update: newuse && update,
+            color,
+        }) {
+            print!("{text}");
+            return;
+        }
+        if quiet {
+            return;
+        }
         for line in [
             "It may be possible to solve this problem by using package.mask to",
             "prevent one of those packages from being selected. However, it is also",
@@ -593,6 +613,16 @@ pub(crate) struct ShowConflictInstanceArgs<'a> {
     pub(crate) need_rebuild: &'a mut Vec<(String, String)>,
     pub(crate) color: &'a Colorizer,
     pub(crate) any_omitted: &'a mut bool,
+    pub(crate) flags: &'a mut ConflictFlags,
+}
+
+/// The two flags the handler's explanation reads, set while the conflict is
+/// rendered.
+// Portage: resolver/slot_collision.py, is_a_version_conflict / conflict_is_unspecific
+#[derive(Default)]
+pub(crate) struct ConflictFlags {
+    pub(crate) is_a_version_conflict: bool,
+    pub(crate) conflict_is_unspecific: bool,
 }
 
 /// Print one instance of a slot conflict with the parents that pull it in.
@@ -613,6 +643,7 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         need_rebuild,
         color,
         any_omitted: any_omitted_out,
+        flags,
     } = args;
     let gate = portage_repo::CategoryGate::new(repos, categories, config_root);
     let mut any_omitted = *any_omitted_out;
@@ -735,6 +766,18 @@ pub(crate) fn show_conflict_instance(args: ShowConflictInstanceArgs<'_>) {
         config_root,
         categories,
     });
+    // A displayed package parent rejected for its version or slot makes this
+    // a version conflict; parents shown but not selected do not count.
+    flags.is_a_version_conflict |= selected.iter().any(|&m| {
+        !classified[m].parent_cpv.is_empty()
+            && classified[m].reasons.iter().any(|r| {
+                matches!(
+                    r,
+                    SlotConflictReason::Version(_) | SlotConflictReason::Slot(_)
+                )
+            })
+    });
+    flags.conflict_is_unspecific |= !inst.parents.is_empty() && selected.is_empty();
     show_selected_parents(
         &mut selected,
         &classified,

@@ -230,6 +230,10 @@ pub struct GraphResult {
     /// Portage's `--backtrack` budget `M` (`max_retries`).
     pub backtrack_max: u32,
     pub slot_conflicts: Vec<SlotConflict>,
+    /// What the slot-conflict handler's search found for `slot_conflicts`: the
+    /// USE changes the explanation after the conflict block lists.
+    // Portage: slot_collision.py, slot_conflict_handler
+    pub slot_conflict_solutions: SlotConflictSolutions,
     /// Withheld upgrades Portage reports through `WARNING: One or more
     /// updates/rebuilds have been skipped due to a dependency conflict:` (merge list
     /// keeps the keeper, rc 0). Rendered after the merge list; suppressed under

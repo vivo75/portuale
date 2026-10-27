@@ -34,6 +34,8 @@ mod rev_dep;
 mod root_deps;
 mod skipped;
 mod slot_conflict;
+mod slot_conflict_inputs;
+mod slot_conflict_solutions;
 mod slot_expand;
 mod withhold;
 
@@ -72,5 +74,7 @@ pub(crate) use rev_dep::*;
 pub(crate) use root_deps::*;
 pub use skipped::*;
 pub use slot_conflict::*;
+pub(crate) use slot_conflict_inputs::*;
+pub use slot_conflict_solutions::*;
 pub(crate) use slot_expand::*;
 pub(crate) use withhold::*;

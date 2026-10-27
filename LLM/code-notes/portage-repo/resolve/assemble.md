@@ -81,3 +81,6 @@ Assembling the final result.
 
 ## fn success-path ignored-user-patches rows (#509)
 - For every merging cp, the filter-dropped binaries Portage accumulates in `ignored_binaries["user_patches"]`, minus `_eliminate_ignored_binaries`. Recomputed here from the settled merge list (Portage's displayed-list filter) because selection's retains are pure and memoized.
+
+## fn assemble_result: slot_conflict_solutions (#597)
+- Portage's `_show_slot_collision_notice` builds the handler for the displayed pass (`depgraph.py:1740-1742`) whether or not the loop built one. The search runs here over the final records (merge-vs-merge plus residual installed-instance conflicts) and the printer decides from the result whether to explain.

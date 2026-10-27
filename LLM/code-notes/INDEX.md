@@ -174,6 +174,8 @@
 - [crates/portage-repo/src/resolve/root_deps.rs](portage-repo/resolve/root_deps.md) — `--root-deps` build entries for the running root.
 - [crates/portage-repo/src/resolve/skipped.rs](portage-repo/resolve/skipped.md) — Skipped-update records (withheld upgrades, backtrack-mask rows) and their grouping.
 - [crates/portage-repo/src/resolve/slot_conflict.rs](portage-repo/resolve/slot_conflict.md) — Slot conflicts: records, merging and rendering.
+- [crates/portage-repo/src/resolve/slot_conflict_inputs.rs](portage-repo/resolve/slot_conflict_inputs.md) — Builds the handler's input from `SlotConflict` records (plan 02.589 R4, backlog #597).
+- [crates/portage-repo/src/resolve/slot_conflict_solutions.rs](portage-repo/resolve/slot_conflict_solutions.md) — The slot-conflict handler's search for USE changes that would solve a slot conflict (plan 02.589 R4, backlog #597).
 - [crates/portage-repo/src/resolve/slot_expand.rs](portage-repo/resolve/slot_expand.md) — Re-expanding a resolved slot when USE changes.
 - [crates/portage-repo/src/resolve/withhold.rs](portage-repo/resolve/withhold.md) — Updates withheld by constraints, and missed updates to backtrack on.
 - [crates/portage-repo/src/resolver_trace.rs](portage-repo/resolver_trace.md) — `emerge --pretend --debug` resolver trace.

@@ -19899,3 +19899,18 @@ as in Portage. Check: `cargo test --release -p portuale --lib
 system_`. The grounding is Portage's source plus these unit tests. A
 bed capture of Portage's start order needs an overlay and an `@system`
 entry in an L3 cell, and is #596.
+
+**A slot conflict that a USE change would solve now says so, and stops
+backtracking there, as Portage does (#597, 2026-10-27).** Portage builds a
+slot-conflict handler on each pass with a conflict and searches the
+conflicting packages' USE for a combination that satisfies every parent
+(`lib/_emerge/resolver/slot_collision.py`). When it finds one, backtracking
+ends (`lib/_emerge/depgraph.py:11849-11865`) and the report prints `It might
+be possible to solve this slot collision` with the `(Change USE: ...)`
+lines in place of the generic package.mask advice (`:1744-1753`). portuale
+had no search and always printed the generic advice. Now it ports the
+search and the stop. `--quiet` drops the generic advice the way Portage
+does. Check from pmtest: `python3 -m pytest
+pytests-contract-suite/test_emerge_pretend_contract.py -q -k
+prints_the_slot_conflict_explanation`. The expected text is host Portage
+3.0.83 on the fixtures: `dev-libs/cgp0x-2.8.0 (Change USE: -icu)`.
