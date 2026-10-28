@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Status:** done 2026-10-28 (Tasks 1–3; branch `slice/573-built-pin-parents`
-in both repos, portuale `55b8ec58`, pmtest `8ff08e5` +
+in both repos, portuale `d2e26103`, pmtest `8ff08e5` +
 the contract commit). Task 3's design moved while executing: the bed showed
 that a locked complete retry changes the merge list (`p569pull-2` where
 Portage keeps `-1`), so the missed-update parents come from a report-only scan
