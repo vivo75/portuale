@@ -1,0 +1,49 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 python3 -I $S/tools/arms.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/r594dtop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ...ARM D:3517 missing dependency filed | parent=(dev-libs/r594dm-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') atom=dev-libs/maskeddep bt=True
+ done!
+Dependency resolution took N s (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/r594dm-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r594dtop-1::testrepo to $S/fx/ 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+dev-libs/r594dm:0 for $S/fx/
+
+  selected: (dev-libs/r594dm-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+  skipped: (dev-libs/r594dm-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (see unsatisfied dependency below)
+
+!!! All ebuilds that could satisfy "dev-libs/maskeddep" for $S/fx/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)
+$S/fx.cfg/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+# fixture package.mask for the masked-dependency disclosure slice:
+# dev-libs/maskeddep stays masked so a dependency on it reports the
+# "All ebuilds ... have been masked" block (never unmasked anywhere).
+
+
+(dependency required by "dev-libs/r594dm-2::testrepo" [ebuild])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+
+### rc: 0

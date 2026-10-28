@@ -184,6 +184,39 @@ pub(crate) struct ReplayKeyArgs<'a> {
     pub(crate) out: &'a mut WalkReplay,
 }
 
+/// Whether the replayed edge can land on a merge-bound or installed target.
+/// Atoms with no package yield first in Portage's order, so a missing dep
+/// fails the key before a later atom's USE change is recorded.
+// Portage: depgraph.py, _minimize_children
+fn replay_edge_has_target(
+    entries: &[GraphEntry],
+    pre: &DigraphPrelude<'_>,
+    i: usize,
+    ei: usize,
+) -> bool {
+    let edge = &entries[i].deps[ei];
+    // drop-ok: fallback; dropped only if next line also fails
+    let Some(atom) = portage_dep::parse_atom(&edge.evaluated)
+        .or_else(|| parse_dep_atom(&edge.atom, "replay_edge_targets"))
+    else {
+        return false;
+    };
+    if atom.blocker != portage_dep::Blocker::None {
+        return false;
+    }
+    let idxs = pre
+        .cp_indices
+        .get(&(edge.category.as_str(), edge.package.as_str()))
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    idxs.iter().copied().any(|j| {
+        !matches!(
+            entries[j].outcome,
+            PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. }
+        ) && pre.edge_matches(&edge.atom, j)
+    })
+}
+
 /// One `_add_pkg_dep_string` call: fail the key on the first unresolvable atom,
 /// else admit the targets in atom order. Returns `true` once a failure is recorded.
 pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
@@ -201,13 +234,24 @@ pub(crate) fn replay_key(args: ReplayKeyArgs<'_>) -> bool {
         out,
     } = args;
     let parent_cp = (entries[i].category.as_str(), entries[i].package.as_str());
-    // Pass 1: pick every atom's target and settle its USE before admitting anything.
-    let mut targets: Vec<(usize, usize)> = Vec::new();
-    let mut flips: Vec<(Cp, Vec<(String, bool)>)> = Vec::new();
+    // Portage `_minimize_children` yields the atoms with no package first, in
+    // textual order, then the satisfiable ones: a missing dep fails the key
+    // before a later atom's USE change is recorded. Target-less edges go
+    // first, in stored order, then the rest, in stored order.
+    // Portage: depgraph.py, _minimize_children
+    let mut order: Vec<usize> = Vec::new();
     for (ei, edge) in entries[i].deps.iter().enumerate() {
         if edge.disjunctive != disjunctive || edge.key != key || alt_suppressed[i].contains(&ei) {
             continue;
         }
+        order.push(ei);
+    }
+    order.sort_by_key(|&ei| replay_edge_has_target(entries, pre, i, ei));
+    // Pass 1: pick every atom's target and settle its USE before admitting anything.
+    let mut targets: Vec<(usize, usize)> = Vec::new();
+    let mut flips: Vec<(Cp, Vec<(String, bool)>)> = Vec::new();
+    for ei in order {
+        let edge = &entries[i].deps[ei];
         // drop-ok: fallback; dropped only if next line also fails
         let Some(atom) = portage_dep::parse_atom(&edge.evaluated)
             .or_else(|| parse_dep_atom(&edge.atom, "replay_edge_atoms"))

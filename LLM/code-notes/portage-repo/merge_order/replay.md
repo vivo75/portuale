@@ -22,6 +22,10 @@ Replaying `_create_graph` for fail-fast passes.
 ## fn replay_key
 - One `_add_pkg_dep_string` call of `replay_create_graph`: resolve every atom of `entries[i]`'s key `key`, fail the key on the first unresolvable one (unresolvable atoms are yielded first, so nothing of the key is admitted then), else admit the targets in atom order. Returns `true` once a failure is recorded.
 - Pass 1: pick every atom's target and settle its USE; a failure stops the key before anything is admitted.
+- #594: the loop runs target-less edges first (`replay_edge_has_target`, stable sort over the stored order), so a missing dep fails the key before a later atom's USE change is recorded -- the order above is now the implementation, not just the intent.
 - Only the use-deps written unconditionally (`flag` / `-flag`) are checked: a `flag?` / `flag=` one depends on the parent's own USE, which Portage's walk may itself change (`_apply_parent_use_changes`) -- evaluating it against the settled parent would invent contradictions Portage never meets.
 - Portage's `_select_pkg_highest_available` over the graph: an instance whose IUSE can carry every use-dep flag, then the usual merge-bound-then-highest ranking. Only the unconditional `flag` / `-flag` forms constrain the target (`use_deps_satisfied`'s own rule); a flag with a `(+)`/`(-)` default need not be declared.
 - Undeclared: satisfied or not by its `(+)`/`(-)` default alone -- no change can help.
+
+## fn replay_edge_has_target (#594)
+- Whether a replayed edge can land on a merge-bound or installed target: a `NoVisibleCandidate`/`Uninstall` outcome never lands, and neither does an edge with no entry at all. Mirrors the target computation at the top of the old `replay_key` loop (same atom parse with the same `drop-ok` fallback, same blocker skip, same `edge_matches` filter); blockers sort target-less and skip either way.

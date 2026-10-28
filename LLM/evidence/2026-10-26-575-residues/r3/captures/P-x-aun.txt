@@ -1,0 +1,21 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/r594xtop
+BT try=1 kind=DeadEnd
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=2 kind=DeadEnd
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/r594xdep[r594flag]".
+!!! One of the following packages is required to complete your request:
+- dev-libs/r594xdep-1::testrepo (Missing IUSE: r594flag)
+(dependency required by "dev-libs/r594xm-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r594xtop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r594xtop" [argument])
+### rc: 1

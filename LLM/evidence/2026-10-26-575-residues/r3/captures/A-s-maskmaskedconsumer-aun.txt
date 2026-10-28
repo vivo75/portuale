@@ -1,0 +1,36 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 python3 -I $S/tools/arms.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/maskmaskedconsumer
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ...ARM D:3517 missing dependency filed | parent=(dev-libs/maskmaskedconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') atom=dev-libs/hardmaskedpkg bt=True
+ARM D:3535 no backtracking (allow_backtracking=False) | parent=(dev-libs/maskmaskedconsumer-1.0:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') atom=dev-libs/hardmaskedpkg bt=False
+ done!
+Dependency resolution took N s (backtrack: 1/20).
+
+
+!!! All ebuilds that could satisfy "dev-libs/hardmaskedpkg" for $S/fx/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/hardmaskedpkg-1.0::testrepo (masked by: package.mask)
+$S/fx.cfg/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+
+
+(dependency required by "dev-libs/maskmaskedconsumer-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/maskmaskedconsumer" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+### rc: 1

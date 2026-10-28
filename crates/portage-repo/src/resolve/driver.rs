@@ -126,13 +126,39 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
             return Ok(result);
         }
         // With `--autounmask-backtrack` off, a pass whose graph carries an
-        // autounmask change ends the loop: the pass is the report.
+        // autounmask change ends the loop: the pass is the report. The change
+        // must reach the graph before the pass's stop: the replay records
+        // only what its fail-fast walk reached, so a change it found came
+        // before a missing-dependency failure. A fixable USE miss alone never
+        // breaks: it sits after every package-less atom, so the replay meets
+        // the missing dep first with nothing new recorded.
         let decision = match decision {
             PassDecision::Feedback(BacktrackFeedback::SlotConflict { base, .. })
                 if ctx.backtrack_max > 0
                     && !ctx.autounmask_backtrack_enabled
                     && let Some(r) = replay.as_ref()
                     && r.failure.is_none()
+                    && r.needed != needed_init =>
+            {
+                apply_replay_flips(
+                    &ctx,
+                    &mut pass.entries,
+                    r,
+                    &params.autounmask_use_config,
+                    &mut pass.autounmask_use_changes,
+                );
+                let entries = pass.entries.clone();
+                let slot_conflicts = std::mem::take(&mut pass.slot_conflicts);
+                let mut result = assemble_result(&ctx, &base, pass, config, restarts);
+                result.slot_conflicts = slot_conflicts;
+                result.settled_with_backtracking = true;
+                replay_slot_conflicts(&ctx, &entries, r, &mut result.slot_conflicts);
+                return Ok(result);
+            }
+            PassDecision::Feedback(BacktrackFeedback::MissingDep { base, .. })
+                if ctx.backtrack_max > 0
+                    && !ctx.autounmask_backtrack_enabled
+                    && let Some(r) = replay.as_ref()
                     && r.needed != needed_init =>
             {
                 apply_replay_flips(

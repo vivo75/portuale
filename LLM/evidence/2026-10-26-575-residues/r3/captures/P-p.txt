@@ -1,0 +1,36 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/r594ptop
+BT try=1 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r594pm neg=!=dev-libs/r594pm-2 reason=MissingDependency { parent: ("dev-libs", "r594pm"), atom: "dev-libs/maskeddep" }
+BT   missing_dep_trigger owner=dev-libs/r594pm neg=!=dev-libs/r594pm-2 atom=dev-libs/maskeddep
+BT try=2 kind=Settle
+BT   masks-in ["!=dev-libs/r594pm-2"]
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/r594pm-1::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r594ptop-1::testrepo to $S/fxp 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+dev-libs/r594pm:0 for $S/fxp/
+
+  selected: (dev-libs/r594pm-1:0/0::testrepo, ebuild scheduled for merge)
+  skipped: (dev-libs/r594pm-2:0/0::testrepo, ebuild scheduled for merge) (see unsatisfied dependency below)
+
+!!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)
+
+(dependency required by "dev-libs/r594pm-2::testrepo" [ebuild])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+### rc: 0

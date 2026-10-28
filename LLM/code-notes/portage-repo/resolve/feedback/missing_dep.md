@@ -8,3 +8,7 @@ Missing-dependency feedback: mask the parent of an unsatisfiable dep and re-run.
 
 ## gate threading (#571)
 - The probe args site uses `ctx.gate()`.
+
+## fn trigger_preempted_by_use_miss (#594)
+- Portage's walk stops at the first unsatisfied dependency in `_minimize_children` order: package-less atoms first, in textual order (`depgraph.py:4766-4788`), then the satisfiable ones. A USE-only miss no autounmask change can fix (the `without_use` reselect at `:3494-3498` finds a package, so arm 9 never files) sits in the package-less group; a fixable USE miss sits in the satisfiable group, after every package-less atom, so it never precedes a filed miss.
+- The trigger is armed during a reverse-textual walk (see `enqueue_flat_deps`, plains pushed reversed for the stack discipline), so the blocking USE miss may be recorded after the trigger. The retract therefore runs post-walk here: same owner, the miss's atom textually ahead of the trigger's in the owner's dep-string order (the entry `deps` order, a proxy for Portage's per-key order), and the miss's entry carrying no USE suggestion (unfixable). Cross-parent order is still the walk's own FIFO (Portage pops LIFO, `depgraph.py:3276`), so only the same owner retracts; the cross-parent shapes stay out under #609.

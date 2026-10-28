@@ -1,0 +1,18 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/iq.cfg ROOT=$S/iq PORTAGE_RUNNING_ROOT=$S/iq DISTDIR=$S/iq/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 python3 -I $S/tools/arms.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv -u dev-libs/r594iq
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/iq/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took N s (backtrack: 0/20).
+
+
+Total: 0 packages, Size of downloads: 0 KiB
+### rc: 0

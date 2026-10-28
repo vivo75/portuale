@@ -1,0 +1,64 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/icp ROOT=$S/icp PORTAGE_RUNNING_ROOT=$S/icp DISTDIR=$S/icp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv -uD @world
+BT try=1 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r594ip neg=!=dev-libs/r594ip-1[installed] reason=MissingDependency { parent: ("dev-libs", "r594ip"), atom: "dev-libs/hardmaskedpkg" }
+BT   missing_dep_trigger owner=dev-libs/r594ip neg=!=dev-libs/r594ip-1[installed] atom=dev-libs/hardmaskedpkg
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/r594ip-1[installed]"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r594ip neg=!=dev-libs/r594ip-1 reason=MissingDependency { parent: ("dev-libs", "r594ip"), atom: "dev-libs/hardmaskedpkg" }
+BT   missing_dep_trigger owner=dev-libs/r594ip neg=!=dev-libs/r594ip-1 atom=dev-libs/hardmaskedpkg
+BT try=3 kind=Settle
+BT   masks-in ["!=dev-libs/r594ip-1", "!=dev-libs/r594ip-1[installed]"]
+BT   replace-in 0 prune=false []
+BT try=4 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r594ip neg=!=dev-libs/r594ip-1[installed] reason=MissingDependency { parent: ("dev-libs", "r594ip"), atom: "dev-libs/hardmaskedpkg" }
+BT   missing_dep_trigger owner=dev-libs/r594ip neg=!=dev-libs/r594ip-1[installed] atom=dev-libs/hardmaskedpkg
+BT try=5 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/r594ip-1[installed]"]
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r594ip neg=!=dev-libs/r594ip-1 reason=MissingDependency { parent: ("dev-libs", "r594ip"), atom: "dev-libs/hardmaskedpkg" }
+BT   missing_dep_trigger owner=dev-libs/r594ip neg=!=dev-libs/r594ip-1 atom=dev-libs/hardmaskedpkg
+BT try=6 kind=Settle
+BT   masks-in ["!=dev-libs/r594ip-1", "!=dev-libs/r594ip-1[installed]"]
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 2/20).
+
+[ebuild  N     ] dev-libs/newpkg-1.0::testrepo to $S/icp 0 KiB
+[ebuild     U  ] dev-libs/upgradepkg-2.0::testrepo [1.0::testrepo] to $S/icp 0 KiB
+[ebuild  N     ] dev-libs/innernestedsetpkg-1.0::testrepo to $S/icp 0 KiB
+[ebuild  N     ] dev-libs/withdeps-1.0::testrepo to $S/icp 0 KiB
+
+Total: 4 packages (1 upgrade, 3 new), Size of downloads: 0 KiB
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+dev-libs/r594ip:0 for $S/icp/
+
+  selected: (dev-libs/r594ip-1:0/0::testrepo, installed)
+  skipped: (dev-libs/r594ip-1:0/0::testrepo, ebuild scheduled for merge) (see unsatisfied dependency below)
+
+!!! All ebuilds that could satisfy "dev-libs/hardmaskedpkg" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/hardmaskedpkg-1.0::testrepo (masked by: package.mask)
+
+(dependency required by "dev-libs/r594ip-1::testrepo" [ebuild])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+
+!!! Problems have been detected with your world file
+!!! Please run emaint --check world
+
+
+!!! Ebuilds for the following packages are either all
+!!! masked or don't exist:
+dev-libs/r594ip
+### rc: 0

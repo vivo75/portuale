@@ -3794,6 +3794,7 @@ mod slot_conflict_solutions;
 mod slot_undo;
 mod tests_consumer_or_view;
 mod tests_consumer_pin_conflict;
+mod tests_first_unsatisfied_dep;
 mod tests_missing_dep_before_conflict;
 mod tests_p491;
 mod tests_p563;

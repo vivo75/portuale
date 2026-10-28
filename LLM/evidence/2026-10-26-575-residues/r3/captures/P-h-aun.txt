@@ -1,0 +1,36 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/r594htop
+BT try=1 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/r594hb neg=!=dev-libs/r594hb-2 reason=MissingDependency { parent: ("dev-libs", "r594hb"), atom: "dev-libs/maskeddep" }
+BT   missing_dep_trigger owner=dev-libs/r594hb neg=!=dev-libs/r594hb-2 atom=dev-libs/maskeddep
+BT try=2 kind=DeadEnd
+BT   masks-in ["!=dev-libs/r594hb-2"]
+BT   replace-in 0 prune=false []
+BT try=3 kind=DeadEnd
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/r594xdep[r594flag]".
+!!! One of the following packages is required to complete your request:
+- dev-libs/r594xdep-1::testrepo (Missing IUSE: r594flag)
+(dependency required by "dev-libs/r594ha-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r594htop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r594htop" [argument])
+
+!!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)
+
+(dependency required by "dev-libs/r594hb-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r594htop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r594htop" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+### rc: 1

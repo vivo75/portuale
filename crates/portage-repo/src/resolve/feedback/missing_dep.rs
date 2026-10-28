@@ -10,6 +10,17 @@ pub(crate) fn step_missing_dep(
     grown: &mut BacktrackParams,
     config: &Config,
 ) -> Option<PassDecision> {
+    // Portage's walk stops at the first unsatisfied dependency in
+    // `_minimize_children` order (package-less atoms first, in textual
+    // order), so a USE-only miss no autounmask change can fix, in the same
+    // dep string ahead of the trigger's atom, means the walk never reached
+    // the trigger's dep. Drop the trigger then; with nothing else filed the
+    // pass ends (no restart). The walk here visits reverse-textual order, so
+    // the trigger may already be armed when the earlier miss is recorded.
+    // Portage: depgraph.py, _minimize_children; _add_dep.
+    if trigger_preempted_by_use_miss(pass) {
+        pass.missing_dep_trigger.take();
+    }
     // Portage: backtracking.py, _feedback_missing_dep. Mask the parent (`!=cpv` in
     // `runtime_pkg_mask`, latched so the same parent is never re-masked) and re-run;
     // with the `||` closure honouring slot constraints, a branch whose `a` has an
@@ -69,6 +80,44 @@ pub(crate) fn step_missing_dep(
         }));
     }
     None
+}
+
+/// Whether a USE-only miss Portage meets first preempts the trigger: the
+/// miss is unfixable (no autounmask USE change for it), in the trigger
+/// owner's dep string, and textually ahead of the trigger's atom. Package-less
+/// atoms go first in Portage's order, so a fixable (satisfiable-group) miss
+/// never preempts. Cross-parent order is still the walk's own, so only the
+/// same owner retracts.
+fn trigger_preempted_by_use_miss(pass: &PassResult) -> bool {
+    let Some(((pc, pp), _, dep_atom)) = pass.missing_dep_trigger.as_ref() else {
+        return false;
+    };
+    // The expanding entry: the one whose dep string names the trigger's atom.
+    let Some(owner) = pass
+        .entries
+        .iter()
+        .find(|e| e.category == *pc && e.package == *pp && edge_index(&e.deps, dep_atom).is_some())
+    else {
+        return false;
+    };
+    let trigger_idx = edge_index(&owner.deps, dep_atom).expect("matched above");
+    pass.use_unsat_deps.iter().any(|rep| {
+        edge_index(&owner.deps, &rep.atom).is_some_and(|rep_idx| rep_idx < trigger_idx)
+            && pass.entries.iter().any(|e| {
+                e.category == rep.category
+                    && e.package == rep.package
+                    && matches!(e.outcome, PretendOutcome::NoVisibleCandidate)
+                    && e.use_suggestion.is_none()
+                    && e.required_by.iter().any(|(c, p)| c == pc && p == pp)
+            })
+    })
+}
+
+/// The position of `atom` in the dep string: the raw token or its evaluated
+/// form, whichever names the edge.
+fn edge_index(deps: &[crate::DepEdge], atom: &str) -> Option<usize> {
+    deps.iter()
+        .position(|d| d.atom == atom || d.evaluated == atom)
 }
 
 /// Whether the probe heals the trigger's own parent, seeded or masked.

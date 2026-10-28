@@ -1,0 +1,27 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/abort-masked-mid
+BT try=1 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/abort-masked-mid neg=!=dev-libs/abort-masked-mid-1.0 reason=MissingDependency { parent: ("dev-libs", "abort-masked-mid"), atom: "dev-libs/maskeddep" }
+BT   missing_dep_trigger owner=dev-libs/abort-masked-mid neg=!=dev-libs/abort-masked-mid-1.0 atom=dev-libs/maskeddep
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/abort-masked-mid neg=!=dev-libs/abort-masked-mid-1.0 reason=MissingDependency { parent: ("dev-libs", "abort-masked-mid"), atom: "dev-libs/maskeddep" }
+BT   missing_dep_trigger owner=dev-libs/abort-masked-mid neg=!=dev-libs/abort-masked-mid-1.0 atom=dev-libs/maskeddep
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+!!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)
+
+(dependency required by "dev-libs/abort-masked-mid-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/abort-masked-mid" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+### rc: 1

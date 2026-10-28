@@ -1,0 +1,24 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 python3 -I $S/tools/arms.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/r594ctop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ...ARM D:3494-3499 reselect without_use found a package (USE-only), nothing filed | parent=(dev-libs/r594cm-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') atom=dev-libs/r594vdep[r594flag] bt=True
+ done!
+Dependency resolution took N s (backtrack: 0/20).
+
+
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/r594vdep[r594flag]" for $S/fx/.
+!!! One of the following packages is required to complete your request:
+- dev-libs/r594vdep-1::testrepo (Change USE: +r594flag)
+(dependency required by "dev-libs/r594cm-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r594ctop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r594ctop" [argument])
+### rc: 1

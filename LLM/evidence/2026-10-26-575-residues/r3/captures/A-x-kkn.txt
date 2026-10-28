@@ -1,0 +1,35 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 python3 -I $S/tools/arms.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask-keep-keywords=n dev-libs/r594xtop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took N s (backtrack: 0/20).
+
+[ebuild  N    ~] dev-libs/r594xdep-2::testrepo to $S/fx/ USE="r594flag" 0 KiB
+[ebuild  N     ] dev-libs/r594xm-2::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r594xtop-1::testrepo to $S/fx/ 0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+The following keyword changes are necessary to proceed:
+ (see "package.accept_keywords" in the portage(5) man page for more details)
+# required by dev-libs/r594xm-2::testrepo
+# required by dev-libs/r594xtop-1::testrepo
+# required by dev-libs/r594xtop (argument)
+=dev-libs/r594xdep-2 ~amd64
+
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/r594xm-2::testrepo
+# required by dev-libs/r594xtop-1::testrepo
+# required by dev-libs/r594xtop (argument)
+>=dev-libs/r594xdep-2 r594flag
+### rc: 1

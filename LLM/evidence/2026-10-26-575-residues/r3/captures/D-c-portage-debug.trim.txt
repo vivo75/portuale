@@ -1,0 +1,28 @@
+24:   ebuild: dev-libs/r594ctop-1::testrepo
+26:Child:         (dev-libs/r594ctop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+29:Parent:    (dev-libs/r594ctop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+30:Depstring: dev-libs/r594cm
+33:Parent:    (dev-libs/r594ctop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+34:Depstring: dev-libs/r594cm
+36:Candidates: ['dev-libs/r594cm']
+37:   ebuild: dev-libs/r594cm-2::testrepo
+39:Child:         (dev-libs/r594cm-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+44:Parent:    (dev-libs/r594cm-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+45:Depstring: dev-libs/r594vdep[r594flag] dev-libs/maskeddep
+48:Parent:    (dev-libs/r594cm-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+49:Depstring: dev-libs/r594vdep[r594flag] dev-libs/maskeddep
+51:Candidates: ['dev-libs/r594vdep[r594flag]', 'dev-libs/maskeddep']
+52:   ebuild: dev-libs/r594vdep-1::testrepo
+55:backtracking due to unsatisfied dep:
+61:ARM D:3517 missing dependency filed | parent=(dev-libs/r594cm-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') atom=dev-libs/maskeddep bt=True
+64:backtracking try 1 
+99:runtime_pkg_mask: {<Package ('ebuild', '$S/fx/', 'dev-libs/r594cm-2', 'merge', 'testrepo')>: {'missing dependency': {(<Package ('ebuild', '$S/fx/', 'dev-libs/r594cm-2', 'merge', 'testrepo')>, '$S/fx/', Atom('dev-libs/maskeddep'))}}} 
+105:   ebuild: dev-libs/r594ctop-1::testrepo
+107:Child:         (dev-libs/r594ctop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+110:Parent:    (dev-libs/r594ctop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+111:Depstring: dev-libs/r594cm
+114:Parent:    (dev-libs/r594ctop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+115:Depstring: dev-libs/r594cm
+117:Candidates: ['dev-libs/r594cm']
+118:   ebuild: dev-libs/r594cm-1::testrepo
+120:Child:         (dev-libs/r594cm-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"

@@ -1,0 +1,32 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 python3 -I $S/tools/arms.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/r594gtop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ...ARM D:3517 missing dependency filed | parent=(dev-libs/r594gm-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') atom=dev-libs/r594gone bt=True
+ done!
+Dependency resolution took N s (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/r594gm-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r594gtop-1::testrepo to $S/fx/ 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+dev-libs/r594gm:0 for $S/fx/
+
+  selected: (dev-libs/r594gm-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+  skipped: (dev-libs/r594gm-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (see unsatisfied dependency below)
+
+emerge: there are no ebuilds to satisfy "dev-libs/r594gone" for $S/fx/.
+(dependency required by "dev-libs/r594gm-2::testrepo" [ebuild])
+
+### rc: 0

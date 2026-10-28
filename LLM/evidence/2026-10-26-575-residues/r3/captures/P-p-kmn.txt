@@ -1,0 +1,36 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask-keep-masks=n dev-libs/r594ptop
+BT try=1 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N    #] dev-libs/maskeddep-1.0::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r594pm-2::testrepo to $S/fxp 0 KiB
+[ebuild  N     ] dev-libs/r594ptop-1::testrepo to $S/fxp 0 KiB
+
+Total: 3 packages (3 new), Size of downloads: 0 KiB
+
+The following mask changes are necessary to proceed:
+ (see "package.unmask" in the portage(5) man page for more details)
+# required by dev-libs/r594pm-2::testrepo
+# required by dev-libs/r594ptop-1::testrepo
+# required by dev-libs/r594ptop (argument)
+# $S/fxp/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+# fixture package.mask for the masked-dependency disclosure slice:
+# dev-libs/maskeddep stays masked so a dependency on it reports the
+# "All ebuilds ... have been masked" block (never unmasked anywhere).
+=dev-libs/maskeddep-1.0
+
+NOTE: The --autounmask-keep-masks option will prevent emerge
+      from creating package.unmask or ** keyword changes.
+### rc: 1

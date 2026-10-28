@@ -1,0 +1,3 @@
+### argv: PORTAGE_GNUPGHOME=<copy of 3rdparty/portage/lib/portage/tests/.gnupg> PATH=3rdparty/portage/bin:$PATH python3 -I pg/pg693836.py
+opts {'--update': True, '--deep': True} success True mergelist [] skip_restart_hits []
+opts {'--update': True, '--deep': True, '--backtrack': 0} success True mergelist [] skip_restart_hits []

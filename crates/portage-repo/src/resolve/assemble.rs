@@ -533,15 +533,22 @@ pub(crate) fn collect_autounmask_and_conflicts(
     // Fed through `record_slot_conflict`, not appended blind, so a record
     // the walker's own check already produced for the same triple keeps the
     // union and the single block.
-    for sc in build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        config,
-        root: ctx.root,
-        entries: &pass.entries,
-        slot_pullers: &pass.slot_pullers,
-        dropped: &params.dropped_pins,
-        gate: ctx.gate(),
-    }) {
-        record_slot_conflict(&mut pass.slot_conflicts, sc);
+    //
+    // Skipped when the walk stopped at an unsatisfied dependency: Portage's
+    // stopped graph never reaches the installed instances, so only the
+    // complete-graph re-walk may show them here.
+    // Portage: depgraph.py, _resolve
+    if ctx.complete || !super::feedback::pass_has_unsatisfied_dep(pass) {
+        for sc in build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+            config,
+            root: ctx.root,
+            entries: &pass.entries,
+            slot_pullers: &pass.slot_pullers,
+            dropped: &params.dropped_pins,
+            gate: ctx.gate(),
+        }) {
+            record_slot_conflict(&mut pass.slot_conflicts, sc);
+        }
     }
 }
 

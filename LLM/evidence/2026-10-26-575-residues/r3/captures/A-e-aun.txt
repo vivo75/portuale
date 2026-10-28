@@ -1,0 +1,28 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 python3 -I $S/tools/arms.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/r594etop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ...ARM D:3494-3499 reselect without_use found a package (USE-only), nothing filed | parent=(dev-libs/r594em-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') atom=dev-libs/r594xdep[r594flag] bt=True
+ done!
+Dependency resolution took N s (backtrack: 0/20).
+
+
+!!! All ebuilds that could satisfy "dev-libs/r594xdep[r594flag]" for $S/fx/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/r594xdep-2::testrepo (masked by: ~amd64 keyword)
+
+(dependency required by "dev-libs/r594em-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r594etop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r594etop" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+### rc: 1

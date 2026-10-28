@@ -81,7 +81,7 @@ pub(crate) fn scan_reverse_dependencies(ctx: &ResolveCtx<'_>, pass: &PassResult)
 /// Whether the pass met a masked, USE-unsatisfied or absent dependency.
 /// Portage's walk stops there and processes no slot conflict (depgraph.py
 /// `_create_graph`, `_resolve`); the `_complete_graph` re-walk does not stop.
-pub(super) fn pass_has_unsatisfied_dep(pass: &PassResult) -> bool {
+pub(crate) fn pass_has_unsatisfied_dep(pass: &PassResult) -> bool {
     !pass.masked_deps.is_empty()
         || !pass.use_unsat_deps.is_empty()
         || !pass.plain_miss_deps.is_empty()

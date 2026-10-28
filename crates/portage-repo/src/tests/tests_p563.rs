@@ -273,9 +273,9 @@ fn skip_block_pins_keep_the_built_subslot_atom() {
 #[test]
 fn g0_benign_disclosure_blocks_the_dropped_pin_heal() {
     // Portage: disclosures precede any backtrack heal (rc 1, backtrack
-    // 1/20, only the masked disclosure; the `p569pull` residual alone
-    // heals rc 0, backtrack 2/20). Resolves loud (rc 1, residual abort),
-    // never heals silently.
+    // 1/20; the count here is still 0/20, which is R6's). Only the masked
+    // disclosure prints: the walk stopped there, so the installed provider
+    // never entered the graph and no residual conflict block follows (R3).
     // Portage: depgraph.py, _slot_confict_backtrack (masked abort first).
     let result = graph_result_real_atoms(
         &[
@@ -298,32 +298,17 @@ fn g0_benign_disclosure_blocks_the_dropped_pin_heal() {
     );
     assert_eq!(
         result.slot_conflicts.len(),
-        1,
-        "the healable residual is preserved, not masked away, got {:?}",
+        0,
+        "no residual block: the walk stopped at the masked dep, so the installed \
+         instances never entered Portage's graph (R3); the count below is still \
+         R6's, got {:?}",
         result.slot_conflicts
-    );
-    let c = &result.slot_conflicts[0];
-    assert_eq!(
-        (
-            c.category.as_str(),
-            c.package.as_str(),
-            c.slot.as_str(),
-            c.resolved_version.as_str(),
-        ),
-        ("dev-libs", "p569prov", "0", "5.44"),
-        "the conflict is the provider's slot, merge version first"
-    );
-    assert_eq!(
-        c.instances
-            .iter()
-            .map(|i| (i.version.as_str(), i.installed))
-            .collect::<Vec<_>>(),
-        vec![("5.44", false), ("5.42", true)],
-        "merge-bound new subslot beside the installed old one"
     );
     assert_eq!(
         result.backtrack_restarts, 0,
-        "no mask excursion: G0 blocked the heal"
+        "the count is still R6's (a failed pass with an empty stack is not \
+         counted): Portage prints 1/20 here, got {:?}",
+        result.outcome
     );
     assert!(
         result.skipped_updates.is_empty(),

@@ -1,0 +1,22 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/abort-unsat-last
+BT try=1 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/abort-unsat-last neg=!=dev-libs/abort-unsat-last-1.0 reason=MissingDependency { parent: ("dev-libs", "abort-unsat-last"), atom: "dev-libs/abort-nonexistent" }
+BT   missing_dep_trigger owner=dev-libs/abort-unsat-last neg=!=dev-libs/abort-unsat-last-1.0 atom=dev-libs/abort-nonexistent
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/abort-unsat-last neg=!=dev-libs/abort-unsat-last-1.0 reason=MissingDependency { parent: ("dev-libs", "abort-unsat-last"), atom: "dev-libs/abort-nonexistent" }
+BT   missing_dep_trigger owner=dev-libs/abort-unsat-last neg=!=dev-libs/abort-unsat-last-1.0 atom=dev-libs/abort-nonexistent
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+emerge: there are no ebuilds to satisfy "dev-libs/abort-nonexistent".
+(dependency required by "dev-libs/abort-unsat-last-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/abort-unsat-last" [argument])
+### rc: 1

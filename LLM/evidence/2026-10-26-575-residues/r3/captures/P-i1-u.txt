@@ -1,0 +1,15 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/icp ROOT=$S/icp PORTAGE_RUNNING_ROOT=$S/icp DISTDIR=$S/icp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv -u dev-libs/r594itop
+BT try=1 kind=Settle
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/r594im-2::testrepo to $S/icp 0 KiB
+[ebuild  N     ] dev-libs/r594itop-1::testrepo to $S/icp 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+### rc: 0

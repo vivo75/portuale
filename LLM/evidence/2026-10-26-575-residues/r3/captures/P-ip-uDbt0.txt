@@ -1,0 +1,23 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/icp ROOT=$S/icp PORTAGE_RUNNING_ROOT=$S/icp DISTDIR=$S/icp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv -uD --backtrack=0 @world
+BT try=1 kind=DeadEnd
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=2 kind=DeadEnd
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/0).
+
+
+!!! All ebuilds that could satisfy "dev-libs/hardmaskedpkg" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/hardmaskedpkg-1.0::testrepo (masked by: package.mask)
+
+(dependency required by "dev-libs/r594ip-1::testrepo" [installed])
+(dependency required by "@world" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+### rc: 1

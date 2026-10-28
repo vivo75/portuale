@@ -1,0 +1,27 @@
+24:   ebuild: dev-libs/r594qtop-1::testrepo
+26:Child:         (dev-libs/r594qtop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+29:Parent:    (dev-libs/r594qtop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+30:Depstring: dev-libs/r594qb dev-libs/r594qa
+33:Parent:    (dev-libs/r594qtop-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+34:Depstring: dev-libs/r594qb dev-libs/r594qa
+36:Candidates: ['dev-libs/r594qb', 'dev-libs/r594qa']
+37:   ebuild: dev-libs/r594qb-2::testrepo
+38:   ebuild: dev-libs/r594qa-2::testrepo
+40:Child:         (dev-libs/r594qb-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+43:Child:         (dev-libs/r594qa-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="" ELIBC="glibc"
+48:Parent:    (dev-libs/r594qa-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+49:Depstring: dev-libs/r594vdep[r594flag]
+52:Parent:    (dev-libs/r594qa-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+53:Depstring: dev-libs/r594vdep[r594flag]
+55:Candidates: ['dev-libs/r594vdep[r594flag]']
+56:   ebuild: dev-libs/r594vdep-1::testrepo
+58:Child:         (dev-libs/r594vdep-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') USE="r594flag" ELIBC="glibc"
+63:Parent:    (dev-libs/r594qb-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+64:Depstring: dev-libs/maskeddep
+67:Parent:    (dev-libs/r594qb-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+68:Depstring: dev-libs/maskeddep
+70:Candidates: ['dev-libs/maskeddep']
+73:backtracking due to unsatisfied dep:
+79:ARM D:3517 missing dependency filed | parent=(dev-libs/r594qb-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') atom=dev-libs/maskeddep bt=True
+97: * In order to avoid wasting time, backtracking has terminated early
+99: * option can be used to force further backtracking, but there is no

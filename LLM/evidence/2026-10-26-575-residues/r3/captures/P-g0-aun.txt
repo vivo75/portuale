@@ -1,0 +1,55 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --autounmask=n dev-libs/p569pull dev-libs/abort-masked-mid
+BT try=1 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/abort-masked-mid neg=!=dev-libs/abort-masked-mid-1.0 reason=MissingDependency { parent: ("dev-libs", "abort-masked-mid"), atom: "dev-libs/maskeddep" }
+BT   missing_dep_trigger owner=dev-libs/abort-masked-mid neg=!=dev-libs/abort-masked-mid-1.0 atom=dev-libs/maskeddep
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   mask dev-libs/abort-masked-mid neg=!=dev-libs/abort-masked-mid-1.0 reason=MissingDependency { parent: ("dev-libs", "abort-masked-mid"), atom: "dev-libs/maskeddep" }
+BT   missing_dep_trigger owner=dev-libs/abort-masked-mid neg=!=dev-libs/abort-masked-mid-1.0 atom=dev-libs/maskeddep
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/p569prov:0
+
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    =dev-libs/p569prov-5.44* required by (dev-libs/p569pull-2:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^                  ^^^^^                                                                                                  
+
+  (dev-libs/p569prov-5.42:0/5.42::testrepo, installed in '$S/fxp') USE="" pulled in by
+    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fxp') USE=""
+    ^                  ^^^^^                                                                                               
+    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '$S/fxp') USE=""
+                     ^^^^^^^^                                                                                               
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+
+!!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)
+
+(dependency required by "dev-libs/abort-masked-mid-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/abort-masked-mid" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+### rc: 1

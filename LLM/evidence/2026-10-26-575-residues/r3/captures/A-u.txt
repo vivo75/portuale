@@ -1,0 +1,38 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fx.cfg ROOT=$S/fx PORTAGE_RUNNING_ROOT=$S/fx DISTDIR=$S/fx/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 python3 -I $S/tools/arms.py --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/r594utop
+WARNING: One or more repositories have missing repo_name entries:
+
+	$S/fx/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ...ARM D:3517 missing dependency filed | parent=(dev-libs/r594um-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') atom=dev-libs/r594ukw[r594flag] bt=True
+ done!
+Dependency resolution took N s (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/r594um-1::testrepo to $S/fx/ 0 KiB
+[ebuild  N     ] dev-libs/r594utop-1::testrepo to $S/fx/ 0 KiB
+
+Total: 2 packages (2 new), Size of downloads: 0 KiB
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+dev-libs/r594um:0 for $S/fx/
+
+  selected: (dev-libs/r594um-1:0/0::testrepo, ebuild scheduled for merge to '$S/fx/')
+  skipped: (dev-libs/r594um-2:0/0::testrepo, ebuild scheduled for merge to '$S/fx/') (see unsatisfied dependency below)
+
+!!! All ebuilds that could satisfy "dev-libs/r594ukw[r594flag]" for $S/fx/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/r594ukw-1::testrepo (masked by: ~amd64 keyword)
+
+(dependency required by "dev-libs/r594um-2::testrepo" [ebuild])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+
+### rc: 0

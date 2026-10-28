@@ -1,0 +1,24 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$S/fxp ROOT=$S/fxp PORTAGE_RUNNING_ROOT=$S/fxp DISTDIR=$S/fxp/distfiles PORTAGE_TMPDIR=$S/ptmp PYTHONHASHSEED=0 PORTUALE_BT_TRACE=1 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --backtrack=0 dev-libs/r594utop
+BT try=1 kind=DeadEnd
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT try=2 kind=DeadEnd
+BT   masks-in []
+BT   replace-in 0 prune=false []
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/0).
+
+
+!!! All ebuilds that could satisfy "dev-libs/r594ukw[r594flag]" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/r594ukw-1::testrepo (masked by: ~amd64 keyword)
+
+(dependency required by "dev-libs/r594um-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r594utop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r594utop" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+### rc: 1
