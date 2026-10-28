@@ -318,6 +318,27 @@ pub(crate) fn print_resolver_debug(
             }
         }
         print!("\n\n");
+
+        // `PORTUALE_BT_TRACE=1` diagnostics for the post-assemble display
+        // fields: this is the only place they exist. Stderr, so the pinned
+        // `--debug` stdout is untouched.
+        if std::env::var("PORTUALE_BT_TRACE").is_ok_and(|value| value == "1") {
+            let mut replaced: Vec<String> = result
+                .slot_operator_replaced
+                .iter()
+                .map(|(c, p)| format!("{c}/{p}"))
+                .collect();
+            replaced.sort_unstable();
+            eprintln!(
+                "BT-RESULT slot_operator_replaced {} {replaced:?}",
+                replaced.len()
+            );
+            eprintln!(
+                "BT-RESULT abi_rebuilds {} {:?}",
+                result.abi_rebuilds.len(),
+                result.abi_rebuilds
+            );
+        }
     }
 }
 

@@ -1,0 +1,24 @@
+BT try=1 kind=Feedback:Config
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass Some(1) [("dev-libs/p589bprov-5.44", "dev-libs/p589bvirt-1")]
+BT try=2 kind=Settle
+BT   masks-in []
+BT   replace-in 2 prune=false ["dev-libs/p589bprov", "dev-libs/p589bvirt"]
+BT   probe-in 0 []
+BT   abi-pass Some(0) []
+BT-ASSEMBLE abi taken=Some(0) scanned=0 extended=1 kept=1 [("dev-libs/p589bprov-5.44", "dev-libs/p589bvirt-1")]
+BT try=3 kind=Feedback:Config
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass Some(1) [("dev-libs/p589bprov-5.44", "dev-libs/p589bvirt-1")]
+BT try=4 kind=Settle
+BT   masks-in []
+BT   replace-in 2 prune=false ["dev-libs/p589bprov", "dev-libs/p589bvirt"]
+BT   probe-in 0 []
+BT   abi-pass Some(0) []
+BT-ASSEMBLE abi taken=Some(0) scanned=0 extended=1 kept=1 [("dev-libs/p589bprov-5.44", "dev-libs/p589bvirt-1")]
+BT-RESULT slot_operator_replaced 0 []
+BT-RESULT abi_rebuilds 1 [("dev-libs/p589bprov-5.44", "dev-libs/p589bvirt-1")]

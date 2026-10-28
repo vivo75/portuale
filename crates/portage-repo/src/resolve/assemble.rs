@@ -15,6 +15,11 @@ pub(crate) fn assemble_result(
     // nothing is synthesised here -- only the `_forced_rebuilds` display
     // pairs are recomputed (the `get_best_run` re-pass needs the fallback).
     // Portage: depgraph.py.
+    let bt = std::env::var("PORTUALE_BT_TRACE").is_ok_and(|value| value == "1");
+    let taken = match &pass.abi_rebuilds {
+        None => "none".to_string(),
+        Some(pairs) => format!("Some({})", pairs.len()),
+    };
     let mut abi_rebuilds = match pass.abi_rebuilds.take() {
         Some(pairs) => pairs,
         None if ctx.ignore_built_slot_operator_deps || !ctx.rebuild_if_new_slot => Vec::new(),
@@ -51,17 +56,27 @@ pub(crate) fn assemble_result(
     // Continuity pairs for conflict-fired rebuilds (the firing pass
     // restarts, so the scan never sees the edge on the settling pass).
     // Unioned with the scan's pairs and deduped.
+    let scanned = abi_rebuilds.len();
     abi_rebuilds.extend(slot_conflict_abi_display_pairs(
         ctx.root,
         &pass.entries,
         &params.slot_operator_replace_installed,
         ctx.with_bdeps,
     ));
+    let extended = abi_rebuilds.len();
     super::feedback::slot_conflict_backtrack::drop_masked_pairs(
         ctx.root,
         params,
         &mut abi_rebuilds,
     );
+    if bt {
+        // `PORTUALE_BT_TRACE=1` only: which `assemble_result` call reports
+        // which pair list, and how much `drop_masked_pairs` removed.
+        eprintln!(
+            "BT-ASSEMBLE abi taken={taken} scanned={scanned} extended={extended} kept={} {abi_rebuilds:?}",
+            abi_rebuilds.len()
+        );
+    }
     abi_rebuilds.sort();
     abi_rebuilds.dedup();
 

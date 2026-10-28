@@ -144,6 +144,7 @@ pub(crate) fn drop_masked_pairs(
     params: &BacktrackParams,
     pairs: &mut Vec<(String, String)>,
 ) {
+    let bt = std::env::var("PORTUALE_BT_TRACE").is_ok_and(|value| value == "1");
     let off = |cpv: &str| {
         let head = cpv.split_once(':').map_or(cpv, |(h, _)| h);
         crate::split_cpv(head).is_some_and(|(c, p, _)| {
@@ -152,5 +153,15 @@ pub(crate) fn drop_masked_pairs(
                 && installed_instance_masked(root, params, &cp)
         })
     };
-    pairs.retain(|(provider, consumer)| !off(provider) && !off(consumer));
+    pairs.retain(|(provider, consumer)| {
+        let provider_off = off(provider);
+        let consumer_off = off(consumer);
+        if bt && (provider_off || consumer_off) {
+            // `PORTUALE_BT_TRACE=1` only: which side killed the display pair.
+            eprintln!(
+                "BT-DROP pair {provider} -> {consumer}: provider_off={provider_off} consumer_off={consumer_off}"
+            );
+        }
+        !provider_off && !consumer_off
+    });
 }

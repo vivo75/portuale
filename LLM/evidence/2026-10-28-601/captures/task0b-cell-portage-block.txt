@@ -1,0 +1,29 @@
+# Portage 3.0.83, `emerge -puvD --debug @world` on the bed (run l0-20261028T224843Z).
+# Verbatim "causing rebuilds" block (header + first rows + the rows portuale's scan misses):
+The following packages are causing rebuilds:
+
+# rows: 48; portuale's settling-pass scan produced 34 pairs, all provider dev-lang/perl-5.44.0.
+
+(dev-perl/TermReadKey-2.380.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(app-text/po4a-0.74-r1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Class-Inspector-1.360.0:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Module-Build-0.423.400-r5:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Unicode-LineBreak-2019.1.0-r2:0/0::gentoo, ebuild scheduled for merge)
+    ...
+# the 14 rows whose consumer is NOT in portuale's 34-pair set:
+(virtual/perl-Math-BigInt-2.5.3:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-File-Temp-0.231.200:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-ExtUtils-ParseXS-3.630.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Scalar-List-Utils-1.700.0:0/0::gentoo, ebuild scheduled for merge)
+(perl-core/File-Temp-0.231.200:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Module-Metadata-1.0.39:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-IO-1.560.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Test-Harness-3.520.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-File-Spec-3.950.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-ExtUtils-MakeMaker-7.780.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-ExtUtils-CBuilder-0.280.243:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-version-0.993.400:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Encode-3.240.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-CPAN-Meta-2.150.13:0/0::gentoo, ebuild scheduled for merge)
+
+# portuale prints no block at all: BT-RESULT abi_rebuilds 0 [].

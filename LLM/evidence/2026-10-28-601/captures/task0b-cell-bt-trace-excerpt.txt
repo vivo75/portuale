@@ -1,0 +1,121 @@
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0"]
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=3 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=4 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=5 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=6 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=7 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=8 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=9 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=10 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=11 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=12 kind=Feedback:Config
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.42.0-r1", "!=dev-lang/perl-5.42.2", "!=dev-lang/perl-5.42.2[installed]"]
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=13 kind=Settle
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.42.0-r1", "!=dev-lang/perl-5.42.2", "!=dev-lang/perl-5.42.2[installed]"]
+BT   replace-in 34 prune=false ["app-text/po4a", "dev-perl/Capture-Tiny", "dev-perl/Class-Inspector", "dev-perl/Config-AutoConf", "dev-perl/Exporter-Tiny", "dev-perl/ExtUtils-CChecker", "dev-perl/File-ShareDir", "dev-perl/File-ShareDir-Install", "dev-perl/File-Slurper", "dev-perl/List-MoreUtils", "dev-perl/List-MoreUtils-XS", "dev-perl/Locale-gettext", "dev-perl/MIME-Charset", "dev-perl/Module-Build", "dev-perl/Params-Util", "dev-perl/PerlIO-utf8_strict", "dev-perl/Pod-Parser", "dev-perl/SGMLSpm", "dev-perl/Syntax-Keyword-Try", "dev-perl/TermReadKey", "dev-perl/Text-CharWidth", "dev-perl/Text-WrapI18N", "dev-perl/Unicode-LineBreak", "dev-perl/XS-Parse-Keyword", "dev-perl/YAML-Tiny", "virtual/perl-CPAN", "virtual/perl-Carp", "virtual/perl-Data-Dumper", "virtual/perl-Exporter", "virtual/perl-File-Path", "virtual/perl-JSON-PP", "virtual/perl-Text-ParseWords", "virtual/perl-XSLoader", "virtual/perl-podlators"]
+BT   probe-in 0 []
+BT   abi-pass Some(34) [34 pairs, providers: ['dev-lang/perl-5.44.0']]
+BT-ASSEMBLE abi taken=Some(34) scanned=34 extended=68 kept=0 []
+BT try=14 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=15 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=16 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=17 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=18 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=19 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=20 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=21 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=22 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=23 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=24 kind=Feedback:MissingDep
+BT   replace-in 0 prune=false [curtailed]
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=25 kind=Feedback:Config
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.42.0-r1", "!=dev-lang/perl-5.42.2", "!=dev-lang/perl-5.42.2[installed]"]
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass none
+BT try=26 kind=Settle
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.42.0-r1", "!=dev-lang/perl-5.42.2", "!=dev-lang/perl-5.42.2[installed]"]
+BT   replace-in 34 prune=false ["app-text/po4a", "dev-perl/Capture-Tiny", "dev-perl/Class-Inspector", "dev-perl/Config-AutoConf", "dev-perl/Exporter-Tiny", "dev-perl/ExtUtils-CChecker", "dev-perl/File-ShareDir", "dev-perl/File-ShareDir-Install", "dev-perl/File-Slurper", "dev-perl/List-MoreUtils", "dev-perl/List-MoreUtils-XS", "dev-perl/Locale-gettext", "dev-perl/MIME-Charset", "dev-perl/Module-Build", "dev-perl/Params-Util", "dev-perl/PerlIO-utf8_strict", "dev-perl/Pod-Parser", "dev-perl/SGMLSpm", "dev-perl/Syntax-Keyword-Try", "dev-perl/TermReadKey", "dev-perl/Text-CharWidth", "dev-perl/Text-WrapI18N", "dev-perl/Unicode-LineBreak", "dev-perl/XS-Parse-Keyword", "dev-perl/YAML-Tiny", "virtual/perl-CPAN", "virtual/perl-Carp", "virtual/perl-Data-Dumper", "virtual/perl-Exporter", "virtual/perl-File-Path", "virtual/perl-JSON-PP", "virtual/perl-Text-ParseWords", "virtual/perl-XSLoader", "virtual/perl-podlators"]
+BT   probe-in 0 []
+BT   abi-pass Some(34) [34 pairs, providers: ['dev-lang/perl-5.44.0']]
+BT-ASSEMBLE abi taken=Some(34) scanned=34 extended=68 kept=0 []
+BT-RESULT slot_operator_replaced 0 []
+BT-RESULT abi_rebuilds 0 []
+# BT-DROP: 136 lines total (68 pairs x 2 assemble calls); every line has provider_off=true consumer_off=false for provider dev-lang/perl-5.44.0
+BT-DROP pair dev-lang/perl-5.44.0 -> app-text/po4a-0.74-r1: provider_off=true consumer_off=false
+BT-DROP pair dev-lang/perl-5.44.0 -> dev-perl/Capture-Tiny-0.500.0-r1: provider_off=true consumer_off=false
+...
+BT-DROP pair dev-lang/perl-5.44.0 -> virtual/perl-XSLoader-0.320.0-r3: provider_off=true consumer_off=false
+BT-DROP pair dev-lang/perl-5.44.0 -> virtual/perl-podlators-6.0.2-r1: provider_off=true consumer_off=false

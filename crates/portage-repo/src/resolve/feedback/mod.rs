@@ -165,6 +165,24 @@ pub(crate) fn collect_feedback(
         replace_in.len(),
         params.prune_rebuilds
     );
+    // The `r` half of the display (`assemble_result` stores `probe_replaced` as
+    // `GraphResult::slot_operator_replaced`) and the pass's own display-pair
+    // stash, so a settling pass's empty pair list can be told from a scan that
+    // did not run. `PORTUALE_BT_TRACE=1` only; `--debug` stdout is pinned.
+    let mut probe_in: Vec<String> = params
+        .probe_replaced
+        .iter()
+        .map(|(c, p)| format!("{c}/{p}"))
+        .collect();
+    probe_in.sort_unstable();
+    eprintln!("BT   probe-in {} {probe_in:?}", probe_in.len());
+    eprintln!(
+        "BT   abi-pass {}",
+        match &pass.abi_rebuilds {
+            None => "none".to_string(),
+            Some(pairs) => format!("Some({}) {pairs:?}", pairs.len()),
+        }
+    );
     for ((cat, pkg), entry) in bt_new_masks(params, after) {
         eprintln!(
             "BT   mask {cat}/{pkg} neg={} reason={:?}",
