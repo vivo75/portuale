@@ -418,3 +418,158 @@ fn merge_same_slot_conflicts_refiles_a_built_puller_under_the_installed_sub_slot
         "the `:0/9=` puller files under the installed 0/9 instance"
     );
 }
+
+/// #601: the slot-conflict ABI step must file **both** sides Portage's
+/// `_slot_operator_update_backtrack` files for a built `:=` conflict: the
+/// installed parent (`dep.parent.installed`) and the installed child
+/// (`child.installed`, `depgraph.py:2434-2460`). Portuale's
+/// `slot_conflict_abi_probe` only returns the parent, so the installed
+/// provider never joins `slot_operator_replace_installed`; `drop_masked_pairs`
+/// then wipes every display pair whose provider is the masked-installed
+/// instance (the cell's `kept=0`).
+/// Portage: depgraph.py, _slot_conflict_backtrack_abi /
+/// _slot_operator_update_backtrack
+#[test]
+fn slot_conflict_abi_step_files_the_installed_provider_and_consumer() {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = TempDir::new("portage-repo-601-abi-child");
+    // vdb: installed provider 5.42 at 0/5.42, installed consumer recording
+    // the hard built `dev-libs/p589dprov:0/5.42=`.
+    for (name, slot, rdepend) in [
+        ("p589dprov-5.42", "0/5.42", ""),
+        ("p589dvirt-1", "0", "dev-libs/p589dprov:0/5.42="),
+    ] {
+        let d = base.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    // Tree: the new provider, the consumer's live `:=` (the probe must accept
+    // the new child), and the merge-bound puller pinning 5.44.
+    let repo = base.join("repo");
+    let write_pkg = |pkg: &str, pv: &str, slot: &str, rdepend: &str| {
+        let dir = repo.join("dev-libs").join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body =
+            format!("EAPI=8\nDESCRIPTION=\"601 abi child\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n");
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
+        let mut entry = "DEFINED_PHASES=-\nDESCRIPTION=601 abi child\nEAPI=8\n".to_string();
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache/dev-libs");
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    };
+    write_pkg("p589dprov", "5.44", "0/5.44", "");
+    write_pkg("p589dvirt", "1", "0", "dev-libs/p589dprov:=");
+    write_pkg("p589dpull", "1", "0", "=dev-libs/p589dprov-5.44*");
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo.clone(),
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    let config = test_config();
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        update: true,
+        with_bdeps: true,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&base, &config, repos, &opts);
+    let prov = ("dev-libs".to_string(), "p589dprov".to_string());
+    let virt = ("dev-libs".to_string(), "p589dvirt".to_string());
+    let pull_cpv = "dev-libs/p589dpull-1:0/0::testrepo";
+    let virt_cpv = "dev-libs/p589dvirt-1:0/0::testrepo";
+    let edge = |cpv: &str, atom: &str| SlotConflictParent {
+        parent_cpv: cpv.to_string(),
+        atom: atom.to_string(),
+        use_display: Vec::new(),
+        installed: false,
+    };
+    let conflict = SlotConflict {
+        category: "dev-libs".to_string(),
+        package: "p589dprov".to_string(),
+        slot: "0".to_string(),
+        resolved_version: "5.44".to_string(),
+        conflicting_atom: "dev-libs/p589dprov:0/5.42=".to_string(),
+        instances: vec![
+            SlotConflictInstance {
+                version: "5.44".to_string(),
+                sub_slot: "5.44".to_string(),
+                repo_name: "testrepo".to_string(),
+                use_display: Vec::new(),
+                parents: vec![edge(pull_cpv, "=dev-libs/p589dprov-5.44*")],
+                installed: false,
+            },
+            SlotConflictInstance {
+                version: "5.42".to_string(),
+                sub_slot: "5.42".to_string(),
+                repo_name: "testrepo".to_string(),
+                use_display: Vec::new(),
+                parents: vec![edge(virt_cpv, "dev-libs/p589dprov:0/5.42=")],
+                installed: true,
+            },
+        ],
+    };
+    let mut pass = pass_161();
+    pass.entries = vec![
+        GraphEntry {
+            outcome: PretendOutcome::Upgrade {
+                from: "5.42".into(),
+                to: "5.44".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("5.44".into()),
+            ..graph_entry("dev-libs", "p589dprov", "5.44")
+        },
+        GraphEntry {
+            outcome: PretendOutcome::AlreadyInstalled {
+                version: "1".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "p589dvirt", "1")
+        },
+        GraphEntry {
+            outcome: PretendOutcome::New {
+                version: "1".into(),
+            },
+            slot: Some("0".into()),
+            sub_slot: Some("0".into()),
+            ..graph_entry("dev-libs", "p589dpull", "1")
+        },
+    ];
+    pass.slot_conflicts = vec![conflict];
+    let mut grown = BacktrackParams::default();
+    let Some(PassDecision::Feedback(BacktrackFeedback::Config { params })) =
+        step_slot_conflict_abi(&mut pass, &ctx, &mut grown, &config)
+    else {
+        panic!("the probe files a Config restart for the built `:=` conflict");
+    };
+    assert_eq!(
+        params.slot_operator_replace_installed,
+        BTreeSet::from([prov, virt]),
+        "Portage files the installed parent and the installed child"
+    );
+    let _ = fs::remove_dir_all(&base);
+}

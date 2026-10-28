@@ -1802,3 +1802,118 @@ fn slot_operator_rebuild_scan_schedules_a_walked_installed_consumer_outside_reac
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// #601: an installed consumer that is **upgrading in the same run** still
+/// contributes the `(provider, consumer)` display pair Portage lists under
+/// "causing rebuilds". Portage's `_compute_abi_rebuild_info` walks
+/// `_slot_operator_deps` and accepts a merge-bound replacement of the installed
+/// parent, upgrade or rebuild (`depgraph.py:1076-1090`); the cell has 48 rows
+/// where portuale has 34 because the scan's `in_graph && !already` skip
+/// (`rebuild_scan.rs:158`) drops every merge-bound consumer.
+/// Portage: depgraph.py, _compute_abi_rebuild_info
+#[test]
+fn slot_operator_rebuild_scan_pairs_a_consumer_upgrading_in_the_same_run() {
+    use md5::Digest as _;
+    use std::fmt::Write as _;
+    let base = TempDir::new("portage-repo-slotop-601-upgrading-consumer");
+    // vdb: provider 5.42 at 0/5.42 and its built-atom consumer at 0.
+    for (name, slot, rdepend) in [
+        ("p589dprov-5.42", "0/5.42", ""),
+        ("p589dvirt-1", "0", "dev-libs/p589dprov:0/5.42="),
+    ] {
+        let d = base.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    }
+    // Tree: the 5.44 provider, plus the consumer's installed version (the
+    // replacement parent whose live `:=` accepts the new sub-slot).
+    let repo = base.join("repo");
+    let write_pkg = |pkg: &str, pv: &str, slot: &str, rdepend: &str| {
+        let dir = repo.join("dev-libs").join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut body = format!(
+            "EAPI=8\nDESCRIPTION=\"601 upgrading consumer\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\n"
+        );
+        if !rdepend.is_empty() {
+            writeln!(body, "RDEPEND=\"{rdepend}\"").unwrap();
+        }
+        std::fs::write(dir.join(format!("{pkg}-{pv}.ebuild")), &body).unwrap();
+        let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
+        let mut entry =
+            "DEFINED_PHASES=-\nDESCRIPTION=601 upgrading consumer\nEAPI=8\n".to_string();
+        if !rdepend.is_empty() {
+            writeln!(entry, "RDEPEND={rdepend}").unwrap();
+        }
+        writeln!(entry, "KEYWORDS=amd64\nSLOT={slot}\n_md5_={md5}").unwrap();
+        let cachedir = repo.join("metadata/md5-cache/dev-libs");
+        std::fs::create_dir_all(&cachedir).unwrap();
+        std::fs::write(cachedir.join(format!("{pkg}-{pv}")), entry).unwrap();
+    };
+    write_pkg("p589dprov", "5.44", "0/5.44", "");
+    write_pkg("p589dvirt", "1", "0", "dev-libs/p589dprov:=");
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo.clone(),
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    let provider = GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "5.42".into(),
+            to: "5.44".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("5.44".into()),
+        ..graph_entry("dev-libs", "p589dprov", "5.44")
+    };
+    // The consumer is merge-bound for an upgrade in this same run: Portage
+    // still lists it in the block.
+    let consumer = GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "1".into(),
+            to: "2".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        ..graph_entry("dev-libs", "p589dvirt", "2")
+    };
+    let empty: BTreeSet<(String, String)> = BTreeSet::new();
+    let (_, abi, _) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        root: &base,
+        entries: &[provider, consumer],
+        reachable: &HashSet::new(),
+        scope: None,
+        walked_installed: &HashSet::new(),
+        already: &empty,
+        undone: &empty,
+        with_bdeps: true,
+        update: true,
+        top_level_cps: &HashSet::new(),
+        top_level_atoms: &HashSet::new(),
+        excluded: &[],
+        config: &test_config(),
+        gate: crate::test_gate(&repos),
+    });
+    assert_eq!(
+        abi,
+        vec![(
+            "dev-libs/p589dprov-5.44".to_string(),
+            "dev-libs/p589dvirt-1".to_string()
+        )],
+        "an upgrading consumer still appears in the rebuild display pair"
+    );
+    let _ = fs::remove_dir_all(&base);
+}

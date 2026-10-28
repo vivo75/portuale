@@ -1,0 +1,55 @@
+# Portage 3.0.83-r1, fixture tree, cwd=pmtest/fixtures (repos.conf locations are relative)
+# env PORTAGE_CONFIGROOT=$PWD ROOT=$PWD PORTAGE_RUNNING_ROOT=$PWD DISTDIR=$PWD/distfiles
+# emerge --pretend --verbose --update dev-libs/p589dpull
+# --- stdout+stderr, verbatim ---
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/home/vivo/repo/PORTUALE/pmtest/fixtures/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	/home/vivo/repo/PORTUALE/pmtest/fixtures/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 7.98 s (backtrack: 1/20).
+
+[ebuild  r  U  ] dev-libs/p589dprov-5.44:0/5.44::testrepo [5.42:0/5.42::testrepo] to /home/vivo/repo/PORTUALE/pmtest/fixtures/ 0 KiB
+[ebuild  rR    ] dev-libs/p589dvirt-1::testrepo to /home/vivo/repo/PORTUALE/pmtest/fixtures/ 0 KiB
+[ebuild  N     ] dev-libs/p589dpull-1::testrepo to /home/vivo/repo/PORTUALE/pmtest/fixtures/ 0 KiB
+
+Total: 3 packages (1 upgrade, 1 new, 1 reinstall), Size of downloads: 0 KiB
+
+The following packages are causing rebuilds:
+
+  (dev-libs/p589dprov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/home/vivo/repo/PORTUALE/pmtest/fixtures/') causes rebuilds for:
+    (dev-libs/p589dvirt-1:0/0::testrepo, ebuild scheduled for merge to '/home/vivo/repo/PORTUALE/pmtest/fixtures/')
+
+!!! The following installed packages are masked:
+- dev-python/entrypoints-0.4::gentoo (masked by: package.mask)
+/.gentoo/repos/gentoo/profiles/package.mask:
+# Sam James <sam@gentoo.org> (2026-10-22)
+# Replaced by importlib, no reverse dependencies (bug #984696). Removal
+# on 2026-11-22.
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
