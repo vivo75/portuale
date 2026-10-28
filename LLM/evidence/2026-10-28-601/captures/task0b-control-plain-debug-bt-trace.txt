@@ -1,0 +1,61 @@
+   ebuild: dev-libs/p589bpull-1::testrepo
+   ebuild: dev-libs/p589bpull-2::testrepo
+   ebuild: dev-libs/p589bvirt-1::testrepo
+installed: dev-libs/p589bvirt-1::testrepo
+   ebuild: dev-libs/p589bprov-5.44::testrepo
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass none
+BT   choice ("dev-libs", "p589bprov", "5.44")
+BT   choice ("dev-libs", "p589bprov", "5.42")
+BT try=2 kind=Feedback:SlotConflict
+BT   masks-in ["!=dev-libs/p589bprov-5.42", "!=dev-libs/p589bprov-5.42[installed]"]
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass none
+BT   choice ("dev-libs", "p589bprov", "5.44")
+BT   choice ("dev-libs", "p589bprov", "5.42")
+BT try=3 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p589bprov-5.42", "!=dev-libs/p589bprov-5.42[installed]", "!=dev-libs/p589bprov-5.44"]
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass none
+BT   mask dev-libs/p589bpull neg=!=dev-libs/p589bpull-2 reason=MissingDependency { parent: ("dev-libs", "p589bpull"), atom: "=dev-libs/p589bprov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p589bpull neg=!=dev-libs/p589bpull-2 atom==dev-libs/p589bprov-5.44*
+BT try=4 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-libs/p589bprov-5.44"]
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass none
+BT   mask dev-libs/p589bpull neg=!=dev-libs/p589bpull-2 reason=MissingDependency { parent: ("dev-libs", "p589bpull"), atom: "=dev-libs/p589bprov-5.44*" }
+BT   missing_dep_trigger owner=dev-libs/p589bpull neg=!=dev-libs/p589bpull-2 atom==dev-libs/p589bprov-5.44*
+BT try=5 kind=Settle
+BT   masks-in ["!=dev-libs/p589bprov-5.44", "!=dev-libs/p589bpull-2"]
+BT   replace-in 0 prune=false []
+BT   probe-in 0 []
+BT   abi-pass Some(0) []
+BT-ASSEMBLE abi taken=Some(0) scanned=0 extended=0 kept=0 []
+
+digraph:
+
+(dev-libs/p589bpull-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed) (runtime)
+  (dev-libs/p589bvirt-1:0/0::testrepo, installed) (runtime)
+(dev-libs/p589bprov-5.42:0/5.42::testrepo, installed) (no children)
+(dev-libs/p589bvirt-1:0/0::testrepo, installed) (no children)
+dev-libs/p589bpull depends on
+  (dev-libs/p589bpull-1:0/0::testrepo, ebuild scheduled for merge) (soft)
+
+digraph:
+
+(dev-libs/p589bprov-5.42:0/5.42::testrepo, installed) (no children)
+(dev-libs/p589bvirt-1:0/0::testrepo, installed) (no children)
+(dev-libs/p589bpull-1:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/p589bprov-5.42:0/5.42::testrepo, installed) (runtime)
+  (dev-libs/p589bvirt-1:0/0::testrepo, installed) (runtime)
+dev-libs/p589bpull depends on
+  (dev-libs/p589bpull-1:0/0::testrepo, ebuild scheduled for merge) (soft)
+BT-RESULT slot_operator_replaced 0 []
+BT-RESULT abi_rebuilds 0 []

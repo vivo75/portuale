@@ -320,8 +320,9 @@ pub(crate) fn print_resolver_debug(
         print!("\n\n");
 
         // `PORTUALE_BT_TRACE=1` diagnostics for the post-assemble display
-        // fields: this is the only place they exist. Stderr, so the pinned
-        // `--debug` stdout is untouched.
+        // fields (`GraphResult::abi_rebuilds` / `slot_operator_replaced`);
+        // this is their only print site. Stderr, so the pinned `--debug`
+        // stdout is untouched.
         if std::env::var("PORTUALE_BT_TRACE").is_ok_and(|value| value == "1") {
             let mut replaced: Vec<String> = result
                 .slot_operator_replaced
