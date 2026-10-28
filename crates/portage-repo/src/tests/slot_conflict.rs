@@ -500,11 +500,11 @@ fn slot_conflict_abi_step_files_the_installed_provider_and_consumer() {
     let virt = ("dev-libs".to_string(), "p589dvirt".to_string());
     let pull_cpv = "dev-libs/p589dpull-1:0/0::testrepo";
     let virt_cpv = "dev-libs/p589dvirt-1:0/0::testrepo";
-    let edge = |cpv: &str, atom: &str| SlotConflictParent {
+    let edge = |cpv: &str, atom: &str, installed: bool| SlotConflictParent {
         parent_cpv: cpv.to_string(),
         atom: atom.to_string(),
         use_display: Vec::new(),
-        installed: false,
+        installed,
     };
     let conflict = SlotConflict {
         category: "dev-libs".to_string(),
@@ -518,7 +518,7 @@ fn slot_conflict_abi_step_files_the_installed_provider_and_consumer() {
                 sub_slot: "5.44".to_string(),
                 repo_name: "testrepo".to_string(),
                 use_display: Vec::new(),
-                parents: vec![edge(pull_cpv, "=dev-libs/p589dprov-5.44*")],
+                parents: vec![edge(pull_cpv, "=dev-libs/p589dprov-5.44*", false)],
                 installed: false,
             },
             SlotConflictInstance {
@@ -526,7 +526,7 @@ fn slot_conflict_abi_step_files_the_installed_provider_and_consumer() {
                 sub_slot: "5.42".to_string(),
                 repo_name: "testrepo".to_string(),
                 use_display: Vec::new(),
-                parents: vec![edge(virt_cpv, "dev-libs/p589dprov:0/5.42=")],
+                parents: vec![edge(virt_cpv, "dev-libs/p589dprov:0/5.42=", true)],
                 installed: true,
             },
         ],

@@ -340,6 +340,72 @@ fn slot_conflict_abi_display_pairs_follow_the_rebuild() {
     let _ = fs::remove_dir_all(&base);
 }
 
+/// #601: a live `|| ( =prov-2 =prov-1 ) prov:=` consumer accepts the 5.44
+/// child through the `:=` arm. Portage's `_slot_operator_update_probe` needs
+/// only one `||` arm to match; `replacement_accepts` already strips `||`
+/// groups (`without_or_groups`), but `slot_conflict_abi_probe` flattens every
+/// member and requires all of them, so the parent is never filed and the
+/// provider misses the replace set (the cell's exit-1 residual conflict).
+/// Portage: depgraph.py, _slot_operator_update_probe
+#[test]
+fn slot_conflict_abi_probe_accepts_an_or_group_arm_for_the_new_child() {
+    use md5::Digest as _;
+    let (base, repos) = abi_probe_harness(true);
+    // The installed consumer's live ebuild: the `||` arm excluding 5.44 must
+    // not veto the `:=` arm.
+    let body = "EAPI=8\nDESCRIPTION=\"601 or arm\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"|| ( =app-misc/abiprov-2 =app-misc/abiprov-1 ) app-misc/abiprov:=\"\n";
+    let dir = base.join("repo/app-misc/abicons");
+    fs::write(dir.join("abicons-1.ebuild"), body).unwrap();
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
+    fs::write(
+        base.join("repo/metadata/md5-cache/app-misc/abicons-1"),
+        format!(
+            "DEFINED_PHASES=-\nDESCRIPTION=601 or arm\nEAPI=8\nKEYWORDS=amd64\nRDEPEND=|| ( =app-misc/abiprov-2 =app-misc/abiprov-1 ) app-misc/abiprov:=\nSLOT=0\n_md5_={md5}\n"
+        ),
+    )
+    .unwrap();
+    let cons_cpv = "app-misc/abicons-1:0/0::testrepo";
+    let record = abi_conflict_record(
+        vec![("app-misc/abiforce-1:0/0::testrepo", ">=app-misc/abiprov-2")],
+        vec![(cons_cpv, "app-misc/abiprov:0/1=")],
+    );
+    let entries = abi_probe_entries(PretendOutcome::AlreadyInstalled {
+        version: "1".to_string(),
+    });
+    let walked: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let parents = collect_probe_parents(CollectProbeParentsArgs {
+        root: &base,
+        entries: &entries,
+        reachable: &HashSet::new(),
+        walked: &walked,
+        in_graph: &HashSet::new(),
+        already: &BTreeSet::new(),
+        with_bdeps: true,
+        excluded: &[],
+    });
+    assert_eq!(
+        slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
+            root: &base,
+            entries: &entries,
+            conflicts: std::slice::from_ref(&record),
+            already: &BTreeSet::new(),
+            undone: &BTreeSet::new(),
+            with_bdeps: true,
+            walked: &walked,
+            excluded: &[],
+            probe_parents: &parents,
+            config: &test_config(),
+            gate: crate::test_gate(&repos),
+        }),
+        BTreeSet::from([("app-misc".to_string(), "abicons".to_string())]),
+        "the `:=` arm of the live `||` group accepts the new child"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// An argument atom is a probe parent of its own cp and vetoes candidates its
 /// atom does not match.
 #[test]

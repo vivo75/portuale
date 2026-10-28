@@ -1891,11 +1891,20 @@ fn slot_operator_rebuild_scan_pairs_a_consumer_upgrading_in_the_same_run() {
         ..graph_entry("dev-libs", "p589dvirt", "2")
     };
     let empty: BTreeSet<(String, String)> = BTreeSet::new();
+    // Mirror the real call site (`assemble.rs:41-43`): the consumer is in the
+    // narrowed scan scope, so the same-slot arm is reachable and only the
+    // `in_graph && !already` skip stands between the scan and the pair.
+    let reach: HashSet<(String, String)> =
+        HashSet::from([("dev-libs".to_string(), "p589dvirt".to_string())]);
+    let scope_set: HashSet<(String, String)> = HashSet::from([
+        ("dev-libs".to_string(), "p589dprov".to_string()),
+        ("dev-libs".to_string(), "p589dvirt".to_string()),
+    ]);
     let (_, abi, _) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         root: &base,
         entries: &[provider, consumer],
-        reachable: &HashSet::new(),
-        scope: None,
+        reachable: &reach,
+        scope: Some(&scope_set),
         walked_installed: &HashSet::new(),
         already: &empty,
         undone: &empty,
@@ -1907,13 +1916,16 @@ fn slot_operator_rebuild_scan_pairs_a_consumer_upgrading_in_the_same_run() {
         config: &test_config(),
         gate: crate::test_gate(&repos),
     });
+    // Portage's block names the merge-bound replacement (`depgraph.py:1076-1090`),
+    // not the installed version the scan reads from the vdb
+    // (`rebuild_scan.rs:172`).
     assert_eq!(
         abi,
         vec![(
             "dev-libs/p589dprov-5.44".to_string(),
-            "dev-libs/p589dvirt-1".to_string()
+            "dev-libs/p589dvirt-2".to_string()
         )],
-        "an upgrading consumer still appears in the rebuild display pair"
+        "an upgrading consumer appears under its merge-bound replacement"
     );
     let _ = fs::remove_dir_all(&base);
 }
