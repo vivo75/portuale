@@ -1,0 +1,3 @@
+# Scratch ROOTs and captured tmp dirs of the probe; only the `<pm>-<cell>.*`
+# captures next to this file are evidence.
+captures/work/

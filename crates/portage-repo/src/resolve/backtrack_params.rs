@@ -267,6 +267,9 @@ pub(crate) enum PassDecision {
 /// `slot_constraints` holds only the solvable-conflict atom sets; every
 /// `!=cpv` negative lives in `runtime_pkg_mask` with its `MaskReason`;
 /// readers see the union via `union_constraints`. `autounmask_use_config` ≈
+/// `(cat/pkg, atom, consumer)` -- one consumer's parent rows of one masked atom.
+pub(crate) type MaskParentKey = ((String, String), String, (String, String, String));
+
 /// `needed_use_config_changes`. `params_equal` excludes the per-node
 /// `mask_steps`/`depth`, like Portage's parameter-only `__eq__`.
 /// Portage: resolver/backtracking.py, BacktrackParameter.
@@ -288,8 +291,14 @@ pub(crate) struct BacktrackParams {
     /// Portage `_complete_graph`'s parent atoms, discovered by vdb reverse
     /// scan. Latches every `(cat/pkg, atom)` already folded into
     /// `slot_constraints` so a constraint is never re-added and the loop
-    /// converges.
+    /// converges. The mask's parent rows are bookkept separately: several
+    /// installed consumers record the same atom, and each one owns its rows.
     pub(crate) reverse_dep_masked: HashSet<((String, String), String)>,
+    /// `(cat/pkg, atom, consumer)` whose `(parent, atom)` pairs are already in
+    /// that atom's `MaskReason::SlotConflict`. The latch above stops the second
+    /// consumer from reaching the mask at all; this set lets its rows append
+    /// once, without re-appending them on every pass.
+    pub(crate) reverse_dep_conflict_parents: HashSet<MaskParentKey>,
     /// Dropped reverse-dep pins, accumulated across passes, for the residual
     /// installed-instance conflict report once the graph settles. Deduped by
     /// `(cp, atom, consumer)`; stale entries simply yield no record.

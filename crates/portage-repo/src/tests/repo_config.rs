@@ -247,6 +247,7 @@ fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_tim
         ignore_built_slot_operator_deps: false,
         top_level_cps: &HashSet::new(),
         world_reachable: &HashSet::new(),
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
         portage_complete: false,

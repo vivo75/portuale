@@ -160,6 +160,11 @@ pub(crate) struct ResolveCtx<'a> {
     /// Forward-installed closure of the required-set seeds plus args;
     /// computed on every pass, read by blocker classification.
     pub(crate) blocker_retry_closure: HashSet<(String, String)>,
+    /// The required sets' installed closure for the complete-graph missed-update
+    /// parents (#573): the complete pass uses `complete_seed_atoms`, a plain pass
+    /// only has the blocker seeds (the CLI fills those on every phase). Read by
+    /// nothing but the report-only parent scan, so it cannot move a merge.
+    pub(crate) report_reachable: HashSet<(String, String)>,
     /// Phase-1 merge set; in the complete pass only these cps may newly merge.
     pub(crate) complete_locked_merges: HashSet<(String, String)>,
     /// Phase-1 merge picks for the complete pass to reuse instead of
@@ -288,6 +293,19 @@ impl<'a> ResolveCtx<'a> {
             } else {
                 installed_graph.reachable(&req.config.complete_seed_atoms, &[])
             };
+        // Portage's complete walk starts from the required sets on every pass;
+        // the missed-update parents outside the graph need that closure even when
+        // this pass is not the complete one.
+        let report_reachable: HashSet<(String, String)> =
+            if req.config.complete_seed_atoms.is_empty() {
+                if req.config.blocker_retry_seed_atoms.is_empty() {
+                    HashSet::new()
+                } else {
+                    installed_graph.reachable(&req.config.blocker_retry_seed_atoms, &[])
+                }
+            } else {
+                world_reachable.clone()
+            };
         // The blocker classification reads this closure on every pass.
         let blocker_retry_closure: HashSet<(String, String)> = {
             let mut seeds = req.config.blocker_retry_seed_atoms.clone();
@@ -364,6 +382,7 @@ impl<'a> ResolveCtx<'a> {
             slot_op_seeds,
             installed_graph,
             world_reachable,
+            report_reachable,
             blocker_retry_closure,
             complete_locked_merges: req
                 .config

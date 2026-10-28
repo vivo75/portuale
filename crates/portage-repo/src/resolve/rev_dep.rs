@@ -278,6 +278,9 @@ pub(crate) struct ReverseDependencyConstraintsArgs<'a> {
     pub(crate) ignore_built_slot_operator_deps: bool,
     pub(crate) top_level_cps: &'a HashSet<(String, String)>,
     pub(crate) world_reachable: &'a HashSet<(String, String)>,
+    /// The required sets' installed closure for the report-only parent rows (#573);
+    /// empty when the run has no seeds at all (unit tests, no CLI world).
+    pub(crate) report_reachable: &'a HashSet<(String, String)>,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) complete: bool,
     /// Portage entered complete mode in this pass: the `||` of a consumer the walk did
@@ -311,6 +314,16 @@ static EMPTY_WANT: Vec<String> = Vec::new();
 pub(crate) fn reverse_dependency_constraints(
     args: ReverseDependencyConstraintsArgs<'_>,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
+    let (enforced, dropped, _report) = reverse_dependency_constraints_reported(args);
+    (enforced, dropped)
+}
+
+/// [`reverse_dependency_constraints`] plus the report-only parent rows: atoms
+/// Portage's missed-update tail records as parents of the skipped version
+/// without making them constraints (`depgraph.py:2107-2121`).
+pub(crate) fn reverse_dependency_constraints_reported(
+    args: ReverseDependencyConstraintsArgs<'_>,
+) -> (Vec<RevDepPin>, Vec<RevDepPin>, Vec<RevDepPin>) {
     let ReverseDependencyConstraintsArgs {
         root,
         entries,
@@ -322,6 +335,7 @@ pub(crate) fn reverse_dependency_constraints(
         ignore_built_slot_operator_deps,
         top_level_cps,
         world_reachable,
+        report_reachable,
         config,
         complete,
         portage_complete,
@@ -421,7 +435,7 @@ pub(crate) fn reverse_dependency_constraints(
         );
     }
     if upgrading.is_empty() && use_breaks.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new());
     }
 
     // No `DEPEND`/`BDEPEND` parent atoms from built packages unless `--with-bdeps`.
@@ -433,6 +447,7 @@ pub(crate) fn reverse_dependency_constraints(
 
     let mut enforced: Vec<RevDepPin> = Vec::new();
     let mut dropped: Vec<RevDepPin> = Vec::new();
+    let mut report: Vec<RevDepPin> = Vec::new();
     let mut seen: HashSet<SeenPin> = HashSet::new();
     let mut built_seen: BuiltSeenMap = HashMap::new();
     // Per-pass `Effective`-layer cache (one overlay per instance).
@@ -495,6 +510,9 @@ pub(crate) fn reverse_dependency_constraints(
             seen: &mut seen,
             built_seen: &mut built_seen,
             dropped: &mut dropped,
+            report: &mut report,
+            portage_complete,
+            report_only: false,
             hard_want,
             enforced: &mut enforced,
             gate,
@@ -502,6 +520,50 @@ pub(crate) fn reverse_dependency_constraints(
         .is_break()
         {
             continue 'consumer;
+        }
+    }
+    // Portage's "Record missed updates" tail takes the parent atoms of every
+    // consumer the *completed* graph contains, including consumers this pass never
+    // walked into (depgraph.py:2107-2121). They are report-only: the analysis below
+    // never feeds `enforced`/`dropped`, so no merge decision can move.
+    if portage_complete && !report_reachable.is_empty() {
+        let report_scope = ConsumerScope {
+            being_replaced: &being_replaced,
+            being_removed: &being_removed,
+            reachable: report_reachable,
+            graph_cps: &graph_cps,
+            already_installed_top_level: &already_installed_top_level,
+            world_reachable,
+            excluded,
+        };
+        for consumer in all_installed_packages(root).iter() {
+            if consumer_in_scope(&scope, consumer) || !consumer_in_scope(&report_scope, consumer) {
+                continue;
+            }
+            let _ = constraints_from_consumer(ConstraintsFromConsumerArgs {
+                consumer,
+                scope: &report_scope,
+                or_scan: &or_scan,
+                leaked: &leaked,
+                entries,
+                config,
+                root,
+                dep_keys,
+                dynamic_deps,
+                ignore_built_slot_operator_deps,
+                meta_memo: &mut meta_memo,
+                upgrading: &upgrading,
+                use_breaks: &use_breaks,
+                seen: &mut seen,
+                built_seen: &mut built_seen,
+                dropped: &mut dropped,
+                report: &mut report,
+                portage_complete,
+                report_only: true,
+                hard_want,
+                enforced: &mut enforced,
+                gate,
+            });
         }
     }
     // The built atoms rode along untouched by every mask/restart decision
@@ -522,7 +584,9 @@ pub(crate) fn reverse_dependency_constraints(
     }
     enforced.sort();
     dropped.sort();
-    (enforced, dropped)
+    report.sort();
+    report.dedup();
+    (enforced, dropped, report)
 }
 
 /// The values [`constraints_from_consumer`] reads from its caller.
@@ -544,6 +608,13 @@ pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     pub(crate) seen: &'a mut HashSet<SeenPin>,
     pub(crate) built_seen: &'a mut BuiltSeenMap,
     pub(crate) dropped: &'a mut Vec<RevDepPin>,
+    /// Report-only parent rows for Portage's missed-update tail.
+    pub(crate) report: &'a mut Vec<RevDepPin>,
+    /// Portage entered complete mode on this pass.
+    pub(crate) portage_complete: bool,
+    /// This consumer is outside the pass's walk; its atoms become missed-update
+    /// parent rows only, never pins.
+    pub(crate) report_only: bool,
     pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) enforced: &'a mut Vec<RevDepPin>,
     pub(crate) gate: CategoryGate<'a>,
@@ -605,6 +676,9 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         seen,
         built_seen,
         dropped,
+        report,
+        portage_complete,
+        report_only,
         hard_want,
         enforced,
         gate,
@@ -637,24 +711,39 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
             continue;
         };
         // A `||` arm `dep_zapdeps` does not select is no parent atom at all.
+        // A report-only consumer was never walked, and Portage's `||` choice for it
+        // keeps the installed arm (`dep_zapdeps`'s installed preference), which is
+        // the view without the post-merge set.
         let post_merge = (or_scan.portage_complete
+            && !report_only
             && !or_scan.installed_walked.contains_key(&(
                 consumer.category.clone(),
                 consumer.package.clone(),
                 consumer.version.clone(),
             )))
         .then_some(or_scan);
-        let demoted = consumer_or_demotions(ConsumerOrDemotionsArgs {
-            scan: or_scan,
-            consumer,
-            depstr,
-            use_flags,
-            leaked: leaked_here,
-            entries,
-            root,
-            config,
-            gate,
-        });
+        // A report-only consumer was never walked, and Portage keeps the arm its
+        // installed record selects (`dep_zapdeps`'s installed preference here, not
+        // the post-merge view the walk uses): the same demotion `#569` applies.
+        let demoted = if report_only {
+            let mut demoted = or_branch_vdb_deselected_set(root, depstr, use_flags);
+            if let Some(leaked) = leaked_here {
+                demoted.retain(|a| !leaked.contains(a));
+            }
+            demoted
+        } else {
+            consumer_or_demotions(ConsumerOrDemotionsArgs {
+                scan: or_scan,
+                consumer,
+                depstr,
+                use_flags,
+                leaked: leaked_here,
+                entries,
+                root,
+                config,
+                gate,
+            })
+        };
         'atom: for atom_str in atoms {
             if constraints_from_atom(ConstraintsFromAtomArgs {
                 atom_str: &atom_str,
@@ -669,6 +758,9 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
                 seen,
                 built_seen,
                 dropped,
+                report,
+                portage_complete,
+                report_only,
                 hard_want,
                 root,
                 enforced,
@@ -701,6 +793,14 @@ pub(crate) struct ConstraintsFromAtomArgs<'a> {
     pub(crate) seen: &'a mut HashSet<SeenPin>,
     pub(crate) built_seen: &'a mut BuiltSeenMap,
     pub(crate) dropped: &'a mut Vec<RevDepPin>,
+    /// Report-only parent rows: atoms Portage records in the missed-update tail
+    /// without making them constraints (see [`constraints_from_atom`]).
+    pub(crate) report: &'a mut Vec<RevDepPin>,
+    /// Portage entered complete mode on this pass (the missed-update tail's
+    /// parents come from the completed graph; `depgraph.py:2107-2121`).
+    pub(crate) portage_complete: bool,
+    /// Report-only: every pin this atom would make becomes a `report` row.
+    pub(crate) report_only: bool,
     pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) root: &'a Path,
     pub(crate) enforced: &'a mut Vec<RevDepPin>,
@@ -722,6 +822,9 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         seen,
         built_seen,
         dropped,
+        report,
+        portage_complete,
+        report_only,
         hard_want,
         root,
         enforced,
@@ -796,6 +899,33 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         }
     }
     if failing.is_empty() {
+        // Portage's "Record missed updates" tail keeps every parent atom that
+        // does not match the skipped package, including a built `:S/SS=` atom
+        // the *kept* instance still satisfies (`depgraph.py:2107-2121`). The
+        // completed graph is where those parents come from, so the row is
+        // report-only: never a constraint, never a new mask.
+        if (report_only || (portage_complete && built_slot_op))
+            && upgrading.iter().any(|((ucp, _), (candidate, _))| {
+                *ucp == cp
+                    && portage_dep::match_from_list(verbatim_head, &[candidate.as_str()])
+                        .is_none_or(|m| m.is_empty())
+            })
+        {
+            let pin = RevDepPin {
+                cp: cp.clone(),
+                atom: verbatim_head.to_string(),
+                raw_atom: atom_str.to_string(),
+                built_render: Vec::new(),
+                consumer: (
+                    consumer.category.clone(),
+                    consumer.package.clone(),
+                    consumer.version.clone(),
+                ),
+            };
+            if !report.contains(&pin) {
+                report.push(pin);
+            }
+        }
         // A same-version USE-change reinstall can still break the `[use]`
         // bound: such a pin is dropped for the residual report, never
         // enforced. The stripped probe must still hold the merge;
@@ -842,7 +972,11 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
                     ),
                 };
                 if seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
-                    dropped.push(pin);
+                    if report_only {
+                        report.push(pin);
+                    } else {
+                        dropped.push(pin);
+                    }
                 }
             }
         }
@@ -871,6 +1005,10 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         ),
     };
     if !seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
+        return ControlFlow::Break(());
+    }
+    if report_only {
+        report.push(pin);
         return ControlFlow::Break(());
     }
     // A stripped pin constrains no slot; a plain pin stays scoped.

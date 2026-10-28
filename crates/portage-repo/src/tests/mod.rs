@@ -1696,6 +1696,7 @@ fn ctx_161<'a>(
             .collect(),
         installed_graph: InstalledReachability::new(root),
         world_reachable: o.reachable.clone(),
+        report_reachable: HashSet::new(),
         blocker_retry_closure: o.blocker_closure.clone(),
         complete_locked_merges: o.locked.clone(),
         complete_reuse: HashMap::new(),
@@ -3799,6 +3800,7 @@ mod tests_missing_dep_before_conflict;
 mod tests_p491;
 mod tests_p563;
 mod tests_p572;
+mod tests_p573;
 mod tests_printed_count;
 mod unsat_probe;
 mod updates;

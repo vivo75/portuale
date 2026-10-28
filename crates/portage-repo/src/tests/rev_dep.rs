@@ -155,6 +155,7 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
         ignore_built_slot_operator_deps: false,
         top_level_cps: &HashSet::new(),
         world_reachable: &HashSet::new(),
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
         portage_complete: false,
@@ -186,6 +187,7 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
         ignore_built_slot_operator_deps: false,
         top_level_cps: &HashSet::new(),
         world_reachable: &HashSet::new(),
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
         portage_complete: false,
@@ -258,6 +260,7 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
         ignore_built_slot_operator_deps: false,
         top_level_cps: &HashSet::new(),
         world_reachable: &HashSet::new(),
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
         portage_complete: false,
@@ -295,6 +298,7 @@ fn reverse_dependency_constraints_finds_a_slot_change_reinstall_pin() {
         ignore_built_slot_operator_deps: false,
         top_level_cps: &HashSet::new(),
         world_reachable: &HashSet::new(),
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
         portage_complete: false,
@@ -377,6 +381,7 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
         ignore_built_slot_operator_deps: false,
         top_level_cps: &top_level,
         world_reachable: &HashSet::new(),
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
         portage_complete: false,
@@ -408,6 +413,7 @@ fn reverse_dependency_constraints_skips_a_noop_top_level_argument() {
         ignore_built_slot_operator_deps: false,
         top_level_cps: &top_level,
         world_reachable: &world,
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
         portage_complete: false,
@@ -468,6 +474,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         ignore_built_slot_operator_deps: false,
         top_level_cps: &HashSet::new(),
         world_reachable: &reachable,
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: false,
         portage_complete: false,
@@ -496,6 +503,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         ignore_built_slot_operator_deps: false,
         top_level_cps: &HashSet::new(),
         world_reachable: &reachable,
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: true,
         portage_complete: false,
@@ -546,6 +554,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         ignore_built_slot_operator_deps: false,
         top_level_cps: &HashSet::new(),
         world_reachable: &HashSet::new(),
+        report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
         complete: true,
         portage_complete: false,
@@ -560,5 +569,172 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
     assert!(
         enforced.is_empty() && dropped.is_empty(),
         "an unreachable consumer must yield no pin, got enforced={enforced:?} dropped={dropped:?}"
+    );
+}
+
+/// A built `:S/SS=` atom the *kept* instance still satisfies is a parent of the
+/// skipped update in Portage's missed-update tail, but never a pin: it must
+/// not constrain the merge. Report-only, and only in complete mode.
+/// Portage: depgraph.py, `_process_slot_conflicts` ("Record missed updates").
+#[test]
+fn built_atom_the_kept_instance_satisfies_is_a_report_only_parent() {
+    let dir = TempDir::new("portage-repo-573-report");
+    let mk = |name: &str, rdepend: &str| {
+        let d = dir.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0/1\n").unwrap();
+        fs::write(d.join("USE"), "\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    };
+    // The real-package shape: only the built atom, satisfied by the installed
+    // 1.0 the merge keeps.
+    mk("real-1.0", "dev-libs/target:0/1=");
+    mk("target-1.0", "");
+    let entries = [GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("dev-libs", "target", "2.0")
+    }];
+    let hard_want: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let empty_cps: HashSet<(String, String)> = HashSet::new();
+    let reachable: HashSet<(String, String)> =
+        HashSet::from([("dev-libs".to_string(), "real".to_string())]);
+    let gate = crate::test_gate(&[]);
+    let config = portage_profile::Config::default();
+    // The complete walk recursed into the consumer: its built atom is a
+    // parent Portage records, but the kept instance still satisfies it, so it
+    // never becomes a constraint.
+    let walked: HashMap<(String, String, String), HashSet<String>> = HashMap::from([(
+        (
+            "dev-libs".to_string(),
+            "real".to_string(),
+            "1.0".to_string(),
+        ),
+        HashSet::new(),
+    )]);
+    let args = |portage_complete: bool| ReverseDependencyConstraintsArgs {
+        root: &dir,
+        entries: &entries,
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &empty_cps,
+        world_reachable: &empty_cps,
+        report_reachable: &empty_cps,
+        config: &config,
+        complete: portage_complete,
+        portage_complete,
+        installed_walked: &walked,
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
+        gate,
+    };
+    let (enforced, dropped, report) = reverse_dependency_constraints_reported(args(true));
+    assert!(
+        enforced.is_empty() && dropped.is_empty(),
+        "the kept instance satisfies the built atom, so nothing is pinned: \
+         enforced={enforced:?} dropped={dropped:?}"
+    );
+    assert_eq!(
+        report
+            .iter()
+            .map(|p| (p.atom.as_str(), p.consumer.1.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("dev-libs/target:0/1=", "real")],
+        "the built row is a report-only parent"
+    );
+    let (_, _, quiet) = reverse_dependency_constraints_reported(args(false));
+    assert!(
+        quiet.is_empty(),
+        "no complete graph, no missed-update parent: {quiet:?}"
+    );
+}
+
+/// The report rows ride the mask an enforced pin creates, and a second pass
+/// over the same scan appends nothing twice.
+#[test]
+fn report_only_parents_append_once_to_the_mask_they_ride() {
+    let dir = slotundo_temp_dir("573-report-mask");
+    let config = test_config();
+    let opts = CtxOpts161 {
+        backtrack_max: 20,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
+    let consumer = (
+        "dev-libs".to_string(),
+        "real".to_string(),
+        "1.0".to_string(),
+    );
+    let pin = |atom: &str| RevDepPin {
+        cp: ("dev-libs".to_string(), "target".to_string()),
+        atom: atom.to_string(),
+        raw_atom: atom.to_string(),
+        built_render: Vec::new(),
+        consumer: consumer.clone(),
+    };
+    let mut pass = pass_161();
+    pass.entries.push(GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: "2.0".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("dev-libs", "target", "2.0")
+    });
+    let scan = || ReverseScan {
+        enforced: vec![pin("=dev-libs/target-1.0")],
+        dropped: Vec::new(),
+        report: vec![pin("dev-libs/target:0/1=")],
+    };
+    let mut grown = BacktrackParams::default();
+    let first = step_reverse_dep_pins(&ctx, &pass, &mut grown, scan());
+    let std::ops::ControlFlow::Break(PassDecision::Feedback(BacktrackFeedback::RevDep { params })) =
+        first
+    else {
+        panic!("the enforced pin asks for a restart");
+    };
+    let mut grown = *params;
+    let parents = |grown: &BacktrackParams| {
+        grown
+            .runtime_pkg_mask
+            .get(&("dev-libs".to_string(), "target".to_string()))
+            .and_then(|bucket| bucket.first())
+            .map(|entry| match &entry.reason {
+                MaskReason::SlotConflict { parents } => parents.clone(),
+                _ => Vec::new(),
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        parents(&grown),
+        vec![
+            (consumer.clone(), "=dev-libs/target-1.0".to_string()),
+            (consumer.clone(), "dev-libs/target:0/1=".to_string()),
+        ],
+        "the enforced pin creates the mask and the report row joins it"
+    );
+    let _ = step_reverse_dep_pins(&ctx, &pass, &mut grown, scan());
+    assert_eq!(
+        parents(&grown),
+        vec![
+            (consumer.clone(), "=dev-libs/target-1.0".to_string()),
+            (consumer.clone(), "dev-libs/target:0/1=".to_string()),
+        ],
+        "a repeated pass does not append the same rows again"
     );
 }

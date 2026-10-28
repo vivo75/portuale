@@ -37,6 +37,9 @@ Parameters a backtracking pass runs with.
 ## struct BacktrackParams::reverse_dep_masked
 - See `reverse_dependency_constraints`.
 
+## struct BacktrackParams::reverse_dep_conflict_parents / type MaskParentKey
+- #573: the latch above is keyed `(cp, atom)` and must stay so (it gates `slot_constraints` and `consumer_pin_conflict_may_feed_back`). The mask's parent rows are a different job: several installed consumers record the same atom, and Portage's "Record missed updates" tail keeps one `(parent, atom)` pair per parent (`depgraph.py:2107-2121`). This set keys those rows by `(cp, atom, consumer)`, so a second consumer appends to the existing `MaskReason::SlotConflict` entry once and a repeated pass appends nothing.
+
 ## struct BacktrackParams::dropped_pins
 - See `RevDepPin` and `build_residual_slot_conflicts`. A later pass picking a compatible version after all yields no record.
 

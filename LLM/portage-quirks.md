@@ -398,3 +398,10 @@ when a claim turns out false.
 - **Why it looks wrong**: the header and the list disagree.
 - **First seen**: Portage 3.0.83, upstream `testSlotCollision` case 7 (`r4/handler.md` §8).
 - **Portuale**: copied by plan 02.589 R4.
+
+## Q23. A parent the graph rebuilds loses its built slot-operator row from the skip block (suspect)
+
+- **What it does**: when a parent of the withheld update is itself being rebuilt in the same graph, `_slot_operator_check_reverse_dependencies` discards that parent's built slot-operator dependency component before comparing (`lib/_emerge/depgraph.py:2503-2517`; `atom.with_slot("=")`), and the "Record missed updates" tail then records only the stripped `=cat/pkg-ver*` atom for that parent (`:2107-2121`). On the hermetic `dev-libs/p569prov` cell with the tree `p573virt-2` visible, Portage's search rebuilds the installed `p573virt-1`, so the block prints three rows (`p573world` built + menu, `p573virt` menu) instead of four.
+- **Why it looks wrong**: the block drops a row for a parent the settled merge list never rebuilds — the rebuild it guards against was backtracked away. The user reads "this consumer does not require the built subslot", which its vdb record says it does.
+- **First seen**: Portage 3.0.83, hermetic `#573` cell on host Portage (`LLM/evidence/2026-10-28-573/captures/`): three rows with `p573virt-2` visible, four with `=dev-libs/p573virt-2` masked. The fixture was deleted so the oracle is the clean four-row set.
+- **Portuale**: not copied. The built atom rides to the printer as `RevDepPin.built_render` regardless of whether the consumer is rebuilt (plan 02.589 Task 10b keeps the row), so portuale prints both rows for every recorded parent.

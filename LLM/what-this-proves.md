@@ -20007,3 +20007,26 @@ Check, from pmtest: `python3 -m pytest
 pytests-contract-suite/test_emerge_pretend_contract.py -q -k 600`. Expected
 rows are Portage 3.0.83 captures in
 `LLM/evidence/2026-10-26-575-residues/r6/captures/`.
+
+**The skipped-update block names every consumer Portage lists (#573).** On the
+L0 `dev-lang/perl` probe Portage prints 69 `(atom, consumer)` rows — 21
+installed `virtual/perl-*` with their built and menu atom, 27 real packages
+(`app-text/po4a`, the `dev-perl/*` modules, `perl-core/File-Temp`) with the
+built atom — and portuale printed one consumer's two. Two defects: the mask's
+parent list was created once per `(cp, atom)`, so every later consumer
+recording the same atom was dropped, and the withheld 5.44 left no settled
+version change, so the installed consumers the complete walk would reach were
+never scanned at all. Now each consumer owns its rows (the latch keeps only
+`slot_constraints`), and a complete-mode report scan over the required sets'
+installed closure records the parent atoms Portage's "Record missed updates"
+tail records without making them constraints — so the merge list does not
+move. Bed `l0-20261028T205343Z`: `dev-lang_perl` is 69/69 set-equal and gone
+from the findings, 92 probes clean, 44 unexplained (same slugs as before,
+minus that one), and `perl-544-stabilization-built-pin-residual` is out of
+`known-divergences.yaml`. Check: `bash LLM/evidence/2026-10-28-573/probe-p573.sh`
+— `captures/portuale-p569prov.stdout` prints Portage's four rows (each
+consumer's built `:0/5.42=` and `=5.42*`), and `captures/portuale-p573up.stdout`
+adds `p573real-1`'s built row once the settled `p573up` upgrade turns the walk
+on; Portage's own blocks are in the `portage-*` captures beside them. Contract:
+`python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -k
+test_skipped_update_block_names_every_installed_consumer`.

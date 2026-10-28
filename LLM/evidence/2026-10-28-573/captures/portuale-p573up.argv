@@ -1,0 +1,1 @@
+portuale emerge -pv --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -u dev-libs/p569prov dev-libs/p573up dev-libs/p573host

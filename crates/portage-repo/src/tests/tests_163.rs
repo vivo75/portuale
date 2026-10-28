@@ -2691,6 +2691,7 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         slot_op_seeds: reachable.iter().map(|(c, p)| format!("{c}/{p}")).collect(),
         installed_graph: InstalledReachability::new(root),
         world_reachable: reachable,
+        report_reachable: HashSet::new(),
         blocker_retry_closure: HashSet::new(),
         complete_locked_merges: HashSet::new(),
         complete_reuse: HashMap::new(),

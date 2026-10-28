@@ -15,10 +15,13 @@ Reverse-dependency pins: an upgrade breaking an installed consumer's recorded de
   still takes `pin.atom` only).
 - Backlog #209: a distinct variant (see its own notes) so the driver can feed these pins back in-pass under `--backtrack=0`, where every other feedback kind still settles.
 
+- #573: the mask's parent rows are per consumer. The creation latch stays keyed `(cp, atom)` (it gates `slot_constraints`), but `reverse_dep_conflict_parents` keys the rows by `(cp, atom, consumer)`: a later consumer with the same atom appends its pairs to the existing `MaskReason::SlotConflict` entry (sorted and deduped, since `MaskReason` is compared in tests). Report-only pins (`ReverseScan.report`) take the same path but never create a mask: they only append to one an enforced pin made.
+
 ## fn live_reachable_consumers
 Backlog #490. Portage's `_complete_graph` pulls in an installed package only through a graph node's dependencies, and an installed package this run replaces is not a node. The pre-merge closure (`ResolveCtx::slot_op_reachable`) still walks through such packages, so an installed leaf that only a replaced parent needs (karchive's pin from `kdoctools-6.30.0` via `kded-6.30.0`) kept pinning the provider's old version; the dropped pin survived across passes and printed as a slot conflict at the end. The live closure re-closes the same seeds with `InstalledReachability::reachable_without`, skipping the cps the pass merges. The one per-pass scan (`scan_reverse_dependencies`) uses it. The `ResolveCtx` stub in the unit tests passes `slot_op_seeds` derived from its reachable set.
 
 ## struct ReverseScan / fn scan_reverse_dependencies
+- #573: `report` holds the missed-update parent atoms Portage records without constraining the merge. `portage_complete` is computed once per pass here (`ctx.portage_complete(&pass.entries)`) and shared by the scan and the report gate.
 - One reverse-dependency scan per pass, run at the top of `collect_feedback_inner` and handed to the two consumers: the early dropped-pin collection (a pass with slot conflicts returns before the pin step, so its dropped pins would otherwise never reach the next pass) and `step_reverse_dep_pins`. Before the consumer-pin route there were two scans on a settling conflict pass.
 
 ## fn file_consumer_pin_conflicts

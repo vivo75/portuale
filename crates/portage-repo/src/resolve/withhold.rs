@@ -32,9 +32,12 @@ pub(crate) fn constraint_withheld_updates(
     enforced: &[RevDepPin],
 ) -> Vec<SkippedUpdate> {
     let mut out: Vec<SkippedUpdate> = Vec::new();
-    let mut seen: HashSet<((String, String), String)> = HashSet::new();
+    // Two consumers recording the same atom are two parents (Portage's
+    // `_conflict_missed_update` keeps one `(parent, atom)` pair per parent
+    // atom), so the consumer is part of the key.
+    let mut seen: HashSet<MaskParentKey> = HashSet::new();
     for pin in enforced {
-        if !seen.insert((pin.cp.clone(), pin.atom.clone())) {
+        if !seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
             continue;
         }
         // An upgrade went through: nothing was withheld.
