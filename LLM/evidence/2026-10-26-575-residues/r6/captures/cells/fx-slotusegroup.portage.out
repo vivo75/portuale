@@ -1,0 +1,12 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 8.70 s (backtrack: 4/20).
+
+[ebuild  N     ] dev-libs/slotusetarget-1.0 to /var/tmp/claude-r6/fx/ USE="x y" 
+[ebuild  N     ] dev-libs/slotusetarget-2.0 to /var/tmp/claude-r6/fx/ USE="(-x)" 
+[ebuild  N     ] dev-libs/slotuseplain-1.0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/slotusex-1.0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/slotusey-1.0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/slotusegroup-1.0 to /var/tmp/claude-r6/fx/

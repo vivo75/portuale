@@ -1,0 +1,17 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/var/tmp/claude-r6/cfxp/repo/profiles/updates/2Q-2024..
+@s
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/r594vdep-1 to /var/tmp/claude-r6/cfxp USE="r594flag" 
+[ebuild  N     ] dev-libs/r594qa-2 to /var/tmp/claude-r6/cfxp

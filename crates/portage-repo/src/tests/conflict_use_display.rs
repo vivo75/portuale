@@ -16,8 +16,8 @@ fn enforced_pin_miss_renders_the_installed_enforcing_consumer() {
         "settles C-1 + A-2 + D-1, saw {versions:?}"
     );
     assert_eq!(
-        result.backtrack_restarts, 2,
-        "two retries mask A-3 away, restarts={}",
+        result.backtrack_restarts, 1,
+        "Portage counts 2 (its second pass restarts on a slot conflict portuale never visits, #613); restarts={}",
         result.backtrack_restarts
     );
     assert_eq!(

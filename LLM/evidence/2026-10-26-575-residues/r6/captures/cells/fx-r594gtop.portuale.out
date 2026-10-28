@@ -1,0 +1,19 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/r594gm-1 to /var/tmp/claude-r6/fxp
+[ebuild  N     ] dev-libs/r594gtop-1 to /var/tmp/claude-r6/fxp
+
+!!! The following update has been skipped due to unsatisfied dependencies:
+
+dev-libs/r594gm:0 for /var/tmp/claude-r6/fxp/
+
+  selected: (dev-libs/r594gm-1:0/0::testrepo, ebuild scheduled for merge)
+  skipped: (dev-libs/r594gm-2:0/0::testrepo, ebuild scheduled for merge) (see unsatisfied dependency below)
+
+emerge: there are no ebuilds to satisfy "dev-libs/r594gone".
+(dependency required by "dev-libs/r594gm-2::testrepo" [ebuild])
+

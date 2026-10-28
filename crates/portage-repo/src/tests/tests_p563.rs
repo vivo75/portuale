@@ -300,14 +300,14 @@ fn g0_benign_disclosure_blocks_the_dropped_pin_heal() {
         result.slot_conflicts.len(),
         0,
         "no residual block: the walk stopped at the masked dep, so the installed \
-         instances never entered Portage's graph (R3); the count below is still \
+         instances never entered Portage's graph (R3); the count below is \
          R6's, got {:?}",
         result.slot_conflicts
     );
     assert_eq!(
-        result.backtrack_restarts, 0,
-        "the count is still R6's (a failed pass with an empty stack is not \
-         counted): Portage prints 1/20 here, got {:?}",
+        result.backtrack_restarts, 1,
+        "R6 #600: the failed last walk ends a counted pass, like Portage's \
+         1/20 here; got {:?}",
         result.outcome
     );
     assert!(

@@ -19990,3 +19990,20 @@ Check, from pmtest: `python3 -m pytest
 pytests-contract-suite/test_emerge_pretend_contract.py -q -k 598`. Expected
 rows are Portage 3.0.83 captures in
 `LLM/evidence/2026-10-26-575-residues/r5/captures/`.
+
+**The printed backtrack count follows Portage's tries (#600, plan 02.589 R6).**
+`emerge -pv dev-libs/r6c0` (a four-package chain whose last link is
+missing) stops with rc 1 and `Dependency resolution took (backtrack: 4/20)`
+in Portage 3.0.83; portuale used to print one try fewer after any dead end.
+The count now follows Portage's `backtracked`: every restart counts, a
+restart whose children are all rejected counts, and an autounmask USE change
+that Portage's walk would not restart for does not. About 270 corpus cases
+move by exactly one on the count line and by nothing else; the bed is
+unchanged (`l0-20261028T083834Z` equals `l0-20261028T011350Z` finding by
+finding). One cell, abk0 world-B, prints 1/2 against Portage's 2/2 because
+the search differs, not the count (#613).
+
+Check, from pmtest: `python3 -m pytest
+pytests-contract-suite/test_emerge_pretend_contract.py -q -k 600`. Expected
+rows are Portage 3.0.83 captures in
+`LLM/evidence/2026-10-26-575-residues/r6/captures/`.

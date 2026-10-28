@@ -1,0 +1,8 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 2.46 s (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/r594cm-1 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/r594ctop-1 to /var/tmp/claude-r6/fx/

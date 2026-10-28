@@ -1,0 +1,8 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 15.86 s (backtrack: 2/2).
+
+[ebuild     U  ] dev-libs/p589bprov-5.44 [5.42] to /var/tmp/claude-r6/cfx/
+[ebuild  N     ] dev-libs/p589bpull-2 to /var/tmp/claude-r6/cfx/

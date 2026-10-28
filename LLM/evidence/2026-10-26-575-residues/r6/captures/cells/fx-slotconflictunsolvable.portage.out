@@ -1,0 +1,11 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 7.71 s (backtrack: 6/20).
+
+[ebuild  N     ] dev-libs/slotconflicttarget-1.0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/slotconflicttarget-2.0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/slotconflictnewpin-1.0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/slotconflictoldpin-1.0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/slotconflictunsolvable-1.0 to /var/tmp/claude-r6/fx/

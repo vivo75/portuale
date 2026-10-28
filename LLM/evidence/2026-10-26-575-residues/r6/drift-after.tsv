@@ -1,0 +1,274 @@
+key	old	new
+--pretend --emptytree dev-libs/abort-masked-cycle	0/20	1/20
+--pretend --emptytree dev-libs/abort-masked-last	0/20	1/20
+--pretend --emptytree dev-libs/abort-masked-mid	0/20	1/20
+--pretend --emptytree dev-libs/abort-unsat-last	0/20	1/20
+--pretend --emptytree dev-libs/abort-unsat-mid	0/20	1/20
+--pretend --emptytree dev-libs/anyofunresolvable	0/20	1/20
+--pretend --emptytree dev-libs/autounmaskdepconsumer	0/20	1/20
+--pretend --emptytree dev-libs/kwbacktop	0/20	1/20
+--pretend --emptytree dev-libs/kwneedpkg	0/20	1/20
+--pretend --emptytree dev-libs/levelconsumer	0/20	1/20
+--pretend --emptytree dev-libs/libcnoisepkg	0/20	1/20
+--pretend --emptytree dev-libs/licensemaskedconsumer	0/20	1/20
+--pretend --emptytree dev-libs/maskmaskedconsumer	0/20	1/20
+--pretend --emptytree dev-libs/maskneedpkg	0/20	1/20
+--pretend --emptytree dev-libs/missingdep	0/20	1/20
+--pretend --emptytree dev-libs/movedepconsumer	0/20	1/20
+--pretend --emptytree dev-libs/multimaskconsumer	0/20	1/20
+--pretend --emptytree dev-libs/ofuzzy	0/20	1/20
+--pretend --emptytree dev-libs/omasked	0/20	1/20
+--pretend --emptytree dev-libs/opartly	0/20	1/20
+--pretend --emptytree dev-libs/ormissbad	0/20	1/20
+--pretend --emptytree dev-libs/rdrmiss	1/20	2/20
+--pretend --emptytree dev-libs/rdrmisstool	0/20	1/20
+--pretend --emptytree dev-libs/rootdepsorpkg	0/20	1/20
+--pretend --emptytree dev-libs/rootdepspkg	0/20	1/20
+--pretend --emptytree dev-libs/scuseparent	5/20	6/20
+--pretend --emptytree dev-libs/slotconfgroup	5/20	6/20
+--pretend --emptytree dev-libs/slotconflictunsolvable	5/20	6/20
+--pretend --emptytree dev-libs/slotusegroup	3/20	4/20
+--pretend --emptytree dev-libs/subslotmismatchconsumer	0/20	1/20
+--pretend --json dev-libs/abort-masked-cycle	0/20	1/20
+--pretend --json dev-libs/abort-masked-last	0/20	1/20
+--pretend --json dev-libs/abort-masked-mid	0/20	1/20
+--pretend --json dev-libs/abort-unsat-last	0/20	1/20
+--pretend --json dev-libs/abort-unsat-mid	0/20	1/20
+--pretend --json dev-libs/anyofunresolvable	0/20	1/20
+--pretend --json dev-libs/autounmaskdepconsumer	0/20	1/20
+--pretend --json dev-libs/kwbacktop	0/20	1/20
+--pretend --json dev-libs/kwneedpkg	0/20	1/20
+--pretend --json dev-libs/levelconsumer	0/20	1/20
+--pretend --json dev-libs/libcnoisepkg	0/20	1/20
+--pretend --json dev-libs/licensemaskedconsumer	0/20	1/20
+--pretend --json dev-libs/maskmaskedconsumer	0/20	1/20
+--pretend --json dev-libs/maskneedpkg	0/20	1/20
+--pretend --json dev-libs/missingdep	0/20	1/20
+--pretend --json dev-libs/movedepconsumer	0/20	1/20
+--pretend --json dev-libs/multimaskconsumer	0/20	1/20
+--pretend --json dev-libs/ofuzzy	0/20	1/20
+--pretend --json dev-libs/opartly	0/20	1/20
+--pretend --json dev-libs/ormissbad	0/20	1/20
+--pretend --json dev-libs/rdrmiss	1/20	2/20
+--pretend --json dev-libs/rdrmisstool	0/20	1/20
+--pretend --json dev-libs/scuseparent	5/20	6/20
+--pretend --json dev-libs/slotconfgroup	5/20	6/20
+--pretend --json dev-libs/slotconflictunsolvable	5/20	6/20
+--pretend --json dev-libs/slotusegroup	3/20	4/20
+--pretend --json dev-libs/subslotmismatchconsumer	0/20	1/20
+--pretend --tree dev-libs/abort-masked-cycle	0/20	1/20
+--pretend --tree dev-libs/abort-masked-last	0/20	1/20
+--pretend --tree dev-libs/abort-masked-mid	0/20	1/20
+--pretend --tree dev-libs/abort-unsat-last	0/20	1/20
+--pretend --tree dev-libs/abort-unsat-mid	0/20	1/20
+--pretend --tree dev-libs/anyofunresolvable	0/20	1/20
+--pretend --tree dev-libs/autounmaskdepconsumer	0/20	1/20
+--pretend --tree dev-libs/kwbacktop	0/20	1/20
+--pretend --tree dev-libs/kwneedpkg	0/20	1/20
+--pretend --tree dev-libs/levelconsumer	0/20	1/20
+--pretend --tree dev-libs/libcnoisepkg	0/20	1/20
+--pretend --tree dev-libs/licensemaskedconsumer	0/20	1/20
+--pretend --tree dev-libs/maskmaskedconsumer	0/20	1/20
+--pretend --tree dev-libs/maskneedpkg	0/20	1/20
+--pretend --tree dev-libs/missingdep	0/20	1/20
+--pretend --tree dev-libs/movedepconsumer	0/20	1/20
+--pretend --tree dev-libs/multimaskconsumer	0/20	1/20
+--pretend --tree dev-libs/ofuzzy	0/20	1/20
+--pretend --tree dev-libs/opartly	0/20	1/20
+--pretend --tree dev-libs/ormissbad	0/20	1/20
+--pretend --tree dev-libs/rdrmiss	1/20	2/20
+--pretend --tree dev-libs/rdrmisstool	0/20	1/20
+--pretend --tree dev-libs/scuseparent	5/20	6/20
+--pretend --tree dev-libs/slotconfgroup	5/20	6/20
+--pretend --tree dev-libs/slotconflictunsolvable	5/20	6/20
+--pretend --tree dev-libs/slotusegroup	3/20	4/20
+--pretend --tree dev-libs/subslotmismatchconsumer	0/20	1/20
+--pretend --update --deep --newuse dev-libs/abort-masked-cycle	0/20	1/20
+--pretend --update --deep --newuse dev-libs/abort-masked-last	0/20	1/20
+--pretend --update --deep --newuse dev-libs/abort-masked-mid	0/20	1/20
+--pretend --update --deep --newuse dev-libs/abort-unsat-last	0/20	1/20
+--pretend --update --deep --newuse dev-libs/abort-unsat-mid	0/20	1/20
+--pretend --update --deep --newuse dev-libs/anyofunresolvable	0/20	1/20
+--pretend --update --deep --newuse dev-libs/autounmaskdepconsumer	0/20	1/20
+--pretend --update --deep --newuse dev-libs/kwbacktop	0/20	1/20
+--pretend --update --deep --newuse dev-libs/kwneedpkg	0/20	1/20
+--pretend --update --deep --newuse dev-libs/levelconsumer	0/20	1/20
+--pretend --update --deep --newuse dev-libs/libcnoisepkg	1/20	2/20
+--pretend --update --deep --newuse dev-libs/licensemaskedconsumer	0/20	1/20
+--pretend --update --deep --newuse dev-libs/maskmaskedconsumer	0/20	1/20
+--pretend --update --deep --newuse dev-libs/maskneedpkg	0/20	1/20
+--pretend --update --deep --newuse dev-libs/missingdep	0/20	1/20
+--pretend --update --deep --newuse dev-libs/movedepconsumer	0/20	1/20
+--pretend --update --deep --newuse dev-libs/multimaskconsumer	0/20	1/20
+--pretend --update --deep --newuse dev-libs/ofuzzy	0/20	1/20
+--pretend --update --deep --newuse dev-libs/omasked	0/20	1/20
+--pretend --update --deep --newuse dev-libs/opartly	0/20	1/20
+--pretend --update --deep --newuse dev-libs/ormissbad	0/20	1/20
+--pretend --update --deep --newuse dev-libs/rdrmiss	1/20	2/20
+--pretend --update --deep --newuse dev-libs/rdrmisstool	0/20	1/20
+--pretend --update --deep --newuse dev-libs/rootdepsorpkg	0/20	1/20
+--pretend --update --deep --newuse dev-libs/scuseparent	5/20	6/20
+--pretend --update --deep --newuse dev-libs/slotconfgroup	5/20	6/20
+--pretend --update --deep --newuse dev-libs/slotconflictunsolvable	5/20	6/20
+--pretend --update --deep --newuse dev-libs/slotusegroup	3/20	4/20
+--pretend --update --deep --newuse dev-libs/subslotmismatchconsumer	0/20	1/20
+--pretend --update --deep dev-libs/abort-masked-cycle	0/20	1/20
+--pretend --update --deep dev-libs/abort-masked-last	0/20	1/20
+--pretend --update --deep dev-libs/abort-masked-mid	0/20	1/20
+--pretend --update --deep dev-libs/abort-unsat-last	0/20	1/20
+--pretend --update --deep dev-libs/abort-unsat-mid	0/20	1/20
+--pretend --update --deep dev-libs/anyofunresolvable	0/20	1/20
+--pretend --update --deep dev-libs/autounmaskdepconsumer	0/20	1/20
+--pretend --update --deep dev-libs/kwbacktop	0/20	1/20
+--pretend --update --deep dev-libs/kwneedpkg	0/20	1/20
+--pretend --update --deep dev-libs/levelconsumer	0/20	1/20
+--pretend --update --deep dev-libs/libcnoisepkg	1/20	2/20
+--pretend --update --deep dev-libs/licensemaskedconsumer	0/20	1/20
+--pretend --update --deep dev-libs/maskmaskedconsumer	0/20	1/20
+--pretend --update --deep dev-libs/maskneedpkg	0/20	1/20
+--pretend --update --deep dev-libs/missingdep	0/20	1/20
+--pretend --update --deep dev-libs/movedepconsumer	0/20	1/20
+--pretend --update --deep dev-libs/multimaskconsumer	0/20	1/20
+--pretend --update --deep dev-libs/ofuzzy	0/20	1/20
+--pretend --update --deep dev-libs/omasked	0/20	1/20
+--pretend --update --deep dev-libs/opartly	0/20	1/20
+--pretend --update --deep dev-libs/ormissbad	0/20	1/20
+--pretend --update --deep dev-libs/rdrmiss	1/20	2/20
+--pretend --update --deep dev-libs/rdrmisstool	0/20	1/20
+--pretend --update --deep dev-libs/rootdepsorpkg	0/20	1/20
+--pretend --update --deep dev-libs/scuseparent	5/20	6/20
+--pretend --update --deep dev-libs/slotconfgroup	5/20	6/20
+--pretend --update --deep dev-libs/slotconflictunsolvable	5/20	6/20
+--pretend --update --deep dev-libs/slotusegroup	3/20	4/20
+--pretend --update --deep dev-libs/subslotmismatchconsumer	0/20	1/20
+--pretend --update dev-libs/abort-masked-cycle	0/20	1/20
+--pretend --update dev-libs/abort-masked-last	0/20	1/20
+--pretend --update dev-libs/abort-masked-mid	0/20	1/20
+--pretend --update dev-libs/abort-unsat-last	0/20	1/20
+--pretend --update dev-libs/abort-unsat-mid	0/20	1/20
+--pretend --update dev-libs/anyofunresolvable	0/20	1/20
+--pretend --update dev-libs/autounmaskdepconsumer	0/20	1/20
+--pretend --update dev-libs/kwbacktop	0/20	1/20
+--pretend --update dev-libs/kwneedpkg	0/20	1/20
+--pretend --update dev-libs/levelconsumer	0/20	1/20
+--pretend --update dev-libs/licensemaskedconsumer	0/20	1/20
+--pretend --update dev-libs/maskmaskedconsumer	0/20	1/20
+--pretend --update dev-libs/maskneedpkg	0/20	1/20
+--pretend --update dev-libs/missingdep	0/20	1/20
+--pretend --update dev-libs/movedepconsumer	0/20	1/20
+--pretend --update dev-libs/multimaskconsumer	0/20	1/20
+--pretend --update dev-libs/ofuzzy	0/20	1/20
+--pretend --update dev-libs/opartly	0/20	1/20
+--pretend --update dev-libs/ormissbad	0/20	1/20
+--pretend --update dev-libs/rdrmiss	1/20	2/20
+--pretend --update dev-libs/rdrmisstool	0/20	1/20
+--pretend --update dev-libs/scuseparent	5/20	6/20
+--pretend --update dev-libs/slotconfgroup	5/20	6/20
+--pretend --update dev-libs/slotconflictunsolvable	5/20	6/20
+--pretend --update dev-libs/slotusegroup	3/20	4/20
+--pretend --update dev-libs/subslotmismatchconsumer	0/20	1/20
+--pretend --verbose dev-libs/abort-masked-cycle	0/20	1/20
+--pretend --verbose dev-libs/abort-masked-last	0/20	1/20
+--pretend --verbose dev-libs/abort-masked-mid	0/20	1/20
+--pretend --verbose dev-libs/abort-unsat-last	0/20	1/20
+--pretend --verbose dev-libs/abort-unsat-mid	0/20	1/20
+--pretend --verbose dev-libs/anyofunresolvable	0/20	1/20
+--pretend --verbose dev-libs/autounmaskdepconsumer	0/20	1/20
+--pretend --verbose dev-libs/kwbacktop	0/20	1/20
+--pretend --verbose dev-libs/kwneedpkg	0/20	1/20
+--pretend --verbose dev-libs/levelconsumer	0/20	1/20
+--pretend --verbose dev-libs/libcnoisepkg	0/20	1/20
+--pretend --verbose dev-libs/licensemaskedconsumer	0/20	1/20
+--pretend --verbose dev-libs/maskmaskedconsumer	0/20	1/20
+--pretend --verbose dev-libs/maskneedpkg	0/20	1/20
+--pretend --verbose dev-libs/missingdep	0/20	1/20
+--pretend --verbose dev-libs/movedepconsumer	0/20	1/20
+--pretend --verbose dev-libs/multimaskconsumer	0/20	1/20
+--pretend --verbose dev-libs/ofuzzy	0/20	1/20
+--pretend --verbose dev-libs/opartly	0/20	1/20
+--pretend --verbose dev-libs/ormissbad	0/20	1/20
+--pretend --verbose dev-libs/rdrmiss	1/20	2/20
+--pretend --verbose dev-libs/rdrmisstool	0/20	1/20
+--pretend --verbose dev-libs/scuseparent	5/20	6/20
+--pretend --verbose dev-libs/slotconfgroup	5/20	6/20
+--pretend --verbose dev-libs/slotconflictunsolvable	5/20	6/20
+--pretend --verbose dev-libs/slotusegroup	3/20	4/20
+--pretend --verbose dev-libs/subslotmismatchconsumer	0/20	1/20
+--pretend dev-libs/abort-masked-cycle	0/20	1/20
+--pretend dev-libs/abort-masked-last	0/20	1/20
+--pretend dev-libs/abort-masked-mid	0/20	1/20
+--pretend dev-libs/abort-unsat-last	0/20	1/20
+--pretend dev-libs/abort-unsat-mid	0/20	1/20
+--pretend dev-libs/anyofunresolvable	0/20	1/20
+--pretend dev-libs/autounmaskdepconsumer	0/20	1/20
+--pretend dev-libs/kwbacktop	0/20	1/20
+--pretend dev-libs/kwneedpkg	0/20	1/20
+--pretend dev-libs/levelconsumer	0/20	1/20
+--pretend dev-libs/libcnoisepkg	0/20	1/20
+--pretend dev-libs/licensemaskedconsumer	0/20	1/20
+--pretend dev-libs/maskmaskedconsumer	0/20	1/20
+--pretend dev-libs/maskneedpkg	0/20	1/20
+--pretend dev-libs/missingdep	0/20	1/20
+--pretend dev-libs/movedepconsumer	0/20	1/20
+--pretend dev-libs/multimaskconsumer	0/20	1/20
+--pretend dev-libs/ofuzzy	0/20	1/20
+--pretend dev-libs/opartly	0/20	1/20
+--pretend dev-libs/ormissbad	0/20	1/20
+--pretend dev-libs/rdrmiss	1/20	2/20
+--pretend dev-libs/rdrmisstool	0/20	1/20
+--pretend dev-libs/scuseparent	5/20	6/20
+--pretend dev-libs/slotconfgroup	5/20	6/20
+--pretend dev-libs/slotconflictunsolvable	5/20	6/20
+--pretend dev-libs/slotusegroup	3/20	4/20
+--pretend dev-libs/subslotmismatchconsumer	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_391_movedepconsumer_with_moves_on_abort	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[#391: moves-on n	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-onl	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask: a 	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--debug + a slot	5/20	6/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--json: unsolvab	5/20	6/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[an installed par	1/20	2/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask keywo	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask per-l	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[depchain: upstre	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[multi-atom: unso	3/20	4/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: a sub	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: any-o	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: unres	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: || gr	0/20	1/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: -	5/20	6/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: U	3/20	4/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: p	5/20	6/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: t	5/20	6/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[the needer/other	3/20	4/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[the same triangl	3/20	4/20
+pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[use-conditional:	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_debug_digraph_dump_order_matches[dev-libs/abort-ma	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_debug_digraph_dump_order_matches[dev-libs/abort-un	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_gate_off_restores_legacy_exit_code[dev-libs/a	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_gate_off_restores_legacy_exit_code[dev-libs/m	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_json_carries_partial_list_and_aborted_reason[	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_masked_cycle_hides_circular_block[columns-dev	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_masked_cycle_hides_circular_block[debug-dev-l	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_masked_cycle_hides_circular_block[pv-dev-libs	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_masked_cycle_hides_circular_block[pvt-dev-lib	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[columns-ab	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[debug-abor	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pv-abort-m	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pv-abort-u	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pvt-abort-	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_any_of_group_falls_back_to_every_alternative_when_none_s	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_autounmask_keyword_backward_cascade_re_resolves_a_slot_t	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_autounmask_levels_unmask_two_categories_at_once_on_the_s	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_keyword_masked_dependency_is_disclosed_with_its_mask_rea	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_masked_dependency_is_disclosed_with_its_mask_reasons#0	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_or_group_other_installed_any_slot_bin_beats_plain_other#	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_or_group_other_installed_some_bin_beats_plain_other#0	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_pkgdir_directory_scan_resolves_a_binpkg_with_no_packages	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_pkgdir_scan_reads_a_multi_instance_xpak_from_the_cat_pn_	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[a keyword-masked dependency is di	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[a package.mask'd dependency is di	0/20	1/20
+tests/test_emerge_pretend_contract.py::test_root_deps_recursion_reports_an_unbuildable_build_dep#0	1/20	2/20
+tests/test_emerge_pretend_contract.py::test_slot_conflict_color_y_colours_violated_spans_with_aligne	5/20	6/20
+tests/test_emerge_pretend_contract.py::test_slot_conflict_notice_renders_pkg_use_display#0	5/20	6/20
+tests/test_emerge_pretend_contract.py::test_slot_conflict_use_reason_keys_unconditional_before_viola	3/20	4/20

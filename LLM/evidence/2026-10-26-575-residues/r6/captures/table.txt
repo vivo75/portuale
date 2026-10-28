@@ -1,0 +1,54 @@
+aub-y-cba                    | Portage 0/20   rc 1 | F0 +brk                                  | portuale 0/20   rc 1 | ERR ERR
+aub-y-cab                    | Portage 2/20   rc 1 | R2 F+ F0 +best +brk                      | portuale 2/20   rc 1 | SC DE ERR ERR
+aub-y-bca                    | Portage 0/20   rc 1 | F0 +brk                                  | portuale 0/20   rc 1 | ERR ERR
+aub-y-bac                    | Portage 0/20   rc 1 | F0 +brk                                  | portuale 0/20   rc 1 | ERR ERR
+aub-y-acb                    | Portage 2/20   rc 1 | R2 F+ F0 +best +brk                      | portuale 2/20   rc 1 | SC DE ERR ERR
+aub-y-abc                    | Portage 3/20   rc 1 | R2 R2 F+ F0 +best +brk                   | portuale 3/20   rc 1 | SC DE CF MD ERR SC ERR ERR
+aub-y-ba                     | Portage 0/20   rc 1 | F0 +brk                                  | portuale 0/20   rc 1 | ERR ERR
+aub-y-ab                     | Portage 1/20   rc 1 | R1 F0 +best +brk                         | portuale 1/20   rc 1 | CF ERR ERR
+aub-n-cba                    | Portage 0/20   rc 1 | B:need_config_change +brk                | portuale 0/20   rc 1 | ERR ERR
+aub-n-cab                    | Portage 0/20   rc 1 | B:need_config_change                     | portuale 0/20   rc 1 | SC
+aub-n-bca                    | Portage 0/20   rc 1 | B:need_config_change +brk                | portuale 0/20   rc 1 | ERR ERR
+aub-n-bac                    | Portage 0/20   rc 1 | B:need_config_change +brk                | portuale 0/20   rc 1 | ERR ERR
+aub-n-acb                    | Portage 0/20   rc 1 | B:need_config_change                     | portuale 0/20   rc 1 | SC
+aub-n-abc                    | Portage 0/20   rc 1 | B:need_config_change                     | portuale 0/20   rc 1 | SC
+aub-n-ba                     | Portage 0/20   rc 1 | B:need_config_change +brk                | portuale 0/20   rc 1 | ERR ERR
+aub-n-ab                     | Portage 0/20   rc 1 | B:need_config_change                     | portuale 0/20   rc 1 | OK
+fx-slotconflictunsolvable    | Portage 6/20   rc 1 | R2 R2 R2 F+ R1 R1 F0 +best               | portuale 5/20   rc 1 | SC MD MD ERR MD MD ERR SC ERR
+fx-slotconfgroup             | Portage 6/20   rc 1 | R2 R2 R2 F+ R1 R1 F0 +best               | portuale 5/20   rc 1 | SC MD MD ERR MD MD ERR SC ERR
+fx-scuseparent               | Portage 6/20   rc 1 | R2 R2 R2 F+ R1 R1 F0 +best               | portuale 5/20   rc 1 | SC MD MD ERR MD MD ERR SC ERR
+fx-slotusegroup              | Portage 4/20   rc 1 | R2 R2 R2 F+ F0 +best                     | portuale 3/20   rc 1 | SC DE MD MD ERR SC ERR
+fx-ormisstop                 | Portage 1/20   rc 0 | R1 B:success                             | portuale 1/20   rc 0 | MD OK
+fx-ormissbad                 | Portage 1/20   rc 1 | R1 F0 +best                              | portuale 0/20   rc 1 | MD ERR MD ERR
+fx-abort-masked-mid          | Portage 1/20   rc 1 | R1 F0 +best                              | portuale 0/20   rc 1 | MD ERR MD ERR
+fx-abort-unsat-mid           | Portage 1/20   rc 1 | R1 F0 +best                              | portuale 0/20   rc 1 | MD ERR MD ERR
+fx-abort-masked-last         | Portage 1/20   rc 1 | R1 F0 +best                              | portuale 0/20   rc 1 | MD ERR MD ERR
+fx-abort-masked-cycle        | Portage 1/20   rc 1 | R1 F0 +best                              | portuale 0/20   rc 1 | MD ERR MD ERR
+fx-r594etop                  | Portage 0/20   rc 1 | F0                                       | portuale 0/20   rc 1 | DE DE ERR
+fx-r594gtop                  | Portage 1/20   rc 0 | R1 B:success                             | portuale 1/20   rc 0 | MD OK
+fx-r594qtop                  | Portage 0/20   rc 1 | B:need_config_change                     | portuale 0/20   rc 1 | MD
+fx-r594ctop                  | Portage 1/20   rc 0 | R1 B:success                             | portuale 1/20   rc 0 | MD OK
+fx-r594ftop                  | Portage 1/20   rc 1 | R1 F0 +best                              | portuale 1/20   rc 1 | MD DE DE ERR
+fx-r594jtop                  | Portage 1/20   rc 1 | R1 B:need_config_change                  | portuale 1/20   rc 1 | MD OK
+fx-p569pull                  | Portage 2/20   rc 0 | R2 R2 B:success                          | portuale 2/20   rc 0 | SC MD OK
+fx-p563pull                  | Portage 2/20   rc 0 | R2 R2 B:success                          | portuale 2/20   rc 0 | SC MD OK
+fx-p589apull                 | Portage 0/20   rc 0 | B:success                                | portuale 0/20   rc 0 | OK OK
+fx-p589bpull                 | Portage 4/20   rc 0 | R2 R2 R1 R1 B:success                    | portuale 4/20   rc 0 | SC SC MD MD OK
+fx-p589cpull                 | Portage 4/20   rc 0 | R2 R2 R1 R1 B:success                    | portuale 4/20   rc 0 | SC SC MD MD OK
+fx-t8x                       | Portage 1/20   rc 0 | R1 B:success                             | portuale 1/20   rc 0 | MD OK
+fx-needer                    | Portage 0/20   rc 0 | B:success                                | portuale 0/20   rc 0 | OK OK
+fx-g0                        | Portage 1/20   rc 1 | R1 F0 +best                              | portuale 0/20   rc 1 | MD ERR MD ERR
+fx-g0-bt1                    | Portage 1/1    rc 1 | R1 B:limit +best                         | portuale 0/1    rc 1 | MD ERR MD ERR
+fx-c-aun                     | Portage 0/20   rc 1 | F0                                       | portuale 0/20   rc 1 | DE DE ERR
+fx-q-bt1                     | Portage 0/1    rc 1 | B:need_config_change                     | portuale 0/1    rc 1 | MD
+fx-p569pull_t8x              | Portage 3/20   rc 0 | R1 R2 R2 B:success                       | portuale 3/20   rc 0 | MD SC MD OK
+fx-triangle                  | Portage 4/20   rc 1 | R2 R2 F+ R1 F0 +best                     | portuale 3/20   rc 1 | SC MD ERR MD ERR SC ERR SC MD ERR MD ERR SC ERR
+fx-triangle-rev              | Portage 4/20   rc 1 | R2 R2 F+ R1 F0 +best                     | portuale 3/20   rc 1 | SC MD ERR MD ERR SC ERR SC MD ERR MD ERR SC ERR
+fx-paired-2                  | Portage 0/20   rc 0 | B:success                                | portuale 0/20   rc 0 | OK OK
+keeper-arg                   | Portage 3/20   rc 1 | R2 R2 F+ F0 +best                        | portuale 2/20   rc 1 | OK SC SC ERR ERR OK
+keeper-hard                  | Portage 4/20   rc 1 | R2 R2 R1 R1 F0 +best                     | portuale 3/20   rc 1 | OK SC SC MD MD ERR OK
+keeper-triangle              | Portage 4/20   rc 1 | R2 R2 F+ R1 F0 +best                     | portuale 3/20   rc 1 | SC MD ERR MD ERR SC ERR SC MD ERR MD ERR SC ERR
+igw-ge                       | Portage 3/20   rc 1 | R2 R2 F+ F0 +best                        | portuale 2/20   rc 1 | OK SC SC ERR ERR OK
+igw-lt                       | Portage 3/20   rc 1 | R2 F+ R1 F0 +best                        | portuale 2/20   rc 1 | OK SC ERR SC ERR OK
+cgpver-ge                    | Portage 3/20   rc 1 | R2 R2 F+ F0 +best                        | portuale 2/20   rc 1 | OK SC SC ERR ERR OK
+cgpver-lt                    | Portage 3/20   rc 1 | R2 F+ R1 F0 +best                        | portuale 2/20   rc 1 | OK SC ERR SC ERR OK

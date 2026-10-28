@@ -1,0 +1,11 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 6.06 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/aub0d-0 to /var/tmp/claude-r6/fx/ USE="-foo" 
+[ebuild  N     ] dev-libs/aub0d-1 to /var/tmp/claude-r6/fx/ USE="-bar" 
+[ebuild  N     ] dev-libs/aub0a-0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/aub0c-0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/aub0b-0 to /var/tmp/claude-r6/fx/

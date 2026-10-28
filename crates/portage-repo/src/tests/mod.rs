@@ -3798,6 +3798,7 @@ mod tests_first_unsatisfied_dep;
 mod tests_missing_dep_before_conflict;
 mod tests_p491;
 mod tests_p563;
+mod tests_printed_count;
 mod unsat_probe;
 mod updates;
 mod use_display;

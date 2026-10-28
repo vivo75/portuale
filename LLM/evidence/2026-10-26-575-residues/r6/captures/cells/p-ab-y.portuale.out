@@ -1,0 +1,9 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/r6p-1 to /var/tmp/claude-r6/fxp USE="r6g" 
+[ebuild  N     ] dev-libs/r6pa-1 to /var/tmp/claude-r6/fxp
+[ebuild  N     ] dev-libs/r6pb-1 to /var/tmp/claude-r6/fxp

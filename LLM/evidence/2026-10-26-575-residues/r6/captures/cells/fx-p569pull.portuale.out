@@ -1,0 +1,22 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 2/20).
+
+[ebuild  N     ] dev-libs/p569pull-1 to /var/tmp/claude-r6/fxp
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+
+dev-libs/p569prov:0 for /var/tmp/claude-r6/fxp/
+
+  (dev-libs/p569prov-5.44:0/5.44::testrepo, ebuild scheduled for merge to '/var/tmp/claude-r6/fxp') USE="" ELIBC="glibc" conflicts with
+    dev-libs/p569prov:0/5.42= required by (dev-libs/p569virt-1:0/0::testrepo, installed in '/var/tmp/claude-r6/fxp') USE=""
+                     ^^^^^^^^
+    =dev-libs/p569prov-5.42* required by (dev-libs/p569virt-1:0/0::testrepo, installed in '/var/tmp/claude-r6/fxp') USE=""
+    ^                  ^^^^^
+
+
+!!! The following update(s) have been skipped due to unsatisfied dependencies
+!!! triggered by backtracking:
+
+dev-libs/p569pull:0 for /var/tmp/claude-r6/fxp/

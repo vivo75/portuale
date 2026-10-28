@@ -15,8 +15,9 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         initial.clone(),
     );
     let mut first_pass = true;
-    // One per loop iteration beyond the first; the final best-run re-pass
-    // shares the value.
+    // One per loop pass; `restarts` is Portage `_backtrack_depgraph`'s
+    // `backtracked`: the passes that did not end the loop. The final
+    // best-run re-pass after the loop shares the value.
     let mut passes: u64 = 0;
     let mut restarts: u64 = 0;
     // The `--backtrack=0` reverse-dependency feed: a satisfiable
@@ -30,6 +31,10 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         let Some(params) = feed_params.take().or_else(|| bt.get()) else {
             break;
         };
+        // Every loop pass is a try; a feed pass is not a retry.
+        if !from_feed {
+            passes += 1;
+        }
         // A retry whose walk fails is a failed iteration, not a result; only
         // the root pass's own failure propagates. A feed pass is just dropped.
         let mut pass = match run_pass(&ctx, &params, first_pass) {
@@ -37,22 +42,18 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
             Err(_) if from_feed => continue,
             Err(_) if !first_pass => {
                 bt.adopt_current(params.clone());
-                // A failed iteration counts too; the cap is checked first.
-                if passes >= u64::from(ctx.backtrack_max) {
+                // A failed iteration counts too, but only while nodes remain;
+                // the cap is checked first.
+                if restarts >= u64::from(ctx.backtrack_max) {
                     break;
                 }
                 if !bt.unexplored.is_empty() {
-                    passes += 1;
-                    restarts = passes - 1;
+                    restarts += 1;
                 }
                 continue;
             }
             Err(e) => return Err(e),
         };
-        if !from_feed {
-            passes += 1;
-            restarts = passes - 1;
-        }
         let was_first = first_pass;
         first_pass = false;
         // The per-pass config view: the accumulator's autounmask-use changes
@@ -191,6 +192,9 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                     && !from_feed
                 {
                     bt.adopt_current(*settled);
+                    if !bt.unexplored.is_empty() {
+                        restarts += 1;
+                    }
                     continue;
                 }
                 return Ok(result);
@@ -199,9 +203,13 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                 // The node is consumed but keeps the pass's merged accumulators
                 // for the best-run re-pass below.
                 bt.adopt_current(*params);
-                // Same cap as the failed-iteration arm above.
+                // Same cap as the failed-iteration arm above; a dead end with
+                // nodes left counts like any other failed pass.
                 if restarts >= u64::from(ctx.backtrack_max) {
                     break;
+                }
+                if !bt.unexplored.is_empty() {
+                    restarts += 1;
                 }
             }
             PassDecision::Feedback(kind) => {
@@ -231,7 +239,20 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                 if restarts >= u64::from(ctx.backtrack_max) {
                     break;
                 }
+                // A restart counts even when every child it adds is rejected.
+                // A grown autounmask config Portage would not restart for is
+                // not a Portage pass and is not counted.
+                let counts = grow_restart_counts(GrowRestartArgs {
+                    ctx: &ctx,
+                    params: &params,
+                    pass: &pass,
+                    kind: &kind,
+                    replay: replay.as_ref(),
+                });
                 bt.feedback(kind);
+                if counts {
+                    restarts += 1;
+                }
             }
         }
     }
@@ -340,6 +361,232 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
     result.prune_unresolved = prune_unresolved;
     result.backtrack_max = ctx.backtrack_max;
     Ok(result)
+}
+
+/// Arguments of [`grow_restart_counts`].
+struct GrowRestartArgs<'a> {
+    ctx: &'a ResolveCtx<'a>,
+    params: &'a BacktrackParams,
+    pass: &'a PassResult,
+    kind: &'a BacktrackFeedback,
+    replay: Option<&'a merge_order::WalkReplay>,
+}
+
+/// Whether this feedback restarts the search the way Portage would: every
+/// feedback counts except a grown autounmask config Portage would not restart
+/// for (a flip its fail-fast walk never reaches, or one that changes nothing
+/// Portage checks).
+// Portage: depgraph.py, _backtrack_depgraph; _pkg_use_enabled's
+// want_restart_for_use_change
+fn grow_restart_counts(args: GrowRestartArgs<'_>) -> bool {
+    let GrowRestartArgs {
+        ctx,
+        params,
+        pass,
+        kind,
+        replay,
+    } = args;
+    let BacktrackFeedback::Config { params: grown } = kind else {
+        return true;
+    };
+    // Only the grow arm can be a pass Portage would not take: the breakage
+    // arm disables the suggestions, and a filed probe restart counts.
+    if !pass.autounmask_grew
+        || (grown.autounmask_disabled && !params.autounmask_disabled)
+        || grown.slot_operator_replace_installed != params.slot_operator_replace_installed
+        || grown.probe_replaced != params.probe_replaced
+    {
+        return true;
+    }
+    let Some(replay) = replay else { return true };
+    // Portage restarts for a USE change only when its walk completes: a
+    // failed walk files no restart (it is a failed pass, not a restart).
+    if replay.failure.is_some() {
+        return false;
+    }
+    let changes = &grown.autounmask_use_config;
+    pass.use_overlay.iter().any(|(cp, flags)| {
+        flags.iter().any(|(flag, want)| {
+            // Reached: the fail-fast replay folded the same flip before its
+            // failure; otherwise Portage's walk never got there.
+            if replay.needed.get(cp).and_then(|m| m.get(flag)) != Some(want) {
+                return false;
+            }
+            flip_wants_restart(FlipRestartArgs {
+                ctx,
+                pass,
+                cp,
+                changes,
+            })
+        })
+    })
+}
+
+/// Arguments of [`flip_wants_restart`].
+struct FlipRestartArgs<'a> {
+    ctx: &'a ResolveCtx<'a>,
+    pass: &'a PassResult,
+    cp: &'a (String, String),
+    changes: &'a HashMap<(String, String), HashMap<String, bool>>,
+}
+
+/// Portage's `want_restart_for_use_change` on one flipped package: its
+/// flattened dependencies or license change under the new USE, or the change
+/// breaks a USE dep of one of its existing parents. Anything unprovable
+/// restarts, like before.
+// Portage: depgraph.py, _pkg_use_enabled
+fn flip_wants_restart(args: FlipRestartArgs<'_>) -> bool {
+    let FlipRestartArgs {
+        ctx,
+        pass,
+        cp,
+        changes,
+    } = args;
+    if flattened_deps_change(ctx, pass, cp, changes) {
+        return true;
+    }
+    parent_use_dep_breaks(pass, cp, changes)
+}
+
+/// Whether any merge-bound version of `cp` flattens its dependencies or
+/// license differently under the flipped USE.
+fn flattened_deps_change(
+    ctx: &ResolveCtx<'_>,
+    pass: &PassResult,
+    cp: &(String, String),
+    changes: &HashMap<(String, String), HashMap<String, bool>>,
+) -> bool {
+    let empty: HashMap<String, bool> = HashMap::new();
+    let changed = changes.get(cp).unwrap_or(&empty);
+    let mut versions: Vec<(String, Option<String>)> = Vec::new();
+    for e in &pass.entries {
+        if (e.category.clone(), e.package.clone()) != *cp {
+            continue;
+        }
+        let version = match &e.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => {
+                Some(version.clone())
+            }
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                Some(to.clone())
+            }
+            _ => None,
+        };
+        if let Some(version) = version
+            && !versions.iter().any(|(v, _)| v == &version)
+        {
+            versions.push((version, e.repo_name.clone()));
+        }
+    }
+    if versions.is_empty() {
+        return true;
+    }
+    versions.iter().any(|(version, repo)| {
+        let Ok(cands) = ctx.repo_candidates(&cp.0, &cp.1) else {
+            return true;
+        };
+        let Some(cand) = cands
+            .iter()
+            .find(|c| &c.version == version && repo.as_deref().is_none_or(|r| r == c.repo_name))
+        else {
+            return true;
+        };
+        let old_use = effective_use_flags(EffectiveUseFlagsArgs {
+            config: ctx.config,
+            iuse: &cand.iuse,
+            keywords: &cand.keywords,
+            candidate_str: &cand.match_str(&cp.0, &cp.1),
+            build_id: cand.build_id.as_deref(),
+            category: &cp.0,
+            package: &cp.1,
+        });
+        let mut new_use: HashSet<String> = old_use.as_ref().clone();
+        for (flag, want) in changed {
+            if *want {
+                new_use.insert(flag.clone());
+            } else {
+                new_use.remove(flag);
+            }
+        }
+        let pf = format!("{}-{version}", cp.1);
+        let Ok(metadata) = repo_aux_metadata(&cand.repo_location, &cp.0, &pf) else {
+            return true;
+        };
+        [
+            "BDEPEND", "DEPEND", "IDEPEND", "PDEPEND", "RDEPEND", "LICENSE",
+        ]
+        .iter()
+        .any(|key| {
+            let text = metadata.get(*key).map(String::as_str).unwrap_or("");
+            let tokens: Vec<String> = text.split_whitespace().map(str::to_string).collect();
+            let old_flat = portage_use_reduce::use_reduce_flat(
+                &tokens,
+                &old_use,
+                portage_use_reduce::MatchMode::Normal,
+            );
+            let new_flat = portage_use_reduce::use_reduce_flat(
+                &tokens,
+                &new_use,
+                portage_use_reduce::MatchMode::Normal,
+            );
+            match (old_flat, new_flat) {
+                (Ok(old_flat), Ok(new_flat)) => {
+                    let mut old_sorted = old_flat;
+                    let mut new_sorted = new_flat;
+                    old_sorted.sort();
+                    new_sorted.sort();
+                    old_sorted != new_sorted
+                }
+                _ => true,
+            }
+        })
+    })
+}
+
+/// Whether the flipped USE breaks a USE dep of an existing parent: for every
+/// edge landing on `cp`, a mentioned flag whose required state mismatches the
+/// change restarts. Unparseable and conditional atoms restart, like before.
+// Portage: depgraph.py, _pkg_use_enabled
+fn parent_use_dep_breaks(
+    pass: &PassResult,
+    cp: &(String, String),
+    changes: &HashMap<(String, String), HashMap<String, bool>>,
+) -> bool {
+    let empty: HashMap<String, bool> = HashMap::new();
+    let changed = changes.get(cp).unwrap_or(&empty);
+    if changed.is_empty() {
+        return false;
+    }
+    pass.entries.iter().any(|e| {
+        e.deps.iter().any(|d| {
+            if d.category != cp.0 || d.package != cp.1 {
+                return false;
+            }
+            let Some(atom) = parse_dep_atom(&d.atom, "grow restart count") else {
+                return true;
+            };
+            let Some(use_deps) = atom.use_deps.as_deref() else {
+                return false;
+            };
+            let mut enabled: HashSet<String> = HashSet::new();
+            let mut disabled: HashSet<String> = HashSet::new();
+            for dep in use_deps {
+                match dep.op {
+                    portage_dep::UseDepOp::Enabled => {
+                        enabled.insert(dep.flag.clone());
+                    }
+                    portage_dep::UseDepOp::Disabled => {
+                        disabled.insert(dep.flag.clone());
+                    }
+                    _ => return true,
+                }
+            }
+            changed.iter().any(|(flag, want)| {
+                let want_enabled = enabled.contains(flag);
+                (want_enabled || disabled.contains(flag)) && want_enabled != *want
+            })
+        })
+    })
 }
 
 /// Whether unresolved dependencies are pruned from the final result after a backtrack.

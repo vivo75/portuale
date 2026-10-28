@@ -1,0 +1,8 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 4.47 s (backtrack: 1/20).
+
+[ebuild  N     ] dev-libs/ormissgood-1.0 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/ormisstop-1.0 to /var/tmp/claude-r6/fx/

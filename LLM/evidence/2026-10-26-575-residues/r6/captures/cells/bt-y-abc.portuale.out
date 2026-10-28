@@ -1,0 +1,41 @@
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/var/tmp/claude-r6/fxp/repo/profiles/updates/2Q-2024..
+@s
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 3/20).
+
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/aub0d:0
+
+  (dev-libs/aub0d-1:0/0::testrepo, ebuild scheduled for merge) USE="-bar" ELIBC="glibc" pulled in by
+    >=dev-libs/aub0d-1 required by (dev-libs/aub0c-0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^^               ^                                                                                               
+
+  (dev-libs/aub0d-0:0/0::testrepo, ebuild scheduled for merge) USE="foo" ELIBC="glibc" pulled in by
+    dev-libs/aub0d[foo] required by (dev-libs/aub0b-0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+                   ^^^                                                                                                
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+

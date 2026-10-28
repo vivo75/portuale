@@ -1,0 +1,10 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 3.25 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/r6y-1 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/r6x-1 to /var/tmp/claude-r6/fx/ USE="r6f" 
+[ebuild  N     ] dev-libs/r6a-1 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/r6b-1 to /var/tmp/claude-r6/fx/

@@ -1,0 +1,269 @@
+file	key	args	stored	now	emulated(A+C)	tags	portuale-seq
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_391_movedepconsumer_with_moves_on_aborts_like_portage#0	-pv --deep dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_391_movedepconsumer_with_moves_on_aborts_like_portage#1	-p --tree --deep dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[#391: moves-on never rewrites ebuild deps (movedepconsumer --pretend aborts)]#0	--pretend dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[#391: moves-on never rewrites ebuild deps (movedepconsumer -pv --deep aborts)]#0	-pv --deep dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask-only=y: same, explicit value form]#0	--pretend --autounmask-only=y dev-libs/autounmaskdepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--autounmask: a dependency's own no-visible-candidate gets no suggestion by default]#0	--pretend dev-libs/autounmaskdepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[--debug + a slot conflict: resolver trace survives backtracking (#62: rc 1 like Portage)]#0	--pretend --debug dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask backward cascade, --autounmask-backtrack=y: aucascleaf appears]#0	--pretend --autounmask-backtrack=y dev-libs/aucasctop	backtrack: 1/20	backtrack: 1/20	1	B?	CF OK
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask breakage, --autounmask --autounmask-backtrack=y]#0	--pretend --autounmask --autounmask-backtrack=y dev-libs/aubreaktop	backtrack: 1/20	backtrack: 1/20	1	B?	CF X X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask breakage, --autounmask-backtrack=y: flag wanted both ways -> abandon]#0	--pretend --autounmask-backtrack=y dev-libs/aubreaktop	backtrack: 1/20	backtrack: 1/20	1	B?	CF X X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask keyword backward cascade: slot narrowed to a ~arch version, default]#0	--pretend dev-libs/kwbacktop	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask per-level re-scan: ~arch + license unmasked on one version, default]#0	--pretend dev-libs/multimaskconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[autounmask: upstream test_autounmask_use_breakage pg0 a/b/c fails like Portage (rc 1; D wanted with foo and -foo at once)]#0	--pretend --autounmask-backtrack=y dev-libs/aub0a dev-libs/aub0b dev-libs/aub0c	backtrack: 3/20	backtrack: 3/20	4	A+B?	SC DE CF MD X SC X X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[depchain: upstream test_old_dep_chain_display pg0 =odc0a-2 fails like Portage (rc 1; C keyword-masked with --autounmask=n)]#0	--pretend --autounmask=n =dev-libs/odc0a-2	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[multi-atom: unsolvable slot conflict between two targets is reported (#62: rc 1 like Portage)]#0	--pretend dev-libs/slotconflictnewpin dev-libs/slotconflictoldpin	backtrack: 3/20	backtrack: 3/20	4	A	SC MD X MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: a sub-slot-restricted dependency atom genuinely rejects a mismatch]#0	--pretend dev-libs/subslotmismatchconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: any-of group falls back to every alternative when none is satisfiable]#0	--pretend dev-libs/anyofunresolvable	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: unresolvable dep aborts the resolve (exit 1, no list since Slice 4)]#0	--pretend dev-libs/missingdep	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: || group other_installed_any_slot bin (bug 522652 fuzzy cp match) beats plain other]#0	--pretend dev-libs/ofuzzy	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[recursion: || group other_installed_some bin -- a bracketed AND-alternative partly installed beats plain other]#0	--pretend dev-libs/opartly	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: --backtrack=30 suppresses the try-a-larger-value hint (#62: rc 1 like Portage)]#0	--pretend --backtrack=30 dev-libs/slotconflictunsolvable	backtrack: 5/30	backtrack: 5/30	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: --color=y colours violated spans, markers stay aligned (#62: rc 1 like Portage)]#0	--pretend --color=y dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: --verbose-conflicts shows every omitted parent (#62: rc 1 like Portage)]#0	--pretend --verbose-conflicts dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: --verbose-conflicts=n is the default (collapsed) (#62: rc 1; Portage rejects =n with rc 2, separate surface)]#0	--pretend --verbose-conflicts=n dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: USE reason keys, unconditional before violated (#62: rc 1 like Portage)]#0	--pretend dev-libs/slotusegroup	backtrack: 3/20	backtrack: 3/20	4	A	SC DE MD MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: pkg_use_display renders non-empty USE on instance + parent lines (#62: rc 1 like Portage)]#0	--pretend dev-libs/scuseparent	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: three same-reason parents collapse to one + '(and N more)' (#62: rc 1 like Portage)]#0	--pretend dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[slot conflict: unsolvable, survives backtracking and is reported (#62: rc 1 like Portage)]#0	--pretend dev-libs/slotconflictunsolvable	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[the needer/othermod triangle reports the installed-instance conflict (#57, #62: rc 1 like Portage)]#0	--pretend dev-libs/needer dev-libs/othermod	backtrack: 3/20	backtrack: 3/20	4	A	SC MD X MD X SC X | SC MD X MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[the same triangle, argv reversed, reports the same conflict (#57, #62: rc 1 like Portage)]#0	--pretend dev-libs/othermod dev-libs/needer	backtrack: 3/20	backtrack: 3/20	4	A	SC MD X MD X SC X | SC MD X MD X SC X
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[tree: backtrack-abandoned parents display under the earliest-resolved puller (#155: [nomerge] mgfa/mgxa, not mgfb/mgxb)]#0	--pretend --tree dev-libs/mg2top	backtrack: 14/20	backtrack: 10/20	10	now!=stored	SC MD MD X MD SC MD MD X MD OK
+contract.json.xz	pytests-contract-suite/test_emerge_pretend_contract.py::test_pretend_case_exit_code[use-conditional: a USE-conditional-only || group that reduces to empty fails at EAPI 7+ (#238: rc 1 like Portage)]#0	--pretend dev-libs/condanyof	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_debug_digraph_dump_order_matches[dev-libs/abort-masked-mid]#0	--pretend --debug dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_debug_digraph_dump_order_matches[dev-libs/abort-unsat-mid]#0	--pretend --debug dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_gate_off_restores_legacy_exit_code[dev-libs/abort-masked-last]#0	--pretend dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_gate_off_restores_legacy_exit_code[dev-libs/abort-masked-mid]#0	--pretend dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_gate_off_restores_legacy_exit_code[dev-libs/abort-unsat-last]#0	--pretend dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_gate_off_restores_legacy_exit_code[dev-libs/abort-unsat-mid]#0	--pretend dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_gate_off_restores_legacy_exit_code[dev-libs/maskneedpkg]#0	--pretend dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_cycle_hides_circular_block[columns-dev-libs/abort-masked-cycle]#0	--pretend -pv --columns dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_cycle_hides_circular_block[debug-dev-libs/abort-masked-cycle]#0	--pretend --debug dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_cycle_hides_circular_block[pv-dev-libs/abort-masked-cycle]#0	--pretend -pv dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_cycle_hides_circular_block[pvt-dev-libs/abort-masked-cycle]#0	--pretend -pvt dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[columns-abort-masked-last]#0	--pretend -pv --columns dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[columns-abort-masked-mid]#0	--pretend -pv --columns dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[columns-abort-unsat-last]#0	--pretend -pv --columns dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[columns-abort-unsat-mid]#0	--pretend -pv --columns dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[debug-abort-masked-last]#0	--pretend --debug dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[debug-abort-unsat-last]#0	--pretend --debug dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pv-abort-masked-last]#0	--pretend -pv dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pv-abort-masked-mid]#0	--pretend -pv dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pv-abort-unsat-last]#0	--pretend -pv dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pv-abort-unsat-mid]#0	--pretend -pv dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pvt-abort-masked-last]#0	--pretend -pvt dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pvt-abort-masked-mid]#0	--pretend -pvt dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pvt-abort-unsat-last]#0	--pretend -pvt dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_abort_path_masked_unsat_suppresses_merge_list[pvt-abort-unsat-mid]#0	--pretend -pvt dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_any_of_group_falls_back_to_every_alternative_when_none_satisfiable#0	--pretend dev-libs/anyofunresolvable	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_autounmask_backward_cascade_re_resolves_an_already_resolved_slot#1	--pretend --autounmask-backtrack=y dev-libs/aucasctop	backtrack: 1/20	backtrack: 1/20	1	B?	CF OK
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_autounmask_breakage_abandons_autounmask_when_a_flag_is_wanted_both_ways#1	--pretend --autounmask-backtrack=y dev-libs/aubreaktop	backtrack: 1/20	backtrack: 1/20	1	B?	CF X X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_autounmask_keyword_backward_cascade_re_resolves_a_slot_to_a_masked_version#0	--pretend dev-libs/kwbacktop	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_autounmask_levels_unmask_two_categories_at_once_on_the_same_version#1	--pretend dev-libs/multimaskconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_keyword_masked_dependency_is_disclosed_with_its_mask_reasons#0	--pretend dev-libs/kwneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_masked_dependency_is_disclosed_with_its_mask_reasons#0	--pretend dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_or_group_other_installed_any_slot_bin_beats_plain_other#0	--pretend dev-libs/ofuzzy	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_or_group_other_installed_some_bin_beats_plain_other#0	--pretend dev-libs/opartly	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[a keyword-masked dependency is disclosed with its mask reasons]#0	--pretend dev-libs/kwneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_pretend_case_exit_code[a package.mask'd dependency is disclosed with its mask reasons]#0	--pretend dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_root_deps_recursion_reports_an_unbuildable_build_dep#0	--pretend --root-deps dev-libs/rdrmiss	backtrack: 1/20	backtrack: 1/20	2	A	MD MD X DE X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_slot_conflict_color_y_colours_violated_spans_with_aligned_markers#0	--pretend --color=y dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_slot_conflict_notice_renders_pkg_use_display#0	--pretend dev-libs/scuseparent	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+contract.json.xz	tests/test_emerge_pretend_contract.py::test_slot_conflict_use_reason_keys_unconditional_before_violated#0	--pretend dev-libs/slotusegroup	backtrack: 3/20	backtrack: 3/20	4	A	SC DE MD MD X SC X
+expanded.json.xz	--pretend --emptytree dev-lang/go	--pretend --emptytree dev-lang/go	backtrack: 0/20	backtrack: 1/20	1	now!=stored	CI OK
+expanded.json.xz	--pretend --emptytree dev-libs/abort-masked-cycle	--pretend --emptytree dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/abort-masked-last	--pretend --emptytree dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/abort-masked-mid	--pretend --emptytree dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/abort-unsat-last	--pretend --emptytree dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/abort-unsat-mid	--pretend --emptytree dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/anyofunresolvable	--pretend --emptytree dev-libs/anyofunresolvable	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/autounmaskdepconsumer	--pretend --emptytree dev-libs/autounmaskdepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/kwbacktop	--pretend --emptytree dev-libs/kwbacktop	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/kwneedpkg	--pretend --emptytree dev-libs/kwneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/levelconsumer	--pretend --emptytree dev-libs/levelconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/licensemaskedconsumer	--pretend --emptytree dev-libs/licensemaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/maskmaskedconsumer	--pretend --emptytree dev-libs/maskmaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/maskneedpkg	--pretend --emptytree dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/missingdep	--pretend --emptytree dev-libs/missingdep	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/movedepconsumer	--pretend --emptytree dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/multimaskconsumer	--pretend --emptytree dev-libs/multimaskconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/ofuzzy	--pretend --emptytree dev-libs/ofuzzy	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/omasked	--pretend --emptytree dev-libs/omasked	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/opartly	--pretend --emptytree dev-libs/opartly	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/ormissbad	--pretend --emptytree dev-libs/ormissbad	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/rdrmiss	--pretend --emptytree dev-libs/rdrmiss	backtrack: 1/20	backtrack: 1/20	2	A	MD MD X DE X
+expanded.json.xz	--pretend --emptytree dev-libs/rdrmisstool	--pretend --emptytree dev-libs/rdrmisstool	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/rootdepsorpkg	--pretend --emptytree dev-libs/rootdepsorpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/rootdepspkg	--pretend --emptytree dev-libs/rootdepspkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --emptytree dev-libs/scuseparent	--pretend --emptytree dev-libs/scuseparent	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --emptytree dev-libs/slotconfgroup	--pretend --emptytree dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --emptytree dev-libs/slotconflictunsolvable	--pretend --emptytree dev-libs/slotconflictunsolvable	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --emptytree dev-libs/slotusegroup	--pretend --emptytree dev-libs/slotusegroup	backtrack: 3/20	backtrack: 3/20	4	A	SC DE MD MD X SC X
+expanded.json.xz	--pretend --emptytree dev-libs/subslotmismatchconsumer	--pretend --emptytree dev-libs/subslotmismatchconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-lang/go	--pretend --tree dev-lang/go	backtrack: 0/20	backtrack: 1/20	1	now!=stored	CI OK
+expanded.json.xz	--pretend --tree dev-libs/abort-masked-cycle	--pretend --tree dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/abort-masked-last	--pretend --tree dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/abort-masked-mid	--pretend --tree dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/abort-unsat-last	--pretend --tree dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/abort-unsat-mid	--pretend --tree dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/anyofunresolvable	--pretend --tree dev-libs/anyofunresolvable	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/autounmaskdepconsumer	--pretend --tree dev-libs/autounmaskdepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/kwbacktop	--pretend --tree dev-libs/kwbacktop	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/kwneedpkg	--pretend --tree dev-libs/kwneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/levelconsumer	--pretend --tree dev-libs/levelconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/licensemaskedconsumer	--pretend --tree dev-libs/licensemaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/maskmaskedconsumer	--pretend --tree dev-libs/maskmaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/maskneedpkg	--pretend --tree dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/missingdep	--pretend --tree dev-libs/missingdep	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/movedepconsumer	--pretend --tree dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/multimaskconsumer	--pretend --tree dev-libs/multimaskconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/ofuzzy	--pretend --tree dev-libs/ofuzzy	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/opartly	--pretend --tree dev-libs/opartly	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/ormissbad	--pretend --tree dev-libs/ormissbad	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/rdrmiss	--pretend --tree dev-libs/rdrmiss	backtrack: 1/20	backtrack: 1/20	2	A	MD MD X DE X
+expanded.json.xz	--pretend --tree dev-libs/rdrmisstool	--pretend --tree dev-libs/rdrmisstool	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --tree dev-libs/scuseparent	--pretend --tree dev-libs/scuseparent	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --tree dev-libs/slotconfgroup	--pretend --tree dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --tree dev-libs/slotconflictunsolvable	--pretend --tree dev-libs/slotconflictunsolvable	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --tree dev-libs/slotusegroup	--pretend --tree dev-libs/slotusegroup	backtrack: 3/20	backtrack: 3/20	4	A	SC DE MD MD X SC X
+expanded.json.xz	--pretend --tree dev-libs/subslotmismatchconsumer	--pretend --tree dev-libs/subslotmismatchconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-lang/go	--pretend --update --deep --newuse dev-lang/go	backtrack: 0/20	backtrack: 1/20	1	now!=stored	CI OK
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/abort-masked-cycle	--pretend --update --deep --newuse dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/abort-masked-last	--pretend --update --deep --newuse dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/abort-masked-mid	--pretend --update --deep --newuse dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/abort-unsat-last	--pretend --update --deep --newuse dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/abort-unsat-mid	--pretend --update --deep --newuse dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/anyofunresolvable	--pretend --update --deep --newuse dev-libs/anyofunresolvable	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/autounmaskdepconsumer	--pretend --update --deep --newuse dev-libs/autounmaskdepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/kwbacktop	--pretend --update --deep --newuse dev-libs/kwbacktop	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/kwneedpkg	--pretend --update --deep --newuse dev-libs/kwneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/levelconsumer	--pretend --update --deep --newuse dev-libs/levelconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/licensemaskedconsumer	--pretend --update --deep --newuse dev-libs/licensemaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/maskmaskedconsumer	--pretend --update --deep --newuse dev-libs/maskmaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/maskneedpkg	--pretend --update --deep --newuse dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/missingdep	--pretend --update --deep --newuse dev-libs/missingdep	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/movedepconsumer	--pretend --update --deep --newuse dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/multimaskconsumer	--pretend --update --deep --newuse dev-libs/multimaskconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/ofuzzy	--pretend --update --deep --newuse dev-libs/ofuzzy	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/omasked	--pretend --update --deep --newuse dev-libs/omasked	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/opartly	--pretend --update --deep --newuse dev-libs/opartly	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/ormissbad	--pretend --update --deep --newuse dev-libs/ormissbad	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/rdrmiss	--pretend --update --deep --newuse dev-libs/rdrmiss	backtrack: 1/20	backtrack: 1/20	2	A	MD MD X DE X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/rdrmisstool	--pretend --update --deep --newuse dev-libs/rdrmisstool	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/rootdepsorpkg	--pretend --update --deep --newuse dev-libs/rootdepsorpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/scuseparent	--pretend --update --deep --newuse dev-libs/scuseparent	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/slotconfgroup	--pretend --update --deep --newuse dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/slotconflictunsolvable	--pretend --update --deep --newuse dev-libs/slotconflictunsolvable	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/slotusegroup	--pretend --update --deep --newuse dev-libs/slotusegroup	backtrack: 3/20	backtrack: 3/20	4	A	SC DE MD MD X SC X
+expanded.json.xz	--pretend --update --deep --newuse dev-libs/subslotmismatchconsumer	--pretend --update --deep --newuse dev-libs/subslotmismatchconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-lang/go	--pretend --update --deep dev-lang/go	backtrack: 0/20	backtrack: 1/20	1	now!=stored	CI OK
+expanded.json.xz	--pretend --update --deep dev-libs/abort-masked-cycle	--pretend --update --deep dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/abort-masked-last	--pretend --update --deep dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/abort-masked-mid	--pretend --update --deep dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/abort-unsat-last	--pretend --update --deep dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/abort-unsat-mid	--pretend --update --deep dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/anyofunresolvable	--pretend --update --deep dev-libs/anyofunresolvable	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/autounmaskdepconsumer	--pretend --update --deep dev-libs/autounmaskdepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/kwbacktop	--pretend --update --deep dev-libs/kwbacktop	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/kwneedpkg	--pretend --update --deep dev-libs/kwneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/levelconsumer	--pretend --update --deep dev-libs/levelconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/licensemaskedconsumer	--pretend --update --deep dev-libs/licensemaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/maskmaskedconsumer	--pretend --update --deep dev-libs/maskmaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/maskneedpkg	--pretend --update --deep dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/missingdep	--pretend --update --deep dev-libs/missingdep	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/movedepconsumer	--pretend --update --deep dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/multimaskconsumer	--pretend --update --deep dev-libs/multimaskconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/ofuzzy	--pretend --update --deep dev-libs/ofuzzy	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/omasked	--pretend --update --deep dev-libs/omasked	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/opartly	--pretend --update --deep dev-libs/opartly	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/ormissbad	--pretend --update --deep dev-libs/ormissbad	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/rdrmiss	--pretend --update --deep dev-libs/rdrmiss	backtrack: 1/20	backtrack: 1/20	2	A	MD MD X DE X
+expanded.json.xz	--pretend --update --deep dev-libs/rdrmisstool	--pretend --update --deep dev-libs/rdrmisstool	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/rootdepsorpkg	--pretend --update --deep dev-libs/rootdepsorpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update --deep dev-libs/scuseparent	--pretend --update --deep dev-libs/scuseparent	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --update --deep dev-libs/slotconfgroup	--pretend --update --deep dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --update --deep dev-libs/slotconflictunsolvable	--pretend --update --deep dev-libs/slotconflictunsolvable	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --update --deep dev-libs/slotusegroup	--pretend --update --deep dev-libs/slotusegroup	backtrack: 3/20	backtrack: 3/20	4	A	SC DE MD MD X SC X
+expanded.json.xz	--pretend --update --deep dev-libs/subslotmismatchconsumer	--pretend --update --deep dev-libs/subslotmismatchconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-lang/go	--pretend --update dev-lang/go	backtrack: 0/20	backtrack: 1/20	1	now!=stored	CI OK
+expanded.json.xz	--pretend --update dev-libs/abort-masked-cycle	--pretend --update dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/abort-masked-last	--pretend --update dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/abort-masked-mid	--pretend --update dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/abort-unsat-last	--pretend --update dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/abort-unsat-mid	--pretend --update dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/anyofunresolvable	--pretend --update dev-libs/anyofunresolvable	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/autounmaskdepconsumer	--pretend --update dev-libs/autounmaskdepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/kwbacktop	--pretend --update dev-libs/kwbacktop	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/kwneedpkg	--pretend --update dev-libs/kwneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/levelconsumer	--pretend --update dev-libs/levelconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/licensemaskedconsumer	--pretend --update dev-libs/licensemaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/maskmaskedconsumer	--pretend --update dev-libs/maskmaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/maskneedpkg	--pretend --update dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/missingdep	--pretend --update dev-libs/missingdep	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/movedepconsumer	--pretend --update dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/multimaskconsumer	--pretend --update dev-libs/multimaskconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/ofuzzy	--pretend --update dev-libs/ofuzzy	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/opartly	--pretend --update dev-libs/opartly	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/ormissbad	--pretend --update dev-libs/ormissbad	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/rdrmiss	--pretend --update dev-libs/rdrmiss	backtrack: 1/20	backtrack: 1/20	2	A	MD MD X DE X
+expanded.json.xz	--pretend --update dev-libs/rdrmisstool	--pretend --update dev-libs/rdrmisstool	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --update dev-libs/scuseparent	--pretend --update dev-libs/scuseparent	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --update dev-libs/slotconfgroup	--pretend --update dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --update dev-libs/slotconflictunsolvable	--pretend --update dev-libs/slotconflictunsolvable	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --update dev-libs/slotusegroup	--pretend --update dev-libs/slotusegroup	backtrack: 3/20	backtrack: 3/20	4	A	SC DE MD MD X SC X
+expanded.json.xz	--pretend --update dev-libs/subslotmismatchconsumer	--pretend --update dev-libs/subslotmismatchconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-lang/go	--pretend --verbose dev-lang/go	backtrack: 0/20	backtrack: 1/20	1	now!=stored	CI OK
+expanded.json.xz	--pretend --verbose dev-libs/abort-masked-cycle	--pretend --verbose dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/abort-masked-last	--pretend --verbose dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/abort-masked-mid	--pretend --verbose dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/abort-unsat-last	--pretend --verbose dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/abort-unsat-mid	--pretend --verbose dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/anyofunresolvable	--pretend --verbose dev-libs/anyofunresolvable	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/autounmaskdepconsumer	--pretend --verbose dev-libs/autounmaskdepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/kwbacktop	--pretend --verbose dev-libs/kwbacktop	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/kwneedpkg	--pretend --verbose dev-libs/kwneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/levelconsumer	--pretend --verbose dev-libs/levelconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/licensemaskedconsumer	--pretend --verbose dev-libs/licensemaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/maskmaskedconsumer	--pretend --verbose dev-libs/maskmaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/maskneedpkg	--pretend --verbose dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/missingdep	--pretend --verbose dev-libs/missingdep	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/movedepconsumer	--pretend --verbose dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/multimaskconsumer	--pretend --verbose dev-libs/multimaskconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/ofuzzy	--pretend --verbose dev-libs/ofuzzy	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/opartly	--pretend --verbose dev-libs/opartly	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/ormissbad	--pretend --verbose dev-libs/ormissbad	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/rdrmiss	--pretend --verbose dev-libs/rdrmiss	backtrack: 1/20	backtrack: 1/20	2	A	MD MD X DE X
+expanded.json.xz	--pretend --verbose dev-libs/rdrmisstool	--pretend --verbose dev-libs/rdrmisstool	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend --verbose dev-libs/scuseparent	--pretend --verbose dev-libs/scuseparent	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --verbose dev-libs/slotconfgroup	--pretend --verbose dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --verbose dev-libs/slotconflictunsolvable	--pretend --verbose dev-libs/slotconflictunsolvable	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend --verbose dev-libs/slotusegroup	--pretend --verbose dev-libs/slotusegroup	backtrack: 3/20	backtrack: 3/20	4	A	SC DE MD MD X SC X
+expanded.json.xz	--pretend --verbose dev-libs/subslotmismatchconsumer	--pretend --verbose dev-libs/subslotmismatchconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-lang/go	--pretend dev-lang/go	backtrack: 0/20	backtrack: 1/20	1	now!=stored	CI OK
+expanded.json.xz	--pretend dev-libs/abort-masked-cycle	--pretend dev-libs/abort-masked-cycle	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/abort-masked-last	--pretend dev-libs/abort-masked-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/abort-masked-mid	--pretend dev-libs/abort-masked-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/abort-unsat-last	--pretend dev-libs/abort-unsat-last	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/abort-unsat-mid	--pretend dev-libs/abort-unsat-mid	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/anyofunresolvable	--pretend dev-libs/anyofunresolvable	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/autounmaskdepconsumer	--pretend dev-libs/autounmaskdepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/kwbacktop	--pretend dev-libs/kwbacktop	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/kwneedpkg	--pretend dev-libs/kwneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/levelconsumer	--pretend dev-libs/levelconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/licensemaskedconsumer	--pretend dev-libs/licensemaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/maskmaskedconsumer	--pretend dev-libs/maskmaskedconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/maskneedpkg	--pretend dev-libs/maskneedpkg	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/missingdep	--pretend dev-libs/missingdep	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/movedepconsumer	--pretend dev-libs/movedepconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/multimaskconsumer	--pretend dev-libs/multimaskconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/ofuzzy	--pretend dev-libs/ofuzzy	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/opartly	--pretend dev-libs/opartly	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/ormissbad	--pretend dev-libs/ormissbad	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/rdrmiss	--pretend dev-libs/rdrmiss	backtrack: 1/20	backtrack: 1/20	2	A	MD MD X DE X
+expanded.json.xz	--pretend dev-libs/rdrmisstool	--pretend dev-libs/rdrmisstool	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X
+expanded.json.xz	--pretend dev-libs/scuseparent	--pretend dev-libs/scuseparent	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend dev-libs/slotconfgroup	--pretend dev-libs/slotconfgroup	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend dev-libs/slotconflictunsolvable	--pretend dev-libs/slotconflictunsolvable	backtrack: 5/20	backtrack: 5/20	6	A	SC MD MD X MD MD X SC X
+expanded.json.xz	--pretend dev-libs/slotusegroup	--pretend dev-libs/slotusegroup	backtrack: 3/20	backtrack: 3/20	4	A	SC DE MD MD X SC X
+expanded.json.xz	--pretend dev-libs/subslotmismatchconsumer	--pretend dev-libs/subslotmismatchconsumer	backtrack: 0/20	backtrack: 0/20	1	A	MD X MD X

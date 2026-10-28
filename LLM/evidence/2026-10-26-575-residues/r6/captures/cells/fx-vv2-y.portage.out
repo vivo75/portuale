@@ -1,0 +1,9 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 2.31 s (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/r594vdep-1 to /var/tmp/claude-r6/fx/ USE="r594flag" 
+[ebuild  N     ] dev-libs/r594vm-2 to /var/tmp/claude-r6/fx/
+[ebuild  N     ] dev-libs/r594vtop-1 to /var/tmp/claude-r6/fx/

@@ -1,0 +1,7 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 17.68 s (backtrack: 3/20).
+
+[ebuild     UD ] dev-libs/cgp1x-0.1 [1] to /var/tmp/claude-r6/cgpver/

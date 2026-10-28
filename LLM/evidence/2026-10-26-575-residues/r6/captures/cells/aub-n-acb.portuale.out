@@ -1,0 +1,37 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/aub0d-0 to /var/tmp/claude-r6/fxp USE="-foo" 
+[ebuild  N     ] dev-libs/aub0d-1 to /var/tmp/claude-r6/fxp USE="-bar" 
+[ebuild  N     ] dev-libs/aub0a-0 to /var/tmp/claude-r6/fxp
+[ebuild  N     ] dev-libs/aub0c-0 to /var/tmp/claude-r6/fxp
+[ebuild  N     ] dev-libs/aub0b-0 to /var/tmp/claude-r6/fxp
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/aub0d:0
+
+  (dev-libs/aub0d-0:0/0::testrepo, ebuild scheduled for merge) USE="-foo" ELIBC="glibc" pulled in by
+    dev-libs/aub0d[foo] required by (dev-libs/aub0b-0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+                   ^^^                                                                                                
+    dev-libs/aub0d[-foo] required by (dev-libs/aub0a-0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+                   ^^^^                                                                                                
+
+  (dev-libs/aub0d-1:0/0::testrepo, ebuild scheduled for merge) USE="-bar" ELIBC="glibc" pulled in by
+    >=dev-libs/aub0d-1 required by (dev-libs/aub0c-0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^^               ^                                                                                               
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+

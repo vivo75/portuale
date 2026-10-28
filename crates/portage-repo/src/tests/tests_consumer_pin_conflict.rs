@@ -731,14 +731,11 @@ fn triangle_backtracks_like_portage_in_both_argument_orders() {
 }
 
 #[test]
-#[ignore = "the driver's exit count is one short after a last dead end with nothing left to explore"]
 fn printed_count_of_the_dead_end_cells_matches_portage() {
-    // The searches above make Portage's tries. The count the driver prints
-    // after exhausting the stack is `passes - 1` and stays one short when the
-    // last pass is a failed walk (a dead end on an argument): 2 for the
-    // argument-only cells, 3 for `needer` and the triangle. The same rule
-    // makes the ordinary unsolvable slot-conflict cells print one less than
-    // Portage; fixing it moves many harvested outputs at once.
+    // The driver prints Portage's `backtracked` (D:12407-12418: a restart
+    // always counts, any other failed pass only while unexplored nodes
+    // remain). R6 (#600); oracle rows in
+    // `LLM/evidence/2026-10-26-575-residues/r6/captures/full-table.md`.
     let keeper = hermetic_root(&["dev-libs/keeper"]);
     let igw = hermetic_root(&["dev-libs/igw0a"]);
     let cgp = hermetic_root(&["dev-libs/cgp1a"]);

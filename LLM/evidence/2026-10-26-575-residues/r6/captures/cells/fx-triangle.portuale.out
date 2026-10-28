@@ -1,0 +1,35 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 3/20).
+
+[ebuild     U  ] dev-libs/paired-2.0 [1.0] to /var/tmp/claude-r6/fxp
+[ebuild  N     ] dev-libs/needer-1.0 to /var/tmp/claude-r6/fxp
+[ebuild  N     ] dev-libs/othermod-1.0 to /var/tmp/claude-r6/fxp
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/paired:0
+
+  (dev-libs/paired-1.0:0/0::testrepo, installed in '/var/tmp/claude-r6/fxp') USE="" pulled in by
+    <dev-libs/paired-2.0 required by (dev-libs/othermod-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^                ^^^                                                                                                    
+
+  (dev-libs/paired-2.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc" pulled in by
+    >=dev-libs/paired-2.0 required by (dev-libs/needer-1.0:0/0::testrepo, ebuild scheduled for merge) USE="" ELIBC="glibc"
+    ^^                ^^^                                                                                                  
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
