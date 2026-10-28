@@ -1,0 +1,124 @@
+BT try=1 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-lang", "perl", "5.42.2")
+BT   choice ("dev-lang", "perl", "5.44.0")
+BT try=2 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-IO neg=!=virtual/perl-IO-1.560.0 reason=MissingDependency { parent: ("virtual", "perl-IO"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-IO neg=!=virtual/perl-IO-1.560.0 atom==dev-lang/perl-5.44*
+BT try=3 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-IO-1.560.0"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-CPAN-Meta neg=!=virtual/perl-CPAN-Meta-2.150.13 reason=MissingDependency { parent: ("virtual", "perl-CPAN-Meta"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-CPAN-Meta neg=!=virtual/perl-CPAN-Meta-2.150.13 atom==dev-lang/perl-5.44*
+BT try=4 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-IO-1.560.0"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-ExtUtils-ParseXS neg=!=virtual/perl-ExtUtils-ParseXS-3.630.0 reason=MissingDependency { parent: ("virtual", "perl-ExtUtils-ParseXS"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-ExtUtils-ParseXS neg=!=virtual/perl-ExtUtils-ParseXS-3.630.0 atom==dev-lang/perl-5.44*
+BT try=5 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-IO-1.560.0"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-Module-Metadata neg=!=virtual/perl-Module-Metadata-1.0.39 reason=MissingDependency { parent: ("virtual", "perl-Module-Metadata"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-Module-Metadata neg=!=virtual/perl-Module-Metadata-1.0.39 atom==dev-lang/perl-5.44*
+BT try=6 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-version neg=!=virtual/perl-version-0.993.400 reason=MissingDependency { parent: ("virtual", "perl-version"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-version neg=!=virtual/perl-version-0.993.400 atom==dev-lang/perl-5.44*
+BT try=7 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-ExtUtils-CBuilder neg=!=virtual/perl-ExtUtils-CBuilder-0.280.243 reason=MissingDependency { parent: ("virtual", "perl-ExtUtils-CBuilder"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-ExtUtils-CBuilder neg=!=virtual/perl-ExtUtils-CBuilder-0.280.243 atom==dev-lang/perl-5.44*
+BT try=8 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-CBuilder-0.280.243", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-File-Spec neg=!=virtual/perl-File-Spec-3.950.0 reason=MissingDependency { parent: ("virtual", "perl-File-Spec"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-File-Spec neg=!=virtual/perl-File-Spec-3.950.0 atom==dev-lang/perl-5.44*
+BT try=9 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-CBuilder-0.280.243", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-File-Spec-3.950.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-Scalar-List-Utils neg=!=virtual/perl-Scalar-List-Utils-1.700.0 reason=MissingDependency { parent: ("virtual", "perl-Scalar-List-Utils"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-Scalar-List-Utils neg=!=virtual/perl-Scalar-List-Utils-1.700.0 atom==dev-lang/perl-5.44*
+BT try=10 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-CBuilder-0.280.243", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-File-Spec-3.950.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-Scalar-List-Utils-1.700.0", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-ExtUtils-MakeMaker neg=!=virtual/perl-ExtUtils-MakeMaker-7.780.0 reason=MissingDependency { parent: ("virtual", "perl-ExtUtils-MakeMaker"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-ExtUtils-MakeMaker neg=!=virtual/perl-ExtUtils-MakeMaker-7.780.0 atom==dev-lang/perl-5.44*
+BT try=11 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-CBuilder-0.280.243", "!=virtual/perl-ExtUtils-MakeMaker-7.780.0", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-File-Spec-3.950.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-Scalar-List-Utils-1.700.0", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-Encode neg=!=virtual/perl-Encode-3.240.0 reason=MissingDependency { parent: ("virtual", "perl-Encode"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-Encode neg=!=virtual/perl-Encode-3.240.0 atom==dev-lang/perl-5.44*
+BT try=12 kind=Feedback:Config
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.42.0-r1", "!=dev-lang/perl-5.42.2", "!=dev-lang/perl-5.42.2[installed]"]
+BT   replace-in 0 prune=false []
+BT   missing_dep_trigger owner=virtual/perl-Data-Dumper neg=!=virtual/perl-Data-Dumper-2.192.0-r1[installed] atom=dev-lang/perl:0/5.42=
+BT try=13 kind=Settle
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.42.0-r1", "!=dev-lang/perl-5.42.2", "!=dev-lang/perl-5.42.2[installed]"]
+BT   replace-in 34 prune=false ["app-text/po4a", "dev-perl/Capture-Tiny", "dev-perl/Class-Inspector", "dev-perl/Config-AutoConf", "dev-perl/Exporter-Tiny", "dev-perl/ExtUtils-CChecker", "dev-perl/File-ShareDir", "dev-perl/File-ShareDir-Install", "dev-perl/File-Slurper", "dev-perl/List-MoreUtils", "dev-perl/List-MoreUtils-XS", "dev-perl/Locale-gettext", "dev-perl/MIME-Charset", "dev-perl/Module-Build", "dev-perl/Params-Util", "dev-perl/PerlIO-utf8_strict", "dev-perl/Pod-Parser", "dev-perl/SGMLSpm", "dev-perl/Syntax-Keyword-Try", "dev-perl/TermReadKey", "dev-perl/Text-CharWidth", "dev-perl/Text-WrapI18N", "dev-perl/Unicode-LineBreak", "dev-perl/XS-Parse-Keyword", "dev-perl/YAML-Tiny", "virtual/perl-CPAN", "virtual/perl-Carp", "virtual/perl-Data-Dumper", "virtual/perl-Exporter", "virtual/perl-File-Path", "virtual/perl-JSON-PP", "virtual/perl-Text-ParseWords", "virtual/perl-XSLoader", "virtual/perl-podlators"]
+BT try=14 kind=Feedback:SlotConflict
+BT   masks-in []
+BT   replace-in 0 prune=false []
+BT   choice ("dev-lang", "perl", "5.42.2")
+BT   choice ("dev-lang", "perl", "5.44.0")
+BT try=15 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-IO neg=!=virtual/perl-IO-1.560.0 reason=MissingDependency { parent: ("virtual", "perl-IO"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-IO neg=!=virtual/perl-IO-1.560.0 atom==dev-lang/perl-5.44*
+BT try=16 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-IO-1.560.0"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-CPAN-Meta neg=!=virtual/perl-CPAN-Meta-2.150.13 reason=MissingDependency { parent: ("virtual", "perl-CPAN-Meta"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-CPAN-Meta neg=!=virtual/perl-CPAN-Meta-2.150.13 atom==dev-lang/perl-5.44*
+BT try=17 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-IO-1.560.0"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-ExtUtils-ParseXS neg=!=virtual/perl-ExtUtils-ParseXS-3.630.0 reason=MissingDependency { parent: ("virtual", "perl-ExtUtils-ParseXS"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-ExtUtils-ParseXS neg=!=virtual/perl-ExtUtils-ParseXS-3.630.0 atom==dev-lang/perl-5.44*
+BT try=18 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-IO-1.560.0"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-Module-Metadata neg=!=virtual/perl-Module-Metadata-1.0.39 reason=MissingDependency { parent: ("virtual", "perl-Module-Metadata"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-Module-Metadata neg=!=virtual/perl-Module-Metadata-1.0.39 atom==dev-lang/perl-5.44*
+BT try=19 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-version neg=!=virtual/perl-version-0.993.400 reason=MissingDependency { parent: ("virtual", "perl-version"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-version neg=!=virtual/perl-version-0.993.400 atom==dev-lang/perl-5.44*
+BT try=20 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-ExtUtils-CBuilder neg=!=virtual/perl-ExtUtils-CBuilder-0.280.243 reason=MissingDependency { parent: ("virtual", "perl-ExtUtils-CBuilder"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-ExtUtils-CBuilder neg=!=virtual/perl-ExtUtils-CBuilder-0.280.243 atom==dev-lang/perl-5.44*
+BT try=21 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-CBuilder-0.280.243", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-File-Spec neg=!=virtual/perl-File-Spec-3.950.0 reason=MissingDependency { parent: ("virtual", "perl-File-Spec"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-File-Spec neg=!=virtual/perl-File-Spec-3.950.0 atom==dev-lang/perl-5.44*
+BT try=22 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-CBuilder-0.280.243", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-File-Spec-3.950.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-Scalar-List-Utils neg=!=virtual/perl-Scalar-List-Utils-1.700.0 reason=MissingDependency { parent: ("virtual", "perl-Scalar-List-Utils"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-Scalar-List-Utils neg=!=virtual/perl-Scalar-List-Utils-1.700.0 atom==dev-lang/perl-5.44*
+BT try=23 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-CBuilder-0.280.243", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-File-Spec-3.950.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-Scalar-List-Utils-1.700.0", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-ExtUtils-MakeMaker neg=!=virtual/perl-ExtUtils-MakeMaker-7.780.0 reason=MissingDependency { parent: ("virtual", "perl-ExtUtils-MakeMaker"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-ExtUtils-MakeMaker neg=!=virtual/perl-ExtUtils-MakeMaker-7.780.0 atom==dev-lang/perl-5.44*
+BT try=24 kind=Feedback:MissingDep
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.44.0", "!=virtual/perl-CPAN-Meta-2.150.13", "!=virtual/perl-ExtUtils-CBuilder-0.280.243", "!=virtual/perl-ExtUtils-MakeMaker-7.780.0", "!=virtual/perl-ExtUtils-ParseXS-3.630.0", "!=virtual/perl-File-Spec-3.950.0", "!=virtual/perl-IO-1.560.0", "!=virtual/perl-Module-Metadata-1.0.39", "!=virtual/perl-Scalar-List-Utils-1.700.0", "!=virtual/perl-version-0.993.400"]
+BT   replace-in 0 prune=false []
+BT   mask virtual/perl-Encode neg=!=virtual/perl-Encode-3.240.0 reason=MissingDependency { parent: ("virtual", "perl-Encode"), atom: "=dev-lang/perl-5.44*" }
+BT   missing_dep_trigger owner=virtual/perl-Encode neg=!=virtual/perl-Encode-3.240.0 atom==dev-lang/perl-5.44*
+BT try=25 kind=Feedback:Config
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.42.0-r1", "!=dev-lang/perl-5.42.2", "!=dev-lang/perl-5.42.2[installed]"]
+BT   replace-in 0 prune=false []
+BT   missing_dep_trigger owner=virtual/perl-Data-Dumper neg=!=virtual/perl-Data-Dumper-2.192.0-r1[installed] atom=dev-lang/perl:0/5.42=
+BT try=26 kind=Settle
+BT   masks-in ["!=dev-lang/perl-5.40.2", "!=dev-lang/perl-5.42.0-r1", "!=dev-lang/perl-5.42.2", "!=dev-lang/perl-5.42.2[installed]"]
+BT   replace-in 34 prune=false ["app-text/po4a", "dev-perl/Capture-Tiny", "dev-perl/Class-Inspector", "dev-perl/Config-AutoConf", "dev-perl/Exporter-Tiny", "dev-perl/ExtUtils-CChecker", "dev-perl/File-ShareDir", "dev-perl/File-ShareDir-Install", "dev-perl/File-Slurper", "dev-perl/List-MoreUtils", "dev-perl/List-MoreUtils-XS", "dev-perl/Locale-gettext", "dev-perl/MIME-Charset", "dev-perl/Module-Build", "dev-perl/Params-Util", "dev-perl/PerlIO-utf8_strict", "dev-perl/Pod-Parser", "dev-perl/SGMLSpm", "dev-perl/Syntax-Keyword-Try", "dev-perl/TermReadKey", "dev-perl/Text-CharWidth", "dev-perl/Text-WrapI18N", "dev-perl/Unicode-LineBreak", "dev-perl/XS-Parse-Keyword", "dev-perl/YAML-Tiny", "virtual/perl-CPAN", "virtual/perl-Carp", "virtual/perl-Data-Dumper", "virtual/perl-Exporter", "virtual/perl-File-Path", "virtual/perl-JSON-PP", "virtual/perl-Text-ParseWords", "virtual/perl-XSLoader", "virtual/perl-podlators"]
