@@ -124,7 +124,10 @@ here so the record is usable:
    `slot_operator_replace_installed` (`resolve/feedback/mod.rs:158-169`); the
    `r` column reads `probe_replaced` (`backtrack_params.rs:367-370` →
    `assemble.rs:295` → `result.slot_operator_replaced` → `pretend/mod.rs:495`).
-   The two sets are not interchangeable.
+   The two sets are not interchangeable. Task 0b then measured both: the
+   `r` column is the union of the pair list, `rebuild_if_reinstalls` and
+   `slot_operator_replaced`, so a pair tags `r` even with
+   `slot_operator_replaced` empty (`discriminator.md`, "The sets").
 8. **The machinery is not missing.** `p589bpull`/`p569pull` already produce
    `r U` + the block and are pinned green, so the cell's gap is shape-specific
    and the open question is the discriminator, not a missing insert.
