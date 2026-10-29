@@ -59,13 +59,16 @@ const DIR_PREFIX: &str = "portuale-vdb-ipc-";
 const MAX_SOCKET_PATH: usize = 107;
 
 /// A running server. Dropping it stops the accept thread and removes the
-/// socket and its directory.
+/// socket and, when the server created it, its directory.
 #[derive(Debug)]
 pub(crate) struct Server {
     dir: PathBuf,
     socket: PathBuf,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Whether `dir` belongs to the server (`start_in`) or to the caller
+    /// (`start_in_dir`, which only removes the socket).
+    remove_dir: bool,
 }
 
 impl Server {
@@ -87,8 +90,21 @@ impl Server {
         sweep_stale(parent);
         let dir = make_private_dir(parent)?;
         let socket = dir.join("s");
+        Server::bind(dir, socket, root, true)
+    }
+
+    /// Bind `socket` (inside `dir`) and start the accept thread. `remove_dir`
+    /// says whether `dir` belongs to the server or to the caller.
+    fn bind(
+        dir: PathBuf,
+        socket: PathBuf,
+        root: &Path,
+        remove_dir: bool,
+    ) -> std::io::Result<Server> {
         if socket.as_os_str().len() > MAX_SOCKET_PATH {
-            let _ = std::fs::remove_dir(&dir);
+            if remove_dir {
+                let _ = std::fs::remove_dir(&dir);
+            }
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
@@ -100,7 +116,9 @@ impl Server {
         let listener = match UnixListener::bind(&socket) {
             Ok(l) => l,
             Err(e) => {
-                let _ = std::fs::remove_dir(&dir);
+                if remove_dir {
+                    let _ = std::fs::remove_dir(&dir);
+                }
                 return Err(e);
             }
         };
@@ -116,7 +134,9 @@ impl Server {
             Ok(t) => t,
             Err(e) => {
                 let _ = std::fs::remove_file(&socket);
-                let _ = std::fs::remove_dir(&dir);
+                if remove_dir {
+                    let _ = std::fs::remove_dir(&dir);
+                }
                 return Err(e);
             }
         };
@@ -126,12 +146,25 @@ impl Server {
             socket,
             stop,
             thread: Some(thread),
+            remove_dir,
         })
     }
 
     /// The socket path (the value of `PORTUALE_VDB_IPC`).
     pub(crate) fn socket(&self) -> &Path {
         &self.socket
+    }
+}
+
+#[cfg(test)]
+impl Server {
+    /// Bind `<dir>/s` for a caller that already owns the directory. The
+    /// directory is made private like `make_private_dir` would, and `Drop`
+    /// removes only the socket (the caller keeps the directory).
+    fn start_in_dir(dir: &Path, root: &Path) -> std::io::Result<Server> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        Server::bind(dir.to_path_buf(), dir.join("s"), root, false)
     }
 }
 
@@ -145,7 +178,9 @@ impl Drop for Server {
             let _ = t.join();
         }
         let _ = std::fs::remove_file(&self.socket);
-        let _ = std::fs::remove_dir(&self.dir);
+        if self.remove_dir {
+            let _ = std::fs::remove_dir(&self.dir);
+        }
         cleanup::unregister(&self.dir);
     }
 }
@@ -485,7 +520,7 @@ mod tests {
             Err(portage_vdb::Error::Busy { .. })
         ));
 
-        let server = Server::start_in(&tmp, &root).unwrap();
+        let server = Server::start_in_dir(&tmp, &root).unwrap();
         let socket = server.socket().to_path_buf();
         let dir = socket.parent().unwrap().to_path_buf();
         use std::os::unix::fs::PermissionsExt;
@@ -599,10 +634,11 @@ mod tests {
         // The client refuses fields that would break the framing.
         assert!(request(&socket, &["match", "a\tb"]).is_err());
 
-        // (c) Cleanup.
+        // (c) Cleanup: the socket goes, the caller's directory stays (the
+        // `TempDir` guard removes it).
         drop(server);
         assert!(!socket.exists());
-        assert!(!dir.exists());
+        assert!(dir.exists());
         let e = query_match(&socket, &root, "dev-libs/keeper", None, &implicit).unwrap_err();
         assert!(e.contains("cannot reach the parent mrg"), "{e}");
         portage_vdb::register(&root, std::sync::Arc::new(portage_vdb::FilesDb::new(&root)));

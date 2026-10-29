@@ -1,0 +1,23 @@
+    Finished `release` profile [optimized] target(s) in 0.10s
+     Running unittests src/main.rs (target/release/deps/portuale-b9dbbc255f8fad13)
+
+running 3 tests
+test vdb_ipc::tests::too_long_socket_path_is_refused ... ok
+test vdb_ipc::tests::stale_directories_of_dead_processes_are_swept ... ok
+test vdb_ipc::tests::server_answers_like_the_direct_match_and_survives_garbage ... FAILED
+
+failures:
+
+---- vdb_ipc::tests::server_answers_like_the_direct_match_and_survives_garbage stdout ----
+
+thread 'vdb_ipc::tests::server_answers_like_the_direct_match_and_survives_garbage' (2414272) panicked at crates/portuale/src/vdb_ipc.rs:488:52:
+called `Result::unwrap()` on an `Err` value: Custom { kind: InvalidInput, error: "socket path /var/tmp/leak-e595/portuale-td-vdb_ipc-2414270-1793260834393293070/portuale-vdb-ipc-2414270-1793260834405575366/s is too long for a Unix socket" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    vdb_ipc::tests::server_answers_like_the_direct_match_and_survives_garbage
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 1355 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p portuale --bin portuale`

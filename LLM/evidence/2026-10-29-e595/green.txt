@@ -1,0 +1,11 @@
+   Compiling portuale v300.83.0 (/home/vivo/repo/PORTUALE/portuale/crates/portuale)
+    Finished `release` profile [optimized] target(s) in 43.76s
+     Running unittests src/main.rs (target/release/deps/portuale-b9dbbc255f8fad13)
+
+running 3 tests
+test vdb_ipc::tests::too_long_socket_path_is_refused ... ok
+test vdb_ipc::tests::stale_directories_of_dead_processes_are_swept ... ok
+test vdb_ipc::tests::server_answers_like_the_direct_match_and_survives_garbage ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1355 filtered out; finished in 0.02s
+
