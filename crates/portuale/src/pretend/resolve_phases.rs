@@ -349,7 +349,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             if is_required_use_report(&msg) {
                 print!(
                     "{}",
-                    abort_preamble(opts.quiet, 0, opts.backtrack_max, color)
+                    abort_preamble(opts.quiet, opts.debug, 0, opts.backtrack_max, color)
                 );
             }
             // Portage never prefixes a `!!!`-headed report with `emerge: `;

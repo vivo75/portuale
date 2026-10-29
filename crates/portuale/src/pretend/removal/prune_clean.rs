@@ -74,7 +74,7 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
             portage_repo::prune_cleanlist(root, &args, providers, &config.package_provided)
         });
     if recomputed {
-        if resolution_notice_shown(quiet, false) {
+        if resolution_notice_shown(quiet || debug, false) {
             println!("\nCalculating dependencies ... done!");
         }
         if verbose {

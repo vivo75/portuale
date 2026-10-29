@@ -200,6 +200,7 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
             columns,
             columnwidth,
             pretend,
+            debug: opts.debug,
             gated_abort_partial,
             deferred_abort_unsat,
             verbose,
@@ -222,6 +223,7 @@ pub(crate) fn render_merge_list(args: RenderMergeListArgs<'_>) {
             columns,
             columnwidth,
             pretend,
+            debug: opts.debug,
             gated_abort_partial,
             deferred_abort_unsat,
             verbose,
@@ -259,6 +261,9 @@ pub(crate) struct RenderMergeRowsArgs<'a> {
     pub(crate) columns: bool,
     pub(crate) columnwidth: i64,
     pub(crate) pretend: bool,
+    /// `--debug`: forwarded to [`ShowAbortDisclosuresArgs`] for the abort
+    /// preamble's banner-only shape (backlog #614).
+    pub(crate) debug: bool,
     pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
     pub(crate) deferred_abort_unsat: &'a mut Vec<usize>,
     pub(crate) verbose: bool,
@@ -295,6 +300,7 @@ pub(crate) fn render_merge_rows(args: RenderMergeRowsArgs<'_>) {
         columns,
         columnwidth,
         pretend,
+        debug,
         gated_abort_partial,
         deferred_abort_unsat,
         verbose,
@@ -352,6 +358,7 @@ pub(crate) fn render_merge_rows(args: RenderMergeRowsArgs<'_>) {
         columns,
         columnwidth,
         pretend,
+        debug,
         gated_abort_partial,
         deferred_abort_unsat,
         verbose,
@@ -405,15 +412,27 @@ pub(crate) fn timing_line(color: &Colorizer, backtrack: Option<(u64, u32)>) -> S
 /// aborted resolve's disclosure block: the banner (with Portage's leading
 /// blank line), `Calculating dependencies ... done!`, and the timing line
 /// (the wall-clock seconds are cut per the determinism convention; only
-/// `backtrack: N/M` is kept; suppressed under `--quiet`).
+/// `backtrack: N/M` is kept; suppressed under `--quiet`). `--debug` keeps
+/// only the banner: Portage's `PORTAGE_DEBUG` puts the spinner in QUIET
+/// mode, so neither the notice nor the report prints (backlog #614).
 // Portage: _emerge/depgraph.py, _start_resolution_display + _show_resolution_report
-pub(crate) fn abort_preamble(quiet: bool, restarts: u64, max: u32, color: &Colorizer) -> String {
+pub(crate) fn abort_preamble(
+    quiet: bool,
+    debug: bool,
+    restarts: u64,
+    max: u32,
+    color: &Colorizer,
+) -> String {
     let mut out = String::from("\n");
     out.push_str(&color.c(
         "darkgreen",
         "These are the packages that would be merged, in order:",
     ));
-    out.push_str("\n\nCalculating dependencies ... done!\n");
+    out.push_str("\n\n");
+    if debug {
+        return out;
+    }
+    out.push_str("Calculating dependencies ... done!\n");
     if !quiet {
         out.push_str(&timing_line(color, Some((restarts, max))));
     }
@@ -437,6 +456,9 @@ pub(crate) struct ShowAbortDisclosuresArgs<'a> {
     pub(crate) columns: bool,
     pub(crate) columnwidth: i64,
     pub(crate) pretend: bool,
+    /// `--debug`: the spinner's QUIET mode, so the preamble keeps only the
+    /// banner (backlog #614).
+    pub(crate) debug: bool,
     pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
     pub(crate) deferred_abort_unsat: &'a mut Vec<usize>,
     pub(crate) verbose: bool,
@@ -460,6 +482,7 @@ pub(crate) fn show_abort_disclosures(args: ShowAbortDisclosuresArgs<'_>) {
         columns,
         columnwidth,
         pretend,
+        debug,
         gated_abort_partial,
         deferred_abort_unsat,
         verbose,
@@ -487,6 +510,7 @@ pub(crate) fn show_abort_disclosures(args: ShowAbortDisclosuresArgs<'_>) {
                 "{}",
                 abort_preamble(
                     quiet,
+                    debug,
                     result.backtrack_restarts,
                     result.backtrack_max,
                     color
@@ -911,7 +935,7 @@ pub(crate) fn show_resolution_header_with_counts(args: ShowResolutionHeaderWithC
             println!("{}", color.c("darkgreen", &banner));
             println!();
         }
-        if resolution_notice_shown(quiet, nodeps) {
+        if resolution_notice_shown(quiet || opts.debug, nodeps) {
             // Ported from the pinned source (one space before `...`).
             println!("Calculating dependencies ... done!");
             // The wall-clock seconds are cut (determinism); only the

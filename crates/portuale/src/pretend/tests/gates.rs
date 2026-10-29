@@ -285,13 +285,13 @@ fn top_level_all_masked_abort_prints_the_notice_on_and_off_pretend() {
 fn abort_preamble_opens_with_the_banner_blank_line() {
     let plain = Colorizer::new(false);
     assert_eq!(
-        abort_preamble(false, 0, 20, &plain),
+        abort_preamble(false, false, 0, 20, &plain),
         "\nThese are the packages that would be merged, in order:\n\n\
          Calculating dependencies ... done!\n\
          Dependency resolution took (backtrack: 0/20).\n\n"
     );
     assert_eq!(
-        abort_preamble(true, 0, 20, &plain),
+        abort_preamble(true, false, 0, 20, &plain),
         "\nThese are the packages that would be merged, in order:\n\n\
          Calculating dependencies ... done!\n"
     );
@@ -301,10 +301,17 @@ fn abort_preamble_opens_with_the_banner_blank_line() {
     // of `--pretend dev-libs/maskedpkg`.
     let colour = Colorizer::new(true);
     assert_eq!(
-        abort_preamble(false, 0, 20, &colour),
+        abort_preamble(false, false, 0, 20, &colour),
         "\n\x1b[32mThese are the packages that would be merged, in order:\x1b[39;49;00m\n\n\
          Calculating dependencies ... done!\n\
          Dependency resolution took \x1b[32m\x1b[39;49;00m s (backtrack: 0/20).\n\n"
+    );
+    // Backlog #614: `--debug` sets PORTAGE_DEBUG=1, which puts the spinner in
+    // QUIET mode; neither the notice completion nor the report is printed,
+    // only the banner.
+    assert_eq!(
+        abort_preamble(false, true, 0, 20, &plain),
+        "\nThese are the packages that would be merged, in order:\n\n"
     );
 }
 

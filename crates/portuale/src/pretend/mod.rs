@@ -763,6 +763,7 @@ pub(crate) fn show_resolution_report(args: ShowResolutionReportArgs<'_>) {
             "{}",
             abort_preamble(
                 disp_quiet,
+                opts.debug,
                 result.backtrack_restarts,
                 result.backtrack_max,
                 &color

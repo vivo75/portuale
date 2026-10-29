@@ -1,0 +1,79 @@
+
+      Arg: dev-libs/abort-masked-mid
+     Atom: dev-libs/abort-masked-mid
+   ebuild: dev-libs/abort-masked-mid-1.0::testrepo
+   ebuild: dev-libs/abort-leaf-b-1.0::testrepo
+   ebuild: dev-libs/maskeddep-1.0::testrepo
+   ebuild: dev-libs/abort-leaf-a-1.0::testrepo
+
+# resolution walk (portuale BFS order, not Portage's LIFO _create_graph order)
+
+Child:         (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/abort-masked-mid
+
+Parent:    (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/abort-leaf-a dev-libs/maskeddep dev-libs/abort-leaf-b (RDEPEND)
+Priority:  runtime
+Candidates: ['dev-libs/abort-leaf-a', 'dev-libs/maskeddep', 'dev-libs/abort-leaf-b']
+
+Exiting... (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Child:         (dev-libs/abort-leaf-b-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/abort-leaf-b required by (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/abort-leaf-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Child:         (dev-libs/maskeddep-:0/0::__unknown__, installed) USE=""
+Parent Dep:    dev-libs/maskeddep required by (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/maskeddep-:0/0::__unknown__, installed)
+
+Child:         (dev-libs/abort-leaf-a-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/abort-leaf-a required by (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/abort-leaf-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+digraph:
+
+(dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/abort-leaf-a-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+  (dev-libs/maskeddep-:0/0::__unknown__, installed) (runtime)
+  (dev-libs/abort-leaf-b-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/abort-leaf-a-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/maskeddep-:0/0::__unknown__, installed) (no children)
+(dev-libs/abort-leaf-b-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+dev-libs/abort-masked-mid depends on
+  (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge) (soft)
+
+digraph:
+
+(dev-libs/abort-leaf-a-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/maskeddep-:0/0::__unknown__, installed) (no children)
+(dev-libs/abort-leaf-b-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/abort-leaf-a-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+  (dev-libs/maskeddep-:0/0::__unknown__, installed) (runtime)
+  (dev-libs/abort-leaf-b-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+dev-libs/abort-masked-mid depends on
+  (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge) (soft)
+
+These are the packages that would be merged, in order:
+
+
+!!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)
+
+(dependency required by "dev-libs/abort-masked-mid-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/abort-masked-mid" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+

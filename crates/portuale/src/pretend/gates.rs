@@ -130,6 +130,8 @@ pub(crate) fn resolution_header_shown(args: ResolutionHeaderShownArgs) -> bool {
 /// Whether the `Calculating dependencies` notice prints: neither `--quiet`
 /// nor `--nodeps` given (either forces the spinner into QUIET mode, which
 /// also suppresses the `... done!` completion and the timing report).
+/// `--debug` is the third QUIET trigger; callers pass `quiet || debug` as the
+/// first argument (backlog #614).
 // Portage: _emerge/depgraph.py, backtrack_depgraph
 pub(crate) fn resolution_notice_shown(quiet: bool, nodeps: bool) -> bool {
     !quiet && !nodeps

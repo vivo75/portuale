@@ -174,7 +174,10 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         // re-saves the empty list.
         // Portage: _emerge/actions.py, action_build; Scheduler.py, _calc_resume_list
         let display = pretend || emerge_opts.tree || (emerge_opts.verbose && !quiet);
-        let notice = super::gates::resolution_notice_shown(quiet, emerge_opts.nodeps);
+        let notice = super::gates::resolution_notice_shown(
+            quiet || emerge_opts.debug,
+            emerge_opts.nodeps,
+        );
         if display {
             if !quiet {
                 let banner = if emerge_opts.tree {
@@ -266,7 +269,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
                 )
             );
         }
-        if super::gates::resolution_notice_shown(quiet, emerge_opts.nodeps) {
+        if super::gates::resolution_notice_shown(quiet || emerge_opts.debug, emerge_opts.nodeps) {
             println!("Calculating dependencies ... done!");
             print!("{}", super::timing_line(&color, None));
         }
@@ -291,6 +294,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         pretend,
         quiet,
         nodeps: emerge_opts.nodeps,
+        debug: emerge_opts.debug,
         entries: &display_entries,
         root,
         opts,
@@ -312,7 +316,7 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
     // `Scheduler.merge` prints the banner, ahead of the interactive-task
     // notice below.
     // Portage: _emerge/actions.py, Scheduler.py (merge, `*** Resuming merge...`)
-    if super::gates::resolution_notice_shown(quiet, emerge_opts.nodeps) {
+    if super::gates::resolution_notice_shown(quiet || emerge_opts.debug, emerge_opts.nodeps) {
         println!("Calculating dependencies ... done!");
         print!("{}", super::timing_line(&color, None));
     }
@@ -447,6 +451,8 @@ pub(crate) struct ResumePretendArgs<'a> {
     pub(crate) pretend: bool,
     pub(crate) quiet: bool,
     pub(crate) nodeps: bool,
+    /// `--debug`: the spinner's QUIET mode, so no resolution notice (backlog #614).
+    pub(crate) debug: bool,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) root: &'a Path,
     pub(crate) opts: ResumeOpts,
@@ -461,6 +467,7 @@ pub(crate) fn resume_pretend(args: ResumePretendArgs<'_>) -> Option<ExitCode> {
         pretend,
         quiet,
         nodeps,
+        debug,
         entries,
         root,
         opts,
@@ -480,7 +487,7 @@ pub(crate) fn resume_pretend(args: ResumePretendArgs<'_>) -> Option<ExitCode> {
                     "These are the packages that would be merged, in order:"
                 )
             );
-            if super::gates::resolution_notice_shown(quiet, nodeps) {
+            if super::gates::resolution_notice_shown(quiet || debug, nodeps) {
                 println!("Calculating dependencies ... done!");
                 print!("{}", super::timing_line(&color, None));
             }

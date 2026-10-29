@@ -404,7 +404,7 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
     // form when piped), preceded by its blank line and with no timing line
     // (depclean never calls `_show_resolution_report`).
     // Portage: _emerge/actions.py, _calc_depclean; stdout_spinner.end_notice
-    if resolution_notice_shown(quiet, false) {
+    if resolution_notice_shown(quiet || debug, false) {
         println!("\nCalculating dependencies ... done!");
     }
 
@@ -491,7 +491,7 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         // The second `_complete_graph` sits behind its own resolver notice,
         // then its own `create_cleanlist()` prints the blocks again.
         // Portage: _emerge/actions.py, _calc_depclean
-        if resolution_notice_shown(quiet, false) {
+        if resolution_notice_shown(quiet || debug, false) {
             println!("\nCalculating dependencies ... done!");
         }
         print_cleanlist_blocks(CleanlistBlocksArgs {
