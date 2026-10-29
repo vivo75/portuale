@@ -105,6 +105,44 @@ fn p491_pass0_seed_files_the_installed_consumer_and_the_kept_child() {
 }
 
 #[test]
+fn p491_pass0_seed_probes_from_the_child_the_graph_merges() {
+    // Portage's probe starts from `dep.child`, the instance the graph picked
+    // (here a merge-bound `p491lib-1`, `6/7`), not from the installed one:
+    // `p491lib-2` (`6/8`) is still an update the installed `p491con` can be
+    // rebuilt against. Same shape as the live gdal / mysql-connector-c case:
+    // the graph merges 8.0.46 (`0/21`), the probe finds 26.10.0 (`0/24`).
+    // Host Portage 3.0.83, `emerge -puDN @world --debug`:
+    // "slot_operator_update_probe: existing child package:
+    // (dev-db/mysql-connector-c-8.0.46:0/21, ebuild scheduled for merge)
+    // existing parent package: (sci-libs/gdal-3.13.3-2, installed)
+    // new child package: (dev-db/mysql-connector-c-26.10.0:0/24 ...)".
+    // Portage: depgraph.py, _slot_operator_update_probe.
+    let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=");
+    let mut entries = p491_entries();
+    entries[1] = GraphEntry {
+        outcome: PretendOutcome::Reinstall {
+            version: "1".to_string(),
+            changed_flags: Vec::new(),
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        },
+        ..entries[1].clone()
+    };
+    let replace = p491_probe(&root, &entries, HashSet::new(), true);
+    assert_eq!(
+        replace,
+        BTreeSet::from([
+            ("dev-libs".to_string(), "p491con".to_string()),
+            ("dev-libs".to_string(), "p491lib".to_string()),
+        ]),
+        "a merge-bound child does not hide the newer sub-slot from the probe"
+    );
+}
+
+#[test]
 fn p491_pass0_seed_refuses_an_argument_pinned_parent() {
     // Portage oracle (`captures/p491-debug-v1.stderr`: no update-probe line —
     // the pinned consumer's dep wants no update, so the tries stay pure

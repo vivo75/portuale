@@ -146,6 +146,7 @@ pub(crate) fn built_parent_update_probe(
                 live,
                 walked,
                 gate,
+                from_graph_child: false,
             }) {
                 hit = Some(child.clone());
                 break;
@@ -176,12 +177,17 @@ pub(crate) struct ChildUpdateArgs<'a> {
     pub(crate) live: &'a HashSet<(String, String)>,
     pub(crate) walked: &'a HashSet<(String, String)>,
     pub(crate) gate: CategoryGate<'a>,
+    /// Probe from the instance the graph merges for the child (Portage's
+    /// `dep.child` of an installed parent's edge) instead of leaving a
+    /// merge-bound child alone.
+    pub(crate) from_graph_child: bool,
 }
 
 /// Whether the installed `child` in `bound_slot` has a tree instance with another
 /// sub-slot that every atom on `child` in some replacement of `parent` accepts.
 /// A child the graph already merges is left alone: the binary's dep then names
-/// a different instance than the installed one.
+/// a different instance than the installed one -- unless `from_graph_child`
+/// (an installed parent), where the merged instance is the probe's child.
 // Portage: _emerge/depgraph.py, _slot_operator_update_probe (replacement_parent loop, candidate filter)
 pub(crate) fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
     let ChildUpdateArgs {
@@ -200,13 +206,15 @@ pub(crate) fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
         live,
         walked,
         gate,
+        from_graph_child,
     } = args;
     let (child_cat, child_pkg) = (child.0.as_str(), child.1.as_str());
-    if entries.iter().any(|e| {
+    let graph_child = entries.iter().find(|e| {
         e.category == child_cat
             && e.package == child_pkg
             && merge_bound_version(&e.outcome).is_some()
-    }) {
+    });
+    if graph_child.is_some() && !from_graph_child {
         return false;
     }
     // The installed instance in the bound slot, the one the binary was built against.
@@ -228,6 +236,18 @@ pub(crate) fn child_has_slot_update(args: ChildUpdateArgs<'_>) -> bool {
         bound_slot.to_string()
     } else {
         child_sub
+    };
+    // The probe's `dep.child` is the instance the graph merges, when it sits
+    // in the bound slot.
+    // Portage: _slot_operator_update_probe (`dep.child` is the graph's pick)
+    let (child_ver, child_sub) = match graph_child {
+        Some(e) if e.slot.as_deref() == Some(bound_slot) => (
+            merge_bound_version(&e.outcome)
+                .cloned()
+                .unwrap_or(child_ver),
+            e.sub_slot.clone().unwrap_or(child_sub),
+        ),
+        _ => (child_ver, child_sub),
     };
     let Ok(child_cands) = gate.repo_candidates(child_cat, child_pkg) else {
         return false;

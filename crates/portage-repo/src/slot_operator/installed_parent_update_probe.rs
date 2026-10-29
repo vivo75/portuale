@@ -183,6 +183,7 @@ pub(crate) fn installed_parent_update_probe(
                 live,
                 walked,
                 gate,
+                from_graph_child: true,
             }) {
                 // Portage files both filings: the installed parent's
                 // replacement atom and the installed child's.
