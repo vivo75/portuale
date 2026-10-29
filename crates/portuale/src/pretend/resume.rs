@@ -174,10 +174,8 @@ pub(crate) fn run_resume(args: RunResumeArgs<'_>) -> ExitCode {
         // re-saves the empty list.
         // Portage: _emerge/actions.py, action_build; Scheduler.py, _calc_resume_list
         let display = pretend || emerge_opts.tree || (emerge_opts.verbose && !quiet);
-        let notice = super::gates::resolution_notice_shown(
-            quiet || emerge_opts.debug,
-            emerge_opts.nodeps,
-        );
+        let notice =
+            super::gates::resolution_notice_shown(quiet || emerge_opts.debug, emerge_opts.nodeps);
         if display {
             if !quiet {
                 let banner = if emerge_opts.tree {
