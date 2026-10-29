@@ -483,7 +483,12 @@ pub fn run(args: &[String]) -> ExitCode {
     // `N` (a pure install that still caused a rebuild); other-slot installs do
     // not count (`NS`, no `r`).
     // Portage: resolver/output.py, PkgAttrDisplay
-    let mut force_reinstall_cps = abi_rebuild_force_reinstall_cps(&result, &root);
+    let mut force_reinstall_cps = abi_rebuild_force_reinstall_cps(AbiRebuildForceReinstallArgs {
+        abi_rebuilds: &result.abi_rebuilds,
+        entries: &result.entries,
+        slot_operator_replaced: &result.slot_operator_replaced,
+        root: &root,
+    });
     // The `--rebuild-if-*` restart parents: tagged `force_reinstall` by the
     // `__auto_rebuild__` set arg, while the merged dep stays untagged (so
     // unlike the ABI pair above this is consumer-only, and there is no
@@ -862,20 +867,33 @@ pub(crate) fn show_resolution_report(args: ShowResolutionReportArgs<'_>) {
     });
 }
 
+/// Arguments of [`abi_rebuild_force_reinstall_cps`].
+pub(crate) struct AbiRebuildForceReinstallArgs<'a> {
+    /// The settled `(provider_cpv, consumer_cpv)` display pairs.
+    pub(crate) abi_rebuilds: &'a [(String, String)],
+    pub(crate) entries: &'a [GraphEntry],
+    /// The settled replace set (`GraphResult::slot_operator_replaced`).
+    pub(crate) slot_operator_replaced: &'a [(String, String)],
+    pub(crate) root: &'a Path,
+}
+
 /// The (category, package) pairs on either side of an ABI-rebuild edge.
 pub(crate) fn abi_rebuild_force_reinstall_cps(
-    result: &GraphResult,
-    root: &Path,
+    args: AbiRebuildForceReinstallArgs<'_>,
 ) -> HashSet<(String, String)> {
-    let force_reinstall_cps: HashSet<(String, String)> = result
-        .abi_rebuilds
+    let AbiRebuildForceReinstallArgs {
+        abi_rebuilds,
+        entries,
+        slot_operator_replaced,
+        root,
+    } = args;
+    let force_reinstall_cps: HashSet<(String, String)> = abi_rebuilds
         .iter()
         .flat_map(|(provider, consumer)| [(provider, true), (consumer, false)])
         .filter_map(|(cpv, is_provider)| {
             let (c, p, v) = portage_repo::split_cpv(cpv)?;
             if is_provider {
-                let slot = result
-                    .entries
+                let slot = entries
                     .iter()
                     .find(|e| {
                         e.category == c
@@ -899,14 +917,23 @@ pub(crate) fn abi_rebuild_force_reinstall_cps(
                 }
             } else {
                 // The consumer side is tagged only when the edge caused its
-                // rebuild: a consumer merge-bound for an upgrade this run is
-                // already merging, and Portage's probe skips a parent that has
-                // a replacement in the graph, so the replace set never names
-                // it (`force_reinstall` stays off). It still appears in the
-                // "causing rebuilds" block.
-                // Portage: depgraph.py, _slot_operator_check_reverse_dependencies
-                // (`:2527-2537`), _iter_atoms_for_pkg
-                let merging = result.entries.iter().any(|e| {
+                // rebuild. A consumer merge-bound for an upgrade this run is
+                // already merging, and Portage never files such a parent into
+                // the replace set: `_slot_operator_trigger_reinstalls` probes
+                // only a built parent (`depgraph.py:3124-3127`, and the
+                // merge-bound replacement node is not built), while
+                // `_slot_operator_update_backtrack` files `dep.parent` only
+                // when it is installed (`:2453-2456`) -- its merge-bound
+                // branch needs `new_dep.parent`, which requires a probe on the
+                // installed instance, i.e. an installed graph node. The
+                // `@__auto_slot_operator_replace_installed__` atom that
+                // `_iter_atoms_for_pkg` needs for `force_reinstall` therefore
+                // never names it. It still appears in the "causing rebuilds"
+                // block, which walks `_slot_operator_deps` and does not
+                // require `built` (`_compute_abi_rebuild_info`, `:931-1145`).
+                // Portage: depgraph.py, _iter_atoms_for_pkg;
+                // _gen_reinstall_sets (`:5479-5480`)
+                let merging = entries.iter().any(|e| {
                     e.category == c
                         && e.package == p
                         && matches!(
@@ -915,8 +942,10 @@ pub(crate) fn abi_rebuild_force_reinstall_cps(
                                 | portage_repo::PretendOutcome::Downgrade { .. }
                         )
                 });
-                let replaced = result
-                    .slot_operator_replaced
+                // A merge-bound parent can still be named by the replace set
+                // (`new_dep.parent.slot_atom`, `:2452-2456`); when it is, the
+                // `force_reinstall` atom exists and the `r` stays.
+                let replaced = slot_operator_replaced
                     .iter()
                     .any(|(rc, rp)| *rc == c && *rp == p);
                 if merging && !replaced {

@@ -217,7 +217,7 @@ fn collect_any_groups<'a>(items: &'a [DepTree], out: &mut Vec<&'a Vec<DepTree>>)
 /// atom matching an installed instance of its own package, a conjunction
 /// only when every leg is, a nested `||` when any leg is. Blockers and
 /// unparseable text never match.
-fn or_member_matches_installed(member: &DepTree, root: &Path) -> bool {
+pub(crate) fn or_member_matches_installed(member: &DepTree, root: &Path) -> bool {
     match member {
         DepTree::Atom(text) => {
             let probe = portage_dep::without_use(text).to_string();

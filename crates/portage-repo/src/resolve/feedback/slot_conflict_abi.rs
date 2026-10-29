@@ -64,13 +64,16 @@ pub(crate) fn step_slot_conflict_abi(
             config,
             gate: ctx.gate(),
         });
-        if !fresh.parents.is_empty() || !fresh.children.is_empty() {
+        // A child is only ever filed together with its parent, so the parent
+        // set is the whole guard.
+        if !fresh.parents.is_empty() {
             // Portage's `_slot_operator_update_backtrack` files both sides of
             // the built `:=` dep: `_replace_installed_atom(dep.parent)` and,
             // with `new_child_slot is None`, `_replace_installed_atom(child)`
-            // when the child is installed. `probe_replaced` is the display
-            // mirror that becomes `__auto_slot_operator_replace_installed__`
-            // (the `r` tag), so it grows with the same set.
+            // when the child is installed (`depgraph.py:2453-2460`).
+            // `probe_replaced` is the display mirror that becomes
+            // `__auto_slot_operator_replace_installed__` (the `r` tag), so it
+            // grows with the same set.
             let filed: BTreeSet<(String, String)> =
                 fresh.parents.union(&fresh.children).cloned().collect();
             grown

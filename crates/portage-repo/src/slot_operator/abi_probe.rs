@@ -80,21 +80,17 @@ pub(crate) fn collect_probe_parents(
         };
         for key in dep_keys {
             let recorded = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
-            // Only the `||` arm the build resolved to is a parent atom of the
-            // installed instance (`dep_zapdeps` drops the rest before the walk
-            // records `_parent_atoms`); the demoted arms must not veto a
-            // candidate. Same strip as `replacement_accepts`.
-            // Portage: dep_check.py, dep_zapdeps
-            let tokens = without_or_groups(&recorded);
-            for token in tokens.split_whitespace() {
-                let Some(atom) = parse_dep_atom(token, "abi_probe_vdb_deps") else {
+            let use_flags =
+                read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+            for token in selected_parent_atoms(&recorded, root, entries, &use_flags) {
+                let Some(atom) = parse_dep_atom(&token, "abi_probe_vdb_deps") else {
                     continue;
                 };
                 if atom.blocker != portage_dep::Blocker::None {
                     continue;
                 }
                 let provider_cp = (atom.category.clone(), atom.package.clone());
-                let effective = relax_built_slot_operator_atom(token);
+                let effective = relax_built_slot_operator_atom(&token);
                 parents.entry(provider_cp).or_default().push(ProbeParent {
                     parent: qcp.clone(),
                     atom: effective,
@@ -103,6 +99,99 @@ pub(crate) fn collect_probe_parents(
         }
     }
     parents
+}
+
+/// The atom texts of one recorded dependency key that are parent atoms of the
+/// installed package: every atom outside a `||` group, plus **one** arm per
+/// `||` group — the one `dep_zapdeps` selects. The walk only records the atom
+/// it resolved (`_add_parent_atom(pkg, (dep.parent, dep.atom))`,
+/// `depgraph.py:3787`, with `dep.atom` from `selected_atoms`, `dep_check.py:928-937`),
+/// so a group's unselected arms are not parent atoms and cannot veto a
+/// candidate.
+///
+/// Arm choice follows `dep_zapdeps`' `choice_bins` (`dep_check.py:382-394`):
+/// an arm whose package is already in this pass's graph wins
+/// (`preferred_in_graph`, `:633-649`, `:694-696`), then an arm matching an
+/// installed instance, else the group contributes nothing. A key whose dep
+/// string does not reduce contributes nothing (Portage's `dep_check` fails it
+/// and the walk stops before recording any parent atom).
+// Portage: dep_check.py, dep_zapdeps
+fn selected_parent_atoms(
+    depstr: &str,
+    root: &Path,
+    entries: &[GraphEntry],
+    use_flags: &HashSet<String>,
+) -> Vec<String> {
+    let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+    let Some(tree) = reduced_dep_tree(&tokens, use_flags) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    push_selected_atoms(&tree, root, entries, &mut out);
+    out
+}
+
+/// Appends the selected atom texts of `nodes`: conjunctions are transparent,
+/// each `||` group contributes the atoms of its chosen arm.
+fn push_selected_atoms(
+    nodes: &[DepTree],
+    root: &Path,
+    entries: &[GraphEntry],
+    out: &mut Vec<String>,
+) {
+    for node in nodes {
+        match node {
+            DepTree::Atom(text) => out.push(text.clone()),
+            DepTree::AllOf(children) => push_selected_atoms(children, root, entries, out),
+            DepTree::AnyOf(arms) => {
+                let chosen = arms
+                    .iter()
+                    .find(|arm| or_member_matches_graph(arm, entries))
+                    .or_else(|| {
+                        arms.iter()
+                            .find(|arm| or_member_matches_installed(arm, root))
+                    });
+                if let Some(arm) = chosen {
+                    push_selected_atoms(std::slice::from_ref(arm), root, entries, out);
+                }
+            }
+        }
+    }
+}
+
+/// Whether the member is satisfied by a package this pass will merge: a plain
+/// atom matching a merge-bound instance, a conjunction only when every leg is,
+/// a nested `||` when any leg is. Mirrors [`or_member_matches_installed`] for
+/// the in-graph half of `dep_zapdeps`' preference. Blockers and unparseable
+/// text never match.
+fn or_member_matches_graph(member: &DepTree, entries: &[GraphEntry]) -> bool {
+    match member {
+        DepTree::Atom(text) => {
+            let probe = portage_dep::without_use(text).to_string();
+            parse_dep_atom(text, "abi_probe_graph_select").is_some_and(|a| {
+                a.blocker == portage_dep::Blocker::None
+                    && entries.iter().any(|e| {
+                        e.category == a.category
+                            && e.package == a.package
+                            && merge_bound_version(&e.outcome).is_some_and(|version| {
+                                let (Some(slot), Some(sub_slot)) = (&e.slot, &e.sub_slot) else {
+                                    return false;
+                                };
+                                let cand = format!(
+                                    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
+                                    "{}/{}-{version}:{slot}/{sub_slot}",
+                                    a.category, a.package
+                                );
+                                let candidates = [cand.as_str()];
+                                portage_dep::match_from_list(&probe, &candidates)
+                                    .is_some_and(|m| !m.is_empty())
+                            })
+                    })
+            })
+        }
+        DepTree::AllOf(members) => members.iter().all(|m| or_member_matches_graph(m, entries)),
+        DepTree::AnyOf(members) => members.iter().any(|m| or_member_matches_graph(m, entries)),
+    }
 }
 
 /// Argument parents of the update probe: each top-level atom is filed under
@@ -163,9 +252,11 @@ pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, Str
 /// accepts `cand`. An atom outside a `||` group is a unit of its own; a whole
 /// `||` group is one disjunctive unit, so it vetoes only when none of its arms
 /// accepts. USE conditionals are reduced against `use_flags` first. False when
-/// no unit names the provider at all.
-// Portage: _emerge/depgraph.py, _slot_operator_update_probe (`atom_not_selected`,
-// `all_candidate_pkgs`)
+/// no unit names the provider at all; a key whose dep string does not reduce is
+/// skipped (the old `flat_dep_atoms` `filter_map` skip), so one unparseable key
+/// cannot veto the whole replacement parent.
+// Portage: _emerge/depgraph.py, _slot_operator_update_probe
+// (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`)
 fn live_units_accept<'a>(
     depstrs: impl Iterator<Item = &'a str>,
     use_flags: &HashSet<String>,
@@ -177,7 +268,7 @@ fn live_units_accept<'a>(
     for depstr in depstrs {
         let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
         let Some(tree) = reduced_dep_tree(&tokens, use_flags) else {
-            return false;
+            continue;
         };
         let mut flat: Vec<Vec<&str>> = Vec::new();
         collect_dep_units(&tree, &mut flat);
@@ -235,7 +326,7 @@ fn collect_unit_atoms<'a>(nodes: &'a [DepTree], out: &mut Vec<&'a str>) {
     }
 }
 
-/// Arguments of [`slot_conflict_abi_probe`].
+/// Arguments of [`slot_conflict_abi_probe_full`].
 pub(crate) struct SlotConflictAbiProbeArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
@@ -415,6 +506,7 @@ pub(crate) fn slot_conflict_abi_probe_full(
                     // disjunctive unit, so it vetoes only when none of its arms
                     // accepts C.
                     // Portage: depgraph.py, _slot_operator_update_probe
+                    // (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`)
                     let accepts = live_units_accept(
                         dep_keys
                             .iter()
@@ -453,7 +545,7 @@ pub(crate) fn slot_conflict_abi_probe_full(
 /// `slot_operator_rebuild` reinstall entry, each recorded built `:=` atom on
 /// a provider cp merged in the same slot at a different sub-slot contributes
 /// its `(provider-cpv, consumer-cpv)` pair.
-// Portage: _emerge/depgraph.py, _compute_abi_rebuild_info
+// Portage: _emerge/depgraph.py, _compute_abi_rebuild_info (`:931-1145`)
 pub(crate) fn slot_conflict_abi_display_pairs(
     root: &Path,
     entries: &[GraphEntry],

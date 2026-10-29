@@ -177,7 +177,7 @@ pub(crate) fn slot_operator_rebuild_scan(
             // A consumer merge-bound for an upgrade in this same run is not
             // scheduled (its own walk re-binds the live atom), but Portage
             // still lists it under its replacement in the rebuild block.
-            // Portage: depgraph.py, _compute_abi_rebuild_info (`:1076-1090`)
+            // Portage: depgraph.py, _compute_abi_rebuild_info (`:931-1145`)
             let merge_bound_consumer = merge_bound.contains_key(&cp) && !already.contains(&cp);
             // Any other merge-bound consumer (its own reinstall: `--changed-slot`
             // and friends) keeps the old skip: its rebuild is its own row and
@@ -195,15 +195,14 @@ pub(crate) fn slot_operator_rebuild_scan(
                 continue;
             }
             // The block names the merge-bound replacement, not the installed
-            // version the recorded atom lives in.
-            // Portage: depgraph.py, _compute_abi_rebuild_info (`:1076-1090`)
-            let consumer_cpv = match merge_bound_consumer {
-                true => merge_bound.get(&cp).map_or_else(
-                    || pkg.cpv(),
-                    |version| format!("{}/{}-{version}", pkg.category, pkg.package),
-                ),
-                false => pkg.cpv(),
-            };
+            // version the recorded atom lives in -- also when that consumer is
+            // already in the replace set (a merge-bound cp can be both; the
+            // display still names the replacement).
+            // Portage: depgraph.py, _compute_abi_rebuild_info (`:931-1145`)
+            let consumer_cpv = merge_bound.get(&cp).map_or_else(
+                || pkg.cpv(),
+                |version| format!("{}/{}-{version}", pkg.category, pkg.package),
+            );
             // A built package's DEPEND/BDEPEND only count when bdeps is on.
             let dep_keys: &[&str] = match with_bdeps && walked.contains(&cp) {
                 true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
