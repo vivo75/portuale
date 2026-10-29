@@ -84,12 +84,17 @@ pub(crate) fn binpkg_respect_use_ok(args: BinpkgRespectUseOkArgs<'_>) -> bool {
         candidate.repo_name.hash(&mut h);
         candidate.iuse.hash(&mut h);
         candidate.keywords.hash(&mut h);
-        // The baked USE set: a `Some(BUILD_ID)` names the
-        // build, so the id is an exact O(1) stand-in for the set. A `None`
+        // The baked USE set: `(BUILD_ID, BUILD_TIME)` names the build (two
+        // binhosts can each carry a build 1 of one version, with different
+        // USE), so the pair is an exact O(1) stand-in for the set. A `None`
         // `build_id` names no build, so those keep the order-independent
         // xor-fold (same cost as before, never a wrong key).
+        // Portage: dbapi/virtual.py, _instance_key_multi_instance
         match &candidate.build_id {
-            Some(id) => id.hash(&mut h),
+            Some(id) => {
+                id.hash(&mut h);
+                candidate.build_time.hash(&mut h);
+            }
             None => {
                 binary_use.len().hash(&mut h);
                 let mut acc: u64 = 0;

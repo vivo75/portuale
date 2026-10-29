@@ -598,3 +598,51 @@ fn binary_masked_report_lists_respect_use_mismatches_as_masked() {
         "one cpv-deduped row for both builds:\n{report}"
     );
 }
+
+/// Two binhosts can each list a build 1 of one version, differing only in
+/// baked USE and `BUILD_TIME`: the verdict for one must not be reused for the
+/// other. Portage tells instances apart by `(cpv, build_id, file_size,
+/// build_time, mtime)` (`dbapi/virtual.py`, `_instance_key_multi_instance`).
+#[test]
+fn binpkg_respect_use_verdict_is_per_build_not_per_build_id() {
+    let dir = slotundo_temp_dir("binpkg-respect-use-instances");
+    let repo = dir.join("repo");
+    fs::create_dir_all(repo.join("metadata/md5-cache/dev-libs")).unwrap();
+    fs::write(
+        repo.join("metadata/md5-cache/dev-libs/x-1.0"),
+        "EAPI=8\nIUSE=foo\nKEYWORDS=amd64\nSLOT=0\n",
+    )
+    .unwrap();
+    let mut ebuild = candidate("1.0", &["amd64"]);
+    ebuild.repo_location = repo;
+    ebuild.iuse = "foo".to_string();
+    let binary = |time: i64, use_flags: &[&str]| {
+        let mut c = candidate("1.0", &["amd64"]);
+        c.source = CandidateSource::Binary;
+        c.iuse = "foo".to_string();
+        c.build_id = Some("1".to_string());
+        c.build_time = Some(time);
+        c.binary_use = Some(use_flags.iter().map(|f| f.to_string()).collect());
+        c
+    };
+    let mut config = test_config();
+    // The profile leaves foo off.
+    config.conf_use_tokens = vec![];
+    let ok = |c: &Candidate| {
+        binpkg_respect_use_ok(BinpkgRespectUseOkArgs {
+            candidate: c,
+            ebuild_at_version: Some(&ebuild),
+            category: "dev-libs",
+            package: "x",
+            config: &config,
+            newuse: false,
+            changed_use: false,
+            respect_use: true,
+        })
+    };
+    assert!(ok(&binary(100, &[])), "built without foo matches");
+    assert!(
+        !ok(&binary(200, &["foo"])),
+        "same build id, built with foo: its own verdict"
+    );
+}
