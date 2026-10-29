@@ -631,10 +631,12 @@ fn slot_conflict_handler_stops(
     if pass.slot_conflicts.is_empty()
         || accept_blocker_conflicts(
             ctx.backtrack_max,
-            ctx.buildpkgonly,
-            ctx.nodeps,
-            ctx.fetchonly,
-            ctx.fetch_all_uri,
+            BlockerConflictOpts {
+                buildpkgonly: ctx.buildpkgonly,
+                nodeps: ctx.nodeps,
+                fetchonly: ctx.fetchonly,
+                fetch_all_uri: ctx.fetch_all_uri,
+            },
         )
     {
         return false;
@@ -649,33 +651,45 @@ fn slot_conflict_handler_stops(
     .is_empty()
 }
 
-/// Portage `_accept_blocker_conflicts`: with backtracking off, an option that
-/// tolerates conflicts drops the slot-conflict handler's USE-change search.
-// Portage: depgraph.py, _accept_blocker_conflicts
-fn accept_blocker_conflicts(
-    backtrack_max: u32,
+/// The options `_accept_blocker_conflicts` reads besides backtracking.
+struct BlockerConflictOpts {
     buildpkgonly: bool,
     nodeps: bool,
     fetchonly: bool,
     fetch_all_uri: bool,
-) -> bool {
-    backtrack_max == 0 && (buildpkgonly || nodeps || fetchonly || fetch_all_uri)
+}
+
+/// Portage `_accept_blocker_conflicts`: with backtracking off, an option that
+/// tolerates conflicts drops the slot-conflict handler's USE-change search.
+// Portage: depgraph.py, _accept_blocker_conflicts
+fn accept_blocker_conflicts(backtrack_max: u32, opts: BlockerConflictOpts) -> bool {
+    backtrack_max == 0 && (opts.buildpkgonly || opts.nodeps || opts.fetchonly || opts.fetch_all_uri)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::{BlockerConflictOpts as Opts, accept_blocker_conflicts as accept};
+
+    fn opts([buildpkgonly, nodeps, fetchonly, fetch_all_uri]: [bool; 4]) -> Opts {
+        Opts {
+            buildpkgonly,
+            nodeps,
+            fetchonly,
+            fetch_all_uri,
+        }
+    }
+
     #[test]
     fn accept_blocker_conflicts_mirrors_portage() {
-        use super::accept_blocker_conflicts as accept;
         // Backtracking on: never acceptable, whatever the flags.
-        assert!(!accept(1, true, true, true, true));
-        assert!(!accept(20, false, false, true, false));
+        assert!(!accept(1, opts([true, true, true, true])));
+        assert!(!accept(20, opts([false, false, true, false])));
         // Backtracking off: each tolerable option on its own.
-        assert!(accept(0, true, false, false, false));
-        assert!(accept(0, false, true, false, false));
-        assert!(accept(0, false, false, true, false));
-        assert!(accept(0, false, false, false, true));
+        assert!(accept(0, opts([true, false, false, false])));
+        assert!(accept(0, opts([false, true, false, false])));
+        assert!(accept(0, opts([false, false, true, false])));
+        assert!(accept(0, opts([false, false, false, true])));
         // Backtracking off with none of them: the handler still runs.
-        assert!(!accept(0, false, false, false, false));
+        assert!(!accept(0, opts([false, false, false, false])));
     }
 }
