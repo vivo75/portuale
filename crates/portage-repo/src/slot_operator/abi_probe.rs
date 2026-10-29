@@ -79,7 +79,13 @@ pub(crate) fn collect_probe_parents(
             false => &["RDEPEND", "PDEPEND", "IDEPEND"],
         };
         for key in dep_keys {
-            let tokens = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            let recorded = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            // Only the `||` arm the build resolved to is a parent atom of the
+            // installed instance (`dep_zapdeps` drops the rest before the walk
+            // records `_parent_atoms`); the demoted arms must not veto a
+            // candidate. Same strip as `replacement_accepts`.
+            // Portage: dep_check.py, dep_zapdeps
+            let tokens = without_or_groups(&recorded);
             for token in tokens.split_whitespace() {
                 let Some(atom) = parse_dep_atom(token, "abi_probe_vdb_deps") else {
                     continue;
@@ -153,6 +159,82 @@ pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, Str
     split_cpv(cpv_part)
 }
 
+/// Whether every dependency unit of a replacement parent that names `provider`
+/// accepts `cand`. An atom outside a `||` group is a unit of its own; a whole
+/// `||` group is one disjunctive unit, so it vetoes only when none of its arms
+/// accepts. USE conditionals are reduced against `use_flags` first. False when
+/// no unit names the provider at all.
+// Portage: _emerge/depgraph.py, _slot_operator_update_probe (`atom_not_selected`,
+// `all_candidate_pkgs`)
+fn live_units_accept<'a>(
+    depstrs: impl Iterator<Item = &'a str>,
+    use_flags: &HashSet<String>,
+    provider: (&str, &str),
+    cand: &str,
+) -> bool {
+    let mut units = 0usize;
+    let mut all = true;
+    for depstr in depstrs {
+        let tokens: Vec<String> = depstr.split_whitespace().map(String::from).collect();
+        let Some(tree) = reduced_dep_tree(&tokens, use_flags) else {
+            return false;
+        };
+        let mut flat: Vec<Vec<&str>> = Vec::new();
+        collect_dep_units(&tree, &mut flat);
+        for unit in flat {
+            let named: Vec<&str> = unit
+                .iter()
+                .copied()
+                .filter(|tok| {
+                    parse_dep_atom(tok, "abi_probe_live_deps").is_some_and(|la| {
+                        la.blocker == portage_dep::Blocker::None
+                            && la.category == provider.0
+                            && la.package == provider.1
+                    })
+                })
+                .collect();
+            if named.is_empty() {
+                continue;
+            }
+            units += 1;
+            all &= named.iter().any(|tok| {
+                portage_dep::match_from_list(portage_dep::without_use(tok), &[cand])
+                    .is_some_and(|mt| !mt.is_empty())
+            });
+        }
+    }
+    units > 0 && all
+}
+
+/// Flattens a reduced dep tree into acceptance units: a plain atom is its own
+/// unit, a conjunction is transparent, and an `||` group is one unit holding
+/// every atom of every arm.
+fn collect_dep_units<'a>(nodes: &'a [DepTree], out: &mut Vec<Vec<&'a str>>) {
+    for node in nodes {
+        match node {
+            DepTree::Atom(text) => out.push(vec![text.as_str()]),
+            DepTree::AllOf(children) => collect_dep_units(children, out),
+            DepTree::AnyOf(children) => {
+                let mut arms: Vec<&str> = Vec::new();
+                collect_unit_atoms(children, &mut arms);
+                out.push(arms);
+            }
+        }
+    }
+}
+
+/// Every atom text under one `||` arm (through nested groups).
+fn collect_unit_atoms<'a>(nodes: &'a [DepTree], out: &mut Vec<&'a str>) {
+    for node in nodes {
+        match node {
+            DepTree::Atom(text) => out.push(text.as_str()),
+            DepTree::AllOf(children) | DepTree::AnyOf(children) => {
+                collect_unit_atoms(children, out);
+            }
+        }
+    }
+}
+
 /// Arguments of [`slot_conflict_abi_probe`].
 pub(crate) struct SlotConflictAbiProbeArgs<'a> {
     pub(crate) root: &'a Path,
@@ -168,17 +250,39 @@ pub(crate) struct SlotConflictAbiProbeArgs<'a> {
     pub(crate) gate: CategoryGate<'a>,
 }
 
+/// [`slot_conflict_abi_probe_full`]'s two filings: the installed parents
+/// Portage reinstalls and the installed children they were built against.
+/// Both land in `slot_operator_replace_installed`.
+pub(crate) struct SlotConflictAbiProbe {
+    /// The parent cps `_replace_installed_atom(dep.parent)` files.
+    pub(crate) parents: BTreeSet<(String, String)>,
+    /// The conflict cps whose installed instance `dep.child` names
+    /// (`new_child_slot is None and child.installed`).
+    pub(crate) children: BTreeSet<(String, String)>,
+}
+
+/// The parent half of [`slot_conflict_abi_probe_full`]: the cps to reinstall.
+/// Test-facing only; the step needs both halves.
+#[cfg(test)]
+pub(crate) fn slot_conflict_abi_probe(
+    args: SlotConflictAbiProbeArgs<'_>,
+) -> BTreeSet<(String, String)> {
+    slot_conflict_abi_probe_full(args).parents
+}
+
 /// Portage's slot-conflict-fired half of the update probe: for every recorded
 /// conflict, for every parent edge whose atom is a built `:=` atom that rejects
 /// another instance, schedule the parent reinstall when the same-version tree
 /// ebuild's live atoms accept that instance and no other parent vetoes it.
 /// Runs over the direct solve's surviving records, before the mask arms, and
-/// returns the newly-scheduled parent cps; no masks are filed for a resolved
-/// conflict.
-// Portage: _emerge/depgraph.py, _slot_conflict_backtrack_abi
-pub(crate) fn slot_conflict_abi_probe(
+/// returns the newly-scheduled parents **and** the installed children
+/// `_slot_operator_update_backtrack` files alongside them; no masks are filed
+/// for a resolved conflict.
+// Portage: _emerge/depgraph.py, _slot_conflict_backtrack_abi /
+// _slot_operator_update_backtrack
+pub(crate) fn slot_conflict_abi_probe_full(
     args: SlotConflictAbiProbeArgs<'_>,
-) -> BTreeSet<(String, String)> {
+) -> SlotConflictAbiProbe {
     let SlotConflictAbiProbeArgs {
         root,
         entries,
@@ -201,6 +305,7 @@ pub(crate) fn slot_conflict_abi_probe(
     // Portage restarts the whole search per resolution; the growing set
     // below is the local equivalent.
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut children: BTreeSet<(String, String)> = BTreeSet::new();
     let mut refusals: BTreeSet<(String, String)> = already.clone();
     for sc in conflicts {
         let provider_cp = (sc.category.clone(), sc.package.clone());
@@ -301,30 +406,23 @@ pub(crate) fn slot_conflict_abi_probe(
                     }) else {
                         continue;
                     };
-                    // Every live atom on the provider must accept C: Portage
-                    // keeps only the replacement children all the replacement
-                    // parent's atoms agree on (an exact pin on the old
-                    // version leaves none).
-                    let provider_atoms: Vec<String> = dep_keys
-                        .iter()
-                        .filter_map(|k| {
-                            flat_dep_atoms(live.get(*k).map(String::as_str).unwrap_or(""), &rep_use)
-                        })
-                        .flatten()
-                        .filter(|tok| {
-                            parse_dep_atom(tok, "abi_probe_live_deps").is_some_and(|la| {
-                                la.blocker == portage_dep::Blocker::None
-                                    && la.category == sc.category
-                                    && la.package == sc.package
-                            })
-                        })
-                        .map(|tok| portage_dep::without_use(&tok).to_string())
-                        .collect();
-                    let accepts = !provider_atoms.is_empty()
-                        && provider_atoms.iter().all(|atom| {
-                            portage_dep::match_from_list(atom, &[c_str.as_str()])
-                                .is_some_and(|mt| !mt.is_empty())
-                        });
+                    // Every live unit on the provider must accept C: Portage
+                    // intersects the candidate sets of the replacement
+                    // parent's atoms (an exact pin on the old version leaves
+                    // none) and skips an atom the replacement does not select
+                    // (`atom_not_selected`). Portuale approximates the
+                    // selection at the group level: one `||` group is a single
+                    // disjunctive unit, so it vetoes only when none of its arms
+                    // accepts C.
+                    // Portage: depgraph.py, _slot_operator_update_probe
+                    let accepts = live_units_accept(
+                        dep_keys
+                            .iter()
+                            .map(|k| live.get(*k).map(String::as_str).unwrap_or_default()),
+                        &rep_use,
+                        (&sc.category, &sc.package),
+                        &c_str,
+                    );
                     if !accepts {
                         continue;
                     }
@@ -333,11 +431,21 @@ pub(crate) fn slot_conflict_abi_probe(
                     }
                     scheduled.insert(pcp.clone());
                     refusals.insert(pcp.clone());
+                    // Portage files the installed child too:
+                    // `new_child_slot is None and child.installed`, where
+                    // `child` is the instance the parent's built atom matches
+                    // (`depgraph.py:2457-2460`).
+                    if m.installed {
+                        children.insert(provider_cp.clone());
+                    }
                 }
             }
         }
     }
-    scheduled
+    SlotConflictAbiProbe {
+        parents: scheduled,
+        children,
+    }
 }
 
 /// Display continuity for conflict-fired rebuilds: recomputed here from the

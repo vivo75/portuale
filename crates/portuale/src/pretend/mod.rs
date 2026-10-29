@@ -897,6 +897,31 @@ pub(crate) fn abi_rebuild_force_reinstall_cps(
                 if !in_slot {
                     return None;
                 }
+            } else {
+                // The consumer side is tagged only when the edge caused its
+                // rebuild: a consumer merge-bound for an upgrade this run is
+                // already merging, and Portage's probe skips a parent that has
+                // a replacement in the graph, so the replace set never names
+                // it (`force_reinstall` stays off). It still appears in the
+                // "causing rebuilds" block.
+                // Portage: depgraph.py, _slot_operator_check_reverse_dependencies
+                // (`:2527-2537`), _iter_atoms_for_pkg
+                let merging = result.entries.iter().any(|e| {
+                    e.category == c
+                        && e.package == p
+                        && matches!(
+                            &e.outcome,
+                            portage_repo::PretendOutcome::Upgrade { .. }
+                                | portage_repo::PretendOutcome::Downgrade { .. }
+                        )
+                });
+                let replaced = result
+                    .slot_operator_replaced
+                    .iter()
+                    .any(|(rc, rp)| *rc == c && *rp == p);
+                if merging && !replaced {
+                    return None;
+                }
             }
             Some((c, p))
         })

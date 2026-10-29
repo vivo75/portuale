@@ -116,6 +116,22 @@ pub(crate) fn slot_operator_rebuild_scan(
             .or_default()
             .push((p.version.clone(), p.slot.clone()));
     }
+    // cp -> the version a genuine version move installs this run (the first
+    // entry wins, like `merge_bound_index`). A same-version `Reinstall` is the
+    // rebuild the scan itself schedules, not a replacement: Portage's
+    // `_eliminate_rebuilds` drops the `--changed-slot` shape's edge entirely.
+    let mut merge_bound: HashMap<(String, String), String> = HashMap::new();
+    for e in entries {
+        if matches!(
+            e.outcome,
+            PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. }
+        ) && let Some(version) = merge_bound_version(&e.outcome)
+        {
+            merge_bound
+                .entry((e.category.clone(), e.package.clone()))
+                .or_insert_with(|| version.clone());
+        }
+    }
     let mut scheduled: BTreeSet<(String, String)> = already.clone();
     let mut abi_rebuilds: Vec<(String, String)> = Vec::new();
     // Every cp this pass actually walked (any outcome). Only consumers
@@ -155,7 +171,18 @@ pub(crate) fn slot_operator_rebuild_scan(
     if !new_slot.is_empty() || !new_slot_fresh.is_empty() || want_probe {
         for pkg in installed.iter() {
             let cp = (pkg.category.clone(), pkg.package.clone());
-            if undone.contains(&cp) || (in_graph.contains(&cp) && !already.contains(&cp)) {
+            if undone.contains(&cp) {
+                continue;
+            }
+            // A consumer merge-bound for an upgrade in this same run is not
+            // scheduled (its own walk re-binds the live atom), but Portage
+            // still lists it under its replacement in the rebuild block.
+            // Portage: depgraph.py, _compute_abi_rebuild_info (`:1076-1090`)
+            let merge_bound_consumer = merge_bound.contains_key(&cp) && !already.contains(&cp);
+            // Any other merge-bound consumer (its own reinstall: `--changed-slot`
+            // and friends) keeps the old skip: its rebuild is its own row and
+            // `_eliminate_rebuilds` drops the edge.
+            if !merge_bound_consumer && in_graph.contains(&cp) && !already.contains(&cp) {
                 continue;
             }
             // Same-slot arm scope: reachability, or an installed consumer the walk recursed into.
@@ -163,13 +190,20 @@ pub(crate) fn slot_operator_rebuild_scan(
             let same_slot_scope = !new_slot.is_empty()
                 && (scope.unwrap_or(reachable).contains(&cp) || walked_installed.contains(&cp));
             // New-slot arm scope: reachability or walked this pass.
-            // Merge-bound consumers stay skipped by the `in_graph` rule:
-            // their live `:=` re-binds through their own walk.
             let new_slot_scope = scope.unwrap_or(reachable).contains(&cp) || walked.contains(&cp);
             if !same_slot_scope && !new_slot_scope {
                 continue;
             }
-            let consumer_cpv = pkg.cpv();
+            // The block names the merge-bound replacement, not the installed
+            // version the recorded atom lives in.
+            // Portage: depgraph.py, _compute_abi_rebuild_info (`:1076-1090`)
+            let consumer_cpv = match merge_bound_consumer {
+                true => merge_bound.get(&cp).map_or_else(
+                    || pkg.cpv(),
+                    |version| format!("{}/{}-{version}", pkg.category, pkg.package),
+                ),
+                false => pkg.cpv(),
+            };
             // A built package's DEPEND/BDEPEND only count when bdeps is on.
             let dep_keys: &[&str] = match with_bdeps && walked.contains(&cp) {
                 true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
@@ -245,7 +279,9 @@ pub(crate) fn slot_operator_rebuild_scan(
                     provider_joins.push(provider_cp);
                 }
             }
-            if !survived {
+            // A merge-bound consumer is already merging, so it contributes the
+            // display pair only (no schedule, no child filing).
+            if !survived || merge_bound_consumer {
                 continue;
             }
             // The installed child joins the replace set with its parent.

@@ -51,7 +51,7 @@ pub(crate) fn step_slot_conflict_abi(
             with_bdeps: ctx.with_bdeps,
             excluded: ctx.excluded,
         });
-        let fresh = slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
+        let fresh = slot_conflict_abi_probe_full(SlotConflictAbiProbeArgs {
             root: ctx.root,
             entries: &pass.entries,
             conflicts: &pass.slot_conflicts,
@@ -64,8 +64,19 @@ pub(crate) fn step_slot_conflict_abi(
             config,
             gate: ctx.gate(),
         });
-        if !fresh.is_empty() {
-            grown.slot_operator_replace_installed.extend(fresh);
+        if !fresh.parents.is_empty() || !fresh.children.is_empty() {
+            // Portage's `_slot_operator_update_backtrack` files both sides of
+            // the built `:=` dep: `_replace_installed_atom(dep.parent)` and,
+            // with `new_child_slot is None`, `_replace_installed_atom(child)`
+            // when the child is installed. `probe_replaced` is the display
+            // mirror that becomes `__auto_slot_operator_replace_installed__`
+            // (the `r` tag), so it grows with the same set.
+            let filed: BTreeSet<(String, String)> =
+                fresh.parents.union(&fresh.children).cloned().collect();
+            grown
+                .slot_operator_replace_installed
+                .extend(filed.iter().cloned());
+            grown.probe_replaced.extend(filed);
             return Some(PassDecision::Feedback(BacktrackFeedback::Config {
                 params: Box::new(std::mem::take(grown)),
             }));
