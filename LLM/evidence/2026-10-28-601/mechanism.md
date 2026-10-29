@@ -36,7 +36,7 @@ dump this section first relied on prints the `--reinstall-atoms` CLI option,
 not an internal set.
 
 Why perl is in Portage's set: `_slot_operator_update_backtrack`
-(`depgraph.py:2415`) adds `_replace_installed_atom(child)` at `:2454-2462`,
+(`depgraph.py:2415`) adds `_replace_installed_atom(child)` at `:2457-2460`,
 `if new_child_slot is None and child.installed`; the child of the missed ABI
 update (`dev-lang/perl-5.42.2:0/5.42=`) is the installed perl. (`:2404-2413`
 is the slot-change twin that files an installed child as well.) portuale's
@@ -109,7 +109,8 @@ here so the record is usable:
 3. **Wrong block lines.** `_compute_abi_rebuild_info` is `depgraph.py:931-1145`
    (the seed loop is `:940-950`); `_show_abi_rebuild_info` is `:1146-1159`.
 4. **Wrong child-filing lines.** `_slot_operator_update_backtrack` starts at
-   `depgraph.py:2415` and files the installed child at `:2454-2462`;
+   `depgraph.py:2415` and files the installed child at `:2457-2460` (the
+   parent half is `:2454-2456`);
    `:2562-2566` is inside `_slot_operator_update_probe`.
 5. **Wrong portuale probe lines.** The insert is
    `installed_parent_update_probe.rs:189-190`; `:119-121` is the

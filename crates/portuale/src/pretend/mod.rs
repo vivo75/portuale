@@ -918,19 +918,20 @@ pub(crate) fn abi_rebuild_force_reinstall_cps(
             } else {
                 // The consumer side is tagged only when the edge caused its
                 // rebuild. A consumer merge-bound for an upgrade this run is
-                // already merging, and Portage never files such a parent into
-                // the replace set: `_slot_operator_trigger_reinstalls` probes
-                // only a built parent (`depgraph.py:3124-3127`, and the
-                // merge-bound replacement node is not built), while
+                // already merging, and Portage files no such parent through
+                // `dep.parent` into the replace set:
+                // `_slot_operator_trigger_reinstalls` probes only a built
+                // parent (`depgraph.py:3124-3127`, and the merge-bound
+                // replacement node is not built), while
                 // `_slot_operator_update_backtrack` files `dep.parent` only
-                // when it is installed (`:2453-2456`) -- its merge-bound
+                // when it is installed (`:2454-2456`) -- its merge-bound
                 // branch needs `new_dep.parent`, which requires a probe on the
-                // installed instance, i.e. an installed graph node. The
+                // installed instance, i.e. an installed graph node. So the
                 // `@__auto_slot_operator_replace_installed__` atom that
-                // `_iter_atoms_for_pkg` needs for `force_reinstall` therefore
-                // never names it. It still appears in the "causing rebuilds"
-                // block, which walks `_slot_operator_deps` and does not
-                // require `built` (`_compute_abi_rebuild_info`, `:931-1145`).
+                // `_iter_atoms_for_pkg` needs for `force_reinstall` does not
+                // name it through that arm. It still appears in the "causing
+                // rebuilds" block, which walks `_slot_operator_deps` and does
+                // not require `built` (`_compute_abi_rebuild_info`, `:931-1145`).
                 // Portage: depgraph.py, _iter_atoms_for_pkg;
                 // _gen_reinstall_sets (`:5479-5480`)
                 let merging = entries.iter().any(|e| {

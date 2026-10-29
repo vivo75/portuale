@@ -406,6 +406,71 @@ fn slot_conflict_abi_probe_accepts_an_or_group_arm_for_the_new_child() {
     let _ = fs::remove_dir_all(&base);
 }
 
+/// #601: a recorded `|| ( … )` group contributes the arm `dep_zapdeps`
+/// selects -- the in-graph member first, then an installed match -- and only
+/// that arm's atom. The walk records the atom it resolved
+/// (`_add_parent_atom`, `depgraph.py:3787`, from `selected_atoms`,
+/// `dep_check.py:928-937`), so the unselected arms are not parent atoms and
+/// cannot veto a candidate.
+// Portage: dep_check.py, dep_zapdeps; depgraph.py, _add_parent_atom
+#[test]
+fn collect_probe_parents_chooses_the_selected_or_arm() {
+    let (base, _repos) = abi_probe_harness(true);
+    let dir = base.join("var/db/pkg/app-misc/abior-1");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("CATEGORY"), "app-misc\n").unwrap();
+    fs::write(dir.join("SLOT"), "0\n").unwrap();
+    fs::write(dir.join("repository"), "testrepo\n").unwrap();
+    fs::write(
+        dir.join("RDEPEND"),
+        "|| ( =app-misc/abiprov-2 =app-misc/abiprov-1 )\n",
+    )
+    .unwrap();
+    let walked: HashSet<(String, String)> =
+        HashSet::from([("app-misc".to_string(), "abior".to_string())]);
+    let atoms = |entries: &[GraphEntry]| -> Vec<String> {
+        collect_probe_parents(CollectProbeParentsArgs {
+            root: &base,
+            entries,
+            reachable: &HashSet::new(),
+            walked: &walked,
+            in_graph: &HashSet::new(),
+            already: &BTreeSet::new(),
+            with_bdeps: true,
+            excluded: &[],
+        })
+        .get(&("app-misc".to_string(), "abiprov".to_string()))
+        .map(|ps| {
+            ps.iter()
+                .filter(|p| p.parent == ("app-misc".to_string(), "abior".to_string()))
+                .map(|p| p.atom.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+    };
+    // A merge-bound `abiprov-2` in this pass's graph: the in-graph arm wins.
+    let merging = vec![GraphEntry {
+        outcome: PretendOutcome::New {
+            version: "2".to_string(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("2".into()),
+        ..graph_entry("app-misc", "abiprov", "2")
+    }];
+    assert_eq!(
+        atoms(&merging),
+        vec!["=app-misc/abiprov-2".to_string()],
+        "the arm this pass merges is the recorded parent atom"
+    );
+    // No in-graph arm: the installed instance's arm is chosen.
+    assert_eq!(
+        atoms(&[]),
+        vec!["=app-misc/abiprov-1".to_string()],
+        "with no in-graph arm the installed match decides"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
 /// An argument atom is a probe parent of its own cp and vetoes candidates its
 /// atom does not match.
 #[test]

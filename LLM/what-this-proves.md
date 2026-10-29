@@ -20038,8 +20038,9 @@ on; Portage's own blocks are in the `portage-*` captures beside them. Contract:
 `python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -k
 test_skipped_update_block_names_every_installed_consumer`.
 
-**The `r` flag, the rebuild block and the merge order of `-puvD @world` now
-match Portage (#601, plan 02.601).** On the bed cell
+**The `r` flag and the 48-row rebuild block of `-puvD @world` now match
+Portage, and its merge order matches except for Portage's own
+`PYTHONHASHSEED`-dependent perl cluster (#601, plan 02.601).** On the bed cell
 `MULTI_deep-update-world` Portage printed `[ebuild  r  U  ]
 dev-lang/perl-5.44.0`, a 48-row "causes rebuilds for:" block, and
 `net-libs/nghttp3` at #10; portuale printed `[ebuild     U  ]`, no block,

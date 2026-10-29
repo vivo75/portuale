@@ -568,8 +568,16 @@ fn slot_conflict_abi_step_files_the_installed_provider_and_consumer() {
     };
     assert_eq!(
         params.slot_operator_replace_installed,
-        BTreeSet::from([prov, virt]),
+        BTreeSet::from([prov.clone(), virt.clone()]),
         "Portage files the installed parent and the installed child"
+    );
+    // The display mirror carries the same union: it becomes the `r` tag
+    // (`__auto_slot_operator_replace_installed__`), so a child-only filing
+    // would leave the provider untagged (#601).
+    assert_eq!(
+        params.probe_replaced,
+        BTreeSet::from([prov, virt]),
+        "the display mirror files both sides too"
     );
     let _ = fs::remove_dir_all(&base);
 }

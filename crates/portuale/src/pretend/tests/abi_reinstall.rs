@@ -5,12 +5,12 @@
 //! `arg.force_reinstall` (`resolver/output.py`, `PkgAttrDisplay.force_reinstall`;
 //! `depgraph.py`, `_iter_atoms_for_pkg`), and the only such atoms here are the
 //! `@__auto_slot_operator_replace_installed__` set's (`_gen_reinstall_sets`,
-//! `depgraph.py:5479-5480`). A merge-bound parent is never filed into that set:
-//! the trigger probes only a built parent (`:3124-3127`) and
-//! `_slot_operator_update_backtrack` files `dep.parent` only when it is
-//! installed (`:2453-2456`). It still appears in the "causing rebuilds" block,
-//! which walks `_slot_operator_deps` and needs no `built` flag
-//! (`_compute_abi_rebuild_info`, `:931-1145`).
+//! `depgraph.py:5479-5480`). A merge-bound parent is not filed through
+//! `dep.parent` into that set: the trigger probes only a built parent
+//! (`:3124-3127`) and `_slot_operator_update_backtrack` files `dep.parent`
+//! only when it is installed (`:2454-2456`). It still appears in the
+//! "causing rebuilds" block, which walks `_slot_operator_deps` and needs no
+//! `built` flag (`_compute_abi_rebuild_info`, `:931-1145`).
 
 use super::*;
 use portage_repo::{CandidateSource, PretendOutcome, VisibilityProvenance};

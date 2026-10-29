@@ -70,7 +70,7 @@ pub(crate) fn step_slot_conflict_abi(
             // Portage's `_slot_operator_update_backtrack` files both sides of
             // the built `:=` dep: `_replace_installed_atom(dep.parent)` and,
             // with `new_child_slot is None`, `_replace_installed_atom(child)`
-            // when the child is installed (`depgraph.py:2453-2460`).
+            // when the child is installed (`depgraph.py:2454-2460`).
             // `probe_replaced` is the display mirror that becomes
             // `__auto_slot_operator_replace_installed__` (the `r` tag), so it
             // grows with the same set.
