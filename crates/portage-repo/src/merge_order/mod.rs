@@ -220,6 +220,10 @@ pub(crate) fn prune_nomerge_roots(g: &mut Digraph, from: usize) {
 /// post-prune graph. Portuale keeps displayed installed entries in the graph,
 /// so this simulates the prune on the alive flags and returns the surviving
 /// counts instead of removing the nodes.
+///
+/// Models only the `installed` branch of Portage's condition
+/// (`depgraph.py:9542`); Portage also prunes non-`Package` and `onlydeps`
+/// roots, which portuale's graph has none of today.
 /// Portage: depgraph.py, _serialize_tasks; _merge_order_bias
 pub(crate) fn post_prune_parent_count(g: &Digraph) -> Vec<usize> {
     let mut alive = g.alive.clone();
