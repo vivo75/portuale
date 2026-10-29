@@ -475,6 +475,65 @@ fn build_digraph_required_by_fallback_marks_an_installed_target_satisfied() {
 }
 
 #[test]
+fn nomerge_root_prune_lowers_the_bias_parent_count() {
+    // Portage prunes rootless installed nodes before `_merge_order_bias`
+    // (depgraph.py:9540-9548), so the bias key counts only post-prune parents.
+    // Counting every alive parent left sys-kernel/linux-headers with its full
+    // 7-parent set and app-arch/zstd with 5, swapping net-libs/nghttp3 and
+    // sys-libs/libseccomp at #10 of `-puvD @world` (bed cell
+    // MULTI_deep-update-world, 2026-10-29).
+    let entries: Vec<GraphEntry> = [
+        ("net-libs", "nghttp3"),
+        ("sys-libs", "libseccomp"),
+        ("sys-apps", "iproute2"),
+        ("net-firewall", "iptables"),
+        ("net-misc", "curl"),
+        ("sys-apps", "shadow"),
+        ("virtual", "os-headers"),
+    ]
+    .into_iter()
+    .map(|(c, p)| new_entry(c, p, "1.0", Vec::new()))
+    .collect();
+    // 0 nghttp3, 1 libseccomp, 2/3 rootless installed parents of 1,
+    // 4 a merge parent of 1, 5/6 merge parents of 0.
+    let mut g = test_graph(
+        7,
+        &[
+            (2, 1, prio(2)),
+            (3, 1, prio(2)),
+            (4, 1, prio(2)),
+            (5, 0, prio(2)),
+            (6, 0, prio(2)),
+        ],
+    );
+    g.installed[2] = true;
+    g.installed[3] = true;
+    let config = portage_profile::Config::default();
+
+    // Raw parent count: libseccomp 3, nghttp3 2.
+    let raw: Vec<usize> = (0..g.n)
+        .map(|i| g.parents[i].iter().filter(|&&p| g.alive[p]).count())
+        .collect();
+    assert!(raw[1] > raw[0], "raw counts: {raw:?}");
+
+    // Post-prune count: the two rootless installed parents drop out.
+    let counts = post_prune_parent_count(&g);
+    assert_eq!(counts[1], 1, "post-prune counts: {counts:?}");
+    assert_eq!(counts[0], 2, "post-prune counts: {counts:?}");
+
+    merge_order_bias(&mut g, &entries, &config, true);
+    let pos = |g: &Digraph, n: usize| g.order.iter().position(|&i| i == n).unwrap();
+    assert!(
+        pos(&g, 0) < pos(&g, 1),
+        "nghttp3 outranks libseccomp on the post-prune count: {:?}",
+        g.order
+    );
+    // The displayed installed entries stay in the graph; only the bias key
+    // ignores them.
+    assert!(g.alive[2] && g.alive[3] && g.order.contains(&2) && g.order.contains(&3));
+}
+
+#[test]
 fn deep_system_deps_follows_only_runtime_edges() {
     let config = portage_profile::Config {
         system_packages: vec!["dev-libs/sys".to_string()],

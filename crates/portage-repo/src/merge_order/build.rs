@@ -228,11 +228,11 @@ pub(crate) fn build_digraph(
     g
 }
 
-/// The nomerge-root prune is deliberately not ported: this graph holds only the
-/// merge closure, which is exactly Portage's post-prune node set.
-/// Portage: depgraph.py, _serialize_tasks
 /// Every `@system`-set member plus everything reachable by runtime edges only.
-/// Portage: _find_deep_system_runtime_deps.py
+/// `schedule_graph` prunes rootless synthetic nodes first; the bias key also
+/// treats rootless installed resolver entries as pruned
+/// ([`post_prune_parent_count`]).
+/// Portage: depgraph.py, _serialize_tasks; _find_deep_system_runtime_deps.py
 pub(crate) fn deep_system_deps(
     g: &Digraph,
     entries: &[GraphEntry],
@@ -278,9 +278,9 @@ pub(crate) fn merge_order_bias(
         return;
     }
     let deep = deep_system_deps(g, entries, config);
-    let parent_count: Vec<usize> = (0..g.n)
-        .map(|i| g.parents[i].iter().filter(|&&p| g.alive[p]).count())
-        .collect();
+    // Portage's bias key is the post-nomerge-prune parent count
+    // (`depgraph.py:9540-9548` then `:9317-9356`).
+    let parent_count = post_prune_parent_count(g);
     // Stable, so a tie keeps discovery order.
     g.order
         .sort_by_key(|&i| (!deep[i], std::cmp::Reverse(parent_count[i])));

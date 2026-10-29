@@ -185,11 +185,19 @@ fn schedule_graph(args: ScheduleGraphArgs<'_>) -> (Vec<GraphEntry>, Digraph, usi
 
     debug_dump_graph(&g, entries, top_level_atoms, root);
 
-    // Prune parentless synthetic installed roots to a fixpoint; restricted to
-    // `i >= real_n` so displayed top-level installed targets stay scheduled.
+    prune_nomerge_roots(&mut g, real_n);
+    merge_order_bias(&mut g, entries, config, implicit_system_deps);
+    (ext, g, real_n, discovery_rank)
+}
+
+/// Remove rootless *synthetic* installed nodes (indices `>= from`) to a
+/// fixpoint, then drop them from `order`. Displayed resolver entries stay in
+/// the graph; the bias counts around them with [`post_prune_parent_count`].
+/// Portage: depgraph.py, _serialize_tasks
+pub(crate) fn prune_nomerge_roots(g: &mut Digraph, from: usize) {
     loop {
         let mut removed = false;
-        for i in real_n..n {
+        for i in from..g.n {
             if !g.alive[i] || !g.installed[i] {
                 continue;
             }
@@ -204,6 +212,37 @@ fn schedule_graph(args: ScheduleGraphArgs<'_>) -> (Vec<GraphEntry>, Digraph, usi
         }
     }
     g.order.retain(|&i| g.alive[i]);
-    merge_order_bias(&mut g, entries, config, implicit_system_deps);
-    (ext, g, real_n, discovery_rank)
+}
+
+/// Per-node parent count over the parents Portage's nomerge-root prune would
+/// keep. Portage removes installed roots to a fixpoint before
+/// `_merge_order_bias` (`depgraph.py:9540-9548`), so its bias key counts the
+/// post-prune graph. Portuale keeps displayed installed entries in the graph,
+/// so this simulates the prune on the alive flags and returns the surviving
+/// counts instead of removing the nodes.
+/// Portage: depgraph.py, _serialize_tasks; _merge_order_bias
+pub(crate) fn post_prune_parent_count(g: &Digraph) -> Vec<usize> {
+    let mut alive = g.alive.clone();
+    let mut count: Vec<usize> = (0..g.n)
+        .map(|i| g.parents[i].iter().filter(|&&p| alive[p]).count())
+        .collect();
+    loop {
+        let mut removed = false;
+        for i in 0..g.n {
+            if !alive[i] || !g.installed[i] || count[i] != 0 {
+                continue;
+            }
+            alive[i] = false;
+            removed = true;
+            for (c, _) in &g.children[i] {
+                if alive[*c] {
+                    count[*c] = count[*c].saturating_sub(1);
+                }
+            }
+        }
+        if !removed {
+            break;
+        }
+    }
+    count
 }
