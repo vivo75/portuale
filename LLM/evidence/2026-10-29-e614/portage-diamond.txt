@@ -1,0 +1,143 @@
+[DEBUG] Using selector: EpollSelector
+!!! Repository 'overlay' is missing masters attribute in '/tmp/opencode/ph-e614/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/opencode/ph-e614/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/opencode/ph-e614/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/tmp/opencode/ph-e614/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+  .='update pass'  *='binary update'  #='/var/db update'  @='/var/db move'
+  s='/var/db SLOT move'  %='binary move'  S='binary SLOT move'
+  p='update /etc/portage/package.*'
+/tmp/opencode/ph-e614/repo/profiles/updates/2Q-2024..
+@s
+
+!!! Repository 'overlay' is missing masters attribute in '/tmp/opencode/ph-e614/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/opencode/ph-e614/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/opencode/ph-e614/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/tmp/opencode/ph-e614/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	/tmp/opencode/ph-e614/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+myaction None
+myopts {'--debug': True, '--pretend': True, '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+
+
+      Arg: dev-libs/diamond
+     Atom: dev-libs/diamond
+   ebuild: dev-libs/diamond-1.0::testrepo
+
+Child:         (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/diamond
+
+Parent:    (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/shared-a dev-libs/shared-b
+Priority:  runtime
+
+Parent:    (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/shared-a dev-libs/shared-b
+Priority:  runtime
+Candidates: ['dev-libs/shared-a', 'dev-libs/shared-b']
+   ebuild: dev-libs/shared-a-1.0::testrepo
+   ebuild: dev-libs/shared-b-1.0::testrepo
+
+Child:         (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/shared-a required by (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+
+Child:         (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/shared-b required by (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+
+Exiting... (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+
+Parent:    (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/common
+Priority:  runtime
+
+Parent:    (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/common
+Priority:  runtime
+Candidates: ['dev-libs/common']
+   ebuild: dev-libs/common-1.0::testrepo
+
+Child:         (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/common required by (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+
+Exiting... (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+
+Parent:    (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/common
+Priority:  runtime
+
+Parent:    (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/common
+Priority:  runtime
+Candidates: ['dev-libs/common']
+   ebuild: dev-libs/common-1.0::testrepo
+
+Child:         (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/common required by (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+
+Exiting... (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+
+digraph:
+
+(dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') depends on
+  (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') (runtime)
+  (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') (runtime)
+dev-libs/diamond depends on
+  (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') (soft)
+(dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') depends on
+  (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') (runtime)
+(dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') depends on
+  (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') (runtime)
+(dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') (no children)
+
+[ebuild  N     ] dev-libs/common-1.0 to /tmp/opencode/ph-e614/
+[ebuild  N     ] dev-libs/shared-a-1.0 to /tmp/opencode/ph-e614/
+[ebuild  N     ] dev-libs/shared-b-1.0 to /tmp/opencode/ph-e614/
+[ebuild  N     ] dev-libs/diamond-1.0 to /tmp/opencode/ph-e614/
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+

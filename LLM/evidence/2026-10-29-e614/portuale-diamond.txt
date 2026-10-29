@@ -1,0 +1,90 @@
+
+      Arg: dev-libs/diamond
+     Atom: dev-libs/diamond
+   ebuild: dev-libs/diamond-1.0::testrepo
+   ebuild: dev-libs/shared-b-1.0::testrepo
+   ebuild: dev-libs/shared-a-1.0::testrepo
+   ebuild: dev-libs/common-1.0::testrepo
+
+# resolution walk (portuale BFS order, not Portage's LIFO _create_graph order)
+
+Child:         (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/diamond
+
+Parent:    (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/shared-a dev-libs/shared-b (RDEPEND)
+Priority:  runtime
+Candidates: ['dev-libs/shared-a', 'dev-libs/shared-b']
+
+Exiting... (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Child:         (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/shared-b required by (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/common (RDEPEND)
+Priority:  runtime
+Candidates: ['dev-libs/common']
+
+Exiting... (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Child:         (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/shared-a required by (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Parent:    (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+Depstring: dev-libs/common (RDEPEND)
+Priority:  runtime
+Candidates: ['dev-libs/common']
+
+Exiting... (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Child:         (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge) USE=""
+Parent Dep:    dev-libs/common required by (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge)
+Parent Dep:    dev-libs/common required by (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+Exiting... (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge)
+
+digraph:
+
+(dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+  (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+dev-libs/diamond depends on
+  (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge) (soft)
+
+digraph:
+
+(dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge) (no children)
+(dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/common-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+(dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge) depends on
+  (dev-libs/shared-a-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+  (dev-libs/shared-b-1.0:0/0::testrepo, ebuild scheduled for merge) (runtime)
+dev-libs/diamond depends on
+  (dev-libs/diamond-1.0:0/0::testrepo, ebuild scheduled for merge) (soft)
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/common-1.0 to /tmp/opencode/ph-e614
+[ebuild  N     ] dev-libs/shared-a-1.0 to /tmp/opencode/ph-e614
+[ebuild  N     ] dev-libs/shared-b-1.0 to /tmp/opencode/ph-e614
+[ebuild  N     ] dev-libs/diamond-1.0 to /tmp/opencode/ph-e614
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+

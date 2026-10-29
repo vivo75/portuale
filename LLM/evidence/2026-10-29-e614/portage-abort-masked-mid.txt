@@ -1,0 +1,171 @@
+[DEBUG] Using selector: EpollSelector
+!!! Repository 'overlay' is missing masters attribute in '/tmp/opencode/ph-e614/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/opencode/ph-e614/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '/tmp/opencode/ph-e614/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '/tmp/opencode/ph-e614/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '/tmp/opencode/ph-e614/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	/tmp/opencode/ph-e614/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+myaction None
+myopts {'--debug': True, '--pretend': True, '--regex-search-auto': 'y'}
+
+
+myparams {'recurse': True, 'binpkg_respect_use': 'auto', 'autounmask': True, 'autounmask_keep_use': False, 'autounmask_keep_license': True, 'autounmask_keep_keywords': True, 'autounmask_keep_masks': True, 'bdeps': 'auto', 'ignore_soname_deps': 'y', 'dynamic_deps': True, 'implicit_system_deps': True, 'binpkg_changed_deps': 'auto'}
+
+
+These are the packages that would be merged, in order:
+
+
+
+      Arg: dev-libs/abort-masked-mid
+     Atom: dev-libs/abort-masked-mid
+   ebuild: dev-libs/abort-masked-mid-1.0::testrepo
+
+Child:         (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-masked-mid
+
+Parent:    (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/abort-leaf-a dev-libs/maskeddep dev-libs/abort-leaf-b
+Priority:  runtime
+
+Parent:    (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/abort-leaf-a dev-libs/maskeddep dev-libs/abort-leaf-b
+Priority:  runtime
+Candidates: ['dev-libs/abort-leaf-a', 'dev-libs/maskeddep', 'dev-libs/abort-leaf-b']
+   ebuild: dev-libs/abort-leaf-a-1.0::testrepo
+
+
+backtracking due to unsatisfied dep:
+    parent: (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+  priority: runtime
+      root: /tmp/opencode/ph-e614/
+      atom: dev-libs/maskeddep
+
+
+
+backtracking try 1 
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+!!! All ebuilds that could satisfy "dev-libs/maskeddep" for /tmp/opencode/ph-e614/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)
+/tmp/opencode/ph-e614/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+# fixture package.mask for the masked-dependency disclosure slice:
+# dev-libs/maskeddep stays masked so a dependency on it reports the
+# "All ebuilds ... have been masked" block (never unmasked anywhere).
+
+
+(dependency required by "dev-libs/abort-masked-mid-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/abort-masked-mid" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+
+
+runtime_pkg_mask: {<Package ('ebuild', '/tmp/opencode/ph-e614/', 'dev-libs/abort-masked-mid-1.0', 'merge', 'testrepo')>: {'missing dependency': {(<Package ('ebuild', '/tmp/opencode/ph-e614/', 'dev-libs/abort-masked-mid-1.0', 'merge', 'testrepo')>, '/tmp/opencode/ph-e614/', Atom('dev-libs/maskeddep'))}}} 
+
+
+
+      Arg: dev-libs/abort-masked-mid
+     Atom: dev-libs/abort-masked-mid
+
+
+backtracking aborted after 1 tries
+
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+!!! All ebuilds that could satisfy "dev-libs/abort-masked-mid" for /tmp/opencode/ph-e614/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/abort-masked-mid-1.0::testrepo (masked by: backtracking: missing dependency)
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
+
+
+      Arg: dev-libs/abort-masked-mid
+     Atom: dev-libs/abort-masked-mid
+   ebuild: dev-libs/abort-masked-mid-1.0::testrepo
+
+Child:         (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/') USE="" ELIBC="glibc"
+Parent Dep:    dev-libs/abort-masked-mid
+
+Parent:    (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/abort-leaf-a dev-libs/maskeddep dev-libs/abort-leaf-b
+Priority:  runtime
+
+Parent:    (dev-libs/abort-masked-mid-1.0:0/0::testrepo, ebuild scheduled for merge to '/tmp/opencode/ph-e614/')
+Depstring: dev-libs/abort-leaf-a dev-libs/maskeddep dev-libs/abort-leaf-b
+Priority:  runtime
+Candidates: ['dev-libs/abort-leaf-a', 'dev-libs/maskeddep', 'dev-libs/abort-leaf-b']
+   ebuild: dev-libs/abort-leaf-a-1.0::testrepo
+forced reinstall atoms:
+
+
+slot operator dependencies:
+
+
+forced rebuilds:
+
+
+
+!!! All ebuilds that could satisfy "dev-libs/maskeddep" for /tmp/opencode/ph-e614/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)
+/tmp/opencode/ph-e614/etc/portage/package.mask:
+# fixture package.mask: two atoms stay masked, one is added then removed
+# again via "-atom" to exercise removal within this same source, and a
+# fourth "-atom" line removes an entry the repo-level
+# repo/profiles/package.mask added, not this file -- proving -atom
+# removal now applies across all three real sources (repo, profile
+# chain, user), not just within the user-level file alone.
+# fixture package.mask for the masked-dependency disclosure slice:
+# dev-libs/maskeddep stays masked so a dependency on it reports the
+# "All ebuilds ... have been masked" block (never unmasked anywhere).
+
+
+(dependency required by "dev-libs/abort-masked-mid-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/abort-masked-mid" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+
