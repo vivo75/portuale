@@ -5071,6 +5071,8 @@ mod tests {
             newuse: false,
             changed_use: false,
             nodeps: false,
+            fetchonly: false,
+            fetch_all_uri: false,
             // The parked engines do not implement `--onlydeps` root filtering.
             onlydeps: false,
             onlydeps_with_rdeps: true,

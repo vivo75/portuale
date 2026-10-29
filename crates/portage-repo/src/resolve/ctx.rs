@@ -95,6 +95,11 @@ pub(crate) struct ResolveCtx<'a> {
     pub(crate) newuse: bool,
     pub(crate) changed_use: bool,
     pub(crate) nodeps: bool,
+    /// `--fetchonly`/`-f`, `--fetch-all-uri`/`-F`: with backtracking off they
+    /// are tolerable blocker conflicts (`_accept_blocker_conflicts`).
+    // Portage: depgraph.py, _accept_blocker_conflicts
+    pub(crate) fetchonly: bool,
+    pub(crate) fetch_all_uri: bool,
     pub(crate) onlydeps: bool,
     pub(crate) onlydeps_with_rdeps: bool,
     pub(crate) onlydeps_with_ideps: bool,
@@ -331,6 +336,8 @@ impl<'a> ResolveCtx<'a> {
             newuse: req.newuse,
             changed_use: req.changed_use,
             nodeps: req.nodeps,
+            fetchonly: req.fetchonly,
+            fetch_all_uri: req.fetch_all_uri,
             onlydeps: req.onlydeps,
             onlydeps_with_rdeps: req.onlydeps_with_rdeps,
             onlydeps_with_ideps: req.onlydeps_with_ideps,

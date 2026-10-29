@@ -629,7 +629,13 @@ fn slot_conflict_handler_stops(
     config: &portage_profile::Config,
 ) -> bool {
     if pass.slot_conflicts.is_empty()
-        || (ctx.backtrack_max == 0 && (ctx.buildpkgonly || ctx.nodeps))
+        || accept_blocker_conflicts(
+            ctx.backtrack_max,
+            ctx.buildpkgonly,
+            ctx.nodeps,
+            ctx.fetchonly,
+            ctx.fetch_all_uri,
+        )
     {
         return false;
     }
@@ -641,4 +647,35 @@ fn slot_conflict_handler_stops(
     })
     .changes
     .is_empty()
+}
+
+/// Portage `_accept_blocker_conflicts`: with backtracking off, an option that
+/// tolerates conflicts drops the slot-conflict handler's USE-change search.
+// Portage: depgraph.py, _accept_blocker_conflicts
+fn accept_blocker_conflicts(
+    backtrack_max: u32,
+    buildpkgonly: bool,
+    nodeps: bool,
+    fetchonly: bool,
+    fetch_all_uri: bool,
+) -> bool {
+    backtrack_max == 0 && (buildpkgonly || nodeps || fetchonly || fetch_all_uri)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn accept_blocker_conflicts_mirrors_portage() {
+        use super::accept_blocker_conflicts as accept;
+        // Backtracking on: never acceptable, whatever the flags.
+        assert!(!accept(1, true, true, true, true));
+        assert!(!accept(20, false, false, true, false));
+        // Backtracking off: each tolerable option on its own.
+        assert!(accept(0, true, false, false, false));
+        assert!(accept(0, false, true, false, false));
+        assert!(accept(0, false, false, true, false));
+        assert!(accept(0, false, false, false, true));
+        // Backtracking off with none of them: the handler still runs.
+        assert!(!accept(0, false, false, false, false));
+    }
 }

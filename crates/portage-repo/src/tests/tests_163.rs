@@ -2639,6 +2639,8 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         newuse: false,
         changed_use: false,
         nodeps: false,
+        fetchonly: false,
+        fetch_all_uri: false,
         onlydeps: false,
         onlydeps_with_rdeps: true,
         onlydeps_with_ideps: false,

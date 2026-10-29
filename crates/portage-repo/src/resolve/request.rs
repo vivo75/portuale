@@ -19,6 +19,12 @@ pub struct ResolveRequest {
     pub newuse: bool,
     pub changed_use: bool,
     pub nodeps: bool,
+    /// `--fetchonly`/`-f` and `--fetch-all-uri`/`-F`: with backtracking off
+    /// they are tolerable blocker conflicts, so the slot-conflict handler's
+    /// USE-change search is skipped (`_accept_blocker_conflicts`).
+    // Portage: depgraph.py, _accept_blocker_conflicts
+    pub fetchonly: bool,
+    pub fetch_all_uri: bool,
     /// `--onlydeps`/`-o`: merge the targets' dependencies but not the targets
     /// themselves. Suppression of the root's own merge list is display-layer
     /// (`pretend.rs`); carried here so the `--onlydeps-with-*` pair gates on it.
@@ -172,6 +178,8 @@ impl ResolveRequest {
             newuse: false,
             changed_use: false,
             nodeps: false,
+            fetchonly: false,
+            fetch_all_uri: false,
             onlydeps: false,
             onlydeps_with_rdeps: true,
             onlydeps_with_ideps: false,
