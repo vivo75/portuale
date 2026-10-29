@@ -550,13 +550,16 @@ pub fn list_remote_binary_candidates(
     if binrepos.is_empty() {
         return Vec::new();
     }
-    // Instances are `(version, BUILD_ID)`: under binpkg-multi-instance a local
-    // build 6 must not hide a remote build 7. A `BUILD_ID`-less
-    // entry is its own `None` key, keeping the version-level shadowing.
-    let local_instances: HashSet<(String, Option<String>)> =
+    // Instances are `(version, BUILD_ID, BUILD_TIME)`: under binpkg-multi-instance
+    // a local build 6 must not hide a remote build 7, nor an older local build 2
+    // a newer remote build 2 of the same number. A `BUILD_ID`-less entry is its
+    // own `None` key, keeping the version-level shadowing.
+    // Portage: dbapi/virtual.py, _instance_key_multi_instance
+    type Instance = (String, Option<String>, Option<i64>);
+    let local_instances: HashSet<Instance> =
         binary_candidates_from_index(local, category, package, false)
             .into_iter()
-            .map(|c| (c.version, c.build_id))
+            .map(|c| (c.version, c.build_id, c.build_time))
             .collect();
 
     // An instance the local `$PKGDIR` or an earlier-priority binrepo carries
@@ -564,12 +567,12 @@ pub fn list_remote_binary_candidates(
     // several builds of one version, so the shadow set grows a whole binrepo
     // at a time (`dedup_binary_instances` collapses them later).
     let mut out: Vec<Candidate> = Vec::new();
-    let mut shadowed: HashSet<(String, Option<String>)> = local_instances;
+    let mut shadowed: HashSet<Instance> = local_instances;
     for binrepo in binrepos {
         let binrepo_index = cached_binary_index(&binrepo.packages_dir(root));
-        let mut this_repo: HashSet<(String, Option<String>)> = HashSet::new();
+        let mut this_repo: HashSet<Instance> = HashSet::new();
         for cand in binary_candidates_from_index(&binrepo_index, category, package, true) {
-            let key = (cand.version.clone(), cand.build_id.clone());
+            let key = (cand.version.clone(), cand.build_id.clone(), cand.build_time);
             if shadowed.contains(&key) {
                 continue;
             }

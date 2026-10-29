@@ -492,3 +492,49 @@ fn binary_candidates_memo_equals_a_fresh_build() {
     assert!(first.iter().all(|c| !c.remote));
     assert!(list_binary_candidates(&index.clone(), "dev-libs", "absent").is_empty());
 }
+
+/// A remote build that shares `(version, BUILD_ID)` with a local `$PKGDIR`
+/// build but has another `BUILD_TIME` is a different instance, so it stays a
+/// candidate; the very same build (equal `BUILD_TIME`) is still dropped.
+/// Expected value from Portage: `dbapi/virtual.py`,
+/// `_instance_key_multi_instance` keys by `(cpv, build_id, file_size,
+/// build_time, mtime)`; `bintree.isremote` drops only an equal key.
+#[test]
+fn list_remote_binary_candidates_keeps_a_newer_build_sharing_a_local_build_id() {
+    let dir = std::env::temp_dir().join(format!("portuale-remote-instance-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("Packages"),
+        "PACKAGES: 2\n\n\
+         BUILD_ID: 1\nBUILD_TIME: 1500\nCPV: dev-libs/inst-1.0\nREPO: gentoo\nSLOT: 0\n\n\
+         BUILD_ID: 2\nBUILD_TIME: 2500\nCPV: dev-libs/inst-1.0\nREPO: gentoo\nSLOT: 0\n\n",
+    )
+    .unwrap();
+    let binrepo = portage_profile::BinRepo {
+        sync_uri: format!("file://{}", dir.display()),
+        ..fixture_binhost()
+    };
+    let local_entry = |id: &str, time: &str| {
+        HashMap::from([
+            ("CPV".to_string(), "dev-libs/inst-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("BUILD_ID".to_string(), id.to_string()),
+            ("BUILD_TIME".to_string(), time.to_string()),
+        ])
+    };
+    // Local build 2 is older than the remote build 2; local build 1 is the
+    // remote build 1 itself.
+    let local = BinaryIndex::from_entries(vec![local_entry("2", "1000"), local_entry("1", "1500")]);
+    let cands =
+        list_remote_binary_candidates(&[binrepo], Path::new("/"), &local, "dev-libs", "inst");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        cands
+            .iter()
+            .map(|c| (c.build_id.as_deref(), c.build_time))
+            .collect::<Vec<_>>(),
+        vec![(Some("2"), Some(2500))],
+        "only the remote build 2 (newer than the local one) is a distinct instance"
+    );
+}
