@@ -20088,3 +20088,70 @@ test_601_masked_installed_provider_keeps_the_rebuild_display`; Portage's side
 of that fixture is `LLM/evidence/2026-10-28-601/captures/task1-portage.txt`,
 and the cell's post-fix excerpts are
 `LLM/evidence/2026-10-28-601/cell-postfix-captures.txt`.
+
+**The endgame and interactive root lines carry Portage's trailing slash
+(#574).** Portage builds `Failed to emerge … for <root>` and
+`Failed to install … to <root>` from `pkg.root` (`lib/_emerge/Scheduler.py:2587-2599`),
+and `Package.root` is the slash-normalised `ROOT` (`Package.py:124`,
+`_config/LocationsManager.py:383-386`); the interactive notice concatenates
+the same field (`Scheduler.py:521-525`). All four display sites now render
+through `portage_repo::root_with_trailing_slash` (idempotent; `ROOT=/` keeps
+its bare form), and the `--keep-going: … dropped because` line is the one
+remaining site, filed as #622. Check: `cargo test --release -p portuale
+failed_pkg_msg`, `… echo_summary`, `… interactive_package` (each covers a
+slash-carrying root too), and from pmtest `python3 -m pytest
+pytests-contract-suite/test_portuale.py -q -k "failed or elog or fetchonly or
+keep_going or getbinpkg or interactive"` (52 passed); Portage's own lines are
+`LLM/evidence/2026-10-20-b437/portage.txt:38,60,80,83,103,113` and
+`LLM/evidence/2026-10-19-b423/portage.txt:35,72,88,140,144,193`. The merge-path
+gate stayed green: L1 `l1-20261029T075605Z`, `sys-libs/glibc` +
+`app-shells/bash`, `merged_count 2`, hard findings 0.
+
+**The `vdb_ipc` tests pass under any `TMPDIR` (#595).** The test used to nest
+`portuale-vdb-ipc-<pid>-<nanos>/s` inside a `portuale-td-…` scratch directory,
+so a `TMPDIR` longer than about 13 characters pushed the socket path past
+`sockaddr_un.sun_path`. The test now binds `<dir>/s` in the scratch directory
+it already owns (`Server::start_in_dir`; `Drop` removes only the socket,
+`start_in` still creates and owns the private directory), and
+`too_long_socket_path_is_refused` still drives `start_in` and still leaves its
+parent empty. Check: `TMPDIR=/var/tmp/leak-e595 cargo test --release -p
+portuale vdb_ipc` (3 passed) followed by `ls -A /var/tmp/leak-e595` (empty);
+the red is `LLM/evidence/2026-10-29-e595/red.txt`.
+
+**`--backtrack=0` with `--fetchonly` or `--fetch-all-uri` also skips the
+slot-conflict handler's USE search (#599).** Portage's
+`_accept_blocker_conflicts` (`lib/_emerge/depgraph.py:9302-9317`) accepts the
+conflict for any of `--buildpkgonly`, `--nodeps`, `--fetchonly`,
+`--fetch-all-uri` with backtracking off, and `need_config_change`
+(`:11849-11865`) then leaves the handler out. The two fetch flags now reach
+`ResolveCtx` and the predicate is `accept_blocker_conflicts`, inert whenever
+backtracking is on. Check: `cargo test --release -p portage-repo
+accept_blocker_conflicts` (the seven-row truth table), and the L0 bed
+`l0-20261029T081005Z` — 120 probes, 92 clean, 16 explained, 42 UNEXPLAINED,
+identical to `l0-20261029T033418Z` (same summary counts and slugs, 0 new).
+
+**`--debug` prints the resolution banner and nothing else of the resolution
+display (#614).** `--debug` sets `PORTAGE_DEBUG=1`
+(`lib/_emerge/main.py:1267-1269`); `actions.py:4200,4220-4221` then puts the
+spinner in QUIET mode, so `begin_notice` writes nothing, `end_notice()`
+returns `False` (`stdout_spinner.py:126-139`) and `_show_resolution_report`
+(`depgraph.py:12350-12351`) never runs — the banner survives because
+`_start_resolution_display` prints it with `writemsg_stdout`. Portuale printed
+the notice and the `Dependency resolution took … (backtrack: N/M)` report
+under `--debug`; `abort_preamble` now returns after the banner when `debug` is
+set, and every `resolution_notice_shown` call site passes `quiet || debug`.
+Check: `sh LLM/evidence/2026-10-29-e614/capture.sh`, then
+`grep -c "Calculating dependencies\|Dependency resolution took"
+/tmp/opencode/portuale-after-*.txt` → 0 for both atoms and
+`grep -c "These are the packages"` → 1; the non-debug run still prints
+banner, notice and timing line. Sixteen corpus rows were blessed, each
+differing only by the two removed lines.
+
+**The host-guard mtime test is deterministic (#616), and the backlog tail has
+its own tier sections (#619).** The test pins the watched directory's mtime to
+an old fixed value before fingerprinting, so `mkdir`'s timestamp cannot
+collide on a coarse-mtime tmpfs; it passed 20/20 runs before and after on this
+host's ext4 (`python3 -m pytest pytests-contract-suite/test_host_guard.py -q`,
+14 passed). The tail entries #574–#619 now sit under their own Tier 1/2/3/4
+headings, so `doc_status_check.py` rule (d) reports nothing; the 42 rule-(c)
+rows that keep the checker red are the remaining work, filed as #620.
