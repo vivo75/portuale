@@ -33,6 +33,15 @@ pub(crate) fn collect_pass_blockers(
         blocker_retry_closure: &ctx.blocker_retry_closure,
         buildpkgonly: ctx.buildpkgonly,
         set_seed_atoms: &ctx.config.blocker_retry_seed_atoms,
+        roots: Some(&ClosureRoots {
+            seeds: {
+                let mut seeds = ctx.config.blocker_retry_seed_atoms.clone();
+                seeds.extend(ctx.atoms.iter().cloned());
+                seeds
+            },
+            system: ctx.config.system_packages.clone(),
+            with_bdeps: ctx.with_bdeps,
+        }),
     });
     // Unresolved rows whose owner has no display entry ride out on the result.
     let mut orphan_blockers: Vec<OrphanBlocker> = Vec::new();

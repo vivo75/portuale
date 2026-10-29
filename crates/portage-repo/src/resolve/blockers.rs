@@ -48,6 +48,16 @@ pub struct OrphanBlocker {
     pub conflict: BlockerConflict,
 }
 
+/// The required-set roots the blocker closure was walked from, so the
+/// "closure still needs the target" veto can drop what this run replaces.
+pub(crate) struct ClosureRoots {
+    /// Request, world and selected atoms.
+    pub(crate) seeds: Vec<String>,
+    pub(crate) system: Vec<String>,
+    /// Whether installed `DEPEND`/`BDEPEND` edges count (`--with-bdeps`).
+    pub(crate) with_bdeps: bool,
+}
+
 /// Arguments of [`set_seed_holds_instance`].
 pub(crate) struct SetSeedHoldsInstanceArgs<'a> {
     pub(crate) set_seed_atoms: &'a [String],
@@ -102,8 +112,9 @@ pub(crate) fn set_seed_holds_instance(args: SetSeedHoldsInstanceArgs<'_>) -> boo
     })
 }
 
-/// [`resolve_blockers_with_seeds`] without set seeds (the solver bridge and
-/// the unit tests carry none).
+/// [`resolve_blockers_with_seeds`] without set seeds or roots (the unit
+/// tests carry none).
+#[cfg(test)]
 pub(crate) fn resolve_blockers(
     root: &Path,
     pending: &[PendingBlocker],
@@ -118,6 +129,7 @@ pub(crate) fn resolve_blockers(
         blocker_retry_closure,
         buildpkgonly,
         set_seed_atoms: &[],
+        roots: None,
     })
 }
 
@@ -524,6 +536,8 @@ pub(crate) struct ResolveBlockersWithSeedsArgs<'a> {
     /// The set seed atoms (`@world`/`@selected` members) Portage adds as
     /// `SetArg` parents in its complete graph; see [`set_seed_holds_instance`].
     pub(crate) set_seed_atoms: &'a [String],
+    /// The roots the closure was walked from; `None` keeps the closure as is.
+    pub(crate) roots: Option<&'a ClosureRoots>,
 }
 
 pub(crate) fn resolve_blockers_with_seeds(
@@ -536,6 +550,7 @@ pub(crate) fn resolve_blockers_with_seeds(
         blocker_retry_closure,
         buildpkgonly,
         set_seed_atoms,
+        roots,
     } = args;
     let mut conflicts = Vec::new();
     // cp -> merge-bound slots this run: a cp re-resolved into another slot
@@ -627,6 +642,7 @@ pub(crate) fn resolve_blockers_with_seeds(
                 hold_atoms: &hold_atoms,
                 live_closure_targets: &live_closure_targets,
                 set_seed_atoms,
+                roots,
             })
             .is_break()
             {
@@ -653,6 +669,7 @@ pub(crate) struct ClassifyBlockerMatchArgs<'a> {
     pub(crate) hold_atoms: &'a OnceCell<Vec<String>>,
     pub(crate) live_closure_targets: &'a OnceCell<HashSet<(String, String)>>,
     pub(crate) set_seed_atoms: &'a [String],
+    pub(crate) roots: Option<&'a ClosureRoots>,
 }
 
 /// File a conflict for one installed or merge-bound match of a blocker, unless the match is harmless.
@@ -672,6 +689,7 @@ pub(crate) fn classify_blocker_match(args: ClassifyBlockerMatchArgs<'_>) -> Cont
         hold_atoms,
         live_closure_targets,
         set_seed_atoms,
+        roots,
     } = args;
     let Some((version, slot, sub_slot)) = by_str.get(m).copied() else {
         return ControlFlow::Break(());
@@ -785,6 +803,7 @@ pub(crate) fn classify_blocker_match(args: ClassifyBlockerMatchArgs<'_>) -> Cont
         hold_atoms,
         live_closure_targets,
         set_seed_atoms,
+        roots,
         root,
         owner_entry,
     });
@@ -836,6 +855,7 @@ pub(crate) struct BlockerUnsolvableArgs<'a> {
     pub(crate) hold_atoms: &'a OnceCell<Vec<String>>,
     pub(crate) live_closure_targets: &'a OnceCell<HashSet<(String, String)>>,
     pub(crate) set_seed_atoms: &'a [String],
+    pub(crate) roots: Option<&'a ClosureRoots>,
     pub(crate) root: &'a Path,
     pub(crate) owner_entry: Option<&'a GraphEntry>,
 }
@@ -857,6 +877,7 @@ pub(crate) fn blocker_unsolvable(args: BlockerUnsolvableArgs<'_>) -> bool {
         hold_atoms,
         live_closure_targets,
         set_seed_atoms,
+        roots,
         root,
         owner_entry,
     } = args;
@@ -888,16 +909,19 @@ pub(crate) fn blocker_unsolvable(args: BlockerUnsolvableArgs<'_>) -> bool {
                     && !cp_moves_slot
                     && live_closure_targets
                         .get_or_init(|| {
-                            live_closure_targets_of(root, entries, blocker_retry_closure)
+                            live_closure_targets_of(root, entries, blocker_retry_closure, roots)
                         })
                         .contains(target_key))
                     || set_seed_holds_instance(SetSeedHoldsInstanceArgs {
                         set_seed_atoms: hold_seeds(
                             hold_atoms,
-                            entries,
-                            set_seed_atoms,
-                            root,
-                            blocker_retry_closure,
+                            HoldSeedsArgs {
+                                entries,
+                                set_seed_atoms,
+                                root,
+                                blocker_retry_closure,
+                                roots,
+                            },
                         ),
                         entries,
                         category: &pb.target_category,
@@ -948,39 +972,81 @@ pub(crate) fn blocker_unsolvable(args: BlockerUnsolvableArgs<'_>) -> bool {
 /// this run: the closure is built from the installed state, but an installed package
 /// the run replaces leaves the graph, and its dependencies with it.
 // Portage: depgraph.py, _validate_blockers (a blocked installed node with parents)
-fn live_closure_targets_of(
+pub(crate) fn live_closure_targets_of(
     root: &Path,
     entries: &[GraphEntry],
     closure: &HashSet<(String, String)>,
+    roots: Option<&ClosureRoots>,
 ) -> HashSet<(String, String)> {
+    let (installed, live) = live_closure_members(root, entries, closure, roots);
+    installed.targets_of(&live)
+}
+
+/// The closure members still in the graph after this run, with the reachability
+/// they were read from. Without `roots`, the closure minus what the run replaces.
+fn live_closure_members(
+    root: &Path,
+    entries: &[GraphEntry],
+    closure: &HashSet<(String, String)>,
+    roots: Option<&ClosureRoots>,
+) -> (InstalledReachability, HashSet<(String, String)>) {
     let merge_bound: HashSet<(String, String)> = entries
         .iter()
         .filter(|e| merge_bound_version(&e.outcome).is_some())
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
-    let live: HashSet<(String, String)> = closure.difference(&merge_bound).cloned().collect();
-    InstalledReachability::new(root).targets_of(&live)
+    let installed = InstalledReachability::new(root);
+    let Some(roots) = roots else {
+        let live = closure.difference(&merge_bound).cloned().collect();
+        return (installed, live);
+    };
+    // Kept entries are graph members too: their installed deps stay.
+    let mut seeds = roots.seeds.clone();
+    seeds.extend(
+        entries
+            .iter()
+            .filter(|e| !merge_bound.contains(&(e.category.clone(), e.package.clone())))
+            .map(|e| format!("{}/{}", e.category, e.package)),
+    );
+    let installed = if roots.with_bdeps {
+        installed
+    } else {
+        installed.runtime_edges_only()
+    };
+    // Packages only a replaced one pulled in leave the graph with it.
+    let live = installed.reachable_without(&seeds, &roots.system, &merge_bound);
+    let live = live.difference(&merge_bound).cloned().collect();
+    (installed, live)
 }
 
 /// The recorded atoms of required-set-reached installed packages the walk never
 /// visited, built once (one vdb scan) the first time a blocker reaches that test.
-fn hold_seeds<'a>(
+pub(crate) struct HoldSeedsArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) set_seed_atoms: &'a [String],
+    pub(crate) root: &'a Path,
+    pub(crate) blocker_retry_closure: &'a HashSet<(String, String)>,
+    pub(crate) roots: Option<&'a ClosureRoots>,
+}
+
+pub(crate) fn hold_seeds<'a>(
     hold_atoms: &'a std::cell::OnceCell<Vec<String>>,
-    entries: &[GraphEntry],
-    set_seed_atoms: &[String],
-    root: &Path,
-    blocker_retry_closure: &HashSet<(String, String)>,
+    args: HoldSeedsArgs<'_>,
 ) -> &'a Vec<String> {
+    let HoldSeedsArgs {
+        entries,
+        set_seed_atoms,
+        root,
+        blocker_retry_closure,
+        roots,
+    } = args;
     hold_atoms.get_or_init(|| {
-        let merge_bound: HashSet<(String, String)> = entries
-            .iter()
-            .filter(|e| merge_bound_version(&e.outcome).is_some())
-            .map(|e| (e.category.clone(), e.package.clone()))
-            .collect();
+        // Only members the run leaves in the graph hold an instance.
+        let live = live_closure_members(root, entries, blocker_retry_closure, roots).1;
         let mut atoms: Vec<String> = set_seed_atoms.to_vec();
         for pkg in all_installed_packages(root).iter() {
             let cp = (pkg.category.clone(), pkg.package.clone());
-            if !blocker_retry_closure.contains(&cp) || merge_bound.contains(&cp) {
+            if !live.contains(&cp) {
                 continue;
             }
             let use_flags =

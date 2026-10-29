@@ -1093,3 +1093,124 @@ fn resolve_blockers_returns_nothing_when_the_target_matches_nothing() {
     );
     assert!(conflicts.is_empty());
 }
+
+/// An installed package only a replaced one pulled in leaves the graph with
+/// it, and installed `DEPEND`/`BDEPEND` edges count only with `--with-bdeps`.
+/// Oracle: depgraph.py `_complete_graph` (only graph nodes pull their deps)
+/// and `_add_pkg_deps` (built pkgs drop DEPEND/BDEPEND without bdeps).
+#[test]
+fn live_closure_targets_drop_what_only_a_replaced_package_needed() {
+    let dir = slotundo_temp_dir("blocker-live-closure-roots");
+    for (name, rdepend) in [
+        ("wroot", "dev-libs/kmid"),
+        ("kmid", "dev-libs/tgt"),
+        ("tgt", ""),
+        ("keeper", ""),
+    ] {
+        slotundo_vdb(SlotundoVdbArgs {
+            dir: &dir,
+            name,
+            version: "1",
+            slot: "0",
+            rdepend,
+            installed_use: "",
+        });
+    }
+    // keeper only build-depends on the target.
+    fs::write(
+        dir.join("var/db/pkg/dev-libs/keeper-1/BDEPEND"),
+        "dev-libs/tgt\n",
+    )
+    .unwrap();
+    let mut wroot = graph_entry("dev-libs", "wroot", "2");
+    wroot.outcome = PretendOutcome::Upgrade {
+        from: "1".into(),
+        to: "2".into(),
+    };
+    let keeper = GraphEntry {
+        outcome: PretendOutcome::AlreadyInstalled {
+            version: "1".into(),
+        },
+        ..graph_entry("dev-libs", "keeper", "1")
+    };
+    let entries = vec![wroot, keeper];
+    let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+    let closure: HashSet<(String, String)> = ["wroot", "kmid", "tgt", "keeper"]
+        .iter()
+        .map(|p| cp(p))
+        .collect();
+    let roots = |with_bdeps| ClosureRoots {
+        seeds: vec!["dev-libs/wroot".to_string()],
+        system: Vec::new(),
+        with_bdeps,
+    };
+    let old = live_closure_targets_of(&dir, &entries, &closure, None);
+    assert!(
+        old.contains(&cp("tgt")),
+        "closure-minus-merge-bound keeps kmid live"
+    );
+    let live = live_closure_targets_of(&dir, &entries, &closure, Some(&roots(false)));
+    assert!(
+        !live.contains(&cp("tgt")),
+        "kmid left the graph with wroot: {live:?}"
+    );
+    let live = live_closure_targets_of(&dir, &entries, &closure, Some(&roots(true)));
+    assert!(
+        live.contains(&cp("tgt")),
+        "a kept leaf's BDEPEND counts with bdeps"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A dep atom recorded by an installed package only a replaced one pulled in
+/// (kwin-x11 behind the old plasma-meta) is not a held-instance seed.
+/// Oracle: depgraph.py `_complete_graph` (only graph nodes pull their deps).
+#[test]
+fn hold_seeds_skip_a_package_only_a_replaced_one_needed() {
+    let dir = slotundo_temp_dir("blocker-hold-seeds-roots");
+    for (name, rdepend) in [
+        ("wroot", "dev-libs/kmid"),
+        ("kmid", ">=dev-libs/tgt-1:0"),
+        ("tgt", ""),
+    ] {
+        slotundo_vdb(SlotundoVdbArgs {
+            dir: &dir,
+            name,
+            version: "1",
+            slot: "0",
+            rdepend,
+            installed_use: "",
+        });
+    }
+    let mut wroot = graph_entry("dev-libs", "wroot", "2");
+    wroot.outcome = PretendOutcome::Upgrade {
+        from: "1".into(),
+        to: "2".into(),
+    };
+    let entries = vec![wroot];
+    let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+    let closure: HashSet<(String, String)> =
+        ["wroot", "kmid", "tgt"].iter().map(|p| cp(p)).collect();
+    let roots = ClosureRoots {
+        seeds: vec!["dev-libs/wroot".to_string()],
+        system: Vec::new(),
+        with_bdeps: false,
+    };
+    let held = |roots| {
+        let cell = std::cell::OnceCell::new();
+        hold_seeds(
+            &cell,
+            HoldSeedsArgs {
+                entries: &entries,
+                set_seed_atoms: &[],
+                root: &dir,
+                blocker_retry_closure: &closure,
+                roots,
+            },
+        )
+        .clone()
+    };
+    assert!(held(None).iter().any(|a| a == ">=dev-libs/tgt-1:0"));
+    assert!(held(Some(&roots)).is_empty(), "kmid left with wroot");
+    let _ = fs::remove_dir_all(&dir);
+}

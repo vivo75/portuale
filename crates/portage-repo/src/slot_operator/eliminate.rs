@@ -344,6 +344,8 @@ pub struct InstalledReachability {
     by_cp: HashMap<Cp, usize>,
     root: PathBuf,
     edges: RefCell<HashMap<usize, Vec<Cp>>>,
+    /// Follow `DEPEND`/`BDEPEND` edges too (the default).
+    build_deps: bool,
 }
 
 impl InstalledReachability {
@@ -360,7 +362,17 @@ impl InstalledReachability {
             by_cp,
             root: root.to_path_buf(),
             edges: RefCell::new(HashMap::new()),
+            build_deps: true,
         }
+    }
+
+    /// Drop the `DEPEND`/`BDEPEND` edges: an installed package's build-time
+    /// deps are not graph edges without `--with-bdeps`.
+    // Portage: depgraph.py, _add_pkg_deps (built pkgs, `--with-bdeps=n`)
+    #[must_use]
+    pub fn runtime_edges_only(mut self) -> Self {
+        self.build_deps = false;
+        self
     }
 
     fn matches_cp(&self, atom_str: &str) -> Option<Cp> {
@@ -381,6 +393,9 @@ impl InstalledReachability {
         let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
         let mut out = Vec::new();
         for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+            if !self.build_deps && matches!(dep_key, "DEPEND" | "BDEPEND") {
+                continue;
+            }
             let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
             if depstr.trim().is_empty() {
                 continue;
@@ -406,6 +421,9 @@ impl InstalledReachability {
             let root = self.root.as_path();
             let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
             for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+                if !self.build_deps && matches!(dep_key, "DEPEND" | "BDEPEND") {
+                    continue;
+                }
                 let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
                 let Some(atoms) = flat_dep_atoms(&depstr, &use_flags) else {
                     continue;

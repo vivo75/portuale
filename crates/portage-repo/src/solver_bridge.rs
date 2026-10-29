@@ -1066,26 +1066,65 @@ fn file_bridge_blocker_conflicts(
     // not move. A satisfied uninstall with an installed parent in the
     // expanded cone flips to unresolved next (Portage's digraph-parents
     // veto, which the solution-member-only entries cannot see).
+    let mut seeds = req.config.blocker_retry_seed_atoms.clone();
+    seeds.extend(req.atoms.iter().cloned());
+    seeds.sort();
+    seeds.dedup();
     let blocker_retry_closure: std::collections::HashSet<(String, String)> = if kept.is_some() {
-        let mut seeds = req.config.blocker_retry_seed_atoms.clone();
-        seeds.extend(req.atoms.iter().cloned());
-        seeds.sort();
-        seeds.dedup();
         super::required_set_reachable_cps(&req.root, &seeds, &req.config.system_packages)
     } else {
         // The bridge has no required-set closure of its own.
         std::collections::HashSet::new()
     };
-    let mut conflicts = super::resolve_blockers(
-        &req.root,
-        pending_blockers,
+    let roots = super::ClosureRoots {
+        seeds: seeds.clone(),
+        system: req.config.system_packages.clone(),
+        with_bdeps: req.with_bdeps,
+    };
+    let mut conflicts = super::resolve_blockers_with_seeds(super::ResolveBlockersWithSeedsArgs {
+        root: &req.root,
+        pending: pending_blockers,
         entries,
-        &blocker_retry_closure,
+        blocker_retry_closure: &blocker_retry_closure,
         // Never runs under `--buildpkgonly`, so the gate is inert here.
-        false,
-    );
+        buildpkgonly: false,
+        set_seed_atoms: &[],
+        roots: kept.is_some().then_some(&roots),
+    });
     if kept.is_some() {
-        unsolvable_with_installed_parent(&req.root, repo, entries, &mut conflicts);
+        // Parents must survive the run: an installed package this run
+        // replaces, and whatever only it pulled in, leaves the graph.
+        let merge_bound: std::collections::HashSet<(String, String)> = entries
+            .iter()
+            .filter(|e| super::merge_bound_version(&e.outcome).is_some())
+            .map(|e| (e.category.clone(), e.package.clone()))
+            .collect();
+        // Kept leaves are solution members the run reaches through the new
+        // deps of merged entries, which the vdb cannot show.
+        let mut live_seeds = seeds.clone();
+        live_seeds.extend(
+            entries
+                .iter()
+                .filter(|e| !merge_bound.contains(&(e.category.clone(), e.package.clone())))
+                .map(|e| format!("{}/{}", e.category, e.package)),
+        );
+        let installed = super::InstalledReachability::new(&req.root);
+        let live = if req.with_bdeps {
+            installed
+        } else {
+            installed.runtime_edges_only()
+        }
+        .reachable_without(&live_seeds, &req.config.system_packages, &merge_bound);
+        unsolvable_with_installed_parent(
+            &InstalledParentScope {
+                root: &req.root,
+                repo,
+                entries,
+                live: &live,
+                with_bdeps: req.with_bdeps,
+            },
+            &mut conflicts,
+        );
     }
     let mut orphan_blockers = Vec::new();
     super::file_blocker_conflicts(
@@ -1480,6 +1519,17 @@ fn installed_satisfies_self(
     })
 }
 
+/// What [`unsolvable_with_installed_parent`] reads besides the conflicts.
+#[derive(Clone, Copy)]
+struct InstalledParentScope<'a> {
+    root: &'a std::path::Path,
+    repo: &'a LazyRepo,
+    entries: &'a [super::GraphEntry],
+    /// Installed cps still in the graph after the run (replaced ones excluded).
+    live: &'a HashSet<(String, String)>,
+    with_bdeps: bool,
+}
+
 /// A satisfied-by-uninstall conflict the bridge must report unresolved instead:
 /// the removal target is installed, nothing this run merges in its cp, and an
 /// installed package the request expansion reached still depends on it. Portage's
@@ -1491,12 +1541,11 @@ fn installed_satisfies_self(
 // Portage: depgraph.py, _validate_blockers (the digraph-contains-and-parents
 // veto on the uninstall scheduling)
 fn unsolvable_with_installed_parent(
-    root: &std::path::Path,
-    repo: &LazyRepo,
-    entries: &[super::GraphEntry],
+    scope: &InstalledParentScope<'_>,
     conflicts: &mut [super::FiledBlocker],
 ) {
     use super::{BlockerSatisfiedBy, merge_bound_version};
+    let InstalledParentScope { entries, .. } = *scope;
     for conflict in conflicts.iter_mut() {
         let Some(BlockerSatisfiedBy::Uninstall { cpv, .. }) = &conflict.conflict.satisfied_by
         else {
@@ -1514,7 +1563,7 @@ fn unsolvable_with_installed_parent(
         }) {
             continue;
         }
-        if !has_installed_parent(root, repo, &category, &package, &version) {
+        if !has_installed_parent(scope, &category, &package, &version) {
             continue;
         }
         conflict.conflict.unsolvable = true;
@@ -1526,12 +1575,18 @@ fn unsolvable_with_installed_parent(
 /// by the request expansion, has a USE-evaluated vdb dep edge onto the
 /// `category/package-version` instance. Blocker atoms are not parents.
 fn has_installed_parent(
-    root: &std::path::Path,
-    repo: &LazyRepo,
+    scope: &InstalledParentScope<'_>,
     category: &str,
     package: &str,
     version: &str,
 ) -> bool {
+    let root = scope.root;
+    // Portage ignores an installed package's DEPEND/BDEPEND edges without --with-bdeps.
+    let dep_keys: &[&str] = if scope.with_bdeps {
+        &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND"]
+    };
     let (slot, sub_slot) = super::read_vdb_slot(root, category, package, version);
     // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
     let candidate = format!("{category}/{package}-{version}:{slot}/{sub_slot}");
@@ -1539,38 +1594,34 @@ fn has_installed_parent(
         .iter()
         .filter(|inst| {
             (inst.category.as_str(), inst.package.as_str()) != (category, package)
-                && repo.expanded_contains(&inst.category, &inst.package)
+                && scope.repo.expanded_contains(&inst.category, &inst.package)
+                && scope
+                    .live
+                    .contains(&(inst.category.clone(), inst.package.clone()))
         })
         .any(|inst| {
             let use_flags =
                 super::read_vdb_flag_set(root, &inst.category, &inst.package, &inst.version, "USE");
-            ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"]
-                .iter()
-                .any(|key| {
-                    let depstr = super::read_vdb_string(
-                        root,
-                        &inst.category,
-                        &inst.package,
-                        &inst.version,
-                        key,
-                    );
-                    let Some(atoms) = super::flat_dep_atoms(&depstr, &use_flags) else {
+            dep_keys.iter().any(|key| {
+                let depstr =
+                    super::read_vdb_string(root, &inst.category, &inst.package, &inst.version, key);
+                let Some(atoms) = super::flat_dep_atoms(&depstr, &use_flags) else {
+                    return false;
+                };
+                atoms.iter().any(|atom_str| {
+                    let Some(atom) = parse_dep_atom(atom_str, "solver_bridge_dep_atoms") else {
                         return false;
                     };
-                    atoms.iter().any(|atom_str| {
-                        let Some(atom) = parse_dep_atom(atom_str, "solver_bridge_dep_atoms") else {
-                            return false;
-                        };
-                        if atom.blocker != portage_dep::Blocker::None
-                            || atom.category != category
-                            || atom.package != package
-                        {
-                            return false;
-                        }
-                        portage_dep::match_from_list(atom_str, &[candidate.as_str()])
-                            .is_some_and(|matched| !matched.is_empty())
-                    })
+                    if atom.blocker != portage_dep::Blocker::None
+                        || atom.category != category
+                        || atom.package != package
+                    {
+                        return false;
+                    }
+                    portage_dep::match_from_list(atom_str, &[candidate.as_str()])
+                        .is_some_and(|matched| !matched.is_empty())
                 })
+            })
         })
 }
 
@@ -8459,7 +8510,7 @@ mod tests {
     #[test]
     fn s6_parent_use_reinstalls_deep_expands_installed_strings() {
         let root = s6_temp_vdb();
-        let mut req = fixture_request(&["dev-libs/pg34-g2p"]);
+        let mut req = fixture_request(&["dev-libs/pg34-ulib"]);
         req.root = root.path().to_path_buf();
         req.deep = super::super::Deep::Unlimited;
         req.config
@@ -8769,7 +8820,7 @@ mod tests {
     #[test]
     fn s6_parent_use_reinstalls_same_slot_wrong_version_records_do_not_satisfy() {
         let root = s6_temp_vdb();
-        let mut req = fixture_request(&["dev-libs/pg34-g2p"]);
+        let mut req = fixture_request(&["dev-libs/pg34-ulib"]);
         req.root = root.path().to_path_buf();
         req.deep = super::super::Deep::Unlimited;
         req.config
@@ -8985,6 +9036,67 @@ mod tests {
         }
     }
 
+    /// Every installed `cat/pkg` of `root`: the "nothing left the graph" live set.
+    fn s6_all_installed_cps(root: &std::path::Path) -> std::collections::HashSet<(String, String)> {
+        super::super::all_installed_packages(root)
+            .iter()
+            .map(|p| (p.category.clone(), p.package.clone()))
+            .collect()
+    }
+
+    fn s6_scope<'a>(
+        root: &'a std::path::Path,
+        repo: &'a super::LazyRepo,
+        entries: &'a [super::super::GraphEntry],
+        with_bdeps: bool,
+        live: &'a std::collections::HashSet<(String, String)>,
+    ) -> super::InstalledParentScope<'a> {
+        super::InstalledParentScope {
+            root,
+            repo,
+            entries,
+            live,
+            with_bdeps,
+        }
+    }
+
+    /// An installed parent the run replaced (not in `live`) or that only
+    /// build-depends on the target (no `--with-bdeps`) does not veto the
+    /// uninstall: Portage's graph holds neither edge.
+    /// Oracle: depgraph.py `_add_pkg_deps` (built pkgs drop DEPEND/BDEPEND
+    /// without `--with-bdeps`) and `_validate_blockers` (parents are graph nodes).
+    #[test]
+    fn has_installed_parent_needs_a_live_runtime_parent() {
+        let root = s6_temp_vdb();
+        let mut req = fixture_request(&["dev-libs/pg34-ulib"]);
+        let repos =
+            super::super::find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+        let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+        req.root = root.path().to_path_buf();
+        let lazy =
+            super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
+        let all = s6_all_installed_cps(&root);
+        let has = |with_bdeps, live: &std::collections::HashSet<(String, String)>| {
+            super::has_installed_parent(
+                &s6_scope(&root, &lazy, &[], with_bdeps, live),
+                "dev-libs",
+                "pg34-cdep",
+                "1",
+            )
+        };
+        assert!(has(true, &all), "ulib-1's RDEPEND parents cdep");
+        assert!(
+            !has(true, &std::collections::HashSet::new()),
+            "a parent that left the graph"
+        );
+        let dir = root.join("var/db/pkg/dev-libs/pg34-ulib-1");
+        std::fs::write(dir.join("DEPEND"), "dev-libs/pg34-cdep\n").expect("DEPEND writes");
+        std::fs::write(dir.join("RDEPEND"), "\n").expect("RDEPEND writes");
+        assert!(has(true, &all), "a DEPEND edge counts with --with-bdeps");
+        assert!(!has(false, &all), "a DEPEND edge is dropped without it");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// `has_installed_parent` reads vdb edges only: blocker atoms are not
     /// parents, so a block the solution bypasses stays satisfied.
     #[test]
@@ -9000,7 +9112,12 @@ mod tests {
             super::LazyRepo::build(&req, repos, &seeds, &shallow, true).expect("closure builds");
         // The only edge onto `pg34-cdep` is the `!` block: no parent.
         assert!(
-            !super::has_installed_parent(&root, &lazy, "dev-libs", "pg34-cdep", "1"),
+            !super::has_installed_parent(
+                &s6_scope(&root, &lazy, &[], true, &s6_all_installed_cps(&root)),
+                "dev-libs",
+                "pg34-cdep",
+                "1"
+            ),
             "a blocker atom never parents the blocked package"
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -9044,7 +9161,11 @@ mod tests {
                 tree_scheduled_uninstall: false,
             },
         }];
-        super::unsolvable_with_installed_parent(&req.root, &lazy, &entries, &mut conflicts);
+        let live = s6_all_installed_cps(&req.root);
+        super::unsolvable_with_installed_parent(
+            &s6_scope(&req.root, &lazy, &entries, true, &live),
+            &mut conflicts,
+        );
         assert!(
             conflicts[0].conflict.unsolvable && conflicts[0].conflict.satisfied_by.is_none(),
             "the installed parent keeps the block unresolved: {:?}",
