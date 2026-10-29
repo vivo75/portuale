@@ -184,7 +184,10 @@ pub(crate) fn interactive_notice(
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);
         out.push_str(&format!("  {}", color.c("INFORM", &cpv)));
         if root != std::path::Path::new("/") {
-            out.push_str(&format!(" for {}", root.display()));
+            out.push_str(&format!(
+                " for {}",
+                portage_repo::root_with_trailing_slash(root)
+            ));
         }
         out.push('\n');
     }

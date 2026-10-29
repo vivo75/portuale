@@ -151,6 +151,7 @@ Elog message collection and dispatch (Portage's `lib/portage/elog/`). Context mo
 
 ## fn format_echo_summary
 - Pure formatter behind `echo_summary` (`mod_echo._finalize`), including the `* Log file: <path>` line when `pkg.logfile` is present (backlog #435).
+- Backlog #574: the `merged to {root}` suffix renders through `portage_repo::root_with_trailing_slash` (Portage's `pkg.root` always carries the slash, `Package.py:124` + `LocationsManager.py:383-386`). The `root == "/"` branch stays: the helper returns `/` for `/`, so an unconditional suffix would print `merged to /:`.
 
 ## fn echo_summary
 - Ports `mod_echo._finalize`: the `* Messages for package <cpv>:` block for every accumulated package, all message types on stdout, each line `<colour> * </colour><msg>` (`EOutput.e{info,log,warn,error,qawarn}`).

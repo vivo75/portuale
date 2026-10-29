@@ -51,3 +51,7 @@ Progress and status lines of the build scheduler: counters, background mode, `>>
 
 ## fn fetching_line (trailing slash history)
 - The `Fetching ({cur} of {max}) {cpv}::{repo}[ for {root}]` line read `[ for {root}]` before the #566 trailing-slash fix; it now renders `[ for {root}/]` like the other progress lines.
+
+## fn interactive_notice
+- Ports Portage's interactive-package notice (`Scheduler.py:521-525`): the `>>> Sending package output to stdio ...` header, one `  <cpv>[ for <root>]` row per interactive entry, then the `--jobs=1` block when parallel.
+- Backlog #574: the ` for <root>` row suffix renders through `portage_repo::root_with_trailing_slash`. Portage concatenates `pkg.root` (`Scheduler.py:521-525`), which `set_root_override` normalises to exactly one trailing slash. The `root == "/"` branch stays (the helper returns `/` for `/`, so an unconditional suffix would print `for /`).

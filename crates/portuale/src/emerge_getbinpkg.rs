@@ -1684,7 +1684,7 @@ pub(crate) fn failed_pkg_msg(cpv: &str, root: &Path, log_path: Option<&Path>) ->
     let for_root = if root == Path::new("/") {
         String::new()
     } else {
-        format!(" for {}", root.display())
+        format!(" for {}", portage_repo::root_with_trailing_slash(root))
     };
     match log_path {
         Some(log) => format!(
@@ -1704,7 +1704,7 @@ pub(crate) fn failed_install_pkg_msg(cpv: &str, root: &Path, log_path: Option<&P
     let for_root = if root == Path::new("/") {
         String::new()
     } else {
-        format!(" to {}", root.display())
+        format!(" to {}", portage_repo::root_with_trailing_slash(root))
     };
     match log_path {
         Some(log) => format!(
@@ -2953,12 +2953,18 @@ mod tests {
                     "/tmp/r/pt/portage/dev-libs/packagepkg-1.0/temp/build.log"
                 ))
             ),
-            "\n>>> Failed to emerge dev-libs/packagepkg-1.0 for /tmp/r/root, Log file:\n\
+            "\n>>> Failed to emerge dev-libs/packagepkg-1.0 for /tmp/r/root/, Log file:\n\
              \n>>>  '/tmp/r/pt/portage/dev-libs/packagepkg-1.0/temp/build.log'\n"
         );
         assert_eq!(
             failed_pkg_msg("dev-libs/packagepkg-1.0", Path::new("/tmp/r/root"), None),
-            "\n>>> Failed to emerge dev-libs/packagepkg-1.0 for /tmp/r/root\n"
+            "\n>>> Failed to emerge dev-libs/packagepkg-1.0 for /tmp/r/root/\n"
+        );
+        // `root_with_trailing_slash` is idempotent: a root that already
+        // carries the slash keeps exactly one.
+        assert_eq!(
+            failed_pkg_msg("dev-libs/packagepkg-1.0", Path::new("/tmp/r/root/"), None),
+            "\n>>> Failed to emerge dev-libs/packagepkg-1.0 for /tmp/r/root/\n"
         );
         // Only a lone failure is silent: a `--keep-going` combined
         // message keeps the normal tail.
@@ -2981,12 +2987,16 @@ mod tests {
                     "/var/tmp/b444/tmp/portage/dev-util/postinstfail-1/temp/build.log"
                 ))
             ),
-            "\n>>> Failed to install dev-util/postinstfail-1 to /var/tmp/b444/root, Log file:\n\
+            "\n>>> Failed to install dev-util/postinstfail-1 to /var/tmp/b444/root/, Log file:\n\
              \n>>>  '/var/tmp/b444/tmp/portage/dev-util/postinstfail-1/temp/build.log'\n"
         );
         assert_eq!(
             failed_install_pkg_msg("dev-util/postinstfail-1", Path::new("/"), None),
             "\n>>> Failed to install dev-util/postinstfail-1\n"
+        );
+        assert_eq!(
+            failed_install_pkg_msg("dev-util/postinstfail-1", Path::new("/tmp/r/root"), None),
+            "\n>>> Failed to install dev-util/postinstfail-1 to /tmp/r/root/\n"
         );
     }
 

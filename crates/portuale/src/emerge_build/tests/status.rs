@@ -436,6 +436,11 @@ fn interactive_package_forces_foreground_and_one_job() {
     );
     assert!(
         interactive_notice(&list, false, std::path::Path::new("/t"), &color)
-            .contains("  dev-libs/inter-1.0 for /t\n\n")
+            .contains("  dev-libs/inter-1.0 for /t/\n\n")
+    );
+    // Idempotent: a root already carrying the slash keeps one.
+    assert!(
+        interactive_notice(&list, false, std::path::Path::new("/t/"), &color)
+            .contains("  dev-libs/inter-1.0 for /t/\n\n")
     );
 }

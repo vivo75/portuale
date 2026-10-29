@@ -197,6 +197,7 @@ see `emerge_build/pretend_pass.md`.
 
 ## fn failed_pkg_msg
 - Ports Portage `Scheduler._failed_pkg_msg(pkg, "emerge", "for")` (`Scheduler.py:2366-2381`, backlog #174): each `_status_msg` emits its own leading blank line, then `>>> <msg>`; the log line carries Portage's own leading space (`f" '{log}'"`). Each `_status_msg` writes its own leading blank line first (`writemsg_level("\n")` before `displayMessage`), and the `>>> ` prefix is `JobStatusDisplay._format_msg`; the ` for <root>` suffix appears when `ROOT != "/"` (Portage `pkg.root_config.settings["ROOT"]`).
+- Backlog #574: the suffix renders through `portage_repo::root_with_trailing_slash`, like the #566 progress family. Portage builds the suffix from `pkg.root` (`Scheduler.py:2587-2599`), and `Package.root` is `root_config.root` (`Package.py:124`), which `set_root_override` normalises to exactly one trailing slash (`LocationsManager.py:383-386`). The `ROOT == "/"` branch stays: the helper returns `/` for `/`, and an unconditional suffix would print `for /`. `failed_install_pkg_msg` (the `to` half) and the interactive notice (`Scheduler.py:521-525`) got the same fix in the same slice.
 
 ## fn local_index_lists_cpv
 - A `BUILD_ID` matching nothing still leaves the plain `CPV` hit: Portage's `cpv_exists` passes a plain string, which `_instance_key_multi_instance` resolves to the latest instance (`virtual.py:53-68`) -- any surviving instance keeps it true.

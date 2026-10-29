@@ -1152,7 +1152,7 @@ pub fn format_echo_summary(packages: &[ElogPackage], color: &Colorizer) -> Strin
         } else {
             out.push_str(&format!(
                 "{star}Messages for package {key} merged to {}:\n",
-                pkg.root
+                portage_repo::root_with_trailing_slash(std::path::Path::new(&pkg.root))
             ));
         }
         if let Some(logfile) = &pkg.logfile {
@@ -1292,7 +1292,17 @@ mod tests {
         };
         assert_eq!(
             format_echo_summary(std::slice::from_ref(&with_log), &color),
-            "\n * Messages for package dev-libs/foo-1.0 merged to /target:\n * Log file: /var/log/portage/dev-libs:foo-1.0:20261020-120000.log\n\n * read the docs\n"
+            "\n * Messages for package dev-libs/foo-1.0 merged to /target/:\n * Log file: /var/log/portage/dev-libs:foo-1.0:20261020-120000.log\n\n * read the docs\n"
+        );
+        // The normaliser is idempotent: a root that already ends in `/` keeps
+        // exactly one slash.
+        let with_slash = ElogPackage {
+            root: "/target/".to_string(),
+            ..with_log
+        };
+        assert_eq!(
+            format_echo_summary(std::slice::from_ref(&with_slash), &color),
+            "\n * Messages for package dev-libs/foo-1.0 merged to /target/:\n * Log file: /var/log/portage/dev-libs:foo-1.0:20261020-120000.log\n\n * read the docs\n"
         );
         echo_summary(std::slice::from_ref(&pkg), &color);
     }
