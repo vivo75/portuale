@@ -204,8 +204,49 @@ fn add_installed_dependency_closure_virtuals_only_expands_virtuals() {
     );
 }
 
+/// A scratch repo carrying `dev-libs/inj-1.0`'s md5-cache entry, so the
+/// installed package has a live ebuild.
+fn libc_inj_repo(tag: &str) -> (TempDir, Vec<RepoConfig>) {
+    use md5::Digest as _;
+    let base = TempDir::new(&format!("portuale-mo-repo-{}-{}", std::process::id(), tag));
+    let dir = base.join("r/dev-libs/inj");
+    std::fs::create_dir_all(&dir).unwrap();
+    let ebuild =
+        "EAPI=8\nDESCRIPTION=\"x\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"dev-libs/keep\"\n";
+    std::fs::write(dir.join("inj-1.0.ebuild"), ebuild).unwrap();
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(ebuild.as_bytes()));
+    let cache = base.join("r/metadata/md5-cache/dev-libs");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(
+        cache.join("inj-1.0"),
+        format!(
+            "DEFINED_PHASES=-\nDESCRIPTION=x\nEAPI=8\nKEYWORDS=amd64\nRDEPEND=dev-libs/keep\nSLOT=0\n_md5_={md5}\n"
+        ),
+    )
+    .unwrap();
+    let repos = vec![RepoConfig {
+        name: "r".to_string(),
+        location: base.join("r"),
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    (base, repos)
+}
+
+/// Portage reads an installed package's deps from its ebuild when the tree
+/// still has it (the injected libc atom is then never seen) and from the vdb
+/// when the ebuild is gone (the atom is a real runtime edge).
+// Portage: _emerge/depgraph.py, _add_pkg_deps (dynamic deps fallback)
 #[test]
-fn add_installed_dependency_closure_strips_the_injected_libc_dep() {
+fn add_installed_dependency_closure_strips_the_injected_libc_dep_only_with_an_ebuild() {
     let files: &[(&str, &str)] = &[
         ("SLOT", "0"),
         (
@@ -216,38 +257,43 @@ fn add_installed_dependency_closure_strips_the_injected_libc_dep() {
              =sys-libs/glibc-mine-2.38 >=sys-libs/other-2.38",
         ),
     ];
-    let root = mo_tmp_vdb(
-        "closure-libc",
-        &[
-            (
-                "virtual",
-                "libc-1.0",
-                &[("SLOT", "0"), ("RDEPEND", "sys-libs/glibc-mine")],
-            ),
-            ("dev-libs", "inj-1.0", files),
-        ],
-    );
-    let mut entries = vec![new_entry(
-        "app-misc",
-        "top",
-        "1.0",
-        vec![runtime_edge("dev-libs/inj", "dev-libs", "inj")],
-    )];
-    add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
-        entries: &mut entries,
-        root: &root,
-        repos: &[],
-        system_atoms: &[],
-        virtuals_only: false,
-        dynamic_deps: true,
-    });
-    let inj = entries
-        .iter()
-        .find(|e| e.package == "inj")
-        .expect("the installed dep is seeded");
-    let atoms: HashSet<&str> = inj.deps.iter().map(|e| e.atom.as_str()).collect();
+    let vdb = &[
+        (
+            "virtual",
+            "libc-1.0",
+            &[("SLOT", "0"), ("RDEPEND", "sys-libs/glibc-mine")][..],
+        ),
+        ("dev-libs", "inj-1.0", files),
+    ];
+    let run = |tag: &str, repos: &[RepoConfig]| -> HashSet<String> {
+        let root = mo_tmp_vdb(tag, vdb);
+        let mut entries = vec![new_entry(
+            "app-misc",
+            "top",
+            "1.0",
+            vec![runtime_edge("dev-libs/inj", "dev-libs", "inj")],
+        )];
+        add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
+            entries: &mut entries,
+            root: &root,
+            repos,
+            system_atoms: &[],
+            virtuals_only: false,
+            dynamic_deps: true,
+        });
+        let inj = entries
+            .iter()
+            .find(|e| e.package == "inj")
+            .expect("the installed dep is seeded");
+        inj.deps.iter().map(|e| e.atom.clone()).collect()
+    };
+    let injected = ">=sys-libs/glibc-mine-2.38";
+
+    // The ebuild is in the tree: the injected bare atom is stripped.
+    let (_keep, repos) = libc_inj_repo("with-ebuild");
+    let atoms = run("closure-libc", &repos);
     assert!(
-        !atoms.contains(">=sys-libs/glibc-mine-2.38"),
+        !atoms.contains(injected),
         "the injected bare `>=libc-provider-version` atom is stripped: {atoms:?}"
     );
     for kept in [
@@ -263,9 +309,18 @@ fn add_installed_dependency_closure_strips_the_injected_libc_dep() {
             "only the exact injected shape is stripped; {kept} must stay: {atoms:?}"
         );
     }
-    // Without an installed libc provider there is no injection to
-    // strip: the same atom stays.
+
+    // The ebuild is gone from the tree: Portage walks the vdb string, so the
+    // atom stays a runtime edge of the installed package.
+    let atoms = run("closure-libc-no-ebuild", &[]);
+    assert!(
+        atoms.contains(injected),
+        "no ebuild means the vdb's libc atom is kept: {atoms:?}"
+    );
+
+    // Without an installed libc provider there is no injection to strip.
     let root = mo_tmp_vdb("closure-libc-none", &[("dev-libs", "inj-1.0", files)]);
+    let (_keep, repos) = libc_inj_repo("none");
     let mut entries = vec![new_entry(
         "app-misc",
         "top",
@@ -275,16 +330,14 @@ fn add_installed_dependency_closure_strips_the_injected_libc_dep() {
     add_installed_dependency_closure(AddInstalledDependencyClosureArgs {
         entries: &mut entries,
         root: &root,
-        repos: &[],
+        repos: &repos,
         system_atoms: &[],
         virtuals_only: false,
         dynamic_deps: true,
     });
     let inj = entries.iter().find(|e| e.package == "inj").unwrap();
     assert!(
-        inj.deps
-            .iter()
-            .any(|e| e.atom == ">=sys-libs/glibc-mine-2.38"),
+        inj.deps.iter().any(|e| e.atom == injected),
         "no libc provider means nothing is stripped: {:?}",
         inj.deps.iter().map(|e| e.atom.as_str()).collect::<Vec<_>>()
     );

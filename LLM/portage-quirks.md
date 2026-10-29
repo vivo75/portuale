@@ -414,3 +414,10 @@ when a claim turns out false.
 - **First seen**: Portage 3.0.83, bed `MULTI_deep-update-world` on 2026-10-29 (plan 02.601 Task 3); not checked against 3.0.82.2.
 - **Portuale**: not copied; portuale's order is deterministic. It matches Portage's seed-0 order for the `net-libs/nghttp3` / `sys-libs/libseccomp` pair (after the post-prune bias-key fix, plan 02.601 Task 3). None of the six measured seeds reproduces portuale's full perl-cluster order. Seed 1 is the closest: it agrees with portuale's own rows through #18 (`virtual/acl`, `dev-libs/libpcre2`, `app-arch/unzip`, `dev-lang/perl`, `virtual/perl-Encode`, `virtual/perl-Test-Harness`; portuale's rows are in `LLM/evidence/2026-10-28-601/cell-postfix-captures.txt`) and diverges at #19, Portage `virtual/perl-Math-BigInt` against portuale `virtual/perl-CPAN`. The bed cell's remaining `[order]` row is allowlisted in `differential-test-bed/compare/known-divergences.yaml` (`perl-cluster-hash-order-601`).
 
+## Q25. An installed package's injected libc atom becomes a real dependency once its ebuild leaves the tree (suspect)
+
+- **What Portage does**: `_inject_libc_dep` (`lib/portage/package/ebuild/doebuild.py:3060`, bug #753500) appends a bare `>=<libc-provider>-<version>` to the `RDEPEND` recorded in every built package. While the ebuild is in the tree, dynamic deps read the ebuild and the atom is never seen. When the ebuild is removed from the tree but the package stays installed, the vdb string is walked and the atom is an ordinary `runtime` edge to glibc.
+- **Why it looks wrong**: the atom was added to record the build's libc, not to order merges, yet it changes the merge order of unrelated dependents (`net-libs/ngtcp2` after `sys-apps/lsb-release` in `dev-lang/rust`) only because a tree sync removed an old ebuild.
+- **First seen**: Portage 3.0.83, bed `dev-lang_rust` after the 2026-10-29 repo update (`dev-libs/openssl-3.5.7` dropped from the tree).
+- **Portuale**: copied (#624); the strip applies only while the ebuild exists.
+

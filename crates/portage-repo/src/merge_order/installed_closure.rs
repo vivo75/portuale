@@ -197,7 +197,7 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
         };
 
     // Closure edges come from the raw vdb snapshot, not the ebuild view the walk
-    // uses; the injected-libc strip below is only sound on that Raw path.
+    // uses; the injected-libc strip below is only sound while the ebuild exists.
     let libc_cps = crate::libc_provider_cps(root);
     let is_injected_libc = |atom: &str| -> bool {
         // drop-ok: unparseable atom kept, not stripped
@@ -246,7 +246,7 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
             true,
         )
         .into_iter()
-        .filter(|e| layer != crate::InstalledMetaLayer::Raw || !is_injected_libc(&e.atom))
+        .filter(|e| live.is_none() || !is_injected_libc(&e.atom))
         .collect()
     };
 

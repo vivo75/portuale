@@ -20155,3 +20155,27 @@ host's ext4 (`python3 -m pytest pytests-contract-suite/test_host_guard.py -q`,
 14 passed). The tail entries #574–#619 now sit under their own Tier 1/2/3/4
 headings, so `doc_status_check.py` rule (d) reports nothing; the 42 rule-(c)
 rows that keep the checker red are the remaining work, filed as #620.
+
+**An installed package whose ebuild left the tree keeps its vdb libc atom as a
+real edge (#624).** After the 2026-10-29 repo update the bed's `dev-lang/rust`
+probe differed: Portage merges `sys-apps/lsb-release` before `net-libs/ngtcp2`,
+portuale the other way, with no dependency string changed. The new tree no
+longer has `dev-libs/openssl-3.5.7`, still installed in the image; Portage then
+walks its vdb `RDEPEND`, which carries the `>=sys-libs/glibc-N` atom added by
+`_inject_libc_dep`, so openssl waits for glibc and `ngtcp2` waits for openssl
+(`_serialize_tasks`, instrumented in the bed: openssl is picked at
+`ignore_priority=None` after glibc and perl; the order is identical for
+`PYTHONHASHSEED` 0-7). Portuale stripped that atom from every installed
+package; `add_installed_dependency_closure` now strips it only while the live
+ebuild exists. Check: `cargo test --release -p portage-repo
+add_installed_dependency_closure_strips_the_injected_libc_dep_only_with_an_ebuild`,
+and from pmtest `printf 'dev-lang/rust\n' >
+differential-test-bed/atomlists/_tmp-rust.txt && L0_SKIP_MULTI=1
+PMTEST_NO_BUILD=1 differential-test-bed/run/l0-resolver.sh
+differential-test-bed/atomlists/_tmp-rust.txt` → `UNEXPLAINED : 0`. Full L0
+`l0-20261029T211222Z` (gentoo `e07309b`): 120 probes, 98 clean, 37 UNEXPLAINED;
+before the fix on the same tree 91 and 44, and the old-tree baseline
+`l0-20261029T090141Z` 92 and 42. Seven probes became clean, none became
+divergent. Quirk Q25 records the Portage side; the fixture-level pin and the
+`automake`/`autoconf` `[NS]`/`[R]` row are #625.
+
