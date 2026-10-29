@@ -14299,7 +14299,14 @@ algorithm on **just the forward transitive dependency closure of the
 merge-bound packages** — 461 of those 1854 nodes — gives the identical
 merge list. Portuale's own entry set already *is* that closure (462
 nodes for the same case), so the "full-transitive-tree walk" the backlog
-had listed as the blocker turned out not to be needed at all.
+had listed as the blocker turned out not to be needed at all. That
+equality held for that 15-package case; it is not a property of the
+closure: the closure leaves out installed nomerge nodes, and Portage's
+`_merge_order_bias` key is those nodes' parent count *after* its own
+nomerge-root prune (`depgraph.py:9317-9356` on the pruned graph,
+`:9540-9548`) — counting the unpruned graph put
+`sys-libs/libseccomp` one slot early on `-puvD @world` (#601, plan
+02.601).
 
 **The one genuinely new mechanism the port needed** is real's
 `_dep_disjunctive_stack`. `_queue_disjunctive_deps` does not walk a
@@ -20030,3 +20037,53 @@ adds `p573real-1`'s built row once the settled `p573up` upgrade turns the walk
 on; Portage's own blocks are in the `portage-*` captures beside them. Contract:
 `python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -q -k
 test_skipped_update_block_names_every_installed_consumer`.
+
+**The `r` flag, the rebuild block and the merge order of `-puvD @world` now
+match Portage (#601, plan 02.601).** On the bed cell
+`MULTI_deep-update-world` Portage printed `[ebuild  r  U  ]
+dev-lang/perl-5.44.0`, a 48-row "causes rebuilds for:" block, and
+`net-libs/nghttp3` at #10; portuale printed `[ebuild     U  ]`, no block,
+`sys-libs/libseccomp` at #10 and `backtrack: 12/20`. Three separate causes,
+each measured before it was fixed:
+
+- Portage keeps one force-reinstall seed for both the `r` column and the
+  block: `_gen_reinstall_sets` (`depgraph.py:5473-5497`) builds
+  `__auto_reinstall__` / `__auto_slot_operator_replace_installed__` with
+  `force_reinstall=True`, `_iter_atoms_for_pkg` (`:4988`) tags a merge row `r`
+  when one of those args matches it (`_emerge/resolver/output.py:812-816`),
+  and `_compute_abi_rebuild_info` (`:931-1145`, shown by
+  `_show_abi_rebuild_info` `:1146-1159`) seeds from the same args. Portuale
+  split that seed; the installed-instance filing of
+  `_slot_operator_update_backtrack` (`:2415-2465`) was missing, so the
+  masked-installed provider produced no pair and neither `r` nor the block
+  appeared.
+- The block's row count was a second gap: the display scan skipped consumers
+  upgrading in the same run (`in_graph && !already`), 14 of Portage's 48 rows;
+  Portage's `_slot_operator_deps` walk (`:1006-1096`) lists an upgrading
+  consumer.
+- The #10 swap was the bias key: `_merge_order_bias` (`:9317-9356`) ranks by
+  parent count on the graph *after* the nomerge-root prune (`:9540-9548`);
+  portuale counted every alive parent, so installed
+  `sys-kernel/linux-headers` kept 7 raw parents (5 after the prune) and beat
+  `app-arch/zstd` (7), unblocking `libseccomp` one iteration early.
+
+The display is also empty under `--emptytree`, where Portage never selects an
+installed package (`:7917-7925`) and so has nothing to file; the first cut of
+this fix over-tagged `-pe @system`, the bed caught it, and the gate is now
+`ResolveCtx::empty` (`tests::graph::emptytree_files_no_slot_operator_rebuild_pairs`
+pins both directions).
+
+Live-verified: bed run `l0-20261029T033418Z` (default L0 list, `PMTEST_PM=portuale-bed`):
+the cell is 141 packages, `r` on perl, the block 48/48 rows set-equal,
+`backtrack: 1/20` on both sides, `nghttp3` before `libseccomp` at #10, and the
+first remaining divergence at #16 — Portage's perl-cluster order, which is
+`PYTHONHASHSEED`-dependent (`LLM/portage-quirks.md` Q24, allowlisted as
+`perl-cluster-hash-order-601`). Summary 92 clean / 16 explained / 42
+unexplained / parity 0.767 against `l0-20261028T205343Z` (92/15/44/0.767),
+with every other cell unchanged. The counter is recorded, not pinned (#608
+covers the `-pvD` 2-vs-1 shape). Check, from pmtest: `python3 -m pytest
+pytests-contract-suite/test_emerge_pretend_contract.py -q -k
+test_601_masked_installed_provider_keeps_the_rebuild_display`; Portage's side
+of that fixture is `LLM/evidence/2026-10-28-601/captures/task1-portage.txt`,
+and the cell's post-fix excerpts are
+`LLM/evidence/2026-10-28-601/cell-postfix-captures.txt`.

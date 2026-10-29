@@ -12,6 +12,10 @@ Assembling the final result.
 ## fn assemble_result continuity pairs
 - Backlog #214 (v2 `#24e`): continuity pairs for conflict-fired rebuilds (see `slot_conflict_abi_display_pairs`) -- shapes the scan already covers render exactly once.
 
+## fn assemble_result emptytree gate (#601)
+- Portage's `--emptytree` never selects an installed package (`depgraph.py:7917-7925`), so `_slot_operator_update_probe` has no installed parent or child to file: `_dynamic_config._slot_operator_replace_installed` stays empty, `_gen_reinstall_sets` (`:5473-5497`) yields no slot-operator set arg, and `_compute_abi_rebuild_info` (`:931-950`) seeds `_forced_rebuilds` from nothing. Under `ctx.empty` the display pairs (scan + continuity) and the `r`-tagging `probe_replaced` mirror are therefore both empty; `--rebuild-if-*`'s `__auto_rebuild__` args are unaffected.
+- Pinned by `tests::graph::emptytree_files_no_slot_operator_rebuild_pairs`: the same graph without `-e` still pairs the provider with its rebuilt consumer.
+
 ## fn assemble_result rebuild-if entries
 - Same `all_installed_packages` scan / entry shape as the slot-operator pass.
 - Portage `_rebuild_config.trigger_rebuilds()` (`--rebuild-if-unbuilt` / `--rebuild-if-new-rev` / `--rebuild-if-new-ver`): an installed package whose build-time dep is being merged this run gets its own `[ebuild R]` rebuild entry.

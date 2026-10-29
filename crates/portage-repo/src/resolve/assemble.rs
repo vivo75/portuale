@@ -20,7 +20,18 @@ pub(crate) fn assemble_result(
         None => "none".to_string(),
         Some(pairs) => format!("Some({})", pairs.len()),
     };
+    // Portage's `--emptytree` never selects an installed package
+    // (`depgraph.py:7917-7925`), so `_slot_operator_update_probe` has no
+    // installed parent or child to file: `_slot_operator_replace_installed`
+    // stays empty, `_gen_reinstall_sets` (`:5473-5497`) yields no
+    // slot-operator set arg, and `_compute_abi_rebuild_info` (`:931-950`)
+    // seeds `_forced_rebuilds` from nothing. Both the display pair list and
+    // the `r`-tagging replace set are therefore empty under `-e`; the
+    // `--rebuild-if-*` args (`__auto_rebuild__`) are unaffected.
+    // Portage: depgraph.py, _gen_reinstall_sets / _compute_abi_rebuild_info
+    let slot_op_pairs = !ctx.empty;
     let mut abi_rebuilds = match pass.abi_rebuilds.take() {
+        _ if !slot_op_pairs => Vec::new(),
         Some(pairs) => pairs,
         None if ctx.ignore_built_slot_operator_deps || !ctx.rebuild_if_new_slot => Vec::new(),
         None => {
@@ -57,12 +68,14 @@ pub(crate) fn assemble_result(
     // restarts, so the scan never sees the edge on the settling pass).
     // Unioned with the scan's pairs and deduped.
     let scanned = abi_rebuilds.len();
-    abi_rebuilds.extend(slot_conflict_abi_display_pairs(
-        ctx.root,
-        &pass.entries,
-        &params.slot_operator_replace_installed,
-        ctx.with_bdeps,
-    ));
+    if slot_op_pairs {
+        abi_rebuilds.extend(slot_conflict_abi_display_pairs(
+            ctx.root,
+            &pass.entries,
+            &params.slot_operator_replace_installed,
+            ctx.with_bdeps,
+        ));
+    }
     let extended = abi_rebuilds.len();
     super::feedback::slot_conflict_backtrack::drop_masked_pairs(
         ctx.root,
@@ -307,7 +320,13 @@ pub(crate) fn assemble_result(
         settled_with_backtracking: false,
         abi_rebuilds,
         rebuild_if_reinstalls,
-        slot_operator_replaced: params.probe_replaced.iter().cloned().collect(),
+        // `probe_replaced` is the display mirror of the same slot-operator
+        // filing, so it is empty under `--emptytree` too (see above).
+        slot_operator_replaced: if ctx.empty {
+            Vec::new()
+        } else {
+            params.probe_replaced.iter().cloned().collect()
+        },
         circular_deps,
         circular_dependency: params.circular_dependency.clone(),
         masked_deps: pass.masked_deps,

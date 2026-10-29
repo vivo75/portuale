@@ -4125,6 +4125,78 @@ fn ignore_built_slot_operator_deps_skips_the_rebuild_scan() {
 }
 
 #[test]
+fn emptytree_files_no_slot_operator_rebuild_pairs() {
+    // `--emptytree` never selects an installed package
+    // (`lib/_emerge/depgraph.py:7917-7925`), so `_slot_operator_update_probe`
+    // has no installed parent or child to file: the replace set stays empty
+    // and `_compute_abi_rebuild_info` (`:931-950`) seeds no display pair. The
+    // same graph without `-e` files both, so this pins the gate on
+    // `ResolveCtx::empty` rather than the graph shape.
+    // Portage: depgraph.py, _gen_reinstall_sets / _compute_abi_rebuild_info
+    let cfg_root = fixtures_root();
+    let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &cfg_root,
+        main_repo_location: &cfg_root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), cfg_root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &cfg_root,
+    })
+    .expect("fixture config resolves");
+    config.complete_seed_atoms = vec!["dev-libs/slotbindconsumer".to_string()];
+    let dir = TempDir::new("portage-repo-emptytreeslotop");
+    let mk = |name: &str, slot: &str, rdepend: &str| {
+        let d = dir.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !rdepend.is_empty() {
+            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        }
+    };
+    mk("slotbindtarget-1.0", "2", "");
+    mk("slotbindconsumer-1.0", "0", "dev-libs/slotbindtarget:2/2=");
+
+    let resolve = |empty: bool| {
+        ResolveRequest {
+            selective: false,
+            empty,
+            ..ResolveRequest::new(
+                &cfg_root,
+                &dir,
+                &["dev-libs/slotbindtarget".to_string()],
+                &config,
+                &fixtures_root().join("distfiles"),
+            )
+        }
+        .resolve()
+        .expect("resolves")
+    };
+
+    let normal = resolve(false);
+    assert!(
+        !normal.abi_rebuilds.is_empty(),
+        "the ordinary graph pairs the provider with its rebuilt consumer"
+    );
+
+    let empty = resolve(true);
+    assert!(
+        empty.abi_rebuilds.is_empty(),
+        "no display pair under --emptytree: {:?}",
+        empty.abi_rebuilds
+    );
+    assert!(
+        empty.slot_operator_replaced.is_empty(),
+        "no `r`-tagging replace set under --emptytree: {:?}",
+        empty.slot_operator_replaced
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn dependency_avoid_update_candidate_is_slot_aware() {
     // Installed at SLOT="2" while the repo ebuild says SLOT="1": the `:1`
     // dependency must NOT short-circuit to "already installed".

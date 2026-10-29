@@ -1,0 +1,129 @@
+# Bed cell MULTI_deep-update-world after #601 -- post-fix excerpts (plan 02.601 Task 4).
+#
+# Provenance
+#   run          pmtest differential-test-bed run l0-20261029T033418Z
+#                (`differential-test-bed/run/l0-resolver.sh`, default L0 list,
+#                PMTEST_PM=portuale-bed PMTEST_NO_BUILD=1)
+#   argv         emerge -puvD @world --color=n          (both sides)
+#   portuale     /var/tmp/bedbin/portuale, frozen from a clean
+#                `cargo build --release -p portuale` on branch
+#                fix/2026-10-28-601-perl-rebuild-display (33b66b67 + the #601
+#                Task 4 emptytree gate); the binary is what the run graded.
+#   Portage      3.0.83-r1 (L0_PORTAGE_PIN), PYTHONHASHSEED=0 (layers/l0/in-container.sh)
+#   tree         repo_gentoo 350c0882200cebbdc04d67cace7c99a6725e1889,
+#                repo_buildovl cd571fc637a805ebde0e8497eab6f124b41c8f96,
+#                profile default/linux/amd64/23.0/systemd
+#   raw logs     differential-test-bed/logs/l0-20261029T033418Z/ (gitignored);
+#                this file is the reviewed excerpt.
+
+== the perl row ==
+
+Portage  : [ebuild  r  U  ] dev-lang/perl-5.44.0:0/5.44::gentoo [5.42.2:0/5.42::gentoo] USE="gdbm -berkdb -doc -minimal" PERL_FEATURES="(-debug) -ithreads -quadmath" 14704 KiB
+portuale : [ebuild  r  U  ] dev-lang/perl-5.44.0:0/5.44::gentoo [5.42.2:0/5.42::gentoo] USE="gdbm -berkdb -doc -minimal" PERL_FEATURES="(-debug) -ithreads -quadmath" 14704 KiB
+
+== the rebuild block (48 consumer rows each) ==
+
+Portage  : (dev-lang/perl-5.44.0:0/5.44::gentoo, ebuild scheduled for merge) causes rebuilds for:
+portuale : (dev-lang/perl-5.44.0:0/5.44::gentoo, ebuild scheduled for merge) causes rebuilds for:
+
+# set equality (comm -3 of the two sorted row sets; empty = equal):
+  (empty -- 48/48 rows set-equal)
+
+# portuale's rows, verbatim (Portage's order differs; the set is what the pin compares):
+(app-text/po4a-0.74-r1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Capture-Tiny-0.500.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Class-Inspector-1.360.0:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Config-AutoConf-0.320.0:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Exporter-Tiny-1.6.3:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/ExtUtils-CChecker-0.120.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/File-ShareDir-1.118.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/File-ShareDir-Install-0.140.0:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/File-Slurper-0.14.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/List-MoreUtils-0.430.0:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/List-MoreUtils-XS-0.430.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Locale-gettext-1.70.0_p20181130:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/MIME-Charset-1.13.1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Module-Build-0.423.400-r5:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Params-Util-1.102.0:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/PerlIO-utf8_strict-0.10.0:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Pod-Parser-1.660.0:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/SGMLSpm-1.1-r2:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Syntax-Keyword-Try-0.310.0:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/TermReadKey-2.380.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Text-CharWidth-0.40.0-r2:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Text-WrapI18N-0.60.0-r3:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/Unicode-LineBreak-2019.1.0-r2:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/XS-Parse-Keyword-0.490.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(dev-perl/YAML-Tiny-1.760.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(perl-core/File-Temp-0.231.200:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-CPAN-2.380.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-CPAN-Meta-2.150.13:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Carp-1.540.0-r3:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Data-Dumper-2.192.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Encode-3.240.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Exporter-5.790.0-r1:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-ExtUtils-CBuilder-0.280.243:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-ExtUtils-MakeMaker-7.780.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-ExtUtils-ParseXS-3.630.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-File-Path-2.180.0-r5:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-File-Spec-3.950.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-File-Temp-0.231.200:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-IO-1.560.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-JSON-PP-4.160.0-r4:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Math-BigInt-2.5.3:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Module-Metadata-1.0.39:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Scalar-List-Utils-1.700.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Test-Harness-3.520.0:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-Text-ParseWords-3.310.0-r5:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-XSLoader-0.320.0-r3:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-podlators-6.0.2-r1:0/0::gentoo, ebuild scheduled for merge)
+(virtual/perl-version-0.993.400:0/0::gentoo, ebuild scheduled for merge)
+
+== the backtrack counter ==
+
+Portage  : Dependency resolution took 4.36 s (backtrack: 1/20).
+portuale : Dependency resolution took (backtrack: 1/20).
+
+== the cell's finding list in the run's report ==
+
+### MULTI_deep-update-world
+  [order] (perl-cluster-hash-order-601) merge order diverges at #16: real virtual/perl-Test-Harness vs portuale virtual/perl-Encode
+
+# No [flags] row (the `r` divergence is gone) and no [order] row at #10
+# (net-libs/nghttp3 now precedes sys-libs/libseccomp in both); the one remaining
+# [order] row is the PYTHONHASHSEED perl cluster (Q24, allowlisted).
+
+== the #16 perl-cluster divergence, and portuale's rows for the Q24 comparison ==
+
+Portage rows #13-19 at PYTHONHASHSEED=1 (from task3-order-seeds.txt) -- the seed
+closest to portuale's order:
+  [ebuild     U  ] virtual/acl-2.4.0::gentoo [0-r2::gentoo] USE="-static-libs" ABI_X86="(64) -32 (-x32)"
+  [ebuild     U  ] dev-libs/libpcre2-10.49:0/3::gentoo [10.47:0/3::gentoo] USE="bzip2 jit pcre16 pcre32 readline unicode zlib -libedit -static-libs -valgrind -verify-sig" ABI_X86="(64) -32 (-x32)"
+  [ebuild     U  ] app-arch/unzip-6.0_p31::gentoo [6.0_p29-r2::gentoo] USE="bzip2 (unicode) -natspec"
+  [ebuild  r  U  ] dev-lang/perl-5.44.0:0/5.44::gentoo [5.42.2:0/5.42::gentoo] USE="gdbm -berkdb -doc -minimal" PERL_FEATURES="(-debug) -ithreads -quadmath"
+  [ebuild     U  ] virtual/perl-Encode-3.240.0::gentoo [3.210.0-r2::gentoo]
+  [ebuild     U  ] virtual/perl-Test-Harness-3.520.0::gentoo [3.500.0-r1::gentoo]
+  [ebuild     U  ] virtual/perl-Math-BigInt-2.5.3::gentoo [2.5.2::gentoo]
+portuale rows #13-19:
+  [ebuild     U  ] virtual/acl-2.4.0::gentoo [0-r2::gentoo] USE="-static-libs" ABI_X86="(64) -32 (-x32)" 0 KiB
+  [ebuild     U  ] dev-libs/libpcre2-10.49:0/3::gentoo [10.47:0/3::gentoo] USE="bzip2 jit pcre16 pcre32 readline unicode zlib -libedit -static-libs -valgrind -verify-sig" ABI_X86="(64) -32 (-x32)" 2135 KiB
+  [ebuild     U  ] app-arch/unzip-6.0_p31::gentoo [6.0_p29-r2::gentoo] USE="bzip2 (unicode) -natspec" 1372 KiB
+  [ebuild  r  U  ] dev-lang/perl-5.44.0:0/5.44::gentoo [5.42.2:0/5.42::gentoo] USE="gdbm -berkdb -doc -minimal" PERL_FEATURES="(-debug) -ithreads -quadmath" 14704 KiB
+  [ebuild     U  ] virtual/perl-Encode-3.240.0::gentoo [3.210.0-r2::gentoo] 0 KiB
+  [ebuild     U  ] virtual/perl-Test-Harness-3.520.0::gentoo [3.500.0-r1::gentoo] 0 KiB
+  [ebuild  rR    ] virtual/perl-CPAN-2.380.0-r1::gentoo  0 KiB
+# seed 1 agrees with portuale on #13-18 and diverges at #19 (Portage
+# virtual/perl-Math-BigInt, portuale virtual/perl-CPAN). The bed pins seed 0,
+# where the first divergence is #16 (Test-Harness vs Encode) -- the allowlisted row.
+
+== the same slice on MULTI_emptytree-system (emerge -pe @system): no `r`, no block ==
+
+Portage  : [ebuild     U  ] dev-lang/perl-5.44.0 [5.42.2]
+portuale : [ebuild     U  ] dev-lang/perl-5.44.0 [5.42.2]
+Portage block rows : 0
+portuale block rows: 0
+# Portage never selects an installed package under --emptytree
+# (depgraph.py:7917-7925), so _slot_operator_replace_installed stays empty and
+# _compute_abi_rebuild_info (:931-950) seeds nothing; portuale gates the same way
+# on ResolveCtx::empty. The cell's findings are exactly the baseline's
+# (autoconf [NS]/[R], order #144).
