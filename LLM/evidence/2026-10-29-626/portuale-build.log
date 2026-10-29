@@ -1,0 +1,341 @@
+[gentoo] Local copy of remote index is up-to-date and will be used.
+[f1r] Local copy of remote index is up-to-date and will be used.
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+
+>>> Emerging (1 of 1) app-benchmarks/hyperfine-1.21.0::gentoo
+ * hyperfine-1.21.0.tar.gz BLAKE2B SHA512 size ;-) ...                   [ ok ]
+ * aho-corasick-1.1.5.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * anstream-1.0.0.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * anstyle-parse-1.0.0.crate BLAKE2B SHA512 size ;-) ...                 [ ok ]
+ * anstyle-query-1.1.5.crate BLAKE2B SHA512 size ;-) ...                 [ ok ]
+ * anstyle-wincon-3.0.11.crate BLAKE2B SHA512 size ;-) ...               [ ok ]
+ * anstyle-1.0.14.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * anyhow-1.0.104.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * approx-0.5.1.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * arrayvec-0.7.8.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * assert_cmd-2.2.2.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * autocfg-1.5.1.crate BLAKE2B SHA512 size ;-) ...                       [ ok ]
+ * bitflags-2.13.2.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * borsh-derive-1.8.1.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * borsh-1.8.1.crate BLAKE2B SHA512 size ;-) ...                         [ ok ]
+ * bstr-1.13.1.crate BLAKE2B SHA512 size ;-) ...                         [ ok ]
+ * bumpalo-3.20.3.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * bytes-1.12.1.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * cfg-if-1.0.5.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * cfg_aliases-0.2.2.crate BLAKE2B SHA512 size ;-) ...                   [ ok ]
+ * chacha20-0.10.2.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * clap-4.6.7.crate BLAKE2B SHA512 size ;-) ...                          [ ok ]
+ * clap_builder-4.6.7.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * clap_complete-4.6.11.crate BLAKE2B SHA512 size ;-) ...                [ ok ]
+ * clap_lex-1.1.1.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * colorchoice-1.0.5.crate BLAKE2B SHA512 size ;-) ...                   [ ok ]
+ * colored-3.1.1.crate BLAKE2B SHA512 size ;-) ...                       [ ok ]
+ * console-0.15.11.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * console-0.16.6.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * cpufeatures-0.3.1.crate BLAKE2B SHA512 size ;-) ...                   [ ok ]
+ * csv-core-0.1.13.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * csv-1.4.0.crate BLAKE2B SHA512 size ;-) ...                           [ ok ]
+ * difflib-0.4.0.crate BLAKE2B SHA512 size ;-) ...                       [ ok ]
+ * encode_unicode-1.0.0.crate BLAKE2B SHA512 size ;-) ...                [ ok ]
+ * equivalent-1.0.2.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * errno-0.3.14.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * fastrand-2.5.0.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * float-cmp-0.10.0.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * getrandom-0.2.17.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * getrandom-0.3.4.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * getrandom-0.4.3.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * hashbrown-0.17.1.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * indexmap-2.14.2.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * indicatif-0.17.4.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * insta-cmd-0.7.0.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * insta-1.48.0.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * instant-0.1.13.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * is_terminal_polyfill-1.70.2.crate BLAKE2B SHA512 size ;-) ...         [ ok ]
+ * itoa-1.0.18.crate BLAKE2B SHA512 size ;-) ...                         [ ok ]
+ * libc-0.2.189.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * linux-raw-sys-0.12.1.crate BLAKE2B SHA512 size ;-) ...                [ ok ]
+ * memchr-2.8.3.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * nix-0.31.3.crate BLAKE2B SHA512 size ;-) ...                          [ ok ]
+ * normalize-line-endings-0.3.0.crate BLAKE2B SHA512 size ;-) ...        [ ok ]
+ * num-traits-0.2.19.crate BLAKE2B SHA512 size ;-) ...                   [ ok ]
+ * number_prefix-0.4.0.crate BLAKE2B SHA512 size ;-) ...                 [ ok ]
+ * once_cell-1.21.4.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * once_cell_polyfill-1.70.2.crate BLAKE2B SHA512 size ;-) ...           [ ok ]
+ * portable-atomic-1.15.0.crate BLAKE2B SHA512 size ;-) ...              [ ok ]
+ * ppv-lite86-0.2.21.crate BLAKE2B SHA512 size ;-) ...                   [ ok ]
+ * predicates-core-1.0.10.crate BLAKE2B SHA512 size ;-) ...              [ ok ]
+ * predicates-tree-1.0.13.crate BLAKE2B SHA512 size ;-) ...              [ ok ]
+ * predicates-3.1.4.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * proc-macro-crate-3.5.0.crate BLAKE2B SHA512 size ;-) ...              [ ok ]
+ * proc-macro2-1.0.107.crate BLAKE2B SHA512 size ;-) ...                 [ ok ]
+ * quote-1.0.47.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * r-efi-5.3.0.crate BLAKE2B SHA512 size ;-) ...                         [ ok ]
+ * r-efi-6.0.0.crate BLAKE2B SHA512 size ;-) ...                         [ ok ]
+ * rand-0.10.3.crate BLAKE2B SHA512 size ;-) ...                         [ ok ]
+ * rand-0.8.8.crate BLAKE2B SHA512 size ;-) ...                          [ ok ]
+ * rand-0.9.5.crate BLAKE2B SHA512 size ;-) ...                          [ ok ]
+ * rand_chacha-0.3.1.crate BLAKE2B SHA512 size ;-) ...                   [ ok ]
+ * rand_chacha-0.9.0.crate BLAKE2B SHA512 size ;-) ...                   [ ok ]
+ * rand_core-0.10.1.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * rand_core-0.6.4.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * rand_core-0.9.5.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * regex-automata-0.4.18.crate BLAKE2B SHA512 size ;-) ...               [ ok ]
+ * regex-syntax-0.8.11.crate BLAKE2B SHA512 size ;-) ...                 [ ok ]
+ * regex-1.13.1.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * rust_decimal-1.43.0.crate BLAKE2B SHA512 size ;-) ...                 [ ok ]
+ * rustix-1.1.5.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * rustversion-1.0.23.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * ryu-1.0.23.crate BLAKE2B SHA512 size ;-) ...                          [ ok ]
+ * serde-1.0.229.crate BLAKE2B SHA512 size ;-) ...                       [ ok ]
+ * serde_core-1.0.229.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * serde_derive-1.0.229.crate BLAKE2B SHA512 size ;-) ...                [ ok ]
+ * serde_json-1.0.151.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * shell-words-1.1.1.crate BLAKE2B SHA512 size ;-) ...                   [ ok ]
+ * similar-2.7.0.crate BLAKE2B SHA512 size ;-) ...                       [ ok ]
+ * strip-ansi-escapes-0.2.1.crate BLAKE2B SHA512 size ;-) ...            [ ok ]
+ * strsim-0.11.1.crate BLAKE2B SHA512 size ;-) ...                       [ ok ]
+ * syn-2.0.119.crate BLAKE2B SHA512 size ;-) ...                         [ ok ]
+ * syn-3.0.6.crate BLAKE2B SHA512 size ;-) ...                           [ ok ]
+ * tempfile-3.27.0.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * terminal_size-0.4.4.crate BLAKE2B SHA512 size ;-) ...                 [ ok ]
+ * termtree-0.5.1.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * thiserror-impl-2.0.21.crate BLAKE2B SHA512 size ;-) ...               [ ok ]
+ * thiserror-2.0.21.crate BLAKE2B SHA512 size ;-) ...                    [ ok ]
+ * toml_datetime-1.1.1+spec-1.1.0.crate BLAKE2B SHA512 size ;-) ...      [ ok ]
+ * toml_edit-0.25.15+spec-1.1.0.crate BLAKE2B SHA512 size ;-) ...        [ ok ]
+ * toml_parser-1.1.3+spec-1.1.0.crate BLAKE2B SHA512 size ;-) ...        [ ok ]
+ * typenum-1.20.1.crate BLAKE2B SHA512 size ;-) ...                      [ ok ]
+ * unicode-ident-1.0.26.crate BLAKE2B SHA512 size ;-) ...                [ ok ]
+ * unicode-width-0.1.14.crate BLAKE2B SHA512 size ;-) ...                [ ok ]
+ * unicode-width-0.2.2.crate BLAKE2B SHA512 size ;-) ...                 [ ok ]
+ * uom-0.36.0.crate BLAKE2B SHA512 size ;-) ...                          [ ok ]
+ * utf8parse-0.2.2.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * vte-0.14.1.crate BLAKE2B SHA512 size ;-) ...                          [ ok ]
+ * wait-timeout-0.2.1.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * wasi-0.11.1+wasi-snapshot-preview1.crate BLAKE2B SHA512 size ;-) ...  [ ok ]
+ * wasip2-1.0.4+wasi-0.2.12.crate BLAKE2B SHA512 size ;-) ...            [ ok ]
+ * wasm-bindgen-macro-support-0.2.129.crate BLAKE2B SHA512 size ;-) ...  [ ok ]
+ * wasm-bindgen-macro-0.2.129.crate BLAKE2B SHA512 size ;-) ...          [ ok ]
+ * wasm-bindgen-shared-0.2.129.crate BLAKE2B SHA512 size ;-) ...         [ ok ]
+ * wasm-bindgen-0.2.129.crate BLAKE2B SHA512 size ;-) ...                [ ok ]
+ * windows-link-0.2.1.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * windows-sys-0.59.0.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * windows-sys-0.61.2.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * windows-targets-0.52.6.crate BLAKE2B SHA512 size ;-) ...              [ ok ]
+ * windows_aarch64_gnullvm-0.52.6.crate BLAKE2B SHA512 size ;-) ...      [ ok ]
+ * windows_aarch64_msvc-0.52.6.crate BLAKE2B SHA512 size ;-) ...         [ ok ]
+ * windows_i686_gnu-0.52.6.crate BLAKE2B SHA512 size ;-) ...             [ ok ]
+ * windows_i686_gnullvm-0.52.6.crate BLAKE2B SHA512 size ;-) ...         [ ok ]
+ * windows_i686_msvc-0.52.6.crate BLAKE2B SHA512 size ;-) ...            [ ok ]
+ * windows_x86_64_gnu-0.52.6.crate BLAKE2B SHA512 size ;-) ...           [ ok ]
+ * windows_x86_64_gnullvm-0.52.6.crate BLAKE2B SHA512 size ;-) ...       [ ok ]
+ * windows_x86_64_msvc-0.52.6.crate BLAKE2B SHA512 size ;-) ...          [ ok ]
+ * winnow-1.0.4.crate BLAKE2B SHA512 size ;-) ...                        [ ok ]
+ * wit-bindgen-0.57.1.crate BLAKE2B SHA512 size ;-) ...                  [ ok ]
+ * zerocopy-derive-0.8.58.crate BLAKE2B SHA512 size ;-) ...              [ ok ]
+ * zerocopy-0.8.58.crate BLAKE2B SHA512 size ;-) ...                     [ ok ]
+ * zmij-1.0.23.crate BLAKE2B SHA512 size ;-) ...                         [ ok ]
+ [32m*[0m Checking whether Rust 9999 is suitable ...
+ [32m*[0m  Checking for dev-lang/rust:9999 ...
+ [32m*[0m  Checking for dev-lang/rust-bin:9999 ...
+ [32m*[0m Checking whether Rust 1.99.0 is suitable ...
+ [32m*[0m  Checking for dev-lang/rust:1.99.0 ...
+ [32m*[0m Using Rust 1.99.0 (source)
+>>> Unpacking source...
+chgrp: changing group of '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/temp/eclass-debug.log': Invalid argument
+>>> Unpacking 'hyperfine-1.21.0.tar.gz' to /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work
+chgrp: changing group of '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/temp/eclass-debug.log': Invalid argument
+ [32m*[0m Unpacking crates ...
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f aho-corasick-1.1.5.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f anstream-1.0.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f anstyle-parse-1.0.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f anstyle-query-1.1.5.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f anstyle-wincon-3.0.11.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f anstyle-1.0.14.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f anyhow-1.0.104.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f approx-0.5.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f arrayvec-0.7.8.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f assert_cmd-2.2.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f autocfg-1.5.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f bitflags-2.13.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f borsh-derive-1.8.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f borsh-1.8.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f bstr-1.13.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f bumpalo-3.20.3.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f bytes-1.12.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f cfg-if-1.0.5.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f cfg_aliases-0.2.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f chacha20-0.10.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f clap-4.6.7.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f clap_builder-4.6.7.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f clap_complete-4.6.11.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f clap_lex-1.1.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f colorchoice-1.0.5.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f colored-3.1.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f console-0.15.11.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f console-0.16.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f cpufeatures-0.3.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f csv-core-0.1.13.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f csv-1.4.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f difflib-0.4.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f encode_unicode-1.0.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f equivalent-1.0.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f errno-0.3.14.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f fastrand-2.5.0.crate
+tar: difflib-0.4.0/Cargo.toml.orig: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f float-cmp-0.10.0.crate
+tar: difflib-0.4.0/examples/example.rs: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: difflib-0.4.0/src/differ.rs: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: difflib-0.4.0/src/lib.rs: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f getrandom-0.2.17.crate
+tar: difflib-0.4.0/src/sequencematcher.rs: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: difflib-0.4.0/src/utils.rs: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: difflib-0.4.0/tests/tests.rs: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: Exiting with failure status due to previous errors
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f getrandom-0.3.4.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f getrandom-0.4.3.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f hashbrown-0.17.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f indexmap-2.14.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f indicatif-0.17.4.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f insta-cmd-0.7.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f insta-1.48.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f instant-0.1.13.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f is_terminal_polyfill-1.70.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f itoa-1.0.18.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f libc-0.2.189.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f linux-raw-sys-0.12.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f memchr-2.8.3.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f nix-0.31.3.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f normalize-line-endings-0.3.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f num-traits-0.2.19.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f number_prefix-0.4.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f once_cell-1.21.4.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f once_cell_polyfill-1.70.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f portable-atomic-1.15.0.crate
+tar: normalize-line-endings-0.3.0/.gitignore: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: normalize-line-endings-0.3.0/.travis.yml: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: normalize-line-endings-0.3.0/Cargo.toml.orig: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: normalize-line-endings-0.3.0/LICENSE: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f ppv-lite86-0.2.21.crate
+tar: normalize-line-endings-0.3.0/README.md: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: normalize-line-endings-0.3.0/src/lib.rs: Cannot change ownership to uid 1000, gid 1000: Invalid argument
+tar: Exiting with failure status due to previous errors
+tar: number_prefix-0.4.0/.gitignore: Cannot change ownership to uid 501, gid 20: Invalid argument
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f predicates-core-1.0.10.crate
+tar: number_prefix-0.4.0/Cargo.toml.orig: Cannot change ownership to uid 501, gid 20: Invalid argument
+tar: number_prefix-0.4.0/examples/conversions.rs: Cannot change ownership to uid 501, gid 20: Invalid argument
+tar: number_prefix-0.4.0/src/lib.rs: Cannot change ownership to uid 501, gid 20: Invalid argument
+tar: number_prefix-0.4.0/src/parse.rs: Cannot change ownership to uid 501, gid 20: Invalid argument
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f predicates-tree-1.0.13.crate
+tar: Exiting with failure status due to previous errors
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f predicates-3.1.4.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f proc-macro-crate-3.5.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f proc-macro2-1.0.107.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f quote-1.0.47.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f r-efi-5.3.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f r-efi-6.0.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rand-0.10.3.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rand-0.8.8.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rand-0.9.5.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rand_chacha-0.3.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rand_chacha-0.9.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rand_core-0.10.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rand_core-0.6.4.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rand_core-0.9.5.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f regex-automata-0.4.18.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f regex-syntax-0.8.11.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f regex-1.13.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rust_decimal-1.43.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rustix-1.1.5.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f rustversion-1.0.23.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f ryu-1.0.23.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f serde-1.0.229.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f serde_core-1.0.229.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f serde_derive-1.0.229.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f serde_json-1.0.151.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f shell-words-1.1.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f similar-2.7.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f strip-ansi-escapes-0.2.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f strsim-0.11.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f syn-2.0.119.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f syn-3.0.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f tempfile-3.27.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f terminal_size-0.4.4.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f termtree-0.5.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f thiserror-impl-2.0.21.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f thiserror-2.0.21.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f toml_datetime-1.1.1+spec-1.1.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f toml_edit-0.25.15+spec-1.1.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f toml_parser-1.1.3+spec-1.1.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f typenum-1.20.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f unicode-ident-1.0.26.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f unicode-width-0.1.14.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f unicode-width-0.2.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f uom-0.36.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f utf8parse-0.2.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f vte-0.14.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f wait-timeout-0.2.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f wasi-0.11.1+wasi-snapshot-preview1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f wasip2-1.0.4+wasi-0.2.12.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f wasm-bindgen-macro-support-0.2.129.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f wasm-bindgen-macro-0.2.129.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f wasm-bindgen-shared-0.2.129.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f wasm-bindgen-0.2.129.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows-link-0.2.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows-sys-0.59.0.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows-sys-0.61.2.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows-targets-0.52.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows_aarch64_gnullvm-0.52.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows_aarch64_msvc-0.52.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows_i686_gnu-0.52.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows_i686_gnullvm-0.52.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows_i686_msvc-0.52.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows_x86_64_gnu-0.52.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows_x86_64_gnullvm-0.52.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f windows_x86_64_msvc-0.52.6.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f winnow-1.0.4.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f wit-bindgen-0.57.1.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f zerocopy-derive-0.8.58.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f zerocopy-0.8.58.crate
+tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f zmij-1.0.23.crate
+ [31;01m*[0m ERROR: app-benchmarks/hyperfine-1.21.0::gentoo failed (unpack phase):
+ [31;01m*[0m   (no error message)
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line  143:  Called src_unpack
+ [31;01m*[0m   environment, line 1750:  Called cargo_src_unpack
+ [31;01m*[0m   environment, line 1091:  Called cargo_crate_unpack
+ [31;01m*[0m   environment, line  872:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m           printf '%s' "${crates[@]}" | xargs -0 -P "$(makeopts_jobs)" -n 1 -t -- tar -x -C "${ECARGO_VENDOR}" -f || die;
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=app-benchmarks/hyperfine-1.21.0::gentoo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=app-benchmarks/hyperfine-1.21.0::gentoo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/temp/build.log.gz'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/distdir'
+ [31;01m*[0m S: '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/hyperfine-1.21.0'
+
+>>> Failed to emerge app-benchmarks/hyperfine-1.21.0, Log file:
+
+>>>  '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/temp/build.log.gz'
+
+ * Messages for package app-benchmarks/hyperfine-1.21.0:
+
+ * ERROR: app-benchmarks/hyperfine-1.21.0::gentoo failed (unpack phase):
+ *   (no error message)
+ * Call stack:
+ *     ebuild.sh, line  143:  Called src_unpack
+ *   environment, line 1750:  Called cargo_src_unpack
+ *   environment, line 1091:  Called cargo_crate_unpack
+ *   environment, line  872:  Called die
+ * The specific snippet of code:
+ *           printf '%s' "${crates[@]}" | xargs -0 -P "$(makeopts_jobs)" -n 1 -t -- tar -x -C "${ECARGO_VENDOR}" -f || die;
+ * If you need support, post the output of `emerge --info '=app-benchmarks/hyperfine-1.21.0::gentoo'`,
+ * the complete build log and the output of `emerge -pqv '=app-benchmarks/hyperfine-1.21.0::gentoo'`.
+ * The complete build log is located at '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/temp/build.log.gz'.
+ * The ebuild environment file is located at '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/temp/environment'.
+ * Working directory: '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/distdir'
+ * S: '/var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/hyperfine-1.21.0'

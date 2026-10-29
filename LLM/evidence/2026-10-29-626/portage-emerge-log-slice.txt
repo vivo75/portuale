@@ -1,0 +1,8 @@
+1793313833:  >>> emerge (1 of 1) app-benchmarks/hyperfine-1.21.0 to /
+1793313833:  === (1 of 1) Cleaning (app-benchmarks/hyperfine-1.21.0::/.gentoo/repos/gentoo/app-benchmarks/hyperfine/hyperfine-1.21.0.ebuild)
+1793313833:  === (1 of 1) Compiling/Merging (app-benchmarks/hyperfine-1.21.0::/.gentoo/repos/gentoo/app-benchmarks/hyperfine/hyperfine-1.21.0.ebuild)
+1793313859:  === (1 of 1) Merging (app-benchmarks/hyperfine-1.21.0::/.gentoo/repos/gentoo/app-benchmarks/hyperfine/hyperfine-1.21.0.ebuild)
+1793313859:  >>> AUTOCLEAN: app-benchmarks/hyperfine:0
+1793313860:  === (1 of 1) Updating world file (app-benchmarks/hyperfine-1.21.0)
+1793313860:  === (1 of 1) Post-Build Cleaning (app-benchmarks/hyperfine-1.21.0::/.gentoo/repos/gentoo/app-benchmarks/hyperfine/hyperfine-1.21.0.ebuild)
+1793313860:  ::: completed emerge (1 of 1) app-benchmarks/hyperfine-1.21.0 to /
