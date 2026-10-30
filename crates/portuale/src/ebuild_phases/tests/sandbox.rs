@@ -278,6 +278,45 @@ fn sandbox_name_tables_are_one_plain_name_per_line() {
     assert!(!environ_whitelisted("EMERGE_DEFAULT_OPTS"));
 }
 
+#[test]
+fn droppriv_mirrors_portage_actionmap_and_gate() {
+    use super::phase_droppriv as drop;
+    let f = "sandbox usersandbox userpriv network-sandbox";
+    // Portage actionmap: only these five phases demote.
+    for p in ["unpack", "prepare", "configure", "compile", "test"] {
+        assert!(drop(p, f, "", true), "{p}");
+    }
+    for p in [
+        "setup", "install", "pretend", "clean", "merge", "qmerge", "config",
+    ] {
+        assert!(!drop(p, f, "", true), "{p}");
+    }
+    // Portage doebuild.py:1795 + :2200-2203 gate.
+    assert!(!drop("unpack", "sandbox userpriv", "userpriv", true));
+    assert!(!drop("unpack", "sandbox userpriv", "nouserpriv", true));
+    assert!(!drop("unpack", "sandbox -userpriv", "", true));
+    assert!(!drop("unpack", f, "", false)); // secpass < 2: not root
+}
+
+/// The build-user identity comes from `getpwnam`/`getgrouplist`, matching
+/// Portage's `portage_uid`/`portage_gid`/`userpriv_groups`; a user that does
+/// not exist degrades to `None` (the caller then runs undemoted).
+#[test]
+fn portage_phase_ids_resolves_a_real_user_and_rejects_unknown_ones() {
+    // Portage: data.py, portage_uid (:169), userpriv_groups (:224-247).
+    let root = portage_phase_ids(Some("root")).expect("root exists on any Linux host");
+    assert_eq!(root.uid, 0, "Portage's getpwnam uid");
+    assert!(
+        root.groups.contains(&root.gid),
+        "getgrouplist includes the primary gid: {:?}",
+        root.groups
+    );
+    assert!(
+        portage_phase_ids(Some("portuale-no-such-build-user")).is_none(),
+        "an unknown build user must degrade, not panic"
+    );
+}
+
 /// Portage `special_env_vars.py:256` (bug 978685): `environ_whitelist_re`
 /// is `^(CCACHE_|DISTCC_|QEMU_).*`, so the empty `USE_EXPAND` variables
 /// `QEMU_SOFTMMU_TARGETS`/`QEMU_USER_TARGETS` reach a binary merge's saved

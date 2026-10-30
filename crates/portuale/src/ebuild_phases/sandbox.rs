@@ -130,6 +130,98 @@ pub(crate) fn network_sandbox_exempt(phase: &str, restrict: &str, properties: &s
         || flat_field_has_token(restrict, &["network-sandbox"])
 }
 
+/// Portage's `_spawn_actionmap` `droppriv` gate plus its per-phase
+/// actionmap table: only `unpack`/`prepare`/`configure`/`compile`/`test`
+/// demote, and only with `FEATURES=userpriv`, neither `RESTRICT` opt-out,
+/// and `secpass >= 2` (effectively root here, per `is_root`).
+// Portage: doebuild.py, _spawn_actionmap (:1780-1795) and actionmap (:1813-1870)
+// The phase spawn consumes this in the follow-up demotion slice (#627 S2).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn phase_droppriv(phase: &str, features: &str, restrict: &str, is_root: bool) -> bool {
+    matches!(
+        phase,
+        "unpack" | "prepare" | "configure" | "compile" | "test"
+    ) && feature_token_present(features, "userpriv")
+        && !flat_field_has_token(restrict, &["userpriv", "nouserpriv"])
+        && is_root
+}
+
+/// The identity a demoted phase runs as: Portage's `portage_uid`/`portage_gid`
+/// plus its `userpriv_groups` list. Consumed by the phase spawn in the
+/// follow-up demotion slice (#627 S2).
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PhaseIds {
+    pub(crate) uid: u32,
+    pub(crate) gid: u32,
+    pub(crate) groups: Vec<u32>,
+}
+
+/// Resolve [`PhaseIds`] for the configured build user: `username` when given,
+/// else `PORTAGE_USERNAME`, else `portage` (Portage's `_portage_username`
+/// default). `None` on any lookup failure so the caller degrades to no
+/// demotion — the same shape as the unusable-unshare path.
+// Portage: data.py, _portage_username (:249-265, :336) and portage_uid/portage_gid (:169);
+// userpriv_groups (:224-247)
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn portage_phase_ids(username: Option<&str>) -> Option<PhaseIds> {
+    use std::ffi::CString;
+
+    let name = username.map(str::to_owned).unwrap_or_else(|| {
+        std::env::var("PORTAGE_USERNAME").unwrap_or_else(|_| "portage".to_string())
+    });
+    let c_name = CString::new(name).ok()?;
+
+    // SAFETY: `c_name` is a valid NUL-terminated string; `getpwnam` takes no
+    // other arguments. The result points at a static buffer, so the fields
+    // are copied out before the next NSS call can reuse it.
+    let passwd = unsafe { libc::getpwnam(c_name.as_ptr()) };
+    if passwd.is_null() {
+        return None;
+    }
+    let (uid, gid) = unsafe { ((*passwd).pw_uid, (*passwd).pw_gid) };
+
+    // `getgrouplist` reports the required count through `ngroups` and returns
+    // -1 when the buffer is short; retry once with the reported size.
+    let mut ngroups: libc::c_int = 16;
+    let mut groups: Vec<libc::gid_t> = vec![0; ngroups as usize];
+    // SAFETY: the buffer has `ngroups` entries, which `getgrouplist` respects.
+    let mut rc = unsafe {
+        libc::getgrouplist(
+            c_name.as_ptr(),
+            gid as libc::gid_t,
+            groups.as_mut_ptr(),
+            &mut ngroups,
+        )
+    };
+    if rc < 0 {
+        if ngroups <= 0 {
+            return None;
+        }
+        groups.resize(ngroups as usize, 0);
+        // SAFETY: as above, with the buffer resized to the required count.
+        rc = unsafe {
+            libc::getgrouplist(
+                c_name.as_ptr(),
+                gid as libc::gid_t,
+                groups.as_mut_ptr(),
+                &mut ngroups,
+            )
+        };
+    }
+    if rc < 0 {
+        return None;
+    }
+    groups.truncate(ngroups.max(0) as usize);
+
+    Some(PhaseIds {
+        uid,
+        gid,
+        // `gid_t` is `u32` on Linux, the only target this backend supports.
+        groups,
+    })
+}
+
 /// `FEATURES=sandbox` or `usersandbox` present (equivalent here: no `userpriv`).
 /// Portage: process.py, _spawn
 pub(crate) fn fs_sandbox_requested(features: &str) -> bool {
