@@ -225,6 +225,110 @@ fn demoted_spawn_runs_as_the_portage_user() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A demoted spawn applies Portage's build umask: the child reports `0022`
+/// and creates a file `644` and a directory `755` even though the caller's
+/// mask is the hostile `002`. A control spawn without demotion keeps the
+/// caller's mask, and the caller's mask is untouched afterwards — so the
+/// `022` can only come from the child's `pre_exec`.
+/// Root-gated (demotion needs root) and skips when the portage user is
+/// unknown, like `demoted_spawn_runs_as_the_portage_user`.
+/// Portage: doebuild.py, spawn (:2171-2180); process.py, _exec (:1265-1274).
+#[test]
+fn demoted_spawn_applies_the_portage_umask() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    let tmp = TempDir::new("portuale-test-droppriv-umask");
+    // The demoted child creates entries here, so it needs write access.
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&*tmp, std::fs::Permissions::from_mode(0o777))
+            .expect("chmod the probe dir world-writable");
+    }
+    let script = tmp.join("umask.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "umask\ncd '{}'\ntouch f\nmkdir d\nstat -c '%a %n' f d\n",
+            tmp.display()
+        ),
+    )
+    .expect("write the umask probe script");
+    let control_script = tmp.join("control-umask.sh");
+    std::fs::write(&control_script, "umask\n").expect("write the control probe script");
+
+    // Hostile caller mask with save/restore: a child inheriting it would
+    // report `0002`, so only `pre_exec` can produce `0022`.
+    let before = unsafe { libc::umask(0o002) };
+    struct Restore(libc::mode_t);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            // SAFETY: `umask(2)` cannot fail.
+            unsafe { libc::umask(self.0) };
+        }
+    }
+    let restore = Restore(before);
+
+    let log = tmp.join("demoted.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso: Isolation::default(),
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&log),
+        context: "droppriv umask probe",
+        interactive: false,
+        droppriv: Some(ids),
+    })
+    .expect("the demoted spawn runs");
+    assert_eq!(status, 0, "the demoted spawn exits 0");
+
+    let control_log = tmp.join("control.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &control_script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso: Isolation::default(),
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&control_log),
+        context: "control umask probe",
+        interactive: false,
+        droppriv: None,
+    })
+    .expect("the control spawn runs");
+    assert_eq!(status, 0, "the control spawn exits 0");
+
+    // End of the hostile window: the parent mask must be back.
+    drop(restore);
+    let cur = unsafe { libc::umask(before) };
+    assert_eq!(cur, before, "the caller's umask is restored");
+
+    let out = std::fs::read_to_string(&log).expect("the demoted child writes its umask");
+    let mut lines = out.lines();
+    assert_eq!(
+        lines.next(),
+        Some("0022"),
+        "the demoted child gets Portage's build umask, not the caller's"
+    );
+    assert_eq!(lines.next(), Some("644 f"), "created files are 644");
+    assert_eq!(lines.next(), Some("755 d"), "created directories are 755");
+
+    let out = std::fs::read_to_string(&control_log).expect("the control child writes its umask");
+    assert_eq!(
+        out.trim(),
+        "0002",
+        "a non-demoted spawn keeps the caller's umask"
+    );
+}
+
 /// End-to-end: a real Bash `setup` phase runs under `[<cat>/<pf>] bash`,
 /// proving the `CATEGORY`/`PF` threading from the spawn site, not just
 /// the constructor. A scratch ebuild in a `TempDir` (no fixture-tree

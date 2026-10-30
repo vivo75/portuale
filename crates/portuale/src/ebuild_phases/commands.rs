@@ -759,9 +759,9 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
         let groups = ids.groups.clone();
         // SAFETY: runs in the child after fork, before exec; only
         // async-signal-safe libc calls, and any failure fails the spawn.
-        // Portage: process.py, _exec (:1265-1272) — setgid, setgroups,
+        // Portage: process.py, _exec (:1265-1274) — setgid, setgroups,
         // then setuid, so the supplementary groups land before root is
-        // dropped.
+        // dropped; the umask follows last.
         use std::os::unix::process::CommandExt as _;
         unsafe {
             cmd.pre_exec(move || {
@@ -774,6 +774,10 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                 if libc::setuid(uid) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
+                // Portage: process.py, _exec — umask after setuid (:1273-1274);
+                // keywords carry "umask": 0o22 on the droppriv path (doebuild.py:2178).
+                // umask(2) cannot fail: it returns the previous mask.
+                libc::umask(0o22);
                 Ok(())
             });
         }
