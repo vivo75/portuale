@@ -28,8 +28,8 @@ The phase shell backend, the calling-environment filter, and sandbox/isolation.
 ## fn phase_isolation
 - The isolation wrappers to apply to one phase, from `FEATURES` -- Portage `_doebuild_spawn`. Only the `src_*` phases (`SANDBOXED_SRC_PHASES`) are wrapped; a requested-but-unusable `unshare` combination degrades to no unshare with one warning (Portage's "Unable to unshare"). `net` also carries Portage `_doebuild_spawn`'s own `networked` exemption formula (`doebuild.py:241-251`): `FEATURES=network-sandbox` is requested but this call still isn't network-unshared when `phase == "unpack"` and the ebuild's own `PROPERTIES` says `live` (a live/VCS package's checkout step needs the network by definition), when `phase == "test"` and `PROPERTIES` says `test_network` (an ebuild that declares its own test suite needs network access), or when the ebuild's own `RESTRICT` says `network-sandbox` (an explicit ebuild opt-out of the whole feature, regardless of phase). `_ipc_phases` (`setup`/`pretend`/`config`/`info`/`pre|postinst`/`pre|postrm`) is Portage's own third exemption clause, but every one of those is already outside `SANDBOXED_SRC_PHASES` here, so it never needs its own check.
 
-## fn phase_isolation (demoted namespaces, #630)
-- A demoted phase keeps `net`/`ipc`/`mount`: the child unshares raw while still root, then demotes, which is Portage's `_exec` shape (`process.py:1061-1084`) and needs no userns. `pid` stays dropped because `CLONE_NEWPID` without Portage's PID-1 re-exec (`pid-ns-init`, `process.py:1111-1145`) is fatal, not degraded: the first fork becomes init, its exit tears the namespace down, and later forks fail `ENOMEM` (evidence `task-2-pid-gap.log`, residue #635). That exception warns once per process from the parent, naming `pid-sandbox` as not applied; `pre_exec` never sees pid+demoted.
+## fn phase_isolation (demoted namespaces, #630/#635)
+- A demoted phase keeps `net`/`ipc`/`mount`/`pid`: the child unshares raw while still root, then demotes, which is Portage's `_exec` shape (`process.py:1061-1084`) and needs no userns. `pid` rides the demoted `pre_exec` fork dance (#635): `CLONE_NEWPID` without Portage's PID-1 re-exec (`pid-ns-init`, `process.py:1111-1145`) is fatal, not degraded — the first fork becomes init, its exit tears the namespace down, and later forks fail `ENOMEM` (evidence `task-2-pid-gap.log`) — so the middle supervises (forwards, reaps, re-raises) while the grandchild, pid 1 by fork order, mounts the fresh `/proc` and execs directly. There is no `pid-sandbox not applied` warning any more: `pre_exec` sees pid+demoted and runs the dance.
 - Only the `usersandbox` filesystem rule stays demotion-dependent (`free = droppriv and not usersandbox`, `doebuild.py:2233-2240`). The unusable-combo degrade is unchanged and routes its warning through `unshare_degrade_message`, which now also reaches demoted runs.
 
 ## fn clone_flags_for
@@ -61,7 +61,7 @@ The phase shell backend, the calling-environment filter, and sandbox/isolation.
 - `FEATURES=network-sandbox` -> `unshare --net` (Portage `CLONE_NEWNET`).
 - `FEATURES=ipc-sandbox` -> `unshare --ipc` (Portage `CLONE_NEWIPC`).
 - `FEATURES=mount-sandbox` -> `unshare --mount` + `mount --make-rslave /` (Portage `CLONE_NEWNS` + Portage `_exec2`'s own `mount --make-rslave /`).
-- `FEATURES=pid-sandbox` -> `unshare --pid --fork --mount-proc` (Portage `CLONE_NEWPID` + `pid-ns-init`; `unshare --fork` stands in for the full init, `--mount-proc` for Portage `_exec2`'s own new `/proc` mount).
+- `FEATURES=pid-sandbox` -> `unshare --pid --fork --mount-proc` on the shim path (Portage `CLONE_NEWPID` + `pid-ns-init`; `unshare --fork` stands in for the full init, `--mount-proc` for Portage `_exec2`'s own new `/proc` mount). The demoted path takes no shim: it keeps `pid` through the raw `pre_exec` fork dance (#635).
 - `FEATURES=sandbox`/`usersandbox` -> `sandbox <cmd>` (Portage `spawn_sandbox`).
 
 ## fn unshare_combo_usable

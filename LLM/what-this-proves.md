@@ -20287,3 +20287,39 @@ corpus did not drift); L1 is not triggered (no merge-path file was touched), and
 the next resolver-touching slice re-triggers it. The
 `#[cfg(target_os = "linux")]` gates are reasoned-only — no BSD toolchain on this
 host, so the non-Linux side has never been compiled — tracked by #637.
+
+**A demoted `pid-sandbox` phase is PID 1 of its own pid namespace with a
+namespace-local `/proc`, so a forking build no longer dies `ENOMEM` (#635).**
+#630 had to drop `pid` for demoted phases: `CLONE_NEWPID` in the demotion
+`pre_exec` without Portage's `pid-ns-init` re-exec makes the first fork the
+namespace init, whose exit tears the namespace down and makes every later fork
+fail `ENOMEM` (rc 254, `LLM/evidence/2026-10-30-630/task-2-pid-gap.log`).
+Fix: no helper binary — the demoted `pre_exec` blocks Portage's forward signal
+set before `fork`, the grandchild is pid 1 by fork order (fresh `/proc` mount,
+inherited mask unblocked, then the unchanged demotion and exec), and the middle
+owns a session, forwards signals with `sigtimedwait`, polls `waitpid(WNOHANG)`
+and re-raises a fatal signal like `pid-ns-init:140-144`, never returning.
+Demoted+pid spawns use `ParentGroup` so the chained `NewSession` hook cannot
+`setsid` the grandchild out of kill reach. Check: `sudo <test-binary>
+demoted_pid --test-threads=1` — RED before (the ENOMEM shape, and no forwarded
+signal), GREEN after: 2 passed, the pid-ns test showing a multi-fork script
+`rc 0`, `id -u` still the portage uid, a pid ns differing from the host and
+`/proc/1/comm == bash`, the signal test turning a forwarded `SIGTERM` into
+`exit 7`; the serial `demoted_` filter runs 8 passed. Acceptance is supporting
+only, not the pin: `sudo ./target/release/portuale emerge -1
+app-benchmarks/hyperfine` rc=0 and the same with `FEATURES="sandbox usersandbox
+userpriv network-sandbox pid-sandbox"` rc=0, both `>>> Completed (1 of 1)`
+with `src_compile` — the forking phase — green, matching Portage's own
+pid-sandboxed `ebuild … compile` rc=0 (`LLM/evidence/2026-10-30-635/`; those
+logs carry no invocation or `FEATURES` header, so the root tests are the pin).
+Close-out: workspace `cargo test --release --no-fail-fast` 3271 passed / 1
+known host-state `embedded_runtime` red / 5 ignored (nothing else failed);
+pmtest `scripts/pytest-parallel.sh` 4618 passed / 7 known host-state `mrg_remote`
+reds / 2 skipped / 2 xfailed, zero corpus drift (the default basetemp was still
+poisoned, #634; cleared and re-ran). Honest limits:
+this is fork-order init, not Portage's re-exec — no Python and no standalone
+binary — so `pid-ns-init`'s utf8 re-exec and autogroup-nice restore have no
+analogue and are moot here, and its `TIOCSCTTY` is not mirrored and cannot
+matter because every demoted phase's stdout is a pipe; a demoted netns still has `lo`
+down (#636) and the non-Linux demoted path has still never been compiled
+(#637). No new residue.
