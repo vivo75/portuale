@@ -1,0 +1,4 @@
+---
+bash: connect: Network is unreachable
+bash: line 1: /dev/tcp/9.9.9.9/80: Network is unreachable
+NOEGRESS
