@@ -57,7 +57,7 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
     } else {
         None
     };
-    let iso = phase_isolation(env, phase, &features, droppriv.is_some());
+    let iso = phase_isolation(env, phase, &features, droppriv.is_some(), is_root);
     let effective_shell = if iso.any() || droppriv.is_some() {
         ShellBackend::Bash
     } else {

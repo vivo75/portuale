@@ -715,7 +715,9 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
     let free = droppriv.is_some() && !usersandbox;
     let sandboxed = iso.fs_sandbox && !free && std::env::var_os("SANDBOX_ACTIVE").is_none();
     let opt_name = phase_opt_name(category, pf, sandboxed);
-    let mut cmd = sandbox_wrapped_command(script, argv_word, iso, &opt_name);
+    // SAFETY: `geteuid(2)` cannot fail.
+    let is_root = unsafe { libc::geteuid() } == 0;
+    let mut cmd = sandbox_wrapped_command(script, argv_word, iso, &opt_name, is_root);
     // Curated env only, like Portage: only whitelisted calling-env vars pass through;
     // the caller-computed `vars` set the rest on top.
     cmd.env_clear();

@@ -443,10 +443,16 @@ impl Isolation {
     pub(crate) fn any(&self) -> bool {
         self.any_unshare() || self.fs_sandbox
     }
-    /// `unshare(1)` flags, `--map-root-user` first so it works non-root (Portage
-    /// unshares only as `uid == 0`).
-    pub(crate) fn unshare_flags(&self) -> Vec<&'static str> {
-        let mut f = vec!["--map-root-user"];
+    /// `unshare(1)` flags. Non-root gets `--map-root-user` first so it can
+    /// unshare at all. Root omits it: Portage unshares as root via `unshare(2)`
+    /// with no new userns (process.py:1061), and a userns would map only the
+    /// caller, leaving portage-owned build paths as overflow uid.
+    pub(crate) fn unshare_flags(&self, is_root: bool) -> Vec<&'static str> {
+        let mut f = if is_root {
+            Vec::new()
+        } else {
+            vec!["--map-root-user"]
+        };
         if self.net {
             f.push("--net");
         }
@@ -500,6 +506,7 @@ pub(crate) fn phase_isolation(
     phase: &str,
     features: &str,
     demoted: bool,
+    is_root: bool,
 ) -> Isolation {
     use std::sync::OnceLock;
     if !listed(SANDBOXED_SRC_PHASES, phase) {
@@ -527,7 +534,7 @@ pub(crate) fn phase_isolation(
             fs_sandbox_for_phase(phase, features)
         },
     };
-    if iso.any_unshare() && !unshare_combo_usable(&iso.unshare_flags()) {
+    if iso.any_unshare() && !unshare_combo_usable(&iso.unshare_flags(is_root)) {
         static WARNED: OnceLock<()> = OnceLock::new();
         WARNED.get_or_init(|| {
             eprintln!(
@@ -578,6 +585,7 @@ pub(crate) fn sandbox_wrapped_command(
     arg: &str,
     iso: Isolation,
     opt_name: &str,
+    is_root: bool,
 ) -> std::process::Command {
     use std::ffi::OsString;
     use std::os::unix::process::CommandExt as _;
@@ -614,7 +622,7 @@ pub(crate) fn sandbox_wrapped_command(
     shim.push_str(&format!("exec -a {} \"$@\"", sh_single_quote(opt_name)));
 
     let mut c = std::process::Command::new("unshare");
-    c.args(iso.unshare_flags())
+    c.args(iso.unshare_flags(is_root))
         .arg("--")
         .arg("bash")
         .arg("-c")

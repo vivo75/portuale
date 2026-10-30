@@ -12,7 +12,13 @@ fn sandbox_wrapped_command_configures_the_real_addrconfig_workaround_addresses()
         pid: false,
         fs_sandbox: false,
     };
-    let cmd = sandbox_wrapped_command(Path::new("/bin/true"), "install", iso, "[cat/pf-1.0] bash");
+    let cmd = sandbox_wrapped_command(
+        Path::new("/bin/true"),
+        "install",
+        iso,
+        "[cat/pf-1.0] bash",
+        false,
+    );
     let shim = cmd
         .get_args()
         .filter_map(|a| a.to_str())
@@ -58,7 +64,8 @@ fn sandbox_wrapped_command_sets_argv0_to_opt_name() {
     )
     .unwrap();
     let opt_name = "[cat/pf-1.0] bash";
-    let mut cmd = sandbox_wrapped_command(&script, "compile", Isolation::default(), opt_name);
+    let mut cmd =
+        sandbox_wrapped_command(&script, "compile", Isolation::default(), opt_name, false);
     cmd.stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let status = cmd.status().expect("the wrapped command spawns");
@@ -84,6 +91,7 @@ fn the_unshare_shim_carries_the_opt_name_as_the_wrapped_argv0() {
         "compile",
         iso,
         "[cat/pf-1.0] sandbox",
+        false,
     );
     let args: Vec<String> = cmd
         .get_args()
@@ -647,4 +655,24 @@ fn pre_phase_symlinked_spine_entry_is_skipped_not_followed() {
             d.display()
         );
     }
+}
+
+/// Portage unshares as root with `unshare(2)` and no new userns
+/// (process.py:1061), so a root phase must not get `--map-root-user`
+/// (which maps only the caller, leaving portage-owned paths as overflow
+/// uid). Non-root keeps `--map-root-user` first, since it has no other way
+/// to unshare. Pure: the bool is passed in, not read from `geteuid`.
+#[test]
+fn unshare_flags_root_omits_userns() {
+    // Portage: process.py, _exec (:1061).
+    let iso = Isolation {
+        net: true,
+        ..Isolation::default()
+    };
+    let root = iso.unshare_flags(true);
+    assert!(!root.contains(&"--map-root-user"), "{root:?}");
+    assert!(root.contains(&"--net"), "{root:?}");
+    let user = iso.unshare_flags(false);
+    assert_eq!(user.first(), Some(&"--map-root-user"), "{user:?}");
+    assert!(user.contains(&"--net"), "{user:?}");
 }
