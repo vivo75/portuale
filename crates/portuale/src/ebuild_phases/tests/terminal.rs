@@ -113,6 +113,7 @@ fn run_script(dir: &Path, phase: &str, body: &str, interactive: bool) -> i32 {
         log_file: PhaseLog::Capture(&dir.join("phase.log")),
         context: phase,
         interactive,
+        droppriv: None,
     })
     .unwrap()
 }

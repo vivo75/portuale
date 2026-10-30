@@ -224,6 +224,8 @@ pub(crate) fn run_misc_functions_bash(args: RunMiscFunctionsBashArgs<'_>) -> Res
         log_file,
         context: dyn_command,
         interactive: false,
+        // `misc-functions` never demote: only the gated phase spawns do.
+        droppriv: None,
     })
 }
 

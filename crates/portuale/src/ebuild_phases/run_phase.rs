@@ -35,8 +35,22 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
 
     // Isolated `src_*` phases run in a subprocess whatever the backend: no
     // namespace or sandbox can confine the in-process Brush interpreter.
-    let iso = phase_isolation(env, phase, &features_string(extra_env));
-    let effective_shell = if iso.any() { ShellBackend::Bash } else { shell };
+    // A demoted phase likewise needs a real child: only a subprocess can
+    // setuid to the build user before exec.
+    let features = features_string(extra_env);
+    let iso = phase_isolation(env, phase, &features);
+    // Portage: doebuild.py, _spawn_actionmap (:1780-1795) plus the username
+    // default (data.py:169).
+    let (restrict, _) = restrict_and_properties(env, &std::collections::HashSet::new());
+    // SAFETY: `geteuid(2)` cannot fail.
+    let droppriv = phase_droppriv(phase, &features, &restrict, unsafe { libc::geteuid() == 0 })
+        .then(|| portage_phase_ids(std::env::var("PORTAGE_USERNAME").ok().as_deref()))
+        .flatten();
+    let effective_shell = if iso.any() || droppriv.is_some() {
+        ShellBackend::Bash
+    } else {
+        shell
+    };
 
     match effective_shell {
         ShellBackend::Brush => {
@@ -64,6 +78,7 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
             config_root,
             log_file,
             iso,
+            droppriv,
         }),
     }
 }
@@ -225,6 +240,10 @@ pub(crate) struct RunOnePhaseBashArgs<'a> {
     pub(crate) config_root: &'a Path,
     pub(crate) log_file: PhaseLog<'a>,
     pub(crate) iso: Isolation,
+    /// The demoted identity from [`run_one_phase`]'s `userpriv` gate (`None`
+    /// keeps root). An in-process brush backend cannot demote, so a `Some`
+    /// here always arrives with [`ShellBackend::Bash`].
+    pub(crate) droppriv: Option<PhaseIds>,
 }
 
 /// `Bash`: a genuine `bash <bin_dir>/ebuild.sh <phase>` subprocess (Portage's
@@ -244,6 +263,7 @@ pub(crate) fn run_one_phase_bash(args: RunOnePhaseBashArgs<'_>) -> Result<i32, S
         config_root,
         log_file,
         iso,
+        droppriv,
     } = args;
     let vars = phase_env_vars(PhaseEnvVarsArgs {
         env,
@@ -266,5 +286,6 @@ pub(crate) fn run_one_phase_bash(args: RunOnePhaseBashArgs<'_>) -> Result<i32, S
         log_file,
         context: &format!("phase {phase}"),
         interactive: properties_name_interactive(env),
+        droppriv,
     })
 }

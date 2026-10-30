@@ -135,8 +135,6 @@ pub(crate) fn network_sandbox_exempt(phase: &str, restrict: &str, properties: &s
 /// demote, and only with `FEATURES=userpriv`, neither `RESTRICT` opt-out,
 /// and `secpass >= 2` (effectively root here, per `is_root`).
 // Portage: doebuild.py, _spawn_actionmap (:1780-1795) and actionmap (:1813-1870)
-// The phase spawn consumes this in the follow-up demotion slice (#627 S2).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn phase_droppriv(phase: &str, features: &str, restrict: &str, is_root: bool) -> bool {
     matches!(
         phase,
@@ -149,9 +147,7 @@ pub(crate) fn phase_droppriv(phase: &str, features: &str, restrict: &str, is_roo
 }
 
 /// The identity a demoted phase runs as: Portage's `portage_uid`/`portage_gid`
-/// plus its `userpriv_groups` list. Consumed by the phase spawn in the
-/// follow-up demotion slice (#627 S2).
-#[cfg_attr(not(test), allow(dead_code))]
+/// plus its `userpriv_groups` list. The phase spawn demotes to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PhaseIds {
     pub(crate) uid: u32,
@@ -165,7 +161,6 @@ pub(crate) struct PhaseIds {
 /// demotion — the same shape as the unusable-unshare path.
 // Portage: data.py, _portage_username (:249-265, :336) and portage_uid/portage_gid (:169);
 // userpriv_groups (:224-247)
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn portage_phase_ids(username: Option<&str>) -> Option<PhaseIds> {
     use std::ffi::CString;
 
@@ -354,20 +349,31 @@ pub(crate) fn phase_isolation(env: &Environment, phase: &str, features: &str) ->
         return Isolation::default();
     }
     let mut net = network_sandbox_requested(features);
-    if net {
-        // Exemptions run for sandboxable phases only, so the empty-set reduction suffices.
-        let (restrict, properties) =
-            restrict_and_properties(env, &std::collections::HashSet::new());
-        if network_sandbox_exempt(phase, &restrict, &properties) {
-            net = false;
-        }
+    // Exemptions run for sandboxable phases only, so the empty-set reduction suffices.
+    let (restrict, properties) = restrict_and_properties(env, &std::collections::HashSet::new());
+    if net && network_sandbox_exempt(phase, &restrict, &properties) {
+        net = false;
     }
+    // A demoted phase never unshares: `unshare --map-root-user` maps only the
+    // caller to root inside the namespace, so the later setuid to an unmapped
+    // uid fails; Portage unshares via `unshare(2)` while still root instead
+    // (process.py:1061). Only the `usersandbox` fs wrapper survives, per
+    // `free = droppriv and not usersandbox` (doebuild.py:2233-2240). The ids
+    // lookup confirms the build user resolves; an unknown user degrades to
+    // the undisturbed isolation, like the unusable-unshare path below.
+    // SAFETY: `geteuid(2)` cannot fail.
+    let demoted = phase_droppriv(phase, features, &restrict, unsafe { libc::geteuid() == 0 })
+        && portage_phase_ids(None).is_some();
     let mut iso = Isolation {
-        net,
-        ipc: feature_token_present(features, "ipc-sandbox"),
-        mount: feature_token_present(features, "mount-sandbox"),
-        pid: feature_token_present(features, "pid-sandbox"),
-        fs_sandbox: fs_sandbox_for_phase(phase, features),
+        net: net && !demoted,
+        ipc: feature_token_present(features, "ipc-sandbox") && !demoted,
+        mount: feature_token_present(features, "mount-sandbox") && !demoted,
+        pid: feature_token_present(features, "pid-sandbox") && !demoted,
+        fs_sandbox: if demoted {
+            feature_token_present(features, "usersandbox")
+        } else {
+            fs_sandbox_for_phase(phase, features)
+        },
     };
     if iso.any_unshare() && !unshare_combo_usable(&iso.unshare_flags()) {
         static WARNED: OnceLock<()> = OnceLock::new();

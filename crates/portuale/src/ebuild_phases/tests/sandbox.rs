@@ -163,6 +163,7 @@ fn sandbox_active_in_the_parent_env_forces_the_bash_suffix() {
         log_file: PhaseLog::Capture(&tmp.join("phase.log")),
         context: "sandbox-active probe",
         interactive: false,
+        droppriv: None,
     })
     .expect("the sandboxed spawn runs");
     assert_eq!(status, 0, "the sandboxed spawn exits 0");
@@ -170,6 +171,49 @@ fn sandbox_active_in_the_parent_env_forces_the_bash_suffix() {
     let argv0 = raw.split(|&b| b == 0).next().unwrap();
     // Without the `SANDBOX_ACTIVE` fold this is `[cat/pf-1.0] sandbox`.
     assert_eq!(argv0, b"[cat/pf-1.0] bash");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A demoted spawn runs as the portage user: `id -u` through
+/// `spawn_bash_script` with `droppriv: Some(ids)` reports the resolved uid.
+/// Root-gated (demotion needs root) and skips when the portage user is
+/// unknown — the same degrade-to-no-demotion shape as the spawn.
+/// Portage: doebuild.py, spawn (:2171-2181); process.py, _exec (:1265-1272).
+#[test]
+fn demoted_spawn_runs_as_the_portage_user() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    let uid = ids.uid;
+    let tmp = TempDir::new("portuale-test-droppriv-spawn");
+    let script = tmp.join("id.sh");
+    std::fs::write(&script, "id -u\n").unwrap();
+    let log = tmp.join("id.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso: Isolation::default(),
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&log),
+        context: "droppriv probe",
+        interactive: false,
+        droppriv: Some(ids),
+    })
+    .expect("the demoted spawn runs");
+    assert_eq!(status, 0, "the demoted spawn exits 0");
+    let out = std::fs::read_to_string(&log).expect("the child writes its uid");
+    assert_eq!(
+        out.trim().parse::<u32>().expect("the uid parses"),
+        uid,
+        "the child runs as the portage user"
+    );
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

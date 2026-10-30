@@ -670,6 +670,10 @@ pub(crate) struct SpawnBashScriptArgs<'a> {
     pub(crate) context: &'a str,
     /// The package's raw `PROPERTIES` names `interactive`.
     pub(crate) interactive: bool,
+    /// Demote the child to this identity before exec (`None` keeps root).
+    /// Only the gated phase spawns set it; `misc_functions` never demotes.
+    /// Portage: doebuild.py, spawn (`droppriv`, :2171-2181)
+    pub(crate) droppriv: Option<PhaseIds>,
 }
 
 /// Run a vendored bash helper script under the sandbox with a curated
@@ -691,16 +695,25 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
         log_file,
         context,
         interactive,
+        droppriv,
     } = args;
     // The guards must outlive `cmd` (see `open_log_file`): declared first so
     // drop order destroys them after `cmd`, on every path.
     let mut pump_guard: Option<LogPump> = None;
     let mut tee_guard: Option<TeePump> = None;
-    // Portage: doebuild.py, spawn (:2243-2261) — ` bash` when free
-    // (no sandbox wrapper here) or already inside one (`SANDBOX_ACTIVE`
-    // in the parent env), ` sandbox` otherwise. No fakeroot wrapper,
-    // so no third suffix.
-    let sandboxed = iso.fs_sandbox && std::env::var_os("SANDBOX_ACTIVE").is_none();
+    // Portage: doebuild.py, spawn (:2233-2261) — `free` when demoted
+    // without `usersandbox` (no sandbox wrapper here), ` bash` when free
+    // or already inside one (`SANDBOX_ACTIVE` in the parent env),
+    // ` sandbox` otherwise. No fakeroot wrapper, so no third suffix.
+    // `FEATURES` rides in `vars` (phase_env always sets it), which is the
+    // only `usersandbox` signal this shared spawn sees.
+    let usersandbox = vars
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "FEATURES")
+        .is_some_and(|(_, v)| feature_token_present(v, "usersandbox"));
+    let free = droppriv.is_some() && !usersandbox;
+    let sandboxed = iso.fs_sandbox && !free && std::env::var_os("SANDBOX_ACTIVE").is_none();
     let opt_name = phase_opt_name(category, pf, sandboxed);
     let mut cmd = sandbox_wrapped_command(script, argv_word, iso, &opt_name);
     // Curated env only, like Portage: only whitelisted calling-env vars pass through;
@@ -737,6 +750,31 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
     // Portage: AbstractEbuildProcess.py, _start
     if argv_word != "config" && !interactive {
         cmd.stdin(std::process::Stdio::null());
+    }
+    if let Some(ids) = &droppriv {
+        let uid = ids.uid;
+        let gid = ids.gid;
+        let groups = ids.groups.clone();
+        // SAFETY: runs in the child after fork, before exec; only
+        // async-signal-safe libc calls, and any failure fails the spawn.
+        // Portage: process.py, _exec (:1265-1272) — setgid, setgroups,
+        // then setuid, so the supplementary groups land before root is
+        // dropped.
+        use std::os::unix::process::CommandExt as _;
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::setgid(gid) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if !groups.is_empty() && libc::setgroups(groups.len(), groups.as_ptr()) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::setuid(uid) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
     let status = spawn_trackable(&mut cmd, PhasePlacement::for_phase(argv_word))
         .map_err(|e| format!("spawning real bash for {context} failed: {e}"))?;
