@@ -54,7 +54,7 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
         shell
     };
 
-    match effective_shell {
+    let result = match effective_shell {
         ShellBackend::Brush => {
             run_one_phase_brush(RunOnePhaseBrushArgs {
                 env,
@@ -82,7 +82,18 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
             iso,
             droppriv,
         }),
+    };
+    // Portage: doebuild.py, _post_phase_userpriv_perms (:2485-2498), gated on
+    // `userpriv` and `secpass >= 2` for the run, whether or not this phase demoted
+    // (doebuild.py:2486). Runs after every phase, success or failure.
+    // SAFETY: `geteuid(2)` cannot fail.
+    if feature_token_present(&features, "userpriv") && unsafe { libc::geteuid() } == 0 {
+        match portage_phase_ids(std::env::var("PORTAGE_USERNAME").ok().as_deref()) {
+            Some(ids) => apply_userpriv_post_perms(&env.t(), &env.home(), &ids),
+            None => eprintln!("warning: build user not found; skipping userpriv ownership fixup"),
+        }
     }
+    result
 }
 
 /// The host `bash` binary, as a phase's `$BASH` (brush never sets it, which broke

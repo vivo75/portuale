@@ -396,3 +396,52 @@ fn environ_whitelist_has_the_portage_3_0_83_additions() {
         assert!(portage_profile::ENV_BLACKLIST.contains(&name));
     }
 }
+
+#[test]
+fn post_phase_perms_force_owner_modes() {
+    // Portage: util/__init__.py, apply_recursive_permissions (:1266-1340) with
+    // dirmode 0o700 / filemode 0o600 and masks 0, via apply_secpass_permissions.
+    // Mask 0 only ORs the owner bits in, so the fixtures start at mode 0 to make
+    // the exact 700/600 result observable. Ids are the current user's, so the
+    // chown is a no-op and the test passes unprivileged; the root-only chown to
+    // portage lives in the Task 4 e2e.
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let tmp = TempDir::new("portuale-test-post-phase-perms");
+    let temp = tmp.join("temp");
+    let home = tmp.join("homedir");
+    let sub = temp.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let file = sub.join("f");
+    std::fs::write(&file, "x").unwrap();
+    let top_file = temp.join("top");
+    std::fs::write(&top_file, "y").unwrap();
+
+    // A symlink to a file outside the tree must neither be followed nor have its
+    // target's mode changed.
+    let outside = tmp.join("outside");
+    std::fs::write(&outside, "z").unwrap();
+    std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::os::unix::fs::symlink(&outside, sub.join("link")).unwrap();
+
+    // Children first: a mode-0 `sub` could not be traversed to reach `file`.
+    for p in [&file, &top_file, &sub, &temp] {
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+
+    // SAFETY: `geteuid`/`getegid` cannot fail.
+    let ids = PhaseIds {
+        uid: unsafe { libc::geteuid() },
+        gid: unsafe { libc::getegid() },
+        groups: Vec::new(),
+    };
+    apply_userpriv_post_perms(&temp, &home, &ids);
+
+    let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
+    assert!(home.is_dir(), "the homedir is created before the walk");
+    assert_eq!(mode(&temp), 0o700);
+    assert_eq!(mode(&sub), 0o700);
+    assert_eq!(mode(&file), 0o600);
+    assert_eq!(mode(&top_file), 0o600);
+    assert_eq!(mode(&outside), 0o644, "symlink target must not be touched");
+}

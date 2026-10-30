@@ -219,6 +219,113 @@ pub(crate) fn portage_phase_ids(username: Option<&str>) -> Option<PhaseIds> {
     })
 }
 
+/// Post-phase ownership fixup: a privileged phase may have left `$T` and the
+/// homedir root-owned, so hand both back to the build user (`dirmode 0o700`,
+/// `filemode 0o600`, masks `0`). Per-entry failures are warnings, never a
+/// failed phase.
+/// Portage: doebuild.py, _post_phase_userpriv_perms (:2485-2498)
+pub(crate) fn apply_userpriv_post_perms(temp: &Path, home: &Path, ids: &PhaseIds) {
+    if let Err(e) = std::fs::create_dir_all(home) {
+        eprintln!("warning: could not create {}: {e}", home.display());
+    }
+    for top in [home, temp] {
+        apply_recursive_perms(top, ids);
+    }
+}
+
+/// `apply_recursive_permissions` (util/__init__.py:1266-1340): the top entry first,
+/// then each directory's children before descending into any of them, never
+/// following symlinks. Entries that vanish mid-walk are skipped silently.
+// Portage: util/__init__.py, apply_recursive_permissions (:1266-1340)
+fn apply_recursive_perms(top: &Path, ids: &PhaseIds) {
+    let meta = match std::fs::symlink_metadata(top) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            eprintln!("warning: could not stat {}: {e}", top.display());
+            return;
+        }
+    };
+    apply_secpass_perms(top, ids, &meta);
+    if meta.is_dir() {
+        walk_perms(top, ids);
+    }
+}
+
+fn walk_perms(dir: &Path, ids: &PhaseIds) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            eprintln!("warning: could not read {}: {e}", dir.display());
+            return;
+        }
+    };
+    let mut children = Vec::new();
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(_) => continue,
+        };
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) => children.push((path, meta)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("warning: could not stat {}: {e}", path.display()),
+        }
+    }
+    for (path, meta) in &children {
+        apply_secpass_perms(path, ids, meta);
+    }
+    for (path, meta) in &children {
+        if meta.is_dir() {
+            walk_perms(path, ids);
+        }
+    }
+}
+
+/// `apply_secpass_permissions` with `follow_links=False` (util/__init__.py:1348)
+/// and `apply_permissions` (:1161): `lchown` to `ids` when the owner differs,
+/// then OR the owner mode into the entry (mask 0 adds bits, never strips them).
+/// Symlinks get the owner change only.
+// Portage: util/__init__.py, apply_secpass_permissions (:1348), apply_permissions (:1161)
+fn apply_secpass_perms(path: &Path, ids: &PhaseIds, meta: &std::fs::Metadata) {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let is_link = meta.file_type().is_symlink();
+    let chowned = meta.uid() != ids.uid || meta.gid() != ids.gid;
+    if chowned && let Err(e) = lchown(path, ids.uid, ids.gid) {
+        eprintln!("warning: could not chown {}: {e}", path.display());
+    }
+    if is_link {
+        return;
+    }
+    let want = if meta.is_dir() { 0o700 } else { 0o600 };
+    let st_mode = meta.mode() & 0o7777;
+    // `chown` clears setuid/setgid, so a chowned entry with those bits must be
+    // re-chmodded even when the owner mode is already present.
+    let keeps_special = chowned && st_mode & 0o6000 != 0;
+    let target = st_mode | want;
+    if (target != st_mode || keeps_special)
+        && let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(target))
+    {
+        eprintln!("warning: could not chmod {}: {e}", path.display());
+    }
+}
+
+fn lchown(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    // SAFETY: `c_path` is a valid NUL-terminated string; `lchown` does not
+    // follow a final symlink component.
+    if unsafe { libc::lchown(c_path.as_ptr(), uid, gid) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
 /// `FEATURES=sandbox` or `usersandbox` present (equivalent here: no `userpriv`).
 /// Portage: process.py, _spawn
 pub(crate) fn fs_sandbox_requested(features: &str) -> bool {
