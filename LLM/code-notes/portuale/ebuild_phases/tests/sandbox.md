@@ -17,3 +17,24 @@ Sandbox/isolation unit tests for phase execution. Context moved out of the code 
 
 ## fn environ_whitelist_has_the_portage_3_0_83_additions
 - Portage `special_env_vars.py` (`5dc9b552e`, `c15ab2464`, `b7052a33d`, `1bad86d92`).
+
+## fn demoted_spawn_runs_as_the_portage_user
+- Root-gated (`SKIP: needs root` otherwise): `spawn_bash_script` with `droppriv: Some(ids)` runs `id -u`, which must print the portage uid -- an undemoted child reports 0 and fails the assert (structural negative control).
+
+## fn droppriv_mirrors_portage_actionmap_and_gate
+- Portage's truth table verbatim (Portage `doebuild.py, _spawn_actionmap (:1780-1795)` and `actionmap (:1813-1870)`): the five demoting phases, seven non-demoting ones, and each gate clause (`RESTRICT` `userpriv`/`nouserpriv`, `-userpriv`, non-root).
+
+## fn portage_phase_ids_resolves_a_real_user_and_rejects_unknown_ones
+- `root` resolves uid 0 with its primary gid present in `groups`; an unknown name returns `None` (degrade, not panic) -- Portage `data.py, portage_uid/portage_gid (:169)` and `userpriv_groups (:224-247)`.
+
+## fn post_phase_perms_force_owner_modes
+- Portage `_post_phase_userpriv_perms` (Portage `doebuild.py:2485-2498`): dirs gain owner rwx (0o700 from mode 0), files 0o600, a symlink is chowned-only and its target keeps its mode; the fixture starts at 0o000 because mask 0 only adds bits.
+
+## fn pre_phase_dirs_become_portage_owned
+- Portage `prepare_build_dirs.py, prepare_build_dirs (:96-106)` and `_prepare_workdir (:329-368)`: all six spine dirs end owned by the ids at exactly 0o700, except WORKDIR which starts 0o755 and keeps its group/other bits (OR semantics, not chmod-set).
+
+## fn pre_phase_symlinked_spine_entry_is_skipped_not_followed
+- A `${T}` symlink stays a symlink, its target keeps its mode and gains no `logging` child; the guard is load-bearing (deleting it creates `outside/logging` through the link).
+
+## fn unshare_flags_root_omits_userns
+- Portage `process.py, _exec (:1061)`: root gets no `--map-root-user`, non-root keeps it first. A single-id userns maps only the caller, so portage-owned paths become overflow uid.

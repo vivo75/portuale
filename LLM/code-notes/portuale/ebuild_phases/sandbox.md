@@ -58,3 +58,30 @@ The phase shell backend, the calling-environment filter, and sandbox/isolation.
 
 ## ENVIRON_WHITELIST (BASH_FUNC____in_portage_iuse%%, #348 S2 E6)
 - Carries Portage's own `BASH_FUNC____in_portage_iuse%%` whitelist entry (`special_env_vars.py`): the gate function is set programmatically, but the calling-env filter must let it through like Portage's does.
+
+## fn phase_droppriv
+- Portage's per-phase `droppriv` gate plus its `actionmap` table (Portage `doebuild.py, _spawn_actionmap (:1780-1795)`, `actionmap (:1813-1870)`): only `unpack`/`prepare`/`configure`/`compile`/`test` demote, and only with `FEATURES=userpriv`, neither `userpriv` nor `nouserpriv` in `RESTRICT`, and root.
+- Deliberate deviation: `droppriv` (`:1795`) reads only `userpriv` from `RESTRICT`; the `nouserpriv` token mirrors the `nosandbox` check at `:1787` and is pinned by `droppriv_mirrors_portage_actionmap_and_gate`. `is_root` is the caller's `geteuid() == 0` (Portage `secpass >= 2`, `data.py, secpass (:92-106)`).
+- `features`/`restrict` are already USE-reduced flat strings (`features_string` / `restrict_and_properties`), so no conditional groups reach the token checks.
+
+## struct PhaseIds
+- Portage's `portage_uid` / `portage_gid` / `userpriv_groups` (Portage `data.py, portage_uid/portage_gid (:169)` and `userpriv_groups (:224-247)`) copied out of NSS into plain scalars; the spawn consumes it in `pre_exec`.
+
+## fn portage_phase_ids
+- Build user: the given name, else `PORTAGE_USERNAME`, else `portage` (Portage `data.py, _portage_username (:249-265, :336)`); `getpwnam` supplies uid/gid and `getgrouplist` the group list.
+- `None` on any lookup failure, so the caller degrades to today's isolation instead of running root unconfined (same shape as the unusable-unshare path).
+- The `passwd` fields are copied before the next NSS call can reuse the static buffer.
+
+## fn apply_userpriv_pre_perms
+- Portage `prepare_build_dirs.py, prepare_build_dirs (:96-106)` plus `_prepare_workdir (:329-368)`: ensure the builddir spine (`dirname(BUILDDIR)`, `BUILDDIR`, `WORKDIR`, `T`, `HOME`, `T/logging`), `lchown` to the build user, OR in owner `rwx` (mask 0 adds bits, never strips — the same `apply_secpass_perms` the post-phase path uses).
+- A symlinked spine entry is skipped and everything beneath it too (lexical `starts_with`), so the spine is never created through or followed; hardening beyond Portage, pinned by `pre_phase_symlinked_spine_entry_is_skipped_not_followed`.
+- The run gate is `userpriv ∈ FEATURES ∧ euid == 0` (`run_phase.rs`, mirroring `doebuild.py:2486`), not per-phase demotion; existence for ungated runs stays `create_directories`' job. Per-entry failures warn; nothing fails the phase.
+
+## fn apply_userpriv_post_perms
+- Portage `doebuild.py, _post_phase_userpriv_perms (:2485-2498)`: `apply_recursive_permissions` (`util/__init__.py:1266-1340`) over `HOME` then `T`, `dirmode 0o700`, `filemode 0o600`, masks 0.
+- Creates `homedir` first, never follows a symlink, skips entries that vanish mid-walk, and warns (never fails) per entry.
+- Runs only after a successful phase: Portage `EbuildPhase.py:389-420` returns before the `:420` call; `test` with `test-fail-continue` counts as success (`:393-402`).
+
+## impl Isolation::unshare_flags
+- Portage `process.py, _exec (:1061)` unshares as uid 0 with no new user namespace, so `is_root` omits `--map-root-user`; non-root keeps it first as its only way to unshare.
+- A root userns must not be created: a single-id map leaves portage-owned build paths as overflow uid, so a root phase's `$T`/`$D` writes fail `EACCES` (the #629 diagnosis; a demoted phase gets no wrappers at all, #630).

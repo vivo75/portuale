@@ -20179,3 +20179,36 @@ before the fix on the same tree 91 and 44, and the old-tree baseline
 divergent. Quirk Q25 records the Portage side; the fixture-level pin and the
 `automake`/`autoconf` `[NS]`/`[R]` row are #625.
 
+**A `userpriv` source phase runs as `portage:portage` instead of root (#626,
+with #627/#628/#629).** Portuale ran `src_unpack` as root inside
+`unshare --map-root-user`; `tar`'s restore of the crates' foreign owners
+(`1000:1000`, `501:20`) then failed `EINVAL` and the cargo eclass died
+(`LLM/evidence/2026-10-29-626/`), while Portage demotes and unpacks clean.
+Portage's gate is `FEATURES=userpriv` ∧ `RESTRICT` carrying neither
+`userpriv` nor `nouserpriv` ∧ root, and it covers exactly `unpack`, `prepare`,
+`configure`, `compile`, `test` (`doebuild.py:1795,1813-1870`); portuale's
+`phase_droppriv` is that table, the bash spawn does Portage's
+`setgid → setgroups → setuid` in `pre_exec` (`process.py:1265-1272`), and a
+demoted phase is never put inside `--map-root-user` (a single-id namespace
+would either refuse the `setuid` or re-root the child and bring EINVAL back).
+The two halves the e2e then exposed are #628 — the builddir spine is handed to
+the build user before the phase (`prepare_build_dirs.py:96-106`,
+`_prepare_workdir:329-368`) — and #629 — root phases `unshare` without a
+userns, as Portage's `unshare(2)` does (`process.py:1061`). Check:
+`sudo <test-binary> demoted_spawn` (root-gated; SKIP-passes unprivileged:
+the child's `id -u` is the portage uid, 250 here), `sudo <test-binary>
+unpack_of_a_foreign_owned_tarball_succeeds_demoted` (a runtime-built
+`--owner=1 --group=1` tar unpacks and every member lands portage-owned), and
+the acceptance that started it, `sudo ./target/release/portuale emerge -1
+app-benchmarks/hyperfine` — the log carries the completed-emerge line
+(`Completed (1 of 1) app-benchmarks/hyperfine-1.21.0::gentoo` through fetch →
+setup → unpack → prepare/configure → compile → install → vdb merge,
+`LLM/evidence/2026-10-30-627/hyperfine-acceptance.log`); exit status rc=0 is
+recorded in Task 4's report (report-only, not in the log). Known reds at
+close-out: 1 cargo `embedded_runtime` + 7 pytest `mrg_remote`, single
+host-state cause (root-only `/etc/portage/gnupg.getuto.tmp` → tar exit 2 as
+uid 1000), zero corpus drift. Honest limit: a
+demoted phase currently gets no `net`/`ipc`/`pid` namespaces, which Portage
+applies even when demoted, so `network-sandbox` does not confine it (libsandbox
+under `usersandbox` and DAC as `portage:portage` still do) — filed as #630.
+
