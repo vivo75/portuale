@@ -595,15 +595,6 @@ pub(crate) fn phase_isolation(
             fs_sandbox_for_phase(phase, features)
         },
     };
-    if demoted && feature_token_present(features, "pid-sandbox") {
-        static PID_WARNED: OnceLock<()> = OnceLock::new();
-        PID_WARNED.get_or_init(|| {
-            eprintln!(
-                "!!! pid-sandbox not applied for demoted {phase} \
-                 (no PID-1 re-exec yet); {phase} runs without pid isolation"
-            );
-        });
-    }
     if iso.any_unshare() && !unshare_combo_usable(&iso.unshare_flags(is_root)) {
         static WARNED: OnceLock<()> = OnceLock::new();
         // Portage names the involved features (process.py:1097-1104).

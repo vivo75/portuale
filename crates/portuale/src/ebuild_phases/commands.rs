@@ -892,11 +892,17 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                                 // by pid (`ParentGroup`), forwards each caught
                                 // signal to the grandchild, polls its exit,
                                 // and never returns.
-                                // Close the spawn error pipe first: `spawn()`
-                                // reads EOF off it, and only an exec-or-exit
-                                // delivers that — without this the spawn would
-                                // block for the whole phase and the scheduler
-                                // could never kill the run mid-phase. One
+                                // SAFETY: a fresh fork is never a group leader.
+                                if libc::setsid() < 0 {
+                                    // SAFETY: plain ints; the grandchild is ours.
+                                    libc::kill(grandchild, libc::SIGKILL);
+                                    return Err(std::io::Error::last_os_error());
+                                }
+                                // Close the spawn error pipe after the fallible
+                                // setup: `spawn()` reads EOF off it, and only an
+                                // exec-or-exit delivers that — without this the
+                                // spawn would block for the whole phase and the
+                                // scheduler could never kill the run mid-phase. One
                                 // async-signal-safe syscall; pre-5.9 kernels
                                 // answer ENOSYS and degrade to the late
                                 // return, still correct.
@@ -904,12 +910,6 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                                 // only std's CLOEXEC error pipe — stdio is 0,
                                 // 1, 2 and the grandchild keeps its own copies.
                                 let _ = libc::close_range(3, u32::MAX, 0);
-                                // SAFETY: a fresh fork is never a group leader.
-                                if libc::setsid() < 0 {
-                                    // SAFETY: plain ints; the grandchild is ours.
-                                    libc::kill(grandchild, libc::SIGKILL);
-                                    return Err(std::io::Error::last_os_error());
-                                }
                                 loop {
                                     // Forward every pending forward-set signal
                                     // (zero timeout: poll, never sleep here).
