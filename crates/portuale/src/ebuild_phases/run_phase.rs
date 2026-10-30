@@ -44,7 +44,6 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
     // undisturbed isolation and no demotion alike.
     let (restrict, _) = restrict_and_properties(env, &std::collections::HashSet::new());
     // SAFETY: `geteuid(2)` cannot fail.
-    // SAFETY: `geteuid(2)` cannot fail.
     let is_root = unsafe { libc::geteuid() == 0 };
     // Portage: doebuild.py, _post_phase_userpriv_perms (:2485-2498): the same
     // `userpriv` + root gate that enables demotion, held for the whole run. One
@@ -64,6 +63,15 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
     } else {
         shell
     };
+
+    // Portage: prepare_build_dirs.py, prepare_build_dirs (:96-106) and
+    // _prepare_workdir (:329-368): a demoted child must find a writable tree
+    // on entry, so the run gate hands the builddir to the build user before
+    // the backend spawns. Unknown user (`None`) skips silently; per-entry
+    // failures inside only warn.
+    if userpriv_run && let Some(ids) = &build_ids {
+        apply_userpriv_pre_perms(ids, env);
+    }
 
     let result = match effective_shell {
         ShellBackend::Brush => {

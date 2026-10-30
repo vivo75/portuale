@@ -326,6 +326,42 @@ fn lchown(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
     }
 }
 
+/// Pre-phase ownership handoff: a demoted child must find a writable tree on
+/// entry, so ensure the builddir spine, hand each entry to `ids`, and OR in
+/// owner `rwx` (mask 0 adds bits, never strips — the same OR semantics as the
+/// post-phase fixup, via [`apply_secpass_perms`]). Top-level only, symlinks
+/// never followed. Per-entry failures are warnings, never a failed phase.
+/// Portage: prepare_build_dirs.py, prepare_build_dirs (:96-106) and _prepare_workdir (:329-368)
+pub(crate) fn apply_userpriv_pre_perms(ids: &PhaseIds, env: &Environment) {
+    let builddir = env.portage_builddir().to_path_buf();
+    let mut dirs: Vec<PathBuf> = Vec::with_capacity(6);
+    if let Some(parent) = builddir.parent() {
+        dirs.push(parent.to_path_buf());
+    }
+    dirs.extend([
+        builddir,
+        env.workdir(),
+        env.t(),
+        env.home(),
+        env.t().join("logging"),
+    ]);
+    for dir in &dirs {
+        // `files` is a symlink, never a dir: don't create through it, same
+        // skip rule as `create_directories`.
+        if std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink()) {
+            continue;
+        }
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("warning: could not create {}: {e}", dir.display());
+            continue;
+        }
+        match std::fs::symlink_metadata(dir) {
+            Ok(meta) => apply_secpass_perms(dir, ids, &meta),
+            Err(e) => eprintln!("warning: could not stat {}: {e}", dir.display()),
+        }
+    }
+}
+
 /// `FEATURES=sandbox` or `usersandbox` present (equivalent here: no `userpriv`).
 /// Portage: process.py, _spawn
 pub(crate) fn fs_sandbox_requested(features: &str) -> bool {

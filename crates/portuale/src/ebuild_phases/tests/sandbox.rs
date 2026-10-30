@@ -445,3 +445,104 @@ fn post_phase_perms_force_owner_modes() {
     assert_eq!(mode(&top_file), 0o600);
     assert_eq!(mode(&outside), 0o644, "symlink target must not be touched");
 }
+
+#[test]
+fn pre_phase_dirs_become_portage_owned() {
+    // Portage: prepare_build_dirs.py, prepare_build_dirs (:96-106) and
+    // _prepare_workdir (:329-368). Top-level ensure + lchown + owner-rwx OR
+    // (mask 0 adds bits, never strips), so fixtures start at mode 0. Ids are
+    // the current user's, so the chown is a no-op and the test passes
+    // unprivileged; the root-owned handoff to portage lives in Task 4's e2e.
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let tmp = TempDir::new("portuale-test-pre-phase-perms");
+    let builddir = tmp.join("portage").join("cat").join("pf-1");
+    for d in [&builddir, &builddir.join("work"), &builddir.join("temp")] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let env = Environment {
+        ebuild_abs: tmp.join("pf-1.ebuild"),
+        pkg_dir: tmp.to_path_buf(),
+        category: "cat".to_string(),
+        split: PackageSplit {
+            p: "pf-1".to_string(),
+            pn: "pf".to_string(),
+            pv: "1".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1".to_string(),
+            pf: "pf-1".to_string(),
+        },
+        eapi: "8".to_string(),
+        portage_tmpdir: tmp.to_path_buf(),
+        portage_builddir: builddir.clone(),
+        inherited: None,
+    };
+
+    // A `files`-shaped symlink inside the builddir must be skipped, never
+    // followed: its target keeps its mode.
+    let outside = tmp.join("outside-files");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&outside, builddir.join("files")).unwrap();
+
+    // Deepest first: a mode-0 parent cannot be traversed to reach its child.
+    for d in [
+        env.t().join("logging"),
+        env.t(),
+        env.home(),
+        env.workdir(),
+        builddir.clone(),
+        builddir.parent().unwrap().to_path_buf(),
+    ] {
+        std::fs::create_dir_all(&d).unwrap();
+    }
+    for d in [
+        env.t().join("logging"),
+        env.t(),
+        env.home(),
+        env.workdir(),
+        builddir.clone(),
+        builddir.parent().unwrap().to_path_buf(),
+    ] {
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+
+    // SAFETY: `geteuid`/`getegid` cannot fail.
+    let ids = PhaseIds {
+        uid: unsafe { libc::geteuid() },
+        gid: unsafe { libc::getegid() },
+        groups: Vec::new(),
+    };
+    apply_userpriv_pre_perms(&ids, &env);
+
+    use std::os::unix::fs::MetadataExt as _;
+    for d in [
+        builddir.parent().unwrap().to_path_buf(),
+        builddir.clone(),
+        env.workdir(),
+        env.t(),
+        env.home(),
+        env.t().join("logging"),
+    ] {
+        let meta = std::fs::symlink_metadata(&d).unwrap();
+        assert_eq!(
+            meta.uid(),
+            ids.uid,
+            "{} owned by the build user",
+            d.display()
+        );
+        assert_eq!(
+            meta.permissions().mode() & 0o7777,
+            0o700,
+            "{} gains owner rwx",
+            d.display()
+        );
+    }
+    let link = std::fs::symlink_metadata(builddir.join("files")).unwrap();
+    assert!(
+        link.file_type().is_symlink(),
+        "the files link is not replaced"
+    );
+    let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
+    assert_eq!(mode(&outside), 0o755, "symlink target must not be touched");
+}
