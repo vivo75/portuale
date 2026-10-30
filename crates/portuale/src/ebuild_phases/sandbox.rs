@@ -342,8 +342,16 @@ pub(crate) fn unshare_combo_usable(flags: &[&str]) -> bool {
 /// Wrappers for one phase from `FEATURES`: only `src_*` phases; an unusable unshare
 /// combination degrades with one warning. `net` also carries the `networked`
 /// exemption (live-`unpack`, `test_network`-`test`, `RESTRICT` opt-out).
+/// `demoted` is [`run_one_phase`]'s already-computed gate outcome (`None`
+/// ids, e.g. an unknown build user, arrive as `false`, leaving the
+/// isolation undisturbed like the unusable-unshare path below).
 /// Portage: doebuild.py, _doebuild_spawn
-pub(crate) fn phase_isolation(env: &Environment, phase: &str, features: &str) -> Isolation {
+pub(crate) fn phase_isolation(
+    env: &Environment,
+    phase: &str,
+    features: &str,
+    demoted: bool,
+) -> Isolation {
     use std::sync::OnceLock;
     if !listed(SANDBOXED_SRC_PHASES, phase) {
         return Isolation::default();
@@ -358,12 +366,7 @@ pub(crate) fn phase_isolation(env: &Environment, phase: &str, features: &str) ->
     // caller to root inside the namespace, so the later setuid to an unmapped
     // uid fails; Portage unshares via `unshare(2)` while still root instead
     // (process.py:1061). Only the `usersandbox` fs wrapper survives, per
-    // `free = droppriv and not usersandbox` (doebuild.py:2233-2240). The ids
-    // lookup confirms the build user resolves; an unknown user degrades to
-    // the undisturbed isolation, like the unusable-unshare path below.
-    // SAFETY: `geteuid(2)` cannot fail.
-    let demoted = phase_droppriv(phase, features, &restrict, unsafe { libc::geteuid() == 0 })
-        && portage_phase_ids(None).is_some();
+    // `free = droppriv and not usersandbox` (doebuild.py:2233-2240).
     let mut iso = Isolation {
         net: net && !demoted,
         ipc: feature_token_present(features, "ipc-sandbox") && !demoted,

@@ -38,14 +38,16 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
     // A demoted phase likewise needs a real child: only a subprocess can
     // setuid to the build user before exec.
     let features = features_string(extra_env);
-    let iso = phase_isolation(env, phase, &features);
     // Portage: doebuild.py, _spawn_actionmap (:1780-1795) plus the username
-    // default (data.py:169).
+    // default (data.py:169). Computed once here: the single NSS lookup feeds
+    // both `phase_isolation` and the spawn, so an unknown user degrades to
+    // undisturbed isolation and no demotion alike.
     let (restrict, _) = restrict_and_properties(env, &std::collections::HashSet::new());
     // SAFETY: `geteuid(2)` cannot fail.
     let droppriv = phase_droppriv(phase, &features, &restrict, unsafe { libc::geteuid() == 0 })
         .then(|| portage_phase_ids(std::env::var("PORTAGE_USERNAME").ok().as_deref()))
         .flatten();
+    let iso = phase_isolation(env, phase, &features, droppriv.is_some());
     let effective_shell = if iso.any() || droppriv.is_some() {
         ShellBackend::Bash
     } else {
