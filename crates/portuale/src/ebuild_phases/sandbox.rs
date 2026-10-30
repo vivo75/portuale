@@ -142,6 +142,8 @@ pub(crate) fn phase_droppriv(phase: &str, features: &str, restrict: &str, is_roo
         phase,
         "unpack" | "prepare" | "configure" | "compile" | "test"
     ) && feature_token_present(features, "userpriv")
+        // Deviation: `nouserpriv` too, which `droppriv` (doebuild.py:1795) never
+        // reads; brief-mandated, mirroring the `nosandbox` check at doebuild.py:1787.
         && !flat_field_has_token(restrict, &["userpriv", "nouserpriv"])
         && is_root
 }
