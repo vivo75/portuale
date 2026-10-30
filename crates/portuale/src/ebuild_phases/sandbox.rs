@@ -494,6 +494,57 @@ pub(crate) fn unshare_combo_usable(flags: &[&str]) -> bool {
     ok
 }
 
+/// Raw `unshare(2)` flags for the demoted `pre_exec` path: the child is still
+/// root there (demotion runs after), so no `CLONE_NEWUSER` is ever set —
+/// exactly Portage's root `libc.unshare` with no userns. Pure and
+/// unit-testable without root.
+/// Portage: process.py, _exec (:693-714) — net adds `NEWNET|NEWUTS`, ipc
+/// adds `NEWIPC`, mount adds `NEWNS`, pid adds `NEWPID|NEWNS`.
+#[cfg(target_os = "linux")]
+pub(crate) fn clone_flags_for(iso: &Isolation) -> libc::c_int {
+    let mut flags = 0;
+    if iso.net {
+        flags |= libc::CLONE_NEWNET | libc::CLONE_NEWUTS;
+    }
+    if iso.ipc {
+        flags |= libc::CLONE_NEWIPC;
+    }
+    if iso.mount {
+        flags |= libc::CLONE_NEWNS;
+    }
+    if iso.pid {
+        flags |= libc::CLONE_NEWPID | libc::CLONE_NEWNS;
+    }
+    flags
+}
+
+/// Non-Linux targets have no namespace APIs: the demoted spawn demotes
+/// exactly as today, and `pre_exec` (whose unshare block is
+/// `#[cfg(target_os = "linux")]`-gated) skips namespace setup.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn clone_flags_for(_: &Isolation) -> libc::c_int {
+    0
+}
+
+/// The once-per-process degrade warning: names the requested FEATURES and
+/// the degraded phase; when demoted, states DAC confinement survives (the
+/// phase still demotes to `portage:portage`, only namespace confinement is
+/// lost). Pure so it is unit-testable without namespaces. `pre_exec` itself
+/// stays print-free.
+pub(crate) fn unshare_degrade_message(features: &str, phase: &str, demoted: bool) -> String {
+    if demoted {
+        format!(
+            "!!! Unable to unshare (for FEATURES=\"{features}\"); \
+             {phase} runs without namespace isolation but still as portage:portage"
+        )
+    } else {
+        format!(
+            "!!! Unable to unshare (for FEATURES=\"{features}\"); \
+             {phase} runs without namespace isolation"
+        )
+    }
+}
+
 /// Wrappers for one phase from `FEATURES`: only `src_*` phases; an unusable unshare
 /// combination degrades with one warning. `net` also carries the `networked`
 /// exemption (live-`unpack`, `test_network`-`test`, `RESTRICT` opt-out).
@@ -518,16 +569,19 @@ pub(crate) fn phase_isolation(
     if net && network_sandbox_exempt(phase, &restrict, &properties) {
         net = false;
     }
-    // A demoted phase never unshares: `unshare --map-root-user` maps only the
-    // caller to root inside the namespace, so the later setuid to an unmapped
-    // uid fails; Portage unshares via `unshare(2)` while still root instead
-    // (process.py:1061). Only the `usersandbox` fs wrapper survives, per
-    // `free = droppriv and not usersandbox` (doebuild.py:2233-2240).
+    // A demoted phase keeps its namespaces: the child unshares raw via
+    // `unshare(2)` while still root in `pre_exec`, then demotes to the
+    // portage ids — Portage's `_exec` shape (process.py:1061-1084), where no
+    // userns appears because no uid mapping is needed. (The `unshare(1)`
+    // shim's `--map-root-user` maps only the caller, which is why the shim
+    // never runs on the demoted path.) Only the `usersandbox` fs wrapper
+    // rule below stays demotion-dependent, per `free = droppriv and not
+    // usersandbox` (doebuild.py:2233-2240).
     let mut iso = Isolation {
-        net: net && !demoted,
-        ipc: feature_token_present(features, "ipc-sandbox") && !demoted,
-        mount: feature_token_present(features, "mount-sandbox") && !demoted,
-        pid: feature_token_present(features, "pid-sandbox") && !demoted,
+        net,
+        ipc: feature_token_present(features, "ipc-sandbox"),
+        mount: feature_token_present(features, "mount-sandbox"),
+        pid: feature_token_present(features, "pid-sandbox"),
         fs_sandbox: if demoted {
             feature_token_present(features, "usersandbox")
         } else {
@@ -536,11 +590,23 @@ pub(crate) fn phase_isolation(
     };
     if iso.any_unshare() && !unshare_combo_usable(&iso.unshare_flags(is_root)) {
         static WARNED: OnceLock<()> = OnceLock::new();
+        // Portage names the involved features (process.py:1097-1104).
+        let mut involved: Vec<&str> = Vec::new();
+        if iso.ipc {
+            involved.push("ipc-sandbox");
+        }
+        if iso.mount {
+            involved.push("mount-sandbox");
+        }
+        if iso.net {
+            involved.push("network-sandbox");
+        }
+        if iso.pid {
+            involved.push("pid-sandbox");
+        }
+        let msg = unshare_degrade_message(&involved.join(" "), phase, demoted);
         WARNED.get_or_init(|| {
-            eprintln!(
-                "!!! Unable to unshare (for FEATURES=\"network-sandbox / ipc-sandbox / \
-                 mount-sandbox / pid-sandbox\"); src_* phases run without namespace isolation"
-            );
+            eprintln!("{msg}");
         });
         iso.net = false;
         iso.ipc = false;
@@ -566,6 +632,38 @@ fn sh_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// The fully-built phase argv: the `libsandbox` prefix (when present — its
+/// presence was already confirmed before `fs_sandbox` was set) plus
+/// `bash <script> <arg>`. Single source: both the shim branch below and the
+/// demoted direct spawn take this argv, never re-derived, so the Task 2
+/// usersandbox control (namespaces + `libsandbox` compose) cannot regress.
+pub(crate) fn phase_argv(script: &Path, arg: &str, iso: &Isolation) -> Vec<std::ffi::OsString> {
+    use std::ffi::OsString;
+    let mut argv: Vec<OsString> = Vec::new();
+    if iso.fs_sandbox
+        && let Some(bin) = sandbox_binary()
+    {
+        argv.push(bin.into());
+    }
+    argv.push("bash".into());
+    argv.push(script.into());
+    argv.push(arg.into());
+    argv
+}
+
+/// A direct `Command` from the fully-built `argv` with `argv[0]` renamed to
+/// `opt_name`: the demoted spawn (namespaces happen in its own `pre_exec`,
+/// so the `unshare(1)` shim — which would demote the wrapper process instead
+/// of the phase — never runs there) and the unisolated fast path below.
+pub(crate) fn direct_command(argv: &[std::ffi::OsString], opt_name: &str) -> std::process::Command {
+    use std::os::unix::process::CommandExt as _;
+    debug_assert!(!argv.is_empty(), "phase argv always holds bash at least");
+    let mut c = std::process::Command::new(&argv[0]);
+    c.args(&argv[1..]);
+    c.arg0(opt_name);
+    c
+}
+
 /// A blocking `Command` running `bash <script> <arg>` (Portage's `EBUILD_SH_BINARY`
 /// shape) wrapped per `iso`, running under `opt_name` (Portage's `spawn`
 /// `opt_name`, via [`phase_opt_name`]):
@@ -587,25 +685,10 @@ pub(crate) fn sandbox_wrapped_command(
     opt_name: &str,
     is_root: bool,
 ) -> std::process::Command {
-    use std::ffi::OsString;
-    use std::os::unix::process::CommandExt as _;
-
-    let mut argv: Vec<OsString> = Vec::new();
-    if iso.fs_sandbox {
-        // Presence was already confirmed before `iso.fs_sandbox` was set.
-        if let Some(bin) = sandbox_binary() {
-            argv.push(bin.into());
-        }
-    }
-    argv.push("bash".into());
-    argv.push(script.into());
-    argv.push(arg.into());
+    let argv = phase_argv(script, arg, &iso);
 
     if !iso.any_unshare() {
-        let mut c = std::process::Command::new(&argv[0]);
-        c.args(&argv[1..]);
-        c.arg0(opt_name);
-        return c;
+        return direct_command(&argv, opt_name);
     }
 
     let mut shim = String::new();

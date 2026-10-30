@@ -717,7 +717,16 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
     let opt_name = phase_opt_name(category, pf, sandboxed);
     // SAFETY: `geteuid(2)` cannot fail.
     let is_root = unsafe { libc::geteuid() } == 0;
-    let mut cmd = sandbox_wrapped_command(script, argv_word, iso, &opt_name, is_root);
+    // A demoted phase never takes the `unshare(1)` shim: the shim would demote
+    // the wrapper process instead of the phase. The spawn is direct — with the
+    // same fully-built argv (`libsandbox` prefix included) — and namespaces
+    // happen in the child's own `pre_exec` (raw `unshare(2)` while still
+    // root), below.
+    let mut cmd = if droppriv.is_some() {
+        direct_command(&phase_argv(script, argv_word, &iso), &opt_name)
+    } else {
+        sandbox_wrapped_command(script, argv_word, iso, &opt_name, is_root)
+    };
     // Curated env only, like Portage: only whitelisted calling-env vars pass through;
     // the caller-computed `vars` set the rest on top.
     cmd.env_clear();
@@ -757,6 +766,10 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
         let uid = ids.uid;
         let gid = ids.gid;
         let groups = ids.groups.clone();
+        // Parent-built: the child (`pre_exec`) cannot allocate. `localhost`
+        // is what Portage sets in the new UTS namespace (process.py:1246-1261).
+        #[cfg(target_os = "linux")]
+        let hostname = std::ffi::CString::new("localhost").expect("the literal carries no NUL");
         // SAFETY: runs in the child after fork, before exec; only
         // async-signal-safe libc calls, and any failure fails the spawn.
         // Portage: process.py, _exec (:1265-1274) — setgid, setgroups,
@@ -765,6 +778,44 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
         use std::os::unix::process::CommandExt as _;
         unsafe {
             cmd.pre_exec(move || {
+                // Portage: process.py, _exec (:1084, validated first) + _exec2
+                // mount/hostname. Raw namespaces while still root: no userns
+                // appears on this path because no uid mapping is needed.
+                #[cfg(target_os = "linux")]
+                {
+                    let clone_flags = clone_flags_for(&iso);
+                    if clone_flags != 0 && libc::unshare(clone_flags) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // Flags 0 (Linux degraded combo) skips namespace setup and
+                    // proceeds straight to demotion — today's behavior.
+                    if iso.mount || iso.pid {
+                        // Portage _exec2: mark / slave so mounts cannot escape
+                        // (:1215-1225). Failure is ignored with continuation:
+                        // Portage warns, and pre_exec cannot print.
+                        // SAFETY: the literal carries its own NUL; NULL source,
+                        // fstype, and data request a pure propagation change.
+                        let slash = b"/\0";
+                        libc::mount(
+                            std::ptr::null(),
+                            slash.as_ptr() as *const libc::c_char,
+                            std::ptr::null(),
+                            libc::MS_SLAVE | libc::MS_REC,
+                            std::ptr::null(),
+                        );
+                    }
+                    if iso.net {
+                        // Portage _exec2: the hostname in the new UTS ns
+                        // (:1246-1261). The result is ignored (benign either way).
+                        // SAFETY: pointer and length come from the live
+                        // parent-built CString moved into this closure.
+                        let _ = libc::sethostname(hostname.as_ptr(), hostname.as_bytes().len());
+                    }
+                }
+                // No /proc remount: without the pid-ns-init re-exec Portage
+                // performs (:1111-1145) a mount here would show the host's
+                // view (filed as residue). No lo setup: no subprocesses may
+                // run in pre_exec (filed as residue).
                 if libc::setgid(gid) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }

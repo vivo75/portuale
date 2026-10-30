@@ -780,3 +780,46 @@ fn unshare_flags_root_omits_userns() {
     assert_eq!(user.first(), Some(&"--map-root-user"), "{user:?}");
     assert!(user.contains(&"--net"), "{user:?}");
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clone_flags_mirror_portages_unshare_bits() {
+    use super::{Isolation, clone_flags_for};
+    // Portage process.py:702-712 — net adds NEWUTS, pid adds NEWNS.
+    let iso = Isolation {
+        net: true,
+        ipc: true,
+        mount: true,
+        pid: true,
+        fs_sandbox: false,
+    };
+    let f = clone_flags_for(&iso);
+    assert_ne!(f & libc::CLONE_NEWNET, 0);
+    assert_ne!(f & libc::CLONE_NEWUTS, 0);
+    assert_ne!(f & libc::CLONE_NEWIPC, 0);
+    assert_ne!(f & libc::CLONE_NEWNS, 0);
+    assert_ne!(f & libc::CLONE_NEWPID, 0);
+    assert_eq!(
+        f & libc::CLONE_NEWUSER,
+        0,
+        "never a userns on the demoted path"
+    );
+    assert_eq!(clone_flags_for(&Isolation::default()), 0);
+}
+
+// Cross-platform (no namespace APIs referenced — warn text only):
+#[test]
+fn degrade_message_names_the_demoted_phase() {
+    let m = unshare_degrade_message("sandbox network-sandbox", "compile", true);
+    assert!(
+        m.contains("network-sandbox"),
+        "names the requested isolation"
+    );
+    assert!(m.contains("compile"), "names the degraded phase");
+    assert!(m.contains("portage"), "states DAC confinement survives");
+    let plain = unshare_degrade_message("sandbox network-sandbox", "compile", false);
+    assert!(
+        !plain.contains("portage"),
+        "non-demoted message claims nothing about ids"
+    );
+}
