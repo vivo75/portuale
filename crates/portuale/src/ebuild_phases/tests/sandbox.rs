@@ -823,3 +823,283 @@ fn degrade_message_names_the_demoted_phase() {
         "non-demoted message claims nothing about ids"
     );
 }
+
+/// The demoted pid-drop is a unit-pinned safety rule: CLONE_NEWPID without a
+/// PID-1 re-exec is fatal, not degraded — the first fork becomes init, its
+/// exit tears the ns down, and later forks fail ENOMEM (proven in
+/// `LLM/evidence/2026-10-30-630/task-2-pid-gap.log`; Portage re-execs via
+/// `pid-ns-init`, process.py:1111-1145, a filed residue). Replicates the
+/// rule through the real `phase_isolation` with a minimal Environment
+/// (outside any repo checkout, so no RESTRICT/PROPERTIES exemption fires):
+/// demoted + pid-sandbox requested ⇒ pid is false while net/ipc/mount stay
+/// as requested.
+#[test]
+fn demoted_phase_isolation_drops_pid_keeps_net() {
+    let tmp = TempDir::new("portuale-test-demoted-pid-drop");
+    let builddir = tmp.join("portage").join("cat").join("pf-1");
+    let env = Environment {
+        ebuild_abs: tmp.join("pf-1.ebuild"),
+        pkg_dir: tmp.to_path_buf(),
+        category: "cat".to_string(),
+        split: PackageSplit {
+            p: "pf-1".to_string(),
+            pn: "pf".to_string(),
+            pv: "1".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1".to_string(),
+            pf: "pf-1".to_string(),
+        },
+        eapi: "8".to_string(),
+        portage_tmpdir: tmp.to_path_buf(),
+        portage_builddir: builddir,
+        inherited: None,
+    };
+    let features = "sandbox userpriv network-sandbox ipc-sandbox mount-sandbox pid-sandbox";
+    let iso = phase_isolation(&env, "compile", features, true, false);
+    assert!(
+        !iso.pid,
+        "pid-sandbox is dropped for demoted phases (fatal without re-exec)"
+    );
+    assert!(iso.net, "net-sandbox is kept for demoted phases");
+    assert!(iso.ipc, "ipc-sandbox is kept for demoted phases");
+    assert!(iso.mount, "mount-sandbox is kept for demoted phases");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// A demoted phase with network isolation has no egress: no default route in
+/// `/proc/net/route` AND the S0 connect probe fails. The unisolated control
+/// (same demoted spawn, no namespaces) shows the host route table, proving
+/// the test observes the namespace, not the host. A connect that succeeds or
+/// hangs (timeout rc 124 — packets left the host) counts as egress; only an
+/// immediate failure counts as isolated.
+/// Root-gated (demotion needs root) and skips when the portage user is
+/// unknown, like `demoted_spawn_runs_as_the_portage_user`.
+/// Portage: process.py, _exec (:693-714, :1084). Grounding: S0
+/// `s0-egress-probe.log` (empty route table in a netns, NOEGRESS to
+/// 9.9.9.9:80) against `s0-host-routes.log` (default route via eth0).
+#[test]
+fn demoted_phase_with_network_sandbox_has_no_egress() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    let tmp = TempDir::new("portuale-test-demoted-egress");
+    let script = tmp.join("egress.sh");
+    std::fs::write(
+        &script,
+        "if awk '$2 == \"00000000\" {found=1} END {exit !found}' /proc/net/route; then\n\
+         echo \"EGRESS=1 reason=default-route-present\"\n\
+         cat /proc/net/route\n\
+         exit 1\n\
+         fi\n\
+         timeout 10 bash -c 'exec 3<>/dev/tcp/9.9.9.9/80' 2>/dev/null\n\
+         rc=$?\n\
+         if [ \"$rc\" -eq 0 ] || [ \"$rc\" -eq 124 ]; then\n\
+         echo \"EGRESS=1 reason=connect-rc-$rc\"\n\
+         exit 1\n\
+         fi\n\
+         echo \"EGRESS=0\"\n\
+         exit 0\n",
+    )
+    .unwrap();
+    let control_script = tmp.join("control-egress.sh");
+    std::fs::write(
+        &control_script,
+        "if awk '$2 == \"00000000\" {found=1} END {exit !found}' /proc/net/route; then\n\
+         echo \"CONTROL=host-routes-visible\"\n\
+         exit 0\n\
+         else\n\
+         echo \"CONTROL=0 reason=no-default-route-without-isolation\"\n\
+         exit 1\n\
+         fi\n",
+    )
+    .unwrap();
+    let iso = Isolation {
+        net: true,
+        ..Isolation::default()
+    };
+    let log = tmp.join("egress.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso,
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&log),
+        context: "egress probe",
+        interactive: false,
+        // Cloned: the control spawn below moves the original.
+        droppriv: Some(PhaseIds {
+            uid: ids.uid,
+            gid: ids.gid,
+            groups: ids.groups.clone(),
+        }),
+    })
+    .expect("the isolated spawn runs");
+    assert_eq!(status, 0, "the namespaced phase has no egress");
+    let out = std::fs::read_to_string(&log).expect("the child writes its verdict");
+    assert!(
+        out.lines().any(|l| l == "EGRESS=0"),
+        "unexpected probe output:\n{out}"
+    );
+
+    let control_log = tmp.join("control.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &control_script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso: Isolation::default(),
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&control_log),
+        context: "egress control probe",
+        interactive: false,
+        droppriv: Some(ids),
+    })
+    .expect("the control spawn runs");
+    assert_eq!(status, 0, "the unisolated spawn sees the host routes");
+    let out = std::fs::read_to_string(&control_log).expect("the control writes its verdict");
+    assert!(
+        out.lines().any(|l| l == "CONTROL=host-routes-visible"),
+        "unexpected control output:\n{out}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Pid-sandbox is DROPPED for demoted phases, never applied: CLONE_NEWPID
+/// without a PID-1 re-exec is fatal — the first fork becomes init, its exit
+/// tears the ns down, and later forks fail ENOMEM (proven in
+/// `task-2-pid-gap.log`; Portage re-execs via `pid-ns-init`,
+/// process.py:1111-1145, a filed residue). Pins the SAFE shape through the
+/// real `phase_isolation` rule: pid requested + demoted ⇒ a multi-fork phase
+/// (two sequential forks plus a fork while a sibling sleeps) still exits 0
+/// and keeps the host pid-ns view.
+/// Root-gated and portage-user-gated like the egress test above.
+#[test]
+fn demoted_pid_sandbox_is_dropped_not_fatal() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    let tmp = TempDir::new("portuale-test-demoted-pidns");
+    let builddir = tmp.join("portage").join("cat").join("pf-1");
+    let env = Environment {
+        ebuild_abs: tmp.join("pf-1.ebuild"),
+        pkg_dir: tmp.to_path_buf(),
+        category: "cat".to_string(),
+        split: PackageSplit {
+            p: "pf-1".to_string(),
+            pn: "pf".to_string(),
+            pv: "1".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1".to_string(),
+            pf: "pf-1".to_string(),
+        },
+        eapi: "8".to_string(),
+        portage_tmpdir: tmp.to_path_buf(),
+        portage_builddir: builddir,
+        inherited: None,
+    };
+    // Through the real rule: pid requested, demoted ⇒ pid dropped, so no
+    // unshare probe runs and the shape is deterministic even as root.
+    let iso = phase_isolation(&env, "compile", "sandbox userpriv pid-sandbox", true, true);
+    assert!(!iso.pid, "phase_isolation drops pid for demoted phases");
+    let script = tmp.join("forks.sh");
+    std::fs::write(
+        &script,
+        "bash -c 'echo one' || exit 10\n\
+         bash -c 'echo two' || exit 11\n\
+         sleep 5 &\n\
+         bash -c 'echo three-while-sibling-alive' || exit 12\n\
+         wait || exit 13\n\
+         readlink /proc/self/ns/pid\n",
+    )
+    .unwrap();
+    let log = tmp.join("forks.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso,
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&log),
+        context: "pid-drop probe",
+        interactive: false,
+        droppriv: Some(ids),
+    })
+    .expect("the pid-dropped spawn runs");
+    assert_eq!(status, 0, "sequential + sibling-alive forks all succeed");
+    let out = std::fs::read_to_string(&log).expect("the child writes its verdict");
+    let self_ns = out.lines().last().expect("the child prints its pid ns");
+    let host_ns = std::fs::read_link("/proc/self/ns/pid").expect("the host pid ns reads");
+    assert_eq!(
+        self_ns,
+        host_ns.to_string_lossy(),
+        "the demoted phase keeps the host pid-ns view"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// NON-ISOLATING control: a demoted spawn with `usersandbox` in FEATURES
+/// stays demoted (`id -u` is still the portage uid), so the `usersandbox`
+/// path + the #627 `free` rule (demoted without `usersandbox` drops the
+/// wrapper) compose with demotion with and without namespaces. Deliberately
+/// requests no namespaces: pre-fix the demoted shim demoted-then-unshared,
+/// so any namespace request failed the whole spawn (exit 1 — the bug Task 1
+/// fixed); only the namespace-free combo passes on both sides of the fix.
+/// It guards the combo, not the confinement.
+/// Root-gated and portage-user-gated like the tests above.
+/// Portage: doebuild.py, spawn (:2233-2261, the `free` rule).
+#[test]
+fn demoted_usersandbox_spawn_stays_demoted() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    let uid = ids.uid;
+    let tmp = TempDir::new("portuale-test-demoted-usersandbox");
+    let script = tmp.join("id.sh");
+    std::fs::write(&script, "id -u\n").unwrap();
+    let log = tmp.join("id.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &script,
+        argv_word: "compile",
+        vars: vec![(
+            "FEATURES".to_string(),
+            "sandbox usersandbox userpriv network-sandbox".to_string(),
+        )],
+        iso: Isolation {
+            fs_sandbox: true,
+            ..Isolation::default()
+        },
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&log),
+        context: "usersandbox probe",
+        interactive: false,
+        droppriv: Some(ids),
+    })
+    .expect("the usersandbox spawn runs");
+    assert_eq!(status, 0, "the usersandbox spawn exits 0");
+    let out = std::fs::read_to_string(&log).expect("the child writes its uid");
+    assert_eq!(
+        out.trim().parse::<u32>().expect("the uid parses"),
+        uid,
+        "the child still runs as the portage user"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

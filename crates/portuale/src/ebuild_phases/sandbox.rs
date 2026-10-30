@@ -569,25 +569,39 @@ pub(crate) fn phase_isolation(
     if net && network_sandbox_exempt(phase, &restrict, &properties) {
         net = false;
     }
-    // A demoted phase keeps its namespaces: the child unshares raw via
-    // `unshare(2)` while still root in `pre_exec`, then demotes to the
-    // portage ids — Portage's `_exec` shape (process.py:1061-1084), where no
-    // userns appears because no uid mapping is needed. (The `unshare(1)`
+    // A demoted phase keeps its net/ipc/mount namespaces: the child unshares
+    // raw via `unshare(2)` while still root in `pre_exec`, then demotes to
+    // the portage ids — Portage's `_exec` shape (process.py:1061-1084), where
+    // no userns appears because no uid mapping is needed. (The `unshare(1)`
     // shim's `--map-root-user` maps only the caller, which is why the shim
-    // never runs on the demoted path.) Only the `usersandbox` fs wrapper
-    // rule below stays demotion-dependent, per `free = droppriv and not
-    // usersandbox` (doebuild.py:2233-2240).
+    // never runs on the demoted path.) `pid` is the exception: CLONE_NEWPID
+    // without Portage's PID-1 re-exec (`pid-ns-init`, process.py:1111-1145)
+    // is fatal, not degraded — the first fork becomes init, its exit tears
+    // the ns down, and later forks fail ENOMEM (proven in
+    // LLM/evidence/2026-10-30-630/task-2-pid-gap.log) — so demoted phases
+    // drop pid-sandbox with their own warning, pending the re-exec residue.
+    // Only the `usersandbox` fs wrapper rule below stays demotion-dependent,
+    // per `free = droppriv and not usersandbox` (doebuild.py:2233-2240).
     let mut iso = Isolation {
         net,
         ipc: feature_token_present(features, "ipc-sandbox"),
         mount: feature_token_present(features, "mount-sandbox"),
-        pid: feature_token_present(features, "pid-sandbox"),
+        pid: feature_token_present(features, "pid-sandbox") && !demoted,
         fs_sandbox: if demoted {
             feature_token_present(features, "usersandbox")
         } else {
             fs_sandbox_for_phase(phase, features)
         },
     };
+    if demoted && feature_token_present(features, "pid-sandbox") {
+        static PID_WARNED: OnceLock<()> = OnceLock::new();
+        PID_WARNED.get_or_init(|| {
+            eprintln!(
+                "!!! pid-sandbox not applied for demoted {phase} \
+                 (no PID-1 re-exec yet); {phase} runs without pid isolation"
+            );
+        });
+    }
     if iso.any_unshare() && !unshare_combo_usable(&iso.unshare_flags(is_root)) {
         static WARNED: OnceLock<()> = OnceLock::new();
         // Portage names the involved features (process.py:1097-1104).
