@@ -796,7 +796,7 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                         // SAFETY: the literal carries its own NUL; NULL source,
                         // fstype, and data request a pure propagation change.
                         let slash = b"/\0";
-                        libc::mount(
+                        let _ = libc::mount(
                             std::ptr::null(),
                             slash.as_ptr() as *const libc::c_char,
                             std::ptr::null(),

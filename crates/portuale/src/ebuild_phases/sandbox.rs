@@ -526,7 +526,7 @@ pub(crate) fn clone_flags_for(_: &Isolation) -> libc::c_int {
     0
 }
 
-/// The once-per-process degrade warning: names the requested FEATURES and
+/// Message for the once-per-process degrade warning: names the requested FEATURES and
 /// the degraded phase; when demoted, states DAC confinement survives (the
 /// phase still demotes to `portage:portage`, only namespace confinement is
 /// lost). Pure so it is unit-testable without namespaces. `pre_exec` itself
