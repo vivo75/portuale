@@ -345,10 +345,16 @@ pub(crate) fn apply_userpriv_pre_perms(ids: &PhaseIds, env: &Environment) {
         env.home(),
         env.t().join("logging"),
     ]);
+    // A skipped (symlinked) entry also skips everything beneath it, so the
+    // spine is never created through or followed — the same no-follow rule
+    // `create_directories` applies to filesdir.
+    let mut skipped: Vec<&PathBuf> = Vec::new();
     for dir in &dirs {
-        // `files` is a symlink, never a dir: don't create through it, same
-        // skip rule as `create_directories`.
+        if skipped.iter().any(|s| dir.starts_with(s)) {
+            continue;
+        }
         if std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink()) {
+            skipped.push(dir);
             continue;
         }
         if let Err(e) = std::fs::create_dir_all(dir) {

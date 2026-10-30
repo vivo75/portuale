@@ -68,7 +68,8 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
     // _prepare_workdir (:329-368): a demoted child must find a writable tree
     // on entry, so the run gate hands the builddir to the build user before
     // the backend spawns. Unknown user (`None`) skips silently; per-entry
-    // failures inside only warn.
+    // failures inside only warn. Existence for ungated runs stays
+    // `create_directories`' job.
     if userpriv_run && let Some(ids) = &build_ids {
         apply_userpriv_pre_perms(ids, env);
     }

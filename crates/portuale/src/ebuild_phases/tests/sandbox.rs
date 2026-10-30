@@ -450,9 +450,11 @@ fn post_phase_perms_force_owner_modes() {
 fn pre_phase_dirs_become_portage_owned() {
     // Portage: prepare_build_dirs.py, prepare_build_dirs (:96-106) and
     // _prepare_workdir (:329-368). Top-level ensure + lchown + owner-rwx OR
-    // (mask 0 adds bits, never strips), so fixtures start at mode 0. Ids are
-    // the current user's, so the chown is a no-op and the test passes
-    // unprivileged; the root-owned handoff to portage lives in Task 4's e2e.
+    // (mask 0 adds bits, never strips). Ids are the current user's, so the
+    // chown is a no-op and the test passes unprivileged; the root-owned
+    // handoff to portage lives in Task 4's e2e. WORKDIR starts at 0o755 so
+    // the OR-add is observable: a chmod-set-to-700 would strip its
+    // group/other bits.
     use std::os::unix::fs::PermissionsExt as _;
 
     let tmp = TempDir::new("portuale-test-pre-phase-perms");
@@ -478,14 +480,8 @@ fn pre_phase_dirs_become_portage_owned() {
         inherited: None,
     };
 
-    // A `files`-shaped symlink inside the builddir must be skipped, never
-    // followed: its target keeps its mode.
-    let outside = tmp.join("outside-files");
-    std::fs::create_dir_all(&outside).unwrap();
-    std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::os::unix::fs::symlink(&outside, builddir.join("files")).unwrap();
-
     // Deepest first: a mode-0 parent cannot be traversed to reach its child.
+    // WORKDIR keeps 0o755, the group/other-bit carrier proving the OR-add.
     for d in [
         env.t().join("logging"),
         env.t(),
@@ -496,15 +492,15 @@ fn pre_phase_dirs_become_portage_owned() {
     ] {
         std::fs::create_dir_all(&d).unwrap();
     }
-    for d in [
-        env.t().join("logging"),
-        env.t(),
-        env.home(),
-        env.workdir(),
-        builddir.clone(),
-        builddir.parent().unwrap().to_path_buf(),
+    for (d, mode) in [
+        (env.t().join("logging"), 0o000),
+        (env.t(), 0o000),
+        (env.home(), 0o000),
+        (env.workdir(), 0o755),
+        (builddir.clone(), 0o000),
+        (builddir.parent().unwrap().to_path_buf(), 0o000),
     ] {
-        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o000)).unwrap();
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(mode)).unwrap();
     }
 
     // SAFETY: `geteuid`/`getegid` cannot fail.
@@ -519,7 +515,6 @@ fn pre_phase_dirs_become_portage_owned() {
     for d in [
         builddir.parent().unwrap().to_path_buf(),
         builddir.clone(),
-        env.workdir(),
         env.t(),
         env.home(),
         env.t().join("logging"),
@@ -538,11 +533,118 @@ fn pre_phase_dirs_become_portage_owned() {
             d.display()
         );
     }
-    let link = std::fs::symlink_metadata(builddir.join("files")).unwrap();
+    // OR-add, not chmod-set: the 0o755 starter keeps its group/other bits.
+    let work_meta = std::fs::symlink_metadata(env.workdir()).unwrap();
+    assert_eq!(work_meta.uid(), ids.uid, "workdir owned by the build user");
+    assert_eq!(
+        work_meta.permissions().mode() & 0o7777,
+        0o755,
+        "workdir keeps its group/other bits"
+    );
+}
+
+/// A spine entry that is a symlink is never created through or followed —
+/// and neither is anything beneath it (a skipped `${T}` also skips
+/// `${T}/logging`): the same no-follow rule `create_directories` applies to
+/// filesdir. (The ownership test above only feeds real dirs, so this focused
+/// case is what covers the guard in `apply_userpriv_pre_perms`.)
+#[test]
+fn pre_phase_symlinked_spine_entry_is_skipped_not_followed() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let tmp = TempDir::new("portuale-test-pre-phase-symlink");
+    let builddir = tmp.join("portage").join("cat").join("pf-1");
+    let env = Environment {
+        ebuild_abs: tmp.join("pf-1.ebuild"),
+        pkg_dir: tmp.to_path_buf(),
+        category: "cat".to_string(),
+        split: PackageSplit {
+            p: "pf-1".to_string(),
+            pn: "pf".to_string(),
+            pv: "1".to_string(),
+            pr: "r0".to_string(),
+            pvr: "1".to_string(),
+            pf: "pf-1".to_string(),
+        },
+        eapi: "8".to_string(),
+        portage_tmpdir: tmp.to_path_buf(),
+        portage_builddir: builddir.clone(),
+        inherited: None,
+    };
+
+    // The link target exists but has no `logging` child: anything created
+    // through the link would show up here.
+    let outside = tmp.join("outside-temp");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Every other spine entry is a real dir starting at mode 0; `${T}` itself
+    // is the symlink, so the guard — not `create_dir_all` — is what skips it
+    // and its `logging` child. (The link goes in before the mode-0 chmods:
+    // creating it inside a mode-0 builddir would fail.)
+    for d in [
+        env.workdir(),
+        env.home(),
+        builddir.clone(),
+        builddir.parent().unwrap().to_path_buf(),
+    ] {
+        std::fs::create_dir_all(&d).unwrap();
+    }
+    std::os::unix::fs::symlink(&outside, env.t()).unwrap();
+    for d in [
+        env.workdir(),
+        env.home(),
+        builddir.clone(),
+        builddir.parent().unwrap().to_path_buf(),
+    ] {
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+
+    // SAFETY: `geteuid`/`getegid` cannot fail.
+    let ids = PhaseIds {
+        uid: unsafe { libc::geteuid() },
+        gid: unsafe { libc::getegid() },
+        groups: Vec::new(),
+    };
+    apply_userpriv_pre_perms(&ids, &env);
+
+    // The symlinked entry is left alone; its target is untouched and nothing
+    // is created through the link.
+    let link = std::fs::symlink_metadata(env.t()).unwrap();
     assert!(
         link.file_type().is_symlink(),
-        "the files link is not replaced"
+        "the symlinked entry is not replaced"
+    );
+    assert_eq!(
+        std::fs::read_link(env.t()).unwrap(),
+        outside,
+        "the symlink still points at its target"
     );
     let mode = |p: &Path| std::fs::symlink_metadata(p).unwrap().permissions().mode() & 0o7777;
     assert_eq!(mode(&outside), 0o755, "symlink target must not be touched");
+    assert!(
+        !outside.join("logging").exists(),
+        "nothing is created through the symlink"
+    );
+    // The real entries still gain owner rwx.
+    for d in [
+        builddir.parent().unwrap().to_path_buf(),
+        builddir.clone(),
+        env.workdir(),
+        env.home(),
+    ] {
+        let meta = std::fs::symlink_metadata(&d).unwrap();
+        assert_eq!(
+            meta.uid(),
+            ids.uid,
+            "{} owned by the build user",
+            d.display()
+        );
+        assert_eq!(
+            meta.permissions().mode() & 0o7777,
+            0o700,
+            "{} gains owner rwx",
+            d.display()
+        );
+    }
 }
