@@ -20241,3 +20241,49 @@ and the default pytest basetemp left poisoned by root-owned residue (#634;
 `sudo rm -rf /var/tmp/pytest-parallel`). Honest
 limit: nothing known for the mask itself; a demoted phase still runs without
 Portage's `net`/`ipc`/`pid` namespaces (#630).
+
+**A demoted phase keeps Portage's `net`/`ipc`/`mount` namespaces, so
+`network-sandbox` blocks egress for `portage:portage` phases (#630).** #627's
+demotion made source phases run as the build user, but `phase_isolation` still
+zeroed every namespace wrapper when `demoted`, on the theory that a single-id
+`--map-root-user` userns cannot host the demoted uid. That theory described the
+`unshare(1)` shim, not Portage: `_exec` unshares raw at `process.py:1061` while
+still root, then demotes in the same child, and never creates a userns
+(`NEWUSER` is absent from the flag table, `process.py:693-714`). Fix:
+`phase_isolation` keeps `net`/`ipc`/`mount` for demoted phases; the demoted
+spawn takes a direct command (the shim would demote the `unshare` wrapper
+instead of the phase) and its `pre_exec` does `libc::unshare` →
+`mount --make-rslave /` → `sethostname("localhost")` →
+`setgid`/`setgroups`/`setuid`/`umask`, all in the child with no subprocess,
+allocation or print. `pid` stays dropped because `CLONE_NEWPID` without
+Portage's PID-1 re-exec is fatal, not degraded (#635), and `lo` stays down
+(#636). Check: `sudo <test-binary>
+demoted_phase_with_network_sandbox_has_no_egress` — RED before the fix with the
+host default route visible, GREEN after on an empty `/proc/net/route` and a
+failed connect to the S0 target, while the `Isolation::default()` control still
+sees the host route; `sudo <test-binary> demoted_` runs five root-gated demoted
+tests (egress, pid-dropped safe shape, the non-isolating usersandbox control,
+umask, and the pre-existing uid check) plus the two plain unit tests the same
+filter matches (`degrade_message_names_the_demoted_phase` and
+`demoted_phase_isolation_drops_pid_keeps_net`) — seven in all. Acceptance: `sudo
+./target/release/portuale emerge -1 app-benchmarks/hyperfine` rc=0 with the
+completed-emerge line (`LLM/evidence/2026-10-30-630/hyperfine-acceptance.log`;
+rc is report-only, not in the log), matching Portage's own single-phase unpack
+oracle (`s0-portage-unpack.log` rc=0). Close-out: workspace `cargo test
+--release` 1369 passed / 1 known host-state `embedded_runtime` red / 3 ignored
+(`--no-fail-fast` confirms no other red); pmtest 4618 passed / 7 known
+host-state `mrg_remote` reds (root-only `/etc/portage/gnupg.getuto.tmp`,
+`pulling /etc/portage` tar exit 2 as uid 1000) / 2 skipped / 2 xfailed; zero
+corpus drift, and the #632/#633 unexplained-once flakes did not recur (the
+default basetemp is still poisoned, #634, so the run used
+`PMTEST_BASETEMP=/var/tmp/pytest-parallel-630`).
+Honest limits: a demoted phase is not PID 1 and drops `pid-sandbox` with its own
+warning while `/proc` keeps the host view (#635), a demoted netns has `lo` down
+(#636), and a requested-but-unusable `unshare` combination still degrades with
+one parent-side warning rather than failing. The L0 differential bed was not run
+for this slice: its probes are resolver-only and never execute phases, so a
+spawn-path diff is unobservable there (pretend output is byte-identical and the
+corpus did not drift); L1 is not triggered (no merge-path file was touched), and
+the next resolver-touching slice re-triggers it. The
+`#[cfg(target_os = "linux")]` gates are reasoned-only — no BSD toolchain on this
+host, so the non-Linux side has never been compiled — tracked by #637.
