@@ -20287,6 +20287,8 @@ corpus did not drift); L1 is not triggered (no merge-path file was touched), and
 the next resolver-touching slice re-triggers it. The
 `#[cfg(target_os = "linux")]` gates are reasoned-only — no BSD toolchain on this
 host, so the non-Linux side has never been compiled — tracked by #637.
+The `pid` limit above was later closed by #635 (fork-order PID 1 plus a
+namespace-local `/proc`); the `#635` wording describes the #630 tree only.
 
 **A demoted `pid-sandbox` phase is PID 1 of its own pid namespace with a
 namespace-local `/proc`, so a forking build no longer dies `ENOMEM` (#635).**

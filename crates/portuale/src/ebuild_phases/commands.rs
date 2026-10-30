@@ -969,10 +969,11 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                         }
                     }
                 }
-                // No /proc remount: without the pid-ns-init re-exec Portage
-                // performs (:1111-1145) a mount here would show the host's
-                // view (filed as residue). No lo setup: no subprocesses may
-                // run in pre_exec (filed as residue).
+                // With `pid` the grandchild above already mounted a fresh
+                // `/proc` over the new pid ns; without `pid` this path never
+                // remounts, so `/proc` keeps the host view. No `lo` setup: no
+                // subprocess may run in `pre_exec`, so a demoted netns keeps
+                // `lo` down (#636).
                 if libc::setgid(gid) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
