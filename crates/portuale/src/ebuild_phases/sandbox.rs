@@ -569,24 +569,26 @@ pub(crate) fn phase_isolation(
     if net && network_sandbox_exempt(phase, &restrict, &properties) {
         net = false;
     }
-    // A demoted phase keeps its net/ipc/mount namespaces: the child unshares
+    // A demoted phase keeps its net/ipc/mount/pid namespaces: the child unshares
     // raw via `unshare(2)` while still root in `pre_exec`, then demotes to
     // the portage ids — Portage's `_exec` shape (process.py:1061-1084), where
     // no userns appears because no uid mapping is needed. (The `unshare(1)`
     // shim's `--map-root-user` maps only the caller, which is why the shim
-    // never runs on the demoted path.) `pid` is the exception: CLONE_NEWPID
-    // without Portage's PID-1 re-exec (`pid-ns-init`, process.py:1111-1145)
-    // is fatal, not degraded — the first fork becomes init, its exit tears
-    // the ns down, and later forks fail ENOMEM (proven in
-    // LLM/evidence/2026-10-30-630/task-2-pid-gap.log) — so demoted phases
-    // drop pid-sandbox with their own warning, pending the re-exec residue.
-    // Only the `usersandbox` fs wrapper rule below stays demotion-dependent,
+    // never runs on the demoted path.) `pid` rides the same path via the
+    // demoted `pre_exec` fork dance (#635): CLONE_NEWPID without Portage's
+    // PID-1 re-exec (`pid-ns-init`, process.py:1111-1145) is fatal, not
+    // degraded — the first fork becomes init, its exit tears the ns down,
+    // and later forks fail ENOMEM (proven in
+    // LLM/evidence/2026-10-30-630/task-2-pid-gap.log) — so the middle
+    // supervises (forwards, reaps, re-raises) and the grandchild, pid 1 by
+    // fork order, mounts the fresh `/proc` and execs directly. Only the
+    // `usersandbox` fs wrapper rule below stays demotion-dependent,
     // per `free = droppriv and not usersandbox` (doebuild.py:2233-2240).
     let mut iso = Isolation {
         net,
         ipc: feature_token_present(features, "ipc-sandbox"),
         mount: feature_token_present(features, "mount-sandbox"),
-        pid: feature_token_present(features, "pid-sandbox") && !demoted,
+        pid: feature_token_present(features, "pid-sandbox"),
         fs_sandbox: if demoted {
             feature_token_present(features, "usersandbox")
         } else {

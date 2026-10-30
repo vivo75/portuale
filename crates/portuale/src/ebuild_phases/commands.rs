@@ -811,6 +811,163 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                         // parent-built CString moved into this closure.
                         let _ = libc::sethostname(hostname.as_ptr(), hostname.as_bytes().len());
                     }
+                    // Portage: pid-ns-init re-exec shape without the re-exec —
+                    // the grandchild IS pid 1 by fork order, so it execs
+                    // directly while the middle supervises.
+                    // process.py:1111-1145.
+                    if iso.pid {
+                        // Block the forward set before forking so no signal
+                        // lands between fork and the supervise loop
+                        // (process.py:1132). Stack-local `sigset_t`: no
+                        // `static` slot, so parallel demoted+pid spawns under
+                        // `JOBS>1` cannot cross-forward.
+                        // SAFETY: `forward` is a live stack slot; the set
+                        // functions only touch it.
+                        let mut forward: libc::sigset_t = std::mem::zeroed();
+                        libc::sigemptyset(&mut forward);
+                        for sig in [
+                            libc::SIGINT,
+                            libc::SIGTERM,
+                            libc::SIGHUP,
+                            libc::SIGTSTP,
+                            libc::SIGCONT,
+                        ] {
+                            libc::sigaddset(&mut forward, sig);
+                        }
+                        if libc::pthread_sigmask(libc::SIG_BLOCK, &forward, std::ptr::null_mut())
+                            != 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        match libc::fork() {
+                            -1 => return Err(std::io::Error::last_os_error()),
+                            0 => {
+                                // Grandchild: pid 1 by fork order. Fresh
+                                // `/proc` over the new pid ns — make-slave
+                                // first, like Portage (process.py:1228), then
+                                // the mount; either failing is fatal there
+                                // (:1226-1245), `Err` here.
+                                // SAFETY: the literals carry their own NULs;
+                                // NULL source/fstype/data request a pure
+                                // propagation change and a proc mount.
+                                let proc = b"/proc\0";
+                                if libc::mount(
+                                    std::ptr::null(),
+                                    proc.as_ptr() as *const libc::c_char,
+                                    std::ptr::null(),
+                                    libc::MS_SLAVE,
+                                    std::ptr::null(),
+                                ) != 0
+                                {
+                                    return Err(std::io::Error::last_os_error());
+                                }
+                                let source = b"proc\0";
+                                let fstype = b"proc\0";
+                                if libc::mount(
+                                    source.as_ptr() as *const libc::c_char,
+                                    proc.as_ptr() as *const libc::c_char,
+                                    fstype.as_ptr() as *const libc::c_char,
+                                    0,
+                                    std::ptr::null(),
+                                ) != 0
+                                {
+                                    return Err(std::io::Error::last_os_error());
+                                }
+                                // `execve` resets handlers, never the mask: the
+                                // phase must not inherit the blocked set.
+                                // SAFETY: `forward` is still a live stack slot.
+                                if libc::pthread_sigmask(
+                                    libc::SIG_UNBLOCK,
+                                    &forward,
+                                    std::ptr::null_mut(),
+                                ) != 0
+                                {
+                                    return Err(std::io::Error::last_os_error());
+                                }
+                                // Falls through to demotion below, then execs.
+                            }
+                            grandchild => {
+                                // Middle: the pid-1 reaper re-expressed without
+                                // Python — owns the session the registry kills
+                                // by pid (`ParentGroup`), forwards each caught
+                                // signal to the grandchild, polls its exit,
+                                // and never returns.
+                                // Close the spawn error pipe first: `spawn()`
+                                // reads EOF off it, and only an exec-or-exit
+                                // delivers that — without this the spawn would
+                                // block for the whole phase and the scheduler
+                                // could never kill the run mid-phase. One
+                                // async-signal-safe syscall; pre-5.9 kernels
+                                // answer ENOSYS and degrade to the late
+                                // return, still correct.
+                                // SAFETY: at `pre_exec` time fds above 2 are
+                                // only std's CLOEXEC error pipe — stdio is 0,
+                                // 1, 2 and the grandchild keeps its own copies.
+                                let _ = libc::close_range(3, u32::MAX, 0);
+                                // SAFETY: a fresh fork is never a group leader.
+                                if libc::setsid() < 0 {
+                                    // SAFETY: plain ints; the grandchild is ours.
+                                    libc::kill(grandchild, libc::SIGKILL);
+                                    return Err(std::io::Error::last_os_error());
+                                }
+                                loop {
+                                    // Forward every pending forward-set signal
+                                    // (zero timeout: poll, never sleep here).
+                                    // SAFETY: `forward`/`info`/`timeout` are
+                                    // live stack slots.
+                                    let mut info: libc::siginfo_t = std::mem::zeroed();
+                                    let timeout = libc::timespec {
+                                        tv_sec: 0,
+                                        tv_nsec: 0,
+                                    };
+                                    while libc::sigtimedwait(&forward, &mut info, &timeout) >= 0 {
+                                        // The grandchild may have just exited;
+                                        // a failed forward is benign.
+                                        // SAFETY: plain ints.
+                                        libc::kill(grandchild, info.si_signo);
+                                    }
+                                    // Poll the grandchild's exit without
+                                    // blocking (WNOHANG); the reaped code is
+                                    // the phase's own.
+                                    // SAFETY: `status` is a live stack slot.
+                                    let mut status = 0;
+                                    if libc::waitpid(grandchild, &mut status, libc::WNOHANG)
+                                        == grandchild
+                                    {
+                                        if libc::WIFEXITED(status) {
+                                            libc::_exit(libc::WEXITSTATUS(status));
+                                        }
+                                        if libc::WIFSIGNALED(status) {
+                                            let sig = libc::WTERMSIG(status);
+                                            // Re-raise like pid-ns-init:140-144:
+                                            // reset to default, unblock (the
+                                            // forward set is still blocked),
+                                            // then signal self. The `_exit`
+                                            // only runs if the raise somehow
+                                            // returns.
+                                            // SAFETY: plain ints; the mask
+                                            // slot is live.
+                                            libc::signal(sig, libc::SIG_DFL);
+                                            libc::pthread_sigmask(
+                                                libc::SIG_UNBLOCK,
+                                                &forward,
+                                                std::ptr::null_mut(),
+                                            );
+                                            libc::kill(libc::getpid(), sig);
+                                            libc::_exit(127);
+                                        }
+                                    }
+                                    // Ten milliseconds between polls.
+                                    // SAFETY: both slots live; no old timeout wanted.
+                                    let pause = libc::timespec {
+                                        tv_sec: 0,
+                                        tv_nsec: 10_000_000,
+                                    };
+                                    libc::nanosleep(&pause, std::ptr::null_mut());
+                                }
+                            }
+                        }
+                    }
                 }
                 // No /proc remount: without the pid-ns-init re-exec Portage
                 // performs (:1111-1145) a mount here would show the host's
@@ -833,7 +990,23 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
             });
         }
     }
-    let status = spawn_trackable(&mut cmd, PhasePlacement::for_phase(argv_word))
+    // A demoted+pid phase runs the fork dance in `pre_exec` (its middle owns
+    // a session via its own `setsid`), so it stays in the parent's group:
+    // `spawn_trackable` chains `pre_exec` hooks in registration order — the
+    // green demotion+egress suite runs both the demote and the `NewSession`
+    // `setsid` closures — so a `NewSession` hook here would run *in the
+    // grandchild*, splitting it out of the middle's process group and making
+    // a group-kill miss the phase. `ParentGroup` adds no second hook, and its
+    // kills are by pid, never `kill(-pgid)` (scheduler_registry.rs:157-160).
+    // Linux-gated: elsewhere `iso.pid` sets no namespaces (the clone stub
+    // is 0).
+    let demoted_pid = cfg!(target_os = "linux") && droppriv.is_some() && iso.pid;
+    let placement = if demoted_pid {
+        PhasePlacement::ParentGroup
+    } else {
+        PhasePlacement::for_phase(argv_word)
+    };
+    let status = spawn_trackable(&mut cmd, placement)
         .map_err(|e| format!("spawning real bash for {context} failed: {e}"))?;
     drop(cmd);
     // Explicit: joins the pump threads now that every write end is closed.

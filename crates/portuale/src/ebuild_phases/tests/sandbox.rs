@@ -824,17 +824,15 @@ fn degrade_message_names_the_demoted_phase() {
     );
 }
 
-/// The demoted pid-drop is a unit-pinned safety rule: CLONE_NEWPID without a
-/// PID-1 re-exec is fatal, not degraded — the first fork becomes init, its
-/// exit tears the ns down, and later forks fail ENOMEM (proven in
-/// `LLM/evidence/2026-10-30-630/task-2-pid-gap.log`; Portage re-execs via
-/// `pid-ns-init`, process.py:1111-1145, a filed residue). Replicates the
-/// rule through the real `phase_isolation` with a minimal Environment
-/// (outside any repo checkout, so no RESTRICT/PROPERTIES exemption fires):
-/// demoted + pid-sandbox requested ⇒ pid is false while net/ipc/mount stay
-/// as requested.
+/// A demoted phase keeps `pid` alongside the other namespaces: the demoted
+/// `pre_exec` fork dance (#635) re-expresses Portage's PID-1 re-exec
+/// (`pid-ns-init`, process.py:1111-1145) without re-execing, so pid-sandbox
+/// applies instead of dropping. Replicates the rule through the real
+/// `phase_isolation` with a minimal Environment (outside any repo checkout,
+/// so no RESTRICT/PROPERTIES exemption fires): demoted + pid-sandbox
+/// requested ⇒ pid stays true with net/ipc/mount as requested.
 #[test]
-fn demoted_phase_isolation_drops_pid_keeps_net() {
+fn demoted_phase_isolation_keeps_pid_with_net() {
     let tmp = TempDir::new("portuale-test-demoted-pid-drop");
     let builddir = tmp.join("portage").join("cat").join("pf-1");
     let env = Environment {
@@ -857,8 +855,8 @@ fn demoted_phase_isolation_drops_pid_keeps_net() {
     let features = "sandbox userpriv network-sandbox ipc-sandbox mount-sandbox pid-sandbox";
     let iso = phase_isolation(&env, "compile", features, true, false);
     assert!(
-        !iso.pid,
-        "pid-sandbox is dropped for demoted phases (fatal without re-exec)"
+        iso.pid,
+        "pid-sandbox is kept for demoted phases (the fork dance reaps)"
     );
     assert!(iso.net, "net-sandbox is kept for demoted phases");
     assert!(iso.ipc, "ipc-sandbox is kept for demoted phases");
@@ -971,17 +969,19 @@ fn demoted_phase_with_network_sandbox_has_no_egress() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// Pid-sandbox is DROPPED for demoted phases, never applied: CLONE_NEWPID
-/// without a PID-1 re-exec is fatal — the first fork becomes init, its exit
-/// tears the ns down, and later forks fail ENOMEM (proven in
-/// `task-2-pid-gap.log`; Portage re-execs via `pid-ns-init`,
-/// process.py:1111-1145, a filed residue). Pins the SAFE shape through the
-/// real `phase_isolation` rule: pid requested + demoted ⇒ a multi-fork phase
-/// (two sequential forks plus a fork while a sibling sleeps) still exits 0
-/// and keeps the host pid-ns view.
+/// A demoted+pid-sandboxed phase runs as PID 1 with a local `/proc` and the
+/// portage uid: the demoted `pre_exec` fork dance (#635) re-expresses
+/// Portage's `pid-ns-init` re-exec shape (process.py:1111-1145) without the
+/// re-exec — the grandchild IS pid 1 by fork order, so it execs directly
+/// while the middle supervises (forwards, reaps, re-raises). The multi-fork
+/// script (two sequential forks plus a fork while a `sleep 5` sibling lives)
+/// pins the ENOMEM fatal shape gone: without a reaper the first fork becomes
+/// init, its exit tears the ns down, and later forks fail (proven in
+/// `task-2-pid-gap.log`).
 /// Root-gated and portage-user-gated like the egress test above.
+/// Portage: process.py, _exec (:693-714, :1084); pid-ns-init.
 #[test]
-fn demoted_pid_sandbox_is_dropped_not_fatal() {
+fn demoted_pid_ns_has_init_reaping_and_local_proc() {
     if unsafe { libc::geteuid() } != 0 {
         eprintln!("SKIP: needs root");
         return;
@@ -990,41 +990,29 @@ fn demoted_pid_sandbox_is_dropped_not_fatal() {
         eprintln!("SKIP: no portage user");
         return;
     };
+    let uid = ids.uid;
     let tmp = TempDir::new("portuale-test-demoted-pidns");
-    let builddir = tmp.join("portage").join("cat").join("pf-1");
-    let env = Environment {
-        ebuild_abs: tmp.join("pf-1.ebuild"),
-        pkg_dir: tmp.to_path_buf(),
-        category: "cat".to_string(),
-        split: PackageSplit {
-            p: "pf-1".to_string(),
-            pn: "pf".to_string(),
-            pv: "1".to_string(),
-            pr: "r0".to_string(),
-            pvr: "1".to_string(),
-            pf: "pf-1".to_string(),
-        },
-        eapi: "8".to_string(),
-        portage_tmpdir: tmp.to_path_buf(),
-        portage_builddir: builddir,
-        inherited: None,
-    };
-    // Through the real rule: pid requested, demoted ⇒ pid dropped, so no
-    // unshare probe runs and the shape is deterministic even as root.
-    let iso = phase_isolation(&env, "compile", "sandbox userpriv pid-sandbox", true, true);
-    assert!(!iso.pid, "phase_isolation drops pid for demoted phases");
-    let script = tmp.join("forks.sh");
+    let script = tmp.join("init.sh");
     std::fs::write(
         &script,
-        "bash -c 'echo one' || exit 10\n\
+        "id -u\n\
+         bash -c 'echo one' || exit 10\n\
          bash -c 'echo two' || exit 11\n\
          sleep 5 &\n\
          bash -c 'echo three-while-sibling-alive' || exit 12\n\
          wait || exit 13\n\
-         readlink /proc/self/ns/pid\n",
+         readlink /proc/self/ns/pid\n\
+         cat /proc/1/comm\n",
     )
     .unwrap();
-    let log = tmp.join("forks.log");
+    // Mount rides with pid per the flag table; the fresh `/proc` mount needs
+    // the new mount ns.
+    let iso = Isolation {
+        pid: true,
+        mount: true,
+        ..Isolation::default()
+    };
+    let log = tmp.join("init.log");
     let status = spawn_bash_script(SpawnBashScriptArgs {
         script: &script,
         argv_word: "compile",
@@ -1033,20 +1021,287 @@ fn demoted_pid_sandbox_is_dropped_not_fatal() {
         category: "cat",
         pf: "pf-1.0",
         log_file: PhaseLog::Capture(&log),
-        context: "pid-drop probe",
+        context: "pid-init probe",
         interactive: false,
         droppriv: Some(ids),
     })
-    .expect("the pid-dropped spawn runs");
-    assert_eq!(status, 0, "sequential + sibling-alive forks all succeed");
-    let out = std::fs::read_to_string(&log).expect("the child writes its verdict");
-    let self_ns = out.lines().last().expect("the child prints its pid ns");
-    let host_ns = std::fs::read_link("/proc/self/ns/pid").expect("the host pid ns reads");
+    .expect("the pid-namespaced spawn runs");
     assert_eq!(
-        self_ns,
-        host_ns.to_string_lossy(),
-        "the demoted phase keeps the host pid-ns view"
+        status, 0,
+        "sequential + sibling-alive forks all succeed (no ENOMEM)"
     );
+    let out = std::fs::read_to_string(&log).expect("the child writes its verdict");
+    let mut lines = out.lines();
+    assert_eq!(
+        lines
+            .next()
+            .unwrap_or("")
+            .parse::<u32>()
+            .expect("the uid parses"),
+        uid,
+        "the phase still demotes to the portage user"
+    );
+    let tail: Vec<&str> = lines.collect();
+    assert!(
+        tail.len() >= 5,
+        "the phase prints its forks, ns and init comm:\n{out}"
+    );
+    assert_eq!(tail[0], "one");
+    assert_eq!(tail[1], "two");
+    assert_eq!(tail[2], "three-while-sibling-alive");
+    let host_ns = std::fs::read_link("/proc/self/ns/pid").expect("the host pid ns reads");
+    assert_ne!(
+        tail[3],
+        host_ns.to_string_lossy(),
+        "the phase lives in its own pid ns"
+    );
+    assert_eq!(tail[4], "bash", "pid 1 of the fresh ns is the phase shell");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Direct children of `pid`, unioned over every thread's `children` file.
+/// Used to find the pid-ns middle, which never execs (so it has no argv to
+/// spot) but stays our direct child while it supervises.
+fn task_children_of(pid: i32) -> Vec<i32> {
+    let mut kids = Vec::new();
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return kids;
+    };
+    for task in tasks.flatten() {
+        let Ok(list) = std::fs::read_to_string(task.path().join("children")) else {
+            continue;
+        };
+        kids.extend(
+            list.split_whitespace()
+                .filter_map(|p| p.parse::<i32>().ok()),
+        );
+    }
+    kids.sort_unstable();
+    kids.dedup();
+    kids
+}
+
+/// The mount-ns id of `pid` (`None` when it just exited).
+fn mount_ns(pid: i32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/ns/mnt"))
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// This process's mount-ns id.
+fn host_mnt() -> String {
+    std::fs::read_link("/proc/self/ns/mnt")
+        .expect("the host mount ns reads")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Whether one of `pid`'s children is pid 1 of a pid ns: its `NSpid` status
+/// line then holds the outer pid plus the inner 1. Only the dance's
+/// grandchild — or pre-fix the phase's first fork — matches.
+fn has_nsinit_child(pid: i32) -> bool {
+    task_children_of(pid).iter().any(|&kid| {
+        std::fs::read_to_string(format!("/proc/{kid}/status"))
+            .ok()
+            .and_then(|status| {
+                status.lines().find_map(|line| {
+                    line.strip_prefix("NSpid:").map(|rest| {
+                        let ids: Vec<&str> = rest.split_whitespace().collect();
+                        ids.len() > 1 && ids.last().is_some_and(|&n| n == "1")
+                    })
+                })
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// A TERM to the pid-ns middle reaches the phase: the middle blocks the
+/// forward set pre-fork and `sigtimedwait`-forwards each caught signal to the
+/// grandchild (process.py:1132; parent-side forward by pid, :961-962),
+/// re-expressed without Python. Proved behaviourally because
+/// `spawn_bash_script` returns `Result<i32>` (signal death maps to 1 either
+/// way): the phase traps TERM into `exit 7`, so a forwarding middle yields
+/// rc 7 while a swallowing one yields a join timeout plus an orphan.
+/// The supervisor pid comes from the session id (`ps -o sid=`): sessions are
+/// not namespaced, the middle owns its session via its own `setsid`, and
+/// `$PPID` is unusable — the middle lives outside the new pid ns, so from
+/// inside `getppid()` reports 0. Two gates stand before the kill: the target
+/// is not the phase itself (pre-fix there is no middle, so the sid IS the
+/// phase pid), and the target lives in a fresh mount ns (never the harness).
+/// Root-gated and portage-user-gated like the tests above.
+/// Portage: process.py, _exec (:1111-1190); pid-ns-init:36-43, :121-149.
+#[test]
+fn demoted_pid_ns_forwards_fatal_signals() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    let tmp = TempDir::new("portuale-test-demoted-pidfwd");
+    // The demoted phase itself writes its pid files here, so the directory
+    // needs write access (mirrors the umask probe above).
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&*tmp, std::fs::Permissions::from_mode(0o777))
+            .expect("chmod the probe dir world-writable");
+    }
+    let self_file = tmp.join("self.pid");
+    let ns_file = tmp.join("ns");
+    let script = tmp.join("trap.sh");
+    // The 1 s sleep loop (not a single `sleep 60`): bash defers a trapped
+    // signal arriving during a foreground external command until that command
+    // completes, so one long sleep would answer only at its natural expiry.
+    std::fs::write(
+        &script,
+        format!(
+            "trap 'exit 7' TERM\n\
+             echo $$ > '{}'\n\
+             readlink /proc/self/ns/pid > '{}'\n\
+             while true; do sleep 1; done\n",
+            self_file.display(),
+            ns_file.display(),
+        ),
+    )
+    .unwrap();
+    let log = tmp.join("trap.log");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let status = spawn_bash_script(SpawnBashScriptArgs {
+            script: &script,
+            argv_word: "compile",
+            vars: Vec::new(),
+            iso: Isolation {
+                pid: true,
+                mount: true,
+                ..Isolation::default()
+            },
+            category: "cat",
+            pf: "pf-1.0",
+            log_file: PhaseLog::Capture(&log),
+            context: "pid-forward probe",
+            interactive: false,
+            droppriv: Some(ids),
+        })
+        .expect("the pid-namespaced spawn runs");
+        let _ = tx.send(status);
+    });
+    // Join with a timeout: the trap answers within about a second of the
+    // forwarded TERM (one `sleep 1` at most), so 30 s is generous. On failure
+    // the whole dance family dies by pid sweep below, so no detached
+    // portage-owned sleeper outlives the test.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let (slf, ns) = loop {
+        let read = (
+            std::fs::read_to_string(&self_file),
+            std::fs::read_to_string(&ns_file),
+        );
+        // Non-empty: the shell creates each file (empty) before the producing
+        // command runs, so bare readability races a partial write.
+        if let (Ok(slf), Ok(ns)) = read
+            && !(slf.trim().is_empty() || ns.trim().is_empty())
+        {
+            break (slf, ns);
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("the phase never wrote its pid files");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    // The phase's children enter the new pid ns (their first fork becomes
+    // init); this documents that the unshare happened, but it cannot gate
+    // the kill below — pre-fix it passes too, while the signal target stays
+    // in the host ns.
+    let host_ns = std::fs::read_link("/proc/self/ns/pid").expect("the host pid ns reads");
+    assert_ne!(
+        ns.trim(),
+        host_ns.to_string_lossy(),
+        "the phase's children enter the new pid ns"
+    );
+    let slf: i32 = slf.trim().parse().expect("the phase pid parses");
+    // The supervisor is this process's child: it never execs (no argv to
+    // spot), so identify it positively — a fresh mount ns plus a child that
+    // is pid 1 of a pid ns (the dance's grandchild; pre-fix the phase's first
+    // fork, which is why gate one below still trips there). Neither `$PPID`
+    // nor the session id can cross the pid ns from inside: the middle lives
+    // outside it, so both read back 0 there.
+    let middle = loop {
+        let mut found = None;
+        for pid in task_children_of(std::process::id() as i32) {
+            if mount_ns(pid).is_some_and(|m| m != host_mnt()) && has_nsinit_child(pid) {
+                found = Some(pid);
+                break;
+            }
+        }
+        if let Some(pid) = found {
+            break pid;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("no supervising middle appeared among this process's children");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    // Gate one: the target is not the phase itself. Pre-fix there is no
+    // middle, so the session id IS the phase pid and signalling it would
+    // merely kill the phase directly — a vacuous rc-7 pass. Post-fix the
+    // middle supervises from outside the pid ns, hence outside `$$`'s domain.
+    assert_ne!(
+        middle, slf,
+        "safety gate: signal the supervisor, never the phase itself"
+    );
+    // Gate two: the target lives in a fresh mount ns (NEWNS rides with pid
+    // per the flag table) — never the harness or its session leader. A
+    // pid-ns sample from inside the phase cannot gate this: pre-fix the
+    // children already report the new pid ns while the target stays home.
+    // (`middle` was found through exactly this check, so this re-reads it
+    // right before the kill rather than trusting the scan.)
+    let middle_mnt = mount_ns(middle).expect("the supervisor's mount ns reads");
+    assert_ne!(
+        middle_mnt,
+        host_mnt(),
+        "safety gate: signal only a supervisor in its own mount ns, never the harness"
+    );
+    // SAFETY: both gates above proved the target is the namespaced
+    // supervisor, a child this test's spawn created.
+    unsafe {
+        libc::kill(middle, libc::SIGTERM);
+    }
+    match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+        Ok(status) => {
+            handle.join().expect("the spawn thread joins");
+            assert_eq!(
+                status, 7,
+                "the trap converted the forwarded TERM into the phase's own exit"
+            );
+        }
+        Err(_) => {
+            // A swallowing middle leaves the sleeper alive: SIGKILL the whole
+            // dance family by pid. Group-kill cannot do this — `kill(-pgid)`
+            // only reaches the caller's own pid ns, so it would stop at the
+            // middle — and `slf` is pid 1 of the new ns (host pid 1 from
+            // here), so only host-side pids discovered down from the middle
+            // may be signalled.
+            // SAFETY: every pid here comes from this test's own spawn subtree
+            // (or is the gated supervisor itself).
+            for _ in 0..3 {
+                unsafe {
+                    libc::kill(middle, libc::SIGKILL);
+                    for kid in task_children_of(middle) {
+                        libc::kill(kid, libc::SIGKILL);
+                        for grandkid in task_children_of(kid) {
+                            libc::kill(grandkid, libc::SIGKILL);
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            let status = rx.recv().expect("the spawn reaps after the kills");
+            handle.join().expect("the spawn thread joins");
+            panic!("the forwarded TERM never landed (reaped {status})");
+        }
+    }
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
