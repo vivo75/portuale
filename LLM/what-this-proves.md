@@ -20212,3 +20212,32 @@ demoted phase currently gets no `net`/`ipc`/`pid` namespaces, which Portage
 applies even when demoted, so `network-sandbox` does not confine it (libsandbox
 under `usersandbox` and DAC as `portage:portage` still do) — filed as #630.
 
+**A demoted phase creates `0644`/`0755` entries under any caller umask, as
+Portage does (#631).** #627's demotion `pre_exec` did Portage's
+`setgid → setgroups → setuid` and stopped there, but Portage's droppriv
+keywords also carry `"umask": 0o22` (`doebuild.py:2178`) and `_exec` applies it
+last (`process.py:1273-1274`), so portuale inherited its caller's mask: a phase
+started from a `002` shell made `0664`/`0775` where Portage makes
+`0644`/`0755`, and the hyperfine acceptance never saw it because the merge
+normalises staged modes. Fix: one `libc::umask(0o22)` after the `setuid` block,
+on the `droppriv` path only, with no error branch — `umask(2)` returns the
+previous mask and cannot fail, and it is async-signal-safe like the three id
+calls before it. Check: `sudo <test-binary>
+demoted_spawn_applies_the_portage_umask` sets the caller mask to the hostile
+`002`, then asserts the demoted child prints `0022` and creates `644 f` /
+`755 d`, the `droppriv: None` control still reports `0002`, and the parent's
+mask reads back unchanged after the restore guard drops (root-gated;
+SKIP-passes when `euid != 0` or no `portage` user, so a plain `cargo test
+--release -p portuale ebuild_phases` stays green: 146 passed, 3 ignored).
+Close-out run: whole workspace and the pmtest contract suite (4617 passed, 2
+skipped, 2 xfailed) green except proven host-state reds — 1 cargo
+`embedded_runtime` + 7 pytest `mrg_remote`, root-only
+`/etc/portage/gnupg.getuto.tmp` → tar exit 2 as uid 1000 — plus two
+unexplained-once flakes that passed alone (2 gpkg oracle tests in one
+no-fail-fast cargo run, `zstd: unsupported format`, #632; 1 pty timeout,
+`test_terminal_title_absent_without_a_tty_gates`, #633), zero corpus drift,
+and the default pytest basetemp left poisoned by root-owned residue (#634;
+`PMTEST_BASETEMP` workaround, owner action
+`sudo rm -rf /var/tmp/pytest-parallel`). Honest
+limit: nothing known for the mask itself; a demoted phase still runs without
+Portage's `net`/`ipc`/`pid` namespaces (#630).

@@ -60,3 +60,6 @@ Runs a phase command list (with logging): fetch once, then each command's phase 
 
 ## skip_pretend on RunCommandsLoggedArgs/RunCommandsAsyncArgs (#512)
 - The scheduler's up-front `pkg_pretend` pass already ran (and replayed) the phase, so the build chain starts at `setup`, like Portage's `EbuildBuild` after `_run_pkg_pretend`. Silent skip (no lines), unlike the stamp path which prints the already-executed pair. Set only by the `-j` scheduler worker; `run_commands` forwards `false`, so the direct `ebuild` paths, `run_package`, the serial merge loop and every unit-test literal run the whole chain from `pretend` as before.
+
+## fn spawn_bash_script
+- The `droppriv: Some(..)` `pre_exec` ends with `libc::umask(0o22)` after the `setuid` block (#631), mirroring `_exec`'s `setgid → setgroups → setuid → umask` (Portage `process.py:1265-1274`; keyword from `doebuild.py:2178`); it sets the demoted child's own mask, whereas `UmaskGuard` (`run_phase.rs`) only restores the parent process umask around an in-process brush phase.
