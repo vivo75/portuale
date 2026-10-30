@@ -641,3 +641,95 @@ fn install_does_not_deadlock_on_an_eclass_scope_larger_than_the_pipe_buffer() {
 
     let _ = std::fs::remove_dir_all(&portage_tmpdir);
 }
+
+/// Unpacking a foreign-owned tarball succeeds demoted: under
+/// `FEATURES="sandbox usersandbox userpriv network-sandbox"` (the #626
+/// host set) the `unpack` phase drops to the portage user, so `tar`
+/// extracting a tarball owned by uid/gid 1 does not hit the `Cannot
+/// change ownership ... Invalid argument` failure a root unpack in a
+/// user namespace gets. Root-gated: demotion needs euid 0 and a
+/// resolvable portage user, else SKIP.
+/// Portage: doebuild.py, spawn (:2171-2181, the userpriv droppriv path).
+#[test]
+fn unpack_of_a_foreign_owned_tarball_succeeds_demoted() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    use std::os::unix::fs::MetadataExt as _;
+    let tmp = TempDir::new("ebuild-phases-test-foreign-owned-unpack");
+    let _ = std::fs::remove_dir_all(&tmp);
+    // Committed fixtures cannot carry owners (git resets them), so the
+    // foreign-owned tarball is crafted at runtime.
+    let srcdir = tmp.join("src");
+    std::fs::create_dir_all(&srcdir).unwrap();
+    std::fs::write(srcdir.join("foreign.txt"), "foreign\n").unwrap();
+    let tarball = tmp.join("foreign.tar");
+    let tar = std::process::Command::new("tar")
+        .args(["--owner=1", "--group=1", "-cf"])
+        .arg(&tarball)
+        .args(["-C"])
+        .arg(&srcdir)
+        .arg("foreign.txt")
+        .status()
+        .expect("tar crafts the foreign-owned tarball");
+    assert!(tar.success(), "tar --owner=1 --group=1 must succeed");
+    let pkg_dir = tmp.join("pkg/dev-libs/foreignpkg");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let ebuild = pkg_dir.join("foreignpkg-1.0.ebuild");
+    std::fs::write(
+        &ebuild,
+        format!(
+            "EAPI=8\nSLOT=\"0\"\nS=\"${{WORKDIR}}\"\n\
+             src_unpack() {{\n\
+             \ttar -x -f \"{t}\" || die\n\
+             }}\n",
+            t = tarball.display(),
+        ),
+    )
+    .unwrap();
+    let portage_tmpdir = tmp.join("tmp");
+    let out = std::process::Command::new(portuale_exe())
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap())
+        .env("HOME", std::env::var("HOME").unwrap_or_default())
+        .env("ROOT", tmp.join("root"))
+        .env("PORTAGE_TMPDIR", &portage_tmpdir)
+        .env("FEATURES", "sandbox usersandbox userpriv network-sandbox")
+        .args(["ebuild", ebuild.to_str().unwrap(), "unpack"])
+        .output()
+        .expect("portuale ebuild spawns");
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{all}");
+    let builddir = portage_tmpdir.join("portage/dev-libs/foreignpkg-1.0");
+    let extracted = builddir.join("work/foreign.txt");
+    let meta = std::fs::metadata(&extracted)
+        .unwrap_or_else(|e| panic!("{} should exist: {e}\n{all}", extracted.display()));
+    assert_eq!(
+        meta.uid(),
+        ids.uid,
+        "extracted files are owned by the portage user, not root: {all}"
+    );
+    // The phase log is written by the root parent's tee, but the
+    // post-phase userpriv fixup chowns everything under temp/ to the
+    // build user — Portage `_post_phase_userpriv_perms`
+    // (doebuild.py:2485-2498) applies to both HOME and T, so the log
+    // ends up portage-owned too.
+    let log = builddir.join("temp/build.log");
+    let meta = std::fs::metadata(&log)
+        .unwrap_or_else(|e| panic!("{} should exist: {e}\n{all}", log.display()));
+    assert_eq!(
+        meta.uid(),
+        ids.uid,
+        "the phase log is chowned to the portage user by the post-phase fixup: {all}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
