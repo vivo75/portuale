@@ -44,9 +44,20 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
     // undisturbed isolation and no demotion alike.
     let (restrict, _) = restrict_and_properties(env, &std::collections::HashSet::new());
     // SAFETY: `geteuid(2)` cannot fail.
-    let droppriv = phase_droppriv(phase, &features, &restrict, unsafe { libc::geteuid() == 0 })
+    // SAFETY: `geteuid(2)` cannot fail.
+    let is_root = unsafe { libc::geteuid() == 0 };
+    // Portage: doebuild.py, _post_phase_userpriv_perms (:2485-2498): the same
+    // `userpriv` + root gate that enables demotion, held for the whole run. One
+    // lookup serves the spawn and the post-phase fixup.
+    let userpriv_run = is_root && feature_token_present(&features, "userpriv");
+    let build_ids = userpriv_run
         .then(|| portage_phase_ids(std::env::var("PORTAGE_USERNAME").ok().as_deref()))
         .flatten();
+    let droppriv = if phase_droppriv(phase, &features, &restrict, is_root) {
+        build_ids.clone()
+    } else {
+        None
+    };
     let iso = phase_isolation(env, phase, &features, droppriv.is_some());
     let effective_shell = if iso.any() || droppriv.is_some() {
         ShellBackend::Bash
@@ -83,12 +94,17 @@ pub(crate) async fn run_one_phase(args: RunOnePhaseArgs<'_>) -> Result<i32, Stri
             droppriv,
         }),
     };
-    // Portage: doebuild.py, _post_phase_userpriv_perms (:2485-2498), gated on
-    // `userpriv` and `secpass >= 2` for the run, whether or not this phase demoted
-    // (doebuild.py:2486). Runs after every phase, success or failure.
-    // SAFETY: `geteuid(2)` cannot fail.
-    if feature_token_present(&features, "userpriv") && unsafe { libc::geteuid() } == 0 {
-        match portage_phase_ids(std::env::var("PORTAGE_USERNAME").ok().as_deref()) {
+    // Portage: EbuildPhase.py:389-420 returns on a failed phase before calling
+    // `_post_phase_userpriv_perms` (:420), so the fixup runs only on success. The
+    // perms themselves are doebuild.py:2485-2498. `test` with `test-fail-continue`
+    // counts as success (EbuildPhase.py:393-402).
+    let failed = match &result {
+        Ok(0) => false,
+        Ok(_) => !(phase == "test" && feature_token_present(&features, "test-fail-continue")),
+        Err(_) => true,
+    };
+    if userpriv_run && !failed {
+        match build_ids {
             Some(ids) => apply_userpriv_post_perms(&env.t(), &env.home(), &ids),
             None => eprintln!("warning: build user not found; skipping userpriv ownership fixup"),
         }
