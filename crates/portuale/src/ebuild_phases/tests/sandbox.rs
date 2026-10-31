@@ -1358,3 +1358,232 @@ fn demoted_usersandbox_spawn_stays_demoted() {
     );
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// The demoted-netns loopback builders mirror Portage's netlink bytes exactly
+/// (`nlmsghdr "=IHHII"`, `ifinfomsg`/`ifaddrmsg` native-aligned, `rtattr "HH"`).
+/// Byte-identical to CPython's `Struct.pack` on this host (checked against the
+/// `netlink.py` oracle while writing); the asserts pin header fields and
+/// address bytes, not padding. Sizes differ from the first sketch (v4 32 not
+/// 40, v6 44 not 52): `create_rtattr`/`create_nlmsg` concatenate with no
+/// alignment padding, so the layout demands the smaller totals.
+/// Portage: lib/portage/util/netlink.py, structs (:30-34),
+/// set_link_up (:102-106), add_address (:108-114).
+#[cfg(target_os = "linux")]
+#[test]
+fn lo_netlink_messages_mirror_portage_bytes() {
+    fn u16ne(b: &[u8], off: usize) -> u16 {
+        u16::from_ne_bytes([b[off], b[off + 1]])
+    }
+    fn u32ne(b: &[u8], off: usize) -> u32 {
+        u32::from_ne_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+    }
+
+    let (up, n) = lo_link_up_msg(1);
+    assert_eq!(n, 32, "nlmsghdr (16) + ifinfomsg (16)");
+    assert_eq!(u32ne(&up, 0), n as u32, "nlmsg_len covers the datagram");
+    assert_eq!(u16ne(&up, 4), 16, "RTM_NEWLINK");
+    assert_eq!(u16ne(&up, 6), 0x5, "NLM_F_REQUEST|NLM_F_ACK");
+    assert_eq!(u32ne(&up, 8), 1, "seq 1");
+    assert_eq!(u32ne(&up, 12), 0, "pid 0");
+    assert_eq!(up[16], 0, "AF_UNSPEC");
+    assert_eq!(u16ne(&up, 18), 0, "ifi_type 0");
+    assert_eq!(u32ne(&up, 20), 1, "ifindex");
+    assert_eq!(u32ne(&up, 24), 1, "ifi_flags IFF_UP");
+    assert_eq!(u32ne(&up, 28), 1, "ifi_change IFF_UP");
+
+    let (v4, n4) = lo_add_v4_msg(1);
+    assert_eq!(n4, 32, "nlmsghdr (16) + ifaddrmsg (8) + rtattr (8)");
+    assert_eq!(u32ne(&v4, 0), n4 as u32, "nlmsg_len covers the datagram");
+    assert_eq!(u16ne(&v4, 4), 20, "RTM_NEWADDR");
+    assert_eq!(u16ne(&v4, 6), 0x605, "REQ|ACK|EXCL|CREATE");
+    assert_eq!(v4[16], 2, "AF_INET");
+    assert_eq!(v4[17], 8, "prefixlen 8");
+    assert_eq!(u32ne(&v4, 20), 1, "ifindex");
+    assert_eq!(u16ne(&v4, 24), 8, "rta_len");
+    assert_eq!(u16ne(&v4, 26), 2, "IFA_LOCAL");
+    assert_eq!(
+        &v4[28..32],
+        &[10, 0, 0, 1],
+        "the AI_ADDRCONFIG workaround address"
+    );
+
+    let (v6, n6) = lo_add_v6_msg(1);
+    assert_eq!(n6, 44, "nlmsghdr (16) + ifaddrmsg (8) + rtattr (20)");
+    assert_eq!(u32ne(&v6, 0), n6 as u32, "nlmsg_len covers the datagram");
+    assert_eq!(u16ne(&v6, 4), 20, "RTM_NEWADDR");
+    assert_eq!(u16ne(&v6, 6), 0x605, "REQ|ACK|EXCL|CREATE");
+    assert_eq!(v6[16], 10, "AF_INET6");
+    assert_eq!(v6[17], 8, "prefixlen 8");
+    assert_eq!(u32ne(&v6, 20), 1, "ifindex");
+    assert_eq!(u16ne(&v6, 24), 20, "rta_len");
+    assert_eq!(u16ne(&v6, 26), 2, "IFA_LOCAL");
+    let mut want6 = [0u8; 16];
+    want6[0] = 0xfd;
+    assert_eq!(&v6[28..44], &want6, "fd::1");
+}
+
+/// Probe script shared by the two loopback spawn tests: the child binds and
+/// listens on 0.0.0.0, then completes a real TCP round-trip (connect, accept,
+/// one message each way) against 127.0.0.1 AND 10.0.0.1. Binding all-local
+/// (not 127.0.0.1) is load-bearing: a 127.0.0.1-bound listener RSTs a
+/// 10.0.0.1 connect (ECONNREFUSED, reproduced standalone), so only 0.0.0.0
+/// lets the 10.0.0.1 leg prove the address is configured — with no default
+/// route a non-local 10.0.0.1 fails ENETUNREACH instead. `assert_pid1` adds
+/// the PID-1 check for the pid-ns variant. The tail re-asserts the #630
+/// no-egress property (no default route, external connect fails), which must
+/// survive lo-up.
+fn loopback_probe_script(assert_pid1: bool) -> String {
+    let pid1 = if assert_pid1 {
+        "if [ \"$$\" != 1 ]; then echo \"PID1=0 got-$$\"; exit 1; fi\necho \"PID1=1\"\n"
+    } else {
+        ""
+    };
+    // NOTE: no `\`-continuations below: they strip leading whitespace and
+    // would de-indent the Python block (IndentationError). Every `\n` and
+    // every Python indent space is an explicit escape.
+    format!(
+        "{pid1}\
+        if awk '$2 == \"00000000\" {{found=1}} END {{exit !found}}' /proc/net/route; then\n\
+        echo \"ISOLATED=0 reason=default-route-present\"\n\
+        exit 1\n\
+        fi\n\
+        python3 - <<'PYEOF'\n\
+        import socket\n\
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n\
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n\
+        srv.bind(('0.0.0.0', 0))\n\
+        srv.listen(1)\n\
+        port = srv.getsockname()[1]\n\
+        srv.settimeout(15)\n\
+        for addr in ('127.0.0.1', '10.0.0.1'):\n\
+        \x20   c = socket.create_connection((addr, port), timeout=15)\n\
+        \x20   conn, _ = srv.accept()\n\
+        \x20   conn.sendall(b'ping')\n\
+        \x20   data = c.recv(4)\n\
+        \x20   assert data == b'ping', (addr, data)\n\
+        \x20   c.close()\n\
+        \x20   conn.close()\n\
+        print('LOOPBACK=1')\n\
+        PYEOF\n\
+        if [ \"$?\" -ne 0 ]; then\n\
+        echo \"LOOPBACK=0 reason=python-probe-failed\"\n\
+        exit 1\n\
+        fi\n\
+        timeout 10 bash -c 'exec 3<>/dev/tcp/9.9.9.9/80' 2>/dev/null\n\
+        rc=$?\n\
+        if [ \"$rc\" -eq 0 ] || [ \"$rc\" -eq 124 ]; then\n\
+        echo \"ISOLATED=0 reason=connect-rc-$rc\"\n\
+        exit 1\n\
+        fi\n\
+        echo \"ISOLATED=1\"\n\
+        exit 0\n"
+    )
+}
+
+/// A demoted phase in a fresh netns reaches localhost over TCP: listener +
+/// connect in the same spawn against 127.0.0.1 and 10.0.0.1, with the #630
+/// no-egress property surviving lo-up. Per the S0 ruling, flags (0x9 in BOTH
+/// states) and bind (succeeds either way) are NOT discriminators — only the
+/// connect is, so this test asserts connects and nothing else would pass it.
+/// Root-gated (demotion needs root) and skips when the portage user is
+/// unknown, like `demoted_spawn_runs_as_the_portage_user`.
+/// Portage: process.py, _exec (:693-714, :1084),
+/// _configure_loopback_interface (:838-871); netlink.py (:18-114).
+/// Grounding: S0 `s0-lo-down-probe.log` (CONNECT-FAIL ENETUNREACH, lo down)
+/// vs `s0-portage-lo-oracle.log` (CONNECT-OK after Portage configures lo).
+#[test]
+fn demoted_netns_loopback_accepts_localhost() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    let tmp = TempDir::new("portuale-test-demoted-loopback");
+    let script = tmp.join("loopback.sh");
+    std::fs::write(&script, loopback_probe_script(false)).unwrap();
+    let log = tmp.join("loopback.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso: Isolation {
+            net: true,
+            ..Isolation::default()
+        },
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&log),
+        context: "loopback probe",
+        interactive: false,
+        droppriv: Some(ids),
+    })
+    .expect("the isolated spawn runs");
+    assert_eq!(status, 0, "localhost connects and egress stays blocked");
+    let out = std::fs::read_to_string(&log).expect("the child writes its verdict");
+    assert!(
+        out.lines().any(|l| l == "LOOPBACK=1"),
+        "real TCP round-trip over lo:\n{out}"
+    );
+    assert!(
+        out.lines().any(|l| l == "ISOLATED=1"),
+        "no default route, no egress:\n{out}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// The same localhost connect, executed as PID 1: lo was configured pre-fork
+/// in `pre_exec` (the netns is shared, so the pid-1 grandchild inherits it).
+/// Root-gated and portage-user-gated like the net-only test above.
+/// Portage: process.py, _exec (:693-714, :1084, :1111-1145 pid-ns-init);
+/// _configure_loopback_interface (:838-871).
+#[test]
+fn demoted_pid_netns_loopback_works_in_pid1() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    let tmp = TempDir::new("portuale-test-demoted-pid-loopback");
+    let script = tmp.join("pid-loopback.sh");
+    std::fs::write(&script, loopback_probe_script(true)).unwrap();
+    let log = tmp.join("pid-loopback.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso: Isolation {
+            net: true,
+            pid: true,
+            mount: true,
+            ..Isolation::default()
+        },
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&log),
+        context: "pid loopback probe",
+        interactive: false,
+        droppriv: Some(ids),
+    })
+    .expect("the pid-namespaced spawn runs");
+    assert_eq!(status, 0, "pid 1 connects over lo and egress stays blocked");
+    let out = std::fs::read_to_string(&log).expect("the child writes its verdict");
+    assert!(
+        out.lines().any(|l| l == "PID1=1"),
+        "the phase runs as pid 1:\n{out}"
+    );
+    assert!(
+        out.lines().any(|l| l == "LOOPBACK=1"),
+        "real TCP round-trip over lo:\n{out}"
+    );
+    assert!(
+        out.lines().any(|l| l == "ISOLATED=1"),
+        "no default route, no egress:\n{out}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}

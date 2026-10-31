@@ -676,6 +676,61 @@ pub(crate) struct SpawnBashScriptArgs<'a> {
     pub(crate) droppriv: Option<PhaseIds>,
 }
 
+/// Bring `lo` up in the fresh netns via raw netlink: `RTM_GETLINK` for the
+/// name `lo`, then link-up (`IFF_UP`), then `10.0.0.1/8`, then `fd::1/8`
+/// when the host stack does IPv6. Best-effort: any failure — socket, send,
+/// short reply, unexpected type — falls through silently and the phase runs
+/// with `lo` down, like a host without `ip`. One ACK/`NLMSG_ERROR` drained
+/// per request; error codes ignored. Stack buffers only, no allocation.
+/// Portage: process.py, _configure_loopback_interface (:838-871);
+/// lib/portage/util/netlink.py, RtNetlink (:63-114).
+#[cfg(target_os = "linux")]
+fn configure_loopback_netlink(has_ipv6: bool) {
+    use std::ffi::c_void;
+    // SAFETY: runs in the child after fork, before exec (called from
+    // `pre_exec`); only raw syscalls on stack buffers and owned fds, no
+    // allocation, no locks, no print. Every failure path closes the socket
+    // (when open) and returns.
+    unsafe {
+        let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_DGRAM, libc::NETLINK_ROUTE);
+        if fd < 0 {
+            return;
+        }
+        let (req, reqlen) = lo_getlink_req();
+        if libc::send(fd, req.as_ptr() as *const c_void, reqlen, 0) < 0 {
+            libc::close(fd);
+            return;
+        }
+        let mut reply = [0u8; 512];
+        let got = libc::recv(fd, reply.as_mut_ptr() as *mut c_void, reply.len(), 0);
+        // Header plus `ifinfomsg`; anything shorter (or an error reply)
+        // carries no ifindex.
+        if got < 32 {
+            libc::close(fd);
+            return;
+        }
+        if u16::from_ne_bytes([reply[4], reply[5]]) != lo_nl::RTM_NEWLINK {
+            libc::close(fd);
+            return;
+        }
+        let ifindex = u32::from_ne_bytes([reply[20], reply[21], reply[22], reply[23]]);
+        let mut ack = [0u8; 64];
+        let mut roundtrip = |buf: &[u8]| {
+            let _ = libc::send(fd, buf.as_ptr() as *const c_void, buf.len(), 0);
+            let _ = libc::recv(fd, ack.as_mut_ptr() as *mut c_void, ack.len(), 0);
+        };
+        let (up, n) = lo_link_up_msg(ifindex);
+        roundtrip(&up[..n]);
+        let (v4, n4) = lo_add_v4_msg(ifindex);
+        roundtrip(&v4[..n4]);
+        if has_ipv6 {
+            let (v6, n6) = lo_add_v6_msg(ifindex);
+            roundtrip(&v6[..n6]);
+        }
+        libc::close(fd);
+    }
+}
+
 /// Run a vendored bash helper script under the sandbox with a curated
 /// environment and optional log capture: only whitelisted calling-env
 /// vars pass through (`LC_ALL` and the IPC daemon never do), and the
@@ -770,6 +825,11 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
         // is what Portage sets in the new UTS namespace (process.py:1246-1261).
         #[cfg(target_os = "linux")]
         let hostname = std::ffi::CString::new("localhost").expect("the literal carries no NUL");
+        // Parent-built: whether the v6 loopback address is even attempted
+        // (Portage `has_ipv6`, process.py:823-835). The child cannot probe:
+        // `UdpSocket::bind` allocates.
+        #[cfg(target_os = "linux")]
+        let has_ipv6 = host_has_ipv6();
         // SAFETY: runs in the child after fork, before exec; only
         // async-signal-safe libc calls, and any failure fails the spawn.
         // Portage: process.py, _exec (:1265-1274) — setgid, setgroups,
@@ -810,6 +870,14 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                         // SAFETY: pointer and length come from the live
                         // parent-built CString moved into this closure.
                         let _ = libc::sethostname(hostname.as_ptr(), hostname.as_bytes().len());
+                        // Portage _exec2: loopback in the new net ns via
+                        // netlink (:838-871) — link up, 10.0.0.1, fd::1 iff
+                        // the parent saw IPv6. No subprocess may run in
+                        // `pre_exec`, so raw syscalls on stack buffers;
+                        // best-effort, failures fall through silently.
+                        // Pre-fork: the shared netns covers the pid
+                        // grandchild below, so it inherits lo-up.
+                        configure_loopback_netlink(has_ipv6);
                     }
                     // Portage: pid-ns-init re-exec shape without the re-exec —
                     // the grandchild IS pid 1 by fork order, so it execs
@@ -971,9 +1039,9 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                 }
                 // With `pid` the grandchild above already mounted a fresh
                 // `/proc` over the new pid ns; without `pid` this path never
-                // remounts, so `/proc` keeps the host view. No `lo` setup: no
-                // subprocess may run in `pre_exec`, so a demoted netns keeps
-                // `lo` down (#636).
+                // remounts, so `/proc` keeps the host view. `lo` came up
+                // pre-fork via netlink (#636) when `iso.net`, so the pid-1
+                // grandchild inherits it through the shared netns.
                 if libc::setgid(gid) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }

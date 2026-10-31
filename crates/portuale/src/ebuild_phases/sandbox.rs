@@ -526,6 +526,242 @@ pub(crate) fn clone_flags_for(_: &Isolation) -> libc::c_int {
     0
 }
 
+/// Whether the host stack can do IPv6 at all: a UDP bind of `[::1]`
+/// (Portage `has_ipv6` binds `("::1", 0)` with `SOCK_DGRAM`,
+/// `process.py:823-835`). Computed in the parent — the child (`pre_exec`)
+/// cannot allocate — and moved into the closure as a `bool`.
+pub(crate) fn host_has_ipv6() -> bool {
+    std::net::UdpSocket::bind("[::1]:0").is_ok()
+}
+
+/// Netlink wire structs for the demoted-netns loopback setup, mirroring
+/// Portage's `Struct` layouts byte for byte: `nlmsghdr "=IHHII"` is
+/// unaligned (16 B); `ifinfomsg "BHiII"` / `ifaddrmsg "BBBBI"` are
+/// native-aligned (16 B / 8 B); `rtattr "HH"` is 4 B.
+// Portage: lib/portage/util/netlink.py (:30-34).
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct Nlmsghdr {
+    len: u32,
+    nl_type: u16,
+    flags: u16,
+    seq: u32,
+    pid: u32,
+}
+
+/// `ifinfomsg "BHiII"`, native-aligned (16 B: the pad byte after `family`
+/// puts `ifi_type` at offset 2, exactly the C struct).
+// Portage: lib/portage/util/netlink.py (:30-34).
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct IfInfoMsg {
+    family: u8,
+    _pad: u8,
+    ifi_type: u16,
+    ifi_index: i32,
+    ifi_flags: u32,
+    ifi_change: u32,
+}
+
+/// `ifaddrmsg "BBBBI"`, native-aligned (8 B).
+// Portage: lib/portage/util/netlink.py (:30-34).
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct IfAddrMsg {
+    family: u8,
+    prefixlen: u8,
+    flags: u8,
+    scope: u8,
+    index: u32,
+}
+
+/// `rtattr "HH"` (4 B), followed by the raw address bytes.
+// Portage: lib/portage/util/netlink.py (:30-34).
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct RtAttr {
+    len: u16,
+    attr_type: u16,
+}
+
+#[cfg(target_os = "linux")]
+const _: () = assert!(std::mem::size_of::<Nlmsghdr>() == 16);
+#[cfg(target_os = "linux")]
+const _: () = assert!(std::mem::size_of::<IfInfoMsg>() == 16);
+#[cfg(target_os = "linux")]
+const _: () = assert!(std::mem::size_of::<IfAddrMsg>() == 8);
+#[cfg(target_os = "linux")]
+const _: () = assert!(std::mem::size_of::<RtAttr>() == 4);
+
+/// Message types and flags for the loopback setup.
+// Portage: lib/portage/util/netlink.py (:18-28).
+#[cfg(target_os = "linux")]
+pub(crate) mod lo_nl {
+    pub(crate) const RTM_NEWLINK: u16 = 16;
+    pub(crate) const RTM_GETLINK: u16 = 18;
+    pub(crate) const RTM_NEWADDR: u16 = 20;
+    pub(crate) const NLM_F_REQUEST: u16 = 0x1;
+    pub(crate) const NLM_F_ACK: u16 = 0x4;
+    pub(crate) const NLM_F_EXCL: u16 = 0x200;
+    pub(crate) const NLM_F_CREATE: u16 = 0x400;
+    pub(crate) const IFF_UP: u32 = 0x1;
+    pub(crate) const IFA_LOCAL: u16 = 2;
+    pub(crate) const IFLA_IFNAME: u16 = 3;
+}
+
+/// `RTM_GETLINK` for the name `lo`: `nlmsghdr` + zero `ifinfomsg` +
+/// `rtattr(IFLA_IFNAME, b"lo")` (38 B; `create_rtattr` pads nothing).
+/// The reply's `ifinfomsg.ifi_index` is the `lo` index the other builders take.
+// Portage: lib/portage/util/netlink.py, get_link_ifindex (:94-100).
+#[cfg(target_os = "linux")]
+pub(crate) fn lo_getlink_req() -> ([u8; 38], usize) {
+    use lo_nl::*;
+    // SAFETY: `repr(C)` structs of proven size (asserts above), so each
+    // transmute exposes the exact native-aligned wire bytes Portage's
+    // `Struct.pack` produces; every bit pattern is a valid byte array.
+    let hdr: [u8; 16] = unsafe {
+        std::mem::transmute(Nlmsghdr {
+            len: 38,
+            nl_type: RTM_GETLINK,
+            flags: NLM_F_REQUEST,
+            seq: 1,
+            pid: 0,
+        })
+    };
+    let body: [u8; 16] = unsafe {
+        std::mem::transmute(IfInfoMsg {
+            family: 0,
+            _pad: 0,
+            ifi_type: 0,
+            ifi_index: 0,
+            ifi_flags: 0,
+            ifi_change: 0,
+        })
+    };
+    let attr: [u8; 4] = unsafe {
+        std::mem::transmute(RtAttr {
+            len: 6,
+            attr_type: IFLA_IFNAME,
+        })
+    };
+    let mut buf = [0u8; 38];
+    buf[0..16].copy_from_slice(&hdr);
+    buf[16..32].copy_from_slice(&body);
+    buf[32..36].copy_from_slice(&attr);
+    buf[36..38].copy_from_slice(b"lo");
+    (buf, 38)
+}
+
+/// `RTM_NEWLINK` setting `IFF_UP` (`change` and `flags` both `IFF_UP`).
+// Portage: lib/portage/util/netlink.py, set_link_up (:102-106).
+#[cfg(target_os = "linux")]
+pub(crate) fn lo_link_up_msg(ifindex: u32) -> ([u8; 32], usize) {
+    use lo_nl::*;
+    // SAFETY: as in `lo_getlink_req`.
+    let hdr: [u8; 16] = unsafe {
+        std::mem::transmute(Nlmsghdr {
+            len: 32,
+            nl_type: RTM_NEWLINK,
+            flags: NLM_F_REQUEST | NLM_F_ACK,
+            seq: 1,
+            pid: 0,
+        })
+    };
+    let body: [u8; 16] = unsafe {
+        std::mem::transmute(IfInfoMsg {
+            family: 0,
+            _pad: 0,
+            ifi_type: 0,
+            ifi_index: ifindex as i32,
+            ifi_flags: IFF_UP,
+            ifi_change: IFF_UP,
+        })
+    };
+    let mut buf = [0u8; 32];
+    buf[0..16].copy_from_slice(&hdr);
+    buf[16..32].copy_from_slice(&body);
+    (buf, 32)
+}
+
+/// `RTM_NEWADDR` adding `10.0.0.1/8` (`IFA_LOCAL`): the `AI_ADDRCONFIG`
+/// workaround address (bug 690758). 32 B: no alignment padding anywhere.
+// Portage: lib/portage/util/netlink.py, add_address (:108-114).
+#[cfg(target_os = "linux")]
+pub(crate) fn lo_add_v4_msg(ifindex: u32) -> ([u8; 32], usize) {
+    use lo_nl::*;
+    // SAFETY: as in `lo_getlink_req`.
+    let hdr: [u8; 16] = unsafe {
+        std::mem::transmute(Nlmsghdr {
+            len: 32,
+            nl_type: RTM_NEWADDR,
+            flags: NLM_F_REQUEST | NLM_F_ACK | NLM_F_EXCL | NLM_F_CREATE,
+            seq: 1,
+            pid: 0,
+        })
+    };
+    let body: [u8; 8] = unsafe {
+        std::mem::transmute(IfAddrMsg {
+            family: 2,
+            prefixlen: 8,
+            flags: 0,
+            scope: 0,
+            index: ifindex,
+        })
+    };
+    let attr: [u8; 4] = unsafe {
+        std::mem::transmute(RtAttr {
+            len: 8,
+            attr_type: IFA_LOCAL,
+        })
+    };
+    let mut buf = [0u8; 32];
+    buf[0..16].copy_from_slice(&hdr);
+    buf[16..24].copy_from_slice(&body);
+    buf[24..28].copy_from_slice(&attr);
+    buf[28..32].copy_from_slice(&[10, 0, 0, 1]);
+    (buf, 32)
+}
+
+/// `RTM_NEWADDR` adding `fd::1/8` (`IFA_LOCAL`). 44 B.
+// Portage: lib/portage/util/netlink.py, add_address (:108-114).
+#[cfg(target_os = "linux")]
+pub(crate) fn lo_add_v6_msg(ifindex: u32) -> ([u8; 44], usize) {
+    use lo_nl::*;
+    // SAFETY: as in `lo_getlink_req`.
+    let hdr: [u8; 16] = unsafe {
+        std::mem::transmute(Nlmsghdr {
+            len: 44,
+            nl_type: RTM_NEWADDR,
+            flags: NLM_F_REQUEST | NLM_F_ACK | NLM_F_EXCL | NLM_F_CREATE,
+            seq: 1,
+            pid: 0,
+        })
+    };
+    let body: [u8; 8] = unsafe {
+        std::mem::transmute(IfAddrMsg {
+            family: 10,
+            prefixlen: 8,
+            flags: 0,
+            scope: 0,
+            index: ifindex,
+        })
+    };
+    let attr: [u8; 4] = unsafe {
+        std::mem::transmute(RtAttr {
+            len: 20,
+            attr_type: IFA_LOCAL,
+        })
+    };
+    let mut addr = [0u8; 16];
+    addr[0] = 0xfd;
+    let mut buf = [0u8; 44];
+    buf[0..16].copy_from_slice(&hdr);
+    buf[16..24].copy_from_slice(&body);
+    buf[24..28].copy_from_slice(&attr);
+    buf[28..44].copy_from_slice(&addr);
+    (buf, 44)
+}
+
 /// Message for the once-per-process degrade warning: names the requested FEATURES and
 /// the degraded phase; when demoted, states DAC confinement survives (the
 /// phase still demotes to `portage:portage`, only namespace confinement is
