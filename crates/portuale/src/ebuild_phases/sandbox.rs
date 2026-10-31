@@ -753,7 +753,8 @@ pub(crate) fn lo_add_v6_msg(ifindex: u32) -> ([u8; 44], usize) {
         })
     };
     let mut addr = [0u8; 16];
-    addr[0] = 0xfd;
+    addr[1] = 0xfd;
+    addr[15] = 1;
     let mut buf = [0u8; 44];
     buf[0..16].copy_from_slice(&hdr);
     buf[16..24].copy_from_slice(&body);

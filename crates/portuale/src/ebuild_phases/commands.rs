@@ -716,7 +716,9 @@ fn configure_loopback_netlink(has_ipv6: bool) {
         let ifindex = u32::from_ne_bytes([reply[20], reply[21], reply[22], reply[23]]);
         let mut ack = [0u8; 64];
         let mut roundtrip = |buf: &[u8]| {
-            let _ = libc::send(fd, buf.as_ptr() as *const c_void, buf.len(), 0);
+            if libc::send(fd, buf.as_ptr() as *const c_void, buf.len(), 0) < 0 {
+                return;
+            }
             let _ = libc::recv(fd, ack.as_mut_ptr() as *mut c_void, ack.len(), 0);
         };
         let (up, n) = lo_link_up_msg(ifindex);

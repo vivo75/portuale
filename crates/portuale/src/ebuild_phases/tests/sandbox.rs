@@ -1378,6 +1378,18 @@ fn lo_netlink_messages_mirror_portage_bytes() {
         u32::from_ne_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
     }
 
+    let (get, ng) = lo_getlink_req();
+    assert_eq!(ng, 38, "nlmsghdr (16) + ifinfomsg (16) + rtattr (6)");
+    assert_eq!(u32ne(&get, 0), ng as u32, "nlmsg_len covers the datagram");
+    assert_eq!(u16ne(&get, 4), 18, "RTM_GETLINK");
+    assert_eq!(u16ne(&get, 6), 0x1, "NLM_F_REQUEST");
+    assert_eq!(u32ne(&get, 8), 1, "seq 1");
+    assert_eq!(u32ne(&get, 12), 0, "pid 0");
+    assert_eq!(get[16], 0, "AF_UNSPEC");
+    assert_eq!(u16ne(&get, 32), 6, "rta_len");
+    assert_eq!(u16ne(&get, 34), 3, "IFLA_IFNAME");
+    assert_eq!(&get[36..38], b"lo", "ifname lo");
+
     let (up, n) = lo_link_up_msg(1);
     assert_eq!(n, 32, "nlmsghdr (16) + ifinfomsg (16)");
     assert_eq!(u32ne(&up, 0), n as u32, "nlmsg_len covers the datagram");
@@ -1417,9 +1429,11 @@ fn lo_netlink_messages_mirror_portage_bytes() {
     assert_eq!(u32ne(&v6, 20), 1, "ifindex");
     assert_eq!(u16ne(&v6, 24), 20, "rta_len");
     assert_eq!(u16ne(&v6, 26), 2, "IFA_LOCAL");
-    let mut want6 = [0u8; 16];
-    want6[0] = 0xfd;
-    assert_eq!(&v6[28..44], &want6, "fd::1");
+    assert_eq!(
+        &v6[28..44],
+        &[0x00, 0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01],
+        "fd::1"
+    );
 }
 
 /// Probe script shared by the two loopback spawn tests: the child binds and
