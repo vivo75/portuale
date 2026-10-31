@@ -1,0 +1,2 @@
+flags 0x9 operstate unknown
+CONNECT-FAIL OSError [Errno 101] Network is unreachable
