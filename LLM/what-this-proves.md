@@ -20571,3 +20571,17 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   unit test (red pre-fix) and a contract test pinning the row on the
   D-default shape (rc 1, backtrack 0/20 autounmask stop on both sides);
   no fixture change was needed.
+
+- **The doc-status checker is green on the real tree (backlog #620).**
+  The 42 tail entries (#574–#615, plus #593/#599/#616) predated the
+  `Oracle:`/`Premise:` token rule, so `doc_status_check.py` rule (c)
+  reported them and the checker could not exit 0 -- contradicting the
+  standing "prints `doc status: OK`" claim. Each entry now carries the
+  token its body already named (evidence captures, S0 tables, merge-gate
+  runs, host-Portage bytes, plan acceptances) or a stated premise where
+  no capture exists yet (umbrellas #575/#589, owner rulings #590/#591,
+  unprobed readings #604/#605/#607, the #596 bed gap, the #615 missing
+  trace). One script appended all 42; `doc_status_check.py` prints `doc
+  status: OK`, `test_doc_status_check.py` (all 25, incl.
+  `test_real_tree_is_clean`) is green, and `cut_registry_check.py` is
+  untouched. Docs-only slice: no product, fixture, or corpus change.
