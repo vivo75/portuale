@@ -6,11 +6,11 @@
 
 **Goal:** A failed demoted loopback setup warns at the head of the phase log, gzip-safe and terminal-visible, via one raw `write(2)` from `pre_exec` — replacing the #638 parent-side pipe with a strictly simpler mechanism.
 
-**Architecture:** S0 proved fd 2 inside `pre_exec` is already the Command-configured stderr (dup2 runs before hooks on this toolchain), so a child-side write lands exactly where phase stderr goes: through the gzip pump as a proper member (fixes #639), at the head of the stream before any phase output (fixes #640 placement), and through the tee pipe to the terminal (fixes #640 visibility). The parent pre-builds one Portage-identical line per errno (1..=135) and moves the table into the closure; the child selects and writes a single line on first failure, then continues best-effort. The entire pipe/append/eprintln apparatus is deleted.
+**Architecture:** S0 proved, for the `Command::stderr(File)` probe it ran, that fd 2 inside `pre_exec` is already the Command-configured stderr (dup2 runs before hooks on this toolchain) — the pipe-backed `Tee` and un-redirected `Inherit` legs extrapolate that ordering, low risk but not probed — so a child-side write lands where phase stderr goes: through the gzip pump as a proper member (fixes #639), at the head of the stream before any phase output (fixes #640 placement), and through the tee pipe to the terminal (fixes #640 visibility). The parent pre-builds one Portage-identical line per errno (1..=135) and moves the table into the closure; the child selects and writes a single line on first failure, then continues best-effort. The entire pipe/append/eprintln apparatus is deleted.
 
 **Tech Stack:** Rust 2024 (`crates/portuale`), Portage 3.0.83 (`3rdparty/portage/lib/portage/process.py:867-871`), pmtest contract suite (`../pmtest`).
 
-**Spec:** `LLM/backlog-tasks.md` #639 + #640, argued from the S0 probe (`LLM/evidence/2026-11-01-639-loopback-report/s0-fd2-preexec.log`: fd 2 in `pre_exec` == configured stderr target), Portage's warn-then-abandon shape (`process.py:861-871`, warn text), and the #638 implementation being superseded (`commands.rs` pipe/read/append/eprintln block).
+**Spec:** `LLM/backlog-tasks.md` #639 + #640, argued from the S0 probe (`LLM/evidence/2026-11-01-639-loopback-report/s0-fd2-preexec.log`: fd 2 in `pre_exec` == configured stderr target for a `stderr(File)` command; the pipe/tee and inherit legs extrapolate it), Portage's warn-then-abandon shape (`process.py:861-871`, warn text), and the #638 implementation being superseded (`commands.rs` pipe/read/append/eprintln block).
 
 ## Global Constraints
 
@@ -24,19 +24,11 @@
 
 ## Review Focus
 
-- The warning lands at the head of the phase log, not the tail — pinned by Task 1's updated test asserting `lines().next()` on the plain log (and first-member content on the `.gz` log).
+- The warning lands at the head of the phase log, not the tail — pinned by Task 1's updated test asserting `lines().next()` on the plain log (and the warning inside a decodable member on the `.gz` log; the reader is `MultiGzDecoder` over the whole concatenated file, since Python's `GzipFile` reads across members).
 - The `.gz` stream stays decodable end-to-end (no raw tail) — pinned by Task 1's new `.gz` decode test (`MultiGzDecoder` over the full file, warning present).
 - The abort-rest + fib_trie behavior is unchanged by the reporting move (only the *sink* for the message moved, not the decision logic) — pinned by re-running the #638 tests unmodified in intent (message-content assertions updated for head placement only).
 - The phase still runs rc 0 and localhost behavior is unchanged (setup itself untouched — this slice only moves where the failure line goes) — pinned by the kept rc/connect assertions.
 - No subprocess, allocation, or stdio in `pre_exec` after the change — pinned by code review of the diff: exactly one `libc::write` added to the child path, pipe creation/read/append deleted (reviewer greps for `pipe2`, `OpenOptions::append` in the report path, and `print!`/`eprintln!` in `pre_exec`).
-
-## Review Focus
-
-- The warning is the first line of the phase log, not the last — pinned by Task 1's updated test asserting `lines().next()` (plain log) instead of the old last-line assertion.
-- `.gz` logs stay decodable with the warning inside a proper gzip member (no raw append anywhere) — pinned by Task 1's new `.gz` test (spawn to `build.log.gz` path with injected failure, decode with `MultiGzDecoder`, warning present).
-- The abort-rest behavior is unchanged (early return on first failure) — pinned by the carried-over fib_trie absence/presence assertions, re-run unmodified in intent.
-- The phase still runs rc 0 on failure, and no warning appears on success — existing assertions, kept verbatim in meaning.
-- No subprocess, allocation, or stdio in `pre_exec` after the change (the deleted pipe code must actually be gone: no `pipe2`, no post-wait read, no `OpenOptions::append` on the log path in the report path) — pinned by code review of the diff (negative claim; reviewer greps).
 
 ---
 
@@ -44,7 +36,7 @@
 
 **Files:** none (read-only checks; S0 evidence already recorded during planning).
 
-- [ ] **Step 1: Cut the branch pair and verify clean trees**
+- [x] **Step 1: Cut the branch pair and verify clean trees**
 
 ```bash
 export PORTUALE_DIR=/home/vivo/repo/PORTUALE/portuale
@@ -56,7 +48,7 @@ git -C "$PORTUALE_DIR" status --short; git -C "$PMTEST_DIR" status --short
 
 Expected: both empty except the untracked plan file + untracked `LLM/evidence/2026-11-01-639-loopback-report/` (S0 probe + outputs, recorded during planning; committed by Task 2).
 
-- [ ] **Step 2: Rebuild and record the binary**
+- [x] **Step 2: Rebuild and record the binary**
 
 ```bash
 cargo build --release -p portuale && ls -l --time-style=full-iso target/release/portuale
@@ -80,7 +72,7 @@ Expected: success; note the mtime.
 - Add (parent, before `Command::spawn`): `let loopback_warn = loopback_warn_table();` moved into the `pre_exec` closure alongside `hostname`/`has_ipv6`/`fail_at`.
 - Add (child, in the net block after the sequence, replacing the 2-byte pipe write): on `step != 0`, one `libc::write(2, line.as_ptr(), line.len())` of `table[(errno-1)]` (bounds-checked, fallback const otherwise); `let _ =` ignored (best-effort). Comment cites the S0 result (fd 2 == phase stderr in `pre_exec` on this toolchain; graceful degradation noted: on a toolchain that reorders dup2 after hooks the warning lands on the parent stderr — still visible, never lost).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 // Update: demoted_loopback_failure_warns_and_continues asserts the warning
@@ -103,21 +95,21 @@ fn loopback_warn_table_matches_portage_text() {
 }
 ```
 
-- [ ] **Step 2: Run them to see red**
+- [x] **Step 2: Run them to see red**
 
 Run: `cargo test --release -p portuale loopback_` (compile fail: `loopback_warn_table` + `fail_at`-less call mismatch) and the root-gated tests against the pre-fix binary (no warning at head; .gz test would show raw tail or missing line — record which)
 Expected: red for the stated reasons.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Per Interfaces above. Keep the abort-rest early returns, the `fail_at` hook, and the `has_ipv6` plumbing byte-identical in behavior; only the reporting leg changes (table + single `write(2)`; delete pipe/read/append/eprint). Update the stale `// Portage _exec2: loopback …` comment block and the pre-exec no-printing comment to name the raw-write exception and its S0 grounding. Keep demotion order, umask, pid dance untouched.
 
-- [ ] **Step 4: Re-run root-gated plus the full crate suite**
+- [x] **Step 4: Re-run root-gated plus the full crate suite**
 
 Run: `sudo <test-binary> demoted_loopback --test-threads=1` (serial: process-global env hook) then `cargo test --release -p portuale`
 Expected: PASS (warning first line; .gz decodes with warning inside; fib_trie absence still holds on injected failure; control clean; SKIP only when not root; suite green modulo known host-state reds).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/portuale/src/ebuild_phases/commands.rs crates/portuale/src/ebuild_phases/tests/sandbox.rs
@@ -137,12 +129,12 @@ Body: cite the S0 result (fd 2 == phase stderr in pre_exec), `process.py:867-871
 **Interfaces:**
 - Consumes: Task 1 product + tests.
 
-- [ ] **Step 1: Re-run the Task 1 root tests on the final binary (rebuild first — stale-binary trap)**
+- [x] **Step 1: Re-run the Task 1 root tests on the final binary (rebuild first — stale-binary trap)**
 
 Run: `cargo build --release -p portuale && cargo test --release --no-run -p portuale && sudo <fresh-binary> demoted_loopback --test-threads=1`
 Expected: all green.
 
-- [ ] **Step 2: Host acceptance — hyperfine once, as regression gate**
+- [x] **Step 2: Host acceptance — hyperfine once, as regression gate**
 
 ```bash
 sudo ./target/release/portuale emerge -1 app-benchmarks/hyperfine 2>&1 | tee LLM/evidence/2026-11-01-639-loopback-report/hyperfine-acceptance.log; echo "rc=${PIPESTATUS[0]}"
@@ -150,7 +142,7 @@ sudo ./target/release/portuale emerge -1 app-benchmarks/hyperfine 2>&1 | tee LLM
 
 Expected: rc=0, `completed emerge (1 of 1) app-benchmarks/hyperfine-1.21.0`. Rationale (say so in the report): this run cannot trigger the failure path; it proves the rewritten reporting leg didn't break spawns — the spawn tests are the pin, this is the gate.
 
-- [ ] **Step 3: Full verification pass**
+- [x] **Step 3: Full verification pass**
 
 ```bash
 cargo fmt --check
@@ -161,7 +153,7 @@ cd "$PMTEST_DIR" && scripts/pytest-parallel.sh
 
 Expected: green modulo the known host-state reds (1 cargo `embedded_runtime` + 7 pytest `mrg_remote`, root-only `gnupg.getuto.tmp` tar exit 2; #632/#633 unexplained-once; #634 basetemp workaround) — disclose with evidence, do not fix here. Zero corpus drift — any drift is a red flag, never a bless.
 
-- [ ] **Step 4: Commit (evidence only if tests untouched)**
+- [x] **Step 4: Commit (evidence only if tests untouched)**
 
 ```bash
 git add LLM/evidence/2026-11-01-639-loopback-report
@@ -183,7 +175,7 @@ Body: test names, acceptance rc + version, pmtest untouched (no pretend change).
 **Interfaces:**
 - Consumes: Task 1 commit + Task 2 evidence and verification.
 
-- [ ] **Step 1: File residues (check numbers free first)**
+- [x] **Step 1: File residues (check numbers free first)**
 
 ```bash
 grep -hoE '^[0-9]+\. \*\*' LLM/backlog-tasks.md LLM/backlog-tasks-*.md | grep -oE '^[0-9]+' | sort -n | tail -1
@@ -191,15 +183,15 @@ grep -hoE '^[0-9]+\. \*\*' LLM/backlog-tasks.md LLM/backlog-tasks-*.md | grep -o
 
 File only what the evidence supports (candidate: toolchain-reorder graceful degradation is a comment, not a residue — do not file it).
 
-- [ ] **Step 2: Append the `what-this-proves.md` paragraph**
+- [x] **Step 2: Append the `what-this-proves.md` paragraph**
 
 Cause (one line + #639/#640 pointers), fix shape (S0 fd-2 finding → child-side `write(2)`, pipe deleted, table-driven Portage-identical text), runnable proofs (`sudo <test-binary> demoted_loopback`, hyperfine acceptance rc, `.gz` decode test), honest limits (C-locale strerror caveat in unit test; residue numbers).
 
-- [ ] **Step 3: Re-run the close-out verification**
+- [x] **Step 3: Re-run the close-out verification**
 
 Same gate as Task 2 Step 3 (docs-only delta expected — product identical; record counts, disclose reds, zero drift).
 
-- [ ] **Step 4: Flip the entries + this plan's Status, commit the close-out**
+- [x] **Step 4: Flip the entries + this plan's Status, commit the close-out**
 
 ```bash
 git add LLM/backlog-tasks.md LLM/what-this-proves.md LLM/superpowers/plans/2026-11-01-639-loopback-warn.md LLM/code-notes/

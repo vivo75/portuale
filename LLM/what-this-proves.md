@@ -20417,11 +20417,14 @@ phase was reaped, and it wrote plain bytes with `OpenOptions::append`, so under
 `gzip.GzipFile(mode="rb")` readers (failure tail, QA scan) either lose it or choke
 on it (#639) — and the line landed after all phase output, while the `Tee` arm
 wrote the file only, leaving a foreground terminal silent where Portage tees its
-line (#640). S0 settled the shape that makes the fix simple: fd 2 inside
-`pre_exec` is already the `Command`-configured stderr, because `dup2` runs before
-hooks on this toolchain (rustc 1.99.0, `LLM/evidence/2026-11-01-639-loopback-report/s0-fd2-preexec.log`),
-so the demoted child writes the line itself with one raw `write(2)` before
-`execve`, and the `pipe2(O_CLOEXEC)` pair, the post-wait read and the parent
+line (#640). S0 settled the shape that makes the fix simple: inside `pre_exec`,
+fd 2 is already the `Command`-configured stderr, because `dup2` runs before hooks
+on this toolchain (rustc 1.99.0, `LLM/evidence/2026-11-01-639-loopback-report/s0-fd2-preexec.log`) —
+proven for the `Command::stderr(File)` destination that probe used, while the
+pipe-backed `Tee` and the un-redirected `Inherit` legs extrapolate the same `dup2`
+ordering (low risk, and stated as extrapolation, not as a probe result), so the
+demoted child writes the line itself with one raw `write(2)` before `execve`, and
+the `pipe2(O_CLOEXEC)` pair, the post-wait read and the parent
 append/`eprint!` split are deleted — reinstating a parent-side append would
 re-break both entries, which is why the S0 finding is recorded here rather than
 only in the code. The text is a parent-built 135-entry table
@@ -20430,8 +20433,11 @@ stack buffer, Portage's bare `strerror` body without `io::Error`'s
 ` (os error N)`), looked up child-side by the allocation-free
 `loopback_warn_line` (with a `const` fallback past the end):
 `Unable to configure loopback interface: <strerror>\n`, Portage's text verbatim
-(`process.py:867-871`). Proof: `sudo <test-binary> demoted_loopback
---test-threads=1` — the injected `linkup` cell exits 0 (best-effort), leaves no
+(`process.py:867-871`). Proof: `sudo target/release/deps/portuale-<hash>
+demoted_loopback --test-threads=1`, the test binary `cargo test --release --no-run
+-p portuale` rebuilds (`<hash>` is cargo's metadata hash; this run used
+`portuale-14707ea0413d8feb`) — the injected `linkup` cell exits 0 (best-effort),
+leaves no
 `10.0.0.1` local route, and its warning is `lines().next()`, i.e. written before
 the phase's output where #638 put it last; `demoted_loopback_warning_survives_gzip_log`
 captures the same injection to `build.log.gz` and `MultiGzDecoder` reads the
@@ -20452,8 +20458,10 @@ ignored, and a failed report never fails the spawn; the body is the C library's
 asserts the stable prefix, the single newline and the absence of the
 ` (os error` suffix, not the C-locale wording; only `Capture` is pinned end to
 end — `Tee`/`Inherit` reach the terminal by construction, through the tee pump
-and the inherited fd 2; and the abort-the-rest shape stays reviewer-pinned, not
-test-pinned, since a failed link-up also leaves the v4 route absent, so
+and the inherited fd 2, not by a pin or by the Portage-vs-portuale foreground
+oracle the OPEN entries filed, which was not run, so that half is the S0 probe
+plus by-construction reasoning; and the abort-the-rest shape stays
+reviewer-pinned, not test-pinned, since a failed link-up also leaves the v4 route absent, so
 `V4_ROUTE=0` fits both "stopped" and "ran and failed". No new residue was filed:
 the test reader is `MultiGzDecoder`, the correct reader for a multi-member log,
 and a toolchain that ran `pre_exec` before `dup2` would degrade to a visible
