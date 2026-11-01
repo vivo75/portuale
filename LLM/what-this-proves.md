@@ -20347,12 +20347,15 @@ the pid fork so the pid-1 grandchild inherits the configured shared netns:
 GETLINK `lo` → `ifi_index` → link up → `10.0.0.1/8` → `fd::1/8` iff the parent's
 `has_ipv6` probe (`process.py:823-835`) saw IPv6. Check: `sudo <test-binary>
 demoted_netns_loopback --test-threads=1` (and the `demoted_pid_netns_…` twin) —
-RED before (the S0 connect failure), GREEN after: a real TCP round-trip from the
-demoted phase to both `127.0.0.1` and `10.0.0.1`, with #630's no-egress property
-re-asserted (the listener must bind `0.0.0.0`: a 127-bound one RSTs the
-`10.0.0.1` leg, which looks exactly like a broken setup); the serial `demoted_`
-filter runs 10 passed, and the unit pin
-`lo_netlink_messages_mirror_portage_bytes` keeps the bytes Portage-identical.
+GREEN after: a real TCP round-trip from the demoted phase to both `127.0.0.1`
+and `10.0.0.1`, with #630's no-egress property re-asserted (the listener must
+bind `0.0.0.0`: a 127-bound one RSTs the `10.0.0.1` leg, which looks exactly
+like a broken setup); the serial `demoted_` filter runs 10 passed, and the unit
+pin `lo_netlink_messages_mirror_portage_bytes` keeps the bytes
+Portage-identical. These spawn tests were never run against the pre-fix tree —
+they were written together with the fix — so no red was ever observed from
+them; the RED side of the evidence is the S0 standalone probe alone
+(`CONNECT-FAIL … ENETUNREACH`, `s0-lo-connect-probe.log`).
 Acceptance is supporting only, not the pin: `sudo ./target/release/portuale
 emerge -1 app-benchmarks/hyperfine` rc=0 and the same with `FEATURES="sandbox
 usersandbox userpriv network-sandbox"` rc=0, both `>>> Completed (1 of 1)`
