@@ -20486,3 +20486,19 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   the updated Rust unit test (red pre-fix) and the new
   `test_quiet_abort_preamble_prints_nothing_like_portage` contract test;
   no fixture change was needed.
+
+- **The parallel-test runner exits actionably on a poisoned basetemp
+  (backlog #634).** `scripts/pytest-parallel.sh` passes an explicit
+  `--basetemp`, so conftest's sudo reclaim (which only covers its own
+  default) never runs -- and root-owned residue from an earlier run as
+  root made pytest die with `INTERNALERROR` (rc 3) before any test. The
+  script now resolves the effective basetemp (explicit `--basetemp` in
+  argv wins, else `PMTEST_BASETEMP`, else `/var/tmp/pytest-parallel`),
+  reclaims it up front, and when residue survives prints the path with
+  both fixes (`sudo rm -rf <path>`, or `PMTEST_BASETEMP=<fresh-dir>`)
+  and exits 2 without starting pytest. Verified both ways on this host:
+  a sudo-poisoned scratch basetemp exits 2 with the message in under a
+  second (the same invocation `INTERNALERROR`d pre-fix), and a default
+  run from a cleaned `/var/tmp/pytest-parallel` completes (4619 passed,
+  only the 7 known host-state `mrg_remote` reds). Pmtest-only change;
+  no fixture, product, or corpus impact.
