@@ -679,7 +679,8 @@ pub(crate) struct SpawnBashScriptArgs<'a> {
 /// Maps `PORTUALE_TEST_LOOPBACK_FAIL` to the sender's `fail_at` step code
 /// (`""|"getlink"|"linkup"|"v4"|"v6"`, unset/empty/garbage → `0`, normal).
 /// Parent-side only: the child (`pre_exec`) cannot allocate to read env,
-/// so the value rides into the closure as a `u8` alongside `has_ipv6`.
+/// so the value rides into the closure as a `u8` alongside `has_ipv6` and
+/// the warning table.
 #[cfg(target_os = "linux")]
 fn loopback_fail_at_env() -> u8 {
     match std::env::var("PORTUALE_TEST_LOOPBACK_FAIL").as_deref() {
@@ -691,24 +692,32 @@ fn loopback_fail_at_env() -> u8 {
     }
 }
 
-/// Portage's loopback-setup warning, identical by design: the step is
+/// Portage's loopback-setup warning lines, identical by design: the step is
 /// deliberately unnamed (Portage names none either), so only the errno
-/// varies run to run.
+/// varies run to run. Parent-built (never `pre_exec`): index `errno - 1`,
+/// with [`LOOPBACK_WARN_FALLBACK`] past the end. Only the stable prefix is
+/// asserted in tests (the `strerror` body is locale-dependent).
 // Portage: process.py, _configure_loopback_interface (:867-871).
 #[cfg(target_os = "linux")]
-pub(crate) fn loopback_warn_msg(errno: i32) -> String {
-    // SAFETY: parent-side only (never `pre_exec`); `strerror`'s static
-    // buffer is copied out before return.
-    let text = unsafe {
-        let p = libc::strerror(errno);
-        if p.is_null() {
-            format!("Unknown error {errno}")
-        } else {
-            std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
-        }
-    };
-    format!("Unable to configure loopback interface: {text}\n")
+pub(crate) fn loopback_warn_table() -> Vec<Vec<u8>> {
+    (1..=135)
+        .map(|errno| {
+            format!(
+                "Unable to configure loopback interface: {}\n",
+                std::io::Error::from_raw_os_error(errno)
+            )
+            .into_bytes()
+        })
+        .collect()
 }
+
+/// The out-of-range loopback warning: a `const` byte string (no allocation,
+/// so the child can borrow it) for errnos past the table. Same Portage
+/// prefix, the `strerror` body replaced by a fixed marker.
+// Portage: process.py, _configure_loopback_interface (:867-871).
+#[cfg(target_os = "linux")]
+pub(crate) const LOOPBACK_WARN_FALLBACK: &[u8] =
+    b"Unable to configure loopback interface: Unknown error\n";
 
 /// Bring `lo` up in the fresh netns via raw netlink: `RTM_GETLINK` for the
 /// name `lo`, then link-up (`IFF_UP`), then `10.0.0.1/8`, then `fd::1/8`
@@ -910,36 +919,12 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
     if argv_word != "config" && !interactive {
         cmd.stdin(std::process::Stdio::null());
     }
-    // The loopback report pipe (Linux demoted+net only): the child writes
-    // exactly `[step, errno]` after its netlink sequence and the parent
-    // reads it once the phase is reaped. Both ends are `CLOEXEC`: the
-    // exec'd phase (and anything it spawns — daemons never see the fd, so
-    // they cannot pin it) loses its copies at exec and the direct child
-    // exits, so EOF is guaranteed once the waited-on child is gone. The
-    // parent's own write copy lives in the stored closure and dies with
-    // `drop(cmd)` below, so the read keys off the child alone.
+    // The loopback warning table (Linux demoted+net only): parent-built —
+    // the child (`pre_exec`) cannot allocate — and moved into the closure
+    // below alongside `hostname`/`has_ipv6`/`fail_at`, which reports the
+    // first netlink failure with a single child-side `write(2)` to fd 2.
     #[cfg(target_os = "linux")]
-    let (loopback_read, loopback_write): (Option<std::fs::File>, Option<std::fs::File>) =
-        if droppriv.is_some() && iso.net {
-            let mut fds = [0; 2];
-            // SAFETY: `fds` is a live two-slot array; `pipe2` fills it on success.
-            if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-                return Err(format!(
-                    "pipe for loopback report: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-            // SAFETY: `pipe2` succeeded, so both fds are owned and open.
-            let (read, write) = unsafe {
-                (
-                    std::fs::File::from_raw_fd(fds[0]),
-                    std::fs::File::from_raw_fd(fds[1]),
-                )
-            };
-            (Some(read), Some(write))
-        } else {
-            (None, None)
-        };
+    let loopback_warn = loopback_warn_table();
     #[cfg(target_os = "linux")]
     let loopback_fail_at: u8 = loopback_fail_at_env();
     if let Some(ids) = &droppriv {
@@ -977,7 +962,9 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                     if iso.mount || iso.pid {
                         // Portage _exec2: mark / slave so mounts cannot escape
                         // (:1215-1225). Failure is ignored with continuation:
-                        // Portage warns, and pre_exec cannot print.
+                        // Portage warns; `pre_exec` stays silent here (its
+                        // one reporting exception is the loopback `write(2)`
+                        // below).
                         // SAFETY: the literal carries its own NUL; NULL source,
                         // fstype, and data request a pure propagation change.
                         let slash = b"/\0";
@@ -998,24 +985,37 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                         // Portage _exec2: loopback in the new net ns via
                         // netlink (:838-871) — link up, 10.0.0.1, fd::1 iff
                         // the parent saw IPv6. No subprocess may run in
-                        // `pre_exec`, so raw syscalls on stack buffers.
+                        // `pre_exec`, so raw syscalls on stack buffers, plus
+                        // one raw `write(2)` below — the single reporting
+                        // exception, and no allocation, stdio, or subprocess.
                         // Best-effort: the first failure aborts the rest
-                        // (Portage warn-and-abandon) and the `(step, errno)`
-                        // pair rides the CLOEXEC pipe to the parent, which
-                        // appends Portage's warning to the phase log; the
-                        // phase itself still runs.
+                        // (Portage warn-and-abandon) and the parent-built
+                        // table line for its errno goes straight to fd 2,
+                        // which IS the phase stderr here: `dup2` runs before
+                        // hooks on this toolchain, so the warning lands in
+                        // the log file, the gzip pump member, the tee pipe,
+                        // or the terminal — whichever stderr is (S0
+                        // `s0-fd2-preexec.log`). On a toolchain that reorders
+                        // `dup2` after hooks the line still lands on the
+                        // parent stderr: visible, never lost. The phase
+                        // itself still runs.
                         // Pre-fork: the shared netns covers the pid
                         // grandchild below, so it inherits lo-up.
+                        // SAFETY: `write(2)` on fd 2 with the live table
+                        // line's pointer/length; best-effort, never fails
+                        // the spawn.
                         let (loopback_step, loopback_errno) =
                             configure_loopback_netlink(has_ipv6, loopback_fail_at);
-                        // Best-effort report, two bytes, never fails the spawn.
-                        if let Some(write) = loopback_write.as_ref() {
-                            use std::os::fd::AsRawFd as _;
-                            let report = [loopback_step, loopback_errno];
+                        if loopback_step != 0 {
+                            let line: &[u8] = loopback_errno
+                                .checked_sub(1)
+                                .and_then(|idx| loopback_warn.get(idx as usize))
+                                .map(Vec::as_slice)
+                                .unwrap_or(LOOPBACK_WARN_FALLBACK);
                             let _ = libc::write(
-                                write.as_raw_fd(),
-                                report.as_ptr() as *const std::ffi::c_void,
-                                report.len(),
+                                2,
+                                line.as_ptr() as *const std::ffi::c_void,
+                                line.len(),
                             );
                         }
                     }
@@ -1024,12 +1024,6 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                     // directly while the middle supervises.
                     // process.py:1111-1145.
                     if iso.pid {
-                        // The loopback report write end (written above, before
-                        // this fork) rides along untouched: the grandchild's
-                        // copy closes at its exec (`CLOEXEC`), the middle's
-                        // copies go with its `close_range` below and its
-                        // `_exit` after reaping — so the parent's EOF still
-                        // keys off the waited-on child alone, no close needed.
                         // Block the forward set before forking so no signal
                         // lands between fork and the supervise loop
                         // (process.py:1132). Stack-local `sigset_t`: no
@@ -1227,45 +1221,5 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
     // Explicit: joins the pump threads now that every write end is closed.
     drop(pump_guard);
     drop(tee_guard);
-    #[cfg(target_os = "linux")]
-    if let Some(read) = loopback_read {
-        // The parent's own write copy died with `drop(cmd)` above (it lived
-        // in the stored closure), and the child's copies closed at
-        // exec/exit — so this blocking read is EOF-terminated once the wait
-        // above returned. On a nonzero step the phase log gains Portage's
-        // warning; the phase itself already ran (best-effort preserved).
-        use std::io::Read as _;
-        let mut report = [0u8; 2];
-        let mut got = 0;
-        let mut read = read;
-        while got < 2 {
-            match read.read(&mut report[got..]) {
-                Ok(0) => break,
-                Ok(n) => got += n,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-        if got == 2 && report[0] != 0 {
-            let warning = loopback_warn_msg(report[1] as i32);
-            match log_file {
-                PhaseLog::Capture(path) | PhaseLog::Tee(path) => {
-                    // Best-effort: nothing left to report to when the log
-                    // itself cannot be appended to.
-                    use std::io::Write as _;
-                    if let Ok(mut f) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(path)
-                    {
-                        let _ = f.write_all(warning.as_bytes());
-                    }
-                }
-                PhaseLog::Inherit | PhaseLog::Foreground => {
-                    eprint!("{warning}");
-                }
-            }
-        }
-    }
     Ok(status.code().unwrap_or(1))
 }

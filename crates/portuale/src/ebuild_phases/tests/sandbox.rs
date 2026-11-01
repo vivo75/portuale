@@ -1654,7 +1654,8 @@ impl Drop for RestoreLoopbackFail {
 /// nothing (no 10.0.0.1 local route in fib_trie — proving the v4 request
 /// never ran after the link-up failure, i.e. abort-rest), rc stays 0
 /// (best-effort), and the `Capture` log carries Portage's warning as its
-/// last line (appended after the pumps join). The clean control then shows
+/// first line (written child-side from `pre_exec` straight to fd 2, before
+/// the phase itself emits anything). The clean control then shows
 /// the warning absent, localhost connecting, and fib_trie holding the
 /// 10.0.0.1 pair — the control that makes the injected absence meaningful
 /// rather than vacuous.
@@ -1662,7 +1663,8 @@ impl Drop for RestoreLoopbackFail {
 /// unknown, like `demoted_spawn_runs_as_the_portage_user`.
 /// Portage: process.py, _configure_loopback_interface (:838-871).
 /// Grounding: S0 `s0-fib-trie-probe.log` (0 hits in a fresh netns; the
-/// `|-- <addr>` + `host LOCAL` local-route shape from the host).
+/// `|-- <addr>` + `host LOCAL` local-route shape from the host); S0
+/// `s0-fd2-preexec.log` (fd 2 in `pre_exec` is the phase stderr).
 #[cfg(target_os = "linux")]
 #[test]
 fn demoted_loopback_failure_warns_and_continues() {
@@ -1720,9 +1722,9 @@ exit 0
     );
     assert!(
         out.lines()
-            .last()
+            .next()
             .is_some_and(|l| l.starts_with("Unable to configure loopback interface: ")),
-        "the warning is appended after the phase output:\n{out}"
+        "the warning heads the log, written pre-exec before phase output:\n{out}"
     );
     drop(_env);
 
@@ -1774,20 +1776,89 @@ fi
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// `loopback_warn_msg` is Portage's warning text exactly: the fixed prefix,
+/// `loopback_warn_table` is Portage's warning text exactly: the fixed prefix,
 /// the `strerror` body, one trailing newline. Only the stable prefix and the
 /// single newline are asserted (the C-locale wording of the body is assumed).
+/// The table covers errnos 1..=135 with a `const` fallback past the end.
 /// Portage: process.py, _configure_loopback_interface (:867-871).
 #[cfg(target_os = "linux")]
 #[test]
-fn loopback_warn_msg_matches_portage_text() {
-    let msg = loopback_warn_msg(libc::ENOENT);
+fn loopback_warn_table_matches_portage_text() {
+    let table = loopback_warn_table();
+    assert_eq!(table.len(), 135, "errnos 1..=135");
+    let line = &table[libc::ENOENT as usize - 1];
     assert!(
-        msg.starts_with("Unable to configure loopback interface: "),
-        "Portage-identical prefix: {msg:?}"
+        line.starts_with(b"Unable to configure loopback interface: "),
+        "Portage-identical prefix: {line:?}"
     );
     assert!(
-        msg.ends_with('\n') && !msg[..msg.len() - 1].contains('\n'),
-        "one trailing newline: {msg:?}"
+        line.ends_with(b"\n") && !line[..line.len() - 1].contains(&b'\n'),
+        "one trailing newline: {line:?}"
     );
+    assert!(
+        LOOPBACK_WARN_FALLBACK.starts_with(b"Unable to configure loopback interface: "),
+        "the fallback keeps the prefix: {LOOPBACK_WARN_FALLBACK:?}"
+    );
+}
+
+/// The injected loopback warning survives a `.gz` phase log: with
+/// `PORTUALE_TEST_LOOPBACK_FAIL=linkup` and `Capture` on a `build.log.gz`
+/// path, the child-side `write(2)` flows through the gzip pump as part of
+/// the member (never a raw tail append), so the member decodes to end and
+/// carries the warning. This pins the #639 regression shape: a post-wait
+/// parent append would land past the member as trailing garbage.
+/// Root-gated and portage-user-gated like the plain-log test above.
+/// Portage: process.py, _configure_loopback_interface (:838-871).
+#[cfg(target_os = "linux")]
+#[test]
+fn demoted_loopback_warning_survives_gzip_log() {
+    use std::io::Read as _;
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    // Serial: the hook is process-global (see `LOOPBACK_HOOK_LOCK`).
+    let _hook = LOOPBACK_HOOK_LOCK.lock().unwrap();
+    let tmp = TempDir::new("portuale-test-demoted-loopback-gz");
+    let script = tmp.join("no-lo.sh");
+    std::fs::write(&script, "echo PHASE_RAN=1\nexit 0\n").unwrap();
+    let _env = RestoreLoopbackFail::set(Some("linkup"));
+    let log = tmp.join("build.log.gz");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso: Isolation {
+            net: true,
+            ..Isolation::default()
+        },
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&log),
+        context: "loopback gz probe",
+        interactive: false,
+        droppriv: Some(ids),
+    })
+    .expect("the injected spawn runs");
+    assert_eq!(status, 0, "the phase still runs when loopback setup fails");
+    let raw = std::fs::read(&log).expect("the gz log exists");
+    let mut decoded = String::new();
+    flate2::read::MultiGzDecoder::new(&raw[..])
+        .read_to_string(&mut decoded)
+        .expect("the member decodes to end, no trailing-garbage corruption");
+    assert!(
+        decoded
+            .lines()
+            .any(|l| l.starts_with("Unable to configure loopback interface: ")),
+        "Portage's warning is inside the decoded member:\n{decoded}"
+    );
+    assert!(
+        decoded.lines().any(|l| l == "PHASE_RAN=1"),
+        "phase output shares the member:\n{decoded}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
 }
