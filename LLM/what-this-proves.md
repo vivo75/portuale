@@ -20411,7 +20411,7 @@ teed to the terminal (#640).
 
 **A demoted `network-sandbox` phase's failed loopback setup now warns through the
 phase's own stderr: gzip-safe, at the head of the log, and on the terminal in a
-foreground run (#639, #640).** #638's parent-side report could only run after the
+foreground run (#639, #640; S0 + by-construction, foreground oracle not run).** #638's parent-side report could only run after the
 phase was reaped, and it wrote plain bytes with `OpenOptions::append`, so under
 `FEATURES=compress-build-logs` the `.log.gz` got text past its gzip member — the
 `gzip.GzipFile(mode="rb")` readers (failure tail, QA scan) either lose it or choke

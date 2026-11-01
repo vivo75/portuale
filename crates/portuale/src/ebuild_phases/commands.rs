@@ -1026,7 +1026,9 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                         // hooks on this toolchain, so the warning lands in
                         // the log file, the gzip pump member, the tee pipe,
                         // or the terminal — whichever stderr is (S0
-                        // `s0-fd2-preexec.log`). On a toolchain that reorders
+                        // `s0-fd2-preexec.log` proves the File leg; the tee
+                        // pipe and terminal legs are extrapolated from the
+                        // same `dup2` ordering, not probed). On a toolchain that reorders
                         // `dup2` after hooks the line still lands on the
                         // parent stderr: visible, never lost. The phase
                         // itself still runs.
