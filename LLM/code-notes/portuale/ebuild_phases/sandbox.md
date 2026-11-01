@@ -96,3 +96,13 @@ The phase shell backend, the calling-environment filter, and sandbox/isolation.
 ## impl Isolation::unshare_flags
 - Portage `process.py, _exec (:1061)` unshares as uid 0 with no new user namespace, so `is_root` omits `--map-root-user`; non-root keeps it first as its only way to unshare.
 - A root userns must not be created: a single-id map leaves portage-owned build paths as overflow uid, so a root phase's `$T`/`$D` writes fail `EACCES` (the #629 diagnosis). A demoted phase uses the raw `unshare(2)` path instead (`phase_isolation`'s demoted rule, #630), so `--map-root-user` never reaches it.
+
+## fn host_has_ipv6
+- Parent-side IPv6 capability probe: `UdpSocket::bind("[::1]:0").is_ok()` (Portage `has_ipv6`, `process.py:823-835`, which binds `("::1", 0)` `SOCK_DGRAM` and treats bind failure — e.g. `ipv6.disable_ipv6=1`'s `EADDRNOTAVAIL` — as no IPv6). Cross-platform; consumed only on Linux (moved into the demoted `pre_exec` closure as a `bool` beside the `hostname` `CString`, since the child cannot allocate).
+
+## mod lo_nl + structs Nlmsghdr/IfInfoMsg/IfAddrMsg/RtAttr
+- Netlink wire layouts mirroring `netlink.py` `Struct`s byte for byte (`:30-34`): `nlmsghdr "=IHHII"` unaligned (16 B); `ifinfomsg "BHiII"` native-aligned (16 B — the pad byte after `family` puts `ifi_type` at offset 2, exactly the C struct); `ifaddrmsg "BBBBI"` native-aligned (8 B); `rtattr "HH"` (4 B). `repr(C)` plus compile-time size asserts; native endian throughout, which matches Portage's native `Struct.pack` on every arch (netlink fields are host-order, not network-order).
+
+## fn lo_getlink_req / lo_link_up_msg / lo_add_v4_msg / lo_add_v6_msg
+- Allocation-free builders (`([u8; N], usize)`) for `get_link_ifindex` / `set_link_up` / `add_address` (`netlink.py:94-114`): `RTM_GETLINK`+`REQ` for `b"lo"` (38 B, `create_rtattr` pads nothing); `RTM_NEWLINK`+`REQ|ACK` with `IFF_UP` change+flags (32 B); `RTM_NEWADDR`+`REQ|ACK|EXCL|CREATE` with `IFA_LOCAL`, `10.0.0.1/8` (32 B) / `fd::1/8` (44 B). The v4/v6 totals are 32/44, not the first sketch's 40/52: `create_nlmsg`/`create_rtattr` concatenate with no alignment padding, so the layout demands the smaller totals (verified byte-identical against CPython `Struct.pack` on this host).
+- Pins: `lo_netlink_messages_mirror_portage_bytes` (header fields + address bytes, not padding); the two root-gated spawn tests (`demoted_netns_loopback_accepts_localhost`, `demoted_pid_netns_loopback_works_in_pid1`) prove the bytes configure a real `lo`. Probe-shape lesson: the listener must bind `0.0.0.0`, not `127.0.0.1` — a 127-bound listener RSTs a `10.0.0.1` connect (`ECONNREFUSED`), which looks exactly like a broken setup (reproduced standalone against Portage's own `RtNetlink` before the fix).

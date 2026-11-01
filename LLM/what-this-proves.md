@@ -20325,3 +20325,43 @@ analogue and are moot here, and its `TIOCSCTTY` is not mirrored and cannot
 matter because every demoted phase's stdout is a pipe; a demoted netns still has `lo`
 down (#636) and the non-Linux demoted path has still never been compiled
 (#637). No new residue.
+The `lo` limit above (and in the #630 paragraph) was later closed by #636 — raw
+netlink in the demoted `pre_exec`; those wordings describe the #630/#635 trees
+only.
+
+**A demoted `network-sandbox` phase has a working loopback in its own netns, so
+localhost-dependent builds connect where Portage does (#636).** #630 left `lo`
+down: the demoted path unshares with a raw `unshare(2)` in `pre_exec`, where no
+subprocess may run, and nothing replaced Portage's
+`_configure_loopback_interface` (`process.py:838-871`). S0 showed why the
+obvious probes lie — `lo`'s flags are `0x9` in both states and `bind` succeeds
+either way (`LLM/evidence/2026-10-31-636/s0-lo-down-probe.log`) — so only a real
+connect separates them: `CONNECT-FAIL … ENETUNREACH` before
+(`s0-lo-connect-probe.log`) against Portage's `CONNECT-OK` after `CFG-DONE`
+(`s0-portage-lo-oracle.log`). Fix: `sandbox.rs` builds Portage's netlink
+messages byte for byte on stack arrays (`lo_getlink_req` 38 B,
+`lo_link_up_msg` 32 B, `lo_add_v4_msg` 32 B, `lo_add_v6_msg` 44 B —
+`util/netlink.py:18-114`), and `commands.rs::configure_loopback_netlink` sends
+them from the demoted `pre_exec` when `iso.net`, after `sethostname` and before
+the pid fork so the pid-1 grandchild inherits the configured shared netns:
+GETLINK `lo` → `ifi_index` → link up → `10.0.0.1/8` → `fd::1/8` iff the parent's
+`has_ipv6` probe (`process.py:823-835`) saw IPv6. Check: `sudo <test-binary>
+demoted_netns_loopback --test-threads=1` (and the `demoted_pid_netns_…` twin) —
+RED before (the S0 connect failure), GREEN after: a real TCP round-trip from the
+demoted phase to both `127.0.0.1` and `10.0.0.1`, with #630's no-egress property
+re-asserted (the listener must bind `0.0.0.0`: a 127-bound one RSTs the
+`10.0.0.1` leg, which looks exactly like a broken setup); the serial `demoted_`
+filter runs 10 passed, and the unit pin
+`lo_netlink_messages_mirror_portage_bytes` keeps the bytes Portage-identical.
+Acceptance is supporting only, not the pin: `sudo ./target/release/portuale
+emerge -1 app-benchmarks/hyperfine` rc=0 and the same with `FEATURES="sandbox
+usersandbox userpriv network-sandbox"` rc=0, both `>>> Completed (1 of 1)`
+(`LLM/evidence/2026-10-31-636/`; hyperfine 1.21.0) — no ebuild on this host
+exercises localhost end to end, so these runs only prove the change did not
+regress a real merge. Honest limits: setup is best-effort and never fatal, so a
+failed request leaves `lo` down, exactly the pre-#636 state; `pre_exec` cannot
+print, so Portage's `Unable to configure loopback interface: <errno>` warning
+has no counterpart and the ACK code is ignored where Portage abandons the rest
+(#638); the 512-byte reply buffer is smaller than Portage's 8 kB (truncation
+keeps the head the fixed offsets read), and the non-Linux demoted path is still
+uncompiled (#637).
