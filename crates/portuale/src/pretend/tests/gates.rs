@@ -290,11 +290,14 @@ fn abort_preamble_opens_with_the_banner_blank_line() {
          Calculating dependencies ... done!\n\
          Dependency resolution took (backtrack: 0/20).\n\n"
     );
-    assert_eq!(
-        abort_preamble(true, false, 0, 20, &plain),
-        "\nThese are the packages that would be merged, in order:\n\n\
-         Calculating dependencies ... done!\n"
-    );
+    // Backlog #621: under `--quiet` Portage prints no resolution display at
+    // all -- `_start_resolution_display` skips the banner
+    // (`depgraph.py:12219`: `"--quiet" not in myopts`) and forces the
+    // spinner QUIET (`:12259-12260`), so `end_notice()` is false and
+    // neither the notice completion nor the report prints. Oracle:
+    // Portage 3.0.83 `--pretend --quiet dev-libs/missingdep` on the
+    // fixture tree: empty stdout, rc 1.
+    assert_eq!(abort_preamble(true, false, 0, 20, &plain), "");
     // Backlog #453 A: with colour on, the banner is `darkgreen` and the cut
     // seconds keep Portage's empty escape pair (determinism: the seconds
     // themselves are still omitted). Oracle: the `--color=y` pipe capture
