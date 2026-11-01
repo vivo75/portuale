@@ -597,6 +597,7 @@ const _: () = assert!(std::mem::size_of::<RtAttr>() == 4);
 // Portage: lib/portage/util/netlink.py (:18-28).
 #[cfg(target_os = "linux")]
 pub(crate) mod lo_nl {
+    pub(crate) const NLMSG_ERROR: u16 = 2;
     pub(crate) const RTM_NEWLINK: u16 = 16;
     pub(crate) const RTM_GETLINK: u16 = 18;
     pub(crate) const RTM_NEWADDR: u16 = 20;

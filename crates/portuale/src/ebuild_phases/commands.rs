@@ -676,60 +676,151 @@ pub(crate) struct SpawnBashScriptArgs<'a> {
     pub(crate) droppriv: Option<PhaseIds>,
 }
 
+/// Maps `PORTUALE_TEST_LOOPBACK_FAIL` to the sender's `fail_at` step code
+/// (`""|"getlink"|"linkup"|"v4"|"v6"`, unset/empty/garbage → `0`, normal).
+/// Parent-side only: the child (`pre_exec`) cannot allocate to read env,
+/// so the value rides into the closure as a `u8` alongside `has_ipv6`.
+#[cfg(target_os = "linux")]
+fn loopback_fail_at_env() -> u8 {
+    match std::env::var("PORTUALE_TEST_LOOPBACK_FAIL").as_deref() {
+        Ok("getlink") => 1,
+        Ok("linkup") => 2,
+        Ok("v4") => 3,
+        Ok("v6") => 4,
+        _ => 0,
+    }
+}
+
+/// Portage's loopback-setup warning, identical by design: the step is
+/// deliberately unnamed (Portage names none either), so only the errno
+/// varies run to run.
+// Portage: process.py, _configure_loopback_interface (:867-871).
+#[cfg(target_os = "linux")]
+pub(crate) fn loopback_warn_msg(errno: i32) -> String {
+    // SAFETY: parent-side only (never `pre_exec`); `strerror`'s static
+    // buffer is copied out before return.
+    let text = unsafe {
+        let p = libc::strerror(errno);
+        if p.is_null() {
+            format!("Unknown error {errno}")
+        } else {
+            std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+        }
+    };
+    format!("Unable to configure loopback interface: {text}\n")
+}
+
 /// Bring `lo` up in the fresh netns via raw netlink: `RTM_GETLINK` for the
 /// name `lo`, then link-up (`IFF_UP`), then `10.0.0.1/8`, then `fd::1/8`
-/// when the host stack does IPv6. Best-effort: any failure — socket, send,
-/// short reply, unexpected type — falls through silently and the phase runs
-/// with `lo` down, like a host without `ip`. One ACK/`NLMSG_ERROR` drained
-/// per request; error codes ignored. Stack buffers only, no allocation.
+/// when the host stack does IPv6. Returns the first failure as
+/// `(step, errno)`: `0` ok, `1` GETLINK, `2` link-up, `3` v4, `4` v6 — the
+/// first failure aborts the rest (Portage warn-and-abandon) and the parent
+/// reports it to the phase log. `errno` is truncated to a byte for the
+/// pipe report (real Linux errnos stay below 134, so no bits are lost).
+/// Best-effort: the phase still runs with `lo` down, like a host without
+/// `ip`. One ACK/`NLMSG_ERROR` is drained per request; a nonzero error
+/// there is that step's failure.
 /// Portage: process.py, _configure_loopback_interface (:838-871);
 /// lib/portage/util/netlink.py, RtNetlink (:63-114).
 #[cfg(target_os = "linux")]
-fn configure_loopback_netlink(has_ipv6: bool) {
+fn configure_loopback_netlink(has_ipv6: bool, fail_at: u8) -> (u8, u8) {
     use std::ffi::c_void;
     // SAFETY: runs in the child after fork, before exec (called from
     // `pre_exec`); only raw syscalls on stack buffers and owned fds, no
     // allocation, no locks, no print. Every failure path closes the socket
     // (when open) and returns.
     unsafe {
+        // `fail_at` is the test hook (`PORTUALE_TEST_LOOPBACK_FAIL`, mapped
+        // by the parent): the named step is skipped and reported failed.
+        let trunc = |errno: i32| errno as u8;
+        let errno_now = || {
+            std::io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EIO)
+        };
+        if fail_at == 1 {
+            return (1, trunc(libc::EIO));
+        }
         let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_DGRAM, libc::NETLINK_ROUTE);
         if fd < 0 {
-            return;
+            return (1, trunc(errno_now()));
         }
         let (req, reqlen) = lo_getlink_req();
         if libc::send(fd, req.as_ptr() as *const c_void, reqlen, 0) < 0 {
+            let errno = errno_now();
             libc::close(fd);
-            return;
+            return (1, trunc(errno));
         }
         let mut reply = [0u8; 512];
         let got = libc::recv(fd, reply.as_mut_ptr() as *mut c_void, reply.len(), 0);
-        // Header plus `ifinfomsg`; anything shorter (or an error reply)
-        // carries no ifindex.
-        if got < 32 {
+        if got < 0 {
+            // EINTR included: a signal won the race, and degrading to a
+            // warning plus no-lo is the safe direction.
+            let errno = errno_now();
             libc::close(fd);
-            return;
+            return (1, trunc(errno));
         }
-        if u16::from_ne_bytes([reply[4], reply[5]]) != lo_nl::RTM_NEWLINK {
+        // Anything but a well-formed `RTM_NEWLINK` carrying an ifindex is a
+        // protocol error: unexpected reply bytes are a protocol error,
+        // unless the kernel named an errno itself via `NLMSG_ERROR`.
+        let ty = u16::from_ne_bytes([reply[4], reply[5]]);
+        if got < 32 || ty != lo_nl::RTM_NEWLINK {
+            let errno = if ty == lo_nl::NLMSG_ERROR && got >= 20 {
+                let raw = i32::from_ne_bytes([reply[16], reply[17], reply[18], reply[19]]);
+                if -raw != 0 { -raw } else { libc::EPROTO }
+            } else {
+                libc::EPROTO
+            };
             libc::close(fd);
-            return;
+            return (1, trunc(errno));
         }
         let ifindex = u32::from_ne_bytes([reply[20], reply[21], reply[22], reply[23]]);
+        if ifindex == 0 {
+            libc::close(fd);
+            return (1, trunc(libc::EPROTO));
+        }
         let mut ack = [0u8; 64];
-        let mut roundtrip = |buf: &[u8]| {
-            if libc::send(fd, buf.as_ptr() as *const c_void, buf.len(), 0) < 0 {
-                return;
+        // One `NLM_F_ACK` request: a nonzero `NLMSG_ERROR` is that step's
+        // failure (Portage `parse_message` raises there too). `Some` aborts
+        // the rest via the early returns below.
+        let mut roundtrip = |step: u8, buf: &[u8]| -> Option<(u8, u8)> {
+            if fail_at == step {
+                return Some((step, trunc(libc::EIO)));
             }
-            let _ = libc::recv(fd, ack.as_mut_ptr() as *mut c_void, ack.len(), 0);
+            if libc::send(fd, buf.as_ptr() as *const c_void, buf.len(), 0) < 0 {
+                return Some((step, trunc(errno_now())));
+            }
+            let got = libc::recv(fd, ack.as_mut_ptr() as *mut c_void, ack.len(), 0);
+            if got < 0 {
+                return Some((step, trunc(errno_now())));
+            }
+            if got >= 20 && u16::from_ne_bytes([ack[4], ack[5]]) == lo_nl::NLMSG_ERROR {
+                let raw = i32::from_ne_bytes([ack[16], ack[17], ack[18], ack[19]]);
+                if -raw != 0 {
+                    return Some((step, trunc(-raw)));
+                }
+            }
+            None
         };
         let (up, n) = lo_link_up_msg(ifindex);
-        roundtrip(&up[..n]);
+        if let Some(failure) = roundtrip(2, &up[..n]) {
+            libc::close(fd);
+            return failure;
+        }
         let (v4, n4) = lo_add_v4_msg(ifindex);
-        roundtrip(&v4[..n4]);
+        if let Some(failure) = roundtrip(3, &v4[..n4]) {
+            libc::close(fd);
+            return failure;
+        }
         if has_ipv6 {
             let (v6, n6) = lo_add_v6_msg(ifindex);
-            roundtrip(&v6[..n6]);
+            if let Some(failure) = roundtrip(4, &v6[..n6]) {
+                libc::close(fd);
+                return failure;
+            }
         }
         libc::close(fd);
+        (0, 0)
     }
 }
 
@@ -819,6 +910,38 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
     if argv_word != "config" && !interactive {
         cmd.stdin(std::process::Stdio::null());
     }
+    // The loopback report pipe (Linux demoted+net only): the child writes
+    // exactly `[step, errno]` after its netlink sequence and the parent
+    // reads it once the phase is reaped. Both ends are `CLOEXEC`: the
+    // exec'd phase (and anything it spawns — daemons never see the fd, so
+    // they cannot pin it) loses its copies at exec and the direct child
+    // exits, so EOF is guaranteed once the waited-on child is gone. The
+    // parent's own write copy lives in the stored closure and dies with
+    // `drop(cmd)` below, so the read keys off the child alone.
+    #[cfg(target_os = "linux")]
+    let (loopback_read, loopback_write): (Option<std::fs::File>, Option<std::fs::File>) =
+        if droppriv.is_some() && iso.net {
+            let mut fds = [0; 2];
+            // SAFETY: `fds` is a live two-slot array; `pipe2` fills it on success.
+            if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+                return Err(format!(
+                    "pipe for loopback report: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            // SAFETY: `pipe2` succeeded, so both fds are owned and open.
+            let (read, write) = unsafe {
+                (
+                    std::fs::File::from_raw_fd(fds[0]),
+                    std::fs::File::from_raw_fd(fds[1]),
+                )
+            };
+            (Some(read), Some(write))
+        } else {
+            (None, None)
+        };
+    #[cfg(target_os = "linux")]
+    let loopback_fail_at: u8 = loopback_fail_at_env();
     if let Some(ids) = &droppriv {
         let uid = ids.uid;
         let gid = ids.gid;
@@ -875,17 +998,38 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                         // Portage _exec2: loopback in the new net ns via
                         // netlink (:838-871) — link up, 10.0.0.1, fd::1 iff
                         // the parent saw IPv6. No subprocess may run in
-                        // `pre_exec`, so raw syscalls on stack buffers;
-                        // best-effort, failures fall through silently.
+                        // `pre_exec`, so raw syscalls on stack buffers.
+                        // Best-effort: the first failure aborts the rest
+                        // (Portage warn-and-abandon) and the `(step, errno)`
+                        // pair rides the CLOEXEC pipe to the parent, which
+                        // appends Portage's warning to the phase log; the
+                        // phase itself still runs.
                         // Pre-fork: the shared netns covers the pid
                         // grandchild below, so it inherits lo-up.
-                        configure_loopback_netlink(has_ipv6);
+                        let (loopback_step, loopback_errno) =
+                            configure_loopback_netlink(has_ipv6, loopback_fail_at);
+                        // Best-effort report, two bytes, never fails the spawn.
+                        if let Some(write) = loopback_write.as_ref() {
+                            use std::os::fd::AsRawFd as _;
+                            let report = [loopback_step, loopback_errno];
+                            let _ = libc::write(
+                                write.as_raw_fd(),
+                                report.as_ptr() as *const std::ffi::c_void,
+                                report.len(),
+                            );
+                        }
                     }
                     // Portage: pid-ns-init re-exec shape without the re-exec —
                     // the grandchild IS pid 1 by fork order, so it execs
                     // directly while the middle supervises.
                     // process.py:1111-1145.
                     if iso.pid {
+                        // The loopback report write end (written above, before
+                        // this fork) rides along untouched: the grandchild's
+                        // copy closes at its exec (`CLOEXEC`), the middle's
+                        // copies go with its `close_range` below and its
+                        // `_exit` after reaping — so the parent's EOF still
+                        // keys off the waited-on child alone, no close needed.
                         // Block the forward set before forking so no signal
                         // lands between fork and the supervise loop
                         // (process.py:1132). Stack-local `sigset_t`: no
@@ -1083,5 +1227,45 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
     // Explicit: joins the pump threads now that every write end is closed.
     drop(pump_guard);
     drop(tee_guard);
+    #[cfg(target_os = "linux")]
+    if let Some(read) = loopback_read {
+        // The parent's own write copy died with `drop(cmd)` above (it lived
+        // in the stored closure), and the child's copies closed at
+        // exec/exit — so this blocking read is EOF-terminated once the wait
+        // above returned. On a nonzero step the phase log gains Portage's
+        // warning; the phase itself already ran (best-effort preserved).
+        use std::io::Read as _;
+        let mut report = [0u8; 2];
+        let mut got = 0;
+        let mut read = read;
+        while got < 2 {
+            match read.read(&mut report[got..]) {
+                Ok(0) => break,
+                Ok(n) => got += n,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        if got == 2 && report[0] != 0 {
+            let warning = loopback_warn_msg(report[1] as i32);
+            match log_file {
+                PhaseLog::Capture(path) | PhaseLog::Tee(path) => {
+                    // Best-effort: nothing left to report to when the log
+                    // itself cannot be appended to.
+                    use std::io::Write as _;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                    {
+                        let _ = f.write_all(warning.as_bytes());
+                    }
+                }
+                PhaseLog::Inherit | PhaseLog::Foreground => {
+                    eprint!("{warning}");
+                }
+            }
+        }
+    }
     Ok(status.code().unwrap_or(1))
 }

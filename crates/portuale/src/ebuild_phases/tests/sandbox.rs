@@ -885,6 +885,8 @@ fn demoted_phase_with_network_sandbox_has_no_egress() {
         eprintln!("SKIP: no portage user");
         return;
     };
+    // Serial against the injected-failure hook (see `LOOPBACK_HOOK_LOCK`).
+    let _hook = LOOPBACK_HOOK_LOCK.lock().unwrap();
     let tmp = TempDir::new("portuale-test-demoted-egress");
     let script = tmp.join("egress.sh");
     std::fs::write(
@@ -1515,6 +1517,8 @@ fn demoted_netns_loopback_accepts_localhost() {
         eprintln!("SKIP: no portage user");
         return;
     };
+    // Serial against the injected-failure hook (see `LOOPBACK_HOOK_LOCK`).
+    let _hook = LOOPBACK_HOOK_LOCK.lock().unwrap();
     let tmp = TempDir::new("portuale-test-demoted-loopback");
     let script = tmp.join("loopback.sh");
     std::fs::write(&script, loopback_probe_script(false)).unwrap();
@@ -1563,6 +1567,8 @@ fn demoted_pid_netns_loopback_works_in_pid1() {
         eprintln!("SKIP: no portage user");
         return;
     };
+    // Serial against the injected-failure hook (see `LOOPBACK_HOOK_LOCK`).
+    let _hook = LOOPBACK_HOOK_LOCK.lock().unwrap();
     let tmp = TempDir::new("portuale-test-demoted-pid-loopback");
     let script = tmp.join("pid-loopback.sh");
     std::fs::write(&script, loopback_probe_script(true)).unwrap();
@@ -1600,4 +1606,187 @@ fn demoted_pid_netns_loopback_works_in_pid1() {
         "no default route, no egress:\n{out}"
     );
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Serializes the `PORTUALE_TEST_LOOPBACK_FAIL` hook against every other
+/// demoted+net spawn in this module: the hook is process-global and read by
+/// the parent at spawn time, so a parallel loopback/egress probe would
+/// otherwise observe the injected failure mid-flight. Root runs go serial
+/// (`--test-threads=1`) per the `demoted_` convention; the lock holds for
+/// the parallel full-suite case.
+static LOOPBACK_HOOK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Saves `PORTUALE_TEST_LOOPBACK_FAIL` on entry and restores it on drop, so
+/// an assertion panic cannot leak the injected failure into another test.
+struct RestoreLoopbackFail {
+    saved: Option<std::ffi::OsString>,
+}
+
+impl RestoreLoopbackFail {
+    fn set(value: Option<&str>) -> Self {
+        let saved = std::env::var_os("PORTUALE_TEST_LOOPBACK_FAIL");
+        // SAFETY: the caller holds `LOOPBACK_HOOK_LOCK`; no other test in
+        // this binary touches the hook while it is held.
+        unsafe {
+            match value {
+                Some(v) => std::env::set_var("PORTUALE_TEST_LOOPBACK_FAIL", v),
+                None => std::env::remove_var("PORTUALE_TEST_LOOPBACK_FAIL"),
+            }
+        }
+        Self { saved }
+    }
+}
+
+impl Drop for RestoreLoopbackFail {
+    fn drop(&mut self) {
+        // SAFETY: same locked env mutation as `set` (restoring the value).
+        unsafe {
+            match self.saved.take() {
+                Some(value) => std::env::set_var("PORTUALE_TEST_LOOPBACK_FAIL", value),
+                None => std::env::remove_var("PORTUALE_TEST_LOOPBACK_FAIL"),
+            }
+        }
+    }
+}
+
+/// An injected loopback-setup failure warns in the phase log while the phase
+/// still runs: with `PORTUALE_TEST_LOOPBACK_FAIL=linkup` the child configures
+/// nothing (no 10.0.0.1 local route in fib_trie — proving the v4 request
+/// never ran after the link-up failure, i.e. abort-rest), rc stays 0
+/// (best-effort), and the `Capture` log carries Portage's warning as its
+/// last line (appended after the pumps join). The clean control then shows
+/// the warning absent, localhost connecting, and fib_trie holding the
+/// 10.0.0.1 pair — the control that makes the injected absence meaningful
+/// rather than vacuous.
+/// Root-gated (demotion needs root) and skips when the portage user is
+/// unknown, like `demoted_spawn_runs_as_the_portage_user`.
+/// Portage: process.py, _configure_loopback_interface (:838-871).
+/// Grounding: S0 `s0-fib-trie-probe.log` (0 hits in a fresh netns; the
+/// `|-- <addr>` + `host LOCAL` local-route shape from the host).
+#[test]
+fn demoted_loopback_failure_warns_and_continues() {
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("SKIP: needs root");
+        return;
+    }
+    let Some(ids) = portage_phase_ids(None) else {
+        eprintln!("SKIP: no portage user");
+        return;
+    };
+    // Serial: the hook is process-global (see `LOOPBACK_HOOK_LOCK`).
+    let _hook = LOOPBACK_HOOK_LOCK.lock().unwrap();
+    let tmp = TempDir::new("portuale-test-demoted-loopback-warn");
+    let script = tmp.join("no-lo.sh");
+    std::fs::write(
+        &script,
+        r#"if grep -A1 -E '^[[:space:]]*[|]-- 10\.0\.0\.1$' /proc/net/fib_trie | grep -q 'host LOCAL'; then
+echo "V4_ROUTE=1 reason=abort-rest-violated"
+exit 1
+fi
+echo "V4_ROUTE=0"
+exit 0
+"#,
+    )
+    .unwrap();
+    let _env = RestoreLoopbackFail::set(Some("linkup"));
+    let log = tmp.join("injected.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso: Isolation {
+            net: true,
+            ..Isolation::default()
+        },
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&log),
+        context: "loopback warn probe",
+        interactive: false,
+        droppriv: Some(ids.clone()),
+    })
+    .expect("the injected spawn runs");
+    assert_eq!(status, 0, "the phase still runs when loopback setup fails");
+    let out = std::fs::read_to_string(&log).expect("the child writes its verdict");
+    assert!(
+        out.lines().any(|l| l == "V4_ROUTE=0"),
+        "no 10.0.0.1 route after the aborted setup:\n{out}"
+    );
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("Unable to configure loopback interface: ")),
+        "Portage's warning lands in the phase log:\n{out}"
+    );
+    assert!(
+        out.lines()
+            .last()
+            .is_some_and(|l| l.starts_with("Unable to configure loopback interface: ")),
+        "the warning is appended after the phase output:\n{out}"
+    );
+    drop(_env);
+
+    let control_script = tmp.join("lo-ok.sh");
+    let presence = r#"if grep -A1 -E '^[[:space:]]*[|]-- 10\.0\.0\.1$' /proc/net/fib_trie | grep -q 'host LOCAL'; then
+echo "V4_ROUTE=1"
+else
+echo "V4_ROUTE=0 reason=no-local-route"
+exit 1
+fi
+"#;
+    std::fs::write(
+        &control_script,
+        presence.to_string() + &loopback_probe_script(false),
+    )
+    .unwrap();
+    let control_log = tmp.join("control.log");
+    let status = spawn_bash_script(SpawnBashScriptArgs {
+        script: &control_script,
+        argv_word: "compile",
+        vars: Vec::new(),
+        iso: Isolation {
+            net: true,
+            ..Isolation::default()
+        },
+        category: "cat",
+        pf: "pf-1.0",
+        log_file: PhaseLog::Capture(&control_log),
+        context: "loopback control probe",
+        interactive: false,
+        droppriv: Some(ids),
+    })
+    .expect("the control spawn runs");
+    assert_eq!(status, 0, "localhost connects and egress stays blocked");
+    let out = std::fs::read_to_string(&control_log).expect("the child writes its verdict");
+    assert!(
+        out.lines().any(|l| l == "V4_ROUTE=1"),
+        "the clean setup configures the 10.0.0.1 route:\n{out}"
+    );
+    assert!(
+        out.lines().any(|l| l == "LOOPBACK=1"),
+        "real TCP round-trip over lo:\n{out}"
+    );
+    assert!(
+        !out.lines()
+            .any(|l| l.starts_with("Unable to configure loopback interface: ")),
+        "no warning on the success path:\n{out}"
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// `loopback_warn_msg` is Portage's warning text exactly: the fixed prefix,
+/// the `strerror` body, one trailing newline. Only the stable prefix and the
+/// single newline are asserted (the C-locale wording of the body is assumed).
+/// Portage: process.py, _configure_loopback_interface (:867-871).
+#[cfg(target_os = "linux")]
+#[test]
+fn loopback_warn_msg_matches_portage_text() {
+    let msg = loopback_warn_msg(libc::ENOENT);
+    assert!(
+        msg.starts_with("Unable to configure loopback interface: "),
+        "Portage-identical prefix: {msg:?}"
+    );
+    assert!(
+        msg.ends_with('\n') && !msg[..msg.len() - 1].contains('\n'),
+        "one trailing newline: {msg:?}"
+    );
 }
