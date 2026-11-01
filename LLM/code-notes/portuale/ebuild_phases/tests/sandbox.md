@@ -38,3 +38,11 @@ Sandbox/isolation unit tests for phase execution. Context moved out of the code 
 
 ## fn unshare_flags_root_omits_userns
 - Portage `process.py, _exec (:1061)`: root gets no `--map-root-user`, non-root keeps it first. A single-id userns maps only the caller, so portage-owned paths become overflow uid.
+
+## fn demoted_loopback_failure_warns_and_continues / fn demoted_loopback_warning_survives_gzip_log (#639)
+- Root-gated, serial (the `PORTUALE_TEST_LOOPBACK_FAIL` hook is process-global, hence `LOOPBACK_HOOK_LOCK`), and skipped without the `portage` user. Both inject `fail_at=linkup` so the netlink sequence stops at link-up: rc 0 (best-effort), no `10.0.0.1` local route in `/proc/net/fib_trie`, and Portage's `Unable to configure loopback interface: ` line present.
+- The plain-log cell pins **head placement** (`lines().next()`): the child writes in `pre_exec`, before `execve`, so the warning precedes all phase output where #638's post-wait append put it last. The `.gz` cell captures to `build.log.gz` and decodes with `MultiGzDecoder` to the end: warning and `PHASE_RAN=1` share the member, which a raw parent append past the gzip member would break (#639). The clean control (`V4_ROUTE=1`, `LOOPBACK=1` real TCP round-trip, no warning) makes the injected absence meaningful.
+- `Tee`/terminal delivery is by construction (fd 2 is the tee pipe, pumped to our stdout), not pinned here.
+
+## fn loopback_warn_table_matches_portage_text / fn loopback_warn_lookup_falls_back_out_of_range (#639)
+- Successor of `loopback_warn_msg_matches_portage_text` after #639 replaced the single message with a 135-entry `errno - 1` table (the child cannot format): asserts the Portage prefix, exactly one trailing newline, and no `io::Error` Display ` (os error N)` suffix on `ENOENT`'s line; the body's C-locale wording is assumed, not asserted. The lookup test calls the production `loopback_warn_line` for errno 0, 200 (→ `LOOPBACK_WARN_FALLBACK`) and `ENOENT` (→ its table line).
