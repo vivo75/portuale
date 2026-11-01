@@ -20466,3 +20466,23 @@ reviewer-pinned, not test-pinned, since a failed link-up also leaves the v4 rout
 the test reader is `MultiGzDecoder`, the correct reader for a multi-member log,
 and a toolchain that ran `pre_exec` before `dup2` would degrade to a visible
 parent-stderr line rather than a lost one (a code comment, not a defect).
+
+- **The `--pretend --quiet` abort preamble prints nothing, like Portage
+  (backlog #621).** `abort_preamble`
+  (`crates/portuale/src/pretend/merge_list.rs`) printed the banner plus
+  `Calculating dependencies ... done!` whenever `quiet` was set, gating
+  only the timing line. Portage's `_start_resolution_display` (vendored
+  3.0.83, `lib/_emerge/depgraph.py:12216-12262`) skips the banner when
+  `--quiet` is in myopts, forces the spinner QUIET, and the
+  `backtrack_depgraph` finally reports only when `end_notice()` is true --
+  false with nothing pending -- so no banner, no notice completion, and no
+  report line. The function now returns the empty string under `quiet`
+  (before the #614 `debug` arm, since quiet wins there too); the
+  non-`--quiet` arms and the already-gated `show_resolution_header_*`
+  success path are untouched. Live-verified on this host: Portage 3.0.83
+  `emerge --pretend --quiet dev-libs/missingdep` prints empty stdout
+  (rc 1), and post-fix portuale stdout on the same fixture atom is
+  byte-identical to it, with the stderr disclosures unchanged. Pinned by
+  the updated Rust unit test (red pre-fix) and the new
+  `test_quiet_abort_preamble_prints_nothing_like_portage` contract test;
+  no fixture change was needed.

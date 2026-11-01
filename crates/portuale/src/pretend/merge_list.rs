@@ -412,9 +412,13 @@ pub(crate) fn timing_line(color: &Colorizer, backtrack: Option<(u64, u32)>) -> S
 /// aborted resolve's disclosure block: the banner (with Portage's leading
 /// blank line), `Calculating dependencies ... done!`, and the timing line
 /// (the wall-clock seconds are cut per the determinism convention; only
-/// `backtrack: N/M` is kept; suppressed under `--quiet`). `--debug` keeps
-/// only the banner: Portage's `PORTAGE_DEBUG` puts the spinner in QUIET
-/// mode, so neither the notice nor the report prints (backlog #614).
+/// `backtrack: N/M` is kept; suppressed under `--quiet`). Under `--quiet`
+/// nothing prints at all: Portage's `_start_resolution_display` skips the
+/// banner (`depgraph.py:12219`) and forces the spinner QUIET
+/// (`:12259-12260`), so `end_notice()` reports no notice to complete and
+/// the report never prints (backlog #621). `--debug` keeps only the
+/// banner: Portage's `PORTAGE_DEBUG` puts the spinner in QUIET mode, so
+/// neither the notice nor the report prints (backlog #614).
 // Portage: _emerge/depgraph.py, _start_resolution_display + _show_resolution_report
 pub(crate) fn abort_preamble(
     quiet: bool,
@@ -423,6 +427,9 @@ pub(crate) fn abort_preamble(
     max: u32,
     color: &Colorizer,
 ) -> String {
+    if quiet {
+        return String::new();
+    }
     let mut out = String::from("\n");
     out.push_str(&color.c(
         "darkgreen",
