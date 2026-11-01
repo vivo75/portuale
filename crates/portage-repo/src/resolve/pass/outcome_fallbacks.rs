@@ -124,6 +124,33 @@ pub(crate) fn apply_outcome_fallbacks(
     {
         outcome = PretendOutcome::AlreadyInstalled { version };
     }
+    // Portage ignores visibility when every match is masked
+    // (`_select_pkg_highest_available_imp`, `depgraph.py:8525-8532`: "all
+    // are masked, so ignore visibility"): a bare atom matching an
+    // installed instance keeps it even when the tree copies are all
+    // masked. This covers `||`-chosen edges too -- their disjunction
+    // already selected this alternative, so the miss must not stand and
+    // the MissingDep trigger must not fire (backlog #615: `-uD[N]
+    // dev-libs/omasked` merges `omasked-1.0` on host Portage with an
+    // installed-masked warning, while portuale aborted rc 1 "All ebuilds
+    // ... have been masked"). Version/slot atoms keep the rule above
+    // (no tree candidate at all), so masked-package diagnostics still
+    // render for those.
+    // Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp.
+    if matches!(outcome, PretendOutcome::NoVisibleCandidate)
+        && owner.is_some()
+        && depth != 0
+        && !ctx.empty
+        && atom.slot.is_none()
+        && atom.slot_operator.is_none()
+        && atom.version.is_none()
+        && cp_has_tree_or_binary_candidate(ctx.gate(), &ctx.local_binpkg, &key.0, &key.1)
+        && !cp_has_visible_candidate(ctx.gate(), &ctx.local_binpkg, &key.0, &key.1, config)
+        && let Some(version) = best_installed_matching(atom_root, current_atom, config)
+            .filter(|v| !installed_version_masked(&bp.masked_negatives_for(key), &key.0, &key.1, v))
+    {
+        outcome = PretendOutcome::AlreadyInstalled { version };
+    }
     // A top-level argument under `--update --selective` with no tree or
     // binary candidate at all but an installed satisfier is already
     // installed (`Total: 0`); without `--update` (or with `--selective=n`)
