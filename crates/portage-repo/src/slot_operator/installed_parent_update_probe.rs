@@ -185,10 +185,37 @@ pub(crate) fn installed_parent_update_probe(
                 gate,
                 from_graph_child: true,
             }) {
-                // Portage files both filings: the installed parent's
-                // replacement atom and the installed child's.
+                // The installed parent is always filed. The child is filed
+                // only when no tree candidate is newer than the installed
+                // instance in the bound slot -- i.e. the restart reinstalls
+                // the same version (a slot-change rebuild like libarchive
+                // 3.1.1 at `0` -> `0/13`, which the update walk would never
+                // pick). When a newer version exists the update walk already
+                // merges the upgrade, so filing the child is redundant for
+                // scheduling and only mistags it: Portage's update backtrack
+                // files the child only when `dep.child` is the installed
+                // node itself (the complete-graph installed pull), never a
+                // merged upgrade -- `_iter_atoms_for_pkg` then finds no
+                // `__auto_slot_operator_replace_installed__` atom naming the
+                // upgrade, so no `r` prints (backlog #623: host-verified
+                // `  U` for `simdutf-9.3.2`, `boost-1.53.0`,
+                // `libmysqlclient-21`, `slotbindtarget-2.0`,
+                // `casctarget-2.0`). A filed upgrade child would tag every
+                // upgraded consumer. The built-parent probe keeps filing its
+                // installed child (mbabilib keeps its `r`).
                 replace.insert(parent.clone());
-                replace.insert(child);
+                let child_is_upgrade = child_ver.as_deref().is_some_and(|installed| {
+                    gate.repo_candidates(&child.0, &child.1)
+                        .map(|cands| {
+                            cands.iter().any(|c| {
+                                vercmp_ordering(&c.version, installed) == Ordering::Greater
+                            })
+                        })
+                        .unwrap_or(false)
+                });
+                if !child_is_upgrade {
+                    replace.insert(child);
+                }
             }
         }
     }

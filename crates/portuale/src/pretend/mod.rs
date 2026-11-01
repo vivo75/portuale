@@ -478,10 +478,11 @@ pub fn run(args: &[String]) -> ExitCode {
         .map(|a| portage_repo::apply_updates_to_atom(a))
         .collect();
     let system_atoms = &config.system_packages;
-    // The red `r` bracket column: every `(cat, pkg)` on either side of an
-    // ABI-rebuild edge. A provider with nothing installed in its own slot stays
-    // `N` (a pure install that still caused a rebuild); other-slot installs do
-    // not count (`NS`, no `r`).
+    // The red `r` bracket column: the merge-bound consumer side of an
+    // ABI-rebuild edge, and only when the edge caused its rebuild (an
+    // already-merging upgrade consumer is untagged unless the replace set
+    // names it). The provider side is never tagged through this edge:
+    // Portage has no provider-side `force_reinstall` rule (backlog #623).
     // Portage: resolver/output.py, PkgAttrDisplay
     let mut force_reinstall_cps = abi_rebuild_force_reinstall_cps(AbiRebuildForceReinstallArgs {
         abi_rebuilds: &result.abi_rebuilds,
@@ -878,7 +879,24 @@ pub(crate) struct AbiRebuildForceReinstallArgs<'a> {
     pub(crate) root: &'a Path,
 }
 
-/// The (category, package) pairs on either side of an ABI-rebuild edge.
+/// Which `(category, package)` an ABI-rebuild edge force-reinstalls for
+/// the red `r` column. Consumer side: a merge-bound consumer is tagged
+/// only when the edge caused its rebuild (an already-merging upgrade
+/// consumer is untagged unless the replace set names it). Provider side:
+/// a provider that reinstalls the *same* version (a slot/sub-slot move,
+/// e.g. libarchive 3.1.1 `0` -> `0/13` under `--changed-slot`) keeps its
+/// `r` -- Portage schedules that reinstall as a forced rebuild and tags
+/// it (`_forced_rebuilds`; the slotchange-case4 oracle pins `rR`
+/// libarchive). A provider that *upgrades* to a new version is never
+/// tagged through this edge: Portage tags `r` only through a
+/// `force_reinstall` arg (`resolver/output.py`,
+/// `PkgAttrDisplay.force_reinstall`), and the only such args are the
+/// rebuild/reinstall/replace sets (`_gen_reinstall_sets`,
+/// `depgraph.py:5479-5480`) -- there is no provider-side ABI rule for
+/// upgrades (backlog #623: host Portage prints a plain `U` for upgraded
+/// providers like `boost-1.53.0`, `libmysqlclient-21`,
+/// `slotbindtarget-2.0` and `casctarget-2.0`, while a replace-set-filed
+/// provider like `mbabilib-2.0` keeps its `r` through the set).
 pub(crate) fn abi_rebuild_force_reinstall_cps(
     args: AbiRebuildForceReinstallArgs<'_>,
 ) -> HashSet<(String, String)> {
@@ -894,26 +912,24 @@ pub(crate) fn abi_rebuild_force_reinstall_cps(
         .filter_map(|(cpv, is_provider)| {
             let (c, p, v) = portage_repo::split_cpv(cpv)?;
             if is_provider {
-                let slot = entries
-                    .iter()
-                    .find(|e| {
-                        e.category == c
-                            && e.package == p
-                            && match &e.outcome {
-                                portage_repo::PretendOutcome::New { version }
-                                | portage_repo::PretendOutcome::Reinstall { version, .. } => {
-                                    *version == v
-                                }
-                                portage_repo::PretendOutcome::Upgrade { to, .. }
-                                | portage_repo::PretendOutcome::Downgrade { to, .. } => *to == v,
-                                _ => false,
-                            }
-                    })
-                    .and_then(|e| e.slot.clone());
-                let in_slot = portage_repo::installed_candidates(root, &c, &p)
-                    .iter()
-                    .any(|(_, s, _)| slot.as_ref().is_none_or(|want| s == want));
-                if !in_slot {
+                // Same-version reinstalls (slot moves) keep the provider
+                // `r`; version upgrades never do through this edge.
+                let reinstall_in_slot = entries.iter().any(|e| {
+                    e.category == c
+                        && e.package == p
+                        && matches!(
+                            &e.outcome,
+                            portage_repo::PretendOutcome::Reinstall { version, .. }
+                                if *version == v
+                        )
+                        && {
+                            let slot = e.slot.clone();
+                            portage_repo::installed_candidates(root, &c, &p)
+                                .iter()
+                                .any(|(_, s, _)| slot.as_ref().is_none_or(|want| s == want))
+                        }
+                });
+                if !reinstall_in_slot {
                     return None;
                 }
             } else {

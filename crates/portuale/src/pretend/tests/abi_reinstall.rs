@@ -91,10 +91,21 @@ fn cps(
     })
 }
 
-/// A consumer upgrading in the same run is already merging: no `r`, even
-/// though it is one of the block's rows.
+/// A merge-bound upgrade provider is not force-reinstalled by the ABI
+/// edge alone (backlog #623): Portage tags `r` only through a
+/// `force_reinstall` arg (`output.py`, `PkgAttrDisplay.force_reinstall`),
+/// and the only such args are the rebuild/reinstall/replace sets
+/// (`_gen_reinstall_sets`, `depgraph.py:5479-5480`) -- there is no
+/// provider-side ABI rule. Verified live against host Portage 3.0.83:
+/// `dev-libs/boost-1.53.0` (upgraded over installed 1.52.0),
+/// `virtual/libmysqlclient-21`, `dev-libs/slotbindtarget-2.0` and
+/// `dev-libs/casctarget-2.0` all print a plain `U` with no rebuild of
+/// their consumer, while the filed `mbabilib-2.0` (`--usepkg` binary
+/// parent) keeps its `r` via the replace set. The consumer half is
+/// unchanged: a merge-bound upgrade consumer with no replace-set entry
+/// stays untagged.
 #[test]
-fn a_merge_bound_upgrade_consumer_is_not_force_reinstalled() {
+fn a_merge_bound_upgrade_provider_is_not_force_reinstalled() {
     let base = root_with_provider("upgrade");
     let entries = vec![
         entry(
@@ -120,8 +131,8 @@ fn a_merge_bound_upgrade_consumer_is_not_force_reinstalled() {
     ];
     let got = cps(&pair("2"), &entries, &[], &base);
     assert!(
-        got.contains(&("dev-libs".to_string(), "abiprov".to_string())),
-        "the provider side keeps its `r`: {got:?}"
+        !got.contains(&("dev-libs".to_string(), "abiprov".to_string())),
+        "an unfiled upgrade provider stays untagged: {got:?}"
     );
     assert!(
         !got.contains(&("dev-libs".to_string(), "abicons".to_string())),
