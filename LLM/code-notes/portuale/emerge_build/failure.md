@@ -14,7 +14,10 @@ One merge pass's out-channel: the display string for the `emerge:` line (or `REP
 Under `--keep-going` a failure triggers one re-plan like Portage's resume loop: the failed package's transitive dependents (`required_by`) are dropped, the progress counter restarts over what is left (`_pkg_count.curval = 0`). The `-jN` scheduler does the same once, when its pass ends, for the dependents that never started.
 
 ## Known cuts
-`>>> Verifying ebuild manifests`; the trailing `/` on `ROOT`; the dependency-resolution time; `ROOT`-qualified drop notice wraps at the same 75 columns but on a path without the `/`. Background single-failure full log dump and the `Error messages for package` block (`Scheduler.py:1337-1413`) are not ported (#437). The `(postinst failed)` summary-row suffix is not ported either: it belongs to the returncode-OK binary-merge arm, and no source merge reaches it. The setup-phase `Package:`/`USE:`/`FEATURES:` elog header (log-only in Portage, replayed by the lone-failure dump) is not emitted: the shell never prints it and no Rust caller stages it.
+`>>> Verifying ebuild manifests`; the dependency-resolution time. The
+`ROOT`-qualified drop notice wraps at the same 75 columns and, since #622,
+on the path with Portage's trailing `/` (`pkg.root` always carries it via
+`set_root_override`; `root_with_trailing_slash`). Background single-failure full log dump and the `Error messages for package` block (`Scheduler.py:1337-1413`) are not ported (#437). The `(postinst failed)` summary-row suffix is not ported either: it belongs to the returncode-OK binary-merge arm, and no source merge reaches it. The setup-phase `Package:`/`USE:`/`FEATURES:` elog header (log-only in Portage, replayed by the lone-failure dump) is not emitted: the shell never prints it and no Rust caller stages it.
 
 ## (#459)
 - Binary-merge `pkg_postinst` failures surface exactly like source ones in 3.0.82.2 (oracle `LLM/evidence/2026-10-21-f459/`, `--usepkgonly` cells): `EbuildMerge` returns the nonzero rc without the `postinst_failure` flag, so `Completed` prints, `_do_merge_exit` takes the `install`/`to` arm, no world record, and the summary row carries no `(postinst failed)` suffix. Backlog #459's filed claim (world recorded + suffix shown) describes the dead-in-practice returncode-OK arm and was overruled by the probe.

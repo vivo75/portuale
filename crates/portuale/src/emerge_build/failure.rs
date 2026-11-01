@@ -411,7 +411,10 @@ impl Ledger {
         let cpv = format!("{}/{}-{version}", entry.category, entry.package);
         let mut msg = format!("emerge --keep-going: {cpv}");
         if report.root != Path::new("/") {
-            msg.push_str(&format!(" for {}", report.root.display()));
+            msg.push_str(&format!(
+                " for {}",
+                portage_repo::root_with_trailing_slash(report.root)
+            ));
         }
         if atoms.is_empty() {
             msg.push_str(" dropped because it is masked or unavailable");
@@ -582,6 +585,34 @@ mod tests {
             build_time: None,
             deps: Vec::new(),
         }
+    }
+
+    #[test]
+    fn dropped_notice_carries_portages_trailing_slash_on_a_non_root() {
+        // Portage `Scheduler.py:2743-2749` prints `pkg.root`, which always
+        // carries exactly one trailing slash (`set_root_override`,
+        // `LocationsManager.py:383-386`); the b423/b437 oracles print
+        // `for /var/tmp/b423/root/ dropped`.
+        let entry = label_entry(CandidateSource::Ebuild, None);
+        let root = Path::new("/var/tmp/b423/root");
+        let no_paths = |_: &GraphEntry| None;
+        let report = FailReport {
+            root,
+            source_paths: &no_paths,
+            features: String::new(),
+            quiet: false,
+            background: false,
+            quiet_fail: false,
+        };
+        let mut ledger = Ledger::default();
+        ledger.dropped(&report, &entry, &["dev-util/bad".into()]);
+        let [ElogItem::Dropped { text, .. }] = ledger.elog.as_slice() else {
+            panic!("expected one dropped elog item");
+        };
+        assert!(
+            text.join(" ").contains("for /var/tmp/b423/root/ dropped"),
+            "dropped notice without trailing slash: {text:?}"
+        );
     }
 
     #[test]

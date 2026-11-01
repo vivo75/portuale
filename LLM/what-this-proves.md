@@ -20467,6 +20467,26 @@ the test reader is `MultiGzDecoder`, the correct reader for a multi-member log,
 and a toolchain that ran `pre_exec` before `dup2` would degrade to a visible
 parent-stderr line rather than a lost one (a code comment, not a defect).
 
+- **The `--keep-going: … dropped because` line carries Portage's trailing
+  slash (backlog #622).** `Ledger::dropped`
+  (`crates/portuale/src/emerge_build/failure.rs`) formatted
+  `report.root.display()` bare, so a non-`/` root printed as
+  `for /var/tmp/b423/root dropped`; Portage builds the same line from
+  `pkg.root` (`lib/_emerge/Scheduler.py:2743-2749`), which always carries
+  exactly one trailing slash (`set_root_override`,
+  `lib/portage/package/ebuild/_config/LocationsManager.py:383-386`), and
+  the b423/b437 oracles print `for /var/tmp/b423/root/ dropped`. The line
+  now goes through the existing `portage_repo::root_with_trailing_slash`,
+  the same helper the other four endgame lines (`Failed to emerge … for`,
+  `Failed to install … to`, `Messages for package … merged to`,
+  `Sending package output … for`) already use since #566/#574. Pinned by
+  a new Rust unit test
+  (`dropped_notice_carries_portages_trailing_slash_on_a_non_root`, red
+  pre-fix with the bare path) and the updated
+  `test_emerge_keep_going_endgame_matches_portage` contract pin, whose
+  docstring cut note is closed; no new fixture was needed since the
+  existing `schedbaddep`/`schedok` endgame shape already covers the line.
+
 - **The `--pretend --quiet` abort preamble prints nothing, like Portage
   (backlog #621).** `abort_preamble`
   (`crates/portuale/src/pretend/merge_list.rs`) printed the banner plus
@@ -20502,3 +20522,23 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   run from a cleaned `/var/tmp/pytest-parallel` completes (4619 passed,
   only the 7 known host-state `mrg_remote` reds). Pmtest-only change;
   no fixture, product, or corpus impact.
+=======
+- **The `--keep-going: … dropped because` line carries Portage's trailing
+  slash (backlog #622).** `Ledger::dropped`
+  (`crates/portuale/src/emerge_build/failure.rs`) formatted
+  `report.root.display()` bare, so a non-`/` root printed as
+  `for /var/tmp/b423/root dropped`; Portage builds the same line from
+  `pkg.root` (`lib/_emerge/Scheduler.py:2743-2749`), which always carries
+  exactly one trailing slash (`set_root_override`,
+  `lib/portage/package/ebuild/_config/LocationsManager.py:383-386`), and
+  the b423/b437 oracles print `for /var/tmp/b423/root/ dropped`. The line
+  now goes through the existing `portage_repo::root_with_trailing_slash`,
+  the same helper the other four endgame lines (`Failed to emerge … for`,
+  `Failed to install … to`, `Messages for package … merged to`,
+  `Sending package output … for`) already use since #566/#574. Pinned by
+  a new Rust unit test
+  (`dropped_notice_carries_portages_trailing_slash_on_a_non_root`, red
+  pre-fix with the bare path) and the updated
+  `test_emerge_keep_going_endgame_matches_portage` contract pin, whose
+  docstring cut note is closed; no new fixture was needed since the
+  existing `schedbaddep`/`schedok` endgame shape already covers the line.
