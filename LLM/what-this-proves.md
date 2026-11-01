@@ -20609,3 +20609,21 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   where the host files the provider through the slot-conflict backtrack
   (`p569`/`p589b`: conflict handler + both atoms filed), portuale detects
   no conflict and prints plain `U` (backlog #641).
+
+- **An installed-but-masked `||` alternative is kept under `--update`
+  instead of aborting (backlog #615).** `-uD[N] dev-libs/omasked` exited
+  rc 1 ("All ebuilds that could satisfy `omaskedinstalled` have been
+  masked") where host Portage 3.0.83 exits rc 0, merges `omasked-1.0`,
+  and warns "The following installed packages are masked". Portage
+  ignores visibility when every match is masked
+  (`_select_pkg_highest_available_imp`, `depgraph.py:8525-8532`); the
+  `||` had already selected the installed alternative, so it is kept.
+  Portuale's installed fallback skipped `||`-chosen edges, and the
+  `--update` early return is skipped when an update is wanted, so the
+  fallback (`outcome_fallbacks.rs`) now keeps the installed instance
+  for bare atoms whose tree copies exist but none is visible
+  (`cp_has_visible_candidate`); version/slot atoms keep the old rule.
+  Live-verified on the fixture tree against both managers: rc 0, single
+  `N` row, `backtrack: 0/20` on both `-uD` and `-uDN`. Pinned by a
+  contract test and a red-pre-fix Rust unit test; the installed-masked
+  warning itself is still missing (#611(d)).

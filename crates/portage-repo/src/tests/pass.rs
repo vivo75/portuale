@@ -1593,3 +1593,57 @@ fn prepare_queued_atom_counts_an_unparseable_atom_only_under_an_owner() {
     assert!(site_count("resolver queue") > before);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Backlog #615: `-uD[N] dev-libs/omasked` keeps the installed masked
+/// alternative instead of aborting. `omaskedinstalled-1.0` is installed
+/// but masked in the tree (`profiles/package.mask`); the `||` picks it
+/// (`other_installed`, #22 slice 4). Under `--update`, Portage ignores
+/// visibility when every match is masked
+/// (`_select_pkg_highest_available_imp`, `depgraph.py:8525-8532`: "all
+/// are masked, so ignore visibility") and keeps the installed instance.
+/// Portuale's installed fallback skipped `||`-chosen edges, so the masked
+/// tree copy left `NoVisibleCandidate`, the MissingDep trigger masked the
+/// parent, and the pass dead-ended (rc 1). The fallback now keeps the
+/// installed instance for bare atoms whose tree copies are all masked.
+#[test]
+fn run_pass_update_deep_keeps_the_installed_masked_or_alternative() {
+    let dir = slotundo_temp_dir("615-or-masked-installed");
+    let d = dir.join("var/db/pkg/dev-libs/omaskedinstalled-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0\n").unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let mut config = test_config();
+    config
+        .package_mask
+        .push("dev-libs/omaskedinstalled".to_string());
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: vec!["dev-libs/omasked".to_string()],
+        update: true,
+        deep: Deep::Unlimited,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let kept = pass
+        .entries
+        .iter()
+        .find(|e| e.category == "dev-libs" && e.package == "omaskedinstalled");
+    assert!(
+        matches!(
+            kept.map(|e| &e.outcome),
+            Some(PretendOutcome::AlreadyInstalled { version }) if version == "1.0"
+        ),
+        "the installed masked alternative is kept, not missed: {:?}",
+        kept.map(|e| &e.outcome)
+    );
+    assert!(
+        pass.entries.iter().any(|e| e.category == "dev-libs"
+            && e.package == "omasked"
+            && matches!(&e.outcome, PretendOutcome::New { .. })),
+        "omasked still merges"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

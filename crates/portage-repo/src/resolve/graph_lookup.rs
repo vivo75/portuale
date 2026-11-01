@@ -35,6 +35,25 @@ pub(crate) fn atom_matches_installed(
     best_installed_matching(root, atom_str, config).is_some()
 }
 
+/// Whether any repo ebuild candidate is visible for `cat/pkg`, or any
+/// local-binary candidate is listed: the Portage "all are masked, so
+/// Whether any repo ebuild candidate is visible for `cat/pkg`, or any
+/// local-binary candidate is listed: the Portage "all are masked, so
+/// ignore visibility" gate (`depgraph.py:8525-8532`) fires only when this
+/// is false while candidates exist at all.
+pub(crate) fn cp_has_visible_candidate(
+    gate: CategoryGate<'_>,
+    local_binpkg: &BinaryIndex,
+    category: &str,
+    package: &str,
+    config: &portage_profile::Config,
+) -> bool {
+    gate.repo_candidates(category, package)
+        .map(|cs| cs.iter().any(|c| is_visible(c, category, package, config)))
+        .unwrap_or(false)
+        || !list_binary_candidates(local_binpkg, category, package).is_empty()
+}
+
 /// Whether any repo ebuild or local-binary candidate exists for `cat/pkg`
 /// at all, masked or not: `false` means the cp is installed-only (or
 /// unknown). The installed-only fallback keys on exactly this, so a cp
