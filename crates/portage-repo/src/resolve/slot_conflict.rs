@@ -452,7 +452,12 @@ pub(crate) fn synthesize_surviving_conflict_entries(
                 blockers: Vec::new(),
                 slot: None,
                 sub_slot: None,
-                repo_name: None,
+                // Backlog #610: the instance's repo, so the row renders
+                // `dev-libs/r592ds-1::testrepo` like Portage's instead of
+                // the repo-less `dev-libs/r592ds-1::`. Slot/sub-slot stay
+                // absent deliberately: these conflict rows render slot-less
+                // on both sides. Portage: D-portage.txt (r1 S0).
+                repo_name: Some(inst.repo_name.clone()),
                 oldbest: Vec::new(),
                 use_flags_display: Vec::new(),
                 use_expand_display: Vec::new(),

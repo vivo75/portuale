@@ -20556,3 +20556,18 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   solver's. Pinned by a new Rust unit test (red pre-fix, plus corrected
   expectations on the neighboring sort test) and a full-output
   default-vs-pubgrub contract pin; no fixture change was needed.
+
+- **The synthesized second-instance row carries its repo (backlog #610).**
+  In a conflicted graph that fails, `synthesize_surviving_conflict_entries`
+  (`crates/portage-repo/src/resolve/slot_conflict.rs`) filed the shadowed
+  instance with `repo_name: None`, rendering `dev-libs/r592ds-1::` where
+  Portage prints `dev-libs/r592ds-1::testrepo` (shapes D default, D
+  `--backtrack=1`, F default). One-line fix: the instance already carries
+  the tree-read repo, so the entry takes `Some(inst.repo_name.clone())`;
+  slot/sub-slot stay deliberately absent since these conflict rows render
+  slot-less on both sides. Live-verified against the r1 S0 oracle
+  (`D-portage.txt`): the D-default row is now
+  `[ebuild  N     ] dev-libs/r592ds-1::testrepo`. Pinned by a new Rust
+  unit test (red pre-fix) and a contract test pinning the row on the
+  D-default shape (rc 1, backtrack 0/20 autounmask stop on both sides);
+  no fixture change was needed.
