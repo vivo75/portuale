@@ -86,21 +86,25 @@ fn p491_probe(
 }
 
 #[test]
-fn p491_pass0_seed_files_the_installed_consumer_and_the_kept_child() {
-    // Portage oracle (analysis.md: try-1 24-atom `slot_operator_replace_installed`
-    // set): the installed consumer joins with its installed child, the keeper's
-    // built pin does not veto (it relaxes: the keeper "may need to be rebuilt").
-    // Portage: depgraph.py, _slot_operator_update_backtrack (both filings).
+fn p491_pass0_seed_files_the_installed_consumer_but_not_the_child() {
+    // The installed consumer joins the replace set; the keeper's built pin
+    // does not veto (it relaxes: the keeper "may need to be rebuilt").
+    // The installed child is NOT filed: Portage's update backtrack files
+    // the child only when `dep.child` is the installed node itself (the
+    // complete-graph installed pull, e.g. mbabi's installed mbabilib-1.0;
+    // the built-parent probe covers the binary-parent shape), never a
+    // merge-bound upgrade. Host Portage 3.0.83 prints a plain `U` for the
+    // upgraded child in the simdutf/boost/virt/slotbind/casc shapes, with
+    // no rebuild of an installed-only parent (backlog #623).
+    // Portage: depgraph.py, _slot_operator_update_backtrack (parent filed;
+    // child filed only when installed).
     let root = p491_vdb("6/7", "dev-libs/p491lib:6/7=");
     let entries = p491_entries();
     let replace = p491_probe(&root, &entries, HashSet::new(), true);
     assert_eq!(
         replace,
-        BTreeSet::from([
-            ("dev-libs".to_string(), "p491con".to_string()),
-            ("dev-libs".to_string(), "p491lib".to_string()),
-        ]),
-        "the installed parent and the kept installed child seed the retry"
+        BTreeSet::from([("dev-libs".to_string(), "p491con".to_string())]),
+        "the installed parent seeds the retry; the child is not filed"
     );
 }
 
@@ -134,11 +138,8 @@ fn p491_pass0_seed_probes_from_the_child_the_graph_merges() {
     let replace = p491_probe(&root, &entries, HashSet::new(), true);
     assert_eq!(
         replace,
-        BTreeSet::from([
-            ("dev-libs".to_string(), "p491con".to_string()),
-            ("dev-libs".to_string(), "p491lib".to_string()),
-        ]),
-        "a merge-bound child does not hide the newer sub-slot from the probe"
+        BTreeSet::from([("dev-libs".to_string(), "p491con".to_string())]),
+        "a merge-bound child does not hide the newer sub-slot from the probe, and is not filed itself"
     );
 }
 

@@ -20585,3 +20585,27 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   status: OK`, `test_doc_status_check.py` (all 25, incl.
   `test_real_tree_is_clean`) is green, and `cut_registry_check.py` is
   untouched. Docs-only slice: no product, fixture, or corpus change.
+
+- **Slot-operator rebuilds no longer tag the upgraded child with the red
+  `r` (backlog #623).** Portage tags `r` only through a `force_reinstall`
+  argument, and the only such arguments are the rebuild/reinstall/replace
+  sets -- there is no provider-side ABI rule, so an upgraded provider
+  prints a plain `U`. Two changes: the ABI-edge display helper tags the
+  provider only for same-version reinstalls (slot moves) and never for
+  version upgrades, and the installed-parent update probe files the child
+  only when no tree candidate is newer than the installed instance (the
+  update walk already merges upgrades; the seed is load-bearing only for
+  same-version slot-change reinstalls). Live-verified against host Portage
+  3.0.83 on identical scratch cells: `emerge --pretend --update --deep
+  dev-cpp/libcmis dev-libs/boost app-text/podofo` prints plain-`U`
+  `boost-1.53.0` on both sides (portuale additionally schedules the
+  `libcmis` rebuild the host skips -- a separate open item), and the
+  `slotbindtarget` / `casctarget` / `A-2` / `provpkg` shapes all print
+  plain-`U` providers on the host while the `slotchange-case4` same-version
+  reinstall keeps its `rR` on both. Twenty-one contract pins moved `r U`
+  to plain `U` (8 entry shapes + 13 upstream-oracle provider rows); the
+  `rR` consumer rows, the causing-rebuilds blocks, `mbabilib-2.0`'s
+  replace-set `r`, and `p589d`'s conflict `r` are untouched. Open residue:
+  where the host files the provider through the slot-conflict backtrack
+  (`p569`/`p589b`: conflict handler + both atoms filed), portuale detects
+  no conflict and prints plain `U` (backlog #641).
