@@ -20542,3 +20542,17 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   `test_emerge_keep_going_endgame_matches_portage` contract pin, whose
   docstring cut note is closed; no new fixture was needed since the
   existing `schedbaddep`/`schedok` endgame shape already covers the line.
+
+- **The pubgrub new-slot `[oldver]` bracket carries the vdb sub-slot and
+  repo (backlog #446).** The bridge's `bridge_outcome_for` new-slot arm
+  built `InstalledRef`s with empty `sub_slot`/`repo`, so `decorate_version`
+  rendered `[1.0:1/::]` where the default solver (and Portage) print
+  `[1.0:1::testrepo]` for `emerge --solver=pubgrub -pvu
+  dev-libs/pg359-gsblk`. The arm now reads both from the vdb
+  (`read_vdb_slot`, `installed_pkg_repo`) -- the same sources the default
+  solver's `installed_refs` uses, including the degenerate absent-file
+  values both sides read (`("0","0")`, `"__unknown__"`). Live-verified on
+  the fixture tree: the pubgrub row is now byte-identical to the default
+  solver's. Pinned by a new Rust unit test (red pre-fix, plus corrected
+  expectations on the neighboring sort test) and a full-output
+  default-vs-pubgrub contract pin; no fixture change was needed.
