@@ -704,19 +704,39 @@ fn loopback_fail_at_env() -> u8 {
 pub(crate) fn loopback_warn_table() -> Vec<Vec<u8>> {
     (1..=135)
         .map(|errno: i32| {
-            // SAFETY: parent-side only (never `pre_exec`); `strerror`'s static
-            // buffer is copied out before return.
-            let text = unsafe {
-                let p = libc::strerror(errno);
-                if p.is_null() {
-                    format!("Unknown error {errno}")
-                } else {
-                    std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
-                }
+            // `strerror_r` (XSI, `__xpg_strerror_r` on glibc) writes into a
+            // caller-owned stack buffer: thread-safe, unlike `strerror`'s
+            // shared static buffer, and the table is built per spawn.
+            let mut buf = [0u8; 256];
+            // SAFETY: `buf` is a live 256-byte stack buffer and the length
+            // passed is its exact size.
+            let rc = unsafe {
+                libc::strerror_r(errno, buf.as_mut_ptr() as *mut libc::c_char, buf.len())
+            };
+            let text = if rc == 0 {
+                std::ffi::CStr::from_bytes_until_nul(&buf)
+                    .map(|c| c.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| format!("Unknown error {errno}"))
+            } else {
+                format!("Unknown error {errno}")
             };
             format!("Unable to configure loopback interface: {text}\n").into_bytes()
         })
         .collect()
+}
+
+/// The child's loopback-warning lookup: `errno` (a `u8` table index, `1`-based)
+/// maps to its [`loopback_warn_table`] line; `0` or any errno past the table
+/// yields [`LOOPBACK_WARN_FALLBACK`]. Pure and allocation-free, so the
+/// `pre_exec` closure calls it directly.
+// Portage: process.py, _configure_loopback_interface (:867-871).
+#[cfg(target_os = "linux")]
+pub(crate) fn loopback_warn_line(table: &[Vec<u8>], errno: u8) -> &[u8] {
+    errno
+        .checked_sub(1)
+        .and_then(|idx| table.get(idx as usize))
+        .map(Vec::as_slice)
+        .unwrap_or(LOOPBACK_WARN_FALLBACK)
 }
 
 /// The out-of-range loopback warning: a `const` byte string (no allocation,
@@ -1018,11 +1038,7 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                         let (loopback_step, loopback_errno) =
                             configure_loopback_netlink(has_ipv6, loopback_fail_at);
                         if loopback_step != 0 {
-                            let line: &[u8] = loopback_errno
-                                .checked_sub(1)
-                                .and_then(|idx| loopback_warn.get(idx as usize))
-                                .map(Vec::as_slice)
-                                .unwrap_or(LOOPBACK_WARN_FALLBACK);
+                            let line = loopback_warn_line(&loopback_warn, loopback_errno);
                             let _ = libc::write(
                                 2,
                                 line.as_ptr() as *const std::ffi::c_void,

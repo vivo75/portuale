@@ -1805,25 +1805,27 @@ fn loopback_warn_table_matches_portage_text() {
     );
 }
 
-/// The child's table lookup (`configure_loopback_netlink` caller in
-/// `pre_exec`): errno `0` and errnos past the table (`200`) must both fall
-/// through to the `const` fallback, not index out of range. The expression
-/// is replicated here verbatim because the closure itself is unreachable
-/// from a unit test.
+/// The child's table lookup is `loopback_warn_line`, the same fn the
+/// `pre_exec` site calls: errno `0` and errnos past the table (`200`) must
+/// both fall through to the `const` fallback, not index out of range.
 #[cfg(target_os = "linux")]
 #[test]
 fn loopback_warn_lookup_falls_back_out_of_range() {
     let table = loopback_warn_table();
-    let lookup = |loopback_errno: u8| -> &[u8] {
-        loopback_errno
-            .checked_sub(1)
-            .and_then(|idx| table.get(idx as usize))
-            .map(Vec::as_slice)
-            .unwrap_or(LOOPBACK_WARN_FALLBACK)
-    };
-    assert_eq!(lookup(0), LOOPBACK_WARN_FALLBACK, "errno 0 falls back");
-    assert_eq!(lookup(200), LOOPBACK_WARN_FALLBACK, "errno 200 falls back");
-    assert_eq!(lookup(libc::ENOENT as u8), table[libc::ENOENT as usize - 1]);
+    assert_eq!(
+        loopback_warn_line(&table, 0),
+        LOOPBACK_WARN_FALLBACK,
+        "errno 0 falls back"
+    );
+    assert_eq!(
+        loopback_warn_line(&table, 200),
+        LOOPBACK_WARN_FALLBACK,
+        "errno 200 falls back"
+    );
+    assert_eq!(
+        loopback_warn_line(&table, libc::ENOENT as u8),
+        table[libc::ENOENT as usize - 1].as_slice()
+    );
 }
 
 /// The injected loopback warning survives a `.gz` phase log: with
