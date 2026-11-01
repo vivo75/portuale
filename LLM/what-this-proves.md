@@ -20368,3 +20368,43 @@ has no counterpart and the ACK code is ignored where Portage abandons the rest
 (#638); the 512-byte reply buffer is smaller than Portage's 8 kB (truncation
 keeps the head the fixed offsets read), and the non-Linux demoted path is still
 uncompiled (#637).
+
+**A demoted `network-sandbox` phase's failed loopback setup is now audible: the
+warning Portage prints reaches the phase log, and the phase still runs (#638).**
+#636's binding constraint is that `pre_exec` may not print, so every netlink
+failure fell through in silence — a phase ran with `lo` down and its build log
+said nothing, where Portage's forked `_exec2` prints
+`Unable to configure loopback interface: <strerror>` and skips the remaining
+requests (`process.py:861-871`). Fix: `configure_loopback_netlink(has_ipv6,
+fail_at)` returns its first failure as `(step, errno)` (0 ok / 1 GETLINK /
+2 link-up / 3 v4 / 4 v6; a nonzero per-ACK `NLMSG_ERROR` is that step's
+failure, Portage `netlink.py:49-57`), the demoted child writes those two bytes
+to a `pipe2(O_CLOEXEC)` fd whose write end lives only in the stored `pre_exec`
+closure, and after the phase is reaped and the pumps join the parent reads the
+pair and appends `loopback_warn_msg` — Portage's text verbatim, the failed step
+deliberately unnamed (`process.py:867-871`) — to the `Capture`/`Tee` log, or
+`eprint!` for `Inherit`/`Foreground`. Best-effort survives: only pipe creation
+can fail the spawn, and a failed `lo` setup still never fails the phase. Proof:
+`sudo <test-binary> demoted_loopback --test-threads=1` — with
+`PORTUALE_TEST_LOOPBACK_FAIL=linkup` the phase exits 0, `/proc/net/fib_trie`
+inside it holds no `10.0.0.1` local route (the v4 request never ran) and the
+warning is the log's last line; the clean control shows the route, a real
+localhost TCP round-trip and no warning; `loopback_warn_msg_matches_portage_text`
+pins the fixed prefix and single trailing newline. S0
+(`LLM/evidence/2026-11-01-638/s0-fib-trie-probe.log`) supplies the shape the
+test greps: a fresh netns reports zero `10.0.0.1` hits while the host shows
+`|-- 10.0.0.1` followed by the `/32 host LOCAL` local-route line. The hyperfine
+acceptance (`hyperfine-acceptance.log`, `app-benchmarks/hyperfine-1.21.0`,
+rc=0, `>>> Completed (1 of 1)`) is supporting only: this host cannot make the
+netlink sequence fail, so it exercises no warning path and proves only that the
+added pipe/write/read/append plumbing did not regress a real merge — the spawn
+test is the pin. Honest limits: the abort-the-rest shape is reviewer-pinned,
+not test-pinned — a failed link-up also leaves the v4 route absent, so the
+injected cell's `V4_ROUTE=0` fits both "stopped" and "ran and failed"; the
+message is identical by construction (same libc `strerror` as Portage's
+`os.strerror`), not oracle-compared, hence only the prefix and newline are
+asserted. Two residues are filed: the warning is appended as plain bytes even
+for a `.gz` log, bypassing the gzip pump (#639), and its placement differs from
+Portage's — appended after the phase's output where Portage writes it before
+`execve`, and log-file-only for `Tee`/foreground spawns where Portage's line is
+teed to the terminal (#640).
