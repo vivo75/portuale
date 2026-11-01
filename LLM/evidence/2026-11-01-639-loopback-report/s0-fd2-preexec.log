@@ -1,0 +1,5 @@
+$ rustc -O s0_fd2.rs -o s0_fd2 && ./s0_fd2
+--- fd2 in pre_exec points at:
+/tmp/s0_fd2-target.txt
+---
+fd 2 inside pre_exec == the Command-configured stderr target (dup2 runs before pre_exec hooks on rustc 1.99.0). A child-side raw write(2) therefore lands exactly where the phase stderr goes: log file, tee pipe, or terminal.
