@@ -35,6 +35,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::Write;
+use std::path::Path;
 
 use crate::parse_dep_atom;
 
@@ -46,11 +47,11 @@ use super::{
     Resolver as PortualeResolver, TopLevel, UseUnsatCandidatesForAtomArgs, UseUnsatDepReport,
     abort_outcome, all_installed_packages, autounmask_use_atom_form, effective_use_flags,
     fill_use_change_chains, find_repos, implicit_iuse_set, installed_candidates,
-    installed_dep_string, installed_pkg_iuse_and_use, is_visible, live_metadata_for_installed,
-    masked_candidates_for_atom, masked_dep_chain, pkg_use_display_for, read_vdb_flag_set,
-    read_vdb_string, reinstall_flags_for_use_change, render_required_use_block, repo_aux_metadata,
-    required_use_dep_chain, split_slot, suggested_parent_use_candidate, suggested_use_flip,
-    use_unsat_candidates_for_atom,
+    installed_dep_string, installed_pkg_iuse_and_use, installed_pkg_repo, is_visible,
+    live_metadata_for_installed, masked_candidates_for_atom, masked_dep_chain, pkg_use_display_for,
+    read_vdb_flag_set, read_vdb_slot, read_vdb_string, reinstall_flags_for_use_change,
+    render_required_use_block, repo_aux_metadata, required_use_dep_chain, split_slot,
+    suggested_parent_use_candidate, suggested_use_flip, use_unsat_candidates_for_atom,
 };
 use crate::CategoryGate;
 
@@ -730,12 +731,14 @@ fn apply_use_flips(use_set: &mut HashSet<String>, flips: &[(String, bool)]) {
 
 /// One planned pick against the installed db: `Reinstall` for a rebuild
 /// member, `Upgrade`/`Downgrade` across slots, else `New` or `AlreadyInstalled`.
+#[allow(clippy::too_many_arguments)]
 fn bridge_outcome_for(
     cp: &str,
     record: &LoadedVersion,
     version: &str,
     installed: &InstalledView,
     kept: Option<&KeptInstalled>,
+    root: &Path,
 ) -> (PretendOutcome, Vec<InstalledRef>, bool) {
     let slot_versions = installed.by_slot.get(&(
         record.category.clone(),
@@ -796,11 +799,20 @@ fn bridge_outcome_for(
                 .iter()
                 .filter(|((cat, pkg, _), _)| cat == &record.category && pkg == &record.package)
                 .flat_map(|((_, _, slot), versions)| {
-                    versions.iter().map(|v| InstalledRef {
-                        version: v.clone(),
-                        slot: slot.clone(),
-                        sub_slot: String::new(),
-                        repo: String::new(),
+                    versions.iter().map(|v| {
+                        // Like the default solver's `installed_refs`: the
+                        // sub-slot and repo come from the vdb, so the
+                        // `[oldver]` bracket renders `[1.0:1::testrepo]`,
+                        // not `[1.0:1/::]` (backlog #446). Portage:
+                        // output.py, convert_myoldbest.
+                        let (_, sub_slot) =
+                            read_vdb_slot(root, &record.category, &record.package, v);
+                        InstalledRef {
+                            version: v.clone(),
+                            slot: slot.clone(),
+                            sub_slot,
+                            repo: installed_pkg_repo(root, &record.category, &record.package, v),
+                        }
                     })
                 })
                 .collect();
@@ -1008,7 +1020,8 @@ fn bridge_entry_for(
     if let Some(flips) = kept.and_then(|k| k.autounmask_use.get(&format!("{cp}-{version}"))) {
         apply_use_flips(&mut use_set, flips);
     }
-    let (outcome, oldbest, new_slot) = bridge_outcome_for(cp, &record, version, installed, kept);
+    let (outcome, oldbest, new_slot) =
+        bridge_outcome_for(cp, &record, version, installed, kept, &req.root);
     let (use_flags_display, use_expand_display, use_expand_display_p) =
         bridge_use_columns(req, cp, &record, version, &use_set, &outcome);
     let cpv = format!("{cp}-{version}");
@@ -7249,8 +7262,10 @@ mod tests {
         };
         // A `vercmp`-equal pick is a downgrade, not an upgrade: `Equal`
         // does not satisfy `> 0` (Portage `vercmp` revision default).
+        // No vdb behind these versions, so sub_slot/repo read empty.
+        let vdb = portage_util::TempDir::new("portage-bridge-outcome");
         let (outcome, _, _) =
-            super::bridge_outcome_for("dev-libs/pg34-x", &record, "1.0-r0", &installed, None);
+            super::bridge_outcome_for("dev-libs/pg34-x", &record, "1.0-r0", &installed, None, &vdb);
         assert!(
             matches!(outcome, super::super::PretendOutcome::Downgrade { .. }),
             "a vercmp-equal pick downgrades: {outcome:?}"
@@ -7288,7 +7303,7 @@ mod tests {
             ..record
         };
         let (outcome, oldbest, new_slot) =
-            super::bridge_outcome_for("dev-libs/pg34-x", &record, "3", &installed, None);
+            super::bridge_outcome_for("dev-libs/pg34-x", &record, "3", &installed, None, &vdb);
         assert!(
             matches!(outcome, super::super::PretendOutcome::New { .. }),
             "an uninstalled slot is New: {outcome:?}"
@@ -7299,17 +7314,78 @@ mod tests {
                 InstalledRef {
                     version: "1".to_string(),
                     slot: "1".to_string(),
-                    sub_slot: String::new(),
-                    repo: String::new(),
+                    // No vdb behind these versions: `split_slot("")` is
+                    // ("0", "0") and the repo is "__unknown__" -- exactly
+                    // what the default solver's `installed_refs` reads for
+                    // the same absent data.
+                    sub_slot: "0".to_string(),
+                    repo: "__unknown__".to_string(),
                 },
                 InstalledRef {
                     version: "2".to_string(),
                     slot: "2".to_string(),
-                    sub_slot: String::new(),
-                    repo: String::new(),
+                    sub_slot: "0".to_string(),
+                    repo: "__unknown__".to_string(),
                 },
             ],
             "oldbest holds the same-cp instances only, slot-sorted"
+        );
+        assert!(new_slot, "another slot is already installed");
+    }
+
+    /// Backlog #446: a new-slot `oldbest` carries the installed instance's
+    /// sub-slot and repo from the vdb, like the default solver's
+    /// `installed_refs` -- not empty strings that render `[1.0:1/::]`.
+    /// Oracle: `emerge --solver=pubgrub -pvu dev-libs/pg359-gsblk` on the
+    /// fixture tree (installed `pg359-gsblk-1.0`, `SLOT=1`,
+    /// `repository=testrepo`) prints `[1.0:1::testrepo]` under the default
+    /// solver; the bridge printed `[1.0:1/::]`.
+    #[test]
+    fn s6_bridge_outcome_for_new_slot_reads_sub_slot_and_repo_from_vdb() {
+        use super::super::InstalledRef;
+        use std::collections::{HashMap, HashSet};
+        let vdb = TempDir::new("portage-bridge-446");
+        let _ = std::fs::remove_dir_all(&vdb);
+        s6_mk_vdb(&vdb, "pg359-gsblk-1.0", "1", "", "", "");
+        let installed = super::InstalledView {
+            by_slot: HashMap::from([(
+                (
+                    "dev-libs".to_string(),
+                    "pg359-gsblk".to_string(),
+                    "1".to_string(),
+                ),
+                vec!["1.0".to_string()],
+            )]),
+            occupied: HashSet::from([("dev-libs".to_string(), "pg359-gsblk".to_string())]),
+        };
+        let record = super::LoadedVersion {
+            category: "dev-libs".to_string(),
+            package: "pg359-gsblk".to_string(),
+            version: "2".to_string(),
+            slot: "2".to_string(),
+            sub_slot: "2".to_string(),
+            repo_name: "testrepo".to_string(),
+            iuse: String::new(),
+            keywords: Vec::new(),
+            required_use: String::new(),
+            deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            raw_deps: Default::default(),
+        };
+        let (outcome, oldbest, new_slot) =
+            super::bridge_outcome_for("dev-libs/pg359-gsblk", &record, "2", &installed, None, &vdb);
+        assert!(
+            matches!(outcome, super::super::PretendOutcome::New { .. }),
+            "an uninstalled slot is New: {outcome:?}"
+        );
+        assert_eq!(
+            oldbest,
+            vec![InstalledRef {
+                version: "1.0".to_string(),
+                slot: "1".to_string(),
+                sub_slot: "1".to_string(),
+                repo: "testrepo".to_string(),
+            }],
+            "new-slot oldbest carries the vdb sub-slot and repo"
         );
         assert!(new_slot, "another slot is already installed");
     }
