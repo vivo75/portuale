@@ -695,25 +695,35 @@ fn loopback_fail_at_env() -> u8 {
 /// Portage's loopback-setup warning lines, identical by design: the step is
 /// deliberately unnamed (Portage names none either), so only the errno
 /// varies run to run. Parent-built (never `pre_exec`): index `errno - 1`,
-/// with [`LOOPBACK_WARN_FALLBACK`] past the end. Only the stable prefix is
-/// asserted in tests (the `strerror` body is locale-dependent).
+/// with [`LOOPBACK_WARN_FALLBACK`] past the end. Each body is the bare
+/// `strerror` text (never `io::Error`'s Display, which appends
+/// " (os error N)"); the `strerror` body is locale-dependent, so tests pin
+/// only the prefix and the absence of the " (os error" suffix.
 // Portage: process.py, _configure_loopback_interface (:867-871).
 #[cfg(target_os = "linux")]
 pub(crate) fn loopback_warn_table() -> Vec<Vec<u8>> {
     (1..=135)
-        .map(|errno| {
-            format!(
-                "Unable to configure loopback interface: {}\n",
-                std::io::Error::from_raw_os_error(errno)
-            )
-            .into_bytes()
+        .map(|errno: i32| {
+            // SAFETY: parent-side only (never `pre_exec`); `strerror`'s static
+            // buffer is copied out before return.
+            let text = unsafe {
+                let p = libc::strerror(errno);
+                if p.is_null() {
+                    format!("Unknown error {errno}")
+                } else {
+                    std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+                }
+            };
+            format!("Unable to configure loopback interface: {text}\n").into_bytes()
         })
         .collect()
 }
 
 /// The out-of-range loopback warning: a `const` byte string (no allocation,
 /// so the child can borrow it) for errnos past the table. Same Portage
-/// prefix, the `strerror` body replaced by a fixed marker.
+/// prefix. It intentionally elides the errno number and the `strerror` body:
+/// the arm is unreachable in practice (real Linux errnos are < 134 and the
+/// `u8` index covers them), and building the text would allocate in `pre_exec`.
 // Portage: process.py, _configure_loopback_interface (:867-871).
 #[cfg(target_os = "linux")]
 pub(crate) const LOOPBACK_WARN_FALLBACK: &[u8] =
@@ -723,10 +733,11 @@ pub(crate) const LOOPBACK_WARN_FALLBACK: &[u8] =
 /// name `lo`, then link-up (`IFF_UP`), then `10.0.0.1/8`, then `fd::1/8`
 /// when the host stack does IPv6. Returns the first failure as
 /// `(step, errno)`: `0` ok, `1` GETLINK, `2` link-up, `3` v4, `4` v6 — the
-/// first failure aborts the rest (Portage warn-and-abandon) and the parent
-/// reports it to the phase log. `errno` is truncated to a byte for the
-/// pipe report (real Linux errnos stay below 134, so no bits are lost).
-/// Best-effort: the phase still runs with `lo` down, like a host without
+/// first failure aborts the rest (Portage warn-and-abandon). The caller then
+/// writes the parent-built table line for that errno to fd 2 with a single
+/// `write(2)`. `errno` is truncated to a `u8` table index (real Linux errnos
+/// stay below 134, so no bits are lost). Best-effort: the phase still runs
+/// with `lo` down, like a host without
 /// `ip`. One ACK/`NLMSG_ERROR` is drained per request; a nonzero error
 /// there is that step's failure.
 /// Portage: process.py, _configure_loopback_interface (:838-871);
