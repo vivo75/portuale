@@ -616,6 +616,37 @@ fn synthesize_166_files_the_instance_beside_its_siblings() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Backlog #610: the filed entry carries the instance's repo, so its row
+/// renders `dev-libs/r592ds-1::testrepo` like Portage's instead of the
+/// repo-less `dev-libs/r592ds-1::`. Oracle: Portage 3.0.83
+/// `emerge -pv dev-libs/r592dtop` (D default,
+/// `LLM/evidence/2026-10-26-575-residues/r1/captures/D-portage.txt`).
+#[test]
+fn synthesize_166_filed_entry_carries_the_instance_repo() {
+    let root = dir_166("synth-repo");
+    let dir = dir_166("synth-repo-repo");
+    let repos = repo_pkgs_166(&dir, &[("dev-libs/foo", "2.0", "0", "fa", "", "")]);
+    let config = cfg_166();
+    let mut entries = vec![entry_166("dev-libs", "foo", "1.0", Vec::new())];
+    synthesize_surviving_conflict_entries(SynthesizeSurvivingConflictEntriesArgs {
+        entries: &mut entries,
+        conflicts: &[synth_conflict_166()],
+        required_by_map: &synth_owners_166(),
+        root: &root,
+        config: &config,
+        gate: crate::test_gate(&repos),
+    });
+    assert_eq!(entries.len(), 2);
+    // `inst_166` files the instance with repo "testrepo".
+    assert_eq!(
+        entries[1].repo_name.as_deref(),
+        Some("testrepo"),
+        "the filed entry keeps the instance repo for its row"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `new_slot` reports whether the cp is already installed.
 #[test]
 fn synthesize_166_new_slot_tracks_the_installed_set() {
