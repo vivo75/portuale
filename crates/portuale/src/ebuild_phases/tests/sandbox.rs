@@ -1663,6 +1663,7 @@ impl Drop for RestoreLoopbackFail {
 /// Portage: process.py, _configure_loopback_interface (:838-871).
 /// Grounding: S0 `s0-fib-trie-probe.log` (0 hits in a fresh netns; the
 /// `|-- <addr>` + `host LOCAL` local-route shape from the host).
+#[cfg(target_os = "linux")]
 #[test]
 fn demoted_loopback_failure_warns_and_continues() {
     if unsafe { libc::geteuid() } != 0 {

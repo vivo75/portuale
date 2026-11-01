@@ -1,0 +1,7 @@
+0
+# host positive shape (grep -A1 '|-- 127.0.0.1' /proc/net/fib_trie | head -4):
+           |-- 127.0.0.1
+              /32 host LOCAL
+--
+           |-- 127.0.0.1
+# default pattern ^ *\|-- 10\.0\.0\.1$ then 'host LOCAL' on the next line (same shape as 127.0.0.1 above)
