@@ -306,6 +306,26 @@ fn collect_feedback_inner(
         }
     }
 
+    // New-style virtual fall-through arms (backlog #572): hand non-installed
+    // chosen arms to the next walk as queue items owned by the virtual, while
+    // installed-satisfied arms stay pins. Filed before the probe and conflict
+    // steps so a conflicted pass cannot preempt the expansion (a conflict's
+    // decision would carry the seeds along but never re-walk for them); the
+    // feed re-runs the walk with the arm as the virtual's own dep, like
+    // Portage's inline `_expand_new_virtuals`.
+    // Portage: dep_check.py, _expand_new_virtuals.
+    let mut expansion_added = false;
+    for seed in virtual_expansion_seeds(ctx, pass, &grown) {
+        if grown.virtual_expansion_seeds.insert(seed) {
+            expansion_added = true;
+        }
+    }
+    if expansion_added {
+        return PassDecision::Feedback(BacktrackFeedback::RevDep {
+            params: Box::new(std::mem::take(&mut grown)),
+        });
+    }
+
     let probe_filed = match step_built_parent_update_probe(ctx, pass, &mut grown, config) {
         BuiltParentProbe::Restart(decision) => return decision,
         BuiltParentProbe::Filed => true,

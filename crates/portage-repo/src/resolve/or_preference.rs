@@ -575,6 +575,11 @@ impl OrSplit {
     pub(crate) fn plain_atoms(&self) -> &HashSet<String> {
         &self.plain
     }
+
+    /// Each `||` group's tokens with the atoms of all its arms.
+    pub(crate) fn groups(&self) -> &[(Vec<String>, HashSet<String>)] {
+        &self.groups
+    }
 }
 
 /// Arguments of [`installed_consumer_or_selection`].

@@ -10,3 +10,6 @@ Seed the walk queue with the top-level and auto-replace atoms.
 
 ## fn seed_queue (#394 restart seeds)
 - Backlog #394: the `rebuild_if_replace_installed` set rides the same internal-arg shape as the slot-operator set (`owner: None`, `depth: 1` -- no `--deep` accounting, no `(Argument)` puller line, never in `top_level_cps`). Portage: `_gen_reinstall_sets` (`depgraph.py:5460-5480`).
+
+## fn seed_queue (virtual expansion seeds)
+- Backlog #572: `BacktrackParams::virtual_expansion_seeds` ride as the virtual's own deps (`owner`/`owner_version` set, `depth: 1` like the other auto seeds -- no `--deep` accounting, no `(Argument)` puller line). Portage attributes expanded atoms to the virtual (`dep_check.py:_expand_new_virtuals`: `atom_graph.add(pkg, virt_atom_node)`), which is what makes the fall-through arm merge as a child of the kept `[nomerge]` virtual.

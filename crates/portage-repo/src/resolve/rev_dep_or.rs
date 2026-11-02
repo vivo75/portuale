@@ -492,3 +492,322 @@ impl OrScan<'_> {
         })
     }
 }
+
+/// Portage's choice bins for one new-style virtual `||` group, narrowed to the
+/// expansion question: an arm is available when every leg is tree-visible or
+/// installed-matched; the downgrade guard demotes an arm whose best candidate
+/// the graph already holds newer (bug #531656). Of the survivors, an installed
+/// arm wins outright (it stays a parent atom/pin -- the Q19 shape); otherwise
+/// the first survivor in ebuild order is the fall-through arm to seed.
+/// dep_zapdeps' fuller bin ladder (USE bins, upgrade promotion, multi-version
+/// choices) is deliberately not reproduced: an arm needing USE changes or a
+/// multi-version virtual stays unseeded (a later slice's fixture decides).
+/// Portage: dep_check.py, dep_zapdeps.
+fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> Vec<String> {
+    let SelectExpansionArmsArgs {
+        split,
+        consumer,
+        config,
+        root,
+        entries,
+        update,
+        gate,
+    } = args;
+    let no_constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let self_node: RootCp = (false, consumer.0.clone(), consumer.1.clone());
+    let mut survivors: Vec<Vec<String>> = Vec::new();
+    let mut installed_survivor = false;
+    for (tokens, _) in split.groups() {
+        let Some(arms) = group_arms(tokens) else {
+            continue;
+        };
+        for arm in arms {
+            if arm.iter().any(|a| {
+                parse_dep_atom(a, "virtual_expansion_arm")
+                    .is_none_or(|at| at.blocker != portage_dep::Blocker::None)
+            }) {
+                continue;
+            }
+            if !arm.iter().all(|a| {
+                atom_matches_installed(root, a, config)
+                    || atom_currently_satisfiable(gate, a, config, &[])
+            }) {
+                continue;
+            }
+            if alternative_downgrade_demoted(AlternativeDowngradeDemotedArgs {
+                root,
+                config,
+                entries,
+                self_cp: &self_node,
+                constraints: &no_constraints,
+                atoms: &arm,
+                queued: &[],
+                update,
+                gate,
+                view: OrView::Normal,
+            }) {
+                continue;
+            }
+            if arm.iter().all(|a| atom_matches_installed(root, a, config)) {
+                installed_survivor = true;
+            } else {
+                survivors.push(arm);
+            }
+        }
+    }
+    if installed_survivor || survivors.is_empty() {
+        return Vec::new();
+    }
+    // First survivor in ebuild order; each leg is re-checked by the caller.
+    survivors.remove(0)
+}
+
+/// One arm per top-level alternative of a `["||", "(", ..., ")"]` token group:
+/// a bare atom or the flattened atoms of a `( ... )` conjunction. `None` for a
+/// nested disjunction (stays a documented cut).
+fn group_arms(group: &[String]) -> Option<Vec<Vec<String>>> {
+    let (_, rest) = group.split_first()?;
+    let (open, rest) = rest.split_first()?;
+    if *open != "(" || rest.last().map(String::as_str) != Some(")") {
+        return None;
+    }
+    let inner = &rest[..rest.len() - 1];
+    let mut arms = Vec::new();
+    let mut j = 0;
+    while j < inner.len() {
+        if inner[j] == "(" {
+            let mut depth = 0;
+            let mut k = j;
+            loop {
+                if inner[k] == "(" {
+                    depth += 1;
+                } else if inner[k] == ")" {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                } else if inner[k] == "||" {
+                    return None;
+                }
+                k += 1;
+                if k >= inner.len() {
+                    return None;
+                }
+            }
+            let mut leg = Vec::new();
+            for t in &inner[j + 1..k] {
+                if t == "(" || t == ")" {
+                    continue;
+                }
+                if t == "||" {
+                    return None;
+                }
+                leg.push(t.clone());
+            }
+            if leg.is_empty() {
+                return None;
+            }
+            arms.push(leg);
+            j = k + 1;
+        } else if inner[j] == "||" || inner[j] == ")" {
+            return None;
+        } else {
+            arms.push(vec![inner[j].clone()]);
+            j += 1;
+        }
+    }
+    if arms.is_empty() {
+        return None;
+    }
+    Some(arms)
+}
+
+/// The values [`select_expansion_arms`] reads from its caller.
+struct SelectExpansionArmsArgs<'a> {
+    split: &'a OrSplit,
+    consumer: &'a (String, String),
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    update: bool,
+    gate: CategoryGate<'a>,
+}
+
+/// Whether a new-style virtual's RDEPEND qualifies for expansion: a pure `||`
+/// shape. A plain atom beside the group suppresses Portage's expansion
+/// (S0 `probe572_mixed.py`); the valid-syntax mixed variants show
+/// shape-dependent behavior (`probe572_mixed_exact.py`), so the gate skips
+/// all mixed virtuals rather than guessing which plain form suppresses.
+pub(crate) fn virtual_rdepend_is_expandable(split: &OrSplit) -> bool {
+    !split.is_flat() && split.plain_atoms().is_empty()
+}
+
+/// New-style virtual `||` arms that need a fresh merge in this pass's graph:
+/// `((vcat, vpkg, vver), atom)` seeds for the next walk, owned by the virtual.
+/// Portage inlines the virtual's RDEPEND into the consumer (`dep_check.py`,
+/// `_expand_new_virtuals`), so the fall-through arm resolves as the virtual's
+/// own dep. Only arms no installed package satisfies become seeds: an
+/// installed-satisfied arm stays a parent atom/pin (the Q19 shape), and
+/// queueing it as a hard dep would invert the backtracking preference.
+/// Single-tree-version, pure-`||` virtuals only; the multi-version choice
+/// stays a documented cut. Already-seeded and already-merge-bound arms are
+/// skipped, so the feed terminates.
+// Portage: dep_check.py, _expand_new_virtuals; depgraph.py, _add_dep (:3364)
+pub(crate) fn virtual_expansion_seeds(
+    ctx: &ResolveCtx<'_>,
+    pass: &PassResult,
+    grown: &BacktrackParams,
+) -> Vec<((String, String, String), String)> {
+    // No seeds when the walk follows no dependencies (`--nodeps`), and none
+    // under `--onlydeps` either: Portage expands virtuals while walking merge
+    // candidates, and the playground oracle merges nothing on this shape under
+    // `--onlydeps` (a build-dep-pulled virtual that needs its fall-through
+    // arm merged stays a documented cut).
+    if ctx.nodeps || ctx.onlydeps {
+        return Vec::new();
+    }
+    let gate = ctx.gate();
+    let mut out = Vec::new();
+    for e in &pass.entries {
+        if e.category != "virtual" {
+            continue;
+        }
+        let PretendOutcome::AlreadyInstalled { version } = &e.outcome else {
+            continue;
+        };
+        if e.required_by.is_empty() {
+            continue;
+        }
+        // Single-tree-version virtuals only: the multi-version choice stays cut.
+        let ebuilds: Vec<_> = gate
+            .repo_candidates(&e.category, &e.package)
+            .map(|cs| {
+                cs.iter()
+                    .filter(|c| c.source == CandidateSource::Ebuild)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        if ebuilds.len() != 1 || ebuilds[0].version != *version {
+            continue;
+        }
+        let cand = &ebuilds[0];
+        let Some(live) =
+            live_metadata_for_installed(gate.repos, ctx.root, &e.category, &e.package, version)
+        else {
+            continue;
+        };
+        let rdepend = live.get("RDEPEND").map(String::as_str).unwrap_or("");
+        // Portage evaluates the virtual's USE conditionals with the virtual's
+        // own effective USE, like the walk would for the tree candidate.
+        let cand_str = cand.match_str(&e.category, &e.package);
+        let use_flags = effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
+            config: ctx.config,
+            iuse: live.get("IUSE").map(String::as_str).unwrap_or_default(),
+            keywords: &cand.keywords,
+            candidate_str: &cand_str,
+            build_id: cand.build_id.as_deref(),
+            category: &e.category,
+            package: &e.package,
+        });
+        // Pure-`||` virtuals only: a plain atom beside the group suppresses
+        // Portage's expansion (S0 `probe572_mixed.py`).
+        let Some(split) = split_or_groups(rdepend, &use_flags) else {
+            continue;
+        };
+        if !virtual_rdepend_is_expandable(&split) {
+            continue;
+        }
+        let chosen = select_expansion_arms(SelectExpansionArmsArgs {
+            split: &split,
+            consumer: &(e.category.clone(), e.package.clone()),
+            config: ctx.config,
+            root: ctx.root,
+            entries: &pass.entries,
+            update: ctx.update,
+            gate,
+        });
+        for atom in chosen {
+            let Some(a) = parse_dep_atom(&atom, "virtual_expansion") else {
+                continue;
+            };
+            if a.blocker != portage_dep::Blocker::None {
+                continue;
+            }
+            // Installed-satisfied arms stay parent atoms/pins.
+            if atom_matches_installed(ctx.root, &atom, ctx.config) {
+                continue;
+            }
+            if !atom_currently_satisfiable(gate, &atom, ctx.config, &[]) {
+                continue;
+            }
+            // The walk already merged it (deep/emptytree reached the arm itself).
+            if pass.entries.iter().any(|o| {
+                o.category == a.category
+                    && o.package == a.package
+                    && merge_bound_version(&o.outcome).is_some()
+            }) {
+                continue;
+            }
+            let seed = (
+                (e.category.clone(), e.package.clone(), version.clone()),
+                atom,
+            );
+            if grown.virtual_expansion_seeds.contains(&seed) {
+                continue;
+            }
+            out.push(seed);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn split_of(depstr: &str) -> Option<OrSplit> {
+        split_or_groups(depstr, &HashSet::from(["amd64".to_string()]))
+    }
+
+    /// Backlog #572 review focus: a mixed virtual is not expanded. The S0
+    /// shape (bare plain atom beside the group, `probe572_mixed.py`) is
+    /// suppressed by Portage; the gate pins that shape plus its valid-syntax
+    /// cousins, since `probe572_mixed_exact.py` shows a same-cp plain pin
+    /// expands-with-failure and a different-cp plain pin suppresses-with-failure.
+    #[test]
+    fn mixed_virtual_rdepend_is_not_expandable() {
+        for depstr in [
+            // S0's exact shape: bare plain atom beside the group.
+            "dev-perl/Other-1.0 || ( =dev-lang/perl-5.42* =dev-lang/perl-5.40* ~perl-core/Encode-3.210.0 )",
+            // Valid-syntax cousins: same-cp pin and different-cp pin beside the group.
+            "=dev-lang/perl-5.42* || ( =dev-lang/perl-5.40* ~perl-core/Encode-3.210.0 )",
+            "=dev-perl/Other-1.0 || ( =dev-lang/perl-5.42* =dev-lang/perl-5.40* ~perl-core/Encode-3.210.0 )",
+            // No group at all.
+            "=dev-lang/perl-5.42*",
+        ] {
+            let split =
+                split_of(depstr).unwrap_or_else(|| panic!("fixture shape must parse: {depstr}"));
+            assert!(
+                !virtual_rdepend_is_expandable(&split),
+                "mixed or group-less RDEPEND must not expand: {depstr}"
+            );
+        }
+    }
+
+    #[test]
+    fn pure_or_virtual_rdepend_is_expandable() {
+        for depstr in [
+            "|| ( =dev-lang/perl-5.42* =dev-lang/perl-5.40* ~perl-core/Encode-3.210.0 )",
+            "|| ( =dev-libs/p572prov-5.42* ~dev-libs/p572enc-3.210 )",
+        ] {
+            let split =
+                split_of(depstr).unwrap_or_else(|| panic!("fixture shape must parse: {depstr}"));
+            assert!(
+                virtual_rdepend_is_expandable(&split),
+                "pure || RDEPEND must expand: {depstr}"
+            );
+        }
+    }
+}

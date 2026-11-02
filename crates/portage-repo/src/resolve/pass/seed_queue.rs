@@ -97,4 +97,21 @@ pub(crate) fn seed_queue(
             from_disjunction: false,
         });
     }
+    // A new-style virtual's fall-through `||` arm rides as the virtual's own
+    // dep (Portage's `_expand_new_virtuals` attributes expanded atoms to the
+    // virtual), seeded at the arm the post-upgrade graph selects so the next
+    // walk merges it (backlog #572).
+    for ((vcat, vpkg, vver), atom) in &bp.virtual_expansion_seeds {
+        state.queue.push_back(QueueItem {
+            atom: atom.clone(),
+            depth: 1,
+            owner: Some((vcat.clone(), vpkg.clone())),
+            owner_version: Some(vver.clone()),
+            owner_targets_running_root: false,
+            unevaluated: None,
+            targets_running_root: false,
+            buildtime_hard: false,
+            from_disjunction: false,
+        });
+    }
 }

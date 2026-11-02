@@ -382,6 +382,13 @@ pub(crate) struct BacktrackParams {
     /// -- `(category, package, version)` of the candidate the restart must
     /// select.
     pub(crate) slot_operator_forced_upgrade: BTreeSet<(String, String, String)>,
+    /// New-style virtual `||` arms that need a fresh merge, seeded into the
+    /// next walk owned by the virtual -- `((vcat, vpkg, vver), atom)`.
+    /// Portage inlines the virtual's RDEPEND into the consumer (`dep_check.py`,
+    /// `_expand_new_virtuals`); the queued arm is the same node its walk would
+    /// add. Latched like the pin sets, so the search terminates. Included in
+    /// `params_equal`.
+    pub(crate) virtual_expansion_seeds: BTreeSet<((String, String, String), String)>,
     /// The undo latch: a demoted cp must be remembered here or the scan would
     /// immediately re-add it (its vdb `:S/SS=` binding is still stale).
     /// Monotone and bounded by the installed cp count, so the search

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** proposed 2026-10-28 (branch `slice/572-or-reverify`).
+**Status:** done 2026-11-02 (Tasks 1–4; branch `backlog/572-or-bound-reverify` in both repos; slice range #572 with residues #643 (nested virtual) and #644 (multi-version + mixed-valid-syntax cuts) filed; commits held pending an explicit ask per AGENTS.md rule 9).
 
 **Goal:** portuale lists the package a new-style virtual's `||` falls through to when a
 co-scheduled upgrade replaces the arm it had bound to (`perl-core/Encode-3.210.0`,

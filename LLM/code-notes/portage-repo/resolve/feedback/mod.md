@@ -35,3 +35,6 @@ Feedback hub: one pass's problems packaged into the next pass's backtrack input.
 
 ## gate threading (#571)
 - The `ReverseDependencyConstraintsArgs` site uses `ctx.gate()`.
+
+## collect_feedback_inner (virtual expansion seeds)
+- Backlog #572: after the reverse-dependency scan, `virtual_expansion_seeds` files new-style virtual fall-through arms into `grown` and returns a RevDep feed immediately, ahead of the probe/mask/conflict steps -- a conflicted pass would otherwise carry the seeds along without re-walking for them, and Portage expands inline before any conflict exists. The feed is uncounted only under `--backtrack=0`; under a live search it counts like the pin feed. The bed gate does not apply (resolve-only; no merge driver touched -- re-check the file list before claiming this).

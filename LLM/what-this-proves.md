@@ -20707,3 +20707,34 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   four Rust unit tests (the selection pair, one red pre-fix; the supersede
   pair) plus the re-asserted #601 step pin and the unchanged #608 pin
   (rows, block, `1/20`).
+
+- **An installed new-style virtual's `||` falls through to the next arm when a
+  co-scheduled upgrade replaces its match (backlog #572, Encode half).**
+  Portage inlines the virtual's RDEPEND into the consumer before `dep_zapdeps`
+  (`dep_check.py`, `_expand_new_virtuals`); portuale reaches that `||` only
+  through the reverse-dependency pin pass, which cannot add nodes -- so the
+  fall-through arm never merged (`dev-libs/p572enc` absent although the
+  upgrade to `dev-libs/p572prov-5.44` kills the installed `=5.42*` branch).
+  The reverse-dependency pass now hands non-installed chosen arms to the next
+  walk as queue items owned by the virtual (`virtual_expansion_seeds`,
+  `seed_queue` with owner/version, RevDep feed); installed-satisfied arms
+  stay pins (the Q19 shape is the tripwire). The choice is a narrow
+  Portage-faithful rule -- per-arm availability, the bug-531656 downgrade
+  guard, installed-wins -- because the walk's own fuzzy-`cp_installed`
+  tie-break inverts Q19. Run it live: `emerge -pv =dev-libs/p572prov-5.44
+  dev-libs/p572leaf` on the pmtest fixtures prints `N p572enc-3.210`, `U
+  p572prov-5.44 [5.42]`, `N p572leaf-1.0` with `Total: 3 packages (1
+  upgrade, 2 new)` -- byte-identical rows to host Portage 3.0.83, which
+  prints `backtrack: 0/20` where portuale prints `1/20` (the feed pass that
+  carries the seeds; Portage expands inline). A read-only review pass added
+  three guardrails with no behavior change: the pure-`||` gate is unit-pinned
+  (mutation-checked), `--nodeps` merges the args but never the fall-through
+  arm and `--onlydeps` merges nothing on this shape (both per hermetic
+  playground oracles; seeds are filed on full walks only), and the deep and
+  `--emptytree` tests assert the arm merges exactly once. The nested-virtual half
+  (Try-Tiny falling through to Sub-Name when the installed virtual's own
+  `||` is doubly dead) needs a consumer-side re-resolution seeds cannot
+  supply -- filed as #643 with fixtures, a RED test and a hermetic
+  playground oracle (`probe572_p03.py`: `[Sub-Name, perl-5.44, Try-Tiny]`);
+  multi-version virtuals and valid-syntax mixed `||` virtuals stay
+  documented cuts (#644).

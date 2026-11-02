@@ -109,3 +109,6 @@ Parameters a backtracking pass runs with.
 
 ## gate threading (#571)
 - `SlotConflictMaskChoicesArgs` carries the gate; missed-update sibling enumeration skips unlisted categories.
+
+## field BacktrackParams::virtual_expansion_seeds
+- Backlog #572: new-style virtual `||` arms needing a fresh merge, `((vcat, vpkg, vver), atom)`, filed by the reverse-dependency pass and seeded into the next walk owned by the virtual. Latched like the pin sets (a filed seed is skipped on later passes), so the RevDep feed terminates. Included in `params_equal`.

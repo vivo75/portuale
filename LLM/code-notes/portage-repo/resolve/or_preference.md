@@ -60,3 +60,6 @@ Which alternative of an `||` group to prefer: Portage `dep_zapdeps`'s choice bin
 
 ## gate threading (#571)
 - `AlternativeDowngradeDemotedArgs`, `DisjunctionPreferenceArgs` and `PromoteTiedAlternativeArgs` carry the gate; the `||`-preference tree lookups gate with it.
+
+## struct OrSplit / fn groups
+- Backlog #572: `groups()` exposes each `||` group's raw tokens with its flat arm atoms, so the virtual-expansion choice can walk arms in ebuild order (the `HashSet` alone loses it).
