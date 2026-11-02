@@ -4,8 +4,9 @@ import pwd
 import shutil
 import sys
 import tempfile
+from pathlib import Path
 
-LIB = "/home/vivo/repo/PORTUALE/portuale/3rdparty/portage/lib"
+LIB = str(Path(__file__).resolve().parents[3] / "3rdparty" / "portage" / "lib")
 sys.path.insert(0, LIB)
 
 import portage  # noqa: E402
@@ -64,13 +65,6 @@ installed = {
 }
 
 world = ["dev-perl/Try-Tiny", "dev-lang/perl"]
-
-BIN_NAMES = (
-    "preferred_in_graph", "preferred_non_installed",
-    "unsat_use_in_graph", "unsat_use_installed", "unsat_use_non_installed",
-    "other_installed", "other_installed_some", "other_installed_any_slot", "other",
-)
-
 
 def interesting(unreduced):
     s = " ".join(str(x) for x in unreduced)
