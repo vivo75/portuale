@@ -63,6 +63,7 @@ pub(crate) fn step_slot_conflict_abi(
             probe_parents: &probe_parents,
             config,
             gate: ctx.gate(),
+            update: ctx.update,
         });
         // A child is only ever filed together with its parent, so the parent
         // set is the whole guard.

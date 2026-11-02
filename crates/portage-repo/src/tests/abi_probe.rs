@@ -60,6 +60,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
             probe_parents: &parents,
             config: &test_config(),
             gate: crate::test_gate(&repos),
+            update: true,
         })
     };
     let abicons = ("app-misc".to_string(), "abicons".to_string());
@@ -178,6 +179,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
             probe_parents: &bare_parents,
             config: &test_config(),
             gate: crate::test_gate(&bare_repos),
+            update: true,
         })
         .is_empty(),
         "without a visible replacement the probe does nothing"
@@ -252,6 +254,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
                 probe_parents: &parents,
                 config: &test_config(),
                 gate: crate::test_gate(&cond_repos),
+                update: true,
             })
             .is_empty(),
             "a conditional `:=` whose flag is off is not selected"
@@ -399,6 +402,7 @@ fn slot_conflict_abi_probe_accepts_an_or_group_arm_for_the_new_child() {
             probe_parents: &parents,
             config: &test_config(),
             gate: crate::test_gate(&repos),
+            update: true,
         }),
         BTreeSet::from([("app-misc".to_string(), "abicons".to_string())]),
         "the `:=` arm of the live `||` group accepts the new child"
@@ -502,4 +506,72 @@ fn argument_probe_parents_veto_a_candidate_the_argument_does_not_match() {
         "app-misc/mmprov-1:0/1",
         &consumer
     ));
+}
+
+/// Backlog #641 (residue of #623): a `||` menu arm the merge does not take
+/// stays bound to its kept installed instance instead of vetoing the probe.
+/// The installed consumer's live ebuild keeps `|| ( =abiprov-1 ... )` arms
+/// that exclude the new child 2 alongside the `:=` that pulls it; the old
+/// veto dropped the whole parent because no arm matched 2, so the provider
+/// missed the replace set (plain `U`). Portage records only `:=`/soname
+/// atoms in `_slot_operator_deps`, so menu pins never join the probe loop;
+/// an arm matching the kept installed instance keeps the group satisfied.
+#[test]
+fn slot_conflict_abi_probe_keeps_an_or_arm_bound_to_the_installed_instance() {
+    use md5::Digest as _;
+    let (base, repos) = abi_probe_harness(true);
+    // The installed consumer's live ebuild: every `||` arm excludes the new
+    // child 2, but `=abiprov-1` still matches the kept installed instance.
+    let body = "EAPI=8\nDESCRIPTION=\"641 or arm\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"|| ( =app-misc/abiprov-1 =app-misc/abiprov-0 ) app-misc/abiprov:=\"\n";
+    let dir = base.join("repo/app-misc/abicons");
+    fs::write(dir.join("abicons-1.ebuild"), body).unwrap();
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
+    fs::write(
+        base.join("repo/metadata/md5-cache/app-misc/abicons-1"),
+        format!(
+            "DEFINED_PHASES=-\nDESCRIPTION=641 or arm\nEAPI=8\nKEYWORDS=amd64\nRDEPEND=|| ( =app-misc/abiprov-1 =app-misc/abiprov-0 ) app-misc/abiprov:=\nSLOT=0\n_md5_={md5}\n"
+        ),
+    )
+    .unwrap();
+    let cons_cpv = "app-misc/abicons-1:0/0::testrepo";
+    let record = abi_conflict_record(
+        vec![("app-misc/abiforce-1:0/0::testrepo", ">=app-misc/abiprov-2")],
+        vec![(cons_cpv, "app-misc/abiprov:0/1=")],
+    );
+    let entries = abi_probe_entries(PretendOutcome::AlreadyInstalled {
+        version: "1".to_string(),
+    });
+    let walked: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let parents = collect_probe_parents(CollectProbeParentsArgs {
+        root: &base,
+        entries: &entries,
+        reachable: &HashSet::new(),
+        walked: &walked,
+        in_graph: &HashSet::new(),
+        already: &BTreeSet::new(),
+        with_bdeps: true,
+        excluded: &[],
+    });
+    assert_eq!(
+        slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
+            root: &base,
+            entries: &entries,
+            conflicts: std::slice::from_ref(&record),
+            already: &BTreeSet::new(),
+            undone: &BTreeSet::new(),
+            with_bdeps: true,
+            walked: &walked,
+            excluded: &[],
+            probe_parents: &parents,
+            config: &test_config(),
+            gate: crate::test_gate(&repos),
+            update: true,
+        }),
+        BTreeSet::from([("app-misc".to_string(), "abicons".to_string())]),
+        "the installed arm keeps its `||` group satisfied, so `:=` still files the parent"
+    );
+    let _ = fs::remove_dir_all(&base);
 }

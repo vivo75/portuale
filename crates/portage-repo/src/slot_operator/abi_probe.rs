@@ -255,14 +255,35 @@ pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, Str
 /// no unit names the provider at all; a key whose dep string does not reduce is
 /// skipped (the old `flat_dep_atoms` `filter_map` skip), so one unparseable key
 /// cannot veto the whole replacement parent.
-// Portage: _emerge/depgraph.py, _slot_operator_update_probe
-// (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`)
-fn live_units_accept<'a>(
-    depstrs: impl Iterator<Item = &'a str>,
-    use_flags: &HashSet<String>,
-    provider: (&str, &str),
-    cand: &str,
-) -> bool {
+///
+/// A group arm the merge does not take may stay bound to a kept installed
+/// instance instead of vetoing: Portage records only `:=`/soname atoms in
+/// `_slot_operator_deps` (`depgraph.py:3818-3825`), so a menu pin like
+/// `=prov-5.42*` never joins the probe's atom loop, and the probe files the
+/// backtrack while the old pin stays satisfied by the installed instance it
+/// already matched (the keep-both outcome, backlog #641). An arm therefore
+/// also accepts when it matches an installed instance of the provider.
+/// Portage: _emerge/depgraph.py, _slot_operator_update_probe
+/// (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`)
+/// Arguments of [`live_units_accept`].
+struct LiveUnitsAcceptArgs<'a> {
+    depstrs: Box<dyn Iterator<Item = &'a str> + 'a>,
+    use_flags: &'a HashSet<String>,
+    provider: (&'a str, &'a str),
+    cand: &'a str,
+    root: &'a Path,
+    update: bool,
+}
+
+fn live_units_accept(args: LiveUnitsAcceptArgs<'_>) -> bool {
+    let LiveUnitsAcceptArgs {
+        depstrs,
+        use_flags,
+        provider,
+        cand,
+        root,
+        update,
+    } = args;
     let mut units = 0usize;
     let mut all = true;
     for depstr in depstrs {
@@ -288,10 +309,41 @@ fn live_units_accept<'a>(
                 continue;
             }
             units += 1;
-            all &= named.iter().any(|tok| {
+            let mut ok = named.iter().any(|tok| {
                 portage_dep::match_from_list(portage_dep::without_use(tok), &[cand])
                     .is_some_and(|mt| !mt.is_empty())
             });
+            if !ok && update && unit.len() > 1 {
+                // A menu arm the merge does not take stays bound to the kept
+                // installed instance (see the fn docs): match arms against
+                // the installed db too, the way `or_member_matches_installed`
+                // does for disjunction ranking.
+                ok = named.iter().any(|tok| {
+                    parse_dep_atom(tok, "abi_probe_live_or_installed").is_some_and(|la| {
+                        la.blocker == portage_dep::Blocker::None
+                            && installed_refs(root, &la.category, &la.package)
+                                .iter()
+                                .any(|r| {
+                                    let probe = format!(
+                                        // match-str-ok: installed ref row (vdb slot/repo), not a Candidate
+                                        "{}/{}-{}:{}/{}::{}",
+                                        la.category,
+                                        la.package,
+                                        r.version,
+                                        r.slot,
+                                        r.sub_slot,
+                                        r.repo
+                                    );
+                                    portage_dep::match_from_list(
+                                        portage_dep::without_use(tok),
+                                        &[probe.as_str()],
+                                    )
+                                    .is_some_and(|mt| !mt.is_empty())
+                                })
+                    })
+                });
+            }
+            all &= ok;
         }
     }
     units > 0 && all
@@ -339,6 +391,10 @@ pub(crate) struct SlotConflictAbiProbeArgs<'a> {
     pub(crate) probe_parents: &'a HashMap<(String, String), Vec<ProbeParent>>,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) gate: CategoryGate<'a>,
+    /// Whether the run wants updates: the installed-arm acceptance files a
+    /// rebuild, which only `--update` schedules (without it the kept
+    /// instance stays and the atom is report-only).
+    pub(crate) update: bool,
 }
 
 /// [`slot_conflict_abi_probe_full`]'s two filings: the installed parents
@@ -386,6 +442,7 @@ pub(crate) fn slot_conflict_abi_probe_full(
         probe_parents,
         config,
         gate,
+        update,
     } = args;
     // cp -> () for every merge-bound entry: only installed parents probe.
     let merge_bound: HashSet<(String, String)> = entries
@@ -507,14 +564,18 @@ pub(crate) fn slot_conflict_abi_probe_full(
                     // accepts C.
                     // Portage: depgraph.py, _slot_operator_update_probe
                     // (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`)
-                    let accepts = live_units_accept(
-                        dep_keys
-                            .iter()
-                            .map(|k| live.get(*k).map(String::as_str).unwrap_or_default()),
-                        &rep_use,
-                        (&sc.category, &sc.package),
-                        &c_str,
-                    );
+                    let accepts = live_units_accept(LiveUnitsAcceptArgs {
+                        depstrs: Box::new(
+                            dep_keys
+                                .iter()
+                                .map(|k| live.get(*k).map(String::as_str).unwrap_or_default()),
+                        ),
+                        use_flags: &rep_use,
+                        provider: (&sc.category, &sc.package),
+                        cand: &c_str,
+                        root,
+                        update,
+                    });
                     if !accepts {
                         continue;
                     }
