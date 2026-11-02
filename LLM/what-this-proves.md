@@ -20648,3 +20648,21 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   with `-uD` boost staying plain-`U` (no #623 regression). Pinned by
   the two #598 rows (restored to host `r U`) and a red-pre-fix Rust unit
   test; the full contract suite stays green with no corpus drift.
+
+- **Plain `-pvD` now reports the provider rebuild tag exactly like host
+  Portage (backlog #608).** `emerge --pretend --verbose --deep
+  dev-libs/p569pull` on the pmtest fixtures prints `Dependency resolution
+  took (backtrack: 1/20).` with `[ebuild  r  U  ]
+  dev-libs/p569prov-5.44`, `[ebuild  rR  ] dev-libs/p569virt-1`, and the
+  "causing rebuilds" block -- byte-identical rows to host Portage 3.0.83
+  (`LLM/evidence/2026-10-26-575-residues/r5/captures/D-p569pull-portage.txt`).
+  The gap was not in the probe's accept logic but in the display mirror:
+  Portage renders `r` from its single `_slot_operator_replace_installed`
+  set, while portuale's `fold_rebuild_scan` assigned the logic replace set
+  without extending `probe_replaced`, and the conflict-ABI probe vetoes
+  without `--update` -- so the provider upgrade printed a plain `U` while
+  the consumer already showed `rR`. The one-site mirror fix changed no
+  restart behavior (the full pmtest parallel run is identical to baseline:
+  4622 passed, only the 7 pre-existing mrg-remote failures) and is pinned
+  by a red-green Rust unit test plus a contract pin asserting rows, block,
+  and the `1/20` counter on the unstripped stdout.

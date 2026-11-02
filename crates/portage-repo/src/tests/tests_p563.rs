@@ -350,3 +350,39 @@ fn skip_block_pins_skip_non_selected_or_branches() {
         result.skipped_updates
     );
 }
+
+#[test]
+fn plain_pull_mirrors_the_scan_filing_into_the_replace_display_set() {
+    // Backlog #608 (`-pvD dev-libs/p569pull`, oracle
+    // `D-p569pull-portage.txt`): one backtrack, and the slot-operator
+    // replace set names both the installed consumer and the provider whose
+    // installed child's slot atom matches the upgrade row (`r U`, not plain
+    // `U`). The rebuild scan (`fold_rebuild_scan`) files the logic set while
+    // the conflict-ABI probe vetoes without `--update`, so the display mirror
+    // (`probe_replaced`) must track the scan's filing too.
+    // Portage: depgraph.py, _slot_operator_trigger_reinstalls /
+    // _gen_reinstall_sets (`__auto_slot_operator_replace_installed__`).
+    // `-D` matches the oracle invocation; without it the shallow walk costs
+    // an extra restart while the display set is the same.
+    let result = graph_result_with("dev-libs/p569pull", |r| r.deep = Deep::Unlimited);
+    assert!(
+        matches!(result.outcome, ResolveOutcome::Complete),
+        "the pull shape heals clean, got {:?}",
+        result.outcome
+    );
+    assert_eq!(
+        result.backtrack_restarts, 1,
+        "the mask backtrack rides the scan filing, like Portage's 1/20: {:?}",
+        result.outcome
+    );
+    for (cat, pkg) in [("dev-libs", "p569prov"), ("dev-libs", "p569virt")] {
+        assert!(
+            result
+                .slot_operator_replaced
+                .iter()
+                .any(|(c, p)| c == cat && p == pkg),
+            "the display set names {cat}/{pkg}: {:?}",
+            result.slot_operator_replaced
+        );
+    }
+}

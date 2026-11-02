@@ -113,6 +113,16 @@ pub(crate) fn fold_rebuild_scan(
     let before = grown.slot_operator_replace_installed.clone();
     drop_masked_installed(ctx.root, grown, &before, &mut scheduled);
     grown.slot_operator_replace_installed = scheduled;
+    // The display mirror tracks the same filing: Portage renders `r` from the
+    // one `_slot_operator_replace_installed` set (`_gen_reinstall_sets`), so a
+    // provider the scan files (e.g. plain `-pvD` p569prov, whose installed
+    // child's slot atom matches the upgrade row) must tag like a probe-filed
+    // one. Without this the logic set has the cp while `probe_replaced` (and
+    // hence `GraphResult::slot_operator_replaced`) does not, and the upgrade
+    // prints a plain `U` (backlog #608).
+    grown
+        .probe_replaced
+        .extend(grown.slot_operator_replace_installed.iter().cloned());
 }
 
 /// Whether an installed instance of `cp` was masked by this search.

@@ -8,3 +8,15 @@ Mask-feedback arm for the first conflicting slot's ranked choices.
 
 ## gate threading (#571)
 - `SlotConflictMaskChoicesArgs` and both scan arg structs use `ctx.gate()`.
+
+## fold_rebuild_scan display mirror (#608)
+- Portage renders `r` from the one `_slot_operator_replace_installed` set
+  (`_gen_reinstall_sets`), so every filing into the logic set needs its
+  display mirror (`probe_replaced` -> `GraphResult::slot_operator_replaced`).
+  `fold_rebuild_scan` assigned `slot_operator_replace_installed` without
+  mirroring: in plain `-pvD p569pull` the scan files prov+virt (logic `rR`
+  via the ABI edge, 1/20) while the conflict-ABI probe vetoes without
+  `--update`, so the provider upgrade printed a plain `U` instead of `r U`.
+  The fix extends `probe_replaced` with the post-drop scheduled set at the
+  same site. Verified red-green by
+  `tests_p563::plain_pull_mirrors_the_scan_filing_into_the_replace_display_set`.
