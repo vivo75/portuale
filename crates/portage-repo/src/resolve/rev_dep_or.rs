@@ -847,7 +847,13 @@ pub(crate) fn expand_new_style_virtual_arm(
     if !virtual_rdepend_is_expandable(&split) {
         return None;
     }
-    // The guard needs no graph view here: the inner choice keeps the demoted arm.
+    // The nested choice is computed here at enqueue/token-rewrite time, not at
+    // pop time (REPORT §4.4): safe because `keep_demoted` skips the downgrade
+    // guard, so the graph inputs are dead by construction, and arm
+    // availability is tree/vdb-static. Tripwire: if `keep_demoted` ever
+    // reads the graph, this call must move to pop time or take the drained
+    // graph instead.
+    // Portage: dep_check.py, dep_zapdeps (inner return).
     let mut nested = select_expansion_arms(SelectExpansionArmsArgs {
         split: &split,
         consumer,
