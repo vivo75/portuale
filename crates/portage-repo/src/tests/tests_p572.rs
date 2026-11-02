@@ -145,10 +145,9 @@ fn q19_sibling_virtual_skip_rows_stay() {
 /// 'dev-perl/Try-Tiny-0.320.0']` — the fall-through leaf plus the perl
 /// upgrade plus the requested leaf, the virtual kept (nomerge).
 ///
-/// Ignored RED: needs a walk-time mechanism Task 2's feed cannot supply
-/// (filed as #643).
+/// Green since #643 Task 2 (was RED on `main`: the `||` never reached the graph).
+/// (`LLM/evidence/2026-11-02-643/REPORT.md`).
 #[test]
-#[ignore = "#643: nested virtual needs consumer-side || re-resolution"]
 fn or_group_of_a_nested_installed_virtual_falls_through_to_the_next_arm() {
     let root = hermetic_root(&["dev-libs/p572try"]);
     let result = resolve_in(&root, &["dev-libs/p572try", "=dev-libs/p572prov-5.44"]);

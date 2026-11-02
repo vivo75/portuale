@@ -502,6 +502,10 @@ impl OrScan<'_> {
 /// dep_zapdeps' fuller bin ladder (USE bins, upgrade promotion, multi-version
 /// choices) is deliberately not reproduced: an arm needing USE changes or a
 /// multi-version virtual stays unseeded (a later slice's fixture decides).
+/// With `keep_demoted` the guard never fires and installed arms stay in the
+/// running: the first available arm returns even when demoted, the shape of
+/// Portage's *inner* `dep_zapdeps` return over an expanded virtual's own `||`
+/// (the outer choice demotes the conjunction as a unit instead).
 /// Portage: dep_check.py, dep_zapdeps.
 fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> Vec<String> {
     let SelectExpansionArmsArgs {
@@ -512,6 +516,7 @@ fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> Vec<String> {
         entries,
         update,
         gate,
+        keep_demoted,
     } = args;
     let no_constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
     let self_node: RootCp = (false, consumer.0.clone(), consumer.1.clone());
@@ -534,21 +539,27 @@ fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> Vec<String> {
             }) {
                 continue;
             }
-            if alternative_downgrade_demoted(AlternativeDowngradeDemotedArgs {
-                root,
-                config,
-                entries,
-                self_cp: &self_node,
-                constraints: &no_constraints,
-                atoms: &arm,
-                queued: &[],
-                update,
-                gate,
-                view: OrView::Normal,
-            }) {
+            // The inner choice over an expanded virtual keeps the
+            // demoted-but-available arm: the outer choice demotes the whole
+            // conjunction instead, so the guard never filters here.
+            // Portage: dep_check.py, dep_zapdeps (inner return).
+            if !keep_demoted
+                && alternative_downgrade_demoted(AlternativeDowngradeDemotedArgs {
+                    root,
+                    config,
+                    entries,
+                    self_cp: &self_node,
+                    constraints: &no_constraints,
+                    atoms: &arm,
+                    queued: &[],
+                    update,
+                    gate,
+                    view: OrView::Normal,
+                })
+            {
                 continue;
             }
-            if arm.iter().all(|a| atom_matches_installed(root, a, config)) {
+            if !keep_demoted && arm.iter().all(|a| atom_matches_installed(root, a, config)) {
                 installed_survivor = true;
             } else {
                 survivors.push(arm);
@@ -631,6 +642,10 @@ struct SelectExpansionArmsArgs<'a> {
     entries: &'a [GraphEntry],
     update: bool,
     gate: CategoryGate<'a>,
+    /// Inner choice over an expanded virtual: keep the demoted-but-available
+    /// arm and installed arms instead of filtering them (the p02 seed feed
+    /// passes `false`).
+    keep_demoted: bool,
 }
 
 /// Whether a new-style virtual's RDEPEND qualifies for expansion: a pure `||`
@@ -726,6 +741,7 @@ pub(crate) fn virtual_expansion_seeds(
             entries: &pass.entries,
             update: ctx.update,
             gate,
+            keep_demoted: false,
         });
         for atom in chosen {
             let Some(a) = parse_dep_atom(&atom, "virtual_expansion") else {
@@ -760,6 +776,217 @@ pub(crate) fn virtual_expansion_seeds(
         }
     }
     out
+}
+
+/// The values [`expand_new_style_virtual_arm`] reads from its caller.
+pub(crate) struct ExpandNewStyleVirtualArmArgs<'a> {
+    pub(crate) atom: &'a str,
+    pub(crate) consumer: &'a (String, String),
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) gate: CategoryGate<'a>,
+}
+
+/// One consumer `||` arm naming an installed new-style virtual becomes the
+/// conjunction `[nested choice..., =virtual/<exact installed version>]`, a
+/// single arm of the consumer's group. The nested choice is Portage's inner
+/// `dep_zapdeps` return, which keeps the demoted-but-available arm; the
+/// outer choice then demotes the whole conjunction through the existing
+/// `||` ranking. `None` when the arm names no expandable virtual, so the
+/// caller keeps the arm byte-identical.
+// Portage: dep_check.py, _expand_new_virtuals.
+pub(crate) fn expand_new_style_virtual_arm(
+    args: ExpandNewStyleVirtualArmArgs<'_>,
+) -> Option<Vec<String>> {
+    let ExpandNewStyleVirtualArmArgs {
+        atom,
+        consumer,
+        config,
+        root,
+        gate,
+    } = args;
+    let parsed = parse_dep_atom(atom, "virtual_arm_expansion")?;
+    if parsed.blocker != portage_dep::Blocker::None || parsed.category != "virtual" {
+        return None;
+    }
+    let version = best_installed_matching(root, atom, config)?;
+    // Single-tree-version virtuals only, the same cut as the seed feed.
+    let ebuilds: Vec<_> = gate
+        .repo_candidates(&parsed.category, &parsed.package)
+        .map(|cs| {
+            cs.iter()
+                .filter(|c| c.source == CandidateSource::Ebuild)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if ebuilds.len() != 1 || ebuilds[0].version != version {
+        return None;
+    }
+    let cand = &ebuilds[0];
+    let live = live_metadata_for_installed(
+        gate.repos,
+        root,
+        &parsed.category,
+        &parsed.package,
+        &version,
+    )?;
+    let rdepend = live.get("RDEPEND").map(String::as_str).unwrap_or("");
+    // The virtual's USE conditionals read its own effective USE, like the seed feed.
+    let cand_str = cand.match_str(&parsed.category, &parsed.package);
+    let use_flags = effective_use_flags_uncached(EffectiveUseFlagsUncachedArgs {
+        config,
+        iuse: live.get("IUSE").map(String::as_str).unwrap_or_default(),
+        keywords: &cand.keywords,
+        candidate_str: &cand_str,
+        build_id: cand.build_id.as_deref(),
+        category: &parsed.category,
+        package: &parsed.package,
+    });
+    let split = split_or_groups(rdepend, &use_flags)?;
+    if !virtual_rdepend_is_expandable(&split) {
+        return None;
+    }
+    // The guard needs no graph view here: the inner choice keeps the demoted arm.
+    let mut nested = select_expansion_arms(SelectExpansionArmsArgs {
+        split: &split,
+        consumer,
+        config,
+        root,
+        entries: &[],
+        update: false,
+        gate,
+        keep_demoted: true,
+    });
+    if nested.is_empty() {
+        return None;
+    }
+    nested.push(format!("={}/{}-{version}", parsed.category, parsed.package));
+    Some(nested)
+}
+
+/// The values [`expand_consumer_virtual_arms`] reads from its caller.
+pub(crate) struct ExpandConsumerVirtualArmsArgs<'a> {
+    pub(crate) tokens: &'a [String],
+    pub(crate) consumer: &'a (String, String),
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) gate: CategoryGate<'a>,
+}
+
+/// Rewrite a merge-bound consumer's dep-string tokens before `||` deferral:
+/// every bare arm of a top-level `||` group that names an installed
+/// new-style virtual becomes its Portage conjunction (see
+/// [`expand_new_style_virtual_arm`]). Arms inside a nested `||` stay
+/// verbatim (that shape is a documented cut); everything else is copied
+/// unchanged, so graphs without a nested-virtual expansion come out
+/// byte-identical.
+// Portage: dep_check.py, _expand_new_virtuals.
+pub(crate) fn expand_consumer_virtual_arms(args: ExpandConsumerVirtualArmsArgs<'_>) -> Vec<String> {
+    let ExpandConsumerVirtualArmsArgs {
+        tokens,
+        consumer,
+        config,
+        root,
+        gate,
+    } = args;
+    let ex = Expander {
+        consumer,
+        config,
+        root,
+        gate,
+    };
+    let mut out = Vec::with_capacity(tokens.len());
+    expand_seq_into(tokens, false, &ex, &mut out);
+    out
+}
+
+/// The per-arm expansion inputs [`expand_seq_into`] threads through the token walk.
+struct Expander<'a> {
+    consumer: &'a (String, String),
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    gate: CategoryGate<'a>,
+}
+
+/// One token-sequence pass: `arm_position` marks the direct arms of an `||`
+/// group body, the only positions Portage expands. `||`, plain groups and
+/// `flag?` conditionals recurse (the deferral split evaluates conditionals
+/// afterwards); a nested `||` copies verbatim with its cut shape.
+fn expand_seq_into(seq: &[String], arm_position: bool, ex: &Expander<'_>, out: &mut Vec<String>) {
+    let mut i = 0;
+    while i < seq.len() {
+        let tok = &seq[i];
+        if tok == "||"
+            && seq.get(i + 1).map(String::as_str) == Some("(")
+            && let Some(close) = find_close(seq, i + 1)
+        {
+            if arm_position {
+                out.extend(seq[i..=close].iter().cloned());
+            } else {
+                out.push("||".to_string());
+                out.push("(".to_string());
+                expand_seq_into(&seq[i + 2..close], true, ex, out);
+                out.push(")".to_string());
+            }
+            i = close + 1;
+        } else if tok == "("
+            && let Some(close) = find_close(seq, i)
+        {
+            out.push("(".to_string());
+            expand_seq_into(&seq[i + 1..close], false, ex, out);
+            out.push(")".to_string());
+            i = close + 1;
+        } else if tok.ends_with('?')
+            && seq.get(i + 1).map(String::as_str) == Some("(")
+            && let Some(close) = find_close(seq, i + 1)
+        {
+            out.push(tok.clone());
+            out.push("(".to_string());
+            expand_seq_into(&seq[i + 2..close], false, ex, out);
+            out.push(")".to_string());
+            i = close + 1;
+        } else if arm_position && let Some(conjunction) = ex.expand_arm(tok) {
+            out.push("(".to_string());
+            out.extend(conjunction);
+            out.push(")".to_string());
+            i += 1;
+        } else {
+            out.push(tok.clone());
+            i += 1;
+        }
+    }
+}
+
+/// The balanced `)` closing the `(` at `open`: `None` when unbalanced. The
+/// caller copies the input verbatim on `None`, so the downstream flattener
+/// errors exactly as it would without the rewrite.
+fn find_close(seq: &[String], open: usize) -> Option<usize> {
+    let mut depth = 0;
+    for (j, tok) in seq.iter().enumerate().skip(open) {
+        if tok == "(" {
+            depth += 1;
+        } else if tok == ")" {
+            depth -= 1;
+            if depth == 0 {
+                return Some(j);
+            }
+        }
+    }
+    None
+}
+
+impl Expander<'_> {
+    /// The conjunction for one bare `||` arm, or `None` to keep the arm.
+    fn expand_arm(&self, tok: &str) -> Option<Vec<String>> {
+        expand_new_style_virtual_arm(ExpandNewStyleVirtualArmArgs {
+            atom: tok,
+            consumer: self.consumer,
+            config: self.config,
+            root: self.root,
+            gate: self.gate,
+        })
+    }
 }
 
 #[cfg(test)]

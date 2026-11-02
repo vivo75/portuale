@@ -1,6 +1,9 @@
 # crates/portage-repo/src/resolve/pass/enqueue_deps.rs
 Folds the entry's dependency keys and queues the atoms they name.
 
+## fn enqueue_entry_deps
+- Backlog #643: dep-string tokens pass through `rev_dep_or::expand_consumer_virtual_arms` immediately before `split_off_disjunctions`, so one consumer `||` arm naming an installed new-style virtual expands to its Portage conjunction (nested choice plus exact-version pin) and the drained-graph pop can fall through to the next arm. The rewrite is byte-identical for graphs without a nested-virtual expansion; see `LLM/code-notes/portage-repo/resolve/rev_dep_or.md` (`expand_new_style_virtual_arm`).
+
 ## fn select_dep_tokens
 - Portage `depgraph.py:4195-4247` (`_add_pkg_dep_string`): for a *built* package (`pkg.built` -- true for a binary, not for a fresh ebuild) with `myparams["bdeps"]` not in `("y","auto")` (i.e. `--usepkg`/`--getbinpkg`, which leaves `bdeps` unset per `create_depgraph_params.py:100`), `DEPEND` and `BDEPEND` are both emptied before the walk. `with_bdeps` (built from that same rule in `pretend.rs`) carries the bit. A binary's recorded `BDEPEND` (e.g. libgweather's `|| ( ( python:3.14 pygobject[...] ) ... )`) must not drive a merge.
 - Backlog #143 S1: Portage `depgraph.py:4176-4183` (`_add_pkg_dep_string`) blanks `RDEPEND`/`PDEPEND`/`IDEPEND` for a *non-built* package under `--buildpkgonly` without `--deep` -- runtime blockers never enter the graph (upstream pg1 E/F). A binary or installed candidate is `pkg.built` and keeps its keys. The same runtime-key blanking applies to the `deps` list: runtime edges must not reach the merge-order digraph either under `--buildpkgonly`.
