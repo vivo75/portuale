@@ -20681,3 +20681,29 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   deferred as #642 with the evidence. Pinned red-green by
   `replacement_accepts_binds_the_selected_or_arm`; the full gates stay green
   (lib 1326 passed, contract file 2207 passed with the #608 pin intact).
+
+- **The conflict probe reads the selected `||` arm too, and a subsumed child
+  rides the display mirror only (backlog #642, closing #618's residue).**
+  The paragraph above's "deliberately keeps its group-granular reading" is
+  now stale: `live_units_accept` accepts a candidate through a `||` group
+  only when a *selected* arm tree-matches it (same `selected_parent_atoms`
+  rule as the recorded-parent side), and a group with no selected arm is
+  neutral, matching Portage's `atom_not_selected` skip. A live `-pvD
+  dev-libs/p569pull` proves it end to end: host Portage 3.0.83 fires the
+  probe here (two `backtracking due to missed slot abi update` blocks for
+  the installed `virt-1` / `prov-5.42` edge in a `--debug` run,
+  `LLM/evidence/2026-11-02-642/`) and prints `backtrack: 1/20` with `r U`
+  / `rR` rows; portuale prints the identical rows and the identical
+  counter. The count needed a second half: the filed child, seeded
+  verbatim, ghosted a same-version reinstall node beside its upgrade
+  (pass 2: `Reinstall-5.42` vs `Upgrade-5.44` conflict, mask restart,
+  `1/20` became `2/20`), which Portage never builds -- its restart
+  re-selects the slot atom and lands one node. So a filed child a
+  merge-bound strictly-newer same-`(cp, slot)` instance subsumes goes to
+  `probe_replaced` only (`SlotConflictAbiProbe::display_only`): the seed
+  set keeps parents and kept children, the mirror keeps everything, the
+  upgrade row keeps its `r`, and the count stays `1/20`. A kept child (no
+  upgrade merging) still files the seed set, preserving #641. Pinned by
+  four Rust unit tests (the selection pair, one red pre-fix; the supersede
+  pair) plus the re-asserted #601 step pin and the unchanged #608 pin
+  (rows, block, `1/20`).

@@ -74,13 +74,19 @@ pub(crate) fn step_slot_conflict_abi(
             // when the child is installed (`depgraph.py:2454-2460`).
             // `probe_replaced` is the display mirror that becomes
             // `__auto_slot_operator_replace_installed__` (the `r` tag), so it
-            // grows with the same set.
+            // grows with the whole filing -- including a subsumed child, whose
+            // upgrade row still needs the tag. The seed set takes parents and
+            // kept children only: a subsumed child would ghost a reinstall
+            // node beside its upgrade (backlog #642).
             let filed: BTreeSet<(String, String)> =
                 fresh.parents.union(&fresh.children).cloned().collect();
             grown
                 .slot_operator_replace_installed
                 .extend(filed.iter().cloned());
             grown.probe_replaced.extend(filed);
+            grown
+                .probe_replaced
+                .extend(fresh.display_only.iter().cloned());
             return Some(PassDecision::Feedback(BacktrackFeedback::Config {
                 params: Box::new(std::mem::take(grown)),
             }));

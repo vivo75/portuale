@@ -575,3 +575,279 @@ fn slot_conflict_abi_probe_keeps_an_or_arm_bound_to_the_installed_instance() {
     );
     let _ = fs::remove_dir_all(&base);
 }
+
+/// Backlog #642: a filed child a merging upgrade subsumes is display-only.
+/// The probe files the installed child alongside the parent (Portage
+/// `_slot_operator_update_backtrack`), but when this pass merges a strictly
+/// newer version of the same `(cp, slot)` the fresh merge already carries
+/// the new ABI: seeding the child would ghost a same-version reinstall node
+/// beside the upgrade that Portage never builds (its restart re-walks with
+/// one provider node), costing a spurious mask restart. The child still
+/// lands in the display mirror, so the upgrade row keeps its `r` tag.
+#[test]
+fn slot_conflict_abi_probe_subsumed_child_is_display_only() {
+    let (base, repos) = abi_probe_harness(true);
+    let cons_cpv = "app-misc/abicons-1:0/0::testrepo";
+    let mut record = abi_conflict_record(
+        vec![("app-misc/abiforce-1:0/0::testrepo", ">=app-misc/abiprov-2")],
+        vec![(cons_cpv, "app-misc/abiprov:0/1=")],
+    );
+    // The matched instance is installed: the probe files the child too.
+    record.instances[1].installed = true;
+    let entries = abi_probe_entries(PretendOutcome::AlreadyInstalled {
+        version: "1".to_string(),
+    });
+    let walked: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let parents = collect_probe_parents(CollectProbeParentsArgs {
+        root: &base,
+        entries: &entries,
+        reachable: &HashSet::new(),
+        walked: &walked,
+        in_graph: &HashSet::new(),
+        already: &BTreeSet::new(),
+        with_bdeps: true,
+        excluded: &[],
+    });
+    // abiprov-2 merges new beside installed abiprov-1: the child is subsumed.
+    let fresh = slot_conflict_abi_probe_full(SlotConflictAbiProbeArgs {
+        root: &base,
+        entries: &entries,
+        conflicts: std::slice::from_ref(&record),
+        already: &BTreeSet::new(),
+        undone: &BTreeSet::new(),
+        with_bdeps: true,
+        walked: &walked,
+        excluded: &[],
+        probe_parents: &parents,
+        config: &test_config(),
+        gate: crate::test_gate(&repos),
+        update: true,
+    });
+    assert_eq!(
+        fresh.parents,
+        BTreeSet::from([("app-misc".to_string(), "abicons".to_string())]),
+        "the parent still files the seed set: {:?}",
+        fresh.parents
+    );
+    assert!(
+        fresh.children.is_empty(),
+        "the subsumed child files no seed: {:?}",
+        fresh.children
+    );
+    assert_eq!(
+        fresh.display_only,
+        BTreeSet::from([("app-misc".to_string(), "abiprov".to_string())]),
+        "the subsumed child still tags the upgrade row: {:?}",
+        fresh.display_only
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// Backlog #642 control: without a merging upgrade the filed child stays in
+/// the seed set (the keep-both outcome of #641).
+#[test]
+fn slot_conflict_abi_probe_kept_child_files_the_seed_set() {
+    let (base, repos) = abi_probe_harness(true);
+    let cons_cpv = "app-misc/abicons-1:0/0::testrepo";
+    let mut record = abi_conflict_record(
+        vec![("app-misc/abiforce-1:0/0::testrepo", ">=app-misc/abiprov-2")],
+        vec![(cons_cpv, "app-misc/abiprov:0/1=")],
+    );
+    record.instances[1].installed = true;
+    let mut entries = abi_probe_entries(PretendOutcome::AlreadyInstalled {
+        version: "1".to_string(),
+    });
+    // No merge-bound newer version: abiprov-2 stays installed-bound.
+    entries[0].outcome = PretendOutcome::AlreadyInstalled {
+        version: "2".to_string(),
+    };
+    let walked: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let parents = collect_probe_parents(CollectProbeParentsArgs {
+        root: &base,
+        entries: &entries,
+        reachable: &HashSet::new(),
+        walked: &walked,
+        in_graph: &HashSet::new(),
+        already: &BTreeSet::new(),
+        with_bdeps: true,
+        excluded: &[],
+    });
+    let fresh = slot_conflict_abi_probe_full(SlotConflictAbiProbeArgs {
+        root: &base,
+        entries: &entries,
+        conflicts: std::slice::from_ref(&record),
+        already: &BTreeSet::new(),
+        undone: &BTreeSet::new(),
+        with_bdeps: true,
+        walked: &walked,
+        excluded: &[],
+        probe_parents: &parents,
+        config: &test_config(),
+        gate: crate::test_gate(&repos),
+        update: true,
+    });
+    assert_eq!(
+        fresh.parents,
+        BTreeSet::from([("app-misc".to_string(), "abicons".to_string())]),
+        "the parent files the seed set: {:?}",
+        fresh.parents
+    );
+    assert_eq!(
+        fresh.children,
+        BTreeSet::from([("app-misc".to_string(), "abiprov".to_string())]),
+        "the kept child files the seed set: {:?}",
+        fresh.children
+    );
+    assert!(
+        fresh.display_only.is_empty(),
+        "nothing is display-only without an upgrade: {:?}",
+        fresh.display_only
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// Backlog #642: only a *selected* `||` arm can accept the candidate child
+/// through the replacement's live atoms. Portage intersects the candidate
+/// sets of the replacement parent's selected atoms (`atom_not_selected`,
+/// `all_candidate_pkgs`, `depgraph.py:2747-2790`); an unselected arm that
+/// tree-matches the candidate does not make the probe accept it. The live
+/// `|| ( =abiprov-1 =abiprov-2 )` group (no plain `:=` leg) is bound by the
+/// first graph-matching arm `=abiprov-1`, which rejects 2 while the
+/// unselected `=abiprov-2` accepts it -- so without `--update` (no #641
+/// installed-arm fallback) the probe files nothing. With `--update` the
+/// installed arm still keeps the group satisfied and the parent is filed.
+#[test]
+fn slot_conflict_abi_probe_ignores_an_unselected_or_arm_for_the_new_child() {
+    use md5::Digest as _;
+    let (base, repos) = abi_probe_harness(true);
+    let body = "EAPI=8\nDESCRIPTION=\"642 or arm\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"|| ( =app-misc/abiprov-1 =app-misc/abiprov-2 )\"\n";
+    let dir = base.join("repo/app-misc/abicons");
+    fs::write(dir.join("abicons-1.ebuild"), body).unwrap();
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
+    fs::write(
+        base.join("repo/metadata/md5-cache/app-misc/abicons-1"),
+        format!(
+            "DEFINED_PHASES=-\nDESCRIPTION=642 or arm\nEAPI=8\nKEYWORDS=amd64\nRDEPEND=|| ( =app-misc/abiprov-1 =app-misc/abiprov-2 )\nSLOT=0\n_md5_={md5}\n"
+        ),
+    )
+    .unwrap();
+    let cons_cpv = "app-misc/abicons-1:0/0::testrepo";
+    let record = abi_conflict_record(
+        vec![("app-misc/abiforce-1:0/0::testrepo", ">=app-misc/abiprov-2")],
+        vec![(cons_cpv, "app-misc/abiprov:0/1=")],
+    );
+    let entries = abi_probe_entries(PretendOutcome::AlreadyInstalled {
+        version: "1".to_string(),
+    });
+    let walked: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let parents = collect_probe_parents(CollectProbeParentsArgs {
+        root: &base,
+        entries: &entries,
+        reachable: &HashSet::new(),
+        walked: &walked,
+        in_graph: &HashSet::new(),
+        already: &BTreeSet::new(),
+        with_bdeps: true,
+        excluded: &[],
+    });
+    let probe = |update: bool| {
+        slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
+            root: &base,
+            entries: &entries,
+            conflicts: std::slice::from_ref(&record),
+            already: &BTreeSet::new(),
+            undone: &BTreeSet::new(),
+            with_bdeps: true,
+            walked: &walked,
+            excluded: &[],
+            probe_parents: &parents,
+            config: &test_config(),
+            gate: crate::test_gate(&repos),
+            update,
+        })
+    };
+    assert!(
+        probe(false).is_empty(),
+        "an unselected arm accepting the new child files nothing without --update"
+    );
+    assert_eq!(
+        probe(true),
+        BTreeSet::from([("app-misc".to_string(), "abicons".to_string())]),
+        "with --update the installed arm keeps the group satisfied (#641)"
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
+/// Backlog #642 control: when the *selected* `||` arm accepts the candidate
+/// child, the probe files the parent with or without `--update`. The live
+/// `|| ( =abiprov-2 =abiprov-1 )` group selects its first graph-matching arm
+/// `=abiprov-2`, which tree-matches 2.
+#[test]
+fn slot_conflict_abi_probe_files_when_the_selected_or_arm_accepts() {
+    use md5::Digest as _;
+    let (base, repos) = abi_probe_harness(true);
+    let body = "EAPI=8\nDESCRIPTION=\"642 selected arm\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"|| ( =app-misc/abiprov-2 =app-misc/abiprov-1 )\"\n";
+    let dir = base.join("repo/app-misc/abicons");
+    fs::write(dir.join("abicons-1.ebuild"), body).unwrap();
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
+    fs::write(
+        base.join("repo/metadata/md5-cache/app-misc/abicons-1"),
+        format!(
+            "DEFINED_PHASES=-\nDESCRIPTION=642 selected arm\nEAPI=8\nKEYWORDS=amd64\nRDEPEND=|| ( =app-misc/abiprov-2 =app-misc/abiprov-1 )\nSLOT=0\n_md5_={md5}\n"
+        ),
+    )
+    .unwrap();
+    let cons_cpv = "app-misc/abicons-1:0/0::testrepo";
+    let record = abi_conflict_record(
+        vec![("app-misc/abiforce-1:0/0::testrepo", ">=app-misc/abiprov-2")],
+        vec![(cons_cpv, "app-misc/abiprov:0/1=")],
+    );
+    let entries = abi_probe_entries(PretendOutcome::AlreadyInstalled {
+        version: "1".to_string(),
+    });
+    let walked: HashSet<(String, String)> = entries
+        .iter()
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
+    let parents = collect_probe_parents(CollectProbeParentsArgs {
+        root: &base,
+        entries: &entries,
+        reachable: &HashSet::new(),
+        walked: &walked,
+        in_graph: &HashSet::new(),
+        already: &BTreeSet::new(),
+        with_bdeps: true,
+        excluded: &[],
+    });
+    let wanted = BTreeSet::from([("app-misc".to_string(), "abicons".to_string())]);
+    for update in [false, true] {
+        assert_eq!(
+            slot_conflict_abi_probe(SlotConflictAbiProbeArgs {
+                root: &base,
+                entries: &entries,
+                conflicts: std::slice::from_ref(&record),
+                already: &BTreeSet::new(),
+                undone: &BTreeSet::new(),
+                with_bdeps: true,
+                walked: &walked,
+                excluded: &[],
+                probe_parents: &parents,
+                config: &test_config(),
+                gate: crate::test_gate(&repos),
+                update,
+            }),
+            wanted,
+            "the selected arm accepting the new child files the parent (update={update})"
+        );
+    }
+    let _ = fs::remove_dir_all(&base);
+}

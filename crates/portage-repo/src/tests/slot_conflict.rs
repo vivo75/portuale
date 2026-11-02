@@ -568,12 +568,16 @@ fn slot_conflict_abi_step_files_the_installed_provider_and_consumer() {
     };
     assert_eq!(
         params.slot_operator_replace_installed,
-        BTreeSet::from([prov.clone(), virt.clone()]),
-        "Portage files the installed parent and the installed child"
+        BTreeSet::from([virt.clone()]),
+        "the seed set takes the parent; the upgrading child rides the mirror \
+         only (a same-version reinstall beside its upgrade would ghost a node \
+         Portage never builds: backlog #642)"
     );
-    // The display mirror carries the same union: it becomes the `r` tag
+    // The display mirror carries both sides: it becomes the `r` tag
     // (`__auto_slot_operator_replace_installed__`), so a child-only filing
-    // would leave the provider untagged (#601).
+    // would leave the provider untagged (#601). Portage files both into its
+    // one set (the two `backtracking due to missed slot abi update` blocks in
+    // the -D oracle debug); portuale splits application but not tagging.
     assert_eq!(
         params.probe_replaced,
         BTreeSet::from([prov, virt]),

@@ -270,12 +270,19 @@ pub(crate) fn atom_matches_installed_instance(tok: &str, root: &Path) -> bool {
 }
 
 /// Whether every dependency unit of a replacement parent that names `provider`
-/// accepts `cand`. An atom outside a `||` group is a unit of its own; a whole
-/// `||` group is one disjunctive unit, so it vetoes only when none of its arms
-/// accepts. USE conditionals are reduced against `use_flags` first. False when
-/// no unit names the provider at all; a key whose dep string does not reduce is
-/// skipped (the old `flat_dep_atoms` `filter_map` skip), so one unparseable key
-/// cannot veto the whole replacement parent.
+/// accepts `cand`. An atom outside a `||` group is a unit of its own; a `||`
+/// group is one unit, but only its *selected* arms constrain the probe:
+/// Portage intersects the candidate sets of the replacement parent's selected
+/// atoms (`atom_not_selected`, `all_candidate_pkgs`, `depgraph.py:2747-2790`),
+/// so a group whose selected arms all reject `cand` vetoes it even when an
+/// unselected arm would tree-match, while a group with no selected arm at all
+/// is neutral (its atoms never join the intersection). Selection reuses
+/// [`selected_parent_atoms`] (the `dep_zapdeps` in-graph / installed
+/// preference the recorded-parent side already models). USE conditionals are
+/// reduced against `use_flags` first. False when no unit names the provider
+/// at all; a key whose dep string does not reduce is skipped (the old
+/// `flat_dep_atoms` `filter_map` skip), so one unparseable key cannot veto the
+/// whole replacement parent.
 ///
 /// A group arm the merge does not take may stay bound to a kept installed
 /// instance instead of vetoing: Portage records only `:=`/soname atoms in
@@ -293,6 +300,7 @@ struct LiveUnitsAcceptArgs<'a> {
     provider: (&'a str, &'a str),
     cand: &'a str,
     root: &'a Path,
+    entries: &'a [GraphEntry],
     update: bool,
 }
 
@@ -303,6 +311,7 @@ fn live_units_accept(args: LiveUnitsAcceptArgs<'_>) -> bool {
         provider,
         cand,
         root,
+        entries,
         update,
     } = args;
     let mut units = 0usize;
@@ -314,6 +323,12 @@ fn live_units_accept(args: LiveUnitsAcceptArgs<'_>) -> bool {
         };
         let mut flat: Vec<Vec<&str>> = Vec::new();
         collect_dep_units(&tree, &mut flat);
+        // The replacement's selected atoms for this key, the portuale form of
+        // Portage's `_select_atoms_probe` set: only these arms join the
+        // candidate intersection (backlog #642).
+        let selected: HashSet<String> = selected_parent_atoms(depstr, root, entries, use_flags)
+            .into_iter()
+            .collect();
         for unit in flat {
             let named: Vec<&str> = unit
                 .iter()
@@ -329,8 +344,18 @@ fn live_units_accept(args: LiveUnitsAcceptArgs<'_>) -> bool {
             if named.is_empty() {
                 continue;
             }
+            // Unselected arms never joined Portage's intersection, so only
+            // selected arms constrain the unit; a unit with no selected arm
+            // is neutral (backlog #642).
+            let selected_named: Vec<&&str> = named
+                .iter()
+                .filter(|tok| selected.contains(**tok))
+                .collect();
+            if selected_named.is_empty() {
+                continue;
+            }
             units += 1;
-            let mut ok = named.iter().any(|tok| {
+            let mut ok = selected_named.iter().any(|tok| {
                 portage_dep::match_from_list(portage_dep::without_use(tok), &[cand])
                     .is_some_and(|mt| !mt.is_empty())
             });
@@ -420,13 +445,19 @@ pub(crate) struct SlotConflictAbiProbeArgs<'a> {
 
 /// [`slot_conflict_abi_probe_full`]'s two filings: the installed parents
 /// Portage reinstalls and the installed children they were built against.
-/// Both land in `slot_operator_replace_installed`.
+/// Parents and kept children land in `slot_operator_replace_installed`; a
+/// child a merging upgrade subsumes lands in `probe_replaced` only (backlog
+/// #642: seeding it would ghost a reinstall node Portage never has, while
+/// the upgrade row still needs its `r` tag).
 pub(crate) struct SlotConflictAbiProbe {
     /// The parent cps `_replace_installed_atom(dep.parent)` files.
     pub(crate) parents: BTreeSet<(String, String)>,
     /// The conflict cps whose installed instance `dep.child` names
-    /// (`new_child_slot is None and child.installed`).
+    /// (`new_child_slot is None and child.installed`), minus subsumed ones.
     pub(crate) children: BTreeSet<(String, String)>,
+    /// Filed children a merge-bound upgrade subsumes in this pass: display
+    /// mirror only, never the seed set.
+    pub(crate) display_only: BTreeSet<(String, String)>,
 }
 
 /// The parent half of [`slot_conflict_abi_probe_full`]: the cps to reinstall.
@@ -443,8 +474,9 @@ pub(crate) fn slot_conflict_abi_probe(
 /// another instance, schedule the parent reinstall when the same-version tree
 /// ebuild's live atoms accept that instance and no other parent vetoes it.
 /// Runs over the direct solve's surviving records, before the mask arms, and
-/// returns the newly-scheduled parents **and** the installed children
-/// `_slot_operator_update_backtrack` files alongside them; no masks are filed
+/// returns the newly-scheduled parents, the installed children
+/// `_slot_operator_update_backtrack` files alongside them, and the subsumed
+/// children that ride the display mirror only; no masks are filed
 /// for a resolved conflict.
 // Portage: _emerge/depgraph.py, _slot_conflict_backtrack_abi /
 // _slot_operator_update_backtrack
@@ -475,6 +507,7 @@ pub(crate) fn slot_conflict_abi_probe_full(
     // below is the local equivalent.
     let mut scheduled: BTreeSet<(String, String)> = BTreeSet::new();
     let mut children: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut display_only: BTreeSet<(String, String)> = BTreeSet::new();
     let mut refusals: BTreeSet<(String, String)> = already.clone();
     for sc in conflicts {
         let provider_cp = (sc.category.clone(), sc.package.clone());
@@ -579,10 +612,9 @@ pub(crate) fn slot_conflict_abi_probe_full(
                     // intersects the candidate sets of the replacement
                     // parent's atoms (an exact pin on the old version leaves
                     // none) and skips an atom the replacement does not select
-                    // (`atom_not_selected`). Portuale approximates the
-                    // selection at the group level: one `||` group is a single
-                    // disjunctive unit, so it vetoes only when none of its arms
-                    // accepts C.
+                    // (`atom_not_selected`). Portuale checks the selected arms
+                    // of each `||` group (backlog #642); a group with no
+                    // selected arm is neutral.
                     // Portage: depgraph.py, _slot_operator_update_probe
                     // (`atom_not_selected`, `all_candidate_pkgs`; `:2747-2778`)
                     let accepts = live_units_accept(LiveUnitsAcceptArgs {
@@ -595,6 +627,7 @@ pub(crate) fn slot_conflict_abi_probe_full(
                         provider: (&sc.category, &sc.package),
                         cand: &c_str,
                         root,
+                        entries,
                         update,
                     });
                     if !accepts {
@@ -608,9 +641,24 @@ pub(crate) fn slot_conflict_abi_probe_full(
                     // Portage files the installed child too:
                     // `new_child_slot is None and child.installed`, where
                     // `child` is the instance the parent's built atom matches
-                    // (`depgraph.py:2457-2460`).
+                    // (`depgraph.py:2457-2460`). A child a merging upgrade
+                    // subsumes in this pass is display-only: seeding it would
+                    // ghost a same-version reinstall node beside the upgrade
+                    // that Portage never has (its one set just tags the
+                    // upgrade row), while the upgrade row still needs its
+                    // `r` tag from the mirror (backlog #642).
                     if m.installed {
-                        children.insert(provider_cp.clone());
+                        if upgrade_subsumes_child(
+                            entries,
+                            &sc.category,
+                            &sc.package,
+                            &sc.slot,
+                            &m.version,
+                        ) {
+                            display_only.insert(provider_cp.clone());
+                        } else {
+                            children.insert(provider_cp.clone());
+                        }
                     }
                 }
             }
@@ -619,7 +667,31 @@ pub(crate) fn slot_conflict_abi_probe_full(
     SlotConflictAbiProbe {
         parents: scheduled,
         children,
+        display_only,
     }
+}
+
+/// Whether a merge-bound upgrade of the child subsumes its reinstall filing:
+/// some entry merges a strictly newer version of the same `(cp, slot)` this
+/// pass, so the fresh merge already carries the new ABI and a same-version
+/// reinstall node beside it would be a ghost Portage never builds (its
+/// restart re-walks with one provider node). Display still tags the upgrade
+/// row through the mirror.
+fn upgrade_subsumes_child(
+    entries: &[GraphEntry],
+    category: &str,
+    package: &str,
+    slot: &str,
+    installed_version: &str,
+) -> bool {
+    entries.iter().any(|e| {
+        e.category == category
+            && e.package == package
+            && e.slot.as_deref() == Some(slot)
+            && merge_bound_version(&e.outcome).is_some_and(|v| {
+                vercmp_ordering(v, installed_version) == std::cmp::Ordering::Greater
+            })
+    })
 }
 
 /// Display continuity for conflict-fired rebuilds: recomputed here from the
