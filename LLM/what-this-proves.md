@@ -20627,3 +20627,24 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   `N` row, `backtrack: 0/20` on both `-uD` and `-uDN`. Pinned by a
   contract test and a red-pre-fix Rust unit test; the installed-masked
   warning itself is still missing (#611(d)).
+
+- **The conflict-path `r` is back on upgraded providers whose `||` menu
+  keeps the old installed instance (backlog #641, residue of #623).**
+  Host Portage 3.0.83 prints `[ebuild  r  U  ] dev-libs/p569prov-5.44`
+  with `[ebuild  rR  ] dev-libs/p569virt-1`: its slot-conflict handler
+  runs, then `backtracking due to missed slot abi update` files both the
+  installed parent and the installed child, and the final forced-reinstall
+  atoms name both. Portuale printed a plain `U` (no conflict detected;
+  rebuild scheduled by the scan instead). Three coordinated changes:
+  the rev-dep scan's post-merge view now applies to walked consumers too;
+  a walked pin additionally needs a `||` menu arm matching a kept
+  installed instance (a plain built pin with no keeping menu still merges
+  silently, exactly like host Portage's slotbind shape); and the
+  conflict ABI probe's `||` group no longer vetoes when an arm matches
+  the kept installed instance (Portage never puts menu pins in its probe
+  loop -- only `:=`/soname atoms are recorded). Live-verified against
+  host Portage on identical scratch cells for `-uD p569pull`
+  (byte-identical rows: `r U`, `N`, `rR`, `N` + causing-rebuilds block),
+  with `-uD` boost staying plain-`U` (no #623 regression). Pinned by
+  the two #598 rows (restored to host `r U`) and a red-pre-fix Rust unit
+  test; the full contract suite stays green with no corpus drift.

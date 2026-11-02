@@ -657,6 +657,103 @@ pub(crate) fn consumer_in_scope(scope: &ConsumerScope<'_>, consumer: &InstalledP
         .any(|ex| matches_cli_option_atom(ex, &consumer_str))
 }
 
+/// Whether the installed consumer's recorded deps hold a `||` group with an
+/// arm matching an installed instance of `provider`: the merge keeps that
+/// instance alongside the upgrade (the keep-both outcome), so a built pin
+/// the upgrade breaks is a real conflict, not a report-only row.
+/// Without such an arm the merge supersedes the instance and the atom stays
+/// report-only. Host-verified both ways (backlog #641): p569virt's
+/// `=5.42*` menu arm keeps installed 5.42 while 5.44 merges (Portage
+/// rebuilds both with `r`), while a plain built pin with no keeping menu
+/// (slotbind's `:2/2=`, the kept-instance unit twin) merges with a plain
+/// `U` and no rebuild. Mirrors the walk's own `||` choice the way
+/// `dep_zapdeps` arm selection does, evaluated against the installed db.
+fn or_menu_keeps_installed(
+    root: &Path,
+    consumer: &InstalledPackage,
+    provider: &(String, String),
+    use_flags: &HashSet<String>,
+) -> bool {
+    fn collect_groups<'a>(nodes: &'a [DepTree], out: &mut Vec<Vec<&'a str>>) {
+        for node in nodes {
+            match node {
+                DepTree::Atom(text) => {
+                    out.push(vec![text.as_str()]);
+                }
+                DepTree::AllOf(children) => collect_groups(children, out),
+                DepTree::AnyOf(children) => {
+                    let mut arms: Vec<&str> = Vec::new();
+                    collect_arm_atoms(children, &mut arms);
+                    out.push(arms);
+                }
+            }
+        }
+    }
+    fn collect_arm_atoms<'a>(nodes: &'a [DepTree], out: &mut Vec<&'a str>) {
+        for node in nodes {
+            match node {
+                DepTree::Atom(text) => out.push(text.as_str()),
+                DepTree::AllOf(children) | DepTree::AnyOf(children) => {
+                    collect_arm_atoms(children, out)
+                }
+            }
+        }
+    }
+    const DEP_KEYS: [&str; 3] = ["RDEPEND", "PDEPEND", "IDEPEND"];
+    for key in DEP_KEYS {
+        let depstr = read_vdb_string(
+            root,
+            &consumer.category,
+            &consumer.package,
+            &consumer.version,
+            key,
+        );
+        if depstr.trim().is_empty() {
+            continue;
+        }
+        let tokens: Vec<String> = depstr.split_whitespace().map(str::to_string).collect();
+        let Some(tree) = reduced_dep_tree(&tokens, use_flags) else {
+            continue;
+        };
+        let mut units: Vec<Vec<&str>> = Vec::new();
+        collect_groups(&tree, &mut units);
+        for unit in units {
+            if unit.len() < 2 {
+                continue;
+            }
+            for tok in unit {
+                let Some(atom) = parse_dep_atom(tok, "or_menu_kept") else {
+                    continue;
+                };
+                if atom.blocker != portage_dep::Blocker::None
+                    || atom.category != provider.0
+                    || atom.package != provider.1
+                {
+                    continue;
+                }
+                if installed_refs(root, &atom.category, &atom.package)
+                    .iter()
+                    .any(|r| {
+                        let probe = format!(
+                            // match-str-ok: installed ref row (vdb slot/repo), not a Candidate
+                            "{}/{}-{}:{}/{}::{}",
+                            atom.category, atom.package, r.version, r.slot, r.sub_slot, r.repo
+                        );
+                        portage_dep::match_from_list(
+                            portage_dep::without_use(tok),
+                            &[probe.as_str()],
+                        )
+                        .is_some_and(|m| !m.is_empty())
+                    })
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Collect the reverse-dependency pins one installed consumer places on the packages being upgraded.
 pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -> ControlFlow<()> {
     let ConstraintsFromConsumerArgs {
@@ -714,14 +811,17 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         // A report-only consumer was never walked, and Portage's `||` choice for it
         // keeps the installed arm (`dep_zapdeps`'s installed preference), which is
         // the view without the post-merge set.
-        let post_merge = (or_scan.portage_complete
-            && !report_only
-            && !or_scan.installed_walked.contains_key(&(
-                consumer.category.clone(),
-                consumer.package.clone(),
-                consumer.version.clone(),
-            )))
-        .then_some(or_scan);
+        // The post-merge set is consulted for every in-scope consumer, walked
+        // or not: a walked consumer's built `:S/SS=` atom can still be
+        // unsatisfiable post-merge when the walk bound a newer sub-slot
+        // while an installed instance the atom pins stays behind (backlog
+        // #641: `-uD dev-libs/p569pull` merges `p569prov-5.44` while
+        // installed `p569virt-1`'s baked `p569prov:0/5.42=` still pins
+        // installed 5.42 -- Portage reports the slot conflict and rebuilds
+        // both with `r`). Unwalked consumers keep the complete-graph view;
+        // walked ones get the same post-merge judgement Portage's reverse
+        // check applies to the completed graph.
+        let post_merge = (or_scan.portage_complete && !report_only).then_some(or_scan);
         // A report-only consumer was never walked, and Portage keeps the arm its
         // installed record selects (`dep_zapdeps`'s installed preference here, not
         // the post-merge view the walk uses): the same demotion `#569` applies.
@@ -874,9 +974,29 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     });
     let built_conflict = built_slot_op
         && !stripped_breaks
-        && post_merge.is_some_and(|scan| !scan.post_merge.matches(atom_str))
+        && post_merge.is_some_and(|scan| {
+            !scan.post_merge.matches(atom_str)
+                // A walked consumer's built pin needs a `||` menu keeping an
+                // installed instance: without one the merge supersedes the
+                // instance (plain-pin shapes stay report-only); unwalked
+                // consumers keep the complete-graph view.
+                && (!scan.installed_walked.contains_key(&(
+                    consumer.category.clone(),
+                    consumer.package.clone(),
+                    consumer.version.clone(),
+                )) || or_menu_keeps_installed(root, consumer, &cp, use_flags))
+        })
         && best_installed_matching(root, atom_str, config).is_some_and(|version| {
             !(scan_rebuild_probe_applies(post_merge, root, &atom.category, &atom.package, &version))
+        })
+        // The upgrade must land in the pinned slot: a same-slot sub-slot
+        // move breaks the pin (an ABI rebuild), while a cross-slot move
+        // coexists with it (the kept instance still satisfies the pin, so
+        // it stays report-only). Portage's whole slot-operator machinery
+        // is same-slot (`depgraph.py:2700-2714`: `pkg.slot != dep.child.slot`
+        // skips the child).
+        && upgrading.keys().any(|(kcp, uslot)| {
+            *kcp == cp && Some(uslot.as_str()) == atom.slot.as_deref()
         });
     let mut failing: Vec<(String, bool)> = Vec::new();
     for ((ucp, slot), (candidate, reinstall_slot_change)) in upgrading {
