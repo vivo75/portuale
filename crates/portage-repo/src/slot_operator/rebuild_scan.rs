@@ -269,6 +269,7 @@ pub(crate) fn slot_operator_rebuild_scan(
                     provider_cp: &provider_cp,
                     cand: &cand,
                     gate,
+                    entries,
                 }) {
                     continue;
                 }

@@ -24,3 +24,8 @@ Slot-change probe and update force-scan tests: moved children, stale binaries.
 - #236 A: Portage `_slot_operator_update_probe` + `_slot_operator_update_backtrack` (`_emerge/depgraph.py:2576-2800`, `:2400-2452`) on the shape the `_minimize_children` collapse leaves behind: the walk bound the installed consumer's built `>=forceprov-1.0:0/1=` and live `forceprov:=` to the installed child, and no update of the child is in the graph. Forces both halves (consumer into the replace set, child's candidate into `slot_operator_forced_upgrade`).
 - A second in-scope parent pinning `<forceprov-2.0` refuses it (Portage `_slot_operator_check_reverse_dependencies`); without `--update` the probe does not run (`want_update`).
 - Portage's own answer on this shape: the ResolverPlayground probe in `LLM/evidence/2026-09-29-236/` (`slotop`: `backtracking due to missed slot abi update`, then `U provpkg-2.0 + rR consrdep`).
+
+## replacement_accepts_ignores_or_groups removed (#618)
+- The old premise (an `||` alternative never vetoes) is replaced by
+  selected-arm binding for `|| ( ... )` groups; the `without_or_groups` unit test is replaced by
+  `replacement_accepts_binds_the_selected_or_arm`.

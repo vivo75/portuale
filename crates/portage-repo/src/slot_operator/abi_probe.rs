@@ -116,7 +116,7 @@ pub(crate) fn collect_probe_parents(
 /// string does not reduce contributes nothing (Portage's `dep_check` fails it
 /// and the walk stops before recording any parent atom).
 // Portage: dep_check.py, dep_zapdeps
-fn selected_parent_atoms(
+pub(crate) fn selected_parent_atoms(
     depstr: &str,
     root: &Path,
     entries: &[GraphEntry],
@@ -246,6 +246,27 @@ pub(crate) fn parse_conflict_parent_cpv(parent_cpv: &str) -> Option<(String, Str
     let head = parent_cpv.split_once("::").map_or(parent_cpv, |(h, _)| h);
     let (cpv_part, _) = head.split_once(':')?;
     split_cpv(cpv_part)
+}
+
+/// Whether `tok` matches an installed instance of its own package: the atom
+/// pulls the same child the update probe already has, so Portage skips it
+/// instead of accepting through it (`atom.match(dep.child)` in
+/// `_slot_operator_update_probe`; backlog #618).
+pub(crate) fn atom_matches_installed_instance(tok: &str, root: &Path) -> bool {
+    parse_dep_atom(tok, "abi_probe_installed_skip").is_some_and(|la| {
+        la.blocker == portage_dep::Blocker::None
+            && installed_refs(root, &la.category, &la.package)
+                .iter()
+                .any(|r| {
+                    let probe = format!(
+                        // match-str-ok: installed ref row (vdb slot/repo), not a Candidate
+                        "{}/{}-{}:{}/{}::{}",
+                        la.category, la.package, r.version, r.slot, r.sub_slot, r.repo
+                    );
+                    portage_dep::match_from_list(portage_dep::without_use(tok), &[probe.as_str()])
+                        .is_some_and(|mt| !mt.is_empty())
+                })
+    })
 }
 
 /// Whether every dependency unit of a replacement parent that names `provider`

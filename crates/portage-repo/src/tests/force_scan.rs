@@ -706,6 +706,7 @@ fn replacement_accepts_follows_the_consumers_tree_atoms() {
             provider_cp: &provider,
             cand,
             gate: crate::test_gate(&repos),
+            entries: &[],
         })
     };
     assert!(!accepts("dev-libs/accprov-2.0:0/2"));
@@ -713,13 +714,99 @@ fn replacement_accepts_follows_the_consumers_tree_atoms() {
     let _ = fs::remove_dir_all(&base);
 }
 
-/// An `|| ( ... )` alternative never vetoes a replacement candidate (Portage
-/// `_slot_operator_update_probe` only reads the parent's mandatory atoms).
+/// #618: only the selected `||` arm binds the replacement. The consumer's
+/// live `|| ( =accprov-1.5 =accprov-2.0 )` must not accept the 2.0 candidate
+/// through the unselected `=accprov-2.0` arm: in-graph first, then installed
+/// (`dep_zapdeps`), so a merge-bound 1.5 selects `=accprov-1.5` even though
+/// the installed 2.0 would select the other arm, and `=accprov-1.5` rejects
+/// 2.0. An arm matching the installed instance pulls the same child and
+/// constrains nothing.
 #[test]
-fn replacement_accepts_ignores_or_groups() {
-    assert_eq!(
-        without_or_groups(">=a/b-1:= || ( c/d:= <a/b-2 ) e/f || ( ( g/h ) i/j ) k/l"),
-        ">=a/b-1:= e/f k/l"
+fn replacement_accepts_binds_the_selected_or_arm() {
+    use md5::Digest as _;
+    let base = TempDir::new("portage-repo-618-selected-arm");
+    for (name, slot) in [
+        ("accons-1.0", "0"),
+        ("accprov-1.0", "0"),
+        ("accprov-2.0", "0"),
+    ] {
+        let d = base.join("var/db/pkg/dev-libs").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(d.join("EAPI"), "8\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+    }
+    let repo = base.join("repo");
+    let dir = repo.join("dev-libs/accons");
+    fs::create_dir_all(&dir).unwrap();
+    let rdepend = "|| ( =dev-libs/accprov-1.5 =dev-libs/accprov-2.0 )";
+    let body = format!(
+        "EAPI=8\nDESCRIPTION=\"618 selected arm\"\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n"
     );
-    assert_eq!(without_or_groups("a/b"), "a/b");
+    fs::write(dir.join("accons-1.0.ebuild"), &body).unwrap();
+    let md5 = portage_util::hex_lower(&md5::Md5::digest(body.as_bytes()));
+    let cachedir = repo.join("metadata/md5-cache/dev-libs");
+    fs::create_dir_all(&cachedir).unwrap();
+    fs::write(
+        cachedir.join("accons-1.0"),
+        format!(
+            "DEFINED_PHASES=-\nDESCRIPTION=618 selected arm\nEAPI=8\nKEYWORDS=amd64\nRDEPEND={rdepend}\nSLOT=0\n_md5_={md5}\n"
+        ),
+    )
+    .unwrap();
+    let repos = vec![RepoConfig {
+        name: "testrepo".to_string(),
+        location: repo,
+        priority: 0,
+        is_main: true,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    let pkg = all_installed_packages(&base)
+        .iter()
+        .find(|p| p.package == "accons")
+        .cloned()
+        .expect("accons is installed");
+    let config = test_config();
+    let provider = ("dev-libs".to_string(), "accprov".to_string());
+    let merge_bound = |version: &str| GraphEntry {
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        ..graph_entry("dev-libs", "accprov", version)
+    };
+    // graph_entry defaults to a New (merge-bound) outcome.
+    let accepts = |cand: &str, entries: &[GraphEntry]| {
+        replacement_accepts(ReplacementAcceptsArgs {
+            root: &base,
+            config: &config,
+            pkg: &pkg,
+            dep_keys: &["RDEPEND"],
+            provider_cp: &provider,
+            cand,
+            gate: crate::test_gate(&repos),
+            entries,
+        })
+    };
+    let cand = "dev-libs/accprov-2.0:0/2";
+    // The graph-first preference selects `=accprov-1.5`, which matches no
+    // installed instance and rejects 2.0.
+    assert!(!accepts(cand, &[merge_bound("1.5")]));
+    // The same candidate is accepted through the selected `=accprov-1.5`
+    // arm when it matches.
+    assert!(accepts("dev-libs/accprov-1.5:0/1", &[merge_bound("1.5")]));
+    // With an empty graph the installed 2.0 selects `=accprov-2.0`, which
+    // pulls the same child and constrains nothing.
+    assert!(accepts(cand, &[]));
+    // A merge-bound 2.0 wins the graph preference over the installed 2.0
+    // arm choice... (both select `=accprov-2.0`, which pulls the installed
+    // child) and still accepts.
+    assert!(accepts(cand, &[merge_bound("2.0")]));
+    let _ = fs::remove_dir_all(&base);
 }

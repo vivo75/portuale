@@ -26,3 +26,12 @@ Slot-operator update-force and slot-change probes.
 
 ## gate threading (#571)
 - All three arg structs carry the gate into `ebuild_visible_at`, `slot_changed` and `tree_metadata_for`.
+
+## fn replacement_accepts selected arm (#618)
+- `without_or_groups` (strip whole `||` groups: "one alternative of a choice
+  does not bind the replacement") is removed; each group of the `depstr` argument contributes only
+  its chosen `|| ( ... )` arm's atoms via `selected_parent_atoms` (in-graph first, then
+  installed), and an atom matching the installed provider instance pulls the
+  same child and constrains nothing (Portage's `atom.match(dep.child)` skip).
+  An unselected accepting arm can no longer force a replacement the selected
+  arm rejects. Unit twin: `replacement_accepts_binds_the_selected_or_arm`.

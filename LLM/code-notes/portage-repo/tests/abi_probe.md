@@ -20,3 +20,7 @@ ABI conflict probe tests: rebuild-vs-report gates and display continuity.
 
 ## fn argument_probe_parents_veto_a_candidate_the_argument_does_not_match
 - Backlog #288: an argument atom is a probe parent of its own cp (Portage `_slot_operator_check_reverse_dependencies` over `_parent_atoms`); a blocker argument is not a parent.
+
+## without_or_groups reference removed (#618)
+- The #601 test docstring no longer cites the removed `without_or_groups`
+  strip; the scan side now reads the selected arm.

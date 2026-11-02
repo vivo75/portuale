@@ -20666,3 +20666,18 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   4622 passed, only the 7 pre-existing mrg-remote failures) and is pinned
   by a red-green Rust unit test plus a contract pin asserting rows, block,
   and the `1/20` counter on the unstripped stdout.
+
+- **The rebuild scan reads the selected `||` arm (backlog #618, scan half).**
+  `replacement_accepts` no longer strips whole `||` groups: each group
+  contributes only its chosen arm's atoms (in-graph first, then installed,
+  the same `dep_zapdeps` preference the recorded-parent side uses), and an
+  atom matching the installed provider pulls the same child, so it constrains
+  nothing (Portage's `atom.match(dep.child)` skip). An unselected accepting
+  arm can no longer force a replacement the selected arm rejects. The
+  conflict-probe half (`live_units_accept`) deliberately keeps its
+  group-granular reading: plain chosen-arm selection there vetoes the #608
+  plain shape (extra Config restart) and silences the core probe, because a
+  faithful port needs the reverse-deps candidate check on top of selection --
+  deferred as #642 with the evidence. Pinned red-green by
+  `replacement_accepts_binds_the_selected_or_arm`; the full gates stay green
+  (lib 1326 passed, contract file 2207 passed with the #608 pin intact).

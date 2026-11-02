@@ -408,11 +408,17 @@ pub(crate) struct ReplacementAcceptsArgs<'a> {
     /// `cat/pkg-ver:slot/sub` of the candidate child.
     pub(crate) cand: &'a str,
     pub(crate) gate: CategoryGate<'a>,
+    /// The pass's graph entries, for the `||` arm preference (in-graph first,
+    /// then installed).
+    pub(crate) entries: &'a [GraphEntry],
 }
 
 /// Whether the tree ebuild that would replace an installed consumer accepts
 /// the candidate child: every unblocked atom it carries on the provider must
-/// match. A consumer without a visible tree ebuild at its installed version
+/// match, where each `||` group contributes only its chosen arm's atoms
+/// (in-graph first, then installed -- an unselected arm binds nothing and a
+/// selected arm that rejects the candidate vetoes it, backlog #618).
+/// A consumer without a visible tree ebuild at its installed version
 /// or without such atoms accepts.
 // Portage: depgraph.py, _slot_operator_update_probe (replacement_parent atoms)
 pub(crate) fn replacement_accepts(args: ReplacementAcceptsArgs<'_>) -> bool {
@@ -424,6 +430,7 @@ pub(crate) fn replacement_accepts(args: ReplacementAcceptsArgs<'_>) -> bool {
         provider_cp,
         cand,
         gate,
+        entries,
     } = args;
     let Some(live) =
         live_metadata_for_installed(gate.repos, root, &pkg.category, &pkg.package, &pkg.version)
@@ -434,48 +441,26 @@ pub(crate) fn replacement_accepts(args: ReplacementAcceptsArgs<'_>) -> bool {
         return true;
     }
     let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
+    // Each `||` group contributes only its chosen arm (in-graph first, then
+    // installed); an atom matching the installed instance pulls the same
+    // child and constrains nothing (backlog #618).
     dep_keys
         .iter()
-        .filter_map(|key| {
-            flat_dep_atoms(
-                &without_or_groups(live.get(*key).map(String::as_str).unwrap_or_default()),
+        .flat_map(|key| {
+            selected_parent_atoms(
+                live.get(*key).map(String::as_str).unwrap_or_default(),
+                root,
+                entries,
                 &use_flags,
             )
         })
-        .flatten()
         .filter_map(|t| {
             let a = parse_dep_atom(&t, "force_scan_provider_atoms")?;
             (a.blocker == portage_dep::Blocker::None
                 && a.category == provider_cp.0
-                && a.package == provider_cp.1)
-                .then(|| portage_dep::without_use(&t).to_string())
+                && a.package == provider_cp.1
+                && !atom_matches_installed_instance(&t, root))
+            .then(|| portage_dep::without_use(&t).to_string())
         })
         .all(|a| portage_dep::match_from_list(&a, &[cand]).is_some_and(|m| !m.is_empty()))
-}
-
-/// `depstr` without its `|| ( ... )` groups: one alternative of a choice does
-/// not bind the replacement, so it cannot veto a candidate.
-pub(crate) fn without_or_groups(depstr: &str) -> String {
-    let mut out: Vec<&str> = Vec::new();
-    let mut tokens = depstr.split_whitespace().peekable();
-    while let Some(tok) = tokens.next() {
-        if tok == "||" && tokens.peek() == Some(&"(") {
-            let mut depth = 0usize;
-            for t in tokens.by_ref() {
-                match t {
-                    "(" => depth += 1,
-                    ")" => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        } else {
-            out.push(tok);
-        }
-    }
-    out.join(" ")
 }

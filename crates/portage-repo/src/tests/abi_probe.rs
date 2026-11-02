@@ -345,8 +345,8 @@ fn slot_conflict_abi_display_pairs_follow_the_rebuild() {
 
 /// #601: a live `|| ( =prov-2 =prov-1 ) prov:=` consumer accepts the 5.44
 /// child through the `:=` arm. Portage's `_slot_operator_update_probe` needs
-/// only one `||` arm to match; `replacement_accepts` already strips `||`
-/// groups (`without_or_groups`), but `slot_conflict_abi_probe` flattens every
+/// only one `||` arm to match; `replacement_accepts` reads the selected arm
+/// (backlog #618), but `slot_conflict_abi_probe` flattens every
 /// member and requires all of them, so the parent is never filed and the
 /// provider misses the replace set (the cell's exit-1 residual conflict).
 /// Portage: depgraph.py, _slot_operator_update_probe
