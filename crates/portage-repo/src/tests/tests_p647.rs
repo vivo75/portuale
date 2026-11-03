@@ -1,11 +1,12 @@
 //! #647: a multi-version installed new-style virtual must expand per version.
 //!
-//! S0 #645 (`LLM/evidence/2026-11-03-645/REPORT.md` §6) proves the trigger:
-//! `virtual/perl-Scalar-List-Utils` ships 4 tree ebuilds and
-//! `virtual/perl-Encode` 2, so the single-tree-version cut fires first in
+//! S0 #645 (`LLM/evidence/2026-11-03-645/REPORT.md` §6) proved the trigger:
+//! `virtual/perl-Scalar-List-Utils` shipped 4 tree ebuilds and
+//! `virtual/perl-Encode` 2, so the single-tree-version cut fired first in
 //! both `virtual_expansion_seeds` (`rev_dep_or.rs:706`) and
 //! `expand_new_style_virtual_arm` (`rev_dep_or.rs:823`) before the fall-through
-//! arm (`dev-perl/Sub-Name`, `perl-core/Encode-3.210.0`) can become a seed.
+//! arm (`dev-perl/Sub-Name`, `perl-core/Encode-3.210.0`) could become a seed
+//! (lifted by Task 2's per-version expansion below).
 //!
 //! Expected values are Portage 3.0.83's own playground on the verbatim real
 //! shapes (`LLM/evidence/2026-11-03-647/probe647_oracle.py`, minuend of the

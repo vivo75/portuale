@@ -681,8 +681,12 @@ pub(crate) fn virtual_rdepend_is_expandable(split: &OrSplit) -> bool {
 /// Only the installed version's RDEPEND seeds, however many tree versions
 /// exist: a seed is a merge commitment with no demotion vehicle, so a
 /// non-installed version's live arm would merge where Portage's `=<cpv>` pin
-/// demotes its whole conjunction. Already-seeded and already-merge-bound arms
-/// are skipped, so the feed terminates.
+/// demotes its whole conjunction. Portage ground (`dep_check.py:197,220,264`):
+/// every matching tree virtual contributes its own RDEPEND (`:220`) with an
+/// unconditional `=<cpv>` pin (`:197`, `:264`), so a bare arm merged as the
+/// virtual's own dep comes only from dep_check on the kept instance's own
+/// string. Already-seeded and already-merge-bound arms are skipped, so the
+/// feed terminates.
 // Portage: dep_check.py, _expand_new_virtuals; depgraph.py, _add_dep (:3364)
 pub(crate) fn virtual_expansion_seeds(
     ctx: &ResolveCtx<'_>,
@@ -805,9 +809,15 @@ pub(crate) struct ExpandNewStyleVirtualArmArgs<'a> {
     /// The walk updates: a newer visible tree version upgrades the virtual
     /// instead of falling through (M4/M5b oracle), so multi-version
     /// expansion stays off and the bare arm resolves to the upgrade.
-    /// Portage expands either way and picks the upgrade in its
-    /// update-aware bins; portuale's tie-break is same-bin only, so the
-    /// demoted conjunctions would wrongly fall through instead.
+    /// Portage expands either way: its update-awareness lives in the upgrade
+    /// selection (`depgraph.py:7332,7356 _want_update_pkg`, `--update` in
+    /// myopts) and the choice bins (`dep_check.py:574-598` `want_update` on
+    /// each choice, `:783-798` upgrade promotion, `:812-818` two-pass
+    /// selection), and the oracle records the upgrade outcome
+    /// (`probe647_oracle.py:339` M4-bare-Ud, `:364` M5b-bare-Ud, header
+    /// `:26-32`). portuale's tie-break is same-bin only, so it suppresses
+    /// the expansion and reaches the same observable outcome through its
+    /// own upgrade path instead (the two `-uD` pins prove it).
     pub(crate) update: bool,
 }
 
@@ -851,6 +861,8 @@ pub(crate) fn expand_new_style_virtual_arm(
         })
         .unwrap_or_default();
     // The installed version must still have a tree ebuild to evaluate.
+    // Corner (a) of #648: installed version with no tree ebuild but other
+    // tree versions present stays off (bare arm), same as the pre-#647 cut.
     if !ebuilds.iter().any(|c| c.version == version) {
         return None;
     }
@@ -904,6 +916,10 @@ pub(crate) fn expand_new_style_virtual_arm(
         let Some(split) = split_or_groups(rdepend, &use_flags) else {
             continue;
         };
+        // Corner (c) of #648: flat-RDEPEND versions (e.g. `1.680.0`, no
+        // `||`) contribute no conjunction on the multi path either — the
+        // flat veto is shared with singles — while Portage evaluates their
+        // flat members plus the `=<cpv>` pin as a conjunction.
         if !virtual_rdepend_is_expandable(&split) {
             continue;
         }
