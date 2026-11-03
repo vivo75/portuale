@@ -421,3 +421,33 @@ when a claim turns out false.
 - **First seen**: Portage 3.0.83, bed `dev-lang_rust` after the 2026-10-29 repo update (`dev-libs/openssl-3.5.7` dropped from the tree).
 - **Portuale**: copied (#624); the strip applies only while the ebuild exists.
 
+
+## Q26. New-style virtuals ship `!>` blockers unparseable by Portage's own grammar (suspect)
+
+- **What Portage does**: `virtual/perl-Scalar-List-Utils-1.630.0-r1` and
+  `virtual/perl-Encode-3.210.0-r2` (bed tree @ `e07309ba6`) carry
+  `!>perl-core/<name>-${PV}-r999` with the revision-bearing `${PV}` expanded,
+  i.e. `!>perl-core/Scalar-List-Utils-1.630.0-r1-r999` and
+  `!>perl-core/Encode-3.210.0-r2-r999` — two `-rN` suffixes. Portage's own
+  `Atom()` rejects both (`InvalidAtom`; `use_reduce(..., token_class=Atom)`
+  raises `InvalidDependString: Invalid atom (...), token 9`, checked on
+  3.0.83). Production never evaluates them: the depgraph catches
+  `InvalidDependString` and skips the parent's atoms (`depgraph.py:2648`,
+  `:3233`, `:3687`, `:3769`, `:3961`, `:4375`, `:4392`, `:4403`), so the
+  blockers are silently dead — the cells resolve with the `||` arms alone
+  (S0 #645: `Sub-Name-0.280.0-r1` / `perl-core/Encode-3.210.0` merge, no
+  blocker rows). The S0 probe hand-expanded `${PV}` without the revision
+  (`!>...-1.630.0-r999`, `!>...-3.210.0-r999`), which is why the playground
+  oracles never see the invalid form.
+- **Why it looks wrong**: the tree text is not parseable by the package
+  manager's own atom grammar; the `!>` guard the ebuild claims to install is
+  void. Repoman should flag `${PV}-r999` on a revisioned `${PV}`.
+- **First seen**: Portage 3.0.83 (the only version checked), bed tree
+  `e07309ba6`, noticed 2026-11-03 while building the #647 fixture family:
+  portuale's unparsed-token invariant (`test_output_invariants.py` §4)
+  flagged `!>dev-libs/p647enccore-3.210.0-r2-r999` at the `blockers` and
+  `installed_meta` sites, and the debug build named the exact token.
+- **Portuale**: `portuale emerge` copies the *effect* (the atoms are dropped,
+  exactly as production skips them), not the text: the #647 fixtures carry
+  the probe's valid forms (`!>...-1.630.0-r999`, `!>...-3.210.0-r999`) so the
+  §4 invariant stays at zero dropped tokens. `portuale mrg`: no decision.
