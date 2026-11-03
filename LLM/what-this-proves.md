@@ -20772,3 +20772,37 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   both yaml entries stay and the real-tree S0 is filed as #645. Residue:
   the nested-`||`-verbatim cut folds into #644; the no-upgrade
   conjunction-wins-tie shape has no pin (#646).
+
+  Multi-version installed virtuals now expand per version, like Portage's
+  `dep_check` recursion (`dep_check.py:196-290`), instead of tripping the
+  single-tree-version cut. Where #572/#643 handled one tree version, the
+  real perl-5.44 tree ships several (SLU 4 ebuilds, Encode 2), and the
+  `ebuilds.len() != 1` cut in both `virtual_expansion_seeds` and
+  `expand_new_style_virtual_arm` (`crates/portage-repo/src/resolve/rev_dep_or.rs`)
+  fired first in code order, with the conjunction extras (`dev-lang/perl:=`,
+  `!<`, `!>`) tripping the second lift in `virtual_rdepend_is_expandable`
+  once the count cut was gone (S0 `LLM/evidence/2026-11-03-645/REPORT.md`,
+  oracle `LLM/evidence/2026-11-03-647/probe647_oracle.py`). Each matching
+  tree version now contributes its RDEPEND (evaluated with that version's
+  USE, `=<cpv>`-pinned) through the existing per-arm selection, so the
+  dead-branch demotion from #643 works per version. Run it live: `cargo
+  test --release -p portage-repo tests_p647` (fall-through on the wrapped
+  `!minimal?` arm, feed on the plain arm, plus the `@world -uD` twin
+  pinning the not-the-cell upgrade) and `python3 -m pytest
+  pytests-contract-suite/test_emerge_pretend_contract.py -k "647 or p647"`
+  in pmtest -- `emerge -pv dev-libs/p647try =dev-libs/p647prov-5.44.0`
+  prints `N p647sub-0.280.0-r1`, `U p647prov-5.44.0 [5.42.2]`, `N
+  p647try-0.320.0` with `Total: 3 packages (1 upgrade, 2 new)`, the
+  hermetic form of the playground oracle (`[Sub-Name-0.280.0-r1,
+  perl-5.44.0, Try-Tiny-0.320.0]`, virtual nomerge; leg B the Encode
+  mirror). Bed verdict: with this fix graded in (`33f9fdcb-dirty`, L0
+  `l0-20261103T163945Z`, same tree pins as the pre-fix run) the six
+  `[missing]` perl rows are gone on gnome-shell, libreoffice and gimp, so
+  both `known-divergences.yaml` entries move out -- but the same run shows
+  fresh `[extra]` perl rows where the expansion now fires and real holds
+  the binding (`perl-core/Encode-3.210.0` on nine cells,
+  `dev-perl/Sub-Name-0.280.0-r1` on five, `perl-core/Test-Harness-3.500.0`
+  on eleven, with matching totals/order moves on texlive, XML-Parser,
+  ruby, mariadb and others). That over-expansion is the filed residue
+  (#649); the hermetic p02/p03, #646 tie, Q19, libc-silence,
+  nodeps/onlydeps and deep/emptytree tripwires all stay green.
