@@ -17,7 +17,7 @@
 //! Expected values are Portage 3.0.83's own playground
 //! (`LLM/evidence/2026-11-03-649/probe649_mutations.py` N1/N2 verbatim,
 //! re-run 2026-11-03 plus the H1 holder oracle in
-//! `LLM/evidence/2026-11-0X-650/probe650_oracle.py`):
+//! `LLM/evidence/2026-11-03-650/probe650_oracle.py`):
 //! - N1 (installed perl-5.42.2 + installed 5.42-arm virtuals, tree 5.44.0
 //!   with the textually-identical PDEPEND, bare `dev-lang/perl` request):
 //!   `SUCCESS True`, `MERGELIST ['dev-lang/perl-5.42.2']` — the virtual kept,

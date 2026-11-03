@@ -30,6 +30,11 @@ Deltas vs the real cell (stated, all outcome-neutral for the verdict):
   sees unreferenced installed leaves, so the edge must be in the closure
   to argue against the transient. The resolution posture (R+skip + extras)
   matches the cell exactly; the request shape differs, and says so.
+- the 5.44 arms' `~` pins (`~perl-core/Encode-3.240.0`,
+  `~perl-core/Test-Harness-3.520.0`) dangle hermetically: no such tree
+  ebuilds exist here, matching the real tree (S0 attribution lock: "for
+  which NO tree ebuild exists"); omitted as non-interacting (the `~` arm
+  is non-winning on both sides either way).
 
 Expected verbatim (locked 2026-11-03, Portage 3.0.83):
 - N1: SUCCESS True, MERGELIST ['dev-lang/perl-5.42.2']
