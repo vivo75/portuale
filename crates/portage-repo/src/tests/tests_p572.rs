@@ -171,7 +171,7 @@ fn or_group_of_a_nested_installed_virtual_falls_through_to_the_next_arm() {
 /// (`LLM/evidence/2026-11-03-646/probe646_noupgrade.py`: p03
 /// ebuilds/installed/world blocks verbatim, bare-consumer request
 /// `["dev-perl/Try-Tiny"]`, no options): `SUCCESS True`,
-/// `MERGELIST ['dev-perl/Try-Tiny-0.320.0]` — the one uninstalled requested
+/// `MERGELIST ['dev-perl/Try-Tiny-0.320.0']` — the one uninstalled requested
 /// package; the virtual is kept (nomerge) and `Sub-Name` is absent. The Rust
 /// request (`dev-libs/p572try` alone) is the same shape as the oracle request.
 #[test]
