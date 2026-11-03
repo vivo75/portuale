@@ -20800,9 +20800,9 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   `[missing]` perl rows are gone on gnome-shell, libreoffice and gimp, so
   both `known-divergences.yaml` entries move out -- but the same run shows
   fresh `[extra]` perl rows where the expansion now fires and real holds
-  the binding (`perl-core/Encode-3.210.0` on nine cells,
+  the binding (`perl-core/Encode-3.210.0` on ten cells,
   `dev-perl/Sub-Name-0.280.0-r1` on five, `perl-core/Test-Harness-3.500.0`
-  on eleven, with matching totals/order moves on texlive, XML-Parser,
-  ruby, mariadb and others). That over-expansion is the filed residue
+  on thirteen, with matching totals/order moves on texlive, texlive-core,
+  XML-Parser, ruby, rake, mariadb, dev-lang_perl and others). That over-expansion is the filed residue
   (#649); the hermetic p02/p03, #646 tie, Q19, libc-silence,
   nodeps/onlydeps and deep/emptytree tripwires all stay green.
