@@ -162,6 +162,51 @@ fn or_group_of_a_nested_installed_virtual_falls_through_to_the_next_arm() {
     );
 }
 
+/// The `#646` no-upgrade tie: the same nested-virtual shape as p03 above, but
+/// requested WITHOUT the co-scheduled upgrade — both legs of the virtual's
+/// `||` stay installed-satisfied, the consumer keeps binding the installed
+/// virtual, and nothing new merges.
+///
+/// Portage playground oracle
+/// (`LLM/evidence/2026-11-03-646/probe646_noupgrade.py`: p03
+/// ebuilds/installed/world blocks verbatim, bare-consumer request
+/// `["dev-perl/Try-Tiny"]`, no options): `SUCCESS True`,
+/// `MERGELIST ['dev-perl/Try-Tiny-0.320.0]` — the one uninstalled requested
+/// package; the virtual is kept (nomerge) and `Sub-Name` is absent. The Rust
+/// request (`dev-libs/p572try` alone) is the same shape as the oracle request.
+#[test]
+fn no_upgrade_nested_virtual_keeps_the_consumer_bound() {
+    let root = hermetic_root(&["dev-libs/p572try"]);
+    let result = resolve_in(&root, &["dev-libs/p572try"]);
+    let names: Vec<String> = result
+        .entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert!(
+        !names.iter().any(|n| n == "dev-libs/p572sub"),
+        "no upgrade is co-scheduled, so the nested || must not fall through to dev-libs/p572sub-1.0: {names:?}"
+    );
+    assert!(
+        !result
+            .entries
+            .iter()
+            .any(|e| matches!(e.outcome, PretendOutcome::Upgrade { .. })),
+        "nothing upgrades without a co-scheduled upgrade: {names:?}"
+    );
+    let new: Vec<String> = result
+        .entries
+        .iter()
+        .filter(|e| matches!(e.outcome, PretendOutcome::New { .. }))
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert_eq!(
+        new,
+        vec!["dev-libs/p572try".to_string()],
+        "only the requested consumer merges new: {names:?}"
+    );
+}
+
 /// The same graph under `-uD @world`: already green before #572, and it must stay
 /// green — the deep walk reaches the virtual by a different route. Asserts the
 /// fall-through arm merges exactly once (review focus: no duplicated child).
