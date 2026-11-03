@@ -17,7 +17,8 @@
 //!   `[perl-5.44.0, perl-core/Encode-3.210.0, Encode-Locale-1.50.0-r1]`, the
 //!   virtual kept at installed `3.210.0-r2`, no virtual upgrade.
 //! - not the cell (M4/M5b, `@world --update --deep`, and the bare-atoms
-//!   `-uD` shape Portage answers identically): the virtual UPGRADES
+//!   `-uD` shape Portage answers identically — committed `M4-bare-Ud` run in
+//!   the oracle probe): the virtual UPGRADES
 //!   (`1.700.0` / `3.240.0`) instead of falling through — the scope boundary
 //!   Task 2 must preserve, not "fix".
 //!
@@ -39,7 +40,11 @@ use crate::tests::tests_consumer_pin_conflict::{hermetic_root, request_in, resol
 /// M6b): `SUCCESS True`, `MERGELIST ['dev-perl/Sub-Name-0.280.0-r1',
 /// 'dev-lang/perl-5.44.0', 'dev-perl/Try-Tiny-0.320.0']` — the fall-through
 /// leaf plus the perl upgrade plus the requested leaf, the virtual kept
-/// (nomerge) at installed `1.680.100_rc`.
+/// (nomerge) at installed `1.680.100_rc`. `minimal` defaults OFF by
+/// profile-chain absence (no `package.use`, profile, or `make.defaults`
+/// enables it — the M1 oracle runs the conditional active), so the wrapped
+/// `||` is live; if a profile ever enables `minimal`, this leg goes silent
+/// for a non-product reason.
 ///
 /// RED before Task 2: the `:706`/`:823` single-tree-version cuts skip the
 /// 4-version virtual, so no `p647sub` seed exists.
@@ -143,9 +148,11 @@ fn multi_version_installed_virtual_feeds_the_plain_consumer_arm() {
 
 /// Not the cell (M4 mirror): the SAME tree under an update+deep request
 /// upgrades the virtual instead of falling through. Portage answers the
-/// bare-atoms `-uD` request identically to `@world --update --deep`
-/// (playground: `MERGELIST ['dev-lang/perl-5.44.0',
-/// 'virtual/perl-Scalar-List-Utils-1.700.0', 'dev-perl/Try-Tiny-0.320.0']`),
+/// bare-atoms `-uD` request identically to `@world --update --deep` —
+/// committed run `M4-bare-Ud` in
+/// `LLM/evidence/2026-11-03-647/probe647_oracle.py` (M4 ebuilds verbatim):
+/// `SUCCESS True`, `MERGELIST ['dev-lang/perl-5.44.0',
+/// 'virtual/perl-Scalar-List-Utils-1.700.0', 'dev-perl/Try-Tiny-0.320.0']` —
 /// so this pins the in-repo `-uD` shape (`tests_p572.rs`
 /// `deep_update_still_lists_the_fall_through_arm` precedent): the virtual
 /// upgrades to `1.700.0` and the fall-through arm stays absent. Task 2 must

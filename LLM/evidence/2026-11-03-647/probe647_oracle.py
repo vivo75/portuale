@@ -3,8 +3,8 @@
 Runs the S0 probe645_mutations.py M6b/M5/M4/M5b definitions VERBATIM (copied,
 not re-derived — every ebuild dict, RDEPEND string and request below is
 byte-identical to the S0 file; only this docstring and the runner tail
-differ: the tail runs exactly the four lock mutations instead of taking
-argv). Run: python3 probe647_oracle.py
+differ: the tail runs exactly the four lock mutations plus one grounding
+run, M4-bare-Ud, for the Rust not-the-cell pin). Run: python3 probe647_oracle.py
 
 Recorded 2026-11-03, Portage 3.0.83, bed tree @ e07309ba6:
 - M6b (leg A, atom request): SUCCESS True,
@@ -20,6 +20,33 @@ Recorded 2026-11-03, Portage 3.0.83, bed tree @ e07309ba6:
 - M5b (not the cell, @world --update --deep): SUCCESS True,
   MERGELIST ['dev-lang/perl-5.44.0', 'virtual/perl-Encode-3.240.0'] —
   the virtual UPGRADES to 3.240.0 (scope boundary, do not "fix").
+- M4-bare-Ud (not-the-cell grounding for the Rust pin, M4 ebuilds verbatim,
+  bare atoms `["dev-perl/Try-Tiny", "dev-lang/perl"]` + `--update --deep`):
+  SUCCESS True,
+  MERGELIST ['dev-lang/perl-5.44.0',
+  'virtual/perl-Scalar-List-Utils-1.700.0', 'dev-perl/Try-Tiny-0.320.0'] —
+  identical to M4, so the pin's bare-atoms `-uD` shape is the same boundary.
+
+Divergent arms (probe/oracle vs TRUE tree text, bed tree @ e07309ba6 —
+every other arm is byte-identical between the two). Fixtures follow the TRUE
+text except the two INVALID `!>` atoms, which carry the probe form (Q26 in
+`LLM/portage-quirks.md`). `~` ignores the revision for matching (verified
+with `match_from_list` both ways on 3.0.83: `~X-1.630.0` and `~X-1.630.0-r1`
+match the same tree set), and neither `!>` fires on any tree that matters,
+so the probe/oracle mergelists hold under either spelling:
+
+| virtual | arm | TRUE tree text | probe text | fixture carries |
+|---|---|---|---|---|
+| slu-1.630.0-r1 | `~` | `~perl-core/Scalar-List-Utils-1.630.0-r1` | `~perl-core/Scalar-List-Utils-1.630.0` | TRUE |
+| slu-1.630.0-r1 | `!<` | `!<perl-core/Scalar-List-Utils-1.630.0-r1` (blocks tree 1.630.0) | `!<perl-core/Scalar-List-Utils-1.630.0` (blocks nothing in-tree) | TRUE |
+| slu-1.630.0-r1 | `!>` | `!>perl-core/Scalar-List-Utils-1.630.0-r1-r999` INVALID | `!>perl-core/Scalar-List-Utils-1.630.0-r999` | probe (= oracle) |
+| enc-3.210.0-r2 | `~` | `~perl-core/Encode-3.210.0-r2` | `~perl-core/Encode-3.210.0` | TRUE |
+| enc-3.210.0-r2 | `!<` | `!<perl-core/Encode-3.210.0-r2` (blocks tree 3.190.0/3.210.0) | `!<perl-core/Encode-3.210.0` (blocks 3.190.0 only) | TRUE |
+| enc-3.210.0-r2 | `!>` | `!>perl-core/Encode-3.210.0-r2-r999` INVALID | `!>perl-core/Encode-3.210.0-r999` | probe (= oracle) |
+
+The `!<` true-vs-probe difference is real (whether the tree's lower core is
+blocked) but mergelist-neutral here: nothing merges a core in legs A/B, and
+the real cell with the TRUE text still falls through to Sub-Name/Encode.
 
 Axes (vs p03 = probe572_p03.py, p02 = probe572.py):
 - M0 baseline p03 (Try-Tiny `|| (>=virtual/... dev-perl/Sub-Name)`, single
@@ -292,3 +319,28 @@ for name in ("M6b", "M5", "M4", "M5b"):
         print("UNSAT", getattr(result, "unsatisfied_deps", None))
     finally:
         playground.cleanup()
+
+# Not-the-cell grounding for the Rust pin
+# (`update_deep_upgrades_the_multi_version_virtual_instead_of_falling_through`
+# in `crates/portage-repo/src/tests/tests_p647.rs`): M4's ebuilds/installed/
+# world VERBATIM (the `_m4()` dicts above — nothing re-derived), but the
+# in-repo `-uD` request shape (bare atoms + update + deep, the `tests_p572.rs`
+# precedent) instead of `@world --update --deep`. Recorded 2026-11-03,
+# Portage 3.0.83: `SUCCESS True`, `MERGELIST ['dev-lang/perl-5.44.0',
+# 'virtual/perl-Scalar-List-Utils-1.700.0', 'dev-perl/Try-Tiny-0.320.0']` —
+# identical to M4, so the pin's bare-atoms shape is the same scope boundary.
+m = _m4()
+print("MUT M4-bare-Ud - M4 ebuilds under the bare-atoms -uD request")
+playground = ResolverPlayground(
+    ebuilds=m["ebuilds"], installed=m["installed"], world=m["world"]
+)
+try:
+    result = playground.run(
+        ["dev-perl/Try-Tiny", "dev-lang/perl"],
+        options={"--update": True, "--deep": True},
+    )
+    print("SUCCESS", result.success)
+    print("MERGELIST", result.mergelist)
+    print("UNSAT", getattr(result, "unsatisfied_deps", None))
+finally:
+    playground.cleanup()
