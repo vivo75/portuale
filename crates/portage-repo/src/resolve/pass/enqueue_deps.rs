@@ -831,7 +831,7 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
     // byte-identical to the pre-deferral walk.
     // Portage: depgraph.py, _queue_disjunctive_deps
     // An installed new-style virtual named by an `||` arm expands inline to
-    // its nested choice plus the exact-version pin, one conjunction arm of
+    // one conjunction per matching tree version, spliced as sibling arms of
     // the consumer's group, so the drained-graph choice can fall through.
     // Portage: dep_check.py, _expand_new_virtuals
     let tokens = expand_consumer_virtual_arms(ExpandConsumerVirtualArmsArgs {
@@ -840,6 +840,7 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         config,
         root: ctx.root,
         gate: ctx.gate(),
+        update: ctx.update,
     });
     let (plains, groups) = split_off_disjunctions(&tokens, use_flags);
     let ControlFlow::Continue(flat_deps) = flatten_dep_string(FlattenDepStringArgs {

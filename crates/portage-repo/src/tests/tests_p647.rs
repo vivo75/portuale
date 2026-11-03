@@ -11,8 +11,9 @@
 //! shapes (`LLM/evidence/2026-11-03-647/probe647_oracle.py`, minuend of the
 //! S0 `probe645_mutations.py` M6b/M5/M4/M5b blocks):
 //! - leg A (M6b, atom request): mergelist
-//!   `[Sub-Name-0.280.0-r1, perl-5.44.0, Try-Tiny-0.320.0]`, the virtual kept
-//!   at installed `1.680.100_rc`, no virtual upgrade.
+//!   `[Sub-Name-0.280.0-r1, perl-5.44.0, Try-Tiny-0.320.0]`, no virtual row
+//!   (kept nomerge — portuale does not materialize the unqueued kept virtual,
+//!   the p03 precedent); no virtual upgrade.
 //! - leg B (M5, atom request): mergelist
 //!   `[perl-5.44.0, perl-core/Encode-3.210.0, Encode-Locale-1.50.0-r1]`, the
 //!   virtual kept at installed `3.210.0-r2`, no virtual upgrade.
@@ -71,18 +72,25 @@ fn multi_version_installed_virtual_falls_through_the_wrapped_arm() {
         "the fall-through arm merges new, got {:?}",
         sub.outcome
     );
-    let virt = result
-        .entries
-        .iter()
-        .find(|e| e.category == "virtual" && e.package == "p647slu")
-        .expect("the installed virtual stays in the graph");
+    // Portage keeps the virtual nomerge (M6b mergelist has no virtual row),
+    // and portuale does not materialize unqueued kept virtuals as entries:
+    // the single-version p03 shape (`or_group_of_a_nested_installed_virtual_`
+    // `falls_through_to_the_next_arm`) falls through with no virtual node
+    // either. So the virtual is absent here, or kept — never upgraded.
+    // Either representation satisfies the oracle; the load-bearing half is
+    // the no-upgrade assertion (a winning `1.700.0` conjunction would show
+    // up as a virtual `Upgrade` row).
     assert!(
-        matches!(
-            &virt.outcome,
-            PretendOutcome::AlreadyInstalled { version } if version == "1.680.100_rc"
-        ),
-        "the virtual is kept at installed 1.680.100_rc, got {:?}",
-        virt.outcome
+        result
+            .entries
+            .iter()
+            .filter(|e| e.category == "virtual" && e.package == "p647slu")
+            .all(|e| matches!(
+                &e.outcome,
+                PretendOutcome::AlreadyInstalled { version } if version == "1.680.100_rc"
+            )),
+        "the virtual is absent or kept at installed 1.680.100_rc: {:?}",
+        result.entries
     );
     assert!(
         !result.entries.iter().any(|e| matches!(
@@ -188,5 +196,55 @@ fn update_deep_upgrades_the_multi_version_virtual_instead_of_falling_through() {
     assert!(
         !names.iter().any(|n| n == "dev-libs/p647sub"),
         "under -uD there is no fall-through to dev-libs/p647sub: {names:?}"
+    );
+}
+
+/// Not the cell (M5b mirror): the plain-consumer tree under an update+deep
+/// request upgrades the virtual instead of feeding the fall-through arm.
+/// Portage answers the bare-atoms `-uD` request identically to
+/// `@world --update --deep` — committed run `M5b-bare-Ud` in
+/// `LLM/evidence/2026-11-03-647/probe647_oracle.py` (M5b ebuilds verbatim):
+/// `SUCCESS True`, `MERGELIST ['dev-lang/perl-5.44.0',
+/// 'virtual/perl-Encode-3.240.0']` — the virtual UPGRADES to `3.240.0` and
+/// the `~` arm stays absent. This pins the seed feed's update behavior: an
+/// upgrading virtual is no kept instance, so its installed RDEPEND pulls
+/// nothing (the `AlreadyInstalled` gate skips it). Task 2 must keep this
+/// behavior, not "fix" it.
+///
+/// (The Rust request names the leaf explicitly because the test tree leaves
+/// it uninstalled, where M5b has it installed: the leaf merges `New` here
+/// and is absent there. The pinned boundary — virtual upgrades, no
+/// `p647enccore` — is identical.)
+#[test]
+fn update_deep_upgrades_the_plain_consumer_virtual_without_feeding_the_arm() {
+    let root = hermetic_root(&[]);
+    let mut req = request_in(&root, &["dev-libs/p647enclocale", "dev-libs/p647prov"]);
+    req.update = true;
+    req.deep = Deep::Unlimited;
+    req.selective = true;
+    let result = req
+        .resolve()
+        .unwrap_or_else(|e| panic!("resolving -uD failed: {e}"));
+    let names: Vec<String> = result
+        .entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    let virt = result
+        .entries
+        .iter()
+        .find(|e| e.category == "virtual" && e.package == "p647enc")
+        .expect("the virtual stays in the graph under -uD");
+    assert!(
+        matches!(
+            &virt.outcome,
+            PretendOutcome::Upgrade { to, .. } if to == "3.240.0"
+        ),
+        "under -uD the virtual upgrades to 3.240.0 (Portage M5b), got {:?}",
+        virt.outcome
+    );
+    assert!(
+        !names.iter().any(|n| n == "dev-libs/p647enccore"),
+        "under -uD there is no seed feed of dev-libs/p647enccore-3.210.0: {names:?}"
     );
 }

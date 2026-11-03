@@ -3,8 +3,8 @@
 Runs the S0 probe645_mutations.py M6b/M5/M4/M5b definitions VERBATIM (copied,
 not re-derived — every ebuild dict, RDEPEND string and request below is
 byte-identical to the S0 file; only this docstring and the runner tail
-differ: the tail runs exactly the four lock mutations plus one grounding
-run, M4-bare-Ud, for the Rust not-the-cell pin). Run: python3 probe647_oracle.py
+differ: the tail runs exactly the four lock mutations plus two grounding
+runs, M4-bare-Ud and M5b-bare-Ud, for the Rust not-the-cell pins). Run: python3 probe647_oracle.py
 
 Recorded 2026-11-03, Portage 3.0.83, bed tree @ e07309ba6:
 - M6b (leg A, atom request): SUCCESS True,
@@ -26,6 +26,12 @@ Recorded 2026-11-03, Portage 3.0.83, bed tree @ e07309ba6:
   MERGELIST ['dev-lang/perl-5.44.0',
   'virtual/perl-Scalar-List-Utils-1.700.0', 'dev-perl/Try-Tiny-0.320.0'] —
   identical to M4, so the pin's bare-atoms `-uD` shape is the same boundary.
+- M5b-bare-Ud (not-the-cell grounding for the second Rust pin, M5b ebuilds
+  verbatim, bare atoms `["dev-perl/Encode-Locale", "dev-lang/perl"]` +
+  `--update --deep`): SUCCESS True,
+  MERGELIST ['dev-lang/perl-5.44.0', 'virtual/perl-Encode-3.240.0'] —
+  identical to M5b: the virtual upgrades and the fall-through arm stays
+  absent, so the pin's bare-atoms shape is the same boundary.
 
 Divergent arms (probe/oracle vs TRUE tree text, bed tree @ e07309ba6 —
 every other arm is byte-identical between the two). Fixtures follow the TRUE
@@ -337,6 +343,31 @@ playground = ResolverPlayground(
 try:
     result = playground.run(
         ["dev-perl/Try-Tiny", "dev-lang/perl"],
+        options={"--update": True, "--deep": True},
+    )
+    print("SUCCESS", result.success)
+    print("MERGELIST", result.mergelist)
+    print("UNSAT", getattr(result, "unsatisfied_deps", None))
+finally:
+    playground.cleanup()
+
+# Not-the-cell grounding for the second Rust pin
+# (`update_deep_upgrades_the_plain_consumer_virtual_without_feeding_the_arm`
+# in `crates/portage-repo/src/tests/tests_p647.rs`): M5b's ebuilds/installed/
+# world VERBATIM (the `_m5b()` dicts above — nothing re-derived), but the
+# in-repo `-uD` request shape (bare atoms + update + deep) instead of
+# `@world --update --deep`. Recorded 2026-11-03, Portage 3.0.83:
+# `SUCCESS True`, `MERGELIST ['dev-lang/perl-5.44.0',
+# 'virtual/perl-Encode-3.240.0']` — identical to M5b: the virtual upgrades
+# and the seed feed's fall-through arm stays absent under `-uD`.
+m = _m5b()
+print("MUT M5b-bare-Ud - M5b ebuilds under the bare-atoms -uD request")
+playground = ResolverPlayground(
+    ebuilds=m["ebuilds"], installed=m["installed"], world=m["world"]
+)
+try:
+    result = playground.run(
+        ["dev-perl/Encode-Locale", "dev-lang/perl"],
         options={"--update": True, "--deep": True},
     )
     print("SUCCESS", result.success)
