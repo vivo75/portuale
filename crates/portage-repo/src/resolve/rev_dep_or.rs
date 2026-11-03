@@ -849,8 +849,20 @@ pub(crate) fn virtual_expansion_seeds(
                 continue;
             }
             if seed_trace_enabled() {
-                let via: Vec<&DowngradeDemoter> =
-                    arms.demoted.iter().flat_map(|(_, ds)| ds.iter()).collect();
+                // `via` names the veto-level demoters only: demoted arms the
+                // installed binding would have held through (had one survived,
+                // `installed_survivor` would have vetoed every seed). A demoted
+                // non-installed arm merely yields its survivor slot, so its
+                // demoter is not this seed's own.
+                let via: Vec<&DowngradeDemoter> = arms
+                    .demoted
+                    .iter()
+                    .filter(|(arm, _)| {
+                        arm.iter()
+                            .all(|a| atom_matches_installed(ctx.root, a, ctx.config))
+                    })
+                    .flat_map(|(_, ds)| ds.iter())
+                    .collect();
                 eprintln!(
                     "SEED commit virtual={}/{} seed={} via={:?}",
                     e.category, e.package, seed.1, via
