@@ -20738,3 +20738,37 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   playground oracle (`probe572_p03.py`: `[Sub-Name, perl-5.44, Try-Tiny]`);
   multi-version virtuals and valid-syntax mixed `||` virtuals stay
   documented cuts (#644).
+
+- **A nested new-style virtual falls through to the consumer's next `||` arm
+  when the installed virtual's own expansion is dead (backlog #643).**
+  Portage evaluates the virtual's RDEPEND inside the consumer's graph
+  (`dep_check.py`, `_expand_new_virtuals`), so the dead nested expansion
+  demotes the virtual arm and the fall-through arm becomes a normal node
+  (`depgraph.py:3364`); portuale's #572 seed feed cannot cover this by
+  construction -- it only adds nodes, never retracts the consumer's binding
+  to the installed virtual (S0 `LLM/evidence/2026-11-02-643/REPORT.md`).
+  The enqueue pass now rewrites the consumer's token stream before
+  `split_off_disjunctions` (`expand_consumer_virtual_arms`, owned by the
+  virtual with pin-contradiction avoidance): a bare arm naming an installed
+  new-style virtual whose live RDEPEND `||` is dead post-upgrade expands to
+  the nested choice plus a `=<virtual>-<installed-version>` pin, and the
+  existing pop-time `or_preference` ranking demotes the conjunction as a
+  unit, so the fall-through arm queues as a normal consumer-owned node.
+  Run it live: `cargo test --release -p portage-repo tests_p572` (the
+  un-ignored p03 test) and `python3 -m pytest
+  pytests-contract-suite/test_emerge_pretend_contract.py -k 643` in pmtest
+  -- `emerge -pv dev-libs/p572try =dev-libs/p572prov-5.44` prints `N
+  p572sub-1.0`, `U p572prov-5.44 [5.42]`, `N p572try-1.0` with `Total: 3
+  packages (1 upgrade, 2 new)`, the hermetic form of the playground oracle
+  `probe572_p03.py` (`[Sub-Name, perl-5.44, Try-Tiny]`, virtual nomerge);
+  the backtrack counter stays deliberately unasserted (feed-vs-inline
+  precedent 1/20 vs 0/20). The p02 shape (satisfiable virtual keeps
+  binding), the silent-`virtual/libc-1.0` tripwire, the `--nodeps` /
+  `--onlydeps` pair, the deep/emptytree once-only pair, and the Q19 skip
+  rows all stay green. Bed verdict: with this fix built into the graded
+  binary (`7b7a4e5f-dirty`, L0 `l0-20261103T001814Z`) the real-tree
+  perl-544 cells still diverge on both the `encode` and the `sub-name`
+  rows -- the fixture shapes do not reproduce the real-tree trigger, so
+  both yaml entries stay and the real-tree S0 is filed as #645. Residue:
+  the nested-`||`-verbatim cut folds into #644; the no-upgrade
+  conjunction-wins-tie shape has no pin (#646).
