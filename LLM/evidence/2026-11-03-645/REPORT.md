@@ -153,7 +153,7 @@ respected.)
 
 ## 6. Follow-up slice — #647
 
-**#647 (filed by this S0; verified free across `LLM/backlog-tasks.md` and
+**#647 (shaped and numbered by this S0, filed at close-out; verified free across `LLM/backlog-tasks.md` and
 `LLM/backlog-tasks-2026-10.md`, whose highest number is #646): lift the
 single-tree-version cut in both expansion mechanisms to Portage's
 per-version expansion, plus the conjunction-extras lift.**
