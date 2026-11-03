@@ -506,8 +506,11 @@ impl OrScan<'_> {
 /// running: the first available arm returns even when demoted, the shape of
 /// Portage's *inner* `dep_zapdeps` return over an expanded virtual's own `||`
 /// (the outer choice demotes the conjunction as a unit instead).
+/// A demotion whose higher-in-slot node the pass's open slot conflict may yet
+/// skip commits no seed: the installed arm holds instead, and the feed
+/// re-commits once the verdict lands with the demoter surviving (#650).
 /// Portage: dep_check.py, dep_zapdeps.
-fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> Vec<String> {
+fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> ExpansionArms {
     let SelectExpansionArmsArgs {
         split,
         consumer,
@@ -517,11 +520,13 @@ fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> Vec<String> {
         update,
         gate,
         keep_demoted,
+        conflicts,
     } = args;
     let no_constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
     let self_node: RootCp = (false, consumer.0.clone(), consumer.1.clone());
     let mut survivors: Vec<Vec<String>> = Vec::new();
     let mut installed_survivor = false;
+    let mut demoted: Vec<(Vec<String>, Vec<DowngradeDemoter>)> = Vec::new();
     for (tokens, _) in split.groups() {
         let Some(arms) = group_arms(tokens) else {
             continue;
@@ -543,8 +548,8 @@ fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> Vec<String> {
             // demoted-but-available arm: the outer choice demotes the whole
             // conjunction instead, so the guard never filters here.
             // Portage: dep_check.py, dep_zapdeps (inner return).
-            if !keep_demoted
-                && alternative_downgrade_demoted(AlternativeDowngradeDemotedArgs {
+            if !keep_demoted {
+                let demoters = downgrade_demoters(AlternativeDowngradeDemotedArgs {
                     root,
                     config,
                     entries,
@@ -555,9 +560,33 @@ fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> Vec<String> {
                     update,
                     gate,
                     view: OrView::Normal,
-                })
-            {
-                continue;
+                });
+                if !demoters.is_empty() {
+                    // Portage files this demotion transiently
+                    // (dep_check.py:531-544, filed :634-635) but re-resolves
+                    // post-skip: the installed arm bins `preferred_in_graph`
+                    // (:636-655) and the fall-through `preferred_non_installed`
+                    // (:599-616). A demoter the pass's open slot conflict may
+                    // yet skip carries no settled verdict, so the demotion is
+                    // withheld here; the installed arm holds instead.
+                    if let Some(hit) = demoters.iter().find(|d| {
+                        conflicts.iter().any(|sc| {
+                            sc.category == d.category
+                                && sc.package == d.package
+                                && sc.slot == d.slot
+                        })
+                    }) {
+                        if seed_trace_enabled() {
+                            eprintln!(
+                                "SEED decline virtual={}/{} arm={:?} demoter={:?} contested",
+                                consumer.0, consumer.1, arm, hit
+                            );
+                        }
+                    } else {
+                        demoted.push((arm.clone(), demoters));
+                        continue;
+                    }
+                }
             }
             if !keep_demoted && arm.iter().all(|a| atom_matches_installed(root, a, config)) {
                 installed_survivor = true;
@@ -567,10 +596,16 @@ fn select_expansion_arms(args: SelectExpansionArmsArgs<'_>) -> Vec<String> {
         }
     }
     if installed_survivor || survivors.is_empty() {
-        return Vec::new();
+        return ExpansionArms {
+            chosen: Vec::new(),
+            demoted,
+        };
     }
     // First survivor in ebuild order; each leg is re-checked by the caller.
-    survivors.remove(0)
+    ExpansionArms {
+        chosen: survivors.remove(0),
+        demoted,
+    }
 }
 
 /// One arm per top-level alternative of a `["||", "(", ..., ")"]` token group:
@@ -642,10 +677,29 @@ struct SelectExpansionArmsArgs<'a> {
     entries: &'a [GraphEntry],
     update: bool,
     gate: CategoryGate<'a>,
+    /// The pass's surviving slot conflicts: a demotion whose higher-in-slot
+    /// node sits in one is withheld (the demoter may yet be skipped, #650).
+    /// The inner-choice caller passes an empty slice alongside
+    /// `keep_demoted` (the guard is dead there either way).
+    conflicts: &'a [SlotConflict],
     /// Inner choice over an expanded virtual: keep the demoted-but-available
     /// arm and installed arms instead of filtering them (the p02 seed feed
     /// passes `false`).
     keep_demoted: bool,
+}
+
+/// What [`select_expansion_arms`] chose: the fall-through arm to seed (empty
+/// when an installed arm holds the binding), plus every guard-demoted arm
+/// with the higher-in-slot nodes that demoted it (the seed's demotion
+/// record, for the seed-decision trace).
+struct ExpansionArms {
+    chosen: Vec<String>,
+    demoted: Vec<(Vec<String>, Vec<DowngradeDemoter>)>,
+}
+
+/// Whether the seed-decision trace is active (`PORTUALE_BT_TRACE=1`).
+fn seed_trace_enabled() -> bool {
+    std::env::var("PORTUALE_BT_TRACE").is_ok_and(|value| value == "1")
 }
 
 /// Whether a new-style virtual's RDEPEND qualifies for expansion: a `||`
@@ -754,7 +808,7 @@ pub(crate) fn virtual_expansion_seeds(
         if !virtual_rdepend_is_expandable(&split) {
             continue;
         }
-        let chosen = select_expansion_arms(SelectExpansionArmsArgs {
+        let arms = select_expansion_arms(SelectExpansionArmsArgs {
             split: &split,
             consumer: &(e.category.clone(), e.package.clone()),
             config: ctx.config,
@@ -763,8 +817,9 @@ pub(crate) fn virtual_expansion_seeds(
             update: ctx.update,
             gate,
             keep_demoted: false,
+            conflicts: &pass.slot_conflicts,
         });
-        for atom in chosen {
+        for atom in arms.chosen {
             let Some(a) = parse_dep_atom(&atom, "virtual_expansion") else {
                 continue;
             };
@@ -792,6 +847,14 @@ pub(crate) fn virtual_expansion_seeds(
             );
             if grown.virtual_expansion_seeds.contains(&seed) {
                 continue;
+            }
+            if seed_trace_enabled() {
+                let via: Vec<&DowngradeDemoter> =
+                    arms.demoted.iter().flat_map(|(_, ds)| ds.iter()).collect();
+                eprintln!(
+                    "SEED commit virtual={}/{} seed={} via={:?}",
+                    e.category, e.package, seed.1, via
+                );
             }
             out.push(seed);
         }
@@ -1002,16 +1065,19 @@ fn expand_single_version_virtual_arm(
         update: false,
         gate,
         keep_demoted: true,
+        conflicts: &[],
     });
-    if nested.is_empty() {
+    if nested.chosen.is_empty() {
         return None;
     }
     // Deterministic order: the plain set has no ebuild order.
     let mut extras: Vec<String> = split.plain_atoms().iter().cloned().collect();
     extras.sort();
-    nested.extend(extras);
-    nested.push(format!("={}/{}-{version}", parsed.category, parsed.package));
-    Some(nested)
+    nested.chosen.extend(extras);
+    nested
+        .chosen
+        .push(format!("={}/{}-{version}", parsed.category, parsed.package));
+    Some(nested.chosen)
 }
 
 /// The values [`expand_consumer_virtual_arms`] reads from its caller.

@@ -16,15 +16,25 @@ pub(crate) struct AlternativeDowngradeDemotedArgs<'a> {
     pub(crate) view: OrView<'a>,
 }
 
-/// An otherwise-available `||` alternative is demoted when one of its atoms would pull
-/// in a *lower* version of a package whose slot the live graph already holds at a
-/// higher version, unless that downgrade is desirable (`downgrade_probe`).
-/// Portage: dep_check.py, dep_zapdeps (conflict_downgrade / installed_downgrade, bug 531656).
-///
-/// Portage's `graph_db` is the live package set; portuale's is the in-progress `entries`,
-/// the same set at the same moment. `avail_pkg` ignores `[use]`; `highest_in_slot` needs
-/// a graph node holding the slot; an atom of the entry's own `cat/pkg` never demotes.
-pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArgs<'_>) -> bool {
+/// The higher-in-slot node whose presence demotes an `||` arm under the
+/// bug-531656 downgrade guard: the arm's best candidate is older than what
+/// the graph already holds in its slot.
+#[derive(Debug)]
+pub(crate) struct DowngradeDemoter {
+    pub(crate) category: String,
+    pub(crate) package: String,
+    // Trace identity only (read by the `Debug` seed-decision log, which dead-code
+    // analysis ignores); the contest check is slot-scoped by design.
+    #[allow(dead_code)]
+    pub(crate) version: String,
+    pub(crate) slot: String,
+}
+
+/// Every higher-in-slot node demoting one of `atoms` (one per demoted atom).
+/// [`alternative_downgrade_demoted`] is the boolean projection.
+pub(crate) fn downgrade_demoters(
+    args: AlternativeDowngradeDemotedArgs<'_>,
+) -> Vec<DowngradeDemoter> {
     let AlternativeDowngradeDemotedArgs {
         root,
         config,
@@ -37,110 +47,130 @@ pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArg
         gate,
         view,
     } = args;
-    atoms.iter().any(|a| {
-        let Some(at) = parse_dep_atom(a, "or_preference") else {
-            return false;
-        };
-        if at.blocker != portage_dep::Blocker::None
-            || (at.category == self_cp.1 && at.package == self_cp.2)
-        {
-            return false;
-        }
-        let extra = constraints
-            .get(&(at.category.clone(), at.package.clone()))
-            .map_or(&[][..], Vec::as_slice);
-        if let OrView::PostMerge(set) = view {
-            // The set holds the graph: the best member is `avail_pkg`, the highest
-            // member of its slot is `highest_in_slot`.
-            let Some((avail_version, avail_slot)) = set.best_matching(a) else {
-                return false;
-            };
-            let Some(highest) = set.highest_in_slot(&at.category, &at.package, &avail_slot) else {
-                return false;
-            };
-            if vercmp_ordering(&avail_version, &highest) != Ordering::Less {
-                return false;
+    atoms
+        .iter()
+        .filter_map(|a| {
+            let at = parse_dep_atom(a, "or_preference")?;
+            if at.blocker != portage_dep::Blocker::None
+                || (at.category == self_cp.1 && at.package == self_cp.2)
+            {
+                return None;
+            }
+            let extra = constraints
+                .get(&(at.category.clone(), at.package.clone()))
+                .map_or(&[][..], Vec::as_slice);
+            if let OrView::PostMerge(set) = view {
+                // The set holds the graph: the best member is `avail_pkg`, the highest
+                // member of its slot is `highest_in_slot`.
+                let (avail_version, avail_slot) = set.best_matching(a)?;
+                let highest = set.highest_in_slot(&at.category, &at.package, &avail_slot)?;
+                if vercmp_ordering(&avail_version, &highest) != Ordering::Less {
+                    return None;
+                }
+                let slot_atom = format!("{}/{}:{avail_slot}", at.category, at.package);
+                if downgrade_probe(gate, config, &slot_atom, &avail_version, extra) {
+                    return None;
+                }
+                return Some(DowngradeDemoter {
+                    category: at.category.clone(),
+                    package: at.package.clone(),
+                    version: highest,
+                    slot: avail_slot,
+                });
+            }
+            let (avail_version, avail_slot) = visible_tree_matches(gate, a, config, extra)
+                .into_iter()
+                .max_by(|x, y| vercmp_ordering(&x.0, &y.0))?;
+            // Merge-bound versions, plus the installed version when an `AlreadyInstalled`
+            // node holds the slot.
+            let mut in_slot: Vec<String> = entries
+                .iter()
+                .filter(|e| {
+                    e.category == at.category
+                        && e.package == at.package
+                        && e.slot.as_deref() == Some(avail_slot.as_str())
+                })
+                .filter_map(|e| match &e.outcome {
+                    PretendOutcome::AlreadyInstalled { version }
+                    | PretendOutcome::New { version }
+                    | PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
+                    PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
+                        Some(to.clone())
+                    }
+                    // A removal installs nothing into the slot.
+                    PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
+                })
+                .collect();
+            // Portage selects world/argv atoms before walking, so the pending update is already
+            // a graph node at judgement time. Portuale judges eagerly: a queued same-cp atom
+            // stands in (tree-best under `--update`, installed-best otherwise).
+            if in_slot.is_empty() {
+                let mut hypothetical: Vec<String> = Vec::new();
+                for q in queued {
+                    let Some(qat) = parse_dep_atom(&q.atom, "or_preference") else {
+                        continue;
+                    };
+                    if qat.category != at.category || qat.package != at.package {
+                        continue;
+                    }
+                    let qextra = constraints
+                        .get(&(qat.category.clone(), qat.package.clone()))
+                        .map_or(&[][..], Vec::as_slice);
+                    if update {
+                        hypothetical.extend(
+                            visible_tree_matches(gate, &q.atom, config, qextra)
+                                .into_iter()
+                                .map(|(v, _)| v),
+                        );
+                    } else {
+                        hypothetical.extend(
+                            installed_candidates(root, &qat.category, &qat.package)
+                                .into_iter()
+                                .filter_map(|(v, _, _)| {
+                                    let probe = format!("{}/{}-{v}", qat.category, qat.package);
+                                    if portage_dep::match_from_list(&q.atom, &[probe.as_str()])
+                                        .is_some_and(|m| !m.is_empty())
+                                    {
+                                        Some(v)
+                                    } else {
+                                        None
+                                    }
+                                }),
+                        );
+                    }
+                }
+                in_slot = hypothetical;
+            }
+            let highest_in_graph = in_slot.iter().max_by(|x, y| vercmp_ordering(x, y))?;
+            if vercmp_ordering(&avail_version, highest_in_graph) != Ordering::Less {
+                return None;
             }
             let slot_atom = format!("{}/{}:{avail_slot}", at.category, at.package);
-            return !downgrade_probe(gate, config, &slot_atom, &avail_version, extra);
-        }
-        let Some((avail_version, avail_slot)) = visible_tree_matches(gate, a, config, extra)
-            .into_iter()
-            .max_by(|x, y| vercmp_ordering(&x.0, &y.0))
-        else {
-            return false;
-        };
-        // Merge-bound versions, plus the installed version when an `AlreadyInstalled`
-        // node holds the slot.
-        let mut in_slot: Vec<String> = entries
-            .iter()
-            .filter(|e| {
-                e.category == at.category
-                    && e.package == at.package
-                    && e.slot.as_deref() == Some(avail_slot.as_str())
-            })
-            .filter_map(|e| match &e.outcome {
-                PretendOutcome::AlreadyInstalled { version }
-                | PretendOutcome::New { version }
-                | PretendOutcome::Reinstall { version, .. } => Some(version.clone()),
-                PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
-                    Some(to.clone())
-                }
-                // A removal installs nothing into the slot.
-                PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => None,
-            })
-            .collect();
-        // Portage selects world/argv atoms before walking, so the pending update is already
-        // a graph node at judgement time. Portuale judges eagerly: a queued same-cp atom
-        // stands in (tree-best under `--update`, installed-best otherwise).
-        if in_slot.is_empty() {
-            let mut hypothetical: Vec<String> = Vec::new();
-            for q in queued {
-                let Some(qat) = parse_dep_atom(&q.atom, "or_preference") else {
-                    continue;
-                };
-                if qat.category != at.category || qat.package != at.package {
-                    continue;
-                }
-                let qextra = constraints
-                    .get(&(qat.category.clone(), qat.package.clone()))
-                    .map_or(&[][..], Vec::as_slice);
-                if update {
-                    hypothetical.extend(
-                        visible_tree_matches(gate, &q.atom, config, qextra)
-                            .into_iter()
-                            .map(|(v, _)| v),
-                    );
-                } else {
-                    hypothetical.extend(
-                        installed_candidates(root, &qat.category, &qat.package)
-                            .into_iter()
-                            .filter_map(|(v, _, _)| {
-                                let probe = format!("{}/{}-{v}", qat.category, qat.package);
-                                if portage_dep::match_from_list(&q.atom, &[probe.as_str()])
-                                    .is_some_and(|m| !m.is_empty())
-                                {
-                                    Some(v)
-                                } else {
-                                    None
-                                }
-                            }),
-                    );
-                }
+            // Both downgrade guards share one test once `highest_in_slot` is a graph node:
+            // lower than what the graph holds, and not a desirable downgrade.
+            if downgrade_probe(gate, config, &slot_atom, &avail_version, extra) {
+                return None;
             }
-            in_slot = hypothetical;
-        }
-        let Some(highest_in_graph) = in_slot.iter().max_by(|x, y| vercmp_ordering(x, y)) else {
-            return false;
-        };
-        if vercmp_ordering(&avail_version, highest_in_graph) != Ordering::Less {
-            return false;
-        }
-        let slot_atom = format!("{}/{}:{avail_slot}", at.category, at.package);
-        // Both downgrade guards share one test once `highest_in_slot` is a graph node:
-        // lower than what the graph holds, and not a desirable downgrade.
-        !downgrade_probe(gate, config, &slot_atom, &avail_version, extra)
-    })
+            Some(DowngradeDemoter {
+                category: at.category.clone(),
+                package: at.package.clone(),
+                version: highest_in_graph.clone(),
+                slot: avail_slot,
+            })
+        })
+        .collect()
+}
+
+/// An otherwise-available `||` alternative is demoted when one of its atoms would pull
+/// in a *lower* version of a package whose slot the live graph already holds at a
+/// higher version, unless that downgrade is desirable (`downgrade_probe`).
+/// Portage: dep_check.py, dep_zapdeps (conflict_downgrade / installed_downgrade, bug 531656).
+///
+/// Portage's `graph_db` is the live package set; portuale's is the in-progress `entries`,
+/// the same set at the same moment. `avail_pkg` ignores `[use]`; `highest_in_slot` needs
+/// a graph node holding the slot; an atom of the entry's own `cat/pkg` never demotes.
+pub(crate) fn alternative_downgrade_demoted(args: AlternativeDowngradeDemotedArgs<'_>) -> bool {
+    !downgrade_demoters(args).is_empty()
 }
 
 /// Arguments of [`disjunction_preference`].
