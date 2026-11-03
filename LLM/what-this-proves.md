@@ -20806,3 +20806,27 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   XML-Parser, ruby, rake, mariadb, dev-lang_perl and others). That over-expansion is the filed residue
   (#649); the hermetic p02/p03, #646 tie, Q19, libc-silence,
   nodeps/onlydeps and deep/emptytree tripwires all stay green.
+
+  #650 (2026-11-03) withholds transient-demoted virtual-expansion seeds on
+  the hermetic shape and proves the withhold's boundary on the real tree.
+  `select_expansion_arms` declines a guard-demotion whose higher-in-slot
+  node sits in the committing pass's open slot conflict (the Ruling-4
+  proxy, verdict-free; `PORTUALE_BT_TRACE=1` prints the `SEED
+  decline/commit` verdict per seed), so the installed arm holds and no
+  seed commits. Live check: `cargo test --release -p portage-repo
+  tests_p650` (2 passed -- the bare leg still merges and seeds the
+  upgrade fall-through, the skipped-transient holder leg holds R+skip
+  with no extras) and `python3 -m pytest
+  pytests-contract-suite/test_emerge_pretend_contract.py -k "p650 or 650"`
+  in pmtest (4 passed: 2 CASES rows + 2 pins). Partial green, stated
+  plainly: the L0 re-grade with the fixed binary
+  (`l0-20261103T233445Z`) keeps the 13/10/5 perl `[extra]` spread
+  byte-identical to the pre-fix baseline, and a single-cell trace
+  (`dev-lang/perl` through `layers/l0/in-container.sh` with
+  `PORTUALE_BT_TRACE=1`) shows why -- both seeds `commit` with demoter
+  `perl-5.44.0` and zero `decline` lines, i.e. the seeds commit in the
+  first pass before the transient's slot conflict opens, and nothing
+  re-checks a committed seed post-skip (shape (a), Portage's late-eval
+  bins, unimplemented). That commit-before-conflict ordering is the filed
+  residue (#651); the gnome-shell/libreoffice/gimp cells show no
+  `[missing]` resurgence.
