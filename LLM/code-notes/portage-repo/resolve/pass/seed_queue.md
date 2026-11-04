@@ -19,3 +19,4 @@ Seed the walk queue with the top-level and auto-replace atoms.
 
 ## fn demoter_masked
 - Backlog #651: exact-`!=cpv` mask probe over `runtime_pkg_mask` for one recorded demoter version. Same granularity as `check_runtime_pkg_mask` (a different masked version does not void); `[binary]` marks never match a demoter.
+- Backlog #651 projection limit (no oracle, residue for Task 4): void-iff-ALL-recorded-demoters-masked projects the guard re-run from the commit-time entries only. If a novel higher-in-slot version of the demoter cp — unselected hence absent at commit — is selected post-skip after the recorded demoters are masked and still tops the installed arm's avail, Portage's `dep_check.py:531-544` would demote again (bin outcome unrecorded) while portuale voids. Needs its own playground oracle (three-version provider world); see the fix-round report §7.

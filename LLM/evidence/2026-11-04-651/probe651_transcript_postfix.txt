@@ -16,6 +16,10 @@ DISTDIR=$PWD/fixtures/distfiles PORTUALE_BT_TRACE=1 PMTEST_ALLOW_ROOT=1 \
 fixture-configroot run is hermetic to host USE/KEYWORDS the same way, and the
 trace lines below are the load-bearing record, byte-identical either way.)
 
+(Stdout `to …` paths are capturer-local (`ROOT=$PWD/fixtures` on the capture
+host); the stderr `SEED`/`BT` trace is the load-bearing record — the
+mergelist rows it proves are the package/version/outcome triples.)
+
 **What this proves (controller Ruling 3).** The commit-before-conflict
 ordering is proven by trace events, not prose:
 
