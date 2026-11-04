@@ -1,6 +1,7 @@
 //! Seed the walk queue with the top-level and auto-replace atoms.
 
 use crate::resolve::pass::*;
+use crate::resolve::rev_dep_or::seed_trace_enabled;
 
 /// Seed the walk queue with the top-level and auto-replace atoms, plus the
 /// greedy installed-slot atoms (`greedy`), which resolve after the arguments
@@ -100,13 +101,35 @@ pub(crate) fn seed_queue(
     // A new-style virtual's fall-through `||` arm rides as the virtual's own
     // dep (Portage's `_expand_new_virtuals` attributes expanded atoms to the
     // virtual), seeded at the arm the post-upgrade graph selects so the next
-    // walk merges it (backlog #572).
-    for ((vcat, vpkg, vver), atom) in &bp.virtual_expansion_seeds {
+    // walk merges it (backlog #572). A seed whose guard-demotion input was
+    // transient never rides: when every recorded demoter is masked in this
+    // pass's backtrack state, the demotion input is gone and the installed
+    // arm it held down survives Portage's post-skip re-resolution instead
+    // (dep_check.py :636-655/:599-616) -- queueing the arm would merge where
+    // Portage holds the binding (#651). A seed with no demoters has no
+    // transient input and always rides. The verdict comes from the existing
+    // mask state, never a new walk.
+    // Portage: dep_check.py, dep_zapdeps.
+    for seed in &bp.virtual_expansion_seeds {
+        if !seed.demoters.is_empty()
+            && seed
+                .demoters
+                .iter()
+                .all(|(cat, pkg, ver)| demoter_masked(bp, cat, pkg, ver))
+        {
+            if seed_trace_enabled() {
+                eprintln!(
+                    "SEED skip virtual={}/{} seed={} demoters={:?} masked",
+                    seed.owner.0, seed.owner.1, seed.atom, seed.demoters
+                );
+            }
+            continue;
+        }
         state.queue.push_back(QueueItem {
-            atom: atom.clone(),
+            atom: seed.atom.clone(),
             depth: 1,
-            owner: Some((vcat.clone(), vpkg.clone())),
-            owner_version: Some(vver.clone()),
+            owner: Some((seed.owner.0.clone(), seed.owner.1.clone())),
+            owner_version: Some(seed.owner.2.clone()),
             owner_targets_running_root: false,
             unevaluated: None,
             targets_running_root: false,
@@ -114,4 +137,19 @@ pub(crate) fn seed_queue(
             from_disjunction: false,
         });
     }
+}
+
+/// Whether the backtrack state masks `cat/pkg-ver`: the higher-in-slot node
+/// is skipped, so a seed committed under its guard-demotion no longer has
+/// a demotion input (backlog #651). Exact `!=cpv` hit only (the
+/// `check_runtime_pkg_mask` precedent); a `[binary]`-marked negative masks a
+/// binary candidate, never a demoter version.
+fn demoter_masked(bp: &BacktrackParams, cat: &str, pkg: &str, ver: &str) -> bool {
+    bp.runtime_pkg_mask
+        .get(&(cat.to_string(), pkg.to_string()))
+        .is_some_and(|bucket| {
+            bucket
+                .iter()
+                .any(|m| m.neg == format!("!={cat}/{pkg}-{ver}"))
+        })
 }

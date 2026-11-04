@@ -2,6 +2,29 @@
 
 use crate::*;
 
+/// One committed virtual-expansion seed: the fall-through `||` arm to merge
+/// as the virtual's own dep, plus the guard-demoters that demoted the
+/// installed arm it was chosen under. The demoters are the seed's post-skip
+/// re-check input: when every one of them is masked in the pass's backtrack
+/// state, the demotion was transient and the seed must not ride the next walk
+/// (Portage's late-eval bins hold the installed arm instead). A seed with no
+/// demoters (no installed arm was guard-demoted) has no transient input and
+/// always survives.
+// Portage: dep_check.py, dep_zapdeps (`:531-544`/`:634-635` transient
+// demotion, `:636-655`/`:599-616` post-skip re-resolution).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ExpansionSeed {
+    /// The owning virtual's `(category, package, installed version)`: the
+    /// latch key with `atom` (first commit wins, so the feed terminates).
+    pub(crate) owner: (String, String, String),
+    /// The fall-through arm atom to merge.
+    pub(crate) atom: String,
+    /// The `(category, package, version)` of every veto-level higher-in-slot
+    /// node that demoted the installed arm (the `via` of the `SEED commit`
+    /// log line), sorted for a deterministic order.
+    pub(crate) demoters: BTreeSet<(String, String, String)>,
+}
+
 /// One ranked mask choice for a slot conflict: mask `target`, opposed by
 /// `parents` (pullers whose atom does NOT match the masked version). One
 /// choice becomes one sibling node; DFS explores the last-added first.
@@ -383,12 +406,13 @@ pub(crate) struct BacktrackParams {
     /// select.
     pub(crate) slot_operator_forced_upgrade: BTreeSet<(String, String, String)>,
     /// New-style virtual `||` arms that need a fresh merge, seeded into the
-    /// next walk owned by the virtual -- `((vcat, vpkg, vver), atom)`.
+    /// next walk owned by the virtual -- [`ExpansionSeed`]s latched by
+    /// owner+atom (first commit wins, so the feed terminates).
     /// Portage inlines the virtual's RDEPEND into the consumer (`dep_check.py`,
     /// `_expand_new_virtuals`); the queued arm is the same node its walk would
     /// add. Latched like the pin sets, so the search terminates. Included in
     /// `params_equal`.
-    pub(crate) virtual_expansion_seeds: BTreeSet<((String, String, String), String)>,
+    pub(crate) virtual_expansion_seeds: BTreeSet<ExpansionSeed>,
     /// The undo latch: a demoted cp must be remembered here or the scan would
     /// immediately re-add it (its vdb `:S/SS=` binding is still stale).
     /// Monotone and bounded by the installed cp count, so the search

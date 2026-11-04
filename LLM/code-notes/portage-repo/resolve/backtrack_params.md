@@ -112,3 +112,7 @@ Parameters a backtracking pass runs with.
 
 ## field BacktrackParams::virtual_expansion_seeds
 - Backlog #572: new-style virtual `||` arms needing a fresh merge, `((vcat, vpkg, vver), atom)`, filed by the reverse-dependency pass and seeded into the next walk owned by the virtual. Latched like the pin sets (a filed seed is skipped on later passes), so the RevDep feed terminates. Included in `params_equal`.
+- Backlog #651: the element is an `ExpansionSeed` (`owner`, `atom`, `demoters`). See `## struct ExpansionSeed`.
+
+## struct ExpansionSeed
+- Backlog #651: one committed virtual-expansion seed plus the guard-demoters that demoted the installed arm it was chosen under (`(cat, pkg, version)` triples, the `SEED commit` line's `via`, sorted for determinism). The consumer (`seed_queue`) voids a seed whose every recorded demoter is masked -- the demotion input was transient, so Portage's late-eval bins would hold the installed arm instead (`dep_check.py :636-655`/`:599-616`). No demoters means no transient input (always rides). Latch key is owner+atom (first commit wins); `params_equal` compares the whole struct.

@@ -698,7 +698,7 @@ struct ExpansionArms {
 }
 
 /// Whether the seed-decision trace is active (`PORTUALE_BT_TRACE=1`).
-fn seed_trace_enabled() -> bool {
+pub(crate) fn seed_trace_enabled() -> bool {
     std::env::var("PORTUALE_BT_TRACE").is_ok_and(|value| value == "1")
 }
 
@@ -726,7 +726,8 @@ pub(crate) fn virtual_rdepend_is_expandable(split: &OrSplit) -> bool {
 }
 
 /// New-style virtual `||` arms that need a fresh merge in this pass's graph:
-/// `((vcat, vpkg, vver), atom)` seeds for the next walk, owned by the virtual.
+/// [`ExpansionSeed`]s owned by the virtual, each carrying the veto-level
+/// guard-demoters it was chosen under (the post-skip re-check input).
 /// Portage inlines the virtual's RDEPEND into the consumer (`dep_check.py`,
 /// `_expand_new_virtuals`), so the fall-through arm resolves as the virtual's
 /// own dep. Only arms no installed package satisfies become seeds: an
@@ -746,7 +747,7 @@ pub(crate) fn virtual_expansion_seeds(
     ctx: &ResolveCtx<'_>,
     pass: &PassResult,
     grown: &BacktrackParams,
-) -> Vec<((String, String, String), String)> {
+) -> Vec<ExpansionSeed> {
     // No seeds when the walk follows no dependencies (`--nodeps`), and none
     // under `--onlydeps` either: Portage expands virtuals while walking merge
     // candidates, and the playground oracle merges nothing on this shape under
@@ -841,31 +842,43 @@ pub(crate) fn virtual_expansion_seeds(
             }) {
                 continue;
             }
-            let seed = (
-                (e.category.clone(), e.package.clone(), version.clone()),
+            // `via` names the veto-level demoters only: demoted arms the
+            // installed binding would have held through (had one survived,
+            // `installed_survivor` would have vetoed every seed). A demoted
+            // non-installed arm merely yields its survivor slot, so its
+            // demoter is not this seed's own.
+            let via: Vec<&DowngradeDemoter> = arms
+                .demoted
+                .iter()
+                .filter(|(arm, _)| {
+                    arm.iter()
+                        .all(|a| atom_matches_installed(ctx.root, a, ctx.config))
+                })
+                .flat_map(|(_, ds)| ds.iter())
+                .collect();
+            let seed = ExpansionSeed {
+                owner: (e.category.clone(), e.package.clone(), version.clone()),
                 atom,
-            );
-            if grown.virtual_expansion_seeds.contains(&seed) {
+                // The post-skip re-check input: the seed survives only while
+                // one of these higher-in-slot nodes survives.
+                demoters: via
+                    .iter()
+                    .map(|d| (d.category.clone(), d.package.clone(), d.version.clone()))
+                    .collect(),
+            };
+            // Latched by owner+atom (first commit wins): a re-derived seed
+            // with different demoters is the same commitment.
+            if grown
+                .virtual_expansion_seeds
+                .iter()
+                .any(|s| s.owner == seed.owner && s.atom == seed.atom)
+            {
                 continue;
             }
             if seed_trace_enabled() {
-                // `via` names the veto-level demoters only: demoted arms the
-                // installed binding would have held through (had one survived,
-                // `installed_survivor` would have vetoed every seed). A demoted
-                // non-installed arm merely yields its survivor slot, so its
-                // demoter is not this seed's own.
-                let via: Vec<&DowngradeDemoter> = arms
-                    .demoted
-                    .iter()
-                    .filter(|(arm, _)| {
-                        arm.iter()
-                            .all(|a| atom_matches_installed(ctx.root, a, ctx.config))
-                    })
-                    .flat_map(|(_, ds)| ds.iter())
-                    .collect();
                 eprintln!(
                     "SEED commit virtual={}/{} seed={} via={:?}",
-                    e.category, e.package, seed.1, via
+                    e.category, e.package, seed.atom, via
                 );
             }
             out.push(seed);

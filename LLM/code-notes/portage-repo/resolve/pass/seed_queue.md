@@ -13,3 +13,9 @@ Seed the walk queue with the top-level and auto-replace atoms.
 
 ## fn seed_queue (virtual expansion seeds)
 - Backlog #572: `BacktrackParams::virtual_expansion_seeds` ride as the virtual's own deps (`owner`/`owner_version` set, `depth: 1` like the other auto seeds -- no `--deep` accounting, no `(Argument)` puller line). Portage attributes expanded atoms to the virtual (`dep_check.py:_expand_new_virtuals`: `atom_graph.add(pkg, virt_atom_node)`), which is what makes the fall-through arm merge as a child of the kept `[nomerge]` virtual.
+
+## fn seed_queue (#651 transient-demoted seeds)
+- Backlog #651: a seed whose guard-demotion input was transient never rides. When every recorded demoter is masked in the pass's backtrack state (`demoter_masked`: exact `!=cat/pkg-ver` hit in `runtime_pkg_mask`, the `check_runtime_pkg_mask` precedent -- a `[binary]`-marked negative masks a binary candidate, never a demoter version), the installed arm the demotion held down survives Portage's post-skip re-resolution instead (`dep_check.py :636-655`/`:599-616`), so the seed is skipped with a `SEED skip ... demoters={...} masked` trace line (identity + verdict per seed). A seed with no demoters has no transient input and always rides. The verdict comes from the existing mask state, never a new walk; the queue contract is otherwise untouched. Latch note: the skipped seed stays in `grown` (the queue step only reads) -- it is skipped again on every masked pass and rides again on an unmasked sibling node, so the search shape is unchanged.
+
+## fn demoter_masked
+- Backlog #651: exact-`!=cpv` mask probe over `runtime_pkg_mask` for one recorded demoter version. Same granularity as `check_runtime_pkg_mask` (a different masked version does not void); `[binary]` marks never match a demoter.
