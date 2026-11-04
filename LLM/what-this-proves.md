@@ -20830,3 +20830,28 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   bins, unimplemented). That commit-before-conflict ordering is the filed
   residue (#651); the gnome-shell/libreoffice/gimp cells show no
   `[missing]` resurgence.
+
+  #651 (2026-11-04) voids transient-demoted seeds at consumption when
+  the demoter no longer survives the post-skip graph. Each committed
+  seed records its demoters, and the consumer skips a seed whose every
+  recorded demoter now reads masked or skipped (void-iff-ALL-masked;
+  Portage's late-eval bins `dep_check.py:636-655/:599-616`, the
+  commit-before-conflict half the #650 proxy never reached), with a
+  `SEED void(post-skip ...)` verdict in the `PORTUALE_BT_TRACE=1` log.
+  Live check: `cargo test --release -p portage-repo tests_p651` (2
+  passed -- the bare leg still merges the transient and seeds only the
+  held fall-through, the chained-holder leg keeps R+skip) and `python3
+  -m pytest
+  "pytests-contract-suite/test_emerge_pretend_contract.py::test_651_bare_request_with_transient_merging_seeds_the_fall_through"
+  "pytests-contract-suite/test_emerge_pretend_contract.py::test_651_chained_holder_skips_the_transient_and_holds_the_installed_binding"`
+  in pmtest (2 passed: the bare-guard and chained-holder CASES pins).
+  Partial green, stated plainly: the L0 re-grade with the fixed binary
+  (`l0-20261104T075942Z`, `ab031e2b-dirty`) clears the Encode extras
+  10-to-0 and the Test-Harness extras 13-to-3, leaves the five Sub-Name
+  extras plus two bare TH extras and the one bundle-swallowed
+  gnome-shell TH row standing (eight rows, listed cell-by-cell in the
+  #651 close-out report), and shows zero `[missing]` rows on any cell.
+  The survivors plus the disclosed novel-demoter corner (a higher
+  version unselected at commit, selected post-skip, still topping the
+  arm's avail -- no playground oracle exists) are the filed residue
+  (#652); no yaml moves either way.
