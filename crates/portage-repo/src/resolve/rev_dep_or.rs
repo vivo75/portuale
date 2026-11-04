@@ -875,6 +875,28 @@ pub(crate) fn virtual_expansion_seeds(
             {
                 continue;
             }
+            // A walk-selected demoter may postdate an independent puller's
+            // pre-demoter judgment, which Portage keeps: the virtual is
+            // already bound without the demoter, so its fall-through holds.
+            // A request-pinned demoter is forced from walk start instead, so
+            // every judgment is post-demoter and the seed fires (M6b/M5).
+            // Portage: depgraph.py, _create_graph (top-level atoms resolve
+            // first); dep_check.py, dep_zapdeps (posture-split first evals).
+            if !seed.demoters.is_empty()
+                && seed
+                    .demoters
+                    .iter()
+                    .all(|d| !demoter_request_pinned(ctx, &d.0, &d.1, &d.2))
+                && let Some((kcat, kpkg)) = independent_keeper(&pass.entries, e, &seed.demoters)
+            {
+                if seed_trace_enabled() {
+                    eprintln!(
+                        "SEED hold virtual={}/{} seed={} keeper={kcat}/{kpkg} demoters={:?} walk-selected",
+                        e.category, e.package, seed.atom, seed.demoters
+                    );
+                }
+                continue;
+            }
             if seed_trace_enabled() {
                 eprintln!(
                     "SEED commit virtual={}/{} seed={} via={:?}",
@@ -1025,6 +1047,146 @@ pub(crate) fn expand_new_style_virtual_arm(
         out.push(conjunction);
     }
     if out.is_empty() { None } else { Some(out) }
+}
+
+/// The selectable pool for pinning judgments: visible tree match strings
+/// plus installed `cat/pkg-ver:slot/sub` partials (no `::repo`), ignoring
+/// backtrack masks: pinning is a request/pull-form property, not a pass
+/// verdict.
+pub(crate) fn selectable_pool(
+    gate: CategoryGate<'_>,
+    config: &portage_profile::Config,
+    root: &Path,
+    category: &str,
+    package: &str,
+) -> Vec<String> {
+    let mut pool: Vec<String> = gate
+        .repo_candidates(category, package)
+        .map(|cs| {
+            cs.iter()
+                .filter(|c| c.source == CandidateSource::Ebuild)
+                .filter(|c| is_visible(c, category, package, config))
+                .map(|c| c.match_str(category, package))
+                .collect()
+        })
+        .unwrap_or_default();
+    for (ver, slot, sub) in installed_candidates(root, category, package) {
+        // match-str-ok: partial form (no ::repo) from the vdb record's fields.
+        pool.push(format!("{category}/{package}-{ver}:{slot}/{sub}"));
+    }
+    pool
+}
+
+/// Whether `atom` matches exactly `version` of the package over the
+/// selectable pool and nothing else: a version-forcing requirement.
+fn atom_matches_only_version(
+    atom: &str,
+    pool: &[String],
+    category: &str,
+    package: &str,
+    version: &str,
+) -> bool {
+    let refs: Vec<&str> = pool.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(atom, &refs) else {
+        return false;
+    };
+    matched.len() == 1
+        && candidate_version(matched[0], category, package).as_deref() == Some(version)
+}
+
+/// Whether a top-level request atom pins the seed's demoter version exactly:
+/// the demoter is forced from walk start, so every `||` judgment is
+/// post-demoter and the fall-through fires (M6b/M5: `=prov-5.44.0` pins the
+/// transient). A bare-selected demoter instead lands mid-walk, possibly after
+/// an independent puller's pre-demoter judgment, which Portage keeps (the
+/// live TH hold). Judged over the selectable pool (visible tree plus
+/// installed), ignoring masks: pinning is a request-form property, not a
+/// pass verdict.
+// Portage: depgraph.py, _create_graph (top-level atoms resolve first).
+fn demoter_request_pinned(
+    ctx: &ResolveCtx<'_>,
+    category: &str,
+    package: &str,
+    version: &str,
+) -> bool {
+    let pool = selectable_pool(ctx.gate(), ctx.config, ctx.root, category, package);
+    ctx.atoms
+        .iter()
+        .any(|a| atom_matches_only_version(a, &pool, category, package, version))
+}
+
+/// What [`merge_version_forced`] reads from its caller.
+pub(crate) struct MergeVersionForcedArgs<'a> {
+    pub(crate) arg_atoms: &'a [String],
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) gate: CategoryGate<'a>,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) root: &'a Path,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+}
+
+/// Whether the merge version is forced by a versioned requirement: a
+/// top-level request atom matching only it, or a merge-bound entry's dep
+/// atom matching only it. A forced demoter makes the conflict hard (Q19:
+/// xpull-2's `=5.44*` forces the transient the virtuals' arms block, so the
+/// skip stands); a walk-selected one leaves the kept binding soft (the bed
+/// TH hold, where no versioned puller wants the transient).
+// Portage: depgraph.py, _create_graph (top-level atoms resolve first).
+pub(crate) fn merge_version_forced(args: MergeVersionForcedArgs<'_>) -> bool {
+    let MergeVersionForcedArgs {
+        arg_atoms,
+        entries,
+        gate,
+        config,
+        root,
+        category,
+        package,
+        version,
+    } = args;
+    let pool = selectable_pool(gate, config, root, category, package);
+    if arg_atoms
+        .iter()
+        .any(|a| atom_matches_only_version(a, &pool, category, package, version))
+    {
+        return true;
+    }
+    entries.iter().any(|e| {
+        e.category != "virtual"
+            && merge_bound_version(&e.outcome).is_some()
+            && e.deps
+                .iter()
+                .any(|d| atom_matches_only_version(&d.atom, &pool, category, package, version))
+    })
+}
+
+/// The merge-bound puller outside the seed's demoter cps that keeps the
+/// virtual: its binding survives the demoter, so Portage's pre-demoter
+/// self-parent judgment sticks and the fall-through never fires (the live TH
+/// hold: the early consumer binds TH before the transient lands). `None`
+/// when every puller is the demoter itself (the transient-dependent Encode
+/// posture, which falls through).
+fn independent_keeper(
+    entries: &[GraphEntry],
+    virtual_entry: &GraphEntry,
+    demoters: &BTreeSet<(String, String, String)>,
+) -> Option<(String, String)> {
+    let demoter_cps: HashSet<(&str, &str)> = demoters
+        .iter()
+        .map(|(c, p, _)| (c.as_str(), p.as_str()))
+        .collect();
+    virtual_entry.required_by.iter().find_map(|(cat, pkg)| {
+        if demoter_cps.contains(&(cat.as_str(), pkg.as_str())) {
+            return None;
+        }
+        entries
+            .iter()
+            .any(|o| {
+                o.category == *cat && o.package == *pkg && merge_bound_version(&o.outcome).is_some()
+            })
+            .then(|| (cat.clone(), pkg.clone()))
+    })
 }
 
 /// The values the single-version arm expansion reads from its caller.

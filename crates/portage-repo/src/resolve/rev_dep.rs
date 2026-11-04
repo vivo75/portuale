@@ -492,6 +492,64 @@ pub(crate) fn reverse_dependency_constraints_reported(
     } else {
         HashMap::new()
     };
+    // The `||`-selected arms (never plain atoms) of every in-scope kept
+    // virtual: the seed feed owns virtual fall-throughs, so a selected arm
+    // constrains the merge only when the version it contradicts is forced
+    // (backlog #652 leg B). Covers a sibling's Q19 leak too (the leaked arm
+    // was selected by some in-scope kept virtual).
+    // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
+    let mut virt_selected: HashSet<String> = HashSet::new();
+    {
+        let mut pre_memo: MetaMemo = HashMap::new();
+        for consumer in all_installed_packages(root).iter() {
+            if consumer.category != "virtual" || !consumer_in_scope(&scope, consumer) {
+                continue;
+            }
+            let deps = consumer_deps(
+                DepSource {
+                    root,
+                    gate,
+                    dep_keys,
+                    dynamic_deps,
+                    ignore_built_slot_operator_deps,
+                },
+                &mut pre_memo,
+                &consumer.category,
+                &consumer.package,
+                &consumer.version,
+            );
+            for (_, depstr) in &deps.strings {
+                if !depstr.contains("||") {
+                    continue;
+                }
+                let Some(split) = split_or_groups(depstr, &deps.use_flags) else {
+                    continue;
+                };
+                if split.is_flat() {
+                    continue;
+                }
+                if let Some(sel) = consumer_or_arms(ConsumerOrArmsArgs {
+                    scan: &or_scan,
+                    consumer,
+                    split: &split,
+                    use_flags: &deps.use_flags,
+                    entries,
+                    root,
+                    config,
+                    gate,
+                }) {
+                    virt_selected.extend(
+                        split
+                            .groups()
+                            .iter()
+                            .flat_map(|(_, atoms)| atoms.iter())
+                            .filter(|a| sel.contains(*a) && !split.plain_atoms().contains(*a))
+                            .cloned(),
+                    );
+                }
+            }
+        }
+    }
     'consumer: for consumer in all_installed_packages(root).iter() {
         if constraints_from_consumer(ConstraintsFromConsumerArgs {
             consumer,
@@ -516,6 +574,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
             hard_want,
             enforced: &mut enforced,
             gate,
+            virt_selected: &virt_selected,
         })
         .is_break()
         {
@@ -563,6 +622,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
                 hard_want,
                 enforced: &mut enforced,
                 gate,
+                virt_selected: &virt_selected,
             });
         }
     }
@@ -618,6 +678,11 @@ pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     pub(crate) hard_want: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) enforced: &'a mut Vec<RevDepPin>,
     pub(crate) gate: CategoryGate<'a>,
+    /// The `||`-selected arms (never plain atoms) of every in-scope kept
+    /// virtual this pass: the seed feed owns them, so they constrain the
+    /// merge only when the contradicted version is forced (backlog #652
+    /// leg B).
+    pub(crate) virt_selected: &'a HashSet<String>,
 }
 
 /// The sets that say which installed consumers a pass's scan reads.
@@ -779,6 +844,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         hard_want,
         enforced,
         gate,
+        virt_selected,
     } = args;
     if !consumer_in_scope(scope, consumer) {
         return ControlFlow::Break(());
@@ -844,10 +910,35 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
                 gate,
             })
         };
+        // The non-plain `||`-group arms of a kept virtual consumer that
+        // some in-scope kept virtual selected this pass (its own selection
+        // or a sibling's, via the Q19 leak); the per-atom gate decides
+        // whether they constrain (forced merge) or are tolerated
+        // (walk-selected merge). Plain atoms beside a group keep the old
+        // path (the #572 mixed shape).
+        let or_selected: HashSet<String> =
+            if report_only || consumer.category != "virtual" || !depstr.contains("||") {
+                HashSet::new()
+            } else {
+                match split_or_groups(depstr, use_flags) {
+                    Some(split) if !split.is_flat() => split
+                        .groups()
+                        .iter()
+                        .flat_map(|(_, atoms)| atoms.iter())
+                        .filter(|a| !split.plain_atoms().contains(*a) && virt_selected.contains(*a))
+                        .cloned()
+                        .collect(),
+                    _ => HashSet::new(),
+                }
+            };
         'atom: for atom_str in atoms {
             if constraints_from_atom(ConstraintsFromAtomArgs {
                 atom_str: &atom_str,
                 demoted: &demoted,
+                // A kept virtual's non-plain `||`-group arm selected by some
+                // in-scope kept virtual (own or leaked): skip only when the
+                // contradicted merge is walk-selected (backlog #652 leg B).
+                or_selected: or_selected.contains(&atom_str),
                 post_merge,
                 config,
                 upgrading,
@@ -865,6 +956,8 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
                 root,
                 enforced,
                 gate,
+                entries,
+                arg_atoms: or_scan.arg_atoms,
             })
             .is_break()
             {
@@ -881,6 +974,12 @@ pub(crate) struct ConstraintsFromAtomArgs<'a> {
     /// `||`-arm texts `dep_zapdeps` does not select for this consumer
     /// (`consumer_or_demotions`): never parent atoms, never pins.
     pub(crate) demoted: &'a HashSet<String>,
+    /// Whether the atom is a kept virtual consumer's non-plain `||`-group
+    /// arm selected by some in-scope kept virtual this pass (own selection
+    /// or a sibling's Q19 leak): the per-atom gate decides whether it
+    /// constrains (forced contradicted merge) or is tolerated
+    /// (walk-selected merge) (backlog #652 leg B).
+    pub(crate) or_selected: bool,
     /// The post-merge set when the consumer is a complete-graph one (not walked, no
     /// `--update`): a built slot-operator atom it cannot satisfy conflicts.
     pub(crate) post_merge: Option<&'a OrScan<'a>>,
@@ -905,6 +1004,8 @@ pub(crate) struct ConstraintsFromAtomArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) enforced: &'a mut Vec<RevDepPin>,
     pub(crate) gate: CategoryGate<'a>,
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) arg_atoms: &'a [String],
 }
 
 /// Collect the reverse-dependency pins one dependency atom of a consumer places on the packages being upgraded.
@@ -912,6 +1013,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     let ConstraintsFromAtomArgs {
         atom_str,
         demoted,
+        or_selected,
         post_merge,
         config,
         upgrading,
@@ -929,6 +1031,8 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         root,
         enforced,
         gate,
+        entries,
+        arg_atoms,
     } = args;
     let Some(atom) = parse_dep_atom(atom_str, "rev_dep") else {
         return ControlFlow::Break(());
@@ -1101,6 +1205,37 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
             }
         }
         return ControlFlow::Break(());
+    }
+    // A kept virtual's `||`-selected arm (own or leaked) constrains the
+    // merge only when a version it contradicts is forced by a versioned
+    // requirement: a top-level request atom or a merge-bound entry's dep
+    // matching only that version (Q19: xpull-2's `=5.44*` forces the
+    // transient the virtuals' arms block, so the skip stands). Otherwise
+    // the seed feed owns the fall-through and the arm is tolerated instead
+    // of masking the merge (backlog #652 leg B: TH's perl arm under the
+    // walk-selected transient; Portage keeps TH and merges perl).
+    // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
+    if or_selected && consumer.category == "virtual" && !report_only {
+        let forced = failing.iter().any(|(slot, _)| {
+            upgrading
+                .get(&(cp.clone(), slot.clone()))
+                .and_then(|(candidate, _)| candidate_version(candidate, &cp.0, &cp.1))
+                .is_some_and(|version| {
+                    merge_version_forced(MergeVersionForcedArgs {
+                        arg_atoms,
+                        entries,
+                        gate,
+                        config,
+                        root,
+                        category: &cp.0,
+                        package: &cp.1,
+                        version: &version,
+                    })
+                })
+        });
+        if !forced {
+            return ControlFlow::Break(());
+        }
     }
     // Verbatim for built bindings via slot-change reinstalls, else stripped.
     let pin_atom = if built_slot_op

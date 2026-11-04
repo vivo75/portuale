@@ -508,3 +508,84 @@ impl BacktrackParams {
             .unwrap_or_default()
     }
 }
+
+/// Drop positive per-`cat/pkg` constraints no visible, unmasked candidate
+/// satisfies: a want whose every version died with the skip is a stale
+/// pre-skip verdict. The puller that filed it re-resolves post-skip (its
+/// `||` picks another arm), so the stale want must not veto the retry —
+/// otherwise the masked pass dead-ends and the search can never settle the
+/// skip it already chose. Negatives (masks) always survive, and so does
+/// every positive with a live (visible, unmasked) match.
+/// Portage: dep_check.py, dep_zapdeps (post-skip re-resolution bins
+/// :636-655/:599-616 re-judge every arm); depgraph.py, _backtrack_depgraph
+/// (each retry re-runs the whole walk from scratch, so no want persists).
+pub(crate) fn drop_stale_positives(
+    map: HashMap<(String, String), Vec<String>>,
+    gate: CategoryGate<'_>,
+    config: &portage_profile::Config,
+) -> HashMap<(String, String), Vec<String>> {
+    map.into_iter()
+        .map(|(cp, constraints)| {
+            if constraints.iter().all(|c| c.starts_with('!')) {
+                return (cp, constraints);
+            }
+            let Ok(candidates) = gate.repo_candidates(&cp.0, &cp.1) else {
+                return (cp, constraints);
+            };
+            let visible: Vec<String> = candidates
+                .iter()
+                .filter(|c| is_visible(c, &cp.0, &cp.1, config))
+                .map(|c| c.match_str(&cp.0, &cp.1))
+                .collect();
+            // A negative hides a candidate exactly like `resolve_pretend`'s
+            // own filter (per-instance marks hide no tree candidate).
+            // Portage: depgraph.py, _wrapped_select_pkg_highest_available_imp.
+            let negatives: Vec<String> = constraints
+                .iter()
+                .filter(|c| c.starts_with('!') && !is_instance_only_mask(c))
+                .cloned()
+                .collect();
+            let hidden = |m: &str| {
+                negatives.iter().any(|n| {
+                    portage_dep::match_from_list(&n[1..], std::slice::from_ref(&m))
+                        .is_some_and(|r| !r.is_empty())
+                })
+            };
+            let mut dropped: Vec<String> = Vec::new();
+            let kept: Vec<String> = constraints
+                .into_iter()
+                .filter(|c| {
+                    if c.starts_with('!') {
+                        return true;
+                    }
+                    let live = visible.iter().any(|v| {
+                        !hidden(v)
+                            && portage_dep::match_from_list(c, std::slice::from_ref(&v.as_str()))
+                                .is_some_and(|r| !r.is_empty())
+                    });
+                    if !live {
+                        dropped.push(c.clone());
+                    }
+                    live
+                })
+                .collect();
+            if !dropped.is_empty() && crate::resolve::rev_dep_or::seed_trace_enabled() {
+                let hiding: Vec<&str> = negatives
+                    .iter()
+                    .filter(|n| {
+                        visible.iter().any(|v| {
+                            portage_dep::match_from_list(&n[1..], std::slice::from_ref(&v.as_str()))
+                                .is_some_and(|r| !r.is_empty())
+                        })
+                    })
+                    .map(String::as_str)
+                    .collect();
+                eprintln!(
+                    "SEED drop-stale {}/{} wants={:?} hidden-by={:?}",
+                    cp.0, cp.1, dropped, hiding
+                );
+            }
+            (cp, kept)
+        })
+        .collect()
+}

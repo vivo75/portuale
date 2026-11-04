@@ -56,3 +56,21 @@ Which `||` arms of an installed consumer become parent atoms (#580 10b).
 - Backlog #643: token rewrite over a merge-bound consumer's dep string in `enqueue_entry_deps`, immediately before `split_off_disjunctions`. Only bare arms at a top-level `||` group body's depth 0 expand; arms inside a nested `||` copy verbatim (that shape stays a documented cut), `flag?` conditionals and plain groups recurse without expanding (the deferral split evaluates conditionals afterwards), and unbalanced input copies through so the downstream flattener errors exactly as before. Graphs without a nested-virtual expansion come out byte-identical (only `p572try` in the fixture tree names a virtual inside an `||`).
 - Backlog #647: one expanded arm now splices N `( conjunction )` sibling groups (one per tree version) instead of one. The splice is order-preserving and deterministic (descending version, extras sorted — the plain set has no ebuild order); single-conjunction expansions serialize exactly as before.
 - Portage keeps the M6b/M5 virtuals nomerge while portuale drops the unqueued kept virtual from entries: only queued atoms become nodes, and only the winning arm queues. The single-version p03 fall-through already ships this representation (its graph has no virtual node), so leg A asserts absent-or-kept plus the load-bearing no-upgrade row (a winning `1.700.0` conjunction would surface as a virtual `Upgrade`).
+
+## fn selectable_pool
+- Backlog #652 leg B: the pinning-judgment pool — visible tree match strings plus installed `cat/pkg-ver:slot/sub` partials (no `::repo`), masks ignored. Pinning is a request/pull-form property (forced from walk start vs selected mid-walk), never a pass verdict.
+
+## fn atom_matches_only_version
+- Backlog #652 leg B: whether an atom text matches exactly one selectable version — the version-forcing test shared by the seed hold (request form) and the enforcement gate (request + merge-bound puller form).
+
+## fn demoter_request_pinned
+- Backlog #652 leg B: whether a top-level request atom pins the seed's demoter version exactly (M6b/M5 `=prov-5.44.0`: forced from walk start, every `||` judgment post-demoter, seeds fire). A bare-selected demoter may postdate an independent puller's pre-demoter judgment, which Portage keeps (the live TH hold). Uses `selectable_pool`.
+
+## fn independent_keeper
+- Backlog #652 leg B: the merge-bound puller outside the seed's demoter cps that keeps the virtual (H-form: fresh `p652early` pulls TH bare). Its binding survives the demoter, so Portage's pre-demoter self-parent judgment sticks and the pin edge is never added. `None` when every puller is the demoter itself (the transient-dependent Encode posture, which falls through).
+
+## fn merge_version_forced
+- Backlog #652 leg B: whether the merge version is forced — request-pinned (above) or pulled by a merge-bound non-virtual entry's dep atom matching only it (Q19: xpull-2's `=5.44*` forces the transient the virtuals' arms block, so the skip stands). A walk-selected merge leaves the kept binding soft (the bed TH hold). Shared by the enforcement gate in `rev_dep.rs`.
+
+## fn virtual_expansion_seeds (seed hold, backlog #652 leg B)
+- A seed with demoters is withheld (never committed, so nothing latches) when every demoter is walk-selected (not `demoter_request_pinned`) and an `independent_keeper` exists: `SEED hold ... keeper=... demoters=... walk-selected`. The pin arm then never rides even though the demoter survives and merges. Disjoint from #651 (demoter-masked skip, which needs committed seeds) and from M6b/M5 (versioned-request demoters stay pinned, seeds fire) and #646 (no demoter, no demotion).

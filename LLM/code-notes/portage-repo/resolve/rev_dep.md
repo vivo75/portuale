@@ -127,3 +127,12 @@ Constraints that installed reverse dependencies put on an upgrade.
 
 ## gate threading (#571)
 - `RevDepPinHoldableArgs`, `MergeUseChangedVsInstalledArgs`, `ReverseDependencyConstraintsArgs`, `ConstraintsFromConsumerArgs` and `ConstraintsFromAtomArgs` carry the gate; `merge_use_state` reads through it.
+
+## virt_selected pre-pass (backlog #652 leg B)
+- One pre-pass over in-scope kept virtuals per scan collects every selected non-plain `||`-group arm (`consumer_or_arms` with the scan's PostMerge view): the seed feed owns such fall-throughs. Threaded as `ConstraintsFromConsumerArgs::virt_selected` into the per-atom gate below. Covers a sibling's Q19 leak too (the leaked arm was selected by some in-scope kept virtual — own selection is a subset, so plain atoms stay out by construction and need no separate check).
+
+## ConstraintsFromAtomArgs::or_selected (backlog #652 leg B)
+- True when the atom is the consumer's non-plain `||`-group arm and in `virt_selected` (own selection or leaked sibling selection). Kept-virtual consumers only; `report_only` consumers keep the old path (missed-update tail rows, never pins).
+
+## fn constraints_from_atom (virtual-arm enforcement gate, backlog #652 leg B)
+- A kept virtual's `or_selected` arm skips enforcement (Break, no pin, no report row) unless a breaking merge version is forced (`merge_version_forced`: request-pinned or versioned merge-bound pull). Forced → the conflict is hard and the arm enforces like any pin (Q19: both virtuals become `=5.42*` skip-block parents, Portage-matching). Walk-selected → tolerated (H-form: no TH enforcement, perl U stands; the bed holds TH). Plain deps (C1 holder) and satisfied selections never reach the gate (no failing slots, early return). Q19, M6b/M5, #646, p02/p03, #651 paths verified green by the whole-crate run.

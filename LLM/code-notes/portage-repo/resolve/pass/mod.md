@@ -10,3 +10,6 @@ One resolver pass (BFS walk) over the dependency graph.
 
 ## fn run_pass (walk-long installed-metadata memo, backlog #441 S1 / #457)
 - Swaps `ctx.installed_meta_memo` into the fresh `PassState` at pass start and back at every exit (the `?` arm restores too: a failed pass retries on the same ctx). The `?`-to-`match` rewrite is only the restore; verdicts are unchanged.
+
+## fn run_pass (stale-positive drop, backlog #652 leg A)
+- The pass-constant `union_constraints` map goes through `drop_stale_positives` (see `backtrack_params.md`) before the walk: one hook, all readers re-resolve post-skip. No stored state changes (branch-local filtering only); the #650 withhold and #651 skip-if-masked paths read masks, not positives, and stay byte-identical where the trigger is absent.

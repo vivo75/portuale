@@ -91,7 +91,10 @@ pub(crate) fn run_pass(
         std::mem::swap(&mut state.installed_meta_memo, &mut guard);
     };
     // Pass-constant: `bp` is never mutated mid-walk (only the overlay).
-    let union_constraints = bp.union_constraints();
+    // Stale pre-skip wants die here, so every `||` re-pops against the
+    // post-skip graph instead of vetoing the retry (backlog #652 leg A).
+    // Portage: depgraph.py, _backtrack_depgraph.
+    let union_constraints = drop_stale_positives(bp.union_constraints(), ctx.gate(), config);
     if resolver_debug() && first_pass {
         for a in ctx.atoms {
             resolver_trace::tr!("\n      Arg: {a}\n     Atom: {a}\n");
