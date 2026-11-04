@@ -241,6 +241,7 @@
 - [crates/portage-repo/src/tests/tests_consumer_or_view.rs](portage-repo/tests/tests_consumer_or_view.md) — An installed consumer's `||` is chosen the way `dep_zapdeps` chooses it, in the view Portage uses (#580 10b).
 - [crates/portage-repo/src/tests/tests_p491.rs](portage-repo/tests/tests_p491.md) — The installed-parent update probe (#491 pass-0 seed), hermetically.
 - [crates/portage-repo/src/tests/tests_p563.rs](portage-repo/tests/tests_p563.md) — The perl-5.44 stabilization shape (#563 heal) and the skip-block pin forms (#568/#569), hermetically.
+- [crates/portage-repo/src/tests/tests_p652b.rs](portage-repo/tests/tests_p652b.md) — #652 leg A (N-form consumer path) + leg B (H-form upgrade hold): RED pins.
 - [crates/portage-repo/src/tests/unsat_probe.rs](portage-repo/tests/unsat_probe.md) — Dead-end pass seeding a replacement parent for an unsatisfiable built `:=` dep.
 - [crates/portage-repo/src/tests/updates.rs](portage-repo/tests/updates.md) — Update-command parsing and dep-string rewrite tests.
 - [crates/portage-repo/src/tests/use_display.rs](portage-repo/tests/use_display.md) — `build_use_expand_display` grouping, diff-marker and force-wrap tests.
