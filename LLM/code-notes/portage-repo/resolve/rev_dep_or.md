@@ -74,3 +74,6 @@ Which `||` arms of an installed consumer become parent atoms (#580 10b).
 
 ## fn virtual_expansion_seeds (seed hold, backlog #652 leg B)
 - A seed with demoters is withheld (never committed, so nothing latches) when every demoter is walk-selected (not `demoter_request_pinned`) and an `independent_keeper` exists: `SEED hold ... keeper=... demoters=... walk-selected`. The pin arm then never rides even though the demoter survives and merges. Disjoint from #651 (demoter-masked skip, which needs committed seeds) and from M6b/M5 (versioned-request demoters stay pinned, seeds fire) and #646 (no demoter, no demotion).
+
+## fn forcing_decidable
+- Backlog #652 R5 (review fix): whether the forcing question is decidable for a requirement text (parses as a match atom). USE-conditional (`flag? ( ... )`) and other multi-token spellings never parse, so their verdict is unknown — and unknown enforces (fail closed = pre-#652 unconditional enforcement). Read by `merge_version_forced` and `demoter_request_pinned` on both the request and merge-bound-dep scans; decidable non-singletons keep the Task-2 verdicts. Tripwire: `use_conditional_spelling_counts_as_forced` (RED before, GREEN after).

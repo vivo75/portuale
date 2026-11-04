@@ -1101,7 +1101,8 @@ fn atom_matches_only_version(
 /// an independent puller's pre-demoter judgment, which Portage keeps (the
 /// live TH hold). Judged over the selectable pool (visible tree plus
 /// installed), ignoring masks: pinning is a request-form property, not a
-/// pass verdict.
+/// pass verdict. Undecidable request text counts as pinning (fail closed,
+/// same rationale as [`merge_version_forced`]).
 // Portage: depgraph.py, _create_graph (top-level atoms resolve first).
 fn demoter_request_pinned(
     ctx: &ResolveCtx<'_>,
@@ -1110,9 +1111,9 @@ fn demoter_request_pinned(
     version: &str,
 ) -> bool {
     let pool = selectable_pool(ctx.gate(), ctx.config, ctx.root, category, package);
-    ctx.atoms
-        .iter()
-        .any(|a| atom_matches_only_version(a, &pool, category, package, version))
+    ctx.atoms.iter().any(|a| {
+        atom_matches_only_version(a, &pool, category, package, version) || !forcing_decidable(a)
+    })
 }
 
 /// What [`merge_version_forced`] reads from its caller.
@@ -1125,6 +1126,17 @@ pub(crate) struct MergeVersionForcedArgs<'a> {
     pub(crate) category: &'a str,
     pub(crate) package: &'a str,
     pub(crate) version: &'a str,
+}
+
+/// Whether the forcing question is decidable for this requirement text: it
+/// parses as a match atom. USE-conditional (`flag? ( ... )`) and other
+/// multi-token spellings never parse as one atom, so their verdict is
+/// unknown — and an unknown verdict must enforce (fail closed = pre-#652
+/// unconditional enforcement), never skip.
+/// Portage: depgraph.py, _slot_operator_check_reverse_dependencies (parent
+/// atoms constrain without re-proving their spelling).
+pub(crate) fn forcing_decidable(atom: &str) -> bool {
+    portage_dep::parse_match_atom(atom).is_some()
 }
 
 /// Whether the merge version is forced by a versioned requirement: a
@@ -1152,12 +1164,23 @@ pub(crate) fn merge_version_forced(args: MergeVersionForcedArgs<'_>) -> bool {
     {
         return true;
     }
+    // Fail closed: a requirement text the matcher cannot decide
+    // (USE-conditional or other multi-token spelling) could pin the version;
+    // the pre-#652 behavior enforced unconditionally, so uncertainty enforces
+    // too. Decidable non-singletons keep the new verdicts (bare atoms,
+    // multi-version pins, wrong-version pins).
+    // Portage: depgraph.py, _slot_operator_check_reverse_dependencies (parent
+    // atoms constrain without re-proving their spelling).
+    if arg_atoms.iter().any(|a| !forcing_decidable(a)) {
+        return true;
+    }
     entries.iter().any(|e| {
         e.category != "virtual"
             && merge_bound_version(&e.outcome).is_some()
-            && e.deps
-                .iter()
-                .any(|d| atom_matches_only_version(&d.atom, &pool, category, package, version))
+            && e.deps.iter().any(|d| {
+                atom_matches_only_version(&d.atom, &pool, category, package, version)
+                    || !forcing_decidable(&d.atom)
+            })
     })
 }
 
@@ -1466,5 +1489,53 @@ mod tests {
                 "conjunction-extras RDEPEND must expand: {depstr}"
             );
         }
+    }
+
+    /// Backlog #652 R5: a USE-conditional spelling of a version-forcing
+    /// requirement is undecidable for the singleton matcher, so it must
+    /// count as forcing (fail closed = pre-#652 unconditional enforcement),
+    /// never as walk-selected. RED before the R5 fix (fail-open returned
+    /// false → the gate would skip enforcement); GREEN after.
+    #[test]
+    fn use_conditional_spelling_counts_as_forced() {
+        let tmp = portage_util::TempDir::new("portage-repo-652r5");
+        let gate = crate::test_gate(&[]);
+        let config = portage_profile::Config::default();
+        fn args<'a>(
+            atoms: &'a [String],
+            gate: CategoryGate<'a>,
+            config: &'a portage_profile::Config,
+            root: &'a Path,
+        ) -> MergeVersionForcedArgs<'a> {
+            MergeVersionForcedArgs {
+                arg_atoms: atoms,
+                entries: &[],
+                gate,
+                config,
+                root,
+                category: "dev-libs",
+                package: "p651prov",
+                version: "5.44.0",
+            }
+        }
+        let plain = ["=dev-libs/p651prov-5.44.0".to_string()];
+        let cond = ["use? ( =dev-libs/p651prov-5.44.0 )".to_string()];
+        // Undecidable: USE-conditional spelling of a version pin. The pool is
+        // empty here, so even the plain pin decides false (nothing selectable
+        // matches) — isolating exactly the R5 hole: undecidable must force.
+        assert!(
+            !forcing_decidable("use? ( =dev-libs/p651prov-5.44.0 )"),
+            "USE-conditional text never parses as one match atom"
+        );
+        assert!(forcing_decidable("=dev-libs/p651prov-5.44.0"));
+        assert!(forcing_decidable("dev-libs/p651prov"));
+        assert!(
+            !merge_version_forced(args(&plain, gate, &config, tmp.path())),
+            "empty pool: plain pin decides false (control)"
+        );
+        assert!(
+            merge_version_forced(args(&cond, gate, &config, tmp.path())),
+            "undecidable requirement spelling must enforce (fail closed)"
+        );
     }
 }

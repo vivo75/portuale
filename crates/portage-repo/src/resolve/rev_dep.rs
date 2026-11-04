@@ -1216,23 +1216,34 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     // walk-selected transient; Portage keeps TH and merges perl).
     // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
     if or_selected && consumer.category == "virtual" && !report_only {
-        let forced = failing.iter().any(|(slot, _)| {
-            upgrading
-                .get(&(cp.clone(), slot.clone()))
-                .and_then(|(candidate, _)| candidate_version(candidate, &cp.0, &cp.1))
-                .is_some_and(|version| {
-                    merge_version_forced(MergeVersionForcedArgs {
-                        arg_atoms,
-                        entries,
-                        gate,
-                        config,
-                        root,
-                        category: &cp.0,
-                        package: &cp.1,
-                        version: &version,
-                    })
-                })
+        let breaking: Vec<String> = failing
+            .iter()
+            .filter_map(|(slot, _)| {
+                upgrading
+                    .get(&(cp.clone(), slot.clone()))
+                    .and_then(|(candidate, _)| candidate_version(candidate, &cp.0, &cp.1))
+            })
+            .collect();
+        let forced = breaking.iter().any(|version| {
+            merge_version_forced(MergeVersionForcedArgs {
+                arg_atoms,
+                entries,
+                gate,
+                config,
+                root,
+                category: &cp.0,
+                package: &cp.1,
+                version,
+            })
         });
+        if seed_trace_enabled() {
+            eprintln!(
+                "SEED {} virtual={}/{} atom={atom_str} breaking={breaking:?}",
+                if forced { "forcing" } else { "tolerate" },
+                consumer.category,
+                consumer.package
+            );
+        }
         if !forced {
             return ControlFlow::Break(());
         }
