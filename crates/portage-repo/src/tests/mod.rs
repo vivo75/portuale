@@ -3809,6 +3809,7 @@ mod tests_p647;
 mod tests_p650;
 mod tests_p651;
 mod tests_p652b;
+mod tests_p656;
 mod tests_printed_count;
 mod unsat_probe;
 mod updates;
