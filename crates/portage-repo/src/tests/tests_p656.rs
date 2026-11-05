@@ -234,3 +234,33 @@ fn seedless_holder_open_pin_still_restarts_the_walk() {
         prov.outcome
     );
 }
+
+/// The skip's recorded parents on the chained-holder world list every
+/// unsatisfied requirer: the installed holder's `:0/5.42` beside both kept
+/// virtuals' `=5.42*` arms. Portage's `_slot_confict_backtrack` records all
+/// parents minus the satisfied ones (`conflict_atoms`, depgraph.py:2241-2246),
+/// so the holder row is part of the oracle block
+/// (`test_651_chained_holder_skips_the_transient_and_holds_the_installed_binding`,
+/// Portage 3.0.83 capture, 2026-11-05). The holder-open early apply used to
+/// file the virtuals alone and the holder's plain pin was discarded.
+#[test]
+fn chained_holder_skip_lists_the_holder_beside_both_virtuals() {
+    let root = hermetic_root(&[]);
+    let result = resolve_bare_in(&root, &["dev-libs/p651prov", "dev-perl/p651top"]);
+    let mut consumers: Vec<&str> = result
+        .skipped_updates
+        .iter()
+        .map(|s| s.consumer_cpv.as_str())
+        .collect();
+    consumers.sort_unstable();
+    assert_eq!(
+        consumers,
+        [
+            "dev-perl/p651holder-1:0/0::testrepo",
+            "virtual/p651enc-3.210.0-r2:0/0::testrepo",
+            "virtual/p651th-3.500.0-r1:0/0::testrepo"
+        ],
+        "skip parents: {:?}",
+        result.skipped_updates
+    );
+}

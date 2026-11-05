@@ -306,8 +306,20 @@ fn collect_feedback_inner(
     // same latch, a no-op). The filing decision is unchanged -- this only
     // lets an already-filed pin reach the next walk.
     // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
+    // The mask is one per cp: the plain pins of a holder-open pin's cp ride
+    // along, so the recorded parents list every unsatisfied requirer, like
+    // Portage's `conflict_atoms` (all parents minus the satisfied ones). Left
+    // to the later pin step they would be discarded by the feed's early
+    // return and never rescanned once the version is masked.
+    // Portage: depgraph.py, _slot_confict_backtrack.
+    let holder_open_cps: HashSet<&(String, String)> =
+        scan.holder_open.iter().map(|pin| &pin.cp).collect();
     let mut holder_open_added = false;
-    for pin in &scan.holder_open {
+    for pin in scan
+        .enforced
+        .iter()
+        .filter(|pin| pin.holder_open || holder_open_cps.contains(&pin.cp))
+    {
         holder_open_added |= apply_enforced_pin(&mut grown, pass, pin, ctx.backtrack_max);
     }
     if !pass.slot_conflicts.is_empty() {

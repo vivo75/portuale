@@ -541,13 +541,16 @@ impl BacktrackParams {
 /// `||` picks another arm), so the stale want must not veto the retry —
 /// otherwise the masked pass dead-ends and the search can never settle the
 /// skip it already chose. Negatives (masks) always survive, and so does
-/// every positive with a live (visible, unmasked) match.
+/// every positive with a live (visible, unmasked) match -- in the tree or
+/// among the installed instances (an installed-only sub-slot or a treeless
+/// carrier has no tree candidate, yet its pin is still a live want).
 /// Portage: dep_check.py, dep_zapdeps (post-skip re-resolution bins
 /// :636-655/:599-616 re-judge every arm); depgraph.py, _backtrack_depgraph
 /// (each retry re-runs the whole walk from scratch, so no want persists).
 pub(crate) fn drop_stale_positives(
     map: HashMap<(String, String), Vec<String>>,
     gate: CategoryGate<'_>,
+    root: &Path,
     config: &portage_profile::Config,
 ) -> HashMap<(String, String), Vec<String>> {
     map.into_iter()
@@ -589,6 +592,7 @@ pub(crate) fn drop_stale_positives(
                             && portage_dep::match_from_list(c, std::slice::from_ref(&v.as_str()))
                                 .is_some_and(|r| !r.is_empty())
                     });
+                    let live = live || atom_matches_installed(root, c, config);
                     if !live {
                         dropped.push(c.clone());
                     }
