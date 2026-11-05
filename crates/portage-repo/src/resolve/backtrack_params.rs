@@ -25,6 +25,25 @@ pub(crate) struct ExpansionSeed {
     pub(crate) demoters: BTreeSet<(String, String, String)>,
 }
 
+/// One recorded parent-posture hold: the fall-through `||` arm of an installed
+/// virtual that a replacing re-evaluating parent keeps installed-bound, so no
+/// seed commits for it. Unlike a latched [`ExpansionSeed`] (a merge
+/// commitment), a hold is re-derived every pass and only re-fires while the
+/// replacing-only posture still reads the same; fresh inputs that flip the
+/// verdict drop the record and commit instead (Portage re-evaluates every
+/// consumer's `||` on each rebuild).
+// Portage: dep_check.py, dep_zapdeps (`:480`/`:531` replacing bypass,
+// `:490`/`:541` downgrade flags).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PostureHold {
+    /// The owning virtual's `(category, package, installed version)`: the
+    /// latch key with `atom` (first hold wins, so the re-fire log stays
+    /// stable across passes).
+    pub(crate) owner: (String, String, String),
+    /// The held fall-through arm atom (never queued while held).
+    pub(crate) atom: String,
+}
+
 /// One ranked mask choice for a slot conflict: mask `target`, opposed by
 /// `parents` (pullers whose atom does NOT match the masked version). One
 /// choice becomes one sibling node; DFS explores the last-added first.
@@ -413,6 +432,13 @@ pub(crate) struct BacktrackParams {
     /// add. Latched like the pin sets, so the search terminates. Included in
     /// `params_equal`.
     pub(crate) virtual_expansion_seeds: BTreeSet<ExpansionSeed>,
+    /// Parent-posture holds recorded by the seed feed (backlog #656 leg (b)):
+    /// one entry per held `(owner, atom)`. Re-checkable search state, not a
+    /// log line -- every pass re-derives the verdict and the feed logs the
+    /// re-fire, so a stale hold cannot outlive the posture that filed it.
+    /// Insert-only per key (a flipped verdict drops the record outright), so
+    /// the search terminates. Included in `params_equal`.
+    pub(crate) posture_holds: BTreeSet<PostureHold>,
     /// The undo latch: a demoted cp must be remembered here or the scan would
     /// immediately re-add it (its vdb `:S/SS=` binding is still stale).
     /// Monotone and bounded by the installed cp count, so the search

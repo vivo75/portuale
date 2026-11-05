@@ -48,6 +48,7 @@ pub(crate) fn params_equal(a: &BacktrackParams, b: &BacktrackParams) -> bool {
         && a.rebuild_if_replace_installed == b.rebuild_if_replace_installed
         && a.slot_operator_forced_upgrade == b.slot_operator_forced_upgrade
         && a.virtual_expansion_seeds == b.virtual_expansion_seeds
+        && a.posture_holds == b.posture_holds
         && a.slot_operator_undone == b.slot_operator_undone
         && a.prune_rebuilds == b.prune_rebuilds
         && a.circular_dependency == b.circular_dependency

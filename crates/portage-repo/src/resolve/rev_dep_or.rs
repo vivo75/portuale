@@ -725,6 +725,15 @@ pub(crate) fn virtual_rdepend_is_expandable(split: &OrSplit) -> bool {
     })
 }
 
+/// What [`virtual_expansion_seeds`] derived this pass: committing seeds plus
+/// the recorded-hold delta (added holds whose posture filed this pass,
+/// dropped holds whose fresh inputs flipped the verdict).
+pub(crate) struct ExpansionFeed {
+    pub(crate) seeds: Vec<ExpansionSeed>,
+    pub(crate) holds_added: Vec<PostureHold>,
+    pub(crate) holds_dropped: Vec<PostureHold>,
+}
+
 /// New-style virtual `||` arms that need a fresh merge in this pass's graph:
 /// [`ExpansionSeed`]s owned by the virtual, each carrying the veto-level
 /// guard-demoters it was chosen under (the post-skip re-check input).
@@ -742,22 +751,37 @@ pub(crate) fn virtual_rdepend_is_expandable(split: &OrSplit) -> bool {
 /// virtual's own dep comes only from dep_check on the kept instance's own
 /// string. Already-seeded and already-merge-bound arms are skipped, so the
 /// feed terminates.
+/// Backlog #656 leg (b): the verdict carries the re-evaluating parents'
+/// posture. A request-pinned demoter forces every judgment post-demoter, so
+/// no keeper binds; with only replacing parents the installed arm holds (the
+/// hold is recorded in `BacktrackParams::posture_holds` and re-fires while the
+/// posture reads the same), while a fresh-leg parent pulls the fall-through.
+/// With a walk-selected demoter only a requested keeper's pre-demoter
+/// judgment binds.
 // Portage: dep_check.py, _expand_new_virtuals; depgraph.py, _add_dep (:3364)
 pub(crate) fn virtual_expansion_seeds(
     ctx: &ResolveCtx<'_>,
     pass: &PassResult,
     grown: &BacktrackParams,
-) -> Vec<ExpansionSeed> {
+) -> ExpansionFeed {
     // No seeds when the walk follows no dependencies (`--nodeps`), and none
     // under `--onlydeps` either: Portage expands virtuals while walking merge
     // candidates, and the playground oracle merges nothing on this shape under
     // `--onlydeps` (a build-dep-pulled virtual that needs its fall-through
     // arm merged stays a documented cut).
     if ctx.nodeps || ctx.onlydeps {
-        return Vec::new();
+        return ExpansionFeed {
+            seeds: Vec::new(),
+            holds_added: Vec::new(),
+            holds_dropped: Vec::new(),
+        };
     }
     let gate = ctx.gate();
-    let mut out = Vec::new();
+    let mut out = ExpansionFeed {
+        seeds: Vec::new(),
+        holds_added: Vec::new(),
+        holds_dropped: Vec::new(),
+    };
     for e in &pass.entries {
         if e.category != "virtual" {
             continue;
@@ -875,11 +899,24 @@ pub(crate) fn virtual_expansion_seeds(
             {
                 continue;
             }
+            // A recorded hold is a re-checkable verdict, not a latch: the
+            // posture below re-derives every pass, and the re-fire line says
+            // whether the record still agrees. A hold never latches a seed,
+            // so a record and a latch for one owner+atom are mutually
+            // exclusive by construction.
+            let recorded = grown
+                .posture_holds
+                .iter()
+                .any(|h| h.owner == seed.owner && h.atom == seed.atom);
             // A walk-selected demoter may postdate an independent puller's
             // pre-demoter judgment, which Portage keeps: the virtual is
             // already bound without the demoter, so its fall-through holds.
-            // A request-pinned demoter is forced from walk start instead, so
-            // every judgment is post-demoter and the seed fires (M6b/M5).
+            // Only a predating (requested) keeper binds -- a walk-selected
+            // keeper's own judgment is post-demoter by construction, so it
+            // never keeps and the fresh leg falls through (backlog #656 leg
+            // (b2): the Encode shape). A request-pinned demoter is forced
+            // from walk start instead, so every judgment is post-demoter and
+            // the seed fires (M6b/M5).
             // Portage: depgraph.py, _create_graph (top-level atoms resolve
             // first); dep_check.py, dep_zapdeps (posture-split first evals).
             if !seed.demoters.is_empty()
@@ -889,13 +926,71 @@ pub(crate) fn virtual_expansion_seeds(
                     .all(|d| !demoter_request_pinned(ctx, &d.0, &d.1, &d.2))
                 && let Some((kcat, kpkg)) = independent_keeper(&pass.entries, e, &seed.demoters)
             {
-                if seed_trace_enabled() {
-                    eprintln!(
-                        "SEED hold virtual={}/{} seed={} keeper={kcat}/{kpkg} demoters={:?} walk-selected",
-                        e.category, e.package, seed.atom, seed.demoters
-                    );
+                if !keeper_requested(ctx, &kcat, &kpkg) {
+                    if seed_trace_enabled() {
+                        eprintln!(
+                            "SEED keeper-unrequested virtual={}/{} seed={} keeper={kcat}/{kpkg} demoters={:?} post-demoter",
+                            e.category, e.package, seed.atom, seed.demoters
+                        );
+                    }
+                } else {
+                    if seed_trace_enabled() {
+                        eprintln!(
+                            "SEED hold virtual={}/{} seed={} keeper={kcat}/{kpkg} demoters={:?} walk-selected",
+                            e.category, e.package, seed.atom, seed.demoters
+                        );
+                    }
+                    continue;
+                }
+            }
+            // A request-pinned demoter is forced from walk start, so no keeper
+            // binds; the replacing parent's posture then decides: with only
+            // replacing re-evaluating parents the installed arm holds
+            // (backlog #656 leg (b1): the TH shape), while a fresh-leg parent
+            // pulls the fall-through (the Encode shape).
+            // Portage: dep_check.py:480/:531 (`if not replacing` bypass),
+            // :490/:541 (downgrade flags); depgraph.py, _will_replace_child.
+            if !seed.demoters.is_empty()
+                && seed
+                    .demoters
+                    .iter()
+                    .any(|d| demoter_request_pinned(ctx, &d.0, &d.1, &d.2))
+                && replacing_posture_holds(&pass.entries, e, &seed.demoters)
+            {
+                if recorded {
+                    if seed_trace_enabled() {
+                        eprintln!(
+                            "SEED hold virtual={}/{} seed={} re-fire=agree recorded",
+                            e.category, e.package, seed.atom
+                        );
+                    }
+                } else {
+                    if seed_trace_enabled() {
+                        eprintln!(
+                            "SEED hold virtual={}/{} seed={} demoters={:?} replacing recorded",
+                            e.category, e.package, seed.atom, seed.demoters
+                        );
+                    }
+                    out.holds_added.push(PostureHold {
+                        owner: seed.owner.clone(),
+                        atom: seed.atom.clone(),
+                    });
                 }
                 continue;
+            }
+            // Fresh inputs overrule the stale record: the hold drops and the
+            // seed commits (Portage re-evaluates every consumer's `||`).
+            if recorded {
+                if seed_trace_enabled() {
+                    eprintln!(
+                        "SEED hold virtual={}/{} seed={} re-fire=flip committing",
+                        e.category, e.package, seed.atom
+                    );
+                }
+                out.holds_dropped.push(PostureHold {
+                    owner: seed.owner.clone(),
+                    atom: seed.atom.clone(),
+                });
             }
             if seed_trace_enabled() {
                 eprintln!(
@@ -903,7 +998,7 @@ pub(crate) fn virtual_expansion_seeds(
                     e.category, e.package, seed.atom, via
                 );
             }
-            out.push(seed);
+            out.seeds.push(seed);
         }
     }
     out
@@ -1210,6 +1305,55 @@ fn independent_keeper(
             })
             .then(|| (cat.clone(), pkg.clone()))
     })
+}
+
+/// Whether the keeper's judgment predates the demoter: only a requested
+/// puller's pre-demoter binding sticks (H-form: requested-first `p652early`
+/// keeps TH). A walk-selected keeper is post-demoter by construction and
+/// never keeps, so the fresh leg falls through instead (backlog #656 leg
+/// (b2): the real-cell Archive-Zip posture). Undecidable request text counts
+/// as requesting (fail closed = the pre-#656 behavior binds).
+// Portage: depgraph.py, _create_graph (top-level atoms resolve first).
+fn keeper_requested(ctx: &ResolveCtx<'_>, category: &str, package: &str) -> bool {
+    ctx.atoms.iter().any(|a| {
+        parse_dep_atom(a, "keeper_requested")
+            .is_none_or(|at| at.category == category && at.package == package)
+    })
+}
+
+/// Whether every merge-bound re-evaluating parent of the virtual replaces the
+/// demoted installed arm: all in-graph requirers share a demoter cp (the
+/// replacing transient's posture keeps the installed arm), with at least one
+/// present. A fresh-leg parent outside the demoter cps pulls the
+/// fall-through instead, so the seed commits (the Encode shape, M6b/M5).
+/// Installed-only requirers never re-evaluate: Portage judges each
+/// consumer's `||` when the consumer itself is processed.
+// Portage: dep_check.py:480/:531 (`if not replacing` bypass), :490/:541
+// (downgrade flags); depgraph.py, _will_replace_child (same cp+slot: the
+// guard demotes within one slot, so the cp test decides it here).
+fn replacing_posture_holds(
+    entries: &[GraphEntry],
+    virtual_entry: &GraphEntry,
+    demoters: &BTreeSet<(String, String, String)>,
+) -> bool {
+    let demoter_cps: HashSet<(&str, &str)> = demoters
+        .iter()
+        .map(|(c, p, _)| (c.as_str(), p.as_str()))
+        .collect();
+    let mut replacing = false;
+    for (cat, pkg) in &virtual_entry.required_by {
+        let merge_bound = entries.iter().any(|o| {
+            o.category == *cat && o.package == *pkg && merge_bound_version(&o.outcome).is_some()
+        });
+        if !merge_bound {
+            continue;
+        }
+        if !demoter_cps.contains(&(cat.as_str(), pkg.as_str())) {
+            return false;
+        }
+        replacing = true;
+    }
+    replacing
 }
 
 /// The values the single-version arm expansion reads from its caller.

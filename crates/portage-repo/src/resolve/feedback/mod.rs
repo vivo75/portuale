@@ -315,10 +315,17 @@ fn collect_feedback_inner(
     // Portage's inline `_expand_new_virtuals`.
     // Portage: dep_check.py, _expand_new_virtuals.
     let mut expansion_added = false;
-    for seed in virtual_expansion_seeds(ctx, pass, &grown) {
+    let feed = virtual_expansion_seeds(ctx, pass, &grown);
+    for seed in feed.seeds {
         if grown.virtual_expansion_seeds.insert(seed) {
             expansion_added = true;
         }
+    }
+    for hold in feed.holds_added {
+        grown.posture_holds.insert(hold);
+    }
+    for hold in feed.holds_dropped {
+        grown.posture_holds.remove(&hold);
     }
     if expansion_added {
         return PassDecision::Feedback(BacktrackFeedback::RevDep {
