@@ -290,6 +290,7 @@ fn build_residual_folds_each_pin_into_its_own_record() {
         atom: "=dev-libs/sounneed-1.0:0/1".to_string(),
         raw_atom: "=dev-libs/sounneed-1.0:0/1".to_string(),
         built_render: Vec::new(),
+        holder_open: false,
         consumer: (
             "dev-libs".to_string(),
             "conpkg".to_string(),
@@ -301,6 +302,7 @@ fn build_residual_folds_each_pin_into_its_own_record() {
         atom: "=dev-libs/souprov-1.0:0/1".to_string(),
         raw_atom: "=dev-libs/souprov-1.0:0/1".to_string(),
         built_render: Vec::new(),
+        holder_open: false,
         consumer: ("dev-libs".to_string(), "zzz".to_string(), "9.9".to_string()),
     };
     let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {

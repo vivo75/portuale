@@ -279,6 +279,7 @@ fn backtrack_params_equal_compares_every_accumulator() {
         atom: "=a/b-1.0".to_string(),
         raw_atom: "=a/b-1.0".to_string(),
         built_render: Vec::new(),
+        holder_open: false,
         consumer: ("a".to_string(), "b".to_string(), "1.0".to_string()),
     };
     let mut p = base.clone();

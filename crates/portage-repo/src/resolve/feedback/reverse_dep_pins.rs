@@ -52,6 +52,10 @@ pub(crate) struct ReverseScan {
     /// atom the kept instance still satisfies. Report-only, never a mask or a
     /// `slot_constraints` entry of their own.
     pub(crate) report: Vec<RevDepPin>,
+    /// The enforced subset filed through the leg-(a) holder-open branch
+    /// (bare demoter + tree-present requirers): applies before the seed
+    /// feed, which would otherwise discard it (backlog #656).
+    pub(crate) holder_open: Vec<RevDepPin>,
 }
 
 /// The pass's one reverse-dependency scan.
@@ -93,6 +97,7 @@ fn scan_reverse_dependencies_inner(
             gate: ctx.gate(),
         });
     ReverseScan {
+        holder_open: enforced.iter().filter(|p| p.holder_open).cloned().collect(),
         enforced,
         dropped,
         report,
@@ -323,6 +328,93 @@ fn merge_candidate(pass: &PassResult, cp: &(String, String), version: &str) -> O
         })
 }
 
+/// Apply one enforced pin to the search state (positive constraint plus the
+/// mask on the merge-bound version it breaks). Shared by the ordinary pin
+/// step and the holder-open early apply (backlog #656 leg (a)): both latch
+/// through `reverse_dep_masked`, so a pin applied early is a no-op later.
+// Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
+pub(crate) fn apply_enforced_pin(
+    grown: &mut BacktrackParams,
+    pass: &PassResult,
+    pin: &RevDepPin,
+    backtrack_max: u32,
+) -> bool {
+    // Every enforced pin is retained (deduped) so the settle path can report the
+    // upgrades they withhold -- no conflict ever forms on that path, so without
+    // this the withhold would stay silent.
+    if !grown.reverse_dep_pins.contains(pin) {
+        grown.reverse_dep_pins.push(pin.clone());
+    }
+    // Two jobs share `reverse_dep_masked` here, and only the second one is
+    // per consumer: the latch keeps `slot_constraints` from growing (once
+    // per `(cp, atom)`), while the mask's parent rows belong to every
+    // consumer recording that atom -- Portage records one
+    // `(parent, atom)` pair per parent atom (`depgraph.py:2107-2121`).
+    let fresh_atom = grown
+        .reverse_dep_masked
+        .insert((pin.cp.clone(), pin.atom.clone()));
+    let fresh_parents = grown.reverse_dep_conflict_parents.insert((
+        pin.cp.clone(),
+        pin.atom.clone(),
+        pin.consumer.clone(),
+    ));
+    if backtrack_max > 0 && (fresh_atom || fresh_parents) {
+        // The built `:S/SS=` form renders first, like Portage's missed-update
+        // parents; a second consumer's rows append after the first one's.
+        let parents: Vec<((String, String, String), String)> = pin
+            .built_render
+            .iter()
+            .map(|built| (pin.consumer.clone(), built.clone()))
+            .chain(std::iter::once((pin.consumer.clone(), pin.atom.clone())))
+            .collect();
+        for (neg, ver) in masked_versions(pass, &pin.cp) {
+            let candidate = merge_candidate(pass, &pin.cp, &ver);
+            if candidate.as_deref().is_some_and(|candidate| {
+                portage_dep::match_from_list(&pin.atom, &[candidate]).is_some_and(|m| !m.is_empty())
+            }) {
+                continue;
+            }
+            let bucket = grown.runtime_pkg_mask.entry(pin.cp.clone()).or_default();
+            match bucket.iter_mut().find(|m| m.neg == neg) {
+                Some(entry) => {
+                    let MaskReason::SlotConflict { parents: known } = &mut entry.reason else {
+                        continue;
+                    };
+                    for parent in &parents {
+                        if !known.contains(parent) {
+                            known.push(parent.clone());
+                        }
+                    }
+                    // `MaskReason` is compared in tests; keep it canonical
+                    // instead of following the scan's consumer order.
+                    known.sort();
+                    known.dedup();
+                }
+                None => {
+                    bucket.push(MaskEntry {
+                        neg: neg.clone(),
+                        reason: MaskReason::SlotConflict {
+                            parents: parents.clone(),
+                        },
+                    });
+                    grown.mask_order.push((pin.cp.clone(), neg));
+                }
+            }
+        }
+    }
+    if fresh_atom {
+        // Enforced pins are positive enforcement atoms, not masks -- exactly like
+        // the solvable-conflict wants above.
+        grown
+            .slot_constraints
+            .entry(pin.cp.clone())
+            .or_default()
+            .push(pin.atom.clone());
+        return true;
+    }
+    false
+}
+
 /// Installed reverse dependencies an upgrade breaks: pin or drop them.
 pub(crate) fn step_reverse_dep_pins(
     ctx: &ResolveCtx<'_>,
@@ -347,86 +439,16 @@ pub(crate) fn step_reverse_dep_pins(
         enforced,
         dropped,
         report,
+        holder_open: _,
     } = scan;
     // Rule 4 of `_eliminate_rebuilds` reads every parent atom of the rebuilt pkg, and
     // the complete-graph nomerge consumers are part of `_parent_atoms`; these pins
     // carry their atoms. Cloned before the loops consume the vectors.
     let reverse_pins: Vec<RevDepPin> = enforced.iter().chain(dropped.iter()).cloned().collect();
-    for pin in enforced {
-        // Every enforced pin is retained (deduped) so the settle path can report the
-        // upgrades they withhold -- no conflict ever forms on that path, so without
-        // this the withhold would stay silent.
-        if !grown.reverse_dep_pins.contains(&pin) {
-            grown.reverse_dep_pins.push(pin.clone());
-        }
-        // Two jobs share `reverse_dep_masked` here, and only the second one is
-        // per consumer: the latch keeps `slot_constraints` from growing (once
-        // per `(cp, atom)`), while the mask's parent rows belong to every
-        // consumer recording that atom -- Portage records one
-        // `(parent, atom)` pair per parent atom (`depgraph.py:2107-2121`).
-        let fresh_atom = grown
-            .reverse_dep_masked
-            .insert((pin.cp.clone(), pin.atom.clone()));
-        let fresh_parents = grown.reverse_dep_conflict_parents.insert((
-            pin.cp.clone(),
-            pin.atom.clone(),
-            pin.consumer.clone(),
-        ));
-        if ctx.backtrack_max > 0 && (fresh_atom || fresh_parents) {
-            // The built `:S/SS=` form renders first, like Portage's missed-update
-            // parents; a second consumer's rows append after the first one's.
-            let parents: Vec<((String, String, String), String)> = pin
-                .built_render
-                .iter()
-                .map(|built| (pin.consumer.clone(), built.clone()))
-                .chain(std::iter::once((pin.consumer.clone(), pin.atom.clone())))
-                .collect();
-            for (neg, ver) in masked_versions(pass, &pin.cp) {
-                let candidate = merge_candidate(pass, &pin.cp, &ver);
-                if candidate.as_deref().is_some_and(|candidate| {
-                    portage_dep::match_from_list(&pin.atom, &[candidate])
-                        .is_some_and(|m| !m.is_empty())
-                }) {
-                    continue;
-                }
-                let bucket = grown.runtime_pkg_mask.entry(pin.cp.clone()).or_default();
-                match bucket.iter_mut().find(|m| m.neg == neg) {
-                    Some(entry) => {
-                        let MaskReason::SlotConflict { parents: known } = &mut entry.reason else {
-                            continue;
-                        };
-                        for parent in &parents {
-                            if !known.contains(parent) {
-                                known.push(parent.clone());
-                            }
-                        }
-                        // `MaskReason` is compared in tests; keep it canonical
-                        // instead of following the scan's consumer order.
-                        known.sort();
-                        known.dedup();
-                    }
-                    None => {
-                        bucket.push(MaskEntry {
-                            neg: neg.clone(),
-                            reason: MaskReason::SlotConflict {
-                                parents: parents.clone(),
-                            },
-                        });
-                        grown.mask_order.push((pin.cp.clone(), neg));
-                    }
-                }
-            }
-        }
-        if fresh_atom {
-            // Enforced pins are positive enforcement atoms, not masks -- exactly like
-            // the solvable-conflict wants above.
-            grown
-                .slot_constraints
-                .entry(pin.cp)
-                .or_default()
-                .push(pin.atom);
-            added = true;
-        }
+    for pin in &enforced {
+        // Holder-open pins applied before the seed feed re-arrive here; the
+        // latch inside keeps the re-apply a no-op.
+        added |= apply_enforced_pin(grown, pass, pin, ctx.backtrack_max);
     }
     // Portage's missed-update tail records every parent atom that does not match
     // the skipped package, including one the *kept* instance still satisfies

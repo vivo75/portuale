@@ -96,6 +96,10 @@ pub(crate) struct RevDepPin {
     pub(crate) built_render: Vec<String>,
     /// The installed consumer `(category, package, version)`.
     pub(crate) consumer: (String, String, String),
+    /// Filed through the leg-(a) holder-open branch (bare demoter +
+    /// installed, tree-present requirers carry the pin): applies before the
+    /// seed feed, which would otherwise discard it (backlog #656).
+    pub(crate) holder_open: bool,
 }
 
 /// Arguments of [`rev_dep_pin_holdable`].
@@ -958,6 +962,9 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
                 gate,
                 entries,
                 arg_atoms: or_scan.arg_atoms,
+                dep_keys,
+                dynamic_deps,
+                ignore_built_slot_operator_deps,
             })
             .is_break()
             {
@@ -1006,6 +1013,83 @@ pub(crate) struct ConstraintsFromAtomArgs<'a> {
     pub(crate) gate: CategoryGate<'a>,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) arg_atoms: &'a [String],
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) ignore_built_slot_operator_deps: bool,
+}
+
+/// What [`holder_enforce_open`] reads from its caller.
+pub(crate) struct HolderEnforceOpenArgs<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) gate: CategoryGate<'a>,
+    pub(crate) dep_keys: &'a [&'a str],
+    pub(crate) dynamic_deps: bool,
+    pub(crate) ignore_built_slot_operator_deps: bool,
+    pub(crate) pin_cp: &'a (String, String),
+    pub(crate) pin_text: &'a str,
+    pub(crate) raw_text: &'a str,
+}
+
+/// Whether an installed, tree-present, non-virtual requirer carries the
+/// contradicted pin: leg (a) of backlog #656 files the kept virtual's `||`
+/// conflict on this shape instead of tolerating it (the unconditional-open
+/// half; the tree-presence bound is the N2 carve-in).
+// Portage: depgraph.py, _slot_operator_check_reverse_dependencies
+pub(crate) fn holder_enforce_open(args: HolderEnforceOpenArgs<'_>) -> bool {
+    let HolderEnforceOpenArgs {
+        root,
+        gate,
+        dep_keys,
+        dynamic_deps,
+        ignore_built_slot_operator_deps,
+        pin_cp,
+        pin_text,
+        raw_text,
+    } = args;
+    let mut meta_memo: MetaMemo = HashMap::new();
+    all_installed_packages(root).iter().any(|holder| {
+        // The virtual consumers' arms never self-trigger: the judged arm is
+        // theirs by construction, so counting them would open every tolerate.
+        if holder.category == "virtual" {
+            return false;
+        }
+        // A requirer is a reverse dependency by definition, never the pin's
+        // own package.
+        if holder.category == pin_cp.0 && holder.package == pin_cp.1 {
+            return false;
+        }
+        // Tree-present: the installed version still has an ebuild in its
+        // recorded repo. The treeless installed-only carrier (N2 `p651pin`)
+        // reads `None` here and never counts.
+        if live_metadata_for_installed(
+            gate.repos,
+            root,
+            &holder.category,
+            &holder.package,
+            &holder.version,
+        )
+        .is_none()
+        {
+            return false;
+        }
+        let deps = consumer_deps(
+            DepSource {
+                root,
+                gate,
+                dep_keys,
+                dynamic_deps,
+                ignore_built_slot_operator_deps,
+            },
+            &mut meta_memo,
+            &holder.category,
+            &holder.package,
+            &holder.version,
+        );
+        deps.strings.iter().any(|(_, depstr)| {
+            flat_dep_atoms(depstr, &deps.use_flags)
+                .is_some_and(|atoms| atoms.iter().any(|a| a == pin_text || a == raw_text))
+        })
+    })
 }
 
 /// Collect the reverse-dependency pins one dependency atom of a consumer places on the packages being upgraded.
@@ -1033,6 +1117,9 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         gate,
         entries,
         arg_atoms,
+        dep_keys,
+        dynamic_deps,
+        ignore_built_slot_operator_deps,
     } = args;
     let Some(atom) = parse_dep_atom(atom_str, "rev_dep") else {
         return ControlFlow::Break(());
@@ -1145,6 +1232,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
                     consumer.package.clone(),
                     consumer.version.clone(),
                 ),
+                holder_open: false,
             };
             if !report.contains(&pin) {
                 report.push(pin);
@@ -1194,6 +1282,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
                         consumer.package.clone(),
                         consumer.version.clone(),
                     ),
+                    holder_open: false,
                 };
                 if seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
                     if report_only {
@@ -1213,8 +1302,14 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     // transient the virtuals' arms block, so the skip stands). Otherwise
     // the seed feed owns the fall-through and the arm is tolerated instead
     // of masking the merge (backlog #652 leg B: TH's perl arm under the
-    // walk-selected transient; Portage keeps TH and merges perl).
+    // walk-selected transient; Portage keeps TH and merges perl), unless
+    // installed, tree-present requirers carry the pin (backlog #656 leg
+    // (a): the bed cell's 48 holders; the treeless N2 pin stays tolerated).
     // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
+    // Whether this atom files through the holder-open branch (leg (a)):
+    // read by the pin site below, which marks the pin for the
+    // seed-preempted early apply.
+    let mut via_holder_open = false;
     if or_selected && consumer.category == "virtual" && !report_only {
         let breaking: Vec<String> = failing
             .iter()
@@ -1236,17 +1331,41 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
                 version,
             })
         });
+        // Leg (a) opens the conflict a bare (non-request-pinned) demoter
+        // leaves tolerated: the holders' own pins never file (out-of-scope
+        // background), so the virtuals' arms file on their behalf. Without
+        // such holders the tolerate stands (M6b/M5/Q19/leg-B pinned shapes
+        // never reach here forced-false; the N2 treeless pin reads
+        // tree-absent and stays tolerated).
+        let holder_open = !forced
+            && holder_enforce_open(HolderEnforceOpenArgs {
+                root,
+                gate,
+                dep_keys,
+                dynamic_deps,
+                ignore_built_slot_operator_deps,
+                pin_cp: &cp,
+                pin_text: constraint.as_str(),
+                raw_text: atom_str,
+            });
         if seed_trace_enabled() {
             eprintln!(
                 "SEED {} virtual={}/{} atom={atom_str} breaking={breaking:?}",
-                if forced { "forcing" } else { "tolerate" },
+                if forced {
+                    "forcing"
+                } else if holder_open {
+                    "enforce-open"
+                } else {
+                    "tolerate"
+                },
                 consumer.category,
                 consumer.package
             );
         }
-        if !forced {
+        if !forced && !holder_open {
             return ControlFlow::Break(());
         }
+        via_holder_open = holder_open;
     }
     // Verbatim for built bindings via slot-change reinstalls, else stripped.
     let pin_atom = if built_slot_op
@@ -1269,6 +1388,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
             consumer.package.clone(),
             consumer.version.clone(),
         ),
+        holder_open: via_holder_open,
     };
     if !seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
         return ControlFlow::Break(());

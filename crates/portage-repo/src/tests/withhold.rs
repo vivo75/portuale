@@ -25,6 +25,7 @@ fn reverse_pin_withhold_reports_a_skip_notice() {
         atom: "~dev-libs/whblocker-1.0".to_string(),
         raw_atom: "~dev-libs/whblocker-1.0".to_string(),
         built_render: Vec::new(),
+        holder_open: false,
         consumer: (
             "dev-libs".to_string(),
             "whtarget".to_string(),
@@ -81,6 +82,7 @@ fn two_consumers_of_the_same_pin_atom_each_get_a_row() {
         atom: "~dev-libs/whblocker-1.0".to_string(),
         raw_atom: "~dev-libs/whblocker-1.0".to_string(),
         built_render: Vec::new(),
+        holder_open: false,
         consumer: (
             "dev-libs".to_string(),
             consumer.to_string(),

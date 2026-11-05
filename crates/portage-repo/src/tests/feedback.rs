@@ -308,6 +308,7 @@ fn collect_feedback_keeps_an_enforced_pin_single() {
         atom: "=dev-libs/souprov-1.0".to_string(),
         raw_atom: "=dev-libs/souprov-1.0".to_string(),
         built_render: Vec::new(),
+        holder_open: false,
         consumer: (
             "dev-libs".to_string(),
             "pinner".to_string(),
@@ -380,6 +381,7 @@ fn collect_feedback_collects_a_dropped_pin_once() {
         atom: "=dev-libs/souprov-1.0".to_string(),
         raw_atom: "=dev-libs/souprov-1.0".to_string(),
         built_render: Vec::new(),
+        holder_open: false,
         consumer: (
             "dev-libs".to_string(),
             "pinner".to_string(),

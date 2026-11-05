@@ -61,18 +61,17 @@ fn resolve_bare_in(root: &Path, atoms: &[&str]) -> GraphResult {
         .unwrap_or_else(|e| panic!("resolving {atoms:?} failed: {e}"))
 }
 
-/// The bare N1-mirror leg on portuale's side: the transient MERGES here
-/// (`U p651prov-5.44.0`) where the N1 oracle reinstalls — the recorded
-/// selection-side divergence (S0 §6 "N1 vs N2 perl-row divergence"), NOT
-/// #651's scope. Given the merge, the demotion is upgrade-demotion, and
-/// upgrade-demoted seeds must still fire (the M6b/M5 precedent Task 2 must
-/// preserve): the fall-through arms merge alongside the upgrade.
-///
-/// Oracle: Portage N1 holds `['dev-lang/perl-5.42.2']`, but that hold rides
-/// the skip this leg does not render — so this leg pins NO CHANGE, guarding
-/// the fix against over-blunting (a fix green on the chain leg by dropping
-/// the seeds while still merging the transient here has confused the two
-/// demotions). GREEN before Task 2, must stay green after.
+/// The bare N1-mirror leg: the fixture vdb grew three installed `=5.42*`
+/// holders under Task 1 (`p656hold{1,2,3}`), so this world is N1 + holders
+/// and Portage's verdict on exactly that shape is reinstall, not upgrade:
+/// P2 (`probe656_oracle.py`: `SUCCESS True`,
+/// `MERGELIST ['dev-lang/perl-5.42.2']`, no skip) and H0 (same with
+/// tree-present holders: tree-presence is invisible to Portage).
+/// The #656 leg-(a) gate files the kept virtuals' `||` arms on the holder
+/// shape, the mask lands 5.44, the seeds void, and the provider reinstalls
+/// with neither fall-through merged -- the R posture the old U pin
+/// predates. Re-pinned 2026-11-05 (was: transient-U + both fall-throughs,
+/// written when the fixture vdb carried no `=5.42*` holder).
 #[test]
 fn bare_request_with_transient_merging_seeds_the_fall_through() {
     let root = hermetic_root(&[]);
@@ -90,21 +89,15 @@ fn bare_request_with_transient_merging_seeds_the_fall_through() {
     assert!(
         matches!(
             &prov.outcome,
-            PretendOutcome::Upgrade { to, .. } if to == "5.44.0"
+            PretendOutcome::Reinstall { version, .. } if version == "5.42.2"
         ),
-        "the transient merges on the bare leg (selection-side U, out of #651 scope), got {:?}",
+        "the provider reinstalls 5.42.2 under the holder skip (P2/H0 oracle), got {:?}: {names:?}",
         prov.outcome
     );
-    for (core, ver) in [("p651enccore", "3.210.0"), ("p651thcore", "3.500.0")] {
-        let entry = result
-            .entries
-            .iter()
-            .find(|e| e.category == "dev-libs" && e.package == core)
-            .unwrap_or_else(|| panic!("the {core} fall-through arm merges: {names:?}"));
+    for core in ["p651enccore", "p651thcore"] {
         assert!(
-            matches!(&entry.outcome, PretendOutcome::New { version } if version == ver),
-            "the {core} fall-through arm merges new, got {:?}",
-            entry.outcome
+            !names.iter().any(|n| n == &format!("dev-libs/{core}")),
+            "no {core} fall-through under the holder skip (P2/H0 oracle): {names:?}"
         );
     }
     assert!(
@@ -112,7 +105,7 @@ fn bare_request_with_transient_merging_seeds_the_fall_through() {
             e.outcome,
             PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. }
         ) && e.category == "virtual"),
-        "no virtual upgrades alongside the fall-through: {names:?}"
+        "no virtual upgrades alongside the hold: {names:?}"
     );
 }
 

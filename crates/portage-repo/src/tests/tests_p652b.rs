@@ -140,12 +140,24 @@ fn nform_consumer_holds_the_virtual_no_subname() {
     );
 }
 
-/// Leg B (H-form, RED): the live merging transient with the early TH
-/// consumer. Portage (libreoffice/gimp bed cells) merges the Encode pin
-/// but holds TH: provider upgrades, no TH pin, neither virtual upgrades.
-/// Portuale fires both seeds and merges TH.
+/// Leg B (H-form): the requested early TH consumer over the bare provider.
+/// The fixture vdb grew three installed `=5.42*` holders under Task 1
+/// (`p656hold{1,2,3}`), so this world renders the #656 leg-(a) holder
+/// shape -- and Portage on exactly this shape reinstalls: H1
+/// (`probe656h_oracle.py`: `SUCCESS True`,
+/// `MERGELIST ['dev-lang/perl-5.42.2', 'dev-perl/s652early-1']`, no skip,
+/// no fall-throughs). The (a) gate files the kept virtuals' arms, the
+/// mask lands 5.44, the seeds void, and the transient reinstalls beside
+/// the requested early consumer with neither pin merged. Re-pinned
+/// 2026-11-05 (was: transient-U + Encode-N, the tolerate+keeper render
+/// that predates the holders).
 ///
-/// RED before Task 2 at the no-TH-pin assertion.
+/// Bed-divergence note: the real libreoffice/gimp cells still merge U +
+/// Encode (their requested closure carries versioned forcers the hermetic
+/// miniature lacks, and leg (b)'s keeper/posture holds that outcome --
+/// the Task-5 bed re-grade covers it). The miniature and the bed cell are
+/// different shapes in Portage itself (H1 = R vs bed = U); this pin tracks
+/// the miniature's own oracle, not the bed's.
 #[test]
 fn hform_upgrade_holds_th_while_encode_merges() {
     let root = hermetic_root(&[]);
@@ -155,7 +167,8 @@ fn hform_upgrade_holds_th_while_encode_merges() {
         .iter()
         .map(|e| format!("{}/{}", e.category, e.package))
         .collect();
-    // Upgrade posture: the transient merges (bed: perl U 5.44.0).
+    // Holder-win posture: the transient reinstalls (H1 oracle mergelist;
+    // the #656 leg-(a) enforcement-open mask, not the selection-side U).
     let prov = result
         .entries
         .iter()
@@ -164,32 +177,24 @@ fn hform_upgrade_holds_th_while_encode_merges() {
     assert!(
         matches!(
             &prov.outcome,
-            PretendOutcome::Upgrade { to, .. } if to == "5.44.0"
+            PretendOutcome::Reinstall { version, .. } if version == "5.42.2"
         ),
-        "the transient merges on the H-form (upgrade posture), got {:?}: {names:?}",
+        "the provider reinstalls 5.42.2 under the holder skip (H1 oracle), got {:?}: {names:?}",
         prov.outcome
     );
-    // Encode merges (bed libreoffice row 33 / gimp row 22).
-    let enc = result
-        .entries
-        .iter()
-        .find(|e| e.category == "dev-libs" && e.package == "p651enccore")
-        .unwrap_or_else(|| panic!("the Encode fall-through merges: {names:?}"));
+    // The requested early consumer still merges (H1 oracle row).
     assert!(
-        matches!(
-            &enc.outcome,
-            PretendOutcome::New { version } if version == "3.210.0"
-        ),
-        "the Encode fall-through merges new, got {:?}: {names:?}",
-        enc.outcome
+        names.iter().any(|n| n == "dev-perl/p652early"),
+        "the requested early consumer merges: {names:?}"
     );
-    // The load-bearing leg-B assertion: TH must be held (bed has no TH
-    // row on either cell).
-    assert!(
-        !names.iter().any(|n| n == "dev-libs/p651thcore"),
-        "no TH fall-through under the live merging transient (Portage holds TH): {names:?}"
-    );
-    // No virtual upgrades (bed upgrades neither the Encode nor the TH virtual).
+    // Neither fall-through merges (H1 has neither pin row).
+    for core in ["p651enccore", "p651thcore"] {
+        assert!(
+            !names.iter().any(|n| n == &format!("dev-libs/{core}")),
+            "no {core} fall-through under the holder skip (H1 oracle): {names:?}"
+        );
+    }
+    // No virtual upgrades (H1 upgrades neither virtual).
     assert!(
         !result.entries.iter().any(|e| matches!(
             e.outcome,

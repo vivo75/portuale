@@ -27,14 +27,25 @@ Task 1 product; S0 `LLM/evidence/2026-11-04-652/`; Task-1 oracle
   bare `virtual/p651th` dep -- the libreoffice-cell early TH-parent
   chain collapsed to one edge). Request `[p652early, p651prov]`
   (transient merges, no skip).
-- Oracle: the BED (playground cannot render the hold -- see the (b)
-  record below): real libreoffice row 33 merges `perl-core/Encode-3.210.0`
-  and carries NO `perl-core/Test-Harness` row and upgrades neither
-  `virtual/perl-Encode` nor `virtual/perl-Test-Harness` (other fresh
-  virtuals do merge; gimp identical: Encode row 22, no TH row, perl U).
-- Portuale (current): merges `p651thcore` (RED at the absence assertion);
-  everything else already matches the bed (prov U, enccore N, virtuals
-  kept, early N), so the failure isolates the TH hold exactly.
+- Oracle history: the BED first (playground cannot render the hold -- see
+  the (b) record below): real libreoffice row 33 merges
+  `perl-core/Encode-3.210.0` and carries NO `perl-core/Test-Harness` row
+  and upgrades neither `virtual/perl-Encode` nor
+  `virtual/perl-Test-Harness` (other fresh virtuals do merge; gimp
+  identical: Encode row 22, no TH row, perl U). Pre-#656 portuale merged
+  `p651thcore` (RED at the absence assertion); everything else already
+  matched the bed (prov U, enccore N, virtuals kept, early N), so the
+  failure isolated the TH hold exactly.
+- Re-pinned 2026-11-05 (#656 leg (a)): the fixture vdb grew three
+  installed `=5.42*` holders (`p656hold{1,2,3}`), so this world renders
+  the holder shape -- and Portage on exactly this shape reinstalls: H1
+  (`probe656h_oracle.py`, same evidence dir: `SUCCESS True`,
+  `MERGELIST ['dev-lang/perl-5.42.2', 'dev-perl/s652early-1']`, no skip,
+  no fall-throughs). New pin: prov R 5.42.2 + early N + no pins + no
+  virtual U/D. The miniature and the bed cell diverge in Portage itself
+  (H1 = R vs bed = U: the bed's requested closure carries versioned
+  forcers the miniature lacks); this pin tracks the miniature's own
+  oracle, the bed cell stays covered by leg (b) + the Task-5 re-grade.
 
 ## (b) bin record (upgrade posture, Portage 3.0.83 dep_check.py)
 - Under an IDENTICAL posture both fall-through `||`s resolve identically

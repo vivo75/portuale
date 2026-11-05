@@ -298,6 +298,17 @@ fn collect_feedback_inner(
     // collected here: a later re-pass would otherwise report the collision
     // without its installed consumers.
     let scan = scan_reverse_dependencies(ctx, pass);
+    // Leg (a) of backlog #656: the holder-open subset applies before the
+    // seed feed. The feed's early return discards a pass's enforced pins
+    // whenever seeds fire, and the latched seeds re-select the `||` on the
+    // next pass, so a scan-only filing never bites. Forced and plain pins
+    // keep the old path (the pin step below re-applies these through the
+    // same latch, a no-op). The filing decision is unchanged -- this only
+    // lets an already-filed pin reach the next walk.
+    // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
+    for pin in &scan.holder_open {
+        apply_enforced_pin(&mut grown, pass, pin, ctx.backtrack_max);
+    }
     if !pass.slot_conflicts.is_empty() {
         for pin in &scan.dropped {
             if !grown.dropped_pins.contains(pin) {
