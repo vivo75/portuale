@@ -309,6 +309,18 @@ type SeenPin = ((String, String), String, (String, String, String));
 /// that consumer recorded against it, seen while scanning this pass.
 type BuiltSeenMap = HashMap<((String, String), (String, String, String)), Vec<String>>;
 
+/// Per-scan answers of the `or_selected` gate. Every input but the key is
+/// constant across one scan, so atoms sharing a key share the answer: the
+/// holder lookup walks every installed package, and a kept virtual's arms
+/// repeat the same pin text dozens of times.
+#[derive(Default)]
+pub(crate) struct OrSelectedMemo {
+    /// [`holder_enforce_open`] by `(pin cp, pin text, raw text)`.
+    holder_open: HashMap<((String, String), String, String), bool>,
+    /// [`merge_version_forced`] by `(cp, merge version)`.
+    forced: HashMap<((String, String), String), bool>,
+}
+
 /// (`cat/pkg`, slot) -> the candidate string this run would install, and whether it changes the slot.
 type UpgradingMap = HashMap<((String, String), String), (String, bool)>;
 
@@ -554,6 +566,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
             }
         }
     }
+    let mut or_memo = OrSelectedMemo::default();
     'consumer: for consumer in all_installed_packages(root).iter() {
         if constraints_from_consumer(ConstraintsFromConsumerArgs {
             consumer,
@@ -579,6 +592,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
             enforced: &mut enforced,
             gate,
             virt_selected: &virt_selected,
+            or_memo: &mut or_memo,
         })
         .is_break()
         {
@@ -627,6 +641,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
                 enforced: &mut enforced,
                 gate,
                 virt_selected: &virt_selected,
+                or_memo: &mut or_memo,
             });
         }
     }
@@ -687,6 +702,7 @@ pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     /// merge only when the contradicted version is forced (backlog #652
     /// leg B).
     pub(crate) virt_selected: &'a HashSet<String>,
+    pub(crate) or_memo: &'a mut OrSelectedMemo,
 }
 
 /// The sets that say which installed consumers a pass's scan reads.
@@ -849,6 +865,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         enforced,
         gate,
         virt_selected,
+        or_memo,
     } = args;
     if !consumer_in_scope(scope, consumer) {
         return ControlFlow::Break(());
@@ -965,6 +982,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
                 dep_keys,
                 dynamic_deps,
                 ignore_built_slot_operator_deps,
+                or_memo,
             })
             .is_break()
             {
@@ -1016,6 +1034,7 @@ pub(crate) struct ConstraintsFromAtomArgs<'a> {
     pub(crate) dep_keys: &'a [&'a str],
     pub(crate) dynamic_deps: bool,
     pub(crate) ignore_built_slot_operator_deps: bool,
+    pub(crate) or_memo: &'a mut OrSelectedMemo,
 }
 
 /// What [`holder_enforce_open`] reads from its caller.
@@ -1120,6 +1139,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         dep_keys,
         dynamic_deps,
         ignore_built_slot_operator_deps,
+        or_memo,
     } = args;
     let Some(atom) = parse_dep_atom(atom_str, "rev_dep") else {
         return ControlFlow::Break(());
@@ -1320,16 +1340,21 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
             })
             .collect();
         let forced = breaking.iter().any(|version| {
-            merge_version_forced(MergeVersionForcedArgs {
-                arg_atoms,
-                entries,
-                gate,
-                config,
-                root,
-                category: &cp.0,
-                package: &cp.1,
-                version,
-            })
+            *or_memo
+                .forced
+                .entry((cp.clone(), version.clone()))
+                .or_insert_with(|| {
+                    merge_version_forced(MergeVersionForcedArgs {
+                        arg_atoms,
+                        entries,
+                        gate,
+                        config,
+                        root,
+                        category: &cp.0,
+                        package: &cp.1,
+                        version,
+                    })
+                })
         });
         // Leg (a) opens the conflict a bare (non-request-pinned) demoter
         // leaves tolerated: the holders' own pins never file (out-of-scope
@@ -1338,16 +1363,21 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         // never reach here forced-false; the N2 treeless pin reads
         // tree-absent and stays tolerated).
         let holder_open = !forced
-            && holder_enforce_open(HolderEnforceOpenArgs {
-                root,
-                gate,
-                dep_keys,
-                dynamic_deps,
-                ignore_built_slot_operator_deps,
-                pin_cp: &cp,
-                pin_text: constraint.as_str(),
-                raw_text: atom_str,
-            });
+            && *or_memo
+                .holder_open
+                .entry((cp.clone(), constraint.clone(), atom_str.to_string()))
+                .or_insert_with(|| {
+                    holder_enforce_open(HolderEnforceOpenArgs {
+                        root,
+                        gate,
+                        dep_keys,
+                        dynamic_deps,
+                        ignore_built_slot_operator_deps,
+                        pin_cp: &cp,
+                        pin_text: constraint.as_str(),
+                        raw_text: atom_str,
+                    })
+                });
         if seed_trace_enabled() {
             eprintln!(
                 "SEED {} virtual={}/{} atom={atom_str} breaking={breaking:?}",
