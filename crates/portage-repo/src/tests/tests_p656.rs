@@ -192,6 +192,70 @@ fn bare_request_with_tree_present_holders_skips_the_transient() {
     );
 }
 
+/// Leg (a), built holder: the same bare request, but the only installed
+/// holder (`dev-perl/p656builthold`, tree `p651prov:=`) carries the slot-operator binding the bed's 48 dev-perl holders
+/// record (`dev-libs/p651prov:0/5.42=`), never the virtuals' textual
+/// `=p651prov-5.42*` pin. The gate must still file the conflict: the 5.44
+/// merge changes the sub-slot the built atom was bound to.
+///
+/// Bed ground truth: L0 `l0-20261105T190633Z` `dev-lang_perl` (trace shows
+/// `SEED enforce-open` instead of `tolerate`; R 5.42.2 + skip WARNING as
+/// Portage). RED before the built-binding match in `holder_enforce_open`:
+/// the textual match finds no holder and the transient merges.
+#[test]
+fn bare_request_with_built_slot_op_holders_skips_the_transient() {
+    let root = hermetic_root(&[]);
+    // Drop every installed non-virtual requirer carrying the textual pin
+    // (their tree RDEPEND is `=p651prov-5.42*`), then install the one holder
+    // whose tree RDEPEND binds `p651prov:=`: only the built form
+    // `:0/5.42=` the vdb records can trip the gate.
+    for category in fs::read_dir(root.join("var/db/pkg")).unwrap() {
+        let category = category.unwrap();
+        if category.file_name() == "virtual" || !category.file_type().unwrap().is_dir() {
+            continue;
+        }
+        for pkg in fs::read_dir(category.path()).unwrap() {
+            let dir = pkg.unwrap().path();
+            let textual = fs::read_to_string(dir.join("RDEPEND"))
+                .is_ok_and(|t| t.contains("=dev-libs/p651prov-5.42*"));
+            if textual {
+                fs::remove_dir_all(&dir).unwrap();
+            }
+        }
+    }
+    install_bare(&root, "dev-perl", "p656builthold-1");
+    fs::write(
+        root.join("var/db/pkg/dev-perl/p656builthold-1/RDEPEND"),
+        "dev-libs/p651prov:0/5.42=\n",
+    )
+    .unwrap();
+    let result = resolve_bare_in(&root, &["dev-libs/p651prov"]);
+    let names: Vec<String> = result
+        .entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    let prov = result
+        .entries
+        .iter()
+        .find(|e| e.category == "dev-libs" && e.package == "p651prov")
+        .expect("the provider stays in the graph");
+    assert!(
+        matches!(
+            &prov.outcome,
+            PretendOutcome::Reinstall { version, .. } if version == "5.42.2"
+        ),
+        "the provider reinstalls 5.42.2 under the built-holder skip, got {:?}: {names:?}",
+        prov.outcome
+    );
+    for fall_through in ["dev-libs/p651thcore", "dev-libs/p651enccore"] {
+        assert!(
+            !names.iter().any(|n| n == fall_through),
+            "no {fall_through} fall-through under the built-holder skip: {names:?}"
+        );
+    }
+}
+
 /// Installs `cat/pkg-version` (no deps) into the scratch root's vdb.
 fn install_bare(root: &Path, category: &str, pkg_version: &str) {
     let dir = root.join("var/db/pkg").join(category).join(pkg_version);

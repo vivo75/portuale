@@ -1047,6 +1047,54 @@ pub(crate) struct HolderEnforceOpenArgs<'a> {
     pub(crate) pin_cp: &'a (String, String),
     pub(crate) pin_text: &'a str,
     pub(crate) raw_text: &'a str,
+    /// `(slot, sub_slot)` of each merge candidate that breaks the pin: a
+    /// holder's built `:S/SS=` atom on the pin's package is contradicted by
+    /// the same-slot candidate with another sub-slot.
+    pub(crate) breaking_slots: &'a [(String, String)],
+}
+
+/// Whether a holder's dependency atom is a built slot-operator binding on the
+/// pin's package that a breaking candidate (same slot, other sub-slot) leaves
+/// unsatisfied: the real perl cell's 48 holders carry `dev-lang/perl:0/5.42=`,
+/// never the virtuals' `=dev-lang/perl-5.42*` text.
+fn holder_built_pin_broken(
+    atom_str: &str,
+    pin_cp: &(String, String),
+    breaking_slots: &[(String, String)],
+) -> bool {
+    let Some(atom) = parse_dep_atom(atom_str, "rev_dep") else {
+        return false;
+    };
+    if atom.blocker != portage_dep::Blocker::None
+        || atom.category != pin_cp.0
+        || atom.package != pin_cp.1
+        || !is_built_slot_op(&atom)
+    {
+        return false;
+    }
+    breaking_slots.iter().any(|(slot, sub)| {
+        atom.slot.as_deref() == Some(slot.as_str())
+            && atom.sub_slot.as_deref().is_some_and(|s| s != sub.as_str())
+    })
+}
+
+/// `(slot, sub_slot)` of the tree candidates at the given versions.
+fn breaking_candidate_slots(
+    gate: CategoryGate<'_>,
+    cp: &(String, String),
+    versions: &[String],
+) -> Vec<(String, String)> {
+    let Ok(candidates) = list_candidates(gate.repos, &cp.0, &cp.1) else {
+        return Vec::new();
+    };
+    candidates
+        .iter()
+        .filter(|c| versions.contains(&c.version))
+        .filter_map(|c| {
+            repo_aux_metadata(&c.repo_location, &cp.0, &format!("{}-{}", cp.1, c.version)).ok()
+        })
+        .map(|meta| crate::reinstall::split_slot(meta.get("SLOT").map_or("", String::as_str)))
+        .collect()
 }
 
 /// Whether an installed, tree-present, non-virtual requirer carries the
@@ -1064,6 +1112,7 @@ pub(crate) fn holder_enforce_open(args: HolderEnforceOpenArgs<'_>) -> bool {
         pin_cp,
         pin_text,
         raw_text,
+        breaking_slots,
     } = args;
     let mut meta_memo: MetaMemo = HashMap::new();
     all_installed_packages(root).iter().any(|holder| {
@@ -1105,8 +1154,13 @@ pub(crate) fn holder_enforce_open(args: HolderEnforceOpenArgs<'_>) -> bool {
             &holder.version,
         );
         deps.strings.iter().any(|(_, depstr)| {
-            flat_dep_atoms(depstr, &deps.use_flags)
-                .is_some_and(|atoms| atoms.iter().any(|a| a == pin_text || a == raw_text))
+            flat_dep_atoms(depstr, &deps.use_flags).is_some_and(|atoms| {
+                atoms.iter().any(|a| {
+                    a == pin_text
+                        || a == raw_text
+                        || holder_built_pin_broken(a, pin_cp, breaking_slots)
+                })
+            })
         })
     })
 }
@@ -1376,6 +1430,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
                         pin_cp: &cp,
                         pin_text: constraint.as_str(),
                         raw_text: atom_str,
+                        breaking_slots: &breaking_candidate_slots(gate, &cp, &breaking),
                     })
                 });
         if seed_trace_enabled() {
