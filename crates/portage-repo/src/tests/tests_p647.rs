@@ -102,6 +102,42 @@ fn multi_version_installed_virtual_falls_through_the_wrapped_arm() {
     );
 }
 
+/// Leg A0 (#657): the same consumer with no perl upgrade in the graph keeps
+/// the installed virtual. Portage expands one conjunction for the selected
+/// (installed) virtual, resolves its nested `||` first and ranks the result
+/// `preferred_installed` over `dev-libs/p647sub`; it never builds a
+/// conjunction per tree version.
+///
+/// Portage playground oracle (scratch probe `probe_tt.py`, case A0, Portage
+/// 3.0.83, M4 dicts of `probe647_oracle.py`): `MERGELIST
+/// ['dev-perl/Try-Tiny-0.320.0']`, no Sub-Name, no perl, no virtual row.
+///
+/// RED before #657: the per-version conjunctions each carried a dead
+/// `~perl-core` member, ranked `OtherInstalledSome`, and `p647sub` won.
+#[test]
+fn bare_consumer_keeps_the_installed_multi_version_virtual() {
+    let root = hermetic_root(&[]);
+    let result = resolve_in(&root, &["dev-libs/p647try"]);
+    let names: Vec<String> = result
+        .entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert!(
+        !names.iter().any(|n| n == "dev-libs/p647sub"),
+        "Portage keeps the installed virtual arm, portuale merged the fall-through: {names:?}"
+    );
+    assert!(
+        result
+            .entries
+            .iter()
+            .filter(|e| e.package == "p647prov" || e.package == "p647slu")
+            .all(|e| matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })),
+        "perl and the virtual stay installed, nothing is scheduled: {:?}",
+        result.entries
+    );
+}
+
 /// Leg B (M5 mirror): the plain top-level `>=virtual/...` consumer never
 /// reaches the consumer expander by design (Portage expands it inline,
 /// `dep_check.py:287-288`) — it is seed-feed territory only. With the

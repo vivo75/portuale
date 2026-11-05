@@ -1077,11 +1077,18 @@ pub(crate) fn expand_new_style_virtual_arm(
     {
         return None;
     }
-    if ebuilds.len() == 1 {
+    // Portage's composite `match_pkgs` returns one package per distinct
+    // (slot, sub_slot): when every tree version shares one, the installed
+    // version is the only expansion (no per-version arms, #657).
+    // Portage: depgraph.py, _dep_check_composite_db.match_pkgs.
+    let installed_cand = ebuilds.iter().find(|c| c.version == version);
+    if let Some(cand) = installed_cand
+        && (ebuilds.len() == 1 || shares_one_slot(&ebuilds, &parsed.category, &parsed.package))
+    {
         return expand_single_version_virtual_arm(ExpandSingleVersionVirtualArmArgs {
             parsed: &parsed,
             version: &version,
-            cand: &ebuilds[0],
+            cand,
             consumer,
             config,
             root,
@@ -1140,6 +1147,27 @@ pub(crate) fn expand_new_style_virtual_arm(
         out.push(conjunction);
     }
     if out.is_empty() { None } else { Some(out) }
+}
+
+/// Whether every candidate carries the same SLOT/SUBSLOT metadata.
+fn shares_one_slot(cands: &[Candidate], category: &str, package: &str) -> bool {
+    let mut first: Option<(String, String)> = None;
+    for c in cands {
+        let Ok(meta) = repo_aux_metadata(
+            &c.repo_location,
+            category,
+            &format!("{package}-{}", c.version),
+        ) else {
+            return false;
+        };
+        let slot = crate::reinstall::split_slot(meta.get("SLOT").map_or("", String::as_str));
+        match &first {
+            None => first = Some(slot),
+            Some(f) if *f == slot => {}
+            Some(_) => return false,
+        }
+    }
+    true
 }
 
 /// The selectable pool for pinning judgments: visible tree match strings
