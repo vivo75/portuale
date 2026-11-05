@@ -943,18 +943,16 @@ pub(crate) fn virtual_expansion_seeds(
                     continue;
                 }
             }
-            // A request-pinned demoter is forced from walk start, so no keeper
-            // binds; the replacing parent's posture then decides: with only
+            // With no keeper binding (a request-pinned demoter is forced from
+            // walk start; a walk-selected one with no independent puller has
+            // none either), the replacing parent's posture decides: with only
             // replacing re-evaluating parents the installed arm holds
-            // (backlog #656 leg (b1): the TH shape), while a fresh-leg parent
-            // pulls the fall-through (the Encode shape).
+            // (backlog #656 leg (b1), #657: the TH shape on the bed's
+            // libreoffice/gimp cells), while a fresh-leg parent pulls the
+            // fall-through (the Encode shape).
             // Portage: dep_check.py:480/:531 (`if not replacing` bypass),
             // :490/:541 (downgrade flags); depgraph.py, _will_replace_child.
             if !seed.demoters.is_empty()
-                && seed
-                    .demoters
-                    .iter()
-                    .any(|d| demoter_request_pinned(ctx, &d.0, &d.1, &d.2))
                 && replacing_posture_holds(&pass.entries, e, &seed.demoters)
             {
                 if recorded {

@@ -58,19 +58,23 @@ fn resolve_bare_in(root: &Path, atoms: &[&str]) -> GraphResult {
 }
 
 /// The bare N1 leg on portuale's side: the transient MERGES here
-/// (`U p650prov-5.44.0`) where the cell skips it — the recorded
+/// (`U p650prov-5.44.0`) where the cell skips it -- the recorded
 /// selection-side divergence (S0 §6 "N1 vs N2 perl-row divergence"), NOT
-/// #650's scope. Given the merge, the demotion is upgrade-demotion, and
-/// upgrade-demoted seeds must still fire (the M6b/M5 precedent Task 2 must
-/// preserve): the fall-through arms merge alongside the upgrade.
+/// #650's scope. With the merge, the demotion is an upgrade-demotion, and the
+/// virtuals' only re-evaluating parent is the replacing transient itself.
+/// Portage then keeps the installed arms (replacing parent: the
+/// `if not replacing` bypass, `dep_check.py:480/:531`), so NEITHER
+/// fall-through arm merges.
 ///
-/// Oracle: Portage N1 holds `['dev-lang/perl-5.42.2']`, but that hold rides
-/// the skip this leg does not render — so this leg pins NO CHANGE, guarding
-/// the fix against over-blunting (a fix green here by dropping the seeds
-/// while still merging the transient has confused the two demotions).
-/// GREEN before Task 2, must stay green after.
+/// Re-pinned 2026-11-05 (#657): this leg used to assert both fall-throughs
+/// merged ("no change" guard against over-blunting #650). The bed disproves
+/// that for the no-fresh-puller shape: L0 `l0-20261105T191358Z` real
+/// `app-office_libreoffice.txt` / `media-gfx_gimp.txt` merge perl-5.44.0 and
+/// carry NO `perl-core/Test-Harness` row, while Encode (pulled by the fresh
+/// `dev-perl/Archive-Zip` outside the demoter) does merge; the fresh-puller
+/// shape stays pinned by `tests_p656` and M6b/M5.
 #[test]
-fn bare_request_with_transient_merging_seeds_the_fall_through() {
+fn bare_request_with_transient_merging_holds_the_fall_through() {
     let root = hermetic_root(&[]);
     let result = resolve_bare_in(&root, &["dev-libs/p650prov"]);
     let names: Vec<String> = result
@@ -91,16 +95,10 @@ fn bare_request_with_transient_merging_seeds_the_fall_through() {
         "the transient merges on the bare leg (selection-side U, out of #650 scope), got {:?}",
         prov.outcome
     );
-    for (core, ver) in [("p650enccore", "3.210.0"), ("p650thcore", "3.500.0")] {
-        let entry = result
-            .entries
-            .iter()
-            .find(|e| e.category == "dev-libs" && e.package == core)
-            .unwrap_or_else(|| panic!("the {core} fall-through arm merges: {names:?}"));
+    for core in ["p650enccore", "p650thcore"] {
         assert!(
-            matches!(&entry.outcome, PretendOutcome::New { version } if version == ver),
-            "the {core} fall-through arm merges new, got {:?}",
-            entry.outcome
+            !names.iter().any(|n| n == &format!("dev-libs/{core}")),
+            "the {core} fall-through arm is held under the replacing transient: {names:?}"
         );
     }
     assert!(
@@ -108,7 +106,7 @@ fn bare_request_with_transient_merging_seeds_the_fall_through() {
             e.outcome,
             PretendOutcome::Upgrade { .. } | PretendOutcome::Downgrade { .. }
         ) && e.category == "virtual"),
-        "no virtual upgrades alongside the fall-through: {names:?}"
+        "no virtual upgrades alongside the hold: {names:?}"
     );
 }
 
