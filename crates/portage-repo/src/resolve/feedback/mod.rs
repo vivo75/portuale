@@ -306,8 +306,9 @@ fn collect_feedback_inner(
     // same latch, a no-op). The filing decision is unchanged -- this only
     // lets an already-filed pin reach the next walk.
     // Portage: depgraph.py, _slot_operator_check_reverse_dependencies.
+    let mut holder_open_added = false;
     for pin in &scan.holder_open {
-        apply_enforced_pin(&mut grown, pass, pin, ctx.backtrack_max);
+        holder_open_added |= apply_enforced_pin(&mut grown, pass, pin, ctx.backtrack_max);
     }
     if !pass.slot_conflicts.is_empty() {
         for pin in &scan.dropped {
@@ -338,7 +339,9 @@ fn collect_feedback_inner(
     for hold in feed.holds_dropped {
         grown.posture_holds.remove(&hold);
     }
-    if expansion_added {
+    // A freshly applied holder-open pin needs a re-walk even when no seed
+    // fires: the pin step below only sees the latch and reports nothing new.
+    if expansion_added || holder_open_added {
         return PassDecision::Feedback(BacktrackFeedback::RevDep {
             params: Box::new(std::mem::take(&mut grown)),
         });

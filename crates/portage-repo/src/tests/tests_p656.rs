@@ -191,3 +191,46 @@ fn bare_request_with_tree_present_holders_skips_the_transient() {
         "no virtual upgrades alongside the hold: {names:?}"
     );
 }
+
+/// Installs `cat/pkg-version` (no deps) into the scratch root's vdb.
+fn install_bare(root: &Path, category: &str, pkg_version: &str) {
+    let dir = root.join("var/db/pkg").join(category).join(pkg_version);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("CATEGORY"), format!("{category}\n")).unwrap();
+    fs::write(dir.join("EAPI"), "8\n").unwrap();
+    fs::write(dir.join("SLOT"), "0\n").unwrap();
+    fs::write(dir.join("repository"), "testrepo\n").unwrap();
+}
+
+/// Leg (a), seedless: the H-form world of
+/// `hform_upgrade_holds_th_while_encode_merges` (requested early TH
+/// consumer + bare provider + the three installed `=5.42*` holders) with the
+/// Encode core already installed. The Encode virtual then files no seed, and
+/// the TH seed is held by the requested keeper, so the only thing that can
+/// make the walk see the holder-open pin is the `RevDep` restart. The pin is
+/// applied to `grown` before the seed feed (`feedback/mod.rs`); the later
+/// `step_reverse_dep_pins` re-apply is a latched no-op, so `added` stays
+/// false and nothing restarts. The provider must still reinstall 5.42.2
+/// (H1 oracle), not upgrade to 5.44.0.
+///
+/// Review finding 1 (2026-11-05, commits since 7dae729b): a RED here means
+/// the early apply swallowed the `RevDep` restart.
+#[test]
+fn seedless_holder_open_pin_still_restarts_the_walk() {
+    let root = hermetic_root(&[]);
+    install_bare(&root, "dev-libs", "p651enccore-3.210.0");
+    let result = resolve_bare_in(&root, &["dev-perl/p652early", "dev-libs/p651prov"]);
+    let prov = result
+        .entries
+        .iter()
+        .find(|e| e.category == "dev-libs" && e.package == "p651prov")
+        .expect("the provider stays in the graph");
+    assert!(
+        matches!(
+            &prov.outcome,
+            PretendOutcome::Reinstall { version, .. } if version == "5.42.2"
+        ),
+        "the holder-open pin must bite without a seed (reinstall 5.42.2), got {:?}",
+        prov.outcome
+    );
+}
