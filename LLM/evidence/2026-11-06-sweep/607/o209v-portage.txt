@@ -1,0 +1,59 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$C/r25.cfg ROOT=$C/r25 PORTAGE_RUNNING_ROOT=$C/r25 DISTDIR=$C/r25/distfiles PORTAGE_TMPDIR=$C/ptmp PYTHONHASHSEED=0 /usr/bin/emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -p --backtrack=0 --update --deep --newuse --oneshot --verbose-conflicts =dev-libs/r25lib-2.0
+!!! Repository 'overlay' is missing masters attribute in '$C/r25/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '$C/r25/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '$C/r25/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '$C/r25/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'independentoverlay' is missing masters attribute in '$C/r25/independentoverlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'overlay' is missing masters attribute in '$C/r25/overlay/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '$C/r25/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+!!! Repository 'repnamefromfile' is missing masters attribute in '$C/r25/repnamerepo/metadata/layout.conf'
+!!! Set 'masters = testrepo' in this file for future compatibility
+WARNING: One or more repositories have missing repo_name entries:
+
+	$C/r25/independentoverlay/profiles/repo_name
+
+NOTE: Each repo_name entry should be a plain text file containing a
+unique name for the repository on the first line.
+
+
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 3.19 s (backtrack: 0/0).
+
+[ebuild     U  ] dev-libs/r25lib-2.0 [1.0] to $C/r25/
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/r25lib:0 for $C/r25/
+
+  (dev-libs/r25lib-2.0:0/2::testrepo, ebuild scheduled for merge to '$C/r25/') USE="" ELIBC="glibc" pulled in by
+    =dev-libs/r25lib-2.0 (Argument)
+
+  (dev-libs/r25lib-1.0:0/1::testrepo, installed in '$C/r25/') USE="" pulled in by
+    <dev-libs/r25lib-2.0:0/1= required by (dev-libs/r25consumer-1.0:0/0::testrepo, installed in '$C/r25/') USE=""
+    ^                ^^^^^^^^                                                                                                                                                                                                    
+    <dev-libs/r25lib-2.0:= required by (dev-libs/r25consumer-1.0:0/0::testrepo, installed in '$C/r25/') USE=""
+    ^                ^^^ ^                                                                                                                                                                                                    
+
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
+### rc: 1

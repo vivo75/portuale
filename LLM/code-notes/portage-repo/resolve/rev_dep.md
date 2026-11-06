@@ -27,6 +27,9 @@ Constraints that installed reverse dependencies put on an upgrade.
   absent. If the strip ever looks wrong for constraints too, that is a
   separate bed-wide change — stop and re-open instead of touching it.
 
+## fn pin_from_built_atom
+- Backlog #607: true when `raw_atom` is a built `:S/SS=` atom whose verbatim head sits in `built_render`, i.e. `atom` is only its stripped constraint. The residual slot-conflict printer then renders the built form alone (Portage never sees the stripped text).
+
 ## fn relax_built_slot_operator_atom
 - Portage `Atom.with_slot("=")` as `_slot_operator_check_reverse_dependencies` applies it (`lib/_emerge/depgraph.py:2494-2502`): a parent whose atom is a **built** slot-operator atom "may need to be rebuilt, therefore discard its soname and built slot operator dependency components" -- the recorded `:S/SS=` binding is relaxed to bare `:=`, keeping the version operator, any `[use]` deps and any `::repo`. The relaxed atom schedules a consumer rebuild, never a withhold: `>=dev-libs/provpkg-1.0:0/1=` still accepts the `0/2`-slot `provpkg-2.0` candidate, while `<dev-libs/r25lib-2.0:0/1=` still rejects `r25lib-2.0`.
 - Unlike `reverse_dep_constraint_atom` (which drops the `=` as well as the slot, equivalently, for *matching*), this keeps the operator so the result stays a faithful `with_slot("=")` rendering.

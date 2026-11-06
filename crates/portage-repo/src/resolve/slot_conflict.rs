@@ -597,11 +597,21 @@ pub(crate) fn build_residual_slot_conflicts(
                 None => ("0".to_string(), "0".to_string(), "__unknown__".to_string()),
             };
             // The consumer's built `:S/SS=` atoms are parents of the instance
-            // too, verbatim, after the pin's own atom.
-            let atoms = std::iter::once(&pin.atom).chain(pin.built_render.iter().filter(|built| {
-                portage_dep::match_from_list(built, &[inst_str.as_str()])
-                    .is_some_and(|m| !m.is_empty())
-            }));
+            // too, verbatim. A pin stripped from a built atom renders only
+            // the built form: Portage never sees the stripped text.
+            let built: Vec<&String> = pin
+                .built_render
+                .iter()
+                .filter(|built| {
+                    portage_dep::match_from_list(built, &[inst_str.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                })
+                .collect();
+            let stripped_from_built = !built.is_empty() && pin_from_built_atom(pin);
+            let atoms = (!stripped_from_built)
+                .then_some(&pin.atom)
+                .into_iter()
+                .chain(built);
             for atom in atoms {
                 let entry = SlotConflictParent {
                     // match-str-ok: slot_conflict_meta/installed ref fields, not a Candidate

@@ -102,6 +102,14 @@ pub(crate) struct RevDepPin {
     pub(crate) holder_open: bool,
 }
 
+/// Whether `pin.atom` was stripped from a built `:S/SS=` atom (its verbatim
+/// form is then one of `pin.built_render`).
+pub(crate) fn pin_from_built_atom(pin: &RevDepPin) -> bool {
+    let head = pin.raw_atom.split('[').next().unwrap_or(&pin.raw_atom);
+    parse_dep_atom(head, "rev_dep").is_some_and(|a| is_built_slot_op(&a))
+        && pin.built_render.iter().any(|b| b == head)
+}
+
 /// Arguments of [`rev_dep_pin_holdable`].
 pub(crate) struct RevDepPinHoldableArgs<'a> {
     pub(crate) root: &'a Path,

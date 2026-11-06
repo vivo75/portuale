@@ -351,6 +351,49 @@ fn build_residual_dedups_identical_pins() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Backlog #607: a pin stripped from a built `:S/SS=` atom renders only the
+/// built atom; a plain pin keeps its own text beside its built siblings.
+/// Expected from Portage 3.0.83 on the r25 shape (`=r25lib-2.0` over
+/// `r25consumer`'s `<dev-libs/r25lib-2.0:0/1=`): the parent is the built
+/// atom, never `<dev-libs/r25lib-2.0`.
+#[test]
+fn build_residual_renders_a_built_pin_only_in_its_built_form() {
+    let dir = slotundo_temp_dir("607-built-only");
+    let (repos, config, upgrade) = residual_161_setup(&dir);
+    let built = RevDepPin {
+        atom: "<dev-libs/souprov-2.0".to_string(),
+        raw_atom: "<dev-libs/souprov-2.0:0/1=".to_string(),
+        built_render: vec!["<dev-libs/souprov-2.0:0/1=".to_string()],
+        ..residual_161_pin()
+    };
+    let atoms_of = |pin: RevDepPin| -> Vec<String> {
+        let out = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+            config: &config,
+            root: &dir,
+            entries: std::slice::from_ref(&upgrade),
+            slot_pullers: &HashMap::new(),
+            dropped: &[pin],
+            gate: crate::test_gate(&repos),
+        });
+        out[0].instances[1]
+            .parents
+            .iter()
+            .map(|p| p.atom.clone())
+            .collect()
+    };
+    assert_eq!(atoms_of(built.clone()), ["<dev-libs/souprov-2.0:0/1="]);
+    // The same built sibling under a plain (non-built) pin: both print.
+    let plain = RevDepPin {
+        raw_atom: "<dev-libs/souprov-2.0".to_string(),
+        ..built
+    };
+    assert_eq!(
+        atoms_of(plain),
+        ["<dev-libs/souprov-2.0", "<dev-libs/souprov-2.0:0/1="]
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// A built `:S/SS=` puller re-files against the installed vdb
 /// sub-slot, not the tree's metadata for that version.
 #[test]

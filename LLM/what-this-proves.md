@@ -20867,3 +20867,12 @@ pointer, byte-identical to Portage 3.0.83 (captures in
 rows print it too).
 
 Backlog #663 (2026-11-06): autounmask now treats an implicit IUSE flag as flippable, like Portage. Live: `emerge --pretend dev-libs/implicitiusepkgmusl` on the fixture tree ends with `The following USE changes are necessary to proceed:` and `>=dev-libs/implicitiuseprov-1.0 elibc_musl`, byte-identical to Portage 3.0.83 (`LLM/evidence/2026-11-06-663/`).
+
+Backlog #607 (2026-11-06): the residual slot-conflict block names an installed
+consumer's built slot-operator atom as Portage does, never the stripped bound.
+Live: on a fixture copy with `dev-libs/r25consumer` added to world,
+`emerge --pretend --backtrack=0 --update --deep --newuse --oneshot =dev-libs/r25lib-2.0`
+lists `<dev-libs/r25lib-2.0:0/1= required by (dev-libs/r25consumer-1.0:0/0::testrepo, …)`
+and `(and 1 more with the same problem)`; `--verbose-conflicts` adds the ebuild's
+`<dev-libs/r25lib-2.0:=`, and `--dynamic-deps=n` drops it again, the same atoms and
+counts as Portage 3.0.83 (`LLM/evidence/2026-11-06-sweep/607/`).
