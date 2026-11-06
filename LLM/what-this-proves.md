@@ -20855,3 +20855,13 @@ parent-stderr line rather than a lost one (a code comment, not a defect).
   version unselected at commit, selected post-skip, still topping the
   arm's avail -- no playground oracle exists) are the filed residue
   (#652); no yaml moves either way.
+
+Backlog #662 (2026-11-06): an installed package that `package.mask` hides in the
+tree but the resolve keeps now gets Portage's closing block. Live:
+`emerge --pretend --update --deep dev-libs/omasked` on the fixture tree prints,
+after the merge list, `!!! The following installed packages are masked:`,
+`- dev-libs/omaskedinstalled-1.0::testrepo (masked by: package.mask)`, the
+`profiles/package.mask` path with its comment block, and the MASKED PACKAGES
+pointer, byte-identical to Portage 3.0.83 (captures in
+`LLM/evidence/2026-11-06-662/`; the plain, `--verbose`, `--quiet` and `--tree`
+rows print it too).

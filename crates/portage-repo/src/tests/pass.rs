@@ -1647,3 +1647,45 @@ fn run_pass_update_deep_keeps_the_installed_masked_or_alternative() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Backlog #662: the kept installed `omaskedinstalled-1.0` lands in
+/// `GraphResult::installed_masked` (Portage's `_masked_installed`, printed
+/// as `!!! The following installed packages are masked:`). Expected value
+/// from Portage 3.0.83 via the fixture oracle
+/// (`LLM/evidence/2026-11-06-662/`): `- dev-libs/omaskedinstalled-1.0::testrepo`.
+#[test]
+fn assemble_result_reports_the_kept_installed_package_that_package_mask_hides() {
+    let dir = slotundo_temp_dir("662-installed-masked");
+    let d = dir.join("var/db/pkg/dev-libs/omaskedinstalled-1.0");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0\n").unwrap();
+    fs::write(d.join("repository"), "testrepo\n").unwrap();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let mut config = test_config();
+    config
+        .package_mask
+        .push("dev-libs/omaskedinstalled".to_string());
+    let opts = CtxOpts161 {
+        backtrack_max: 10,
+        atoms: vec!["dev-libs/omasked".to_string()],
+        update: true,
+        deep: Deep::Unlimited,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, repos, &opts);
+    let pass = run_pass(&ctx, &BacktrackParams::default(), true).expect("walk settles");
+    let result = assemble_result(&ctx, &BacktrackParams::default(), pass, &config, 0);
+    let got: Vec<_> = result
+        .installed_masked
+        .iter()
+        .map(|m| {
+            format!(
+                "{}/{}-{}::{}",
+                m.category, m.package, m.version, m.repo_name
+            )
+        })
+        .collect();
+    assert_eq!(got, ["dev-libs/omaskedinstalled-1.0::testrepo"]);
+    let _ = fs::remove_dir_all(&dir);
+}

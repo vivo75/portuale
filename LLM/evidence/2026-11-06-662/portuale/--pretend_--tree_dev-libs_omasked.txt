@@ -1,0 +1,31 @@
+
+These are the packages that would be merged, in reverse order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+
+[ebuild  N     ] dev-libs/omasked-1.0 to /tmp/l0-fixture-oracle/fixtures
+
+!!! The following installed packages are masked:
+- dev-libs/omaskedinstalled-1.0::testrepo (masked by: package.mask)
+/tmp/l0-fixture-oracle/fixtures/repo/profiles/package.mask:
+# repo-level package.mask (the real Gentoo tree's own security/arch-mask
+# mechanism) -- stacked ahead of the profile chain's own package.mask
+# files and the user-level /etc/portage/package.mask, with -atom removal
+# applying across all three sources, not just within one file.
+# masters: an overlay with no explicit "masters =" implicitly masters
+# this (the main) repo alone -- these two entries mask packages that
+# exist ONLY in the overlay (never in this repo), so the only way
+# either can end up masked is via that implicit master inheritance,
+# not an ordinary same-repo mask.
+# explicit masters= (repos.conf): independentoverlay declares
+# "masters = overlay", NOT this (the main) repo -- this entry must NOT
+# mask independentmastermainonlypkg (which exists only there), proving
+# masters is no longer an unconditional "every overlay masters main"
+# blanket rule.
+# fixture: backlog #22 slice 4 (other_installed bin) -- masked despite
+# being genuinely installed; see dev-libs/omasked's || group.
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+

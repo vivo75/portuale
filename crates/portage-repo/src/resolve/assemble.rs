@@ -285,6 +285,45 @@ pub(crate) fn assemble_result(
             config,
             merging: &merging,
         });
+    // Installed packages kept although `package.mask` hides them in the tree.
+    // Portage: depgraph.py, display_problems (_masked_installed).
+    let mut installed_masked: Vec<InstalledMaskedEntry> = Vec::new();
+    for e in &pass.entries {
+        let PretendOutcome::AlreadyInstalled { version } = &e.outcome else {
+            continue;
+        };
+        if installed_masked
+            .iter()
+            .any(|m| m.category == e.category && m.package == e.package && &m.version == version)
+        {
+            continue;
+        }
+        let Ok(candidates) = ctx.repo_candidates(&e.category, &e.package) else {
+            continue;
+        };
+        let Some(c) = candidates.iter().find(|c| &c.version == version) else {
+            continue;
+        };
+        if !crate::masked_deps::candidate_masking_reasons(c, &e.category, &e.package, config)
+            .iter()
+            .any(|r| r == "package.mask")
+        {
+            continue;
+        }
+        installed_masked.push(InstalledMaskedEntry {
+            category: e.category.clone(),
+            package: e.package.clone(),
+            version: version.clone(),
+            repo_name: installed_pkg_repo(ctx.root, &e.category, &e.package, version),
+            mask_entry: crate::provenance::visibility_provenance(
+                c,
+                &e.category,
+                &e.package,
+                config,
+            )
+            .mask_entry,
+        });
+    }
     let slot_conflict_solutions = solve_slot_conflict_records(SolveRecordsArgs {
         conflicts: &pass.slot_conflicts,
         config,
@@ -301,6 +340,7 @@ pub(crate) fn assemble_result(
         skipped_updates: pass.skipped_updates,
         skipped_missing_deps,
         skipped_missing_dep_full,
+        installed_masked,
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,
         ignored_user_patch_binaries,

@@ -17,6 +17,20 @@ pub struct ChangedDepsReportEntry {
     pub repo_name: String,
 }
 
+/// One installed package `package.mask` hides in the tree yet the resolve keeps
+/// (Portage ignores visibility when every match is masked): an entry of the
+/// `!!! The following installed packages are masked:` block. `mask_entry` is the
+/// stacked `package.mask` entry whose file and comment the block prints.
+// Portage: depgraph.py, display_problems (_masked_installed); show_masked_packages
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledMaskedEntry {
+    pub category: String,
+    pub package: String,
+    pub version: String,
+    pub repo_name: String,
+    pub mask_entry: Option<String>,
+}
+
 /// Why a resolve was abandoned: Portage's `_create_graph` returns 0 the moment a
 /// required dep cannot be satisfied or `_serialize_tasks` gives up on a cycle, and
 /// `action_build` then runs `display_problems()` without ever calling `display()`,
@@ -252,6 +266,11 @@ pub struct GraphResult {
     /// counts them in `Conflict:`, and fails the run (Portage's n1b/n6b shape).
     pub orphan_blockers: Vec<OrphanBlocker>,
     pub changed_deps_report: Vec<ChangedDepsReportEntry>,
+    /// Kept installed packages `package.mask` hides in the tree (see
+    /// [`InstalledMaskedEntry`]); `display_problems` prints them after the
+    /// changed-deps report. Scope: the `package.mask` reason only.
+    // Portage: depgraph.py, display_problems
+    pub installed_masked: Vec<InstalledMaskedEntry>,
     /// Binaries the `--binpkg-respect-user-patches` filter dropped for cps
     /// that merge (ebuild or binary): the success-path ignored-binaries
     /// block. Empty unless a binary pool was consulted.

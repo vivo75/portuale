@@ -155,6 +155,41 @@ pub(crate) fn final_gates(args: FinalGatesArgs<'_>) -> Option<ExitCode> {
         eprintln!("      information about this option.");
     }
 
+    // Installed packages the resolve kept although `package.mask` hides them.
+    // Portage prints the block after the merge list: header, one line per
+    // package, the masking file and comment once per distinct comment, a
+    // blank line, then the MASKED PACKAGES pointer.
+    // Portage: depgraph.py, display_problems; show_masked_packages
+    if !result.installed_masked.is_empty() {
+        eprintln!(
+            "\n{} The following installed packages are masked:",
+            color.c("BAD", "!!!")
+        );
+        let mut shown_comments: Vec<Vec<String>> = Vec::new();
+        for m in &result.installed_masked {
+            eprintln!(
+                "- {}/{}-{}::{} (masked by: package.mask)",
+                m.category, m.package, m.version, m.repo_name
+            );
+            if let Some((path, comment)) = m
+                .mask_entry
+                .as_deref()
+                .and_then(|entry| portage_profile::masking_file_comment(config, entry))
+                && !shown_comments.contains(&comment)
+            {
+                eprintln!("{}:", path.display());
+                for line in &comment {
+                    eprintln!("{line}");
+                }
+                eprintln!();
+                shown_comments.push(comment);
+            }
+        }
+        eprintln!("For more information, see the MASKED PACKAGES section in the emerge");
+        eprintln!("man page or refer to the Gentoo Handbook.");
+        eprintln!();
+    }
+
     // `--buildpkgonly` with unmerged dependencies fails after the merge list.
     // See `GraphResult::buildpkgonly_deps_unsatisfied`.
     // Portage: depgraph.py, display_problems

@@ -671,6 +671,7 @@ fn graph_result_from_order(
         skipped_missing_dep_full: Vec::new(),
         orphan_blockers,
         changed_deps_report: Vec::new(),
+        installed_masked: Vec::new(),
         ignored_user_patch_binaries: Vec::new(),
         buildpkgonly_deps_unsatisfied: false,
         prune_unresolved: false,
