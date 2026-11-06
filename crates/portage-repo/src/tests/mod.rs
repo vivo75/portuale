@@ -1728,6 +1728,7 @@ fn pass_161() -> PassResult {
         slot_pullers: HashMap::new(),
         masked_deps: Vec::new(),
         use_unsat_deps: Vec::new(),
+        use_only_masked_misses: Vec::new(),
         plain_miss_deps: Vec::new(),
         nvc_dep_atoms: HashMap::new(),
         missing_dep_trigger: None,

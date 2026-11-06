@@ -10,7 +10,7 @@ Reports for dependencies whose USE requirements no candidate meets.
 - `required` is Portage `use.required` -- every no-default flag, conditionals included (backlog #265(a)).
 - `None` when the atom carries no use-deps or no visible candidate misses on USE -- Portage's plain masked / "no ebuilds to satisfy" paths own those.
 - Display order mirrors Portage exactly: "Only show the latest version" (`:6876-6890`); all `Missing IUSE:` candidates print (`:6896-6907`).
-- Documented narrowings (same family as `masked_candidates_for_atom`'s): Portage's `Missing IUSE:` fallback can be suppressed by a masked candidate that has the flag (`:6897-6907`).
+- `masked_with_iuse` (backlog #611(a), D:6918-6929): when only `Missing IUSE:` rows exist and a masked match declares every required flag, `None` -- the masked block prints instead (`masked_rows_for_pool_inner` keeps those rows). `use_unsat_scan` still returns the rows with the flag set, so the walk records the miss in `use_only_masked_misses` and `trigger_preempted_by_use_miss` keeps treating it as a USE-only stop (Portage D:3494-3499 files no backtrack for it).
 - `db.match(atom.without_use)`: version/slot filter, USE and visibility ignored.
 - `required_of`: Portage `atom.unevaluated_atom.use.required` -- `no_default`, i.e. every token *without* a `(+)`/`(-)` default marker, conditionals (`flag?`, `flag=`, `!flag?`, …) included, in declaration order here (`lib/portage/dep/__init__.py:1363` `self.required = frozenset(no_default)`; backlog #265(a)). A default-marked token is not a `required` flag in Portage's parser (it has a fallback when missing from IUSE).
 - `enabled`/`disabled`: Portage `atom.use.enabled` / `.disabled` -- the evaluated atom's own unconditional deps.

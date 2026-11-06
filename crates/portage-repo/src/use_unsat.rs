@@ -102,6 +102,37 @@ pub(crate) fn use_unsat_parent_row(
     ))
 }
 
+/// Whether `c` declares (or the profile's `IUSE_EFFECTIVE` holds) every
+/// flag in `required` (Portage `not pkg.iuse.get_missing_iuse(required)`).
+pub(crate) fn declares_required_iuse(
+    c: &Candidate,
+    category: &str,
+    package: &str,
+    required: &[String],
+    config: &portage_profile::Config,
+) -> bool {
+    candidate_iuse_and_use(c, category, package, config).is_some_and(|(declared, _)| {
+        required
+            .iter()
+            .all(|f| declared.contains(f) || config.iuse_effective.contains(f))
+    })
+}
+
+/// Portage `atom.unevaluated_atom.use.required`: every use-dep token
+/// without a `(+)`/`(-)` default, conditionals included.
+pub(crate) fn required_use_flags(atom: &portage_dep::Atom) -> Vec<String> {
+    atom.use_deps
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter(|d| d.default.is_none())
+        .map(|d| d.flag.clone())
+        .collect()
+}
+
+/// One displayed candidate row: `cat/pkg-ver::repo` and its reasons.
+pub(crate) type UseUnsatRow = (String, Vec<String>);
+
 pub(crate) struct UseUnsatCandidatesForAtomArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
@@ -121,14 +152,21 @@ pub(crate) struct UseUnsatCandidatesForAtomArgs<'a> {
 /// Display order: when any candidate can be fixed by a `Change USE:`,
 /// only the latest such candidate is listed, followed by the requirer's
 /// own row when the dep is conditional; otherwise all `Missing IUSE:`
-/// candidates print, in descending-version order.
-///
-/// Narrowing: a `Missing IUSE:` fallback that Portage suppresses via a
-/// masked flag-carrying candidate can't be expressed by this scan.
+/// candidates print, in descending-version order, unless a masked
+/// candidate declares every required flag (`None`: the masked block wins).
 /// Portage: lib/_emerge/depgraph.py, _show_unsatisfied_dep
 pub(crate) fn use_unsat_candidates_for_atom(
     args: UseUnsatCandidatesForAtomArgs<'_>,
 ) -> Option<Vec<(String, Vec<String>)>> {
+    use_unsat_scan(args).and_then(|(rows, masked_with_iuse)| (!masked_with_iuse).then_some(rows))
+}
+
+/// [`use_unsat_candidates_for_atom`] before the masked block takes over:
+/// the rows plus Portage's `masked_with_iuse` (true only for `Missing IUSE:`
+/// rows), so a caller can still tell a USE-only miss shown as masked.
+pub(crate) fn use_unsat_scan(
+    args: UseUnsatCandidatesForAtomArgs<'_>,
+) -> Option<(Vec<UseUnsatRow>, bool)> {
     let UseUnsatCandidatesForAtomArgs {
         root,
         entries,
@@ -175,27 +213,28 @@ pub(crate) fn use_unsat_candidates_for_atom(
             .collect()
     };
     // Every no-default token (conditionals included), in declaration
-    // order; a default-marked token is not required (it has a fallback
-    // when missing from IUSE).
-    let required_of = |atom: &portage_dep::Atom| -> Vec<String> {
-        atom.use_deps
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .filter(|d| d.default.is_none())
-            .map(|d| d.flag.clone())
-            .collect()
-    };
-    let required = required_of(&display);
+    // order; a default-marked token has a fallback when missing from IUSE.
+    let required = required_use_flags(&display);
     // The evaluated atom's own unconditional deps.
     let enabled = flags_of(&evaluated, portage_dep::UseDepOp::Enabled);
     let disabled = flags_of(&evaluated, portage_dep::UseDepOp::Disabled);
 
     let mut change_rows: Vec<(String, Vec<String>)> = Vec::new();
     let mut iuse_rows: Vec<(String, Vec<String>)> = Vec::new();
+    // A masked candidate declaring every required flag: Portage's
+    // `masked_with_iuse`, which hands the miss to the masked block.
+    let mut masked_with_iuse = false;
     for c in cands {
         // Masked instances never reach the displayed rows.
         if !is_visible(c, &display.category, &display.package, config) {
+            masked_with_iuse = masked_with_iuse
+                || declares_required_iuse(
+                    c,
+                    &display.category,
+                    &display.package,
+                    &required,
+                    config,
+                );
             continue;
         }
         let Some((declared, use_flags)) =
@@ -313,10 +352,10 @@ pub(crate) fn use_unsat_candidates_for_atom(
         }) {
             rows.push(parent_row);
         }
-        return Some(rows);
+        return Some((rows, false));
     }
     if iuse_rows.is_empty() {
         return None;
     }
-    Some(iuse_rows)
+    Some((iuse_rows, masked_with_iuse))
 }

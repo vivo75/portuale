@@ -1,0 +1,11 @@
+### argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$CFG ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles PORTAGE_TMPDIR=$SP/ptmp PYTHONHASHSEED=0 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/r594xtop
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/r594xdep[r594flag]".
+!!! One of the following packages is required to complete your request:
+- dev-libs/r594xdep-1::testrepo (Missing IUSE: r594flag)
+(dependency required by "dev-libs/r594xm-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r594xtop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r594xtop" [argument])
+### rc: 1

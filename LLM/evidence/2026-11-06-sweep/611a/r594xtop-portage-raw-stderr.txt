@@ -1,0 +1,15 @@
+
+
+
+
+
+!!! All ebuilds that could satisfy "dev-libs/r594xdep[r594flag]" for $FX/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/r594xdep-2::testrepo (masked by: ~amd64 keyword)
+
+(dependency required by "dev-libs/r594xm-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r594xtop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r594xtop" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+

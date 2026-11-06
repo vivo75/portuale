@@ -17,6 +17,8 @@ pub(crate) struct PassResult {
     pub(crate) slot_pullers: SlotPullers,
     pub(crate) masked_deps: Vec<MaskedDepReport>,
     pub(crate) use_unsat_deps: Vec<UseUnsatDepReport>,
+    /// See `PassState::use_only_masked_misses`.
+    pub(crate) use_only_masked_misses: Vec<UseUnsatDepReport>,
     pub(crate) plain_miss_deps: Vec<PlainMissDepReport>,
     pub(crate) nvc_dep_atoms: HashMap<(String, String), String>,
     pub(crate) missing_dep_trigger: Option<((String, String), String, String)>,
@@ -166,6 +168,10 @@ pub(crate) struct PassState {
     /// USE-unsatisfied disclosures for this pass (see `UseUnsatDepReport`): rebuilt
     /// every attempt like `masked_deps`.
     pub(crate) use_unsat_deps: Vec<UseUnsatDepReport>,
+    /// USE-only misses whose display is the masked block (Portage
+    /// `masked_with_iuse`): never rendered, still a USE-only stop for
+    /// `trigger_preempted_by_use_miss`.
+    pub(crate) use_only_masked_misses: Vec<UseUnsatDepReport>,
     /// Plain-miss disclosures for this pass (see `PlainMissDepReport`): rebuilt every
     /// attempt like `masked_deps`.
     pub(crate) plain_miss_deps: Vec<PlainMissDepReport>,

@@ -575,6 +575,16 @@ fn masked_rows_for_pool_inner(
     let respect_use_active = use_gate.is_some_and(|g| g.respect_use || g.newuse || g.changed_use);
     // Descending version.
     masked.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+    // Portage `masked_with_iuse`: when a masked match declares every
+    // required flag, a visible match lacking one cannot silence the block.
+    let required = required_use_flags(atom);
+    let lacks_iuse = |c: &Candidate| {
+        !declares_required_iuse(c, &atom.category, &atom.package, &required, config)
+    };
+    let masked_with_iuse = !required.is_empty()
+        && masked
+            .iter()
+            .any(|c| !is_visible(c, &atom.category, &atom.package, config) && !lacks_iuse(c));
 
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -584,6 +594,9 @@ fn masked_rows_for_pool_inner(
         // binary (USE mismatch, then stale baked deps) counts as masked
         // instead of selectable.
         if is_visible(c, &atom.category, &atom.package, config) {
+            if masked_with_iuse && lacks_iuse(c) {
+                continue;
+            }
             let mismatched = respect_use_active
                 && use_gate.is_some_and(|g| {
                     let ebuild_at_version = g

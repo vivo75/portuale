@@ -101,6 +101,9 @@ Masked-dependency reports.
 ## fn is_all_masked_abort_report
 - #351 S7: matches the top-level "all masked" block (`all_masked_report`/`all_binary_masked_report`) by its `!!! All ebuilds that could satisfy` prefix — the only resolver `Err` raised after resolution started, so the only one whose exit path prints the resolution notice. Portage's `for <root>.` header suffix (omitted here per the fixture-miss-message convention) sits after the matched prefix, so both shapes match.
 
+## fn masked_rows_for_pool_inner (masked_with_iuse, backlog #611(a))
+- Portage `_show_unsatisfied_dep` collects every masked match into `masked_packages` whatever is visible; the visible matches only decide whether the USE block wins. When the USE block would be all `Missing IUSE:` rows and some masked match declares every required flag (`masked_with_iuse`, D:6918-6929), Portage prints the masked block (D:7015-7043). Here a visible match that lacks a required flag no longer silences the rows under that same condition, so the masked report exists for the display. Everywhere else the any-visible rule stands.
+
 ## fn masked_rows_for_pool_inner (user-patches elif, backlog #509)
 - Portage's `elif ... user_patches` (`depgraph.py:6690-6695`): a visible binary the filter dropped reports `user patches`, after `respect_use` and `changed_deps`. Gated on `BinaryRespectUseGate.user_patches` (default-on flag threaded from `--binpkg-respect-user-patches`, `=n` disables); ebuild pools never match (the `Binary` source check). Covered by `test_509_*` pmtest pins and the `mask_reason_is_user_patches_after_changed_deps` unit leg.
 

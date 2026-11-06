@@ -101,7 +101,11 @@ fn trigger_preempted_by_use_miss(pass: &PassResult) -> bool {
         return false;
     };
     let trigger_idx = edge_index(&owner.deps, dep_atom).expect("matched above");
-    pass.use_unsat_deps.iter().any(|rep| {
+    let mut use_only = pass
+        .use_unsat_deps
+        .iter()
+        .chain(&pass.use_only_masked_misses);
+    use_only.any(|rep| {
         edge_index(&owner.deps, &rep.atom).is_some_and(|rep_idx| rep_idx < trigger_idx)
             && pass.entries.iter().any(|e| {
                 e.category == rep.category

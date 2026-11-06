@@ -26,6 +26,7 @@ pub(crate) fn assemble_pass_result(
         slot_pullers: state.slot_pullers,
         masked_deps: state.masked_deps,
         use_unsat_deps: state.use_unsat_deps,
+        use_only_masked_misses: state.use_only_masked_misses,
         plain_miss_deps: state.plain_miss_deps,
         nvc_dep_atoms: state.nvc_dep_atoms,
         missing_dep_trigger: state.missing_dep_trigger,

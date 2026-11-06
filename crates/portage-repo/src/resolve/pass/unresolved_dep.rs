@@ -670,7 +670,7 @@ pub(crate) fn record_miss_disclosure(args: RecordMissDisclosureArgs<'_>) {
             // USE-unsatisfied disclosure: visible ebuilds that can't satisfy the
             // atom's `[use]` deps. Portage renders this block before the masked
             // one (`show_missing_use` wins).
-            if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
+            let scan = use_unsat_scan(UseUnsatCandidatesForAtomArgs {
                 root: ctx.root,
                 entries: &state.entries,
                 display_atom,
@@ -678,7 +678,23 @@ pub(crate) fn record_miss_disclosure(args: RecordMissDisclosureArgs<'_>) {
                 owner,
                 config,
                 gate: ctx.gate(),
-            }) {
+            });
+            if let Some((rows, true)) = scan {
+                // Shown as masked, still a USE-only miss for the stop order.
+                if !state
+                    .use_only_masked_misses
+                    .iter()
+                    .any(|r| r.category == key.0 && r.package == key.1)
+                {
+                    state.use_only_masked_misses.push(UseUnsatDepReport {
+                        category: key.0.clone(),
+                        package: key.1.clone(),
+                        atom: display_atom.to_string(),
+                        rows,
+                        chain: Vec::new(),
+                    });
+                }
+            } else if let Some((rows, _)) = scan {
                 // A supersede refreshes the just-computed rows too.
                 match state
                     .use_unsat_deps

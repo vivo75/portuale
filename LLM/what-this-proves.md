@@ -20885,3 +20885,12 @@ merges `y`, the glibc reinstall, then the `x` upgrade when the installed `orphan
 ebuild) records `>=sys-libs/glibc-2.0`, and `y`, `x`, glibc when that record is empty or an
 ebuild exists, the same three orders Portage 3.0.83's ResolverPlayground gives
 (`LLM/evidence/2026-11-06-sweep/625a/`).
+
+Backlog #611(a) (2026-11-06): a dependency whose visible versions lack a required
+USE flag, while a masked version declares it, now gets Portage's all-masked block
+instead of "no ebuilds built with USE flags". Live, on the fixture tree:
+`emerge --pretend dev-libs/r594xtop` (also with `--autounmask=n` or `--backtrack=0`)
+prints `!!! All ebuilds that could satisfy "dev-libs/r594xdep[r594flag]" … have been masked.`,
+`- dev-libs/r594xdep-2::testrepo (masked by: ~amd64 keyword)` and the three-line
+dependency chain, rc 1, `backtrack: 0/20` (`0/0`), the same block as Portage 3.0.83
+(`LLM/evidence/2026-11-06-sweep/611a/`).
