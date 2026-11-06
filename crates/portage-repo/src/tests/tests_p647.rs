@@ -138,6 +138,53 @@ fn bare_consumer_keeps_the_installed_multi_version_virtual() {
     );
 }
 
+/// Leg A1 (#657, skip block): the bed shape of `dev-perl/Try-Tiny`. Two
+/// installed new-style virtuals are plain deps of the consumer: `p657exp`
+/// (`virtual/perl-Exporter`: `|| ( =prov-5.44* =prov-5.42* ... )`) and
+/// `p657mm` (`virtual/perl-ExtUtils-MakeMaker`: only `=prov-5.42*`).
+/// Portage's inner `dep_zapdeps` picks the HIGHER same-cp arm of the
+/// Exporter virtual (`dep_check.py:796-797`, "prefer upgrades"), so
+/// `p647prov-5.44.0` enters the graph, collides with the installed 5.42.2 the
+/// sibling pins, the slot-conflict backtrack masks 5.44.0 and the run ends
+/// with the consumer alone plus the "skipped due to unsatisfied
+/// dependencies" block for the provider.
+///
+/// Portage playground oracle (scratch probe `probe_exp.py`, scenario P1mm,
+/// Portage 3.0.83): inner Exporter pick `['=dev-lang/perl-5.44*']`,
+/// "backtracking due to slot conflict", `package(s) to mask: [perl-5.44.0]`,
+/// `MERGELIST ['dev-perl/Try-Tiny-0.320.0']`. Bed `dev-perl_Try-Tiny` shows
+/// the skip block (l0-20261105T230556Z).
+///
+/// RED before the fix: portuale keeps the installed 5.42 arm for the
+/// installed virtual, never schedules 5.44.0, and prints no skip block.
+#[test]
+#[ignore = "RED #657: installed-virtual arm choice does not prefer the higher same-cp arm"]
+fn installed_virtual_with_a_higher_perl_arm_schedules_then_skips_the_transient() {
+    let root = hermetic_root(&[]);
+    let result = resolve_in(&root, &["dev-libs/p657try"]);
+    let names: Vec<String> = result
+        .entries
+        .iter()
+        .map(|e| format!("{}/{}", e.category, e.package))
+        .collect();
+    assert!(
+        result
+            .entries
+            .iter()
+            .filter(|e| e.package == "p647prov")
+            .all(|e| matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })),
+        "the masked transient never merges: {names:?}"
+    );
+    assert!(
+        result
+            .skipped_updates
+            .iter()
+            .any(|s| s.category == "dev-libs" && s.package == "p647prov"),
+        "Portage prints the skipped-update block for dev-libs/p647prov: {:?}",
+        result.skipped_updates
+    );
+}
+
 /// Leg B (M5 mirror): the plain top-level `>=virtual/...` consumer never
 /// reaches the consumer expander by design (Portage expands it inline,
 /// `dep_check.py:287-288`) — it is seed-feed territory only. With the
