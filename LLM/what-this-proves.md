@@ -20865,3 +20865,5 @@ after the merge list, `!!! The following installed packages are masked:`,
 pointer, byte-identical to Portage 3.0.83 (captures in
 `LLM/evidence/2026-11-06-662/`; the plain, `--verbose`, `--quiet` and `--tree`
 rows print it too).
+
+Backlog #663 (2026-11-06): autounmask now treats an implicit IUSE flag as flippable, like Portage. Live: `emerge --pretend dev-libs/implicitiusepkgmusl` on the fixture tree ends with `The following USE changes are necessary to proceed:` and `>=dev-libs/implicitiuseprov-1.0 elibc_musl`, byte-identical to Portage 3.0.83 (`LLM/evidence/2026-11-06-663/`).

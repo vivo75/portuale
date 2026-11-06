@@ -1027,3 +1027,18 @@ fn aup0b_pubgrub_records_the_parent_flip_and_fails_like_the_default_solver() {
     );
     assert!(child.parent_use_suggestion.is_some());
 }
+
+/// Backlog #663: an implicit-IUSE flag (`elibc_musl`, `USE_EXPAND_IMPLICIT`)
+/// is flippable by autounmask, like Portage's `Package._iuse.get_flag`
+/// (`_iuse_implicit_match`). Expected value from Portage 3.0.83 via the
+/// fixture oracle (`LLM/evidence/2026-11-06-663/`).
+#[test]
+fn autounmask_use_suggests_an_implicit_iuse_flag() {
+    let resolved = graph_result_autounmask("dev-libs/implicitiusepkgmusl");
+    assert_eq!(resolved.autounmask_use_changes.len(), 1);
+    assert_eq!(
+        resolved.autounmask_use_changes[0].atom,
+        ">=dev-libs/implicitiuseprov-1.0"
+    );
+    assert_eq!(resolved.autounmask_use_changes[0].token, "elibc_musl");
+}

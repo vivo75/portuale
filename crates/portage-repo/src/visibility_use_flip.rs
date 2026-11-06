@@ -84,7 +84,9 @@ pub(crate) fn suggested_use_flip(
             // mechanism below is a separate path.
             _ => continue,
         };
-        if !iuse.contains(&ud.flag) {
+        // Implicit IUSE (`USE_EXPAND_IMPLICIT`, arch) counts as declared.
+        // Portage: Package.py, _iuse.get_flag (`_iuse_implicit_match`)
+        if !iuse.contains(&ud.flag) && !config.iuse_effective.contains(&ud.flag) {
             // No `package.use` entry could ever set an undeclared flag --
             // but a matching `(+)`/`(-)` default already satisfies the
             // requirement; only a genuinely unsatisfiable missing flag
