@@ -1251,6 +1251,7 @@ fn c_path(p: &[u8]) -> Result<std::ffi::CString, ()> {
 
 /// `xattr.list(src)`: ENOTSUP/EOPNOTSUPP means "none" (`attrs = ()`).
 /// Shared with `helpers/xattr.rs` (one copier, not two).
+#[cfg(target_os = "linux")]
 pub(crate) fn xattr_list(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
     let c = c_path(path).map_err(|_| libc::EINVAL)?;
     let n = unsafe { libc::listxattr(c.as_ptr(), std::ptr::null_mut(), 0) };
@@ -1277,6 +1278,7 @@ pub(crate) fn xattr_list(path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
         .collect())
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn xattr_get(path: &[u8], name: &[u8]) -> Result<Vec<u8>, i32> {
     let c = c_path(path).map_err(|_| libc::EINVAL)?;
     let n = std::ffi::CString::new(name).map_err(|_| libc::EINVAL)?;
@@ -1294,6 +1296,7 @@ pub(crate) fn xattr_get(path: &[u8], name: &[u8]) -> Result<Vec<u8>, i32> {
 }
 
 /// Shared with `helpers/xattr.rs`.
+#[cfg(target_os = "linux")]
 pub(crate) fn xattr_set(path: &[u8], name: &[u8], value: &[u8]) -> Result<(), i32> {
     let c = c_path(path).map_err(|_| libc::EINVAL)?;
     let n = std::ffi::CString::new(name).map_err(|_| libc::EINVAL)?;
@@ -1307,6 +1310,24 @@ pub(crate) fn xattr_set(path: &[u8], name: &[u8], value: &[u8]) -> Result<(), i3
         )
     };
     if r != 0 { Err(last_errno()) } else { Ok(()) }
+}
+
+// The BSDs use `extattr_*`, which is not ported (backlog #665): no
+// attributes are listed and reading or setting one reports ENOTSUP, the
+// same answer a filesystem without xattr support gives.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn xattr_list(_path: &[u8]) -> Result<Vec<Vec<u8>>, i32> {
+    Ok(Vec::new())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn xattr_get(_path: &[u8], _name: &[u8]) -> Result<Vec<u8>, i32> {
+    Err(libc::ENOTSUP)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn xattr_set(_path: &[u8], _name: &[u8], _value: &[u8]) -> Result<(), i32> {
+    Err(libc::ENOTSUP)
 }
 
 /// `_copyxattr(src, dest, exclude)`. `Err` is either an errno line
@@ -1485,7 +1506,7 @@ fn c_chmod(p: &[u8], mode: i64) -> Result<(), Vec<u8>> {
         return Err(b"OverflowError: Python int too large to convert to C long".to_vec());
     }
     let c = c_path(p).map_err(|_| errno_line(libc::EINVAL, p))?;
-    if unsafe { libc::chmod(c.as_ptr(), mode as u32) } == 0 {
+    if unsafe { libc::chmod(c.as_ptr(), crate::sys_types::mode_t_of(mode as u32)) } == 0 {
         Ok(())
     } else {
         Err(errno_line(last_errno(), p))

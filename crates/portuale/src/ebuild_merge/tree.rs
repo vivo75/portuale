@@ -323,7 +323,7 @@ pub(crate) fn create_special_node(
     use std::os::unix::ffi::OsStrExt;
 
     let src_meta = std::fs::symlink_metadata(src).map_err(|e| format!("{}: {e}", src.display()))?;
-    let mode = src_meta.mode() & 0o7777;
+    let mode = crate::sys_types::mode_t_of(src_meta.mode() & 0o7777);
     let dest_c = std::ffi::CString::new(dest.as_os_str().as_bytes())
         .map_err(|e| format!("{}: {e}", dest.display()))?;
 

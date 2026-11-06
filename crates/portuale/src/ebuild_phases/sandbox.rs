@@ -522,6 +522,7 @@ pub(crate) fn clone_flags_for(iso: &Isolation) -> libc::c_int {
 /// exactly as today, and `pre_exec` (whose unshare block is
 /// `#[cfg(target_os = "linux")]`-gated) skips namespace setup.
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)] // only the Linux `pre_exec` block calls it
 pub(crate) fn clone_flags_for(_: &Isolation) -> libc::c_int {
     0
 }
@@ -530,6 +531,7 @@ pub(crate) fn clone_flags_for(_: &Isolation) -> libc::c_int {
 /// (Portage `has_ipv6` binds `("::1", 0)` with `SOCK_DGRAM`,
 /// `process.py:823-835`). Computed in the parent — the child (`pre_exec`)
 /// cannot allocate — and moved into the closure as a `bool`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // read by the Linux-only `pre_exec` block
 pub(crate) fn host_has_ipv6() -> bool {
     std::net::UdpSocket::bind("[::1]:0").is_ok()
 }

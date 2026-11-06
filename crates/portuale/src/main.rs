@@ -40,6 +40,7 @@ mod regen;
 mod remote;
 mod remote_bundle;
 mod self_exe;
+mod sys_types;
 mod title;
 mod vdb_cmd;
 #[cfg(feature = "vdb-fuse")]

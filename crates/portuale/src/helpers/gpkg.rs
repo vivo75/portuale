@@ -970,7 +970,7 @@ impl<'w> ImageTar<'w> {
     fn add(&mut self, path: &Path, arcname: &[u8]) -> Result<(), Failure> {
         let md =
             std::fs::symlink_metadata(path).map_err(|e| io_msg(&path.display().to_string(), e))?;
-        let ftype = md.mode() & libc::S_IFMT;
+        let ftype = crate::sys_types::mode_t_of(md.mode()) & libc::S_IFMT;
         let mut info = Info::new(arcname.to_vec(), md.mtime());
         info.typeflag = match ftype {
             libc::S_IFREG => {
@@ -1017,8 +1017,8 @@ impl<'w> ImageTar<'w> {
             .or_insert_with(|| name_of(NameKind::Group, md.gid()))
             .clone();
         if matches!(info.typeflag, b'3' | b'4') {
-            info.devmajor = u64::from(libc::major(md.rdev()));
-            info.devminor = u64::from(libc::minor(md.rdev()));
+            info.devmajor = libc::major(md.rdev()) as u64;
+            info.devminor = libc::minor(md.rdev()) as u64;
         }
         match info.typeflag {
             b'0' => {

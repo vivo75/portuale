@@ -164,11 +164,23 @@ pub(crate) fn is_noexec(dir: &Path) -> bool {
     let Ok(c) = std::ffi::CString::new(dir.as_os_str().as_bytes()) else {
         return true;
     };
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-        return true;
+    #[cfg(target_os = "linux")]
+    {
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+            return true;
+        }
+        st.f_flag & libc::ST_NOEXEC != 0
     }
-    st.f_flag & libc::ST_NOEXEC != 0
+    // The BSDs report mount flags through `statfs` (`MNT_NOEXEC`), not statvfs.
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return true;
+        }
+        (st.f_flags as u64) & (libc::MNT_NOEXEC as u64) != 0
+    }
 }
 
 /// First of `candidates` that `usable` accepts, else the first one (the caller

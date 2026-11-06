@@ -1214,7 +1214,7 @@ pub(crate) fn spawn_bash_script(args: SpawnBashScriptArgs<'_>) -> Result<i32, St
                 if libc::setgid(gid) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
-                if !groups.is_empty() && libc::setgroups(groups.len(), groups.as_ptr()) != 0 {
+                if !groups.is_empty() && libc::setgroups(groups.len() as _, groups.as_ptr()) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 if libc::setuid(uid) != 0 {
