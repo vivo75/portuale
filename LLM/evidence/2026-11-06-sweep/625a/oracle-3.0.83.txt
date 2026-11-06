@@ -1,0 +1,3 @@
+with_ebuild=False '>=sys-libs/glibc-2.0' ['dev-libs/x', 'dev-libs/y', 'sys-libs/glibc'] {} -> ['dev-libs/y-1', 'sys-libs/glibc-2.0', 'dev-libs/x-1']
+with_ebuild=False '' ['dev-libs/x', 'dev-libs/y', 'sys-libs/glibc'] {} -> ['dev-libs/y-1', 'dev-libs/x-1', 'sys-libs/glibc-2.0']
+with_ebuild=True '>=sys-libs/glibc-2.0' ['dev-libs/x', 'dev-libs/y', 'sys-libs/glibc'] {} -> ['dev-libs/y-1', 'dev-libs/x-1', 'sys-libs/glibc-2.0']

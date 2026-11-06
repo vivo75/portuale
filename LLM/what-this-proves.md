@@ -20876,3 +20876,12 @@ lists `<dev-libs/r25lib-2.0:0/1= required by (dev-libs/r25consumer-1.0:0/0::test
 and `(and 1 more with the same problem)`; `--verbose-conflicts` adds the ebuild's
 `<dev-libs/r25lib-2.0:=`, and `--dynamic-deps=n` drops it again, the same atoms and
 counts as Portage 3.0.83 (`LLM/evidence/2026-11-06-sweep/607/`).
+
+Backlog #625(a) (2026-11-06): the installed-without-ebuild libc edge of #624
+now has an end-to-end pin. Live, in pmtest:
+`python3 -m pytest pytests-contract-suite/test_emerge_pretend_contract.py -k test_625a`
+(3 passed): on a private config root, `emerge --pretend dev-libs/x dev-libs/y sys-libs/glibc`
+merges `y`, the glibc reinstall, then the `x` upgrade when the installed `orphan` (no
+ebuild) records `>=sys-libs/glibc-2.0`, and `y`, `x`, glibc when that record is empty or an
+ebuild exists, the same three orders Portage 3.0.83's ResolverPlayground gives
+(`LLM/evidence/2026-11-06-sweep/625a/`).
