@@ -217,6 +217,30 @@ mod tests {
         let root = tmp.join("root");
         std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
         let fixtures = repo().join("fixtures");
+        // A client config of its own: the fixture `repos.conf` locations are
+        // relative to the config root, which a pulled copy no longer is.
+        let client_etc = tmp.join("client/etc/portage");
+        std::fs::create_dir_all(client_etc.join("repos.conf")).unwrap();
+        std::fs::copy(
+            fixtures.join("etc/portage/make.conf"),
+            client_etc.join("make.conf"),
+        )
+        .unwrap();
+        std::fs::write(
+            client_etc.join("repos.conf/repos.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n\n[testrepo]\nlocation = {}\n\n\
+                 [overlay]\nlocation = {}\npriority = 10\n",
+                fixtures.join("repo").display(),
+                fixtures.join("overlay").display()
+            ),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            fixtures.join("repo/profiles/default"),
+            client_etc.join("make.profile"),
+        )
+        .unwrap();
         let exe = crate::self_exe::built_portuale_bin();
         let out = std::process::Command::new(exe)
             .env(crate::ebuild_phases::BIN_DIR_VAR, &bin)
@@ -229,6 +253,11 @@ mod tests {
                 "--remote-hostname=localtest",
                 "--remote-transport=local",
             ])
+            // The default `client:/etc/portage` would pull the host's own tree.
+            .arg(format!(
+                "--remote-etc-portage=client:{}",
+                client_etc.display()
+            ))
             .arg(format!("--remote-root={}", root.display()))
             .arg(format!("--remote-workdir={}", tmp.join("work").display()))
             .arg(format!(
