@@ -3,13 +3,15 @@
 //! *next* process reclaims what a dead one left behind (nothing can run on
 //! the way out of an abort/kill).
 //!
-//! Naming: `$TMPDIR/portuale-td-{tag}-{pid}-{nanos}`. The prefix is the
-//! sweep's match key; the pid/nanos tail avoids collisions and tells a
-//! live run's directories from a dead one's.
+//! Naming: `$TMPDIR/portuale-td-{tag}-{seq}-{pid}-{nanos}`. The prefix is the
+//! sweep's match key; the pid/nanos tail tells a live run's directories
+//! from a dead one's, and `seq` (a per-process counter) keeps two threads
+//! that read the same clock tick apart (backlog #632).
 
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The prefix every [`TempDir`] directory carries, and the sweep's match key.
 pub const TEMP_DIR_PREFIX: &str = "portuale-td-";
@@ -23,7 +25,7 @@ pub struct TempDir {
 }
 
 impl TempDir {
-    /// Create `{$TMPDIR}/portuale-td-{tag}-{pid}-{nanos}/`, sweeping any
+    /// Create `{$TMPDIR}/portuale-td-{tag}-{seq}-{pid}-{nanos}/`, sweeping any
     /// dead process's leftovers first (once per process).
     pub fn new(tag: &str) -> Self {
         Self::new_in(&std::env::temp_dir(), tag)
@@ -32,13 +34,23 @@ impl TempDir {
     /// [`TempDir::new`] under an explicit parent.
     pub fn new_in(parent: &Path, tag: &str) -> Self {
         stale_sweep_once(parent);
-        let path = parent.join(format!(
-            "{TEMP_DIR_PREFIX}{tag}-{}-{}",
-            std::process::id(),
-            nanos()
-        ));
-        fs::create_dir_all(&path).expect("create test temp dir");
-        Self { path }
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        fs::create_dir_all(parent).expect("create test temp dir parent");
+        // Exclusive `create_dir`: an existing directory is never adopted, so
+        // two guards can never share (and then delete) one scratch root.
+        loop {
+            let path = parent.join(format!(
+                "{TEMP_DIR_PREFIX}{tag}-{}-{}-{}",
+                SEQ.fetch_add(1, Ordering::Relaxed),
+                std::process::id(),
+                nanos()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => return Self { path },
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("create test temp dir {path:?}: {e}"),
+            }
+        }
     }
 
     /// The directory itself.
@@ -232,5 +244,33 @@ mod tests {
         assert_eq!(parse_owner_pid("tag-123"), None);
         assert_eq!(parse_owner_pid("tag-pid-nanos"), None);
         assert_eq!(parse_owner_pid(""), None);
+    }
+}
+
+#[cfg(test)]
+mod collision_tests {
+    use super::*;
+
+    /// Backlog #632: two guards created in the same clock tick must never
+    /// share a path (they used to, and one's `Drop` then deleted the
+    /// other's scratch root mid-test).
+    #[test]
+    fn concurrent_temp_dirs_never_share_a_path() {
+        let parent = TempDir::new("collision-parent");
+        let guards: Vec<TempDir> = (0..16)
+            .map(|_| {
+                let p = parent.path().to_path_buf();
+                std::thread::spawn(move || {
+                    (0..2000)
+                        .map(|_| TempDir::new_in(&p, "p"))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect();
+        let uniq: std::collections::HashSet<_> = guards.iter().map(|g| g.path()).collect();
+        assert_eq!(uniq.len(), guards.len(), "duplicate temp dir names");
     }
 }
