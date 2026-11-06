@@ -1,0 +1,11 @@
+Undefined license group 'FREE'
+
+
+!!! Problem resolving dependencies for dev-libs/requiredusebadpkg2
+
+!!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg2" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+- dev-libs/requiredusebadpkg2-1.0::testrepo USE="baz -qux" ELIBC="glibc"
+
+  The following REQUIRED_USE flag constraints are unsatisfied:
+    baz? ( qux )
+

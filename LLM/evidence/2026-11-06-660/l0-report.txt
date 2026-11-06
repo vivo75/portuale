@@ -1,0 +1,195 @@
+# L0 resolver-parity report
+
+## environment
+  date_utc	2026-11-06T08:42:27Z
+  portuale_bin	emerge: command-line interface to the Portuale package manager
+  real_portage	Portage 3.0.83 (python 3.14.6-final-0, default, gcc-15, unavailable, 6.18.39-serv x86_64)
+  portage_pin	3.0.83-r1
+  staged_at	/tmp/l0-fixture-oracle/fixtures
+
+## summary
+  probes           : 38
+  clean            : 6
+  parity_rate      : 0.158
+  explained        : 85
+  UNEXPLAINED      : 11
+    advice       : 6
+    error        : 3
+    missing      : 2
+
+## unexplained findings
+
+### --pretend_--quiet_dev-libs_abort-masked-cycle
+  [advice] real-only: masked: # "All ebuilds ... have been masked" block (never unmasked anywhere).
+
+### --pretend_--quiet_dev-libs_abort-masked-last
+  [advice] real-only: masked: # "All ebuilds ... have been masked" block (never unmasked anywhere).
+
+### --pretend_--quiet_dev-libs_abort-masked-mid
+  [advice] real-only: masked: # "All ebuilds ... have been masked" block (never unmasked anywhere).
+
+### --pretend_--quiet_dev-libs_implicitiusepkgmusl
+  [advice] real-only: use-change: >=dev-libs/implicitiuseprov-1.0 elibc_musl
+  [advice] portuale-only: masked: !!! One of the following packages is required to complete your request:
+  [missing] ebuild dev-libs/implicitiusepkgmusl-1.0 present for real, absent for portuale
+  [missing] ebuild dev-libs/implicitiuseprov-1.0 present for real, absent for portuale
+  [error] portuale-only message: !!! One of the following packages is required to complete your request:
+
+### --pretend_--quiet_dev-libs_maskneedpkg
+  [advice] real-only: masked: # "All ebuilds ... have been masked" block (never unmasked anywhere).
+
+### --pretend_--update_--deep_--newuse_dev-libs_omasked
+  [error] real-only message: !!! The following installed packages are masked:
+
+### --pretend_--update_--deep_dev-libs_omasked
+  [error] real-only message: !!! The following installed packages are masked:
+
+## explained (allowlisted) findings
+
+### --pretend_--quiet_app-misc_soreqb
+  [error] (fixture-problem-resolving-header) real-only message: !!! Problem resolving dependencies for app-misc/soreqb
+  [error] (fixture-masked-path-suffix) real-only message: !!! The ebuild selected to satisfy "app-misc/soreqb" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+  [error] (fixture-unmet-requirements-wording) portuale-only message: !!! The ebuild selected to satisfy "app-misc/soreqb" has unmet requirements.
+
+### --pretend_--quiet_dev-libs_abort-masked-cycle
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/maskeddep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/maskeddep
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+
+### --pretend_--quiet_dev-libs_abort-masked-last
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/maskeddep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/maskeddep
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+
+### --pretend_--quiet_dev-libs_abort-masked-mid
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/maskeddep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/maskeddep
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+
+### --pretend_--quiet_dev-libs_abort-unsat-last
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/abort-nonexistent" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/abort-nonexistent".
+
+### --pretend_--quiet_dev-libs_abort-unsat-mid
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/abort-nonexistent" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/abort-nonexistent".
+
+### --pretend_--quiet_dev-libs_anyofunresolvable
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/doesnotexist-anywhere" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/doesnotexist-anywhere".
+
+### --pretend_--quiet_dev-libs_autounmaskdepconsumer
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/autounmaskkeywordpkg
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/autounmaskkeywordpkg" have been masked.
+
+### --pretend_--quiet_dev-libs_implicitiusepkgmusl
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/implicitiuseprov[elibc_musl]".
+
+### --pretend_--quiet_dev-libs_kwbacktop
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy ">=dev-libs/kwbackmid-2.0" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: >=dev-libs/kwbackmid-2.0
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy ">=dev-libs/kwbackmid-2.0" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy ">=dev-libs/kwbackmid-2.0" have been masked.
+
+### --pretend_--quiet_dev-libs_kwneedpkg
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/kwmaskeddep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/kwmaskeddep
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/kwmaskeddep" have been masked.
+
+### --pretend_--quiet_dev-libs_levelconsumer
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/levelpkg" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/levelpkg
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/levelpkg" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/levelpkg" have been masked.
+
+### --pretend_--quiet_dev-libs_libcnoisepkg
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "sys-libs/musl" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "sys-libs/musl".
+
+### --pretend_--quiet_dev-libs_licensemaskedconsumer
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/licensemaskedpkg" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/licensemaskedpkg
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/licensemaskedpkg" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/licensemaskedpkg" have been masked.
+
+### --pretend_--quiet_dev-libs_maskmaskedconsumer
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/hardmaskedpkg" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/hardmaskedpkg
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/hardmaskedpkg" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/hardmaskedpkg" have been masked.
+
+### --pretend_--quiet_dev-libs_maskneedpkg
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/maskeddep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/maskeddep
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/maskeddep" have been masked.
+
+### --pretend_--quiet_dev-libs_missingdep
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/doesnotexist-anywhere" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/doesnotexist-anywhere".
+
+### --pretend_--quiet_dev-libs_movedepconsumer
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/oldmovepkg" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/oldmovepkg".
+
+### --pretend_--quiet_dev-libs_multimaskconsumer
+  [advice] (fixture-masked-path-suffix) real-only: masked: All ebuilds that could satisfy "dev-libs/multimaskdep" for /tmp/l0-fixture-oracle/fixtures/ have been masked.
+  [advice] (fixture-masked-atom-synthesis) portuale-only: masked-atom: dev-libs/multimaskdep
+  [advice] (fixture-masked-message-unsuffixed) portuale-only: masked: !!! All ebuilds that could satisfy "dev-libs/multimaskdep" have been masked.
+  [error] (fixture-masked-message-unsuffixed) portuale-only message: !!! All ebuilds that could satisfy "dev-libs/multimaskdep" have been masked.
+
+### --pretend_--quiet_dev-libs_ofuzzy
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "=dev-libs/ofuzzyinstalled-2.0" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "=dev-libs/ofuzzyinstalled-2.0".
+
+### --pretend_--quiet_dev-libs_opartly
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/opartlyb" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/opartlyb".
+
+### --pretend_--quiet_dev-libs_ormissbad
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/ormiss-nonexistent" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/ormiss-nonexistent".
+
+### --pretend_--quiet_dev-libs_parentflipeqpkg
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/parentflipchildpkg[feat=]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/parentflipchildpkg[feat=]".
+
+### --pretend_--quiet_dev-libs_pfgraphparent
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/pfgraphchild[pf=]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/pfgraphchild[pf=]".
+
+### --pretend_--quiet_dev-libs_requiredusebadparentpkg
+  [error] (fixture-masked-path-suffix) real-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+  [error] (fixture-unmet-requirements-wording) portuale-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" has unmet requirements.
+
+### --pretend_--quiet_dev-libs_requiredusebadpkg
+  [error] (fixture-problem-resolving-header) real-only message: !!! Problem resolving dependencies for dev-libs/requiredusebadpkg
+  [error] (fixture-masked-path-suffix) real-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+  [error] (fixture-unmet-requirements-wording) portuale-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" has unmet requirements.
+
+### --pretend_--quiet_dev-libs_requiredusebadpkg2
+  [error] (fixture-problem-resolving-header) real-only message: !!! Problem resolving dependencies for dev-libs/requiredusebadpkg2
+  [error] (fixture-masked-path-suffix) real-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg2" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+  [error] (fixture-unmet-requirements-wording) portuale-only message: !!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg2" has unmet requirements.
+
+### --pretend_--quiet_dev-libs_requsefail
+  [error] (fixture-problem-resolving-header) real-only message: !!! Problem resolving dependencies for dev-libs/requsefail
+  [error] (fixture-masked-path-suffix) real-only message: !!! The ebuild selected to satisfy "dev-libs/requsefail" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+  [error] (fixture-unmet-requirements-wording) portuale-only message: !!! The ebuild selected to satisfy "dev-libs/requsefail" has unmet requirements.
+
+### --pretend_--quiet_dev-libs_subslotmismatchconsumer
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds to satisfy "dev-libs/subslotpkg:0/3" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds to satisfy "dev-libs/subslotpkg:0/3".
+
+### --pretend_--quiet_dev-libs_unsatuseiuse
+  [error] (fixture-masked-path-suffix) real-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/unsatuseiusetarget[noiuse]" for /tmp/l0-fixture-oracle/fixtures/.
+  [error] (fixture-miss-message-unsuffixed) portuale-only message: emerge: there are no ebuilds built with USE flags to satisfy "dev-libs/unsatuseiusetarget[noiuse]".
+
+## allowlist entries that matched nothing (candidates for removal)
+  slotop-world-complete-graph-order

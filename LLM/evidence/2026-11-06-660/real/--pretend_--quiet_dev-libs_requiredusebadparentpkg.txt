@@ -1,0 +1,10 @@
+Undefined license group 'FREE'
+
+!!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+- dev-libs/requiredusebadpkg-1.0::testrepo USE="foo -bar" ELIBC="glibc"
+
+  The following REQUIRED_USE flag constraints are unsatisfied:
+    foo? ( bar )
+
+(dependency required by "dev-libs/requiredusebadparentpkg-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/requiredusebadparentpkg" [argument])

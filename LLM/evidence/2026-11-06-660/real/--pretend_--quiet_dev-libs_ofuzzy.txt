@@ -1,0 +1,5 @@
+Undefined license group 'FREE'
+
+emerge: there are no ebuilds to satisfy "=dev-libs/ofuzzyinstalled-2.0" for /tmp/l0-fixture-oracle/fixtures/.
+(dependency required by "dev-libs/ofuzzy-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/ofuzzy" [argument])

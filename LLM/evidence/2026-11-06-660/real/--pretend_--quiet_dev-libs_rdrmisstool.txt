@@ -1,0 +1,5 @@
+Undefined license group 'FREE'
+
+emerge: there are no ebuilds to satisfy "dev-libs/rdrnothere".
+(dependency required by "dev-libs/rdrmisstool-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/rdrmisstool" [argument])

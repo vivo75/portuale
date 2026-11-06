@@ -1,0 +1,4 @@
+
+emerge: there are no ebuilds to satisfy "dev-libs/subslotpkg:0/3".
+(dependency required by "dev-libs/subslotmismatchconsumer-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/subslotmismatchconsumer" [argument])

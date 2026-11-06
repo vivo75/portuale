@@ -1,0 +1,11 @@
+Undefined license group 'FREE'
+
+
+!!! Problem resolving dependencies for dev-libs/requsefail
+
+!!! The ebuild selected to satisfy "dev-libs/requsefail" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+- dev-libs/requsefail-1.0::testrepo USE="brokenflag" ELIBC="glibc"
+
+  The following REQUIRED_USE flag constraints are unsatisfied:
+    brokenflag? ( !brokenflag )
+

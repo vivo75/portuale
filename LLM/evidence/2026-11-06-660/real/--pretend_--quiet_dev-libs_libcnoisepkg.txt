@@ -1,0 +1,5 @@
+Undefined license group 'FREE'
+
+emerge: there are no ebuilds to satisfy "sys-libs/musl" for /tmp/l0-fixture-oracle/fixtures/.
+(dependency required by "dev-libs/libcnoisepkg-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/libcnoisepkg" [argument])

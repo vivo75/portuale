@@ -1,0 +1,4 @@
+
+emerge: there are no ebuilds to satisfy "dev-libs/doesnotexist-anywhere".
+(dependency required by "dev-libs/missingdep-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/missingdep" [argument])

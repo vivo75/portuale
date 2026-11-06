@@ -1,0 +1,8 @@
+
+!!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg" has unmet requirements.
+- dev-libs/requiredusebadpkg-1.0::testrepo USE="foo -bar" ELIBC="glibc"
+
+  The following REQUIRED_USE flag constraints are unsatisfied:
+    foo? ( bar )
+
+

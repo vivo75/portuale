@@ -1,0 +1,5 @@
+Undefined license group 'FREE'
+
+emerge: there are no ebuilds to satisfy "dev-libs/parentflipchildpkg[feat=]" for /tmp/l0-fixture-oracle/fixtures/.
+(dependency required by "dev-libs/parentflipeqpkg-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/parentflipeqpkg" [argument])

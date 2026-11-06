@@ -1,0 +1,8 @@
+
+!!! The ebuild selected to satisfy "app-misc/soreqb" has unmet requirements.
+- app-misc/soreqb-0::testrepo USE="-x -y" ELIBC="glibc"
+
+  The following REQUIRED_USE flag constraints are unsatisfied:
+    any-of ( x y )
+
+

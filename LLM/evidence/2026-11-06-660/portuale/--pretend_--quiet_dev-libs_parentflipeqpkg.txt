@@ -1,0 +1,4 @@
+
+emerge: there are no ebuilds to satisfy "dev-libs/parentflipchildpkg[feat=]".
+(dependency required by "dev-libs/parentflipeqpkg-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/parentflipeqpkg" [argument])

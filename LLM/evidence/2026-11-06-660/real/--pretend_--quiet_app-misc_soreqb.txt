@@ -1,0 +1,23 @@
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+@s
+
+Undefined license group 'FREE'
+
+Performing Global Updates
+(Could take a couple of minutes if you have a lot of binary packages.)
+@s
+
+Undefined license group 'FREE'
+
+
+!!! Problem resolving dependencies for app-misc/soreqb
+
+!!! The ebuild selected to satisfy "app-misc/soreqb" for /tmp/l0-fixture-oracle/fixtures/ has unmet requirements.
+- app-misc/soreqb-0::testrepo USE="-x -y" ELIBC="glibc"
+
+  The following REQUIRED_USE flag constraints are unsatisfied:
+    any-of ( x y )
+

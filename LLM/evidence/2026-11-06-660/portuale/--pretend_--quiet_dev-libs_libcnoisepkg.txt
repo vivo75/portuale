@@ -1,0 +1,4 @@
+
+emerge: there are no ebuilds to satisfy "sys-libs/musl".
+(dependency required by "dev-libs/libcnoisepkg-1.0::testrepo" [ebuild])
+(dependency required by "dev-libs/libcnoisepkg" [argument])
