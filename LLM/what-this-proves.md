@@ -21065,3 +21065,25 @@ inside `pytests-contract-suite/`; `python3 -m pytest
 test_harvested_corpus.py -q -k nodekey` (in that directory) shows the key rule.
 #672 was settled as real Portage behaviour (`to '<ROOT>'` follows ROOT, not the
 running root) but left open and re-scoped; a trial fix moved about twenty pins.
+
+Backlog #680 (2026-11-07): a build-time dependency is now merged *usable*
+(charter property 2, PMS 8.1). An installed package whose recorded
+`:SLOT/SUB=` binding the plan breaks no longer satisfies a dependency in the
+merge-order graph, and every build waits for the run-time dependencies of its
+build-time dependencies that no installed package satisfies. With the
+hand-built `p680*` shape (installed `p680perl-1.0:0/1.0`, XS module `p680xs`
+bound to it, `p680doc` DEPENDing on the module, `p680build` BDEPENDing on the
+installed tool `p680tool` whose RDEPEND is the module),
+`emerge -pvuD app-misc/p680meta` now merges `p680perl`, `p680cycb`,
+`p680cyca`, `p680gettext`, `p680xs`, `p680doc`, `p680build`, `p680meta`
+(before: `p680build` and `p680doc` at #2-#3, `p680xs` last). Live check, from
+the pmtest root: `python3 -m pytest pytests-contract-suite -q -k test_680`.
+On the bed, `l0-health-20261107T210124Z` against `l0-health-20261107T195447Z`:
+the six plans with the `Locale-gettext` findings (`-puvDN @world`, its
+`--exclude sys-devel/gcc` form, `-pve @world`, `-pve @system`,
+`-pve app-misc/tmux`, `MULTI_emptytree-system`) are clean, the other 179 have
+the same findings. L0 `l0-20261107T205456Z`: 91 clean, 44 unexplained (was 43):
+`MULTI_deep-update-world` and `MULTI_emptytree-system` still diverge from
+Portage at the same position (#21, #144) inside the perl-virtual cluster, but
+portuale now puts `virtual/perl-CPAN` there, so the first no longer matches the
+`perl-cluster-hash-order-601` allowlist entry.

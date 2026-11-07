@@ -29,7 +29,7 @@ pub(crate) fn build_digraph(
     };
 
     // Installed match for the atom, via the shared `edge_satisfied_with` rule.
-    let installed_by_cp = installed_candidates_by_cp(root);
+    let installed_by_cp = usable_installed_by_cp(root, entries);
     let satisfied = |edge: &DepEdge, child: Option<usize>| -> bool {
         edge_satisfied_with(
             &installed_by_cp,
@@ -226,6 +226,50 @@ pub(crate) fn build_digraph(
         }
     }
     g
+}
+
+/// A build-time dependency is usable only once its run-time dependencies are
+/// in place too (PMS 8.1). For each build-time edge `i -> j`, adds a build-time
+/// edge `i -> k` for every `k` in [`unsatisfied_runtime_closure`] of `j`.
+pub(crate) fn add_usability_edges(g: &mut Digraph) {
+    let mut closures: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut extra: Vec<(usize, usize, DepPriority)> = Vec::new();
+    for i in 0..g.n {
+        for (j, prios) in &g.children[i] {
+            let Some(build) = prios.iter().find(|p| p.buildtime) else {
+                continue;
+            };
+            let derived = DepPriority {
+                buildtime: true,
+                optional: build.optional,
+                ..DepPriority::default()
+            };
+            let needs = closures
+                .entry(*j)
+                .or_insert_with(|| unsatisfied_runtime_closure(g, *j));
+            extra.extend(needs.iter().filter(|&&k| k != i).map(|&k| (i, k, derived)));
+        }
+    }
+    for (i, k, priority) in extra {
+        g.add_edge(i, k, priority);
+    }
+}
+
+/// Every node `j` reaches through run-time edges that no installed package
+/// satisfies: what must be merged before `j` can be used.
+fn unsatisfied_runtime_closure(g: &Digraph, j: usize) -> Vec<usize> {
+    let mut seen = HashSet::from([j]);
+    let mut stack = vec![j];
+    let mut out = Vec::new();
+    while let Some(x) = stack.pop() {
+        for (k, prios) in &g.children[x] {
+            if prios.iter().any(|p| p.runtime && !p.satisfied) && seen.insert(*k) {
+                stack.push(*k);
+                out.push(*k);
+            }
+        }
+    }
+    out
 }
 
 /// Every `@system`-set member plus everything reachable by runtime edges only.

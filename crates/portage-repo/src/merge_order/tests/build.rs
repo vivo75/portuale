@@ -645,3 +645,41 @@ fn gather_deps_collects_the_filtered_closure_and_rejects_escapes() {
     let mergeable: HashSet<usize> = [0].into_iter().collect();
     assert_eq!(gather_deps(&g, 0, None, &mergeable), None, "1 escapes");
 }
+
+#[test]
+fn add_usability_edges_waits_for_the_unsatisfied_runtime_closure_of_a_build_dep() {
+    // #680: 0 builds with 1 (BDEPEND). 1 needs 2 at run time and 2 needs 3,
+    // none installed; 1's need of 4 is met by an installed package.
+    let build = DepPriority {
+        buildtime: true,
+        ..DepPriority::default()
+    };
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let satisfied_runtime = DepPriority {
+        satisfied: true,
+        ..runtime
+    };
+    let mut g = test_graph(
+        5,
+        &[
+            (0, 1, build),
+            (1, 2, runtime),
+            (2, 3, runtime),
+            (1, 4, satisfied_runtime),
+        ],
+    );
+    add_usability_edges(&mut g);
+    let children: Vec<usize> = g.children[0].iter().map(|(c, _)| *c).collect();
+    assert_eq!(children, [1, 2, 3]);
+    assert!(
+        g.children[0][1]
+            .1
+            .iter()
+            .all(|p| p.buildtime && !p.satisfied)
+    );
+    // Run-time edges alone add nothing.
+    assert!(g.children[1].iter().all(|(c, _)| [2, 4].contains(c)));
+}

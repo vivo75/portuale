@@ -88,6 +88,57 @@ pub(crate) fn installed_candidates_by_cp(
     by_cp
 }
 
+/// [`installed_candidates_by_cp`] without the installed packages the plan
+/// breaks. A package built against `cat/pkg:SLOT/SUB=` stops working once the
+/// plan merges `cat/pkg:SLOT` at another sub-slot, so it cannot stand in for
+/// its own rebuild when a build-time dependency needs it.
+pub(crate) fn usable_installed_by_cp(
+    root: &Path,
+    entries: &[GraphEntry],
+) -> HashMap<(String, String), Vec<String>> {
+    let merged_sub_slot: HashMap<(&str, &str, &str), &str> = entries
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.outcome,
+                PretendOutcome::New { .. }
+                    | PretendOutcome::Upgrade { .. }
+                    | PretendOutcome::Downgrade { .. }
+                    | PretendOutcome::Reinstall { .. }
+            )
+        })
+        .filter_map(|e| {
+            let key = (e.category.as_str(), e.package.as_str(), e.slot.as_deref()?);
+            Some((key, e.sub_slot.as_deref()?))
+        })
+        .collect();
+    let binding_broken = |atom: portage_dep::Atom| {
+        let (Some(slot), Some(sub_slot)) = (&atom.slot, &atom.sub_slot) else {
+            return false;
+        };
+        atom.slot_operator == Some(portage_dep::SlotOperator::Equals)
+            && merged_sub_slot
+                .get(&(atom.category.as_str(), atom.package.as_str(), slot.as_str()))
+                .is_some_and(|merged| merged != sub_slot)
+    };
+    let mut by_cp = (*installed_candidates_by_cp(root)).clone();
+    for p in all_installed_packages(root).iter() {
+        let rdepend = crate::read_vdb_string(root, &p.category, &p.package, &p.version, "RDEPEND");
+        if !rdepend
+            .split_whitespace()
+            .filter_map(portage_dep::parse_atom)
+            .any(binding_broken)
+        {
+            continue;
+        }
+        let prefix = format!("{}/{}-{}:", p.category, p.package, p.version);
+        if let Some(cands) = by_cp.get_mut(&(p.category.clone(), p.package.clone())) {
+            cands.retain(|c| !c.starts_with(&prefix));
+        }
+    }
+    by_cp
+}
+
 /// A synthetic `AlreadyInstalled` node for an installed package the resolve never
 /// made an entry for. Filtered back out of the scheduled list before returning.
 pub(crate) fn synthetic_installed_entry(

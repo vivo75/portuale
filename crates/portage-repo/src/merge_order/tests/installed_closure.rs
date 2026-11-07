@@ -342,3 +342,40 @@ fn add_installed_dependency_closure_strips_the_injected_libc_dep_only_with_an_eb
         inj.deps.iter().map(|e| e.atom.as_str()).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn usable_installed_by_cp_drops_a_package_whose_slot_operator_binding_the_plan_breaks() {
+    // #680: the installed XS module is bound to perl:0/1.0; the plan merges
+    // perl at sub-slot 2.0, so the installed module cannot stand in for its
+    // rebuild. The unbound tool stays usable.
+    let root = mo_tmp_vdb(
+        "usable",
+        &[
+            ("dev-lang", "perl-1.0", &[("SLOT", "0/1.0")]),
+            (
+                "dev-perl",
+                "xs-1.0",
+                &[("SLOT", "0"), ("RDEPEND", "dev-lang/perl:0/1.0=")],
+            ),
+            (
+                "dev-util",
+                "tool-1.0",
+                &[("SLOT", "0"), ("RDEPEND", "dev-perl/xs")],
+            ),
+        ],
+    );
+    let mut perl = new_entry("dev-lang", "perl", "2.0", Vec::new());
+    perl.slot = Some("0".into());
+    perl.sub_slot = Some("2.0".into());
+    let usable = usable_installed_by_cp(&root, std::slice::from_ref(&perl));
+    let cands = |cat: &str, pkg: &str| usable[&(cat.to_string(), pkg.to_string())].clone();
+    assert!(cands("dev-perl", "xs").is_empty());
+    assert_eq!(cands("dev-util", "tool"), ["dev-util/tool-1.0:0/0"]);
+    // The same sub-slot breaks nothing.
+    perl.sub_slot = Some("1.0".into());
+    let usable = usable_installed_by_cp(&root, std::slice::from_ref(&perl));
+    assert_eq!(
+        usable[&("dev-perl".into(), "xs".into())],
+        ["dev-perl/xs-1.0:0/0"]
+    );
+}

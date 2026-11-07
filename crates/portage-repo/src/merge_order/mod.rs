@@ -103,7 +103,7 @@ pub(crate) fn serialize_merge_order(args: SerializeMergeOrderArgs<'_>) -> (Vec<u
 
     debug_dump_graph(&g, entries, top_level_atoms, root);
 
-    // Post-prune, pre-bias insertion order: the stable-sort tie-break.
+    // Post-prune, biased insertion order: the stable-sort tie-break.
     if mo_sel_enabled() {
         let nodes: Vec<String> = g
             .order
@@ -113,7 +113,6 @@ pub(crate) fn serialize_merge_order(args: SerializeMergeOrderArgs<'_>) -> (Vec<u
         eprintln!("MO_ORDER count={} {}", nodes.len(), nodes.join(" "));
     }
 
-    merge_order_bias(&mut g, entries, config, implicit_system_deps);
     let _span = portage_util::profile::span("serialize_merge_order select_nodes");
     let scheduled: Vec<usize> = select_nodes(&mut g, entries, root, None)
         .into_iter()
@@ -187,6 +186,8 @@ fn schedule_graph(args: ScheduleGraphArgs<'_>) -> (Vec<GraphEntry>, Digraph, usi
 
     prune_nomerge_roots(&mut g, real_n);
     merge_order_bias(&mut g, entries, config, implicit_system_deps);
+    // After the bias, so the extra edges change no reference count.
+    add_usability_edges(&mut g);
     (ext, g, real_n, discovery_rank)
 }
 
