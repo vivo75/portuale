@@ -298,6 +298,18 @@ fn collect_feedback_inner(
     // collected here: a later re-pass would otherwise report the collision
     // without its installed consumers.
     let scan = scan_reverse_dependencies(ctx, pass);
+    add_merge_parents(
+        &mut pass.slot_conflicts,
+        &scan.merge_parents,
+        ctx.root,
+        config,
+        ctx.gate(),
+    );
+    for row in &scan.merge_parents {
+        if !grown.merge_parents.contains(row) {
+            grown.merge_parents.push(row.clone());
+        }
+    }
     // Leg (a) of backlog #656: the holder-open subset applies before the
     // seed feed. The feed's early return discards a pass's enforced pins
     // whenever seeds fire, and the latched seeds re-select the `||` on the
@@ -385,9 +397,17 @@ fn collect_feedback_inner(
 
     // The contradicted consumer pins join the conflicts after the walker's, and
     // the ABI step looks at their built atoms like it does at any other.
-    if file_consumer_pin_conflicts(ctx, pass, &mut grown, &scan)
-        && let Some(decision) = step_slot_conflict_abi(pass, ctx, &mut grown, config)
-    {
+    let filed = file_consumer_pin_conflicts(ctx, pass, &mut grown, &scan);
+    if filed {
+        add_merge_parents(
+            &mut pass.slot_conflicts,
+            &scan.merge_parents,
+            ctx.root,
+            config,
+            ctx.gate(),
+        );
+    }
+    if filed && let Some(decision) = step_slot_conflict_abi(pass, ctx, &mut grown, config) {
         return decision;
     }
 

@@ -21002,3 +21002,18 @@ the block now lists the merge-bound virtual under both 5.42 and 5.44. Rows equal
 Portage 3.0.83 as sets, rc 1 and 4/20 on both, except the installed virtual's
 own `=5.44*` row (#606) (`LLM/evidence/2026-11-06-sweep/604/`). The Q19 entry in
 `portage-quirks.md` is corrected: it overstated the leak.
+
+Backlog #606 (2026-11-07): an installed consumer's selected `||` arm that the
+merge satisfies is now a parent atom of the merge-bound instance, as Portage's
+complete graph records it; only a graph-unsatisfied arm goes to the vdb test
+(`depgraph.py` 8799-8809). With the Q19 shape in an ad-hoc ROOT (`p590vpar` in
+world; `p590vpar-1`, `virtual/p590vva-1`, `virtual/p590vvb-1`, `p590vprov-5.42`
+installed), `emerge -p dev-libs/p590vpull` prints `backtrack: 6/20` (was 2/20),
+`N p590vpull-1` and the skip block with both virtuals' `=5.42*`;
+`-p --backtrack=0 --verbose-conflicts` lists `p590vpull-2` and `p590vva-1` under
+5.44 (the second row was missing). Both conflict choices now carry two atoms, so
+5.42 is masked first and the mask sequence equals Portage 3.0.83's `--debug`
+trace (`LLM/evidence/2026-11-06-sweep/606/`). The w604 shapes A and C gain the
+installed virtual's `=5.44*` row and now equal Portage as sets. Not done: the
+same shape on the shared fixture ROOT, where `p590vpar` is reached only through
+`p590vpull-2` (#676).

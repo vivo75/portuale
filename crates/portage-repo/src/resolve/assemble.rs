@@ -619,16 +619,24 @@ pub(crate) fn collect_autounmask_and_conflicts(
     // complete-graph re-walk may show them here.
     // Portage: depgraph.py, _resolve
     if ctx.complete || !super::feedback::pass_has_unsatisfied_dep(pass) {
-        for sc in build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        let residual = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
             config,
             root: ctx.root,
             entries: &pass.entries,
             slot_pullers: &pass.slot_pullers,
             dropped: &params.dropped_pins,
             gate: ctx.gate(),
-        }) {
+        });
+        for sc in residual {
             record_slot_conflict(&mut pass.slot_conflicts, sc);
         }
+        add_merge_parents(
+            &mut pass.slot_conflicts,
+            &params.merge_parents,
+            ctx.root,
+            config,
+            ctx.gate(),
+        );
     }
 }
 

@@ -248,6 +248,59 @@ pub(crate) fn slot_conflict_puller_cpv(
     format!("{pc}/{pp}-{pv}:{pslot}/{psub}::{prepo}")
 }
 
+/// Adds each installed consumer's `||` arm the merge satisfies as a parent of the
+/// merge-bound instance it matches (backlog #606).
+// Portage: depgraph.py, _add_parent_atom
+pub(crate) fn add_merge_parents(
+    conflicts: &mut [SlotConflict],
+    rows: &[RevDepPin],
+    root: &Path,
+    config: &portage_profile::Config,
+    gate: CategoryGate<'_>,
+) {
+    for sc in conflicts.iter_mut() {
+        for row in rows
+            .iter()
+            .filter(|r| r.cp.0 == sc.category && r.cp.1 == sc.package)
+        {
+            let (cc, cp, cv) = &row.consumer;
+            for inst in sc.instances.iter_mut().filter(|i| !i.installed) {
+                let sub = if inst.sub_slot.is_empty() {
+                    slot_conflict_meta(gate, &sc.category, &sc.package, &inst.version).0
+                } else {
+                    inst.sub_slot.clone()
+                };
+                let inst_str = format!(
+                    // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
+                    "{}/{}-{}:{}/{sub}",
+                    sc.category, sc.package, inst.version, sc.slot
+                );
+                if portage_dep::match_from_list(&row.atom, &[inst_str.as_str()])
+                    .is_none_or(|m| m.is_empty())
+                {
+                    continue;
+                }
+                let Some(r) = installed_refs(root, cc, cp)
+                    .into_iter()
+                    .find(|r| &r.version == cv)
+                else {
+                    continue;
+                };
+                let parent = SlotConflictParent {
+                    // match-str-ok: installed ref fields, not a Candidate
+                    parent_cpv: format!("{cc}/{cp}-{cv}:{}/{}::{}", r.slot, r.sub_slot, r.repo),
+                    atom: row.atom.clone(),
+                    use_display: installed_use_display_for(root, config, cc, cp, cv),
+                    installed: true,
+                };
+                if !inst.parents.contains(&parent) {
+                    inst.parents.push(parent);
+                }
+            }
+        }
+    }
+}
+
 /// Records a fresh `SlotConflict`, replacing the existing record for the same
 /// `(category, package, slot, existing, current)` triple.
 pub(crate) fn record_slot_conflict(slot_conflicts: &mut Vec<SlotConflict>, sc: SlotConflict) {

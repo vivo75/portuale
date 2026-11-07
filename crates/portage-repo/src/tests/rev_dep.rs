@@ -702,6 +702,7 @@ fn report_only_parents_append_once_to_the_mask_they_ride() {
         dropped: Vec::new(),
         report: vec![pin("dev-libs/target:0/1=")],
         holder_open: Vec::new(),
+        merge_parents: Vec::new(),
     };
     let mut grown = BacktrackParams::default();
     let first = step_reverse_dep_pins(&ctx, &pass, &mut grown, scan());

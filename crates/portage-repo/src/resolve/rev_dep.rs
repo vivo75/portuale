@@ -335,6 +335,7 @@ type UpgradingMap = HashMap<((String, String), String), (String, bool)>;
 /// The empty reverse-dependency want list shared by every consumer without one.
 static EMPTY_WANT: Vec<String> = Vec::new();
 
+#[cfg(test)]
 pub(crate) fn reverse_dependency_constraints(
     args: ReverseDependencyConstraintsArgs<'_>,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>) {
@@ -345,9 +346,26 @@ pub(crate) fn reverse_dependency_constraints(
 /// [`reverse_dependency_constraints`] plus the report-only parent rows: atoms
 /// Portage's missed-update tail records as parents of the skipped version
 /// without making them constraints (`depgraph.py:2107-2121`).
+#[cfg(test)]
 pub(crate) fn reverse_dependency_constraints_reported(
     args: ReverseDependencyConstraintsArgs<'_>,
 ) -> (Vec<RevDepPin>, Vec<RevDepPin>, Vec<RevDepPin>) {
+    let (enforced, dropped, report, _) = reverse_dependency_scan(args);
+    (enforced, dropped, report)
+}
+
+/// [`reverse_dependency_constraints_reported`] plus the `||` arms in-scope installed
+/// consumers select that the merge satisfies: parent atoms of the merge-bound
+/// instance (backlog #606).
+// Portage: depgraph.py, _add_parent_atom (via _add_dep)
+pub(crate) fn reverse_dependency_scan(
+    args: ReverseDependencyConstraintsArgs<'_>,
+) -> (
+    Vec<RevDepPin>,
+    Vec<RevDepPin>,
+    Vec<RevDepPin>,
+    Vec<RevDepPin>,
+) {
     let ReverseDependencyConstraintsArgs {
         root,
         entries,
@@ -484,7 +502,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
         );
     }
     if upgrading.is_empty() && use_breaks.is_empty() {
-        return (Vec::new(), Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     }
 
     // No `DEPEND`/`BDEPEND` parent atoms from built packages unless `--with-bdeps`.
@@ -497,6 +515,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
     let mut enforced: Vec<RevDepPin> = Vec::new();
     let mut dropped: Vec<RevDepPin> = Vec::new();
     let mut report: Vec<RevDepPin> = Vec::new();
+    let mut merge_parents: Vec<RevDepPin> = Vec::new();
     let mut seen: HashSet<SeenPin> = HashSet::new();
     let mut built_seen: BuiltSeenMap = HashMap::new();
     // Per-pass `Effective`-layer cache (one overlay per instance).
@@ -619,6 +638,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
             built_seen: &mut built_seen,
             dropped: &mut dropped,
             report: &mut report,
+            merge_parents: &mut merge_parents,
             portage_complete,
             report_only: false,
             hard_want,
@@ -668,6 +688,7 @@ pub(crate) fn reverse_dependency_constraints_reported(
                 built_seen: &mut built_seen,
                 dropped: &mut dropped,
                 report: &mut report,
+                merge_parents: &mut merge_parents,
                 portage_complete,
                 report_only: true,
                 hard_want,
@@ -698,7 +719,9 @@ pub(crate) fn reverse_dependency_constraints_reported(
     dropped.sort();
     report.sort();
     report.dedup();
-    (enforced, dropped, report)
+    merge_parents.sort();
+    merge_parents.dedup();
+    (enforced, dropped, report, merge_parents)
 }
 
 /// The values [`constraints_from_consumer`] reads from its caller.
@@ -736,6 +759,8 @@ pub(crate) struct ConstraintsFromConsumerArgs<'a> {
     /// leg B).
     pub(crate) virt_selected: &'a HashSet<String>,
     pub(crate) or_memo: &'a mut OrSelectedMemo,
+    /// Selected `||` arms the merge satisfies (see [`reverse_dependency_scan`]).
+    pub(crate) merge_parents: &'a mut Vec<RevDepPin>,
 }
 
 /// The sets that say which installed consumers a pass's scan reads.
@@ -899,6 +924,7 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         gate,
         virt_selected,
         or_memo,
+        merge_parents,
     } = args;
     if !consumer_in_scope(scope, consumer) {
         return ControlFlow::Break(());
@@ -985,6 +1011,16 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
                     _ => HashSet::new(),
                 }
             };
+        if !report_only {
+            record_merge_parents(MergeParentsArgs {
+                depstr,
+                use_flags,
+                demoted: &demoted,
+                upgrading,
+                consumer,
+                out: merge_parents,
+            });
+        }
         'atom: for atom_str in atoms {
             if constraints_from_atom(ConstraintsFromAtomArgs {
                 atom_str: &atom_str,
@@ -1024,6 +1060,69 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
         }
     }
     ControlFlow::Continue(())
+}
+
+/// What [`record_merge_parents`] reads.
+struct MergeParentsArgs<'a> {
+    depstr: &'a str,
+    use_flags: &'a HashSet<String>,
+    demoted: &'a HashSet<String>,
+    upgrading: &'a UpgradingMap,
+    consumer: &'a InstalledPackage,
+    out: &'a mut Vec<RevDepPin>,
+}
+
+/// Every selected `||` arm of one dependency string that the merge-bound version of
+/// its package satisfies: Portage adds it as a parent atom of that instance.
+// Portage: depgraph.py, _add_dep (_add_parent_atom)
+fn record_merge_parents(args: MergeParentsArgs<'_>) {
+    let MergeParentsArgs {
+        depstr,
+        use_flags,
+        demoted,
+        upgrading,
+        consumer,
+        out,
+    } = args;
+    if !depstr.contains("||") {
+        return;
+    }
+    let Some(split) = split_or_groups(depstr, use_flags) else {
+        return;
+    };
+    for atom in split.groups().iter().flat_map(|(_, atoms)| atoms.iter()) {
+        if split.plain_atoms().contains(atom) || demoted.contains(atom) {
+            continue;
+        }
+        let Some(parsed) =
+            parse_dep_atom(atom, "rev_dep").filter(|a| a.blocker == portage_dep::Blocker::None)
+        else {
+            continue;
+        };
+        let cp = (parsed.category.clone(), parsed.package.clone());
+        let satisfied =
+            upgrading
+                .iter()
+                .filter(|((ucp, _), _)| *ucp == cp)
+                .any(|(_, (cand, _))| {
+                    portage_dep::match_from_list(atom, &[cand.as_str()])
+                        .is_some_and(|m| !m.is_empty())
+                });
+        if satisfied {
+            out.push(RevDepPin {
+                cp,
+                atom: atom.clone(),
+                raw_atom: atom.clone(),
+                built_render: Vec::new(),
+                consumer: (
+                    consumer.category.clone(),
+                    consumer.package.clone(),
+                    consumer.version.clone(),
+                ),
+                holder_open: false,
+            });
+        }
+    }
 }
 
 /// The values [`constraints_from_atom`] reads from its caller.

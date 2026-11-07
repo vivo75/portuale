@@ -345,6 +345,9 @@ pub(crate) struct BacktrackParams {
     /// installed-instance conflict report once the graph settles. Deduped by
     /// `(cp, atom, consumer)`; stale entries simply yield no record.
     pub(crate) dropped_pins: Vec<RevDepPin>,
+    /// Installed consumers' selected `||` arms the merge satisfies, accumulated
+    /// like `dropped_pins`: parents of the merge-bound instance in the report.
+    pub(crate) merge_parents: Vec<RevDepPin>,
     /// Enforced holdable pins, accumulated across passes like `dropped_pins`,
     /// so `assemble_result` can report the upgrades they withhold through the
     /// same skip-conflict `WARNING` (no conflict ever forms on that path).

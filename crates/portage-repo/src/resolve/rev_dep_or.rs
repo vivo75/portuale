@@ -201,7 +201,12 @@ pub(crate) fn consumer_or_demotions(args: ConsumerOrDemotionsArgs<'_>) -> HashSe
         for atom in selected.iter().chain(leaked.into_iter().flatten()) {
             let blocker = parse_dep_atom(atom, "rev_dep_or")
                 .is_none_or(|a| a.blocker != portage_dep::Blocker::None);
-            if arms.contains(atom) && !blocker && !atom_matches_installed(root, atom, config) {
+            // Only a dependency the graph leaves unsatisfied reaches the vdb test.
+            if arms.contains(atom)
+                && !blocker
+                && !scan.post_merge.matches(atom)
+                && !atom_matches_installed(root, atom, config)
+            {
                 demoted.insert(atom.clone());
             }
         }

@@ -615,3 +615,64 @@ fn merge_bound_virtual_takes_the_parents_or_pick_of_its_eapi() {
         ]
     );
 }
+
+// ---- #606: an installed consumer's selected arm is a parent of the merge it selects ----
+
+#[test]
+fn installed_virtual_selecting_the_merge_is_its_parent() {
+    // #606. Complete mode evaluates the installed `virtual/p590vva`; with
+    // `p590vprov-5.44` in the graph its `=5.44*` arm is chosen, and a dependency the
+    // graph satisfies is a parent atom of that node (D:8799-8809 only sends
+    // graph-unsatisfied ones to the vdb test). Portage 3.0.83 `emerge -p
+    // --backtrack=0 --verbose-conflicts dev-libs/p590vpull` (clusterB `q19-bt0`): the
+    // 5.44 instance lists `p590vpull-2` and `p590vva-1`; the 5.42 one both virtuals.
+    let root = hermetic_root(&["dev-libs/p590vpar"]);
+    let mut req = complete_request_in(&root, &["dev-libs/p590vpull"]);
+    req.backtrack_max = 0;
+    let result = req.resolve().expect("resolves");
+    let sc = result
+        .slot_conflicts
+        .iter()
+        .find(|c| c.package == "p590vprov")
+        .expect("a p590vprov conflict");
+    let mut rows: Vec<(String, String, String)> = sc
+        .instances
+        .iter()
+        .flat_map(|i| {
+            i.parents
+                .iter()
+                .map(|p| (i.version.clone(), p.parent_cpv.clone(), p.atom.clone()))
+        })
+        .collect();
+    rows.sort();
+    let row = |v: &str, p: &str, a: &str| {
+        (
+            v.to_string(),
+            format!("{p}:0/0::testrepo"),
+            format!("=dev-libs/p590vprov-{a}*"),
+        )
+    };
+    assert_eq!(
+        rows,
+        vec![
+            row("5.42", "virtual/p590vva-1", "5.42"),
+            row("5.42", "virtual/p590vvb-1", "5.42"),
+            row("5.44", "dev-libs/p590vpull-2", "5.44"),
+            row("5.44", "virtual/p590vva-1", "5.44"),
+        ]
+    );
+}
+
+#[test]
+fn q19_backtracks_six_times_like_portage() {
+    // #606. Both choices carry two conflict atoms, so the version-desc order stands
+    // and 5.42 is masked first: 5.42, +5.44, +p590vpull-2, the dead end on the
+    // argument, then 5.44 alone and +p590vpull-2 (Portage 3.0.83 `--debug`, clusterB
+    // `q19-portage-debug`): `backtrack: 6/20`, `N p590vpull-1`.
+    let root = hermetic_root(&["dev-libs/p590vpar"]);
+    let result = complete_request_in(&root, &["dev-libs/p590vpull"])
+        .resolve()
+        .expect("resolves");
+    assert_eq!(result.backtrack_restarts, 6);
+    assert_eq!(merges(&result), rows(&[("dev-libs/p590vpull", "1")]));
+}

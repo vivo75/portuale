@@ -60,3 +60,6 @@ Slot conflicts: records, merging and rendering.
 
 ## gate threading (#571)
 - `slot_conflict_meta`, `slot_conflict_puller_cpv`, the display fns (`slot_conflict_flag_sets`, `skipped_update_use_display_for`, `pkg_use_display_for`, `skipped_consumer_use_display`) and every `*Args` struct carrying `repos` (`Build`, `MergeSameSlot`, `Residual*`, `Synthesize*`) carry the gate. Installed instances keep their vdb branch.
+
+## fn add_merge_parents
+- #606: files each `merge_parents` row as an installed parent (`installed in`, vdb USE) of every merge-bound instance of the conflict its atom matches (tree sub-slot when the record has none). Called in `collect_feedback_inner` right after the reverse scan and again after `file_consumer_pin_conflicts` (so the backtrack ranking, `slot_conflict_mask_choices`, counts the atom: Q19's two choices both carry two atoms, as in Portage's `_slot_confict_backtrack`), and in `collect_autounmask_and_conflicts` from `BacktrackParams::merge_parents` after the residual records (so the printed block has the row). The driver's best-run report accumulates them like `dropped_pins`. Not part of the backtracker's state equality.

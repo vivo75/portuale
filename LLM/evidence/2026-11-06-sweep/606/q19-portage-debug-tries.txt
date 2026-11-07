@@ -1,0 +1,8 @@
+61718:  package(s) to mask: [<Package ('ebuild', '$C/fxw/', 'dev-libs/p590vprov-5.42', 'merge', 'testrepo')>, <Package ('installed', '$C/fxw/', 'dev-libs/p590vprov-5.42', 'nomerge', 'installed')>]
+72351:backtracking try 1 
+141248:  package(s) to mask: [<Package ('installed', '$C/fxw/', 'dev-libs/p590vprov-5.42', 'nomerge', 'installed')>]
+151881:backtracking try 2 
+159147:backtracking try 3 
+159210:backtracking try 4 
+159257:backtracking try 5 
+159319:backtracking try 6 

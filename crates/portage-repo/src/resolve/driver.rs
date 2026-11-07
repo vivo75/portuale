@@ -317,8 +317,8 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
             let naked = run_pass(rctx, &best, false)?;
             let mut report = best.clone();
             let live_reachable = live_reachable_consumers(rctx, &naked.entries);
-            let (enforced, dropped) =
-                reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+            let (enforced, dropped, _, merge_parents) =
+                reverse_dependency_scan(ReverseDependencyConstraintsArgs {
                     root: rctx.root,
                     entries: &naked.entries,
                     with_bdeps: rctx.with_bdeps,
@@ -349,6 +349,11 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
             for pin in dropped {
                 if !report.dropped_pins.contains(&pin) {
                     report.dropped_pins.push(pin);
+                }
+            }
+            for row in merge_parents {
+                if !report.merge_parents.contains(&row) {
+                    report.merge_parents.push(row);
                 }
             }
             (naked, report)

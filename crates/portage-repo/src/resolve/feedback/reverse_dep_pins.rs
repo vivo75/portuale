@@ -56,6 +56,8 @@ pub(crate) struct ReverseScan {
     /// (bare demoter + tree-present requirers): applies before the seed
     /// feed, which would otherwise discard it (backlog #656).
     pub(crate) holder_open: Vec<RevDepPin>,
+    /// Selected `||` arms the merge satisfies: parents of the merge-bound instance.
+    pub(crate) merge_parents: Vec<RevDepPin>,
 }
 
 /// The pass's one reverse-dependency scan.
@@ -72,8 +74,8 @@ fn scan_reverse_dependencies_inner(
     live_reachable: &HashSet<(String, String)>,
     portage_complete: bool,
 ) -> ReverseScan {
-    let (enforced, dropped, report) =
-        reverse_dependency_constraints_reported(ReverseDependencyConstraintsArgs {
+    let (enforced, dropped, report, merge_parents) =
+        reverse_dependency_scan(ReverseDependencyConstraintsArgs {
             root: ctx.root,
             entries: &pass.entries,
             with_bdeps: ctx.with_bdeps,
@@ -101,6 +103,7 @@ fn scan_reverse_dependencies_inner(
         enforced,
         dropped,
         report,
+        merge_parents,
     }
 }
 
@@ -440,6 +443,7 @@ pub(crate) fn step_reverse_dep_pins(
         dropped,
         report,
         holder_open: _,
+        merge_parents: _,
     } = scan;
     // Rule 4 of `_eliminate_rebuilds` reads every parent atom of the rebuilt pkg, and
     // the complete-graph nomerge consumers are part of `_parent_atoms`; these pins
