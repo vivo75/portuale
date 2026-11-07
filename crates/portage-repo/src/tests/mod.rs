@@ -2076,6 +2076,15 @@ fn blocker_161_scratch_repo(args: Blocker161ScratchRepoArgs<'_>) -> RepoConfig {
 /// set directly (the `FX_WORLD_EXTRA=dev-libs/abk0b` equivalent the bed cell
 /// stages).
 fn graph_result_abk0_worldb_on(root: &Path, backtrack_max: u32) -> GraphResult {
+    graph_result_abk0_worldb_opts(root, backtrack_max, true)
+}
+
+/// The world-B `abk0d` resolve with `--autounmask-backtrack` set or not.
+fn graph_result_abk0_worldb_opts(
+    root: &Path,
+    backtrack_max: u32,
+    autounmask_backtrack: bool,
+) -> GraphResult {
     let fixture_root = fixtures_root();
     let mut config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
         config_root: &fixture_root,
@@ -2087,7 +2096,7 @@ fn graph_result_abk0_worldb_on(root: &Path, backtrack_max: u32) -> GraphResult {
         eroot: &fixture_root,
     })
     .expect("fixture config resolves");
-    config.autounmask_backtrack = true;
+    config.autounmask_backtrack = autounmask_backtrack;
     config.complete_seed_atoms = vec!["dev-libs/abk0b".to_string()];
     ResolveRequest {
         autounmask_suggest_keywords: true,

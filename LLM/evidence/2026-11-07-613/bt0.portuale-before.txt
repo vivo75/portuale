@@ -1,0 +1,13 @@
+### argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$CFG ROOT=$R PORTAGE_RUNNING_ROOT=$R DISTDIR=$C/distfiles PYTHONHASHSEED=0 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n --pretend --backtrack=0 dev-libs/abk0d
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/0).
+[ebuild   R    ] dev-libs/abk0c-1 [1] to $R USE="y*" 
+[ebuild     U  ] dev-libs/abk0a-2 [1] to $R
+[ebuild  N     ] dev-libs/abk0d-1 to $R
+The following USE changes are necessary to proceed:
+ (see "package.use" in the portage(5) man page for more details)
+# required by dev-libs/abk0d-1::testrepo
+# required by dev-libs/abk0d (argument)
+>=dev-libs/abk0c-1 x y
+### rc: 1

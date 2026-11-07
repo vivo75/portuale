@@ -65,7 +65,17 @@ pub(crate) struct ReverseScan {
 pub(crate) fn scan_reverse_dependencies(ctx: &ResolveCtx<'_>, pass: &PassResult) -> ReverseScan {
     let live_reachable = live_reachable_consumers(ctx, &pass.entries);
     let portage_complete = ctx.portage_complete(&pass.entries);
-    scan_reverse_dependencies_inner(ctx, pass, &live_reachable, portage_complete)
+    let mut scan = scan_reverse_dependencies_inner(ctx, pass, &live_reachable, portage_complete);
+    // Without a search nothing chooses between two conflict packages: the
+    // merge version stays and the conflict is reported, like a dropped pin.
+    if ctx.backtrack_max == 0 {
+        let (split, kept): (Vec<RevDepPin>, Vec<RevDepPin>) = std::mem::take(&mut scan.enforced)
+            .into_iter()
+            .partition(|p| !p.holder_open && pin_splits_the_slot(ctx, pass, p));
+        scan.enforced = kept;
+        scan.dropped.extend(split);
+    }
+    scan
 }
 
 fn scan_reverse_dependencies_inner(
@@ -138,12 +148,87 @@ fn consumer_pin_conflict_may_feed_back(
         && !(grown.autounmask_use_broke && !grown.autounmask_disabled)
 }
 
-/// Files the slot conflict a dropped installed-consumer pin leaves behind:
-/// the merge version and the installed instance in one slot, the consumer's
-/// atoms as parents of the installed one. Added after the walker's own
-/// conflicts, so the backtrack step, which feeds back the first conflict
-/// only, still takes theirs first. Returns whether a record was filed.
-/// Nothing is filed without a live search.
+/// The slot conflicts newly enforced pins leave when the installed instance
+/// misses an atom the merge version satisfies: Portage's slot then holds two
+/// conflict packages and backtracks over both. When the installed instance
+/// matches every merge-side atom only the merge version conflicts, and the
+/// single mask of the pin step is Portage's one choice.
+// Portage: depgraph.py, _process_slot_conflict, _slot_confict_backtrack
+fn fresh_pin_conflicts(
+    ctx: &ResolveCtx<'_>,
+    pass: &PassResult,
+    grown: &BacktrackParams,
+    scan: &ReverseScan,
+) -> Vec<SlotConflict> {
+    if pass_has_unsatisfied_dep(pass) {
+        return Vec::new();
+    }
+    let fresh: Vec<RevDepPin> = scan
+        .enforced
+        .iter()
+        .filter(|p| {
+            !p.holder_open
+                && !grown
+                    .reverse_dep_masked
+                    .contains(&(p.cp.clone(), p.atom.clone()))
+                && pin_splits_the_slot(ctx, pass, p)
+        })
+        .cloned()
+        .collect();
+    if fresh.is_empty() {
+        return Vec::new();
+    }
+    pin_records(ctx, pass, &fresh)
+}
+
+/// The consumer-pin conflict records of `pins` on this pass.
+fn pin_records(ctx: &ResolveCtx<'_>, pass: &PassResult, pins: &[RevDepPin]) -> Vec<SlotConflict> {
+    build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
+        config: ctx.config,
+        root: ctx.root,
+        entries: &pass.entries,
+        slot_pullers: &pass.slot_pullers,
+        dropped: pins,
+        gate: ctx.gate(),
+    })
+}
+
+/// Whether `pin`'s conflict puts the installed instance in conflict too.
+fn pin_splits_the_slot(ctx: &ResolveCtx<'_>, pass: &PassResult, pin: &RevDepPin) -> bool {
+    pin_records(ctx, pass, std::slice::from_ref(pin))
+        .iter()
+        .any(installed_misses_a_merge_atom)
+}
+
+/// Whether the record's installed instance fails an atom of its merge instance.
+fn installed_misses_a_merge_atom(record: &SlotConflict) -> bool {
+    let Some(inst) = record.instances.iter().find(|i| i.installed) else {
+        return false;
+    };
+    let inst_str = format!(
+        // match-str-ok: partial form (no ::repo) built from a record's version/slot fields
+        "{}/{}-{}:{}/{}",
+        record.category, record.package, inst.version, record.slot, inst.sub_slot
+    );
+    record
+        .instances
+        .iter()
+        .filter(|i| !i.installed)
+        .flat_map(|i| &i.parents)
+        .any(|p| {
+            portage_dep::match_from_list(&p.atom, &[inst_str.as_str()])
+                .is_some_and(|m| m.is_empty())
+        })
+}
+
+/// Files the slot conflict a contradicted installed-consumer pin leaves
+/// behind: the merge version and the installed instance in one slot, the
+/// consumer's atoms as parents of the installed one. Dropped pins file once
+/// the pass's enforced pins are settled; a newly enforced pin files when the
+/// installed instance is a conflict package too (`fresh_pin_conflicts`).
+/// Added after the walker's own conflicts, so the backtrack step, which
+/// feeds back the first conflict only, still takes theirs first. Returns
+/// whether a record was filed. Nothing is filed without a live search.
 // Portage: depgraph.py, _process_slot_conflicts
 pub(crate) fn file_consumer_pin_conflicts(
     ctx: &ResolveCtx<'_>,
@@ -151,22 +236,19 @@ pub(crate) fn file_consumer_pin_conflicts(
     grown: &mut BacktrackParams,
     scan: &ReverseScan,
 ) -> bool {
-    if ctx.backtrack_max == 0 || !consumer_pin_conflict_may_feed_back(pass, grown, scan) {
+    if ctx.backtrack_max == 0 {
         return false;
     }
-    for pin in &scan.dropped {
-        if !grown.dropped_pins.contains(pin) {
-            grown.dropped_pins.push(pin.clone());
+    let records = if consumer_pin_conflict_may_feed_back(pass, grown, scan) {
+        for pin in &scan.dropped {
+            if !grown.dropped_pins.contains(pin) {
+                grown.dropped_pins.push(pin.clone());
+            }
         }
-    }
-    let records = build_residual_slot_conflicts(BuildResidualSlotConflictsArgs {
-        config: ctx.config,
-        root: ctx.root,
-        entries: &pass.entries,
-        slot_pullers: &pass.slot_pullers,
-        dropped: &grown.dropped_pins,
-        gate: ctx.gate(),
-    });
+        pin_records(ctx, pass, &grown.dropped_pins)
+    } else {
+        fresh_pin_conflicts(ctx, pass, grown, scan)
+    };
     let mut filed = false;
     for record in records {
         filed |= file_after_walker_conflicts(&mut pass.slot_conflicts, record);

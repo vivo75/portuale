@@ -39,6 +39,7 @@ Fail-fast replay of the best pass.
 
 ## fn apply_replay_flips
 - Backlog #244. `r.needed` beyond the ones `base` already carried in from earlier passes. The row's and the slot-conflict block's `USE="…"` show the changed state (Portage's `_pkg_use_enabled`). Portuale's walk skips the flip when the requester's atom first lands on another instance of the slot, hence the `changes` recording.
+- Backlog #613: a flip the pass's own walk already folded (every new flag already holds its wanted state in `use_flags_display`) keeps the walk's display, which marks changes against the installed instance (`USE="x*"` on an `R` row); re-rendering it (`rerender_flipped`, `installed: None`) printed every flag (`USE="x -y -z"`). The change record is still pushed (deduped by atom and token). Shape: world-B `abk0d` with default options, `LLM/evidence/2026-11-07-613/def.*`.
 
 ## gate threading (#571)
 - Replay lookups use `ctx.repo_candidates`.

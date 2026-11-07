@@ -251,11 +251,6 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
                         }
                     }
                 }
-                // Break when the restart budget is spent; fall through to the
-                // best-run re-pass after the loop.
-                if restarts >= u64::from(ctx.backtrack_max) {
-                    break;
-                }
                 // A restart counts even when every child it adds is rejected.
                 // A grown autounmask config Portage would not restart for is
                 // not a Portage pass and is not counted.
@@ -266,6 +261,12 @@ fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphR
                     kind: &kind,
                     replay: replay.as_ref(),
                 });
+                // Break when the restart budget is spent; fall through to the
+                // best-run re-pass after the loop. An uncounted grow is the
+                // same Portage pass, so the budget does not stop it.
+                if counts && restarts >= u64::from(ctx.backtrack_max) {
+                    break;
+                }
                 bt.feedback(kind);
                 if counts {
                     restarts += 1;

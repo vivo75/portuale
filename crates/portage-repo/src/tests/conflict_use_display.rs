@@ -16,8 +16,8 @@ fn enforced_pin_miss_renders_the_installed_enforcing_consumer() {
         "settles C-1 + A-2 + D-1, saw {versions:?}"
     );
     assert_eq!(
-        result.backtrack_restarts, 1,
-        "Portage counts 2 (its second pass restarts on a slot conflict portuale never visits, #613); restarts={}",
+        result.backtrack_restarts, 2,
+        "Portage 3.0.83 counts 2: the {{A-1}}-masked choice restarts before the {{A-3}}-masked one settles (#613); restarts={}",
         result.backtrack_restarts
     );
     assert_eq!(
@@ -313,5 +313,61 @@ fn slot_conflict_use_display_renders_use_expand_groups() {
     );
     assert!(
         pkg_use_display_for(crate::test_gate(&repos), &config, "dev-libs", "aub0d", "9").is_empty()
+    );
+}
+
+/// The merge versions a result settles on, in entry order.
+fn abk0_versions(result: &GraphResult) -> Vec<(&str, &str)> {
+    result
+        .entries
+        .iter()
+        .filter_map(|e| merge_bound_version(&e.outcome).map(|v| (e.package.as_str(), v.as_str())))
+        .collect()
+}
+
+/// #613: with `--autounmask-backtrack` off the first pass's `x` change stops
+/// the search, and the `A-3` / installed `A-1` slot conflict is reported
+/// (Portage 3.0.83: `0/20`, `LLM/evidence/2026-11-07-613/def.portage.txt`).
+#[test]
+fn world_bound_stops_on_the_use_change_with_the_slot_conflict() {
+    let result = graph_result_abk0_worldb_opts(&fixtures_root(), 20, false);
+    assert_eq!(
+        abk0_versions(&result),
+        vec![("abk0c", "1"), ("abk0a", "3"), ("abk0d", "1")]
+    );
+    assert_eq!(result.backtrack_restarts, 0);
+    assert_eq!(
+        result.slot_conflicts.len(),
+        1,
+        "{:?}",
+        result.slot_conflicts
+    );
+    let conflict = &result.slot_conflicts[0];
+    assert_eq!(conflict.package, "abk0a");
+    let versions: Vec<(&str, bool)> = conflict
+        .instances
+        .iter()
+        .map(|i| (i.version.as_str(), i.installed))
+        .collect();
+    assert_eq!(versions, vec![("3", false), ("1", true)]);
+    assert!(result.skipped_updates.is_empty());
+}
+
+/// #613: without a search the installed `A-1`, which misses `abk0d`'s
+/// `>=A-2`, is not enforced in-pass: the conflict is reported (Portage
+/// 3.0.83 `--backtrack=0`: `0/0`, `bt0.portage.txt`).
+#[test]
+fn world_bound_without_backtracking_keeps_the_newest_and_reports() {
+    let result = graph_result_abk0_worldb_opts(&fixtures_root(), 0, true);
+    assert_eq!(
+        abk0_versions(&result),
+        vec![("abk0c", "1"), ("abk0a", "3"), ("abk0d", "1")]
+    );
+    assert_eq!(result.backtrack_restarts, 0);
+    assert_eq!(
+        result.slot_conflicts.len(),
+        1,
+        "{:?}",
+        result.slot_conflicts
     );
 }

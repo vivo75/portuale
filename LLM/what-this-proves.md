@@ -21031,3 +21031,22 @@ dev-libs/p625r` (`|| ( p625ac:2 p625ac:1 )`, the slot-1 arm pulling
 `p625ac-1`. On the bed the two `MULTI_emptytree-system` flag findings
 (`autoconf`/`automake` `[NS]` vs `[R]`) are gone: L0 `l0-20261107T085458Z`,
 91 clean, 43 unexplained (was 45), no other cell changed.
+
+Backlog #613 (2026-11-07): an installed consumer's pin that the merge version
+breaks is now a two-choice slot conflict when the installed instance also misses
+an atom of the merge version, as in Portage's `_process_slot_conflict` /
+`_slot_confict_backtrack` (`depgraph.py` 2150-2279); when the installed instance
+satisfies the merge side the old single mask stays (Portage then has one choice).
+With the world-B `abk0d` ROOT (pmtest `_abk0_worldb_root`: installed `abk0a-1`,
+`abk0b-1` with `RDEPEND=<dev-libs/abk0a-3`, `abk0c-1`; `abk0b` in world),
+`emerge -p dev-libs/abk0d` prints `backtrack: 0/20`, `R abk0c-1 USE="x*"`,
+`U abk0a-3` and the `abk0a-3` / installed `abk0a-1` slot-conflict block, rc 1
+(was `1/20`, `abk0a-2`, `USE="y*"`, a skipped-update warning and `x y`);
+`--backtrack=0` and `--autounmask-backtrack=y --backtrack=1` report the same
+conflict (`0/0`, `1/1` with the `--backtrack=30` advice), and
+`--autounmask-backtrack=y` with `--backtrack=2`/`3`/default prints `2/2`, `2/3`,
+`2/20` (was 1). All 8 option cells and 5 cells with the USE flags preset equal
+Portage 3.0.83 apart from the known root-suffix cut in the conflict block
+(`LLM/evidence/2026-11-07-613/`). L0 bed `l0-20261107T100217Z`: 91 clean,
+43 unexplained, every cell identical to `l0-20261107T085458Z`.
+

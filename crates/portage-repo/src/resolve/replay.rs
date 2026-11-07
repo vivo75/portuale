@@ -464,40 +464,14 @@ pub(crate) fn apply_replay_flips(
             }) else {
                 continue;
             };
-            for (f, on) in &new {
-                for (g, v) in e.use_flags_display.iter_mut() {
-                    if g == f {
-                        *v = *on;
-                    }
-                }
+            // A flip the pass's own walk already folded keeps its display,
+            // which compares against the installed instance.
+            let folded = new
+                .iter()
+                .all(|(f, on)| e.use_flags_display.iter().any(|(g, v)| g == f && v == on));
+            if !folded {
+                rerender_flipped(ctx, e, cand, cp, &new);
             }
-            let cpv = cand.match_str(&cp.0, &cp.1);
-            let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
-                iuse: &cand.iuse,
-                keywords: &cand.keywords,
-                candidate_str: &cpv,
-                build_id: cand.build_id.as_deref(),
-                category: &cp.0,
-                package: &cp.1,
-                config: ctx.config,
-            });
-            let no_reinst = HashSet::new();
-            e.use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
-                use_flags_display: &e.use_flags_display,
-                config: ctx.config,
-                installed: None,
-                forced: &forced,
-                all_flags: true,
-                reinst_flags: &no_reinst,
-            });
-            e.use_expand_display_p = build_use_expand_display(BuildUseExpandDisplayArgs {
-                use_flags_display: &e.use_flags_display,
-                config: ctx.config,
-                installed: None,
-                forced: &forced,
-                all_flags: false,
-                reinst_flags: &no_reinst,
-            });
             let atom = autounmask_use_atom_form(cand, &cands, &cp.0, &cp.1, ctx.config);
             let token = new
                 .iter()
@@ -515,4 +489,48 @@ pub(crate) fn apply_replay_flips(
             }
         }
     }
+}
+
+/// Applies `new` to `e`'s USE columns and re-renders them.
+fn rerender_flipped(
+    ctx: &ResolveCtx<'_>,
+    e: &mut GraphEntry,
+    cand: &Candidate,
+    cp: &(String, String),
+    new: &[(String, bool)],
+) {
+    for (f, on) in new {
+        for (g, v) in e.use_flags_display.iter_mut() {
+            if g == f {
+                *v = *on;
+            }
+        }
+    }
+    let cpv = cand.match_str(&cp.0, &cp.1);
+    let forced = forced_or_masked_flags(ForcedOrMaskedFlagsArgs {
+        iuse: &cand.iuse,
+        keywords: &cand.keywords,
+        candidate_str: &cpv,
+        build_id: cand.build_id.as_deref(),
+        category: &cp.0,
+        package: &cp.1,
+        config: ctx.config,
+    });
+    let no_reinst = HashSet::new();
+    e.use_expand_display = build_use_expand_display(BuildUseExpandDisplayArgs {
+        use_flags_display: &e.use_flags_display,
+        config: ctx.config,
+        installed: None,
+        forced: &forced,
+        all_flags: true,
+        reinst_flags: &no_reinst,
+    });
+    e.use_expand_display_p = build_use_expand_display(BuildUseExpandDisplayArgs {
+        use_flags_display: &e.use_flags_display,
+        config: ctx.config,
+        installed: None,
+        forced: &forced,
+        all_flags: false,
+        reinst_flags: &no_reinst,
+    });
 }
