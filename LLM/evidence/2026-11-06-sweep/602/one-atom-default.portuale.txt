@@ -1,0 +1,8 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$FX ROOT=$R PORTAGE_RUNNING_ROOT=$R DISTDIR=$FX/distfiles PORTAGE_TMPDIR=$S PYTHONHASHSEED=0 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -p =dev-libs/w602prov-2
+Dependency resolution took (backtrack: 2/20).
+[ebuild  r  U  ] dev-libs/w602prov-2 [1] to $R
+[ebuild  rR    ] app-misc/w602cons-1 to $R
+The following packages are causing rebuilds:
+  (dev-libs/w602prov-2:0/2::testrepo, ebuild scheduled for merge to '$R') causes rebuilds for:
+    (app-misc/w602cons-1:0/0::testrepo, ebuild scheduled for merge to '$R')
+### rc: 0

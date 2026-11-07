@@ -1,0 +1,5 @@
+{"desc": "fixture package: #602 complete mode from a slot conflict while backtracking",
+ "ebuilds": {"dev-libs/w602prov-1": {"SLOT": "0/1"}, "dev-libs/w602prov-2": {"SLOT": "0/2"},
+             "app-misc/w602cons-1": {"RDEPEND": "dev-libs/w602prov:="},
+             "dev-libs/w602s-1": {}, "dev-libs/w602s-2": {},
+             "app-misc/w602a-1": {"RDEPEND": "<dev-libs/w602s-2"}}}

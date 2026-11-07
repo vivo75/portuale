@@ -254,6 +254,9 @@ pub(crate) struct ResolveCtx<'a> {
     /// layer from `dynamic_deps`, which is fixed for one ctx, so one map
     /// serves all passes. VDB reads are frozen for the walk and repo
     /// metadata never changes mid-walk, so nothing here can go stale.
+    /// Set once a pass of this walk holds a slot conflict while backtracking is
+    /// allowed (`GraphResult::slot_conflict_backtracking`).
+    pub(crate) slot_conflict_seen: std::cell::Cell<bool>,
     pub(crate) installed_meta_memo:
         std::cell::RefCell<HashMap<(String, String, String, String), String>>,
 }
@@ -466,6 +469,7 @@ impl<'a> ResolveCtx<'a> {
             local_binpkg: build_local_binpkg_index(&req.config),
             tree_sim_memo: TreeSimMemo::default(),
             pool_memo: std::rc::Rc::default(),
+            slot_conflict_seen: std::cell::Cell::new(false),
             installed_meta_memo: std::cell::RefCell::default(),
         })
     }

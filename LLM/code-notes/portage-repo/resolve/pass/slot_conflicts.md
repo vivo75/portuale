@@ -10,3 +10,6 @@ Solves the pass's slot conflicts directly where one instance can go, and drops t
 
 ## gate threading (#571)
 - `DirectSolveInput`, both `slot_conflict_flag_sets` sites and the pool use `ctx.gate()`.
+
+## fn solve_pass_slot_conflicts (backlog #602 signal)
+- Before the direct solve, a non-empty conflict list with `backtrack_max > 0` sets `ResolveCtx::slot_conflict_seen`. It is set here, not from the driver's `pass.slot_conflicts`, because a conflict this function solves directly never reaches the driver, and Portage enters complete mode for it all the same (`_resolve_conflicts` looks at the package tracker before `_process_slot_conflicts`). `backtracking_resolve` copies the flag into `GraphResult::slot_conflict_backtracking`.

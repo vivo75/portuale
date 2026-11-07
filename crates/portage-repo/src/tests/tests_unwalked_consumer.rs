@@ -102,3 +102,39 @@ fn unwalked_consumer_atom_matching_an_installed_package_still_pins() {
         .collect();
     assert_eq!(skipped, vec!["<dev-libs/w603lib-2"]);
 }
+
+/// The #602 shape: installed `w602prov-1` (`0/1`) and `w602cons-1`
+/// (`dev-libs/w602prov:0/1=`), in world.
+fn w602_root() -> TempDir {
+    let root = hermetic_root(&["app-misc/w602cons"]);
+    install(&root, "dev-libs/w602prov-1", &[("SLOT", "0/1")]);
+    install(
+        &root,
+        "app-misc/w602cons-1",
+        &[("RDEPEND", "dev-libs/w602prov:0/1=")],
+    );
+    root
+}
+
+#[test]
+fn slot_conflict_while_backtracking_is_reported_for_complete_mode() {
+    // #602. `w602s` picks 2, `w602a` needs `<w602s-2`: a slot conflict. Portage
+    // turns complete mode on when one appears while backtracking is allowed
+    // (D:9473-9480); the CLI's second walk reads this flag (`602/` captures:
+    // `r U w602prov-2`, `rR w602cons-1` with the complete-graph switches off).
+    let root = w602_root();
+    let three = ["=dev-libs/w602prov-2", "dev-libs/w602s", "app-misc/w602a"];
+    let mut req = request_in(&root, &three);
+    req.selective = false;
+    let result = req.resolve().expect("resolves");
+    assert!(result.slot_conflict_backtracking);
+    // `--backtrack=0`: `_allow_backtracking` is false, no complete mode.
+    let mut req = request_in(&root, &three);
+    req.selective = false;
+    req.backtrack_max = 0;
+    assert!(!req.resolve().expect("resolves").slot_conflict_backtracking);
+    // No conflict at all.
+    let mut req = request_in(&root, &["=dev-libs/w602prov-2"]);
+    req.selective = false;
+    assert!(!req.resolve().expect("resolves").slot_conflict_backtracking);
+}

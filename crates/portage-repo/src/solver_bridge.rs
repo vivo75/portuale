@@ -685,6 +685,7 @@ fn graph_result_from_order(
         // No relaxation loop ran, so no early-termination gate can hinge on flips.
         autounmask_no_clean_tail: false,
         settled_with_backtracking: false,
+        slot_conflict_backtracking: false,
         abi_rebuilds,
         // No restart runs, so no rebuild-if reinstall is ever recorded.
         rebuild_if_reinstalls: Vec::new(),

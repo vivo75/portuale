@@ -56,3 +56,6 @@ The backtracking loop: one pass per node, settle or feed back.
 
 ## fn walk_flips (#609)
 - The USE changes Portage's `_create_graph` folds on a pass: only when the pass suggests USE changes (`autounmask_suggest_use`, not the breakage clean pass); otherwise every USE miss is a stop.
+
+## fn backtracking_resolve / backtrack_search (backlog #602)
+- Split so the wrapper can read `ResolveCtx::slot_conflict_seen` after the search on every return path and copy it into `GraphResult::slot_conflict_backtracking`. The body is unchanged.

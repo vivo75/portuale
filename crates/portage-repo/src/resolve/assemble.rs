@@ -358,6 +358,7 @@ pub(crate) fn assemble_result(
         autounmask_no_clean_tail: !params.autounmask_use_config.is_empty()
             || pass.parent_flip_rescued,
         settled_with_backtracking: false,
+        slot_conflict_backtracking: false,
         abi_rebuilds,
         rebuild_if_reinstalls,
         // `probe_replaced` is the display mirror of the same slot-operator

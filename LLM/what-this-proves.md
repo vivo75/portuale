@@ -20945,3 +20945,19 @@ config root: `emerge -p dev-libs/w603lib` and `emerge -pu @world` print
 block (was `UD w603lib-1 [3]`, the skip block and 1/20); with `w603lib-1`
 installed instead the atom matches and both PMs still print `R w603lib-1`, the
 skip row and 1/20. Same as Portage 3.0.83 (`LLM/evidence/2026-11-06-sweep/603/`).
+
+Backlog #602 (2026-11-07): a slot conflict met while backtracking is allowed
+now puts the run in complete mode, as Portage's `_resolve_conflicts` does
+(`depgraph.py` 9473-9480), even with the `--complete-graph-if-new-*` and
+`--rebuild-if-new-slot` switches off. Live, with installed `dev-libs/w602prov-1`
+(`SLOT=0/1`) and the world consumer `app-misc/w602cons-1`
+(`RDEPEND="dev-libs/w602prov:0/1="`) in an ad-hoc ROOT:
+`emerge -p --complete-graph-if-new-ver=n --complete-graph-if-new-use=n --rebuild-if-new-slot=n =dev-libs/w602prov-2 dev-libs/w602s app-misc/w602a`
+prints `r U w602prov-2`, `N w602s-1`, `N w602a-1`, `rR w602cons-1`, the
+`w602s` skip block and the rebuild block (was a plain `U w602prov-2` and no
+rebuild); without the conflict (`=dev-libs/w602prov-2` alone) or with
+`--backtrack=0` both PMs print a plain `U`. Rows equal Portage 3.0.83
+(`LLM/evidence/2026-11-06-sweep/602/`); the backtrack count does not (#670).
+When the conflict is the only reason for the second walk, the run keeps the
+first walk's skip block, backtrack count and `--debug` narration, so all-new
+graphs such as `emerge -p --backtrack=1 dev-libs/bkt3d dev-libs/bkt3c` print as before.

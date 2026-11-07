@@ -4,11 +4,17 @@ use crate::*;
 use portage_profile::Config;
 
 pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, Error> {
-    // Portage `_backtrack_depgraph`: pop a node, run one pass, settle or
-    // feed back; `--backtrack=0` explores no feedback (the root pass settles).
     // A resolve never writes the VDB: validate VDB memos once, not per read.
     let _vdb_frozen = portage_vdb::freeze();
     let ctx = ResolveCtx::new(req)?;
+    let mut result = backtrack_search(&ctx, req)?;
+    result.slot_conflict_backtracking = ctx.slot_conflict_seen.get();
+    Ok(result)
+}
+
+fn backtrack_search(ctx: &ResolveCtx<'_>, req: &ResolveRequest) -> Result<GraphResult, Error> {
+    // Portage `_backtrack_depgraph`: pop a node, run one pass, settle or
+    // feed back; `--backtrack=0` explores no feedback (the root pass settles).
     let initial = BacktrackParams::initial(req);
     let mut bt = Backtracker::new(
         std::cmp::max(1, ctx.backtrack_max.div_ceil(2)),
@@ -37,7 +43,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         }
         // A retry whose walk fails is a failed iteration, not a result; only
         // the root pass's own failure propagates. A feed pass is just dropped.
-        let mut pass = match run_pass(&ctx, &params, first_pass) {
+        let mut pass = match run_pass(ctx, &params, first_pass) {
             Ok(pass) => pass,
             Err(_) if from_feed => continue,
             Err(_) if !first_pass => {
@@ -64,7 +70,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         // The clean pass after an autounmask breakage is reported as it
         // stands, cut to what the fail-fast walk reached.
         if params.autounmask_disabled {
-            return run_breakage_clean_pass(&ctx, &initial, restarts);
+            return run_breakage_clean_pass(ctx, &initial, restarts);
         }
         // The walk over this pass with the USE changes it needs; a flip
         // contradicting one already needed fails the pass into one clean pass.
@@ -82,7 +88,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
             && (pass_has_use_changes(&params, &pass)
                 || !pass.slot_conflicts.is_empty()
                 || !replay_needed.is_empty()))
-        .then(|| replay_walk(&ctx, &pass.entries, true, &needed_init));
+        .then(|| replay_walk(ctx, &pass.entries, true, &needed_init));
         // The changes this walk needed carry into every later try.
         if ctx.autounmask_backtrack_enabled
             && let Some(r) = replay.as_ref()
@@ -98,16 +104,16 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
             .as_ref()
             .is_some_and(|r| r.failure.as_ref().is_some_and(|f| f.contradiction))
         {
-            return run_breakage_clean_pass(&ctx, &initial, restarts);
+            return run_breakage_clean_pass(ctx, &initial, restarts);
         }
-        drop_trigger_behind_first_failure(&ctx, &params, &mut pass, &needed_init);
-        let decision = collect_feedback(&ctx, &params, &mut pass, config);
+        drop_trigger_behind_first_failure(ctx, &params, &mut pass, &needed_init);
+        let decision = collect_feedback(ctx, &params, &mut pass, config);
         // The slot-conflict handler stops the search when a USE change would
         // solve this pass's conflicts. The root pass is then the report; a
         // later pass's stop is followed by a final pass from the best run
         // that no longer shows the suggestion.
         // Portage: depgraph.py, need_config_change (handler arm), _backtrack_depgraph
-        if slot_conflict_handler_stops(&ctx, &pass, config) {
+        if slot_conflict_handler_stops(ctx, &pass, config) {
             if restarts > 0 {
                 break;
             }
@@ -123,7 +129,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                     | BacktrackFeedback::MissingDep { base, .. },
                 ) => *base,
             };
-            let mut result = assemble_result(&ctx, &grown, pass, config, restarts);
+            let mut result = assemble_result(ctx, &grown, pass, config, restarts);
             result.settled_with_backtracking = ctx.backtrack_max > 0;
             return Ok(result);
         }
@@ -143,7 +149,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                     && r.needed != needed_init =>
             {
                 apply_replay_flips(
-                    &ctx,
+                    ctx,
                     &mut pass.entries,
                     r,
                     &params.autounmask_use_config,
@@ -151,11 +157,11 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                 );
                 let entries = pass.entries.clone();
                 let slot_conflicts = std::mem::take(&mut pass.slot_conflicts);
-                let mut result = assemble_result(&ctx, &base, pass, config, restarts);
+                let mut result = assemble_result(ctx, &base, pass, config, restarts);
                 result.slot_conflicts = slot_conflicts;
                 result.settled_with_backtracking = true;
-                replay_slot_conflicts(&ctx, &entries, r, &mut result.slot_conflicts);
-                fail_fast_truncate_final(&ctx, &mut result, Some(&needed_init));
+                replay_slot_conflicts(ctx, &entries, r, &mut result.slot_conflicts);
+                fail_fast_truncate_final(ctx, &mut result, Some(&needed_init));
                 return Ok(result);
             }
             PassDecision::Feedback(BacktrackFeedback::MissingDep { base, .. })
@@ -165,7 +171,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                     && r.needed != needed_init =>
             {
                 apply_replay_flips(
-                    &ctx,
+                    ctx,
                     &mut pass.entries,
                     r,
                     &params.autounmask_use_config,
@@ -173,11 +179,11 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                 );
                 let entries = pass.entries.clone();
                 let slot_conflicts = std::mem::take(&mut pass.slot_conflicts);
-                let mut result = assemble_result(&ctx, &base, pass, config, restarts);
+                let mut result = assemble_result(ctx, &base, pass, config, restarts);
                 result.slot_conflicts = slot_conflicts;
                 result.settled_with_backtracking = true;
-                replay_slot_conflicts(&ctx, &entries, r, &mut result.slot_conflicts);
-                fail_fast_truncate_final(&ctx, &mut result, Some(&needed_init));
+                replay_slot_conflicts(ctx, &entries, r, &mut result.slot_conflicts);
+                fail_fast_truncate_final(ctx, &mut result, Some(&needed_init));
                 return Ok(result);
             }
             d => d,
@@ -185,7 +191,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         match decision {
             PassDecision::Settle { params } => {
                 let settled = params.clone();
-                let result = assemble_result(&ctx, &params, pass, config, restarts);
+                let result = assemble_result(ctx, &params, pass, config, restarts);
                 // A retry pass that dropped a set member and still reports a
                 // slot conflict is a failed iteration; a drop on a
                 // conflict-free pass settles.
@@ -201,7 +207,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                     continue;
                 }
                 let mut result = result;
-                fail_fast_truncate_final(&ctx, &mut result, walk_flips(&params, &needed_init));
+                fail_fast_truncate_final(ctx, &mut result, walk_flips(&params, &needed_init));
                 return Ok(result);
             }
             PassDecision::DeadEnd { params } => {
@@ -235,9 +241,9 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                                 BacktrackFeedback::SlotConflict { base, .. } => *base,
                                 BacktrackFeedback::MissingDep { base, .. } => *base,
                             };
-                            let mut result = assemble_result(&ctx, &grown, pass, config, restarts);
+                            let mut result = assemble_result(ctx, &grown, pass, config, restarts);
                             fail_fast_truncate_final(
-                                &ctx,
+                                ctx,
                                 &mut result,
                                 walk_flips(&params, &needed_init),
                             );
@@ -254,7 +260,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                 // A grown autounmask config Portage would not restart for is
                 // not a Portage pass and is not counted.
                 let counts = grow_restart_counts(GrowRestartArgs {
-                    ctx: &ctx,
+                    ctx,
                     params: &params,
                     pass: &pass,
                     kind: &kind,
@@ -281,7 +287,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         ctx0 = ResolveCtx::new(&req0)?;
         &ctx0
     } else {
-        &ctx
+        ctx
     };
     let pass = run_pass(rctx, &best, false)?;
     let config_owned: Option<portage_profile::Config> = best.backtrack_config.clone();
@@ -362,17 +368,17 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         && (pass_has_use_changes(&best, &pass)
             || !pass.slot_conflicts.is_empty()
             || !replay_needed.is_empty())
-        && replay_walk(&ctx, &pass.entries, true, &best_needed)
+        && replay_walk(ctx, &pass.entries, true, &best_needed)
             .failure
             .is_some_and(|f| f.contradiction)
     {
-        return run_breakage_clean_pass(&ctx, &initial, restarts);
+        return run_breakage_clean_pass(ctx, &initial, restarts);
     }
-    let prune_unresolved = prune_unresolved_after_backtrack(restarts, &ctx, &report, &pass, config);
+    let prune_unresolved = prune_unresolved_after_backtrack(restarts, ctx, &report, &pass, config);
     let mut result = assemble_result(rctx, &report, pass, config, restarts);
     result.prune_unresolved = prune_unresolved;
     result.backtrack_max = ctx.backtrack_max;
-    fail_fast_truncate_final(&ctx, &mut result, walk_flips(&best, &best_needed));
+    fail_fast_truncate_final(ctx, &mut result, walk_flips(&best, &best_needed));
     Ok(result)
 }
 

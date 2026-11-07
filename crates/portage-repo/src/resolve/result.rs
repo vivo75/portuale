@@ -344,6 +344,10 @@ pub struct GraphResult {
     /// advisory omits its `--backtrack=30` hint (shown only when backtracking is off).
     // Portage: depgraph.py
     pub settled_with_backtracking: bool,
+    /// Some pass of the search held a slot conflict while backtracking was
+    /// allowed: Portage enters complete mode for that run.
+    // Portage: depgraph.py, _resolve_conflicts
+    pub slot_conflict_backtracking: bool,
     /// `(provider-cpv, consumer-cpv)` pairs behind each slot-operator auto-rebuild:
     /// the consumer got a `Reinstall { slot_operator_rebuild: true }` entry because
     /// the provider's new sub-slot breaks its built `:S/SS=` link. Sorted, deduped.

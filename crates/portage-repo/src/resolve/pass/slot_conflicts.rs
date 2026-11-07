@@ -10,6 +10,10 @@ pub(crate) fn solve_pass_slot_conflicts(
     bp: &BacktrackParams,
     config: &Config,
 ) {
+    // Portage: depgraph.py, _resolve_conflicts (complete mode on a conflict)
+    if !state.slot_conflicts.is_empty() && ctx.backtrack_max > 0 {
+        ctx.slot_conflict_seen.set(true);
+    }
     if !state.slot_conflicts.is_empty() {
         let solved = direct_solve_slot_conflicts(DirectSolveInput {
             conflicts: &state.slot_conflicts,

@@ -1,0 +1,4 @@
+### portage argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$FX ROOT=$R PORTAGE_RUNNING_ROOT=$R DISTDIR=$FX/distfiles PORTAGE_TMPDIR=$S PYTHONHASHSEED=0 emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -p --complete-graph-if-new-ver=n --complete-graph-if-new-use=n --rebuild-if-new-slot=n =dev-libs/w602prov-2
+Dependency resolution took 1.81 s (backtrack: 0/20).
+[ebuild     U  ] dev-libs/w602prov-2 [1] to $R
+### rc: 0

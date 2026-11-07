@@ -490,11 +490,31 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             gate,
         })
     };
+    // A slot conflict while backtracking puts Portage in complete mode too.
+    // That run's missed updates and backtracks stay the first walk's: the
+    // second walk reuses its picks and never meets the conflict again.
+    // Portage: depgraph.py, _resolve_conflicts
+    let conflict_only =
+        !complete_graph && !auto_enable && !nodeps && result.slot_conflict_backtracking;
+    let auto_enable = auto_enable || conflict_only;
+    let phase1_missed = conflict_only.then(|| {
+        (
+            result.skipped_updates.clone(),
+            result.skipped_missing_deps.clone(),
+            result.skipped_missing_dep_full.clone(),
+        )
+    });
     let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
     // A first walk that already aborted (a masked or flip-only dependency) keeps its
     // report: Portage reaches `_complete_graph` only after `_create_graph()` succeeded.
     // Portage: depgraph.py, _resolve (select_files)
     let phase1_aborted = matches!(result.outcome, portage_repo::ResolveOutcome::Aborted { .. });
+    // The `--debug` trace narrates the first walk only for a conflict-only
+    // second walk: it changes no row the trace shows.
+    let trace_on = portage_repo::resolver_debug();
+    if conflict_only {
+        portage_repo::set_resolver_debug(false);
+    }
     let result = if phase1_aborted {
         result
     } else if want_complete {
@@ -535,11 +555,24 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     } else {
         result
     };
+    portage_repo::set_resolver_debug(trace_on);
+    let mut result = result;
+    if let Some((updates, missing, missing_full)) = phase1_missed {
+        result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);
+        if result.skipped_updates.is_empty() {
+            result.skipped_updates = updates;
+        }
+        if result.skipped_missing_deps.is_empty() {
+            result.skipped_missing_deps = missing;
+        }
+        if result.skipped_missing_dep_full.is_empty() {
+            result.skipped_missing_dep_full = missing_full;
+        }
+    }
     // Repaint running-rooted rows from the running root's own profile,
     // merge entries and abort-partial rows alike. Runs only on a genuine
     // cross-root run with a loaded running profile; single-root runs keep
     // the resolve-time target paint.
-    let mut result = result;
     if let (Some(running), Some(running_cfg)) =
         (root_deps_running_root.as_deref(), running_config.as_ref())
     {
