@@ -105,6 +105,8 @@ pub(crate) struct ResolveOnceArgs<'a> {
     pub(crate) locked: &'a [String],
     pub(crate) with_seeds: bool,
     pub(crate) reuse: &'a HashMap<(String, String), portage_repo::PretendOutcome>,
+    /// The backtracking masks the search starts from (`ResolveRequest::seed_masks`).
+    pub(crate) seed_masks: &'a portage_repo::SettledMasks,
     /// The run-shared allow-list, built once by the caller.
     pub(crate) categories: std::rc::Rc<portage_repo::Categories>,
 }
@@ -124,6 +126,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         locked,
         with_seeds,
         reuse,
+        seed_masks,
         categories,
     } = args;
     let &ResolvePlan {
@@ -263,6 +266,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         implicit_system_deps,
         complete,
         complete_reuse: reuse.clone(),
+        seed_masks: seed_masks.clone(),
         set_args: set_args.clone(),
         argument_sets: argument_sets.clone(),
         solver,
@@ -303,27 +307,28 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         pretend,
         ..
     } = opts;
-    let run_resolve =
-        |complete: bool,
-         locked: &[String],
-         with_seeds: bool,
-         reuse: &HashMap<(String, String), portage_repo::PretendOutcome>| {
-            resolve_once(ResolveOnceArgs {
-                plan,
-                opts,
-                config,
-                config_root,
-                root,
-                expanded_atoms,
-                set_args,
-                argument_sets,
-                complete,
-                locked,
-                with_seeds,
-                reuse,
-                categories: std::rc::Rc::clone(&categories),
-            })
-        };
+    let run_resolve = |complete: bool,
+                       locked: &[String],
+                       with_seeds: bool,
+                       reuse: &HashMap<(String, String), portage_repo::PretendOutcome>,
+                       seed_masks: &portage_repo::SettledMasks| {
+        resolve_once(ResolveOnceArgs {
+            plan,
+            opts,
+            config,
+            config_root,
+            root,
+            expanded_atoms,
+            set_args,
+            argument_sets,
+            complete,
+            locked,
+            with_seeds,
+            reuse,
+            seed_masks,
+            categories: std::rc::Rc::clone(&categories),
+        })
+    };
     let handle = |r: Result<portage_repo::GraphResult, crate::error::Error>| match r {
         Ok(result) => Ok(result),
         Err(e) => {
@@ -398,8 +403,9 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     // and only extends it, never adding a new merge.
     // Portage: depgraph.py, _complete_graph
     let empty_reuse: HashMap<(String, String), portage_repo::PretendOutcome> = HashMap::new();
+    let no_masks = portage_repo::SettledMasks::default();
     let result = match handle(
-        run_resolve(false, &[], false, &empty_reuse).map_err(crate::error::Error::from),
+        run_resolve(false, &[], false, &empty_reuse, &no_masks).map_err(crate::error::Error::from),
     ) {
         Ok(result) => result,
         Err(code) => {
@@ -468,6 +474,11 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
     // first walk can misfire a probe the seeded re-walk avoids (r25).
     // Portage: depgraph.py, _complete_graph
     let phase1_restarts = result.backtrack_restarts;
+    // The complete walk starts from the masks phase 1 settled under: Portage
+    // runs `_complete_graph` inside that same depgraph, so a version phase 1
+    // backtracked away (a top-level pick included) stays masked there.
+    // Portage: depgraph.py, _resolve_conflicts
+    let phase1_masks = result.settled_masks.clone();
     let phase1_rebuild_if = !result.rebuild_if_reinstalls.is_empty();
     // Phase 2 (`_complete_graph`): run when `--complete-graph` is explicit
     // or auto-enabled (first graph changes an installed package while a
@@ -519,7 +530,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         result
     } else if want_complete {
         match handle(
-            run_resolve(true, &locked_merges, true, &complete_reuse)
+            run_resolve(true, &locked_merges, true, &complete_reuse, &phase1_masks)
                 .map_err(crate::error::Error::from),
         ) {
             Ok(mut result) => {
@@ -539,8 +550,10 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         // deterministic input means an identical walk; the only delta is
         // the slot-operator-rebuild scan now seeing `slot_op_reachable`.
         // Portage: depgraph.py, _complete_graph
-        match handle(run_resolve(false, &[], true, &empty_reuse).map_err(crate::error::Error::from))
-        {
+        match handle(
+            run_resolve(false, &[], true, &empty_reuse, &no_masks)
+                .map_err(crate::error::Error::from),
+        ) {
             Ok(mut result) => {
                 if phase1_rebuild_if {
                     result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);

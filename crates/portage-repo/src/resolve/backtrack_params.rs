@@ -504,6 +504,8 @@ impl BacktrackParams {
             autounmask_suggest_use: req.autounmask_suggest_use,
             autounmask_suggest_license: req.autounmask_suggest_license,
             autounmask_suggest_masks: req.autounmask_suggest_masks,
+            runtime_pkg_mask: req.seed_masks.runtime_pkg_mask.clone(),
+            mask_order: req.seed_masks.mask_order.clone(),
             ..Default::default()
         }
     }

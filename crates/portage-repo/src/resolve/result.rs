@@ -229,6 +229,20 @@ pub fn abort_outcome(args: AbortOutcomeArgs<'_>) -> ResolveOutcome {
     ResolveOutcome::Complete
 }
 
+/// The `runtime_pkg_mask` negatives of one backtrack node, opaque to callers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SettledMasks {
+    pub(crate) runtime_pkg_mask: HashMap<(String, String), Vec<MaskEntry>>,
+    pub(crate) mask_order: Vec<((String, String), String)>,
+}
+
+impl SettledMasks {
+    /// True when the node masked nothing.
+    pub fn is_empty(&self) -> bool {
+        self.runtime_pkg_mask.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphResult {
     pub entries: Vec<GraphEntry>,
@@ -348,6 +362,10 @@ pub struct GraphResult {
     /// allowed: Portage enters complete mode for that run.
     // Portage: depgraph.py, _resolve_conflicts
     pub slot_conflict_backtracking: bool,
+    /// The backtracking masks of the search node this result settled on, for
+    /// the complete-graph walk to start from (`ResolveRequest::seed_masks`).
+    // Portage: depgraph.py, _resolve_conflicts (_complete_graph runs in the same depgraph)
+    pub settled_masks: SettledMasks,
     /// `(provider-cpv, consumer-cpv)` pairs behind each slot-operator auto-rebuild:
     /// the consumer got a `Reinstall { slot_operator_rebuild: true }` entry because
     /// the provider's new sub-slot breaks its built `:S/SS=` link. Sorted, deduped.

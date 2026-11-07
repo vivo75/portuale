@@ -1,0 +1,5 @@
+{"desc": "fixture package: #602 regression, the complete walk keeps the settled backtrack masks",
+ "ebuilds": {"dev-libs/w602rprov-1": {"SLOT": "0/1"}, "dev-libs/w602rprov-2": {"SLOT": "0/2"},
+             "app-misc/w602rvirt-1": {"RDEPEND": "|| ( =dev-libs/w602rprov-1* ~dev-libs/w602rcore-1 ) dev-libs/w602rprov:="},
+             "app-misc/w602rvirt-2": {"RDEPEND": "|| ( =dev-libs/w602rprov-2* ~dev-libs/w602rcore-2 ) dev-libs/w602rprov:="},
+             "app-misc/w602rcons-1": {"RDEPEND": "=dev-libs/w602rprov-1* dev-libs/w602rprov:="}}}

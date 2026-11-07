@@ -723,6 +723,7 @@ fn graph_onlydeps(
         implicit_system_deps: true,
         complete: false,
         complete_reuse: HashMap::new(),
+        seed_masks: crate::SettledMasks::default(),
         set_args: std::collections::HashSet::new(),
         categories: None,
         solver: SolverKind::Portage,

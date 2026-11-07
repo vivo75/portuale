@@ -686,6 +686,7 @@ fn graph_result_from_order(
         autounmask_no_clean_tail: false,
         settled_with_backtracking: false,
         slot_conflict_backtracking: false,
+        settled_masks: crate::SettledMasks::default(),
         abi_rebuilds,
         // No restart runs, so no rebuild-if reinstall is ever recorded.
         rebuild_if_reinstalls: Vec::new(),
@@ -5194,6 +5195,7 @@ mod tests {
             implicit_system_deps: true,
             complete: false,
             complete_reuse: HashMap::new(),
+            seed_masks: crate::SettledMasks::default(),
             set_args: std::collections::HashSet::new(),
             categories: None,
             solver: SolverKind::Portage,

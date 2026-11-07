@@ -197,3 +197,55 @@ fn chained_holder_skips_the_transient_and_holds_the_installed_binding() {
         "no virtual upgrades alongside the hold: {names:?}"
     );
 }
+
+/// The complete-graph walk starts from the masks the first walk settled
+/// under. Bare `emerge -pv virtual/p651th`: Portage 3.0.83 (host, on a copy
+/// of the fixtures) masks `p651prov-5.44.0`, then `p651th-3.520.0` (its
+/// `=p651prov-5.44*` arm is left unsatisfiable), and reinstalls
+/// `p651th-3.500.0-r1`, with or without `--complete-graph`. The slot conflict
+/// met while backtracking turns complete mode on (#602), and Portage runs
+/// `_complete_graph` in the same depgraph, under that `runtime_pkg_mask`
+/// (`depgraph.py` `_resolve_conflicts`). A complete walk without the masks
+/// re-picks `p651th-3.520.0` as an upgrade: the bed's
+/// `virtual/perl-ExtUtils-MakeMaker` regression of `l0-20261107T041916Z`.
+#[test]
+fn complete_walk_keeps_the_masks_the_first_walk_settled_under() {
+    let root = hermetic_root(&[]);
+    let th = |result: &GraphResult| {
+        result
+            .entries
+            .iter()
+            .find(|e| e.category == "virtual" && e.package == "p651th")
+            .map(|e| e.outcome.clone())
+            .expect("p651th is in the graph")
+    };
+    let first = resolve_bare_in(&root, &["virtual/p651th"]);
+    assert!(
+        matches!(th(&first), PretendOutcome::Reinstall { ref version, .. } if version == "3.500.0-r1"),
+        "first walk: {:?}",
+        th(&first)
+    );
+    assert!(first.slot_conflict_backtracking);
+    assert!(!first.settled_masks.is_empty());
+    let complete = |seed: &SettledMasks| {
+        let mut req = request_in(&root, &["virtual/p651th"]);
+        req.selective = false;
+        // The CLI's second walk: complete, locked to the first walk's merges.
+        req.complete = true;
+        req.config.complete_locked_merges = vec!["virtual/p651th".to_string()];
+        req.seed_masks = seed.clone();
+        req.resolve().expect("complete walk resolves")
+    };
+    let seeded = complete(&first.settled_masks);
+    assert!(
+        matches!(th(&seeded), PretendOutcome::Reinstall { ref version, .. } if version == "3.500.0-r1"),
+        "seeded complete walk: {:?}",
+        th(&seeded)
+    );
+    let unseeded = complete(&SettledMasks::default());
+    assert!(
+        matches!(th(&unseeded), PretendOutcome::Upgrade { ref to, .. } if to == "3.520.0"),
+        "the unseeded complete walk re-picks the masked version: {:?}",
+        th(&unseeded)
+    );
+}

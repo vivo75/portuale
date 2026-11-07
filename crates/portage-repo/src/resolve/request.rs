@@ -139,6 +139,12 @@ pub struct ResolveRequest {
     /// pulling atom and the pass constraints before reusing it.
     // Portage: depgraph.py, _complete_graph (_select_pkg_from_graph)
     pub complete_reuse: HashMap<(String, String), PretendOutcome>,
+    /// The backtracking masks the search starts from: the first walk's
+    /// settled ones for the complete-graph walk, empty otherwise. Portage
+    /// runs `_complete_graph` inside the depgraph that settled, under its
+    /// `runtime_pkg_mask`.
+    // Portage: depgraph.py, _resolve_conflicts
+    pub seed_masks: SettledMasks,
     /// Top-level atoms expanded from a `@world`/`@selected` set argument. A
     /// member selecting no package lands in the missing-args report instead of
     /// failing the run. Empty for direct resolver callers (unit tests), which
@@ -229,6 +235,7 @@ impl ResolveRequest {
             implicit_system_deps: true,
             complete: false,
             complete_reuse: HashMap::new(),
+            seed_masks: SettledMasks::default(),
             set_args: std::collections::HashSet::new(),
             categories: None,
             solver: SolverKind::Portage,

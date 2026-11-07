@@ -20973,3 +20973,15 @@ the slot-conflict block, `- dev-libs/w605x-2 (Change USE: +w605flag)` and rc 1
 (was a plain `U`, rc 0); with `w605cona-1` (`|| ( dev-libs/w605x[w605flag] dev-libs/w605y )`,
 `w605y-1` installed) it prints a plain `U`, rc 0. Same as Portage 3.0.83 apart
 from the conflict block's ROOT suffix (#672) (`LLM/evidence/2026-11-06-sweep/605/`).
+
+The #602 regression (2026-11-07): the complete-graph walk now starts from the
+backtrack masks the first walk settled under, as Portage runs `_complete_graph`
+inside the depgraph that settled (`depgraph.py` `_resolve_conflicts`). Live, on
+the shared fixture ROOT: `emerge -pv virtual/p651th` prints
+`[ebuild   R    ] virtual/p651th-3.500.0-r1`, the `dev-libs/p651prov:0` skip
+block and `virtual/p651th:0` under "triggered by backtracking" (was
+`U p651th-3.520.0` since #602); `emerge -pv --complete-graph virtual/p651enc`
+prints `R p651enc-3.210.0-r2` (was `U p651enc-3.240.0`, before #602 too). Rows
+equal Portage 3.0.83; the counts do not (#670, #674). On the bed,
+`virtual/perl-ExtUtils-MakeMaker` is back to `R 7.760.0`
+(`LLM/evidence/2026-11-06-sweep/602-regression/`).

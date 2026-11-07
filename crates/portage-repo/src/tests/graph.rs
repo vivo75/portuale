@@ -4498,6 +4498,7 @@ fn exact_version_update_keeps_arg_pinned_provider() {
             implicit_system_deps: true,
             complete: false,
             complete_reuse: HashMap::new(),
+            seed_masks: crate::SettledMasks::default(),
             set_args: std::collections::HashSet::new(),
             categories: None,
             solver: SolverKind::Portage,

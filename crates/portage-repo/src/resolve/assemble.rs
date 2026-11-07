@@ -359,6 +359,10 @@ pub(crate) fn assemble_result(
             || pass.parent_flip_rescued,
         settled_with_backtracking: false,
         slot_conflict_backtracking: false,
+        settled_masks: SettledMasks {
+            runtime_pkg_mask: params.runtime_pkg_mask.clone(),
+            mask_order: params.mask_order.clone(),
+        },
         abi_rebuilds,
         rebuild_if_reinstalls,
         // `probe_replaced` is the display mirror of the same slot-operator
