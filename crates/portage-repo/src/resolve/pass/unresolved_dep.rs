@@ -662,8 +662,9 @@ pub(crate) fn record_miss_disclosure(args: RecordMissDisclosureArgs<'_>) {
                         package: key.1.clone(),
                         atom: display_atom.to_string(),
                         masked,
-                        // Chains walk post-loop out of the final entries.
+                        // Chains and notes fill post-loop.
                         chain: Vec::new(),
+                        notes: Vec::new(),
                     }),
                 }
             }

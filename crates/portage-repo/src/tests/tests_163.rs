@@ -68,6 +68,7 @@ fn masked_163(cat: &str, pkg: &str, atom: &str) -> MaskedDepReport {
         atom: atom.to_string(),
         masked: Vec::new(),
         chain: Vec::new(),
+        notes: Vec::new(),
     }
 }
 

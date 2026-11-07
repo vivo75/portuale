@@ -20908,3 +20908,17 @@ prints only the `r594vdep[r594flag]` USE block with `backtrack: 0/20`, and
 `emerge -pv dev-libs/r594htop` prints only the `r594xdep[r594flag]` all-masked block
 under `r594ha-2` with `0/20`; none prints the `maskeddep` block any more. Same as
 Portage 3.0.83 (`LLM/evidence/2026-11-06-sweep/609/`).
+
+Backlog #611(c) (2026-11-07): every masked-package listing now prints what
+Portage's `show_masked_packages` prints under a row: the `package.mask` file and
+the comment above the matching entry (once per distinct comment in a block) and,
+for a license mask, where the license text lives. One shared function serves the
+dependency block, the skipped-update block and the top-level all-masked block.
+Live, on the fixture tree: `emerge --pretend dev-libs/maskneedpkg` prints, under
+`- dev-libs/maskeddep-1.0::testrepo (masked by: package.mask)`, the
+`etc/portage/package.mask:` path and its nine comment lines, then the dependency
+chain; `dev-libs/hardmaskedpkg`, `repomaskedpkg`, `profilemaskedpkg`,
+`mastermaskedpkg`, `layoutmasterpkg` name the user, repo, profile and overlay
+`package.mask` files the same way, byte-identical to Portage 3.0.83
+(`LLM/evidence/2026-11-06-sweep/611c/`). The #609 fail-fast cut also learned to
+leave `||` edges alone (`dev-libs/opartly` keeps Portage's `1/20`).

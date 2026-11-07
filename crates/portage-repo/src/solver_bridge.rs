@@ -4471,12 +4471,18 @@ fn bridge_validate_aborts(
     }
     for miss in &misses {
         if let Some(masked) = masked_candidates_for_atom(lazy.gate(), &miss.display, &req.config) {
+            let gate = lazy.gate();
+            let pool = gate
+                .repo_candidates(&miss.category, &miss.package)
+                .unwrap_or_default();
+            let notes = crate::masked_row_notes(&pool, gate.repos, &masked, &req.config);
             validation.masked_deps.push(MaskedDepReport {
                 category: miss.category.clone(),
                 package: miss.package.clone(),
                 atom: miss.display.clone(),
                 masked,
                 chain: Vec::new(),
+                notes,
             });
         } else if let Some(rows) = use_unsat_candidates_for_atom(UseUnsatCandidatesForAtomArgs {
             root: &req.root,

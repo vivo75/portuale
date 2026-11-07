@@ -134,9 +134,10 @@ pub(crate) fn show_skipped_missing_deps(
                     println!(
                         "!!! One of the following masked packages is required to complete your request:"
                     );
-                    for (cpv, reasons) in &report.masked {
-                        println!("- {cpv} (masked by: {})", reasons.join(", "));
-                    }
+                    print!(
+                        "{}",
+                        portage_repo::show_masked_packages(&report.masked, &report.notes)
+                    );
                     if report
                         .masked
                         .iter()

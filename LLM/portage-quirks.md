@@ -451,3 +451,10 @@ when a claim turns out false.
   exactly as production skips them), not the text: the #647 fixtures carry
   the probe's valid forms (`!>...-1.630.0-r999`, `!>...-3.210.0-r999`) so the
   §4 invariant stays at zero dropped tokens. `portuale mrg`: no decision.
+
+## Q27. `display_problems` passes the `_pkg_use_enabled` method, not its result, as `use=` (harmless)
+
+- **What it does**: the "installed packages are masked" loop calls `get_masking_status(pkg, pkgsettings, root_config, use=self._pkg_use_enabled)` (`lib/_emerge/depgraph.py:11418-11420`) -- the bound method, where `_get_masked_packages` passes `modified_use = _pkg_use_enabled(pkg)` (`:12621-12626`).
+- **Why it looked wrong**: `use` reads as "this package's USE", and a method object is not one.
+- **Checked 2026-11-07 (Portage 3.0.83)**: inert. `get_masking_status` only forwards `use` to `_get_masking_status` (`:12718-12724`), whose body never reads it (`:12727-12746`, `_getmaskingstatus` is called without it). Whatever is passed, the reasons are the same. Found as an unconfirmed candidate in the 2026-11-06 sweep (`LLM/evidence/2026-11-06-sweep/clusterC.md`).
+- **Portuale**: nothing to copy; `candidate_masking_reasons` takes no USE argument either.

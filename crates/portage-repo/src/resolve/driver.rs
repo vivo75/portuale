@@ -406,10 +406,10 @@ fn drop_trigger_behind_first_failure(
         return;
     };
     let parent = &pass.entries[f.parent];
-    if merge_bound_version(&parent.outcome).is_none() {
+    let edge = &parent.deps[f.edge];
+    if merge_bound_version(&parent.outcome).is_none() || edge.disjunctive {
         return;
     }
-    let edge = &parent.deps[f.edge];
     let same_edge = parent.category == *tc
         && parent.package == *tp
         && (edge.atom == *t_atom || edge.evaluated == *t_atom);

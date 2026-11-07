@@ -1,0 +1,14 @@
+!!! All ebuilds that could satisfy "dev-libs/overlaymaskedpkg::overlay" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/overlaymaskedpkg-1.0::overlay (masked by: package.mask)
+CFG/overlay/profiles/package.mask:
+# fixture overlay package.mask: masks dev-libs/overlaymaskedpkg, but
+# ONLY the overlay's own copy -- this line has no explicit "::repo"
+# constraint, so it must be scoped to "::overlay" automatically (real
+# append_repo), never masking the identically-named package in the main
+# repo too.
+
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+

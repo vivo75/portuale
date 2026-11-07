@@ -160,3 +160,62 @@ fn a_masked_version_with_the_required_iuse_hands_the_miss_to_the_masked_block() 
         .is_some()
     );
 }
+
+#[test]
+fn show_masked_packages_prints_the_mask_file_comment_once_and_license_paths() {
+    // Backlog #611(c): Portage's `show_masked_packages` (depgraph.py
+    // D:12632-12690) prints, under a `package.mask` row, the masking file
+    // and the comment above the entry (once per distinct comment), and a
+    // line per missing license found under a repo's `licenses/`. Portage
+    // 3.0.83 prints the fixture's user `package.mask` comment under
+    // `maskeddep-1.0` (`LLM/evidence/2026-11-06-sweep/611c/`).
+    let root = fixtures_root();
+    let config = portage_profile::resolve_config(portage_profile::ResolveConfigArgs {
+        config_root: &root,
+        main_repo_location: &root.join("repo"),
+        overlay_repos: &[("overlay".to_string(), root.join("overlay"))],
+        repo_aliases: &[],
+        main_repo_name: "testrepo",
+        repo_masters: &HashMap::new(),
+        eroot: &root,
+    })
+    .expect("fixture config resolves");
+    let repos = find_repos(&root).expect("repos");
+    let gate = crate::test_gate(&repos);
+    let rows = masked_candidates_for_atom(gate, "dev-libs/maskeddep", &config).expect("masked");
+    let pool = gate.repo_candidates("dev-libs", "maskeddep").expect("pool");
+    let notes = masked_row_notes(&pool, &repos, &rows, &config);
+    let (path, comment) = notes[0].mask_comment.clone().expect("a comment");
+    assert_eq!(path, root.join("etc/portage/package.mask"));
+    assert!(
+        comment
+            .last()
+            .is_some_and(|l| l.contains("have been masked\" block")),
+        "{comment:?}"
+    );
+    // Two rows sharing one comment print it once; a license prints once.
+    let lic = std::path::PathBuf::from("/r/licenses/EULA");
+    let note = MaskedRowNotes {
+        mask_comment: Some((path.clone(), comment.clone())),
+        licenses: vec![("EULA".to_string(), lic)],
+    };
+    let two = vec![
+        ("a/b-2::r".to_string(), vec!["package.mask".to_string()]),
+        ("a/b-1::r".to_string(), vec!["package.mask".to_string()]),
+    ];
+    let text = show_masked_packages(&two, &[note.clone(), note]);
+    let mut want = String::from("- a/b-2::r (masked by: package.mask)\n");
+    want.push_str(&format!("{}:\n", path.display()));
+    for line in &comment {
+        want.push_str(&format!("{line}\n"));
+    }
+    want.push('\n');
+    want.push_str("A copy of the 'EULA' license is located at '/r/licenses/EULA'.\n\n");
+    want.push_str("- a/b-1::r (masked by: package.mask)\n");
+    assert_eq!(text, want);
+    // No notes: rows only.
+    assert_eq!(
+        show_masked_packages(&two[..1], &[]),
+        "- a/b-2::r (masked by: package.mask)\n"
+    );
+}

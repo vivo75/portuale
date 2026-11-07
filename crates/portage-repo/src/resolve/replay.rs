@@ -157,7 +157,10 @@ pub(crate) fn fail_fast_truncate_final(
     let Some(f) = r.failure.as_ref() else {
         return;
     };
-    if merge_bound_version(&result.entries[f.parent].outcome).is_none() {
+    // An installed parent escapes; a `||` edge is chosen by
+    // `_pop_disjunction`, which the replay does not model.
+    let parent = &result.entries[f.parent];
+    if merge_bound_version(&parent.outcome).is_none() || parent.deps[f.edge].disjunctive {
         return;
     }
     truncate_to_replay(ctx, result, &r);

@@ -169,12 +169,15 @@ pub(crate) fn missing_dep_full_row(
             let (acat, apkg) = portage_dep::parse_atom(atom)
                 .map(|a| (a.category, a.package))
                 .unwrap_or_else(|| (cat.to_string(), pkg.to_string()));
+            let pool = gate.repo_candidates(&acat, &apkg).unwrap_or_default();
+            let notes = masked_row_notes(&pool, gate.repos, &masked, config);
             SkippedDepDisclosure::Masked(MaskedDepReport {
                 category: acat,
                 package: apkg,
                 atom: atom.to_string(),
                 masked,
                 chain,
+                notes,
             })
         }
         None => {

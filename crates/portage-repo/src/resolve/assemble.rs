@@ -711,6 +711,10 @@ pub(crate) fn finalize_dep_reports(pass: &mut PassResult, ctx: &ResolveCtx<'_>) 
             root: ctx.root,
             atom: &atom,
         });
+        let pool = ctx
+            .repo_candidates(&rep.category, &rep.package)
+            .unwrap_or_default();
+        rep.notes = masked_row_notes(&pool, &ctx.repos, &rep.masked, ctx.config);
     }
     // Same walk for the `[use]`-unsatisfied disclosures.
     // Portage: _get_dep_chain.

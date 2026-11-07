@@ -427,6 +427,113 @@ pub struct MaskedDepReport {
     /// parent (Portage shows only its first abandon; portuale discloses all).
     // Portage: _get_dep_chain
     pub chain: Vec<(String, String)>,
+    /// What [`show_masked_packages`] prints under each `masked` row, in the
+    /// same order; empty when not looked up (rows only).
+    pub notes: Vec<MaskedRowNotes>,
+}
+
+/// What Portage's `show_masked_packages` prints under one masked row: the
+/// `package.mask` file and the comment above the matching entry, and the
+/// path of each license the row still needs accepting.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MaskedRowNotes {
+    pub mask_comment: Option<(PathBuf, Vec<String>)>,
+    pub licenses: Vec<(String, PathBuf)>,
+}
+
+/// The notes of each row in `rows`, looked up in `pool` (the candidates the
+/// rows were built from) by version and repo.
+// Portage: depgraph.py, show_masked_packages (getmaskingreason, _getMissingLicenses, findLicensePath)
+pub(crate) fn masked_row_notes(
+    pool: &[Candidate],
+    repos: &[RepoConfig],
+    rows: &[(String, Vec<String>)],
+    config: &portage_profile::Config,
+) -> Vec<MaskedRowNotes> {
+    rows.iter()
+        .map(|(cpv, reasons)| {
+            if reasons.iter().any(|r| r.starts_with("EAPI ")) {
+                return MaskedRowNotes::default();
+            }
+            let (bare, repo) = cpv
+                .split_once("::")
+                .map_or((cpv.as_str(), None), |(b, r)| (b, Some(r)));
+            let Some((category, package, version)) = split_cpv(bare) else {
+                return MaskedRowNotes::default();
+            };
+            let Some(c) = pool
+                .iter()
+                .find(|c| c.version == version && repo.is_none_or(|r| r == c.repo_name))
+            else {
+                return MaskedRowNotes::default();
+            };
+            let mask_comment = reasons
+                .iter()
+                .any(|r| r == "package.mask")
+                .then(|| visibility_provenance(c, &category, &package, config).mask_entry)
+                .flatten()
+                .and_then(|entry| portage_profile::masking_file_comment(config, &entry))
+                .filter(|(_, comment)| !comment.is_empty());
+            let cpv_str = c.match_str(&category, &package);
+            let licenses = missing_licenses(c, &category, &package, &cpv_str, config)
+                .into_iter()
+                .filter_map(|l| find_license_path(repos, &l).map(|p| (l, p)))
+                .collect();
+            MaskedRowNotes {
+                mask_comment,
+                licenses,
+            }
+        })
+        .collect()
+}
+
+/// Portage's `portdbapi.findLicensePath`: the first readable
+/// `licenses/<name>` over the repos, highest priority first.
+fn find_license_path(repos: &[RepoConfig], name: &str) -> Option<PathBuf> {
+    let mut order: Vec<&RepoConfig> = repos.iter().collect();
+    order.sort_by_key(|r| std::cmp::Reverse(r.priority));
+    order
+        .into_iter()
+        .map(|r| r.location.join("licenses").join(name))
+        .find(|p| p.is_file())
+}
+
+/// Portage's `show_masked_packages`: one `- <cpv> (masked by: …)` line per
+/// row, each followed by its `package.mask` file and comment (once per
+/// distinct comment) and the location of each missing license (once per
+/// license). Every line ends in `\n`.
+// Portage: depgraph.py, show_masked_packages
+pub fn show_masked_packages(rows: &[(String, Vec<String>)], notes: &[MaskedRowNotes]) -> String {
+    let mut out = String::new();
+    let mut shown_comments: Vec<&Vec<String>> = Vec::new();
+    let mut shown_licenses: Vec<&str> = Vec::new();
+    let none = MaskedRowNotes::default();
+    for (i, (cpv, reasons)) in rows.iter().enumerate() {
+        out.push_str(&format!("- {cpv} (masked by: {})\n", reasons.join(", ")));
+        let n = notes.get(i).unwrap_or(&none);
+        if let Some((path, comment)) = &n.mask_comment
+            && !shown_comments.contains(&comment)
+        {
+            out.push_str(&format!("{}:\n", path.display()));
+            for line in comment {
+                out.push_str(line);
+                out.push('\n');
+            }
+            out.push('\n');
+            shown_comments.push(comment);
+        }
+        for (name, path) in &n.licenses {
+            if shown_licenses.contains(&name.as_str()) {
+                continue;
+            }
+            out.push_str(&format!(
+                "A copy of the '{name}' license is located at '{}'.\n\n",
+                path.display()
+            ));
+            shown_licenses.push(name);
+        }
+    }
+    out
 }
 
 /// The separate "no ebuilds built with USE flags to satisfy" disclosure for a
@@ -695,8 +802,10 @@ pub(crate) fn all_masked_report(
     // The header/footer live here; the masked list is shared with the
     // dependency disclosure.
     let masked = masked_candidates_for_atom(gate, atom_str, config)?;
-
-    render_all_masked_block(xinfo, masked, set_member_of, false)
+    let atom = portage_dep::parse_atom(atom_str)?;
+    let pool = gate.repo_candidates(&atom.category, &atom.package).ok()?;
+    let notes = masked_row_notes(&pool, gate.repos, &masked, config);
+    render_all_masked_block(xinfo, masked, &notes, set_member_of, false)
 }
 
 /// Binary-only twin of [`all_masked_report`] for `--usepkgonly`, where
@@ -766,7 +875,9 @@ pub(crate) fn all_binary_masked_report_with_respect_use(
     } = args;
     let atom = portage_dep::parse_atom(atom_str)?;
     let masked = masked_rows_for_pool_inner(binaries, atom_str, &atom, config, Some(&gate))?;
-    render_all_masked_block(xinfo, masked, None, binary_header)
+    let repos = gate.changed_deps.as_ref().map_or(&[][..], |g| g.gate.repos);
+    let notes = masked_row_notes(binaries, repos, &masked, config);
+    render_all_masked_block(xinfo, masked, &notes, None, binary_header)
 }
 
 /// The values [`binary_masked_rows_for_atom`] reads from its caller.
@@ -946,12 +1057,13 @@ pub(crate) fn usepkg_dropped_binary_report(
         .into_iter()
         .map(|c| (output_cpv_for_masked_row(c, &atom, &[]), Vec::new()))
         .collect();
-    render_all_masked_block(xinfo, rows, None, usepkgonly)
+    render_all_masked_block(xinfo, rows, &[], None, usepkgonly)
 }
 
 fn render_all_masked_block(
     xinfo: &str,
     masked: Vec<(String, Vec<String>)>,
+    notes: &[MaskedRowNotes],
     set_member_of: Option<&str>,
     binary: bool,
 ) -> Option<String> {
@@ -971,12 +1083,7 @@ fn render_all_masked_block(
          !!! One of the following masked packages is required to complete your request:\n",
         crate::display_root_suffix()
     );
-    for (output_cpv, reasons) in masked {
-        out.push_str(&format!(
-            "- {output_cpv} (masked by: {})\n",
-            reasons.join(", ")
-        ));
-    }
+    out.push_str(&show_masked_packages(&masked, notes));
     if have_eapi_mask {
         out.push_str(eapi_mask_upgrade_notice());
     }

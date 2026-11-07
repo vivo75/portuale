@@ -115,3 +115,9 @@ Masked-dependency reports.
 
 ## gate threading (#571)
 - `atom_currently_satisfiable`, `HighestAvailableCandidateIgnoringUseArgs`, `masked_candidates_for_atom`, `all_masked_report`, `MaskedRowsForDepArgs`, `BinaryChangedDepsGate` and `atom_all_use_unmasked` carry the gate.
+
+## fn show_masked_packages (backlog #611(c))
+- Portage's `show_masked_packages` (`lib/_emerge/depgraph.py:12632-12690`), shared by every masked-row renderer: the dependency block (`pretend/display/entry_line.rs`), the skipped-update full block (`pretend/problem_reports.rs`), and the top-level and binary all-masked blocks (`render_all_masked_block`, whose text `pretend/resolve_phases.rs` colours). The installed-masked block of #662 (`pretend/final_gates.rs`) keeps its own loop over `InstalledMaskedEntry::mask_entry`; the output is the same shape.
+- Per row: `package.mask` file and comment once per distinct comment (`shown_comments`), then `A copy of the '<L>' license is located at '<path>'.` once per license (`shown_licenses`); both sets live for one call, i.e. one block. Empty comments print nothing (`if comment and ...`). EAPI-masked rows get no notes.
+- `masked_row_notes` finds each row's candidate by version and `::repo` in the pool the rows came from; the comment is `masking_file_comment` on the row's `visibility_provenance(...).mask_entry` (the #662 lookup). Licenses: `missing_licenses` then `find_license_path` (`portdbapi.findLicensePath`: the repos reversed, i.e. highest priority first). The fixture tree has no `licenses/` dir, so the license line is pinned by the Rust unit test only.
+- `MaskedDepReport::notes` is filled post-pass in `finalize_dep_reports` (the dep-walk reports), at construction in `missing_dep_full_row` and the solver bridge. A binary-only row (no ebuild of that version) gets no notes.

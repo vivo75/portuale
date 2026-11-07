@@ -214,3 +214,18 @@ fn the_first_masked_dependency_wins_over_a_later_one() {
         );
     }
 }
+
+#[test]
+fn a_failing_or_branch_keeps_its_missing_dependency_restart() {
+    // Portage 3.0.83 `emerge -p --update --deep dev-libs/opartly` and
+    // `--emptytree`: rc 1, `(backtrack: 1/20)`. The failing atoms sit in a
+    // `||` group, which Portage picks in `_pop_disjunction`; the replay does
+    // not model that, so the #609 cut leaves the trigger alone.
+    let root = hermetic_root(&[]);
+    let mut req = request_in(&root, &["dev-libs/opartly"]);
+    req.update = true;
+    req.deep = Deep::Unlimited;
+    let r = req.resolve().expect("the library reports the miss");
+    assert!(aborted(&r), "rc 1, got {:?}", r.outcome);
+    assert_eq!(r.backtrack_restarts, 1, "{:?}", r.outcome);
+}

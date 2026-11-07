@@ -1,0 +1,12 @@
+!!! All ebuilds that could satisfy "dev-libs/profilemaskedpkg" have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/profilemaskedpkg-1.0::testrepo (masked by: package.mask)
+CFG/repo/profiles/base/package.mask:
+# profile-level package.mask: masks a candidate for anyone inheriting
+# this profile level, stacked in chain order alongside the repo-level
+# and user-level sources.
+
+
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+

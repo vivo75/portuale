@@ -483,9 +483,10 @@ pub(crate) fn print_no_visible_candidate(
             color.c("BAD", " have been masked.")
         );
         eprintln!("!!! One of the following masked packages is required to complete your request:");
-        for (cpv, reasons) in &report.masked {
-            eprintln!("- {cpv} (masked by: {})", reasons.join(", "));
-        }
+        eprint!(
+            "{}",
+            portage_repo::show_masked_packages(&report.masked, &report.notes)
+        );
         if report
             .masked
             .iter()
