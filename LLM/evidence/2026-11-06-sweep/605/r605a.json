@@ -1,0 +1,1 @@
+{"installed": {"dev-libs/w605x-1": {"IUSE": "w605flag", "USE": "w605flag"}, "dev-libs/w605y-1": {}, "app-misc/w605cona-1": {"RDEPEND": "|| ( dev-libs/w605x[w605flag] dev-libs/w605y )"}}, "world": ["app-misc/w605cona"]}

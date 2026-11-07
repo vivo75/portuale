@@ -431,6 +431,31 @@ pub(crate) fn reverse_dependency_constraints_reported(
                 },
             );
         }
+        // An upgrade's own USE can break an installed consumer's `[use]` dep too:
+        // the installed instance it still matches is pulled back in, a slot conflict.
+        // Portage: depgraph.py, _complete_graph (8807-8834)
+        if complete
+            && let PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } =
+                &e.outcome
+            && let Some((merge_use, merge_iuse)) =
+                merge_use_state(gate, config, &e.category, &e.package, to)
+        {
+            let slot = e.slot.clone().unwrap_or_else(|| "0".to_string());
+            use_breaks
+                .entry((cp.clone(), slot.clone()))
+                .or_insert(UseBreakSource {
+                    candidate: format!(
+                        // match-str-ok: merge-list entry (Option slot/repo), not a Candidate
+                        "{}/{}-{to}:{slot}/{}::{}",
+                        e.category,
+                        e.package,
+                        e.sub_slot.as_deref().unwrap_or("0"),
+                        e.repo_name.as_deref().unwrap_or_default()
+                    ),
+                    merge_use,
+                    merge_iuse,
+                });
+        }
         let (to, reinstall_slot_change) = match &e.outcome {
             PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => {
                 (to, false)

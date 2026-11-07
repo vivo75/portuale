@@ -1,0 +1,5 @@
+### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$FX ROOT=$R PORTAGE_RUNNING_ROOT=$R DISTDIR=$FX/distfiles PORTAGE_TMPDIR=$S PYTHONHASHSEED=0 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv =dev-libs/w605x-2
+Dependency resolution took (backtrack: 0/20).
+[ebuild     U  ] dev-libs/w605x-2::testrepo [1::testrepo] to $R USE="-w605flag*" 0 KiB
+Total: 1 package (1 upgrade), Size of downloads: 0 KiB
+### rc: 0

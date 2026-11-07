@@ -20961,3 +20961,15 @@ rebuild); without the conflict (`=dev-libs/w602prov-2` alone) or with
 When the conflict is the only reason for the second walk, the run keeps the
 first walk's skip block, backtrack count and `--debug` narration, so all-new
 graphs such as `emerge -p --backtrack=1 dev-libs/bkt3d dev-libs/bkt3c` print as before.
+
+Backlogs #605 and #671 (2026-11-07, one change): an upgrade whose own USE breaks
+the `[use]` dependency of an installed world consumer is now a slot conflict,
+as in Portage's `_complete_graph` (`depgraph.py` 8807-8834), and the
+post-merge `||` view judges a `[use]` arm against the merge node's USE
+(`dep_check.py` 492-495). Live, with installed `dev-libs/w605x-1` built with
+`w605flag` in an ad-hoc ROOT: with the world consumer `w605conc-1`
+(`RDEPEND="dev-libs/w605x[w605flag]"`) `emerge -pv =dev-libs/w605x-2` prints
+the slot-conflict block, `- dev-libs/w605x-2 (Change USE: +w605flag)` and rc 1
+(was a plain `U`, rc 0); with `w605cona-1` (`|| ( dev-libs/w605x[w605flag] dev-libs/w605y )`,
+`w605y-1` installed) it prints a plain `U`, rc 0. Same as Portage 3.0.83 apart
+from the conflict block's ROOT suffix (#672) (`LLM/evidence/2026-11-06-sweep/605/`).

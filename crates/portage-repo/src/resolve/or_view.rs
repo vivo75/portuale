@@ -8,6 +8,9 @@ struct SetMember {
     slot: String,
     sub_slot: String,
     repo: String,
+    /// A merge node's `(enabled USE, IUSE)`; `None` for an installed package
+    /// (its vdb record holds them).
+    use_state: Option<(HashSet<String>, HashSet<String>)>,
 }
 
 /// What the package tracker holds once the walk is done: the graph nodes plus
@@ -38,6 +41,14 @@ impl PostMergeSet {
                     slot,
                     sub_slot: e.sub_slot.clone().unwrap_or_else(|| "0".to_string()),
                     repo: e.repo_name.clone().unwrap_or_default(),
+                    use_state: Some((
+                        e.use_flags_display
+                            .iter()
+                            .filter(|(_, on)| *on)
+                            .map(|(f, _)| f.clone())
+                            .collect(),
+                        e.use_flags_display.iter().map(|(f, _)| f.clone()).collect(),
+                    )),
                 }
             } else if let PretendOutcome::AlreadyInstalled { version } = &e.outcome {
                 let held = installed_refs(root, &e.category, &e.package)
@@ -51,6 +62,7 @@ impl PostMergeSet {
                         |r| r.sub_slot.clone(),
                     ),
                     repo: held.map(|r| r.repo).unwrap_or_default(),
+                    use_state: None,
                 }
             } else {
                 continue;
@@ -75,6 +87,7 @@ impl PostMergeSet {
                 slot: n.slot.clone(),
                 sub_slot: n.sub_slot.clone(),
                 repo: n.repo.clone(),
+                use_state: n.use_state.clone(),
             });
         }
         let replacing = self.replacing.get(&cp).map_or(&[][..], Vec::as_slice);
@@ -91,6 +104,7 @@ impl PostMergeSet {
                     slot: r.slot,
                     sub_slot: r.sub_slot,
                     repo: r.repo,
+                    use_state: None,
                 });
             }
         }
@@ -132,6 +146,31 @@ impl PostMergeSet {
             || !self
                 .matching(&atom.category, &atom.package, atom_str)
                 .is_empty()
+    }
+
+    /// Whether a member matching the atom also satisfies its `[use]` deps: a merge
+    /// node with its own USE, an installed package with its vdb USE.
+    // Portage: dep_check.py, dep_zapdeps (avail_pkg_use, 492-495)
+    pub(crate) fn use_matches(&self, atom_str: &str, config: &portage_profile::Config) -> bool {
+        let Some(atom) = parse_dep_atom(atom_str, "or_view") else {
+            return false;
+        };
+        let use_deps = atom.use_deps.clone().unwrap_or_default();
+        self.matching(&atom.category, &atom.package, atom_str)
+            .into_iter()
+            .any(|m| {
+                let (enabled, iuse) = m.use_state.unwrap_or_else(|| {
+                    let (mut iuse, enabled) = installed_pkg_iuse_and_use(
+                        &self.root,
+                        &atom.category,
+                        &atom.package,
+                        &m.version,
+                    );
+                    iuse.extend(config.iuse_effective.iter().cloned());
+                    (enabled, iuse)
+                });
+                !portage_dep::use_deps_violated(&use_deps, &HashSet::new(), &enabled, &iuse)
+            })
     }
 
     /// Whether the set holds any version of the atom's package.
@@ -222,11 +261,17 @@ impl OrView<'_> {
         }
     }
 
-    /// Whether the atom's `[use]` deps hold on an available package. In `PostMerge` a
-    /// node carries no USE state yet, so the tree and the vdb stand in for it.
+    /// Whether the atom's `[use]` deps hold on an available package: the tree or the
+    /// vdb in `Normal`, the merge node's own USE (or a kept installed package's) in
+    /// `PostMerge`.
     pub(crate) fn use_satisfiable(self, p: OrProbe<'_>, atom_str: &str, extra: &[String]) -> bool {
-        atom_currently_satisfiable(p.gate, atom_str, p.config, extra)
-            || atom_matches_installed(p.root, atom_str, p.config)
+        match self {
+            OrView::Normal => {
+                atom_currently_satisfiable(p.gate, atom_str, p.config, extra)
+                    || atom_matches_installed(p.root, atom_str, p.config)
+            }
+            OrView::PostMerge(set) => set.use_matches(atom_str, p.config),
+        }
     }
 
     /// Whether the atom is satisfied by what is installed.

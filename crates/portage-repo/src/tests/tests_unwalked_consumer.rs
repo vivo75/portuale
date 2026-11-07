@@ -4,7 +4,7 @@
 //! copy of the fixtures (`LLM/evidence/2026-11-06-sweep/<item>/`), cited per test.
 //! `D` = `lib/_emerge/depgraph.py`.
 
-use super::tests_consumer_pin_conflict::{hermetic_root, request_in};
+use super::tests_consumer_pin_conflict::{hermetic_root, request_in, resolve_complete_in};
 use super::*;
 
 /// Writes an installed package (EAPI 8, slot 0, `testrepo`) into `root`'s vdb.
@@ -137,4 +137,80 @@ fn slot_conflict_while_backtracking_is_reported_for_complete_mode() {
     let mut req = request_in(&root, &["=dev-libs/w602prov-2"]);
     req.selective = false;
     assert!(!req.resolve().expect("resolves").slot_conflict_backtracking);
+}
+
+/// The #605 shapes: installed `w605x-1` built with `w605flag` and one world
+/// consumer per variant (`a`: `|| ( x[w605flag] y )` with `w605y-1` installed,
+/// `c`: plain `x[w605flag]`). `w605x-2` merges with the flag off (profile default).
+fn w605_root(variant: char) -> TempDir {
+    let (consumer, rdepend) = match variant {
+        'a' => ("w605cona", "|| ( dev-libs/w605x[w605flag] dev-libs/w605y )"),
+        _ => ("w605conc", "dev-libs/w605x[w605flag]"),
+    };
+    let world = format!("app-misc/{consumer}");
+    let root = hermetic_root(&[world.as_str()]);
+    install(
+        &root,
+        "dev-libs/w605x-1",
+        &[("IUSE", "w605flag"), ("USE", "w605flag")],
+    );
+    if variant == 'a' {
+        install(&root, "dev-libs/w605y-1", &[]);
+    }
+    install(
+        &root,
+        &format!("app-misc/{consumer}-1"),
+        &[("RDEPEND", rdepend)],
+    );
+    root
+}
+
+#[test]
+fn post_merge_use_reads_the_merge_node_use() {
+    // #605: in `_graph_trees` the `[use]` of an `||` arm is matched against the
+    // merge node's own USE (DC:492-495), not the tree or the vdb.
+    let root = w605_root('c');
+    let node = |on: bool| GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "1".into(),
+            to: "2".into(),
+        },
+        slot: Some("0".into()),
+        sub_slot: Some("0".into()),
+        repo_name: Some("testrepo".into()),
+        use_flags_display: vec![("w605flag".to_string(), on)],
+        ..graph_entry("dev-libs", "w605x", "2")
+    };
+    let config = test_config();
+    let off = PostMergeSet::build(&root, &[node(false)]);
+    assert!(off.matches("dev-libs/w605x"));
+    assert!(!off.use_matches("dev-libs/w605x[w605flag]", &config));
+    let on = PostMergeSet::build(&root, &[node(true)]);
+    assert!(on.use_matches("dev-libs/w605x[w605flag]", &config));
+    // No merge node: the installed `w605x-1` keeps its recorded USE.
+    let kept = PostMergeSet::build(&root, &[]);
+    assert!(kept.use_matches("dev-libs/w605x[w605flag]", &config));
+}
+
+#[test]
+fn upgrade_breaking_an_unwalked_consumer_use_dep_conflicts() {
+    // #671. Portage 3.0.83 `emerge -p =dev-libs/w605x-2` (`605/C-p`): complete mode
+    // walks `w605conc`, `w605x[w605flag]` still matches the installed `w605x-1`, so
+    // it is pulled back in: a slot conflict, rc 1, "Change USE: +w605flag".
+    // Variant A (`605/A-p`): the post-merge `||` takes `w605y` (#605), no conflict.
+    let c = w605_root('c');
+    let result = resolve_complete_in(&c, &["=dev-libs/w605x-2"]);
+    let rows: Vec<&str> = result
+        .slot_conflicts
+        .iter()
+        .flat_map(|sc| sc.instances.iter().map(|i| i.version.as_str()))
+        .collect();
+    assert!(rows.contains(&"1") && rows.contains(&"2"), "{rows:?}");
+    let a = w605_root('a');
+    let result = resolve_complete_in(&a, &["=dev-libs/w605x-2"]);
+    assert!(
+        result.slot_conflicts.is_empty(),
+        "{:?}",
+        result.slot_conflicts
+    );
 }

@@ -154,3 +154,7 @@ Constraints that installed reverse dependencies put on an upgrade.
 
 ## fn matches_no_installed
 - Helper of the #603 rule above: the evaluated atom (`evaluate_atom_conditionals` with the consumer's USE) against the vdb, with the unevaluated text for the IUSE membership check.
+
+## fn reverse_dependency_constraints_reported (upgrade USE breaks, backlog #671)
+- In complete mode an `Upgrade`/`Downgrade` entry also files its own merge USE (`merge_use_state` of the new version) as a `use_breaks` source, next to the same-version USE reinstall. `constraints_from_atom`'s existing USE-break check then drops a consumer's `[use]` pin the merge contradicts into the residual report, which renders Portage's slot-conflict block with "Change USE" (Portage pulls the installed instance back in, `depgraph.py:8807-8834`). The #603 rule runs first, so an atom the installed instance does not match stays initially unsatisfied.
+- `or_insert`: a USE reinstall source for the same slot (not possible together with an upgrade of that slot) is never overwritten.
