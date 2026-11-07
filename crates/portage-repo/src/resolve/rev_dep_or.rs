@@ -221,15 +221,23 @@ pub(crate) struct SiblingVirtualLeaksArgs<'a> {
     pub(crate) gate: CategoryGate<'a>,
 }
 
-/// Quirk Q19: Portage compares a virtual's child atoms with the atoms chosen anywhere
-/// under the same parent by identity, and interning makes equal atoms one object. So
-/// a virtual keeps, as parent atoms, every atom of its own dependency string that
-/// equals an atom chosen by its parent or by a sibling virtual. Returns, per
-/// installed virtual, those atom texts.
+/// Per virtual instance, the atoms of its own dependency string a sibling leaked.
+pub(crate) type LeakMap = HashMap<(String, String, String), HashSet<String>>;
+
+/// What [`leak_one_parent`] collects: installed and merge-bound virtuals apart.
+#[derive(Default)]
+struct VirtualLeaks {
+    installed: LeakMap,
+    merge_bound: LeakMap,
+}
+
+/// Quirk Q19: Portage compares a virtual's child atoms with the atoms chosen in the
+/// same parent's disjunctive `dep_check` by identity, and interning makes atoms with
+/// one intern key one object. So a virtual keeps, as parent atoms, every atom of its
+/// own dependency string whose key equals an atom chosen by the parent's `||` groups
+/// or by a sibling virtual.
 // Portage: depgraph.py, _select_atoms_highest_available (chosen_atom_ids)
-pub(crate) fn sibling_virtual_leaks(
-    args: SiblingVirtualLeaksArgs<'_>,
-) -> HashMap<(String, String, String), HashSet<String>> {
+pub(crate) fn sibling_virtual_leaks(args: SiblingVirtualLeaksArgs<'_>) -> LeakMap {
     let SiblingVirtualLeaksArgs {
         scan,
         deps,
@@ -240,7 +248,7 @@ pub(crate) fn sibling_virtual_leaks(
         config,
         gate,
     } = args;
-    let mut leaks: HashMap<(String, String, String), HashSet<String>> = HashMap::new();
+    let mut leaks = VirtualLeaks::default();
     for parent in all_installed_packages(root).iter() {
         let parent_key = (
             parent.category.clone(),
@@ -262,15 +270,27 @@ pub(crate) fn sibling_virtual_leaks(
         );
         leak_one_parent(
             &LeakCtx {
-                scan,
+                scan: Some(scan),
                 deps,
                 entries,
                 root,
                 config,
                 gate,
+                update: scan.update,
+                root_deps_running_root: scan.root_deps_running_root,
             },
             meta_memo,
-            &parent_deps,
+            // The depgraph parses every parent's atoms with the package's own EAPI.
+            (
+                &parent_deps,
+                &read_vdb_string(
+                    root,
+                    &parent.category,
+                    &parent.package,
+                    &parent.version,
+                    "EAPI",
+                ),
+            ),
             &|split: &OrSplit| {
                 consumer_or_arms(ConsumerOrArmsArgs {
                     scan,
@@ -287,15 +307,85 @@ pub(crate) fn sibling_virtual_leaks(
             &mut leaks,
         );
     }
-    // A merge-bound parent is a graph node the walk expanded: its `||` is chosen in
-    // the normal view, its dependency strings are the tree's.
-    for entry in entries {
+    merge_bound_parents_leak(
+        &LeakCtx {
+            scan: Some(scan),
+            deps,
+            entries,
+            root,
+            config,
+            gate,
+            update: scan.update,
+            root_deps_running_root: scan.root_deps_running_root,
+        },
+        meta_memo,
+        &mut leaks,
+    );
+    leaks.installed
+}
+
+/// The values [`merge_bound_virtual_leaks`] reads from its caller.
+pub(crate) struct MergeBoundVirtualLeaksArgs<'a> {
+    pub(crate) entries: &'a [GraphEntry],
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
+    pub(crate) update: bool,
+    pub(crate) root_deps_running_root: Option<&'a Path>,
+}
+
+/// Quirk Q19 for merge-bound virtuals: per merge-bound virtual, the atoms of its tree
+/// RDEPEND that a merge-bound parent's `||` pick or a merge-bound sibling virtual of
+/// the same EAPI leaked, beyond its own choice. An installed parent is not scanned.
+// Portage: depgraph.py, _select_atoms_highest_available (chosen_atom_ids)
+pub(crate) fn merge_bound_virtual_leaks(args: MergeBoundVirtualLeaksArgs<'_>) -> LeakMap {
+    let MergeBoundVirtualLeaksArgs {
+        entries,
+        root,
+        config,
+        gate,
+        update,
+        root_deps_running_root,
+    } = args;
+    let mut leaks = VirtualLeaks::default();
+    let deps = DepSource {
+        root,
+        gate,
+        dep_keys: &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"],
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+    };
+    merge_bound_parents_leak(
+        &LeakCtx {
+            scan: None,
+            deps,
+            entries,
+            root,
+            config,
+            gate,
+            update,
+            root_deps_running_root,
+        },
+        &mut HashMap::new(),
+        &mut leaks,
+    );
+    leaks.merge_bound
+}
+
+/// Every merge-bound parent's dep_check. A merge-bound parent is a graph node the walk
+/// expanded: its `||` is chosen in the normal view, its dependency strings are the tree's.
+fn merge_bound_parents_leak(cx: &LeakCtx<'_>, meta_memo: &mut MetaMemo, leaks: &mut VirtualLeaks) {
+    for entry in cx.entries {
         let Some(version) = merge_bound_version(&entry.outcome) else {
             continue;
         };
-        let Some(meta) =
-            live_metadata_for_installed(gate.repos, root, &entry.category, &entry.package, version)
-        else {
+        let Some(meta) = live_metadata_for_installed(
+            cx.gate.repos,
+            cx.root,
+            &entry.category,
+            &entry.package,
+            version,
+        ) else {
             continue;
         };
         let use_flags: HashSet<String> = entry
@@ -306,7 +396,8 @@ pub(crate) fn sibling_virtual_leaks(
             .collect();
         let parent_deps = ConsumerDeps {
             use_flags,
-            strings: deps
+            strings: cx
+                .deps
                 .dep_keys
                 .iter()
                 .filter_map(|k| {
@@ -318,63 +409,71 @@ pub(crate) fn sibling_virtual_leaks(
         };
         let cp = (entry.category.clone(), entry.package.clone());
         leak_one_parent(
-            &LeakCtx {
-                scan,
-                deps,
-                entries,
-                root,
-                config,
-                gate,
-            },
+            cx,
             meta_memo,
-            &parent_deps,
+            (
+                &parent_deps,
+                meta.get("EAPI").map(String::as_str).unwrap_or_default(),
+            ),
             &|split: &OrSplit| {
                 installed_consumer_or_selection(InstalledConsumerOrSelectionArgs {
                     split,
                     use_flags: &parent_deps.use_flags,
                     consumer: &cp,
-                    config,
-                    root,
-                    entries,
-                    update: scan.update,
-                    root_deps_running_root: scan.root_deps_running_root,
-                    gate,
+                    config: cx.config,
+                    root: cx.root,
+                    entries: cx.entries,
+                    update: cx.update,
+                    root_deps_running_root: cx.root_deps_running_root,
+                    gate: cx.gate,
                     view: OrView::Normal,
                 })
             },
-            &mut leaks,
+            leaks,
         );
     }
-    leaks
 }
 
 /// What [`leak_one_parent`] reads besides the parent.
 struct LeakCtx<'a> {
-    scan: &'a OrScan<'a>,
+    /// `None` when installed virtuals are not evaluated (they never leak into a
+    /// merge-bound one: their atoms carry no EAPI).
+    scan: Option<&'a OrScan<'a>>,
     deps: DepSource<'a>,
     entries: &'a [GraphEntry],
     root: &'a Path,
     config: &'a portage_profile::Config,
     gate: CategoryGate<'a>,
+    update: bool,
+    root_deps_running_root: Option<&'a Path>,
 }
 
-/// One parent's dep_check, one dependency key at a time: `parent_picks` gives the atoms
-/// its own `||` groups choose.
+/// An atom as Portage interns it here: its text and the EAPI it was parsed with,
+/// `None` for an installed virtual (`dep_check` passes no EAPI for one).
+type InternKey = (String, Option<String>);
+
+/// One virtual reached through a parent's disjunctive `dep_check`.
+struct LeakMember {
+    key: (String, String, String),
+    merge_bound: bool,
+    eapi: Option<String>,
+    atoms: HashSet<String>,
+    own: HashSet<String>,
+}
+
+/// One parent's disjunctive dep_check, one dependency key at a time. Only its `||`
+/// groups and virtual atoms share the call; `parent_picks` gives the atoms its own
+/// `||` groups choose.
+// Portage: depgraph.py, _queue_disjunctive_deps; dep_check.py, _expand_new_virtuals
 fn leak_one_parent(
     cx: &LeakCtx<'_>,
     meta_memo: &mut MetaMemo,
-    parent_deps: &ConsumerDeps,
+    (parent_deps, parent_eapi): (&ConsumerDeps, &str),
     parent_picks: &dyn Fn(&OrSplit) -> HashSet<String>,
-    leaks: &mut HashMap<(String, String, String), HashSet<String>>,
+    leaks: &mut VirtualLeaks,
 ) {
-    let LeakCtx {
-        scan,
-        deps,
-        entries,
-        root,
-        config,
-        gate,
-    } = *cx;
+    let LeakCtx { root, config, .. } = *cx;
+    let parent_eapi = Some(parent_eapi.to_string());
     for (_key, depstr) in &parent_deps.strings {
         if !depstr.contains("virtual/") {
             continue;
@@ -382,77 +481,166 @@ fn leak_one_parent(
         let Some(split) = split_or_groups(depstr, &parent_deps.use_flags) else {
             continue;
         };
-        let mut chosen: HashSet<String> = split.plain_atoms().clone();
-        chosen.extend(parent_picks(&split));
-        let virtuals: Vec<String> = chosen
+        let is_virtual = |a: &String| {
+            parse_dep_atom(a, "rev_dep_or")
+                .is_some_and(|p| p.category == "virtual" && p.blocker == portage_dep::Blocker::None)
+        };
+        let picks: HashSet<String> = parent_picks(&split)
+            .into_iter()
+            .filter(|a| !split.plain_atoms().contains(a))
+            .collect();
+        let virtuals: Vec<String> = split
+            .plain_atoms()
             .iter()
-            .filter(|a| {
-                parse_dep_atom(a, "rev_dep_or").is_some_and(|p| {
-                    p.category == "virtual" && p.blocker == portage_dep::Blocker::None
-                })
-            })
+            .filter(|a| is_virtual(a))
+            .chain(picks.iter().filter(|a| is_virtual(a)))
             .cloned()
             .collect();
         if virtuals.is_empty() {
             continue;
         }
-        // (virtual instance, its atoms) for this dep key.
-        let mut members: Vec<((String, String, String), HashSet<String>)> = Vec::new();
+        let mut chosen: HashSet<InternKey> = picks
+            .iter()
+            .map(|a| (a.clone(), parent_eapi.clone()))
+            .collect();
+        let mut members: Vec<LeakMember> = Vec::new();
         for atom in &virtuals {
-            let Some(version) = best_installed_matching(root, atom, config) else {
-                continue;
-            };
-            let Some(parsed) = parse_dep_atom(atom, "rev_dep_or") else {
-                continue;
-            };
-            let virt = InstalledPackage {
-                category: parsed.category.clone(),
-                package: parsed.package.clone(),
-                version: version.clone(),
-                slot: String::new(),
-            };
-            let virt_deps = consumer_deps(
-                deps,
-                meta_memo,
-                &virt.category,
-                &virt.package,
-                &virt.version,
-            );
-            // GLEP 37: a virtual contributes its RDEPEND whatever key the parent
-            // names it in (DC:217-220).
-            let Some((_, virt_str)) = virt_deps.strings.iter().find(|(k, _)| k == "RDEPEND") else {
-                continue;
-            };
-            let Some(virt_split) = split_or_groups(virt_str, &virt_deps.use_flags) else {
-                continue;
-            };
-            let Some(all_atoms) = flat_dep_atoms(virt_str, &virt_deps.use_flags) else {
-                continue;
-            };
-            // A virtual nothing evaluates chooses no atom.
-            if let Some(picks) = consumer_or_arms(ConsumerOrArmsArgs {
-                scan,
-                consumer: &virt,
-                split: &virt_split,
-                use_flags: &virt_deps.use_flags,
-                entries,
-                root,
-                config,
-                gate,
-            }) {
-                chosen.extend(virt_split.plain_atoms().iter().cloned());
-                chosen.extend(picks);
-                members.push(((virt.category, virt.package, virt.version), all_atoms));
+            let member = merge_bound_member(cx, atom).or_else(|| {
+                let version = best_installed_matching(root, atom, config)?;
+                installed_member(cx, meta_memo, atom, &version)
+            });
+            if let Some(member) = member {
+                chosen.extend(member.own.iter().map(|a| (a.clone(), member.eapi.clone())));
+                members.push(member);
             }
         }
-        for (virt_key, atoms) in members {
-            let leaked: HashSet<String> =
-                atoms.into_iter().filter(|a| chosen.contains(a)).collect();
-            if !leaked.is_empty() {
-                leaks.entry(virt_key).or_default().extend(leaked);
+        for m in members {
+            let leaked: HashSet<String> = m
+                .atoms
+                .iter()
+                .filter(|a| chosen.contains(&((*a).clone(), m.eapi.clone())))
+                .filter(|a| !(m.merge_bound && m.own.contains(*a)))
+                .cloned()
+                .collect();
+            if leaked.is_empty() {
+                continue;
             }
+            let map = if m.merge_bound {
+                &mut leaks.merge_bound
+            } else {
+                &mut leaks.installed
+            };
+            map.entry(m.key).or_default().extend(leaked);
         }
     }
+}
+
+/// The installed virtual `atom` names, with what its own dep_check chooses. `None`
+/// when nothing evaluates it.
+fn installed_member(
+    cx: &LeakCtx<'_>,
+    meta_memo: &mut MetaMemo,
+    atom: &str,
+    version: &str,
+) -> Option<LeakMember> {
+    let scan = cx.scan?;
+    let parsed = parse_dep_atom(atom, "rev_dep_or")?;
+    let virt = InstalledPackage {
+        category: parsed.category.clone(),
+        package: parsed.package.clone(),
+        version: version.to_string(),
+        slot: String::new(),
+    };
+    let virt_deps = consumer_deps(
+        cx.deps,
+        meta_memo,
+        &virt.category,
+        &virt.package,
+        &virt.version,
+    );
+    // GLEP 37: a virtual contributes its RDEPEND whatever key the parent names it in.
+    let (_, virt_str) = virt_deps.strings.iter().find(|(k, _)| k == "RDEPEND")?;
+    let virt_split = split_or_groups(virt_str, &virt_deps.use_flags)?;
+    let atoms = flat_dep_atoms(virt_str, &virt_deps.use_flags)?;
+    let picks = consumer_or_arms(ConsumerOrArmsArgs {
+        scan,
+        consumer: &virt,
+        split: &virt_split,
+        use_flags: &virt_deps.use_flags,
+        entries: cx.entries,
+        root: cx.root,
+        config: cx.config,
+        gate: cx.gate,
+    })?;
+    let mut own = virt_split.plain_atoms().clone();
+    own.extend(picks);
+    Some(LeakMember {
+        key: (virt.category, virt.package, virt.version),
+        merge_bound: false,
+        eapi: None,
+        atoms,
+        own,
+    })
+}
+
+/// The merge-bound virtual `atom` names: its tree RDEPEND, parsed with its own EAPI,
+/// and the atoms its `||` groups choose in the walk's view.
+fn merge_bound_member(cx: &LeakCtx<'_>, atom: &str) -> Option<LeakMember> {
+    let (entry, version) = cx.entries.iter().find_map(|e| {
+        let v = merge_bound_version(&e.outcome)?;
+        let cand = format!(
+            // match-str-ok: merge-list entry (Option slot/repo), not a Candidate
+            "{}/{}-{v}:{}",
+            e.category,
+            e.package,
+            e.slot.as_deref().unwrap_or("0")
+        );
+        portage_dep::match_from_list(atom, &[cand.as_str()])
+            .is_some_and(|m| !m.is_empty())
+            .then_some((e, v))
+    })?;
+    let meta = live_metadata_for_installed(
+        cx.gate.repos,
+        cx.root,
+        &entry.category,
+        &entry.package,
+        version,
+    )?;
+    let use_flags: HashSet<String> = entry
+        .use_flags_display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.clone())
+        .collect();
+    let virt_str = meta.get("RDEPEND")?;
+    let virt_split = split_or_groups(virt_str, &use_flags)?;
+    let atoms = flat_dep_atoms(virt_str, &use_flags)?;
+    let mut own = virt_split.plain_atoms().clone();
+    own.extend(installed_consumer_or_selection(
+        InstalledConsumerOrSelectionArgs {
+            split: &virt_split,
+            use_flags: &use_flags,
+            consumer: &(entry.category.clone(), entry.package.clone()),
+            config: cx.config,
+            root: cx.root,
+            entries: cx.entries,
+            update: cx.update,
+            root_deps_running_root: cx.root_deps_running_root,
+            gate: cx.gate,
+            view: OrView::Normal,
+        },
+    ));
+    Some(LeakMember {
+        key: (
+            entry.category.clone(),
+            entry.package.clone(),
+            version.clone(),
+        ),
+        merge_bound: true,
+        eapi: meta.get("EAPI").cloned(),
+        atoms,
+        own,
+    })
 }
 
 impl OrScan<'_> {

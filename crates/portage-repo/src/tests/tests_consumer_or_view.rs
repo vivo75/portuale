@@ -501,3 +501,117 @@ fn sibling_virtuals_of_a_merge_bound_parent_share_the_atom_a_sibling_chose() {
         ]
     );
 }
+
+// ---- #604: the leak is keyed like Portage's atom intern key ----
+
+/// A scratch ROOT with `w604prov-5.42` installed, plus `virtual/w604va-1` when
+/// `with_virtual`.
+fn w604_root(with_virtual: bool) -> TempDir {
+    let root = hermetic_root(&[]);
+    let mut pkgs = vec![("dev-libs", "w604prov-5.42", "0/5.42", "")];
+    if with_virtual {
+        pkgs.push((
+            "virtual",
+            "w604va-1",
+            "0",
+            "|| ( =dev-libs/w604prov-5.44* =dev-libs/w604prov-5.42* )",
+        ));
+    }
+    for (cat, pf, slot, rdepend) in pkgs {
+        let d = root.join("var/db/pkg").join(cat).join(pf);
+        fs::create_dir_all(&d).unwrap();
+        for (name, value) in [
+            ("CATEGORY", cat),
+            ("SLOT", slot),
+            ("EAPI", "8"),
+            ("repository", "testrepo"),
+            ("RDEPEND", rdepend),
+        ] {
+            if !value.is_empty() {
+                fs::write(d.join(name), format!("{value}\n")).unwrap();
+            }
+        }
+    }
+    root
+}
+
+/// The `w604prov` conflict's `(instance version, parent cpv, atom)` rows, sorted, of
+/// `emerge -p --backtrack=0 --verbose-conflicts w604force <parent>`.
+fn w604_rows(root: &Path, parent: &str) -> Vec<(String, String, String)> {
+    let mut req = request_in(root, &["dev-libs/w604force", parent]);
+    req.backtrack_max = 0;
+    let result = req.resolve().expect("resolves");
+    let conflicts: Vec<&SlotConflict> = result
+        .slot_conflicts
+        .iter()
+        .filter(|c| c.package == "w604prov")
+        .collect();
+    assert_eq!(conflicts.len(), 1, "one conflict block: {conflicts:#?}");
+    let mut rows: Vec<(String, String, String)> = conflicts[0]
+        .instances
+        .iter()
+        .flat_map(|i| {
+            i.parents
+                .iter()
+                .map(|p| (i.version.clone(), p.parent_cpv.clone(), p.atom.clone()))
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+fn w604_row(ver: &str, parent: &str, atom_ver: &str) -> (String, String, String) {
+    (
+        ver.to_string(),
+        format!("{parent}:0/0::testrepo"),
+        format!("=dev-libs/w604prov-{atom_ver}*"),
+    )
+}
+
+#[test]
+fn installed_virtual_takes_no_atom_from_its_parent() {
+    // #604. The parent's plain `=5.42*` never shares the virtual's dep_check
+    // (D:4872-4904), and its `||` pick is parsed with EAPI 8 where the installed
+    // virtual's atoms carry none (DC:866-871), so neither leaks into the installed
+    // virtual. Portage 3.0.83, `-p --backtrack=0 --verbose-conflicts` (pmtest
+    // `test_604_*`, shapes A and C): the virtual is never a `=5.42*` parent, and the
+    // conflict prints once.
+    for parent in ["dev-libs/w604par", "dev-libs/w604paror"] {
+        let root = w604_root(true);
+        let rows = w604_rows(&root, parent);
+        assert!(
+            !rows.contains(&w604_row("5.42", "virtual/w604va-1", "5.42")),
+            "{parent}: {rows:#?}"
+        );
+        assert!(
+            rows.contains(&w604_row("5.42", &format!("{parent}-1"), "5.42")),
+            "{parent}: {rows:#?}"
+        );
+    }
+}
+
+#[test]
+fn merge_bound_virtual_takes_the_parents_or_pick_of_its_eapi() {
+    // #604. With the virtual merge-bound its RDEPEND is parsed with its own EAPI 8,
+    // the parent's: the parent's `||` pick `=5.42*` is the virtual's own atom object,
+    // so the virtual is a `=5.42*` parent too (D:6122-6133). A plain parent atom is
+    // not in the call and does not leak. Portage 3.0.83 (shapes D and B).
+    let root = w604_root(false);
+    assert_eq!(
+        w604_rows(&root, "dev-libs/w604paror"),
+        vec![
+            w604_row("5.42", "dev-libs/w604paror-1", "5.42"),
+            w604_row("5.42", "virtual/w604va-1", "5.42"),
+            w604_row("5.44", "dev-libs/w604force-1", "5.44"),
+            w604_row("5.44", "virtual/w604va-1", "5.44"),
+        ]
+    );
+    assert_eq!(
+        w604_rows(&root, "dev-libs/w604par"),
+        vec![
+            w604_row("5.42", "dev-libs/w604par-1", "5.42"),
+            w604_row("5.44", "dev-libs/w604force-1", "5.44"),
+            w604_row("5.44", "virtual/w604va-1", "5.44"),
+        ]
+    );
+}

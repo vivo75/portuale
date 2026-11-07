@@ -20985,3 +20985,20 @@ prints `R p651enc-3.210.0-r2` (was `U p651enc-3.240.0`, before #602 too). Rows
 equal Portage 3.0.83; the counts do not (#670, #674). On the bed,
 `virtual/perl-ExtUtils-MakeMaker` is back to `R 7.760.0`
 (`LLM/evidence/2026-11-06-sweep/602-regression/`).
+
+Backlog #604 (2026-11-07): the Q19 sibling-virtual leak now follows Portage's
+atom intern key (`dep/__init__.py` 1577-1595) as far as text and EAPI go. Only a
+parent's `||` picks and virtual atoms share the virtuals' `dep_check`
+(`depgraph.py` 4872-4904), the parent's atoms carry its EAPI, an installed
+virtual's none (`dep_check.py` 866-871), so installed virtuals take nothing from
+their parent and a merge-bound virtual of the parent's EAPI takes its `||` pick.
+Live, with `dev-libs/w604prov-5.42` and `virtual/w604va-1` installed in an
+ad-hoc ROOT, `emerge -p --backtrack=0 --verbose-conflicts dev-libs/w604force
+dev-libs/w604par` prints one `dev-libs/w604prov:0` block with no
+`=dev-libs/w604prov-5.42* required by (virtual/w604va-1 ...)` row (was that row
+plus a second copy of the block); with the virtual not installed and the parent
+`w604paror` (`|| ( =dev-libs/w604prov-5.42* dev-libs/w604none ) virtual/w604va`)
+the block now lists the merge-bound virtual under both 5.42 and 5.44. Rows equal
+Portage 3.0.83 as sets, rc 1 and 4/20 on both, except the installed virtual's
+own `=5.44*` row (#606) (`LLM/evidence/2026-11-06-sweep/604/`). The Q19 entry in
+`portage-quirks.md` is corrected: it overstated the leak.
