@@ -1,5 +1,12 @@
 # Agent context: portuale, a Rust reimplementation of Portage
 
+> **2026-11-07: the foundations changed.** Portuale is no longer a friendly
+> fork or a drop-in replacement and Portage is no longer the oracle. Read
+> `docs/charter.md` first. Everything below that says "drop-in", "same
+> behaviour", "mimic" or "oracle" is history until it is rewritten; hard
+> goals 1 and 4 (a shared suite for two implementations) predate the removal
+> of the Python copy and no longer apply as written.
+
 This file is the single entry point for (re)deriving where portuale
 stands and what to do next: goals, hard constraints, architecture
 decisions, the phase-execution/bash-backend findings, and pointers to the

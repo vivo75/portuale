@@ -634,6 +634,7 @@ fn direct_solve_ambiguous_conflict_prefers_the_walked_instance() {
     // Only 2 walked: 2 first, installed 1 second, unwalked 3.0 last.
     let entries = vec![GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "mgfc".into(),
         outcome: PretendOutcome::New {

@@ -1563,6 +1563,7 @@ fn residual_161_setup(dir: &Path) -> (Vec<RepoConfig>, portage_profile::Config, 
     fs::write(c.join("repository"), "testrepo\n").unwrap();
     let upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "souprov".into(),
         outcome: PretendOutcome::Upgrade {
@@ -2167,6 +2168,7 @@ fn slotundo_rebuild_entry(
 ) -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: name.into(),
         outcome: PretendOutcome::Reinstall {
@@ -2194,6 +2196,7 @@ fn slotundo_rebuild_entry(
 fn slotundo_provider_entry() -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::Upgrade {
             from: "1.0".into(),
             to: "2.0".into(),
@@ -3063,6 +3066,7 @@ mod tests_164 {
         } = args;
         GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: category.to_string(),
             package: package.to_string(),
             outcome,
@@ -3711,6 +3715,7 @@ fn pu(flag: &str) -> Vec<(String, Vec<String>)> {
 fn graph_entry(category: &str, package: &str, version: &str) -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: category.to_string(),
         package: package.to_string(),
         outcome: PretendOutcome::New {

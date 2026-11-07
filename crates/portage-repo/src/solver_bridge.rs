@@ -1036,6 +1036,7 @@ fn bridge_entry_for(
     collect_bridge_blockers(&record, &use_set, version, pending_blockers, seen_blockers);
     Some(GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: record.category.clone(),
         package: record.package.clone(),
         outcome,
@@ -4438,6 +4439,7 @@ fn bridge_validate_aborts(
     for ((category, package), owner, atom, suggestion) in rescued {
         let mut entry = GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: category.clone(),
             package: package.clone(),
             outcome: PretendOutcome::NoVisibleCandidate,
@@ -4516,6 +4518,7 @@ fn bridge_validate_aborts(
         owners.dedup();
         validation.nvc_entries.push(GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: miss.category.clone(),
             package: miss.package.clone(),
             outcome: PretendOutcome::NoVisibleCandidate,
@@ -8530,6 +8533,7 @@ mod tests {
     ) -> super::super::GraphEntry {
         super::super::GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: category.to_string(),
             package: package.to_string(),
             outcome,

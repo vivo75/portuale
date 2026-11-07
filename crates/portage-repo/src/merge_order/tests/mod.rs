@@ -105,6 +105,7 @@ fn cycle_sets(cycles: &[Vec<usize>]) -> Vec<Vec<usize>> {
 fn new_entry(category: &str, package: &str, version: &str, deps: Vec<DepEdge>) -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: category.to_string(),
         package: package.to_string(),
         outcome: PretendOutcome::New {

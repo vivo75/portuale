@@ -132,6 +132,18 @@ pub struct GraphEntry {
     /// Index in pre-sort BFS discovery order, stamped just before sorting; display
     /// edges enumerate in this order. `0` for entries fabricated outside a resolve.
     pub discovery: usize,
+    /// The metadata and USE this entry's dependencies were read with, so `--json`
+    /// can hand them to a plan checker. `None` when the entry was never expanded.
+    pub dep_input: Option<std::sync::Arc<DepInput>>,
+}
+
+/// What one entry's dependency strings were evaluated against.
+#[derive(Debug, PartialEq, Eq)]
+pub struct DepInput {
+    /// The candidate's metadata (`*DEPEND`, `REQUIRED_USE`, `IUSE`, ...).
+    pub metadata: std::sync::Arc<HashMap<String, String>>,
+    /// The candidate's effective USE.
+    pub use_flags: HashSet<String>,
 }
 
 /// A root-qualified `cat/pkg`: the same cp merged in both roots is two nodes, so every

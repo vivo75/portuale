@@ -13,6 +13,7 @@ fn installed_child_row_displays_the_vdb_use_not_an_empty_string() {
     let root = fixtures_root();
     let parent = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".to_string(),
         package: "deepusedepparent".to_string(),
         outcome: PretendOutcome::AlreadyInstalled {

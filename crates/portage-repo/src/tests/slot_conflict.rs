@@ -96,6 +96,7 @@ fn build_residual_skips_a_consumer_being_replaced() {
     let (repos, config, upgrade) = residual_161_setup(&dir);
     let consumer_merge = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "conpkg".into(),
         outcome: PretendOutcome::New {
@@ -276,6 +277,7 @@ fn build_residual_folds_each_pin_into_its_own_record() {
     fs::write(d.join("repository"), "testrepo\n").unwrap();
     let sounneed_merge = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "sounneed".into(),
         outcome: PretendOutcome::New {

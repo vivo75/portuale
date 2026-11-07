@@ -16,6 +16,7 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
     let parent = GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::Reinstall {
             version: "4.10.0".into(),
             changed_flags: Vec::new(),
@@ -31,6 +32,7 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     };
     let child = GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::AlreadyInstalled {
             version: "3.1.1".into(),
         },
@@ -112,6 +114,7 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     });
     let parent_souprov = GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::Reinstall {
             version: "1.0".into(),
             changed_flags: Vec::new(),
@@ -127,6 +130,7 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     };
     let child_souprov = GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::AlreadyInstalled {
             version: "1.0".into(),
         },
@@ -203,6 +207,7 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
     std::fs::write(vd.join("repository"), "testrepo\n").unwrap();
     let child = GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::AlreadyInstalled {
             version: "2.0".into(),
         },
@@ -216,6 +221,7 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
     // An `Upgrade` parent probes like a `Reinstall` one.
     let upgrade_a = GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::Upgrade {
             from: "0.9".into(),
             to: "1.0".into(),
@@ -316,6 +322,7 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
     }];
     let parent = GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::New {
             version: "1.0".into(),
         },
@@ -323,6 +330,7 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
     };
     let binary_child = |package: &str| GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::New {
             version: "1.0".into(),
         },
@@ -415,6 +423,7 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     }];
     let parent = GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::New {
             version: "1.0".into(),
         },
@@ -422,6 +431,7 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
     };
     let binary_child = |package: &str, slot: &str, sub: &str| GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::New {
             version: "1.0".into(),
         },

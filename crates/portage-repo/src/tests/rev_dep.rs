@@ -131,6 +131,7 @@ fn reverse_dependency_constraints_skips_an_unreachable_installed_consumer() {
 
     let target_upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "target".into(),
         outcome: PretendOutcome::Upgrade {

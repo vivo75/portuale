@@ -191,6 +191,7 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
     oldbest.sort_by(|a, b| vercmp_ordering(&a.version, &b.version));
     state.entries.push(GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: key.0.clone(),
         package: key.1.clone(),
         outcome,

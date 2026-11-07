@@ -7,6 +7,7 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
     let entries = vec![
         GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: "dev-libs".into(),
             package: "samepkg".into(),
             outcome: PretendOutcome::AlreadyInstalled {
@@ -40,6 +41,7 @@ fn run_buildpkgonly_skips_already_installed_and_no_visible_candidate() {
         },
         GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: "dev-libs".into(),
             package: "nosuchpkg".into(),
             outcome: PretendOutcome::NoVisibleCandidate,
@@ -105,6 +107,7 @@ fn real_buildpkgonly_builds_a_real_binary_package_end_to_end() {
 
     let entries = vec![GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "packagepkg".into(),
         outcome: PretendOutcome::New {
@@ -579,6 +582,7 @@ fn real_buildpkgonly_refuses_a_real_src_uri_with_no_manifest_entry() {
 
     let entries = vec![GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "fetchpkg".into(),
         outcome: PretendOutcome::New {
@@ -915,6 +919,7 @@ fn build_ppatch_binpkg(cfg: &std::path::Path, pkgdir: &std::path::Path) -> std::
     let repos = find_repos(cfg).unwrap();
     let entries = vec![GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "app-misc".into(),
         package: "ppatch".into(),
         outcome: PretendOutcome::New {

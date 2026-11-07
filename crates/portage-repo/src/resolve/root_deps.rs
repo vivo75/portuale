@@ -254,6 +254,7 @@ pub(crate) fn resolve_root_deps_build_entries(
     // Both `false` above, so the outcome can only come from an ebuild.
     let mut entry = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: atom.category.clone(),
         package: atom.package.clone(),
         outcome,

@@ -445,6 +445,7 @@ fn use_install_166(root: &Path, cat: &str, pf: &str, use_flags: &str) {
 fn entry_166(cat: &str, pkg: &str, version: &str, display: Vec<(String, bool)>) -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: cat.to_string(),
         package: pkg.to_string(),
         outcome: PretendOutcome::New {

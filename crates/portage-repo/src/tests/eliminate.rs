@@ -177,6 +177,7 @@ fn slot_operator_rebuild_entries_use_the_consumer_tree_slot_and_repo() {
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
     let bar_upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "bar".into(),
         outcome: PretendOutcome::Upgrade {
@@ -223,6 +224,7 @@ fn slot_operator_rebuild_entries_mark_repo_drifted_rebuilds_oldbest() {
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
     let bar_upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "bar".into(),
         outcome: PretendOutcome::Upgrade {

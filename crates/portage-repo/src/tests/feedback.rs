@@ -243,6 +243,7 @@ fn collect_feedback_reports_no_rebuilds_when_the_pass_is_stuck() {
     let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
     let bar_upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "bar".into(),
         outcome: PretendOutcome::Upgrade {
@@ -293,6 +294,7 @@ fn collect_feedback_keeps_an_enforced_pin_single() {
     let ctx = ctx_161(&dir, &config, repos, &opts);
     let souprov_upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "souprov".into(),
         outcome: PretendOutcome::Upgrade {
@@ -369,6 +371,7 @@ fn collect_feedback_collects_a_dropped_pin_once() {
     let ctx = ctx_161(&dir, &config, repos, &opts);
     let souprov_upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "souprov".into(),
         outcome: PretendOutcome::Upgrade {

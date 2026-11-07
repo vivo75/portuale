@@ -90,6 +90,10 @@ pub(crate) fn enqueue_graphed_entry(
         repo_candidates,
         owner,
     });
+    state.entries[entry_idx].dep_input = Some(std::sync::Arc::new(DepInput {
+        metadata: std::sync::Arc::clone(&metadata),
+        use_flags: use_flags.clone(),
+    }));
 
     record_entry_fetch(RecordEntryFetchArgs {
         candidate_source,

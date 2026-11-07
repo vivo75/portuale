@@ -464,6 +464,7 @@ pub fn run(args: &[String]) -> ExitCode {
         top_level_pkgs: &top_level_pkgs,
         has_autounmask_changes,
         gated_abort_partial,
+        root: &root,
     }) {
         return code;
     }

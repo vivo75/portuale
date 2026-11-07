@@ -1,7 +1,9 @@
 # Architecture
 
-`portuale` is a Rust reimplementation of Portage's `emerge`.
-It aims to match Portage's behaviour and output.
+`portuale` is a package manager for Gentoo written in Rust. It began as a
+reimplementation of Portage's `emerge` and `ebuild`, and keeps their options
+and intentions, but it is no longer a fork and does not aim to match
+Portage's output (see [`charter.md`](charter.md)).
 It resolves, builds, merges, and unmerges Gentoo packages.
 Agent working material lives in `LLM/`.
 

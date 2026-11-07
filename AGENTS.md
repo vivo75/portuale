@@ -1,7 +1,12 @@
 # AGENTS.md
 
 Entrypoint for LLM/agent work on this repo. **Read
-[`LLM/agent-context.md`](LLM/agent-context.md) first** — it holds the
+[`docs/charter.md`](docs/charter.md) first: it states what portuale is and
+how it relates to Portage (an example and teacher, no longer the oracle or
+the goal). Where this file or `LLM/agent-context.md` still says "mimic
+Portage", "drop-in replacement" or "Portage is the oracle", the charter
+wins; those passages are being brought in line.** Then read
+[`LLM/agent-context.md`](LLM/agent-context.md): it holds the
 settled goals, hard constraints, architecture decisions, the bash-backend
 investigation, the current state, and the open backlog. This file is just
 the operating rhythm and the rules. Humans new to the tree start with
@@ -27,19 +32,19 @@ the next slice") and expects the same rhythm every time:
 3. **Re-open judgment calls that surface during implementation** rather
    than silently picking a default. If a slice conflicts with a hard
    constraint (e.g. contract-suite determinism), stop and surface it.
-4. **Ground expected output in Portage, not in a second copy.**
-   There is no Python mirror any more
-   (`docs/history/second_python_copy_removal.md`, deleted 2026-10-03 — in git history; the rule here is its conclusion).
-   A slice that changes `emerge` output takes its expected value from
-   Portage — the container test bed (`../pmtest/differential-test-bed/`),
-   this host's Portage `emerge`, or an upstream
-   `lib/portage/tests/resolver/` case — and says which in the test's
-   docstring. Real-execution features
-   (merge/unmerge/package/fetch/phases) are checked the same way (L1–L3).
-   **If Portage's behaviour there looks unintended, say so:** add an entry to
-   [`LLM/portage-quirks.md`](LLM/portage-quirks.md) (what it does, source
-   citation, why it looks wrong, whether portuale copies it). Mimic first;
-   knowing where Portage is buggy is still worth a record.
+4. **Ground expected behaviour in the charter, not in Portage's output.**
+   Portage is no longer the oracle (`docs/charter.md`). A slice takes its
+   expected behaviour from the PMS, the EAPIs and the Devmanual, and from the
+   health properties in the charter; where those are silent the owner
+   decides. Portage's output is still useful as a comparison and as a hint
+   (the container bed, this host's `emerge`, upstream
+   `lib/portage/tests/resolver/`), and a test's docstring says which source
+   it uses. Do not file or fix a difference from Portage as such: it matters
+   only if the user is worse off (wrong packages, an order that breaks a
+   build, a misleading message). Do not copy confirmed Portage bugs
+   (`LLM/portage_bug_list_2026-11-07.html`); record suspicious Portage
+   behaviour in [`LLM/portage-quirks.md`](LLM/portage-quirks.md). Prefer
+   changes that remove code.
 5. **Add fixtures by hand** under `fixtures/repo/…` (+ `metadata/md5-cache/…`).
    There is one fixture tree and it lives in pmtest: `fixtures/` here is
    a symlink to `../pmtest/fixtures`, so the file you add is pmtest's

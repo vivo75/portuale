@@ -107,6 +107,7 @@ fn binary_entry(package: &str, binary: bool) -> portage_repo::GraphEntry {
     use portage_repo::{CandidateSource, PretendOutcome, VisibilityProvenance};
     portage_repo::GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".to_string(),
         package: package.to_string(),
         outcome: PretendOutcome::New {

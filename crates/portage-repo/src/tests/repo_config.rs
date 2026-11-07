@@ -213,6 +213,7 @@ fn reverse_dependency_constraints_enforces_a_runtime_pin_but_ignores_a_build_tim
     let repos = hermetic_find_repos(&root).expect("fixture repos.conf must resolve");
     let upgrade = |pkg: &str| GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: pkg.into(),
         outcome: PretendOutcome::Upgrade {

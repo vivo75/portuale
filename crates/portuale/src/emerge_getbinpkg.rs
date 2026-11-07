@@ -2593,6 +2593,7 @@ mod tests {
     ) -> GraphEntry {
         GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: category.into(),
             package: package.into(),
             outcome: PretendOutcome::New {
@@ -5353,6 +5354,7 @@ mod tests {
         };
         let entry = GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: "dev-libs".into(),
             package: "packagepkg".into(),
             outcome: PretendOutcome::New {
@@ -5482,6 +5484,7 @@ mod tests {
         };
         let entry = GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: "dev-libs".into(),
             package: "packagepkg".into(),
             outcome: PretendOutcome::New {
@@ -5778,6 +5781,7 @@ mod tests {
         };
         let entry = GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: "dev-libs".into(),
             package: "packagepkg".into(),
             outcome: PretendOutcome::Upgrade {
@@ -6020,6 +6024,7 @@ mod mixed_pretend_tests {
     fn graph_entry(package: &str, source: CandidateSource, version: &str) -> GraphEntry {
         GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: "dev-libs".into(),
             package: package.into(),
             outcome: PretendOutcome::New {

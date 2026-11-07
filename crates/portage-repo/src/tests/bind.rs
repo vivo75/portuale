@@ -71,6 +71,7 @@ fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
     fs::write(d.join("SLOT"), "0/3\n").unwrap();
     let new_entry = |package: &str, version: &str, slot: &str, sub: &str| GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: package.into(),
         outcome: PretendOutcome::New {
@@ -101,6 +102,7 @@ fn bind_slot_operator_token_prefers_graph_entries_then_installed() {
     );
     let reinstall = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "bar".into(),
         outcome: PretendOutcome::Reinstall {

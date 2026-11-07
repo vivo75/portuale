@@ -222,6 +222,7 @@ pub(crate) fn uninstall_entry(
     let repo_name = installed_pkg_repo(root, &category, &package, &version);
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category,
         package,
         outcome: PretendOutcome::Uninstall { version },

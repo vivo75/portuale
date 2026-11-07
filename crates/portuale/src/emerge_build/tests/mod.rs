@@ -19,6 +19,7 @@ fn tempdir() -> TempDir {
 fn live_test_entry() -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "propertiespkg".into(),
         outcome: PretendOutcome::New {
@@ -55,6 +56,7 @@ fn live_test_entry() -> GraphEntry {
 fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: package.into(),
         outcome,
@@ -89,6 +91,7 @@ fn source_entry(package: &str, outcome: PretendOutcome) -> GraphEntry {
 fn buildpkgonly_entry(category: &str, package: &str, version: &str) -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: category.into(),
         package: package.into(),
         outcome: PretendOutcome::New {

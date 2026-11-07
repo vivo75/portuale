@@ -1,6 +1,8 @@
 //! `--json` output.
 
 use crate::pretend::*;
+use portage_repo::DepInput;
+use std::collections::BTreeSet;
 
 /// Escapes `s` for a JSON string literal (quote, backslash, control
 /// characters). Hand-rolled: `--json` is a small flat shape with no other
@@ -29,7 +31,9 @@ pub(crate) fn json_string(s: &str) -> String {
 /// merge-list lines, plus `requested`/`required_by` (which no text line
 /// carries) and the unconditional `--json`-only detail fields below.
 /// Deliberately not affected by `--onlydeps` suppression: a consumer can
-/// filter on `requested` itself.
+/// filter on `requested` itself. With `verbose`, merge-bound entries also
+/// carry `sub_slot`, `dependencies`, `required_use`, `iuse` and `use` (see
+/// [`dep_input_fields`]).
 pub(crate) fn entry_to_json(
     entry: &GraphEntry,
     merge_order: usize,
@@ -225,6 +229,17 @@ pub(crate) fn entry_to_json(
             .collect();
         fields.push(format!("\"use_flags\":{{{}}}", use_flags.join(",")));
     }
+    if verbose
+        && is_merge_bound(&entry.outcome)
+        && let Some(input) = &entry.dep_input
+    {
+        let sub_slot = entry
+            .sub_slot
+            .as_deref()
+            .map_or("null".to_string(), json_string);
+        fields.push(format!("\"sub_slot\":{sub_slot}"));
+        fields.extend(dep_input_fields(input));
+    }
     let blockers: Vec<String> = entry
         .blockers
         .iter()
@@ -242,6 +257,112 @@ pub(crate) fn entry_to_json(
         .collect();
     fields.push(format!("\"blockers\":[{}]", blockers.join(",")));
     format!("{{{}}}", fields.join(","))
+}
+
+fn is_merge_bound(outcome: &PretendOutcome) -> bool {
+    matches!(
+        outcome,
+        PretendOutcome::New { .. }
+            | PretendOutcome::Upgrade { .. }
+            | PretendOutcome::Downgrade { .. }
+            | PretendOutcome::Reinstall { .. }
+    )
+}
+
+fn json_string_array<'a>(items: impl IntoIterator<Item = &'a str>) -> String {
+    let items: Vec<String> = items.into_iter().map(json_string).collect();
+    format!("[{}]", items.join(","))
+}
+
+/// What a plan checker needs to evaluate one merge-bound entry on its own: the
+/// raw dependency strings by class, `REQUIRED_USE`, the `IUSE` names, and the
+/// enabled flags among those the strings can test (`IUSE`, every flag a
+/// `flag?` conditional names and every `REQUIRED_USE` flag, which covers
+/// implicit ones such as `elibc_glibc` or `kernel_linux`).
+pub(crate) fn dep_input_fields(input: &DepInput) -> Vec<String> {
+    let meta = |key: &str| input.metadata.get(key).map_or("", |v| v.trim());
+    let dependencies: Vec<String> = ["DEPEND", "BDEPEND", "RDEPEND", "PDEPEND", "IDEPEND"]
+        .into_iter()
+        .filter(|key| !meta(key).is_empty())
+        .map(|key| format!("{}:{}", json_string(key), json_string(meta(key))))
+        .collect();
+    let iuse: BTreeSet<&str> = meta("IUSE")
+        .split_whitespace()
+        .map(|flag| flag.trim_start_matches(['+', '-']))
+        .collect();
+    let conditionals = ["DEPEND", "BDEPEND", "RDEPEND", "PDEPEND", "IDEPEND"]
+        .into_iter()
+        .flat_map(|key| meta(key).split_whitespace())
+        .filter_map(|token| token.strip_suffix('?'));
+    // Every `REQUIRED_USE` token but the group operators names a flag.
+    let required = meta("REQUIRED_USE")
+        .split_whitespace()
+        .filter(|token| !matches!(*token, "||" | "^^" | "??" | "(" | ")"))
+        .map(|token| token.trim_end_matches('?'));
+    let named = conditionals
+        .chain(required)
+        .map(|flag| flag.trim_start_matches('!'));
+    let testable: BTreeSet<&str> = iuse.iter().copied().chain(named).collect();
+    let enabled = testable
+        .into_iter()
+        .filter(|flag| input.use_flags.contains(*flag));
+    vec![
+        format!("\"dependencies\":{{{}}}", dependencies.join(",")),
+        format!("\"required_use\":{}", json_string(meta("REQUIRED_USE"))),
+        format!("\"iuse\":{}", json_string_array(iuse)),
+        format!("\"use\":{}", json_string_array(enabled)),
+    ]
+}
+
+/// The installed packages the plan leaves alone: not replaced in their slot by
+/// a merge-bound entry and not uninstalled. Running-root entries are ignored.
+pub(crate) fn kept_packages(
+    root: &Path,
+    entries: &[GraphEntry],
+) -> Vec<portage_repo::InstalledPackage> {
+    let mut replaced_slots: HashSet<(&str, &str, &str)> = HashSet::new();
+    let mut uninstalled: HashSet<(&str, &str, &str)> = HashSet::new();
+    for e in entries.iter().filter(|e| !e.targets_running_root) {
+        let cp = (e.category.as_str(), e.package.as_str());
+        match &e.outcome {
+            PretendOutcome::Uninstall { version } => {
+                uninstalled.insert((cp.0, cp.1, version));
+            }
+            outcome if is_merge_bound(outcome) => {
+                if let Some(slot) = &e.slot {
+                    replaced_slots.insert((cp.0, cp.1, slot));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut kept: Vec<portage_repo::InstalledPackage> = portage_repo::all_installed_packages(root)
+        .iter()
+        .filter(|p| {
+            !replaced_slots.contains(&(&p.category, &p.package, &p.slot))
+                && !uninstalled.contains(&(&p.category, &p.package, &p.version))
+        })
+        .cloned()
+        .collect();
+    // The VDB scan follows directory order; the output must not.
+    kept.sort_by_key(portage_repo::InstalledPackage::cpv);
+    kept
+}
+
+fn kept_to_json(kept: &[portage_repo::InstalledPackage]) -> String {
+    let items: Vec<String> = kept
+        .iter()
+        .map(|p| {
+            format!(
+                "{{\"category\":{},\"package\":{},\"version\":{},\"slot\":{}}}",
+                json_string(&p.category),
+                json_string(&p.package),
+                json_string(&p.version),
+                json_string(&p.slot)
+            )
+        })
+        .collect();
+    format!("[{}]", items.join(","))
 }
 
 pub(crate) fn slot_conflict_to_json(c: &SlotConflict) -> String {
@@ -356,10 +477,14 @@ pub(crate) struct PrintJsonArgs<'a> {
     pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
     pub(crate) verbose: bool,
     pub(crate) running_root: Option<&'a Path>,
+    /// The target root, read for the `-v` `kept` list.
+    pub(crate) root: &'a Path,
 }
 
 /// The whole `--json` output as one line, no pretty-printing (a
-/// portuale-specific convenience format, not a stable schema).
+/// portuale-specific convenience format, not a stable schema). With
+/// `verbose` it ends with `kept` (see [`kept_packages`]), so the document
+/// alone describes the final installed set for a plan checker.
 pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
     let PrintJsonArgs {
         entries,
@@ -376,6 +501,7 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
         top_level_pkgs,
         verbose,
         running_root,
+        root,
     } = args;
     let entries_json: Vec<String> = entries
         .iter()
@@ -416,8 +542,14 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
     // On an abort the caller passes the partial display list, so a `--json`
     // consumer sees the same rows the text list shows.
     let aborted_json = abort_outcome_to_json(outcome);
+    // `-v` adds the installed packages the plan leaves alone, for plan checkers.
+    let kept_json = if verbose {
+        format!(",\"kept\":{}", kept_to_json(&kept_packages(root, entries)))
+    } else {
+        String::new()
+    };
     println!(
-        "{{\"entries\":[{}],\"backtrack\":{{\"restarts\":{},\"max\":{}}},\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}],\"aborted\":{}}}",
+        "{{\"entries\":[{}],\"backtrack\":{{\"restarts\":{},\"max\":{}}},\"slot_conflicts\":[{}],\"changed_deps_report\":[{}],\"autounmask_keyword_changes\":[{}],\"autounmask_use_changes\":[{}],\"autounmask_license_changes\":[{}],\"autounmask_mask_changes\":[{}],\"abi_rebuilds\":[{}],\"aborted\":{}{}}}",
         entries_json.join(","),
         backtrack_restarts,
         backtrack_max,
@@ -428,6 +560,7 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
         autounmask_license_json.join(","),
         autounmask_mask_json.join(","),
         abi_rebuilds_json.join(","),
-        aborted_json
+        aborted_json,
+        kept_json
     );
 }

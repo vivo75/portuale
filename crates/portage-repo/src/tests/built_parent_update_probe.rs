@@ -16,6 +16,7 @@ fn mbabilib_vdb(slot: &str) -> TempDir {
 fn mbabicons_binary() -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::New {
             version: "1.0".into(),
         },

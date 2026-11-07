@@ -98,6 +98,7 @@ pub(crate) fn synthetic_installed_entry(
 ) -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category,
         package,
         outcome: PretendOutcome::AlreadyInstalled { version },

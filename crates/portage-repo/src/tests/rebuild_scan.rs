@@ -21,6 +21,7 @@ fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update()
     mk("holder-1.0", "0", "dev-libs/bar:0/1=");
     let bar_downgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "bar".into(),
         outcome: PretendOutcome::Downgrade {
@@ -98,6 +99,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     // `bar` is being upgraded to slot 2 sub-slot 9 this run.
     let bar_upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "bar".into(),
         outcome: PretendOutcome::Upgrade {
@@ -194,6 +196,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     // in-graph cp is still skipped.
     let stale_rebuild = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "stale".into(),
         outcome: PretendOutcome::Reinstall {
@@ -1057,6 +1060,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
     // `bar` moves to slot 2 sub-slot 9 this run.
     let bar_upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "bar".into(),
         outcome: PretendOutcome::Upgrade {
@@ -1088,6 +1092,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
     // `AlreadyInstalled` node per consumer, the @world shape).
     let walked_entry = |name: &str| GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::AlreadyInstalled {
             version: "1.0".into(),
         },
@@ -1230,6 +1235,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
     fs::write(d.join("RDEPEND"), "dev-libs/bar:2/2=\n").unwrap();
     let bar_reinstall = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "bar".into(),
         outcome: PretendOutcome::Reinstall {

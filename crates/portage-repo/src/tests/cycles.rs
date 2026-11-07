@@ -293,6 +293,7 @@ fn find_hard_cycles_reports_a_build_time_cycle_and_ignores_a_run_time_one() {
         graph_entry("dev-libs", "hca", "1.0"),
         GraphEntry {
             discovery: 0,
+            dep_input: None,
             outcome: PretendOutcome::AlreadyInstalled {
                 version: "1.0".to_string(),
             },

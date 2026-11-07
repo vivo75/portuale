@@ -770,6 +770,7 @@ pub(crate) struct PrintJsonResultArgs<'a> {
     pub(crate) top_level_pkgs: &'a HashSet<(String, String)>,
     pub(crate) has_autounmask_changes: bool,
     pub(crate) gated_abort_partial: Option<&'a Vec<GraphEntry>>,
+    pub(crate) root: &'a Path,
 }
 
 /// The `--json` output, which replaces the merge list.
@@ -782,6 +783,7 @@ pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCod
         top_level_pkgs,
         has_autounmask_changes,
         gated_abort_partial,
+        root,
     } = args;
     let ResolvePlan {
         root_deps_running_root,
@@ -814,6 +816,7 @@ pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCod
             top_level_pkgs,
             verbose,
             running_root: root_deps_running_root.as_deref(),
+            root,
         });
         // Same non-zero-on-autounmask-changes contract as the text path: a
         // `--json` consumer's exit-code check must see the "config still needs

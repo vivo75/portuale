@@ -120,6 +120,7 @@ pub(crate) fn resume_entry(args: ResumeEntryArgs<'_>) -> GraphEntry {
     };
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: category.to_string(),
         package: package.to_string(),
         outcome: PretendOutcome::New {

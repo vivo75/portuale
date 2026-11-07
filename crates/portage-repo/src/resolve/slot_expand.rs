@@ -255,6 +255,10 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
     let Ok(delta_meta) = repo_aux_metadata(&existing_cand.repo_location, &key.0, &pf) else {
         return;
     };
+    state.entries[existing_idx].dep_input = Some(Arc::new(DepInput {
+        metadata: Arc::clone(&delta_meta),
+        use_flags: new_use.clone(),
+    }));
     // The delta atoms queue one deeper than the flipped package's own depth.
     let slot = state.entries[existing_idx].slot.clone().unwrap_or_default();
     let existing_depth = state

@@ -513,6 +513,7 @@ fn walker_conflict_is_fed_back_before_a_consumer_pin_conflict() {
     let ctx = ctx_161(&dir, &config, repos, &opts);
     let souprov_upgrade = GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: "dev-libs".into(),
         package: "souprov".into(),
         outcome: PretendOutcome::Upgrade {

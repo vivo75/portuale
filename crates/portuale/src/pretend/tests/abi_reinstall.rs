@@ -54,6 +54,7 @@ fn entry(
         build_time: None,
         deps: Vec::new(),
         discovery: 0,
+        dep_input: None,
     }
 }
 

@@ -153,6 +153,7 @@ fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
     fn entry(package: &str, version: &str, running: bool, deps: Vec<DepEdge>) -> GraphEntry {
         GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: "dev-libs".to_string(),
             package: package.to_string(),
             outcome: PretendOutcome::New {

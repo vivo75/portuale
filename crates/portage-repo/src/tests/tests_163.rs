@@ -15,6 +15,7 @@ fn entry_163(
 ) -> GraphEntry {
     GraphEntry {
         discovery: 0,
+        dep_input: None,
         category: cat.to_string(),
         package: pkg.to_string(),
         outcome,

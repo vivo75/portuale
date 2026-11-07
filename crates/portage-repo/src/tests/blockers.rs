@@ -566,6 +566,7 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
     };
     let installed = |pkg: &str| GraphEntry {
         discovery: 0,
+        dep_input: None,
         outcome: PretendOutcome::AlreadyInstalled {
             version: "1.0".into(),
         },

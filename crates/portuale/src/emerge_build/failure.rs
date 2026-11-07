@@ -554,6 +554,7 @@ mod tests {
     fn label_entry(source: CandidateSource, build_id: Option<&str>) -> GraphEntry {
         GraphEntry {
             discovery: 0,
+            dep_input: None,
             category: "dev-util".into(),
             package: "f459-postinstfail".into(),
             outcome: PretendOutcome::New {
