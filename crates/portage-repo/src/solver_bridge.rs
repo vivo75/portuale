@@ -699,6 +699,7 @@ fn graph_result_from_order(
         use_unsat_deps: Vec::new(),
         // No BFS walk: no plain-miss disclosure.
         plain_miss_deps: Vec::new(),
+        fail_fast_unreached: Vec::new(),
         // No probe walk runs here, and the outcome is always `Complete`.
         virtual_cycle: Vec::new(),
     }

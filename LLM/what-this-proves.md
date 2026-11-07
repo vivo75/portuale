@@ -20894,3 +20894,17 @@ prints `!!! All ebuilds that could satisfy "dev-libs/r594xdep[r594flag]" … hav
 `- dev-libs/r594xdep-2::testrepo (masked by: ~amd64 keyword)` and the three-line
 dependency chain, rc 1, `backtrack: 0/20` (`0/0`), the same block as Portage 3.0.83
 (`LLM/evidence/2026-11-06-sweep/611a/`).
+
+Backlog #609 (2026-11-06): every final result now stops where Portage's LIFO
+walk stops, not only the autounmask-breakage clean pass. The fail-fast cut runs on
+the `--backtrack=0` result, a settled pass, the best-run re-pass and the
+`--autounmask-backtrack=n` stops (not in complete mode, not past an installed
+parent), keeps the first failing dependency's report whether it is masked, USE or
+plain, and a missing-dependency restart is filed only for that dependency. Live, on
+the fixture tree: `emerge -pv --backtrack=0 dev-libs/r592atop` prints only
+`emerge: there are no ebuilds to satisfy "dev-libs/r592agone".` with its three-line
+chain (no `r592as:0` slot-conflict block), `emerge -pv --autounmask=n dev-libs/r594qtop`
+prints only the `r594vdep[r594flag]` USE block with `backtrack: 0/20`, and
+`emerge -pv dev-libs/r594htop` prints only the `r594xdep[r594flag]` all-masked block
+under `r594ha-2` with `0/20`; none prints the `maskeddep` block any more. Same as
+Portage 3.0.83 (`LLM/evidence/2026-11-06-sweep/609/`).

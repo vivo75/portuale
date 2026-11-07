@@ -420,6 +420,10 @@ pub struct GraphResult {
     /// precedence.
     // Portage: depgraph.py, _show_unsatisfied_dep
     pub plain_miss_deps: Vec<PlainMissDepReport>,
+    /// `NoVisibleCandidate` dependencies (`cat/pkg`) Portage's walk never
+    /// reaches because it stopped at an earlier failure: no row is printed.
+    // Portage: depgraph.py, _create_graph
+    pub fail_fast_unreached: Vec<(String, String)>,
 }
 
 impl GraphResult {

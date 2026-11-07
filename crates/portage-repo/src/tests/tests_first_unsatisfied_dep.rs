@@ -132,3 +132,85 @@ fn masked_only_shapes_backtrack_once() {
         assert_eq!(r.backtrack_restarts, 1, "{atom}: {:?}", r.outcome);
     }
 }
+
+/// The `(node, type)` chain of the one report kept, innermost first.
+fn chain_nodes(chain: &[(String, String)]) -> Vec<&str> {
+    chain.iter().map(|(n, _)| n.as_str()).collect()
+}
+
+#[test]
+fn backtrack_0_reports_only_the_first_failure_and_no_later_conflict() {
+    // Backlog #609, Portage 3.0.83 `emerge -pv --backtrack=0
+    // dev-libs/r592atop` (`LLM/evidence/2026-11-06-sweep/609/`): rc 1,
+    // `(backtrack: 0/0)`, only the `r592agone` miss under `r592ay-2`. The
+    // LIFO walk pops `ay-2` first and stops, so `ax-2` never pulls `as-1`.
+    let root = hermetic_root(&[]);
+    let mut req = request_in(&root, &["dev-libs/r592atop"]);
+    req.backtrack_max = 0;
+    let r = req.resolve().expect("the library reports the miss");
+    assert!(aborted(&r), "rc 1, got {:?}", r.outcome);
+    assert!(r.slot_conflicts.is_empty(), "{:?}", r.slot_conflicts);
+    assert_eq!(r.plain_miss_deps.len(), 1, "{:?}", r.plain_miss_deps);
+    assert_eq!(r.plain_miss_deps[0].atom, "dev-libs/r592agone");
+    assert_eq!(
+        chain_nodes(&r.plain_miss_deps[0].chain),
+        [
+            "dev-libs/r592ay-2::testrepo",
+            "dev-libs/r592atop-1::testrepo",
+            "dev-libs/r592atop"
+        ]
+    );
+}
+
+#[test]
+fn a_use_stop_drops_the_later_masked_dependency_and_its_restart() {
+    // Backlog #609, Portage 3.0.83 `emerge -pv --autounmask=n
+    // dev-libs/r594qtop`: rc 1, `(backtrack: 0/20)`, only the `r594vdep`
+    // USE block. `r594qa` (listed last) is popped first and stops the walk,
+    // so `maskeddep` under `r594qb` is neither reported nor backtracked for.
+    let root = hermetic_root(&[]);
+    let r = resolve_in(&root, &["dev-libs/r594qtop"]);
+    assert!(aborted(&r), "rc 1, got {:?}", r.outcome);
+    assert_eq!(r.backtrack_restarts, 0, "{:?}", r.outcome);
+    assert!(r.masked_deps.is_empty(), "{:?}", r.masked_deps);
+    assert_eq!(r.use_unsat_deps.len(), 1, "{:?}", r.use_unsat_deps);
+    assert_eq!(r.use_unsat_deps[0].atom, "dev-libs/r594vdep[r594flag]");
+    assert_eq!(
+        r.fail_fast_unreached,
+        [("dev-libs".to_string(), "maskeddep".to_string())]
+    );
+}
+
+#[test]
+fn the_first_masked_dependency_wins_over_a_later_one() {
+    // Backlog #609, Portage 3.0.83 `emerge -pv [--backtrack=0]
+    // dev-libs/r594htop`: rc 1, `(backtrack: 0/20)` and `0/0`, only the
+    // `r594xdep[r594flag]` all-masked block under `r594ha-2`.
+    let root = hermetic_root(&[]);
+    for max in [20, 0] {
+        let mut req = request_use_in(&root, &["dev-libs/r594htop"]);
+        req.backtrack_max = max;
+        let r = req.resolve().expect("the library reports the miss");
+        assert!(aborted(&r), "rc 1, got {:?}", r.outcome);
+        assert_eq!(r.backtrack_restarts, 0, "{max}: {:?}", r.outcome);
+        let atoms: Vec<&str> = r.masked_deps.iter().map(|m| m.atom.as_str()).collect();
+        assert_eq!(atoms, ["dev-libs/r594xdep[r594flag]"], "{max}");
+        assert_eq!(
+            chain_nodes(&r.masked_deps[0].chain),
+            [
+                "dev-libs/r594ha-2::testrepo",
+                "dev-libs/r594htop-1::testrepo",
+                "dev-libs/r594htop"
+            ]
+        );
+        assert!(
+            matches!(
+                &r.outcome,
+                ResolveOutcome::Aborted { reason: AbortReason::MaskedDep { atom, .. }, .. }
+                    if atom == "dev-libs/r594xdep[r594flag]"
+            ),
+            "{:?}",
+            r.outcome
+        );
+    }
+}

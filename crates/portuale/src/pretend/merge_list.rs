@@ -532,6 +532,10 @@ pub(crate) fn show_abort_disclosures(args: ShowAbortDisclosuresArgs<'_>) {
                 entry.outcome,
                 portage_repo::PretendOutcome::NoVisibleCandidate
             ) && entry.parent_use_suggestion.is_none()
+                && !result
+                    .fail_fast_unreached
+                    .iter()
+                    .any(|(c, p)| *c == entry.category && *p == entry.package)
             {
                 // With a slot conflict recorded, this line waits until after
                 // the slot-conflict block (Portage's `display_problems` order).

@@ -100,6 +100,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         {
             return run_breakage_clean_pass(&ctx, &initial, restarts);
         }
+        drop_trigger_behind_first_failure(&ctx, &params, &mut pass, &needed_init);
         let decision = collect_feedback(&ctx, &params, &mut pass, config);
         // The slot-conflict handler stops the search when a USE change would
         // solve this pass's conflicts. The root pass is then the report; a
@@ -154,6 +155,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                 result.slot_conflicts = slot_conflicts;
                 result.settled_with_backtracking = true;
                 replay_slot_conflicts(&ctx, &entries, r, &mut result.slot_conflicts);
+                fail_fast_truncate_final(&ctx, &mut result, Some(&needed_init));
                 return Ok(result);
             }
             PassDecision::Feedback(BacktrackFeedback::MissingDep { base, .. })
@@ -175,6 +177,7 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                 result.slot_conflicts = slot_conflicts;
                 result.settled_with_backtracking = true;
                 replay_slot_conflicts(&ctx, &entries, r, &mut result.slot_conflicts);
+                fail_fast_truncate_final(&ctx, &mut result, Some(&needed_init));
                 return Ok(result);
             }
             d => d,
@@ -197,6 +200,8 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                     }
                     continue;
                 }
+                let mut result = result;
+                fail_fast_truncate_final(&ctx, &mut result, walk_flips(&params, &needed_init));
                 return Ok(result);
             }
             PassDecision::DeadEnd { params } => {
@@ -230,7 +235,13 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
                                 BacktrackFeedback::SlotConflict { base, .. } => *base,
                                 BacktrackFeedback::MissingDep { base, .. } => *base,
                             };
-                            return Ok(assemble_result(&ctx, &grown, pass, config, restarts));
+                            let mut result = assemble_result(&ctx, &grown, pass, config, restarts);
+                            fail_fast_truncate_final(
+                                &ctx,
+                                &mut result,
+                                walk_flips(&params, &needed_init),
+                            );
+                            return Ok(result);
                         }
                     }
                 }
@@ -361,7 +372,50 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
     let mut result = assemble_result(rctx, &report, pass, config, restarts);
     result.prune_unresolved = prune_unresolved;
     result.backtrack_max = ctx.backtrack_max;
+    fail_fast_truncate_final(&ctx, &mut result, walk_flips(&best, &best_needed));
     Ok(result)
+}
+
+/// The USE changes Portage's walk folds on a pass run with `params`: `needed`
+/// when the pass suggests USE changes, else none (every USE miss stops it).
+// Portage: depgraph.py, _pkg_use_enabled (autounmask)
+fn walk_flips<'a>(params: &BacktrackParams, needed: &'a UseChanges) -> Option<&'a UseChanges> {
+    (params.autounmask_suggest_use && !params.autounmask_disabled).then_some(needed)
+}
+
+/// Portage's walk stops at its first unsatisfied dependency and backtracks
+/// for that one only: drop a missing-dependency trigger the replayed walk
+/// never reaches because an earlier merge-bound edge fails first.
+// Portage: depgraph.py, _create_graph; _add_dep ("missing dependency")
+fn drop_trigger_behind_first_failure(
+    ctx: &ResolveCtx<'_>,
+    params: &BacktrackParams,
+    pass: &mut PassResult,
+    needed_init: &HashMap<(String, String), HashMap<String, bool>>,
+) {
+    let Some(((tc, tp), _, t_atom)) = pass.missing_dep_trigger.as_ref() else {
+        return;
+    };
+    if ctx.portage_complete(&pass.entries) {
+        return;
+    }
+    let flips = walk_flips(params, needed_init);
+    let empty = HashMap::new();
+    let r = replay_walk(ctx, &pass.entries, flips.is_some(), flips.unwrap_or(&empty));
+    let Some(f) = r.failure.as_ref() else {
+        return;
+    };
+    let parent = &pass.entries[f.parent];
+    if merge_bound_version(&parent.outcome).is_none() {
+        return;
+    }
+    let edge = &parent.deps[f.edge];
+    let same_edge = parent.category == *tc
+        && parent.package == *tp
+        && (edge.atom == *t_atom || edge.evaluated == *t_atom);
+    if !same_edge {
+        pass.missing_dep_trigger = None;
+    }
 }
 
 /// Arguments of [`grow_restart_counts`].

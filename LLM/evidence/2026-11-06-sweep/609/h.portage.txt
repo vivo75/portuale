@@ -1,0 +1,13 @@
+### argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$CFG ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles PORTAGE_TMPDIR=$SP/ptmp PYTHONHASHSEED=0 emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv dev-libs/r594htop
+These are the packages that would be merged, in order:
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 0/20).
+!!! All ebuilds that could satisfy "dev-libs/r594xdep[r594flag]" for $FX/ have been masked.
+!!! One of the following masked packages is required to complete your request:
+- dev-libs/r594xdep-2::testrepo (masked by: ~amd64 keyword)
+(dependency required by "dev-libs/r594ha-2::testrepo" [ebuild])
+(dependency required by "dev-libs/r594htop-1::testrepo" [ebuild])
+(dependency required by "dev-libs/r594htop" [argument])
+For more information, see the MASKED PACKAGES section in the emerge
+man page or refer to the Gentoo Handbook.
+### rc: 1

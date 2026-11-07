@@ -2,6 +2,9 @@
 
 use crate::*;
 
+/// Needed USE changes per `(category, package)`: flag -> wanted state.
+pub(crate) type UseChanges = HashMap<(String, String), HashMap<String, bool>>;
+
 /// `merge_order::replay_create_graph`'s USE model for one entry: the ebuild's
 /// profile-valid `IUSE`, its configured USE with no autounmask change applied
 /// (the replay layers the needed changes itself), and the forced/masked flags.
@@ -125,6 +128,44 @@ pub(crate) fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult)
         return;
     }
     let r = replay_walk(ctx, &result.entries, false, &HashMap::new());
+    truncate_to_replay(ctx, result, &r);
+}
+
+/// [`fail_fast_truncate`] for a final result of the search (`--backtrack=0`,
+/// a settled pass, the best-run re-pass, an autounmask stop): the walk folds
+/// the pass's USE changes when `flips` is given. Left untouched in complete
+/// mode (`_complete_graph` walks with `allow_unsatisfied`) and when the first
+/// failure's parent is not merge-bound (the installed-parent escapes).
+// Portage: depgraph.py, _create_graph; _add_dep; _complete_graph
+pub(crate) fn fail_fast_truncate_final(
+    ctx: &ResolveCtx<'_>,
+    result: &mut GraphResult,
+    flips: Option<&UseChanges>,
+) {
+    if !matches!(result.outcome, ResolveOutcome::Aborted { .. })
+        || ctx.portage_complete(&result.entries)
+    {
+        return;
+    }
+    let empty = HashMap::new();
+    let r = replay_walk(
+        ctx,
+        &result.entries,
+        flips.is_some(),
+        flips.unwrap_or(&empty),
+    );
+    let Some(f) = r.failure.as_ref() else {
+        return;
+    };
+    if merge_bound_version(&result.entries[f.parent].outcome).is_none() {
+        return;
+    }
+    truncate_to_replay(ctx, result, &r);
+}
+
+/// Cut `result` to what the replayed walk `r` reached (see
+/// [`fail_fast_truncate`]).
+fn truncate_to_replay(ctx: &ResolveCtx<'_>, result: &mut GraphResult, r: &merge_order::WalkReplay) {
     let Some(f) = r.failure.clone() else {
         return;
     };
@@ -132,10 +173,15 @@ pub(crate) fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult)
     let edge = &entries[f.parent].deps[f.edge];
     let (fc, fp) = (edge.category.clone(), edge.package.clone());
     let same = |c: &str, p: &str, a: &str| c == fc && p == fp && a == edge.atom;
-    let has_report = result
-        .use_unsat_deps
+    let masked_report = result
+        .masked_deps
         .iter()
-        .any(|d| same(&d.category, &d.package, &d.atom))
+        .any(|d| same(&d.category, &d.package, &d.atom));
+    let has_report = masked_report
+        || result
+            .use_unsat_deps
+            .iter()
+            .any(|d| same(&d.category, &d.package, &d.atom))
         || result
             .plain_miss_deps
             .iter()
@@ -171,6 +217,12 @@ pub(crate) fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult)
             break;
         }
     }
+    result.fail_fast_unreached = entries
+        .iter()
+        .filter(|e| matches!(e.outcome, PretendOutcome::NoVisibleCandidate))
+        .filter(|e| e.category != fc || e.package != fp)
+        .map(|e| (e.category.clone(), e.package.clone()))
+        .collect();
     result
         .use_unsat_deps
         .retain(|d| same(&d.category, &d.package, &d.atom));
@@ -183,7 +235,12 @@ pub(crate) fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult)
     for d in &mut result.plain_miss_deps {
         d.chain = chain.clone();
     }
-    result.masked_deps.clear();
+    result
+        .masked_deps
+        .retain(|d| same(&d.category, &d.package, &d.atom));
+    for d in &mut result.masked_deps {
+        d.chain = chain.clone();
+    }
     // Slot conflicts: only admitted instances, in admission order.
     let rank: HashMap<(String, String, String), usize> = r
         .admitted
@@ -213,14 +270,25 @@ pub(crate) fn fail_fast_truncate(ctx: &ResolveCtx<'_>, result: &mut GraphResult)
     }
     result.slot_conflicts.retain(|c| c.instances.len() >= 2);
     if let ResolveOutcome::Aborted { reason, .. } = &mut result.outcome
-        && let AbortReason::UnsatisfiedAtom { atom, parent_cpv }
-        | AbortReason::MaskedDep { atom, parent_cpv } = reason
+        && let AbortReason::UnsatisfiedAtom { parent_cpv, .. }
+        | AbortReason::MaskedDep { parent_cpv, .. } = reason
     {
         let pe = &entries[f.parent];
+        let mut pcpv = std::mem::take(parent_cpv);
         if let Some(v) = merge_bound_version(&pe.outcome) {
-            *parent_cpv = format!("{}/{}-{v}", pe.category, pe.package);
+            pcpv = format!("{}/{}-{v}", pe.category, pe.package);
         }
-        *atom = edge.atom.clone();
+        *reason = if masked_report {
+            AbortReason::MaskedDep {
+                atom: edge.atom.clone(),
+                parent_cpv: pcpv,
+            }
+        } else {
+            AbortReason::UnsatisfiedAtom {
+                atom: edge.atom.clone(),
+                parent_cpv: pcpv,
+            }
+        };
     }
 }
 

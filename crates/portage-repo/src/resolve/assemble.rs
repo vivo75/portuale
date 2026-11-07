@@ -372,6 +372,7 @@ pub(crate) fn assemble_result(
         masked_deps: pass.masked_deps,
         use_unsat_deps: pass.use_unsat_deps,
         plain_miss_deps: pass.plain_miss_deps,
+        fail_fast_unreached: Vec::new(),
         large_cycle_count,
         report_cycles,
         cycle_display,

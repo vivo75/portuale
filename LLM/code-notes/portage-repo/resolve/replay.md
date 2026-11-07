@@ -21,6 +21,12 @@ Fail-fast replay of the best pass.
 - Keeps the unsatisfied-dependency report of the first failing atom with its own dep chain (Portage's `_get_dep_chain` from the failing parent up the admitting edges to the argument); the other failing atoms were never reached.
 - Slot conflicts: instances and parents in admission order (Portage's package tracker insertion order); a conflict the walk would only have formed after the failure never existed.
 - Leaves `result` untouched when the replay finds no failure or the pass has no report for the failing atom (nothing provably better).
+- Backlog #609 (2026-11-06): the cut itself is `truncate_to_replay`. It now knows `masked_deps` (a masked failing atom is a report too; the masked report of the failing atom is kept with the replay's chain, the rest dropped, instead of clearing them all) and rewrites the abort reason to `MaskedDep`/`UnsatisfiedAtom` by which report survived. Every `NoVisibleCandidate` dependency other than the failing one lands in `GraphResult::fail_fast_unreached`, so the merge-list abort loop prints no bare `!!! no visible ebuild` line for it.
+
+## fn fail_fast_truncate_final
+- Backlog #609. The same cut on the search's final results (`--backtrack=0`, a settled pass, the best-run re-pass, the two `--autounmask-backtrack=n` stops): Portage's `_create_graph` stops at the first failure on every pass (D:3269-3284, `_add_dep` D:3535), not only on the breakage clean pass. The walk folds the pass's USE changes when autounmask suggests them (`walk_flips` in `driver.rs`), so a takable USE miss is no stop (`r594qtop` default keeps the `maskeddep` block after the USE change, as Portage does).
+- Skipped in complete mode: `_complete_graph` calls `_create_graph(allow_unsatisfied=True)` (D:3418-3420), so a miss found there never stops a walk. Skipped when the first failure's parent is not merge-bound: the installed-parent escapes (D:3437-3456 complete mode, D:3475-3486 runtime-masked installed parent) keep Portage walking.
+- Probes and Portage captures: `LLM/evidence/2026-11-06-sweep/609/`.
 
 ## fn replay_conflict_use_display
 - Backlog #264. Portage's `pkg_use_display(pkg, modified_use=...)` (`_pkg_use_enabled`), grouped into `USE` + `USE_EXPAND` like every other conflict line. The merge-row display (`GraphEntry::use_expand_display`) is the wrong helper: it is Portage's `_create_use_string`, which knows only `IUSE`-declared flags and drops unchanged ones at plain `-p`, while Portage renders the conflict block through `pkg_use_display` (implicit-expand groups included, every flag shown).
