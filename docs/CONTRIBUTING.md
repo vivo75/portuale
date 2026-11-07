@@ -18,21 +18,48 @@ Build before testing: the unit tests in `crates/portuale` run
 
 ## The pmtest sibling checkout
 
-The black-box contract suite, the fixtures, and the differential test bed
-live in the sibling `pmtest` repository, next to this checkout.
-`fixtures/` here is a symlink into its fixture tree, so the Rust tests and
-the contract suite read the same files. A checkout without the sibling
-beside it cannot run the tests. Never edit the suite to make a package
-manager pass; fix the package manager instead.
+The black-box contract suite, the health checker, the fixtures, and the
+differential test bed live in the sibling `pmtest` repository, next to this
+checkout. `fixtures/` here is a symlink into its fixture tree, so the Rust
+tests and the contract suite read the same files. A checkout without the
+sibling beside it cannot run the tests.
+
+What counts as correct is set by the charter ([`charter.md`](charter.md)),
+the PMS and the Devmanual, not by what Portage prints. Two checks follow
+that rule:
+
+- `pmtest/pytests-contract-suite/health_checker.py` checks a plan (the
+  `emerge --pretend -v --json` output) against charter properties 1
+  (dependencies hold) and 2 (order is legal). It is written from the PMS and
+  shares no code with portuale or Portage. The other properties have no
+  checker yet.
+- `pmtest/differential-test-bed/run/l0-health.sh` runs it on every L0 plan
+  of a real Gentoo tree in a container. Portage is not run.
+
+The contract suite, the pinned outputs and the harvested corpus record what
+Portage printed. They are a regression and comparison tool: a difference from
+Portage is a prompt to look, not by itself a bug. Never edit the suite to
+make a package manager pass; fix the package manager, or change the
+expected value for a stated reason.
+
+## Code expectations
+
+- Code must be readable by humans. Comments and documentation are in
+  international English (`LLM/` is the exception).
+- Functions have a clear behaviour and are small enough to hold in the head.
+- Less code is better. A change that improves features and also shrinks the
+  code (tests excluded) is worth more than one that only adds code.
 
 ## Version numbers
 
-portuale's version number tracks the Portage release this tree ports:
+portuale's version number stays derived from Portage's release. The
+Portage-dependent part is updated when Portage is, after checking what
+changed since the previous version:
 
 - MAJOR = Portage MAJOR × 100 + Portage MINOR.
 - MINOR = Portage PATCH.
-- PATCH is a sequence number. 0 means porting of this Portage release has
-  started but the tree may not match Portage yet. 1 and above are releases
+- PATCH is a sequence number. 0 means the move to this Portage release
+  has started and what changed in Portage is not yet checked. 1 and above are releases
   fit for installing packages.
 
 The full Portage version sits in the workspace `Cargo.toml` under
@@ -56,7 +83,8 @@ portuale 300.83.0.
 ## Commit policy
 
 - Title: `<what changed>: <short description>`.
-- Body: a wrapped paragraph explaining the why and the Portage grounding.
+- Body: a wrapped paragraph explaining the why and what grounds it (the charter, the PMS, or the Portage
+  source consulted).
 - Commits are paired across the two repos (see `AGENTS.md`,
   "Two repos, one project"): the product change lands here, fixtures and
   contract pins land in `pmtest` on a same-named branch, and the two

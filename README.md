@@ -1,53 +1,50 @@
 <img src="docs/images/logo.svg" alt="portuale logo" width="120" />
 
-# portuale — a Rust reimplementation of Portage
+# portuale — a package manager for Gentoo, in Rust
 
-`portuale` is a drop-in Rust reimplementation of Gentoo's package
-manager: **same behaviour as [Portage](https://wiki.gentoo.org/wiki/Project:Portage)
-(and then some)**, developed as a **friendly fork** — a separate,
-cooperating codebase, verified against the Python original by a shared,
-black-box, jointly-owned test suite. It builds, merges, and unmerges
-real Gentoo packages today. It was built one reviewed slice at a time,
-starting from `portage.versions`; a few portage features are still
-unported — see **Status** below.
+`portuale` is a package manager for Gentoo written in Rust. It started as a
+reimplementation of [Portage](https://wiki.gentoo.org/wiki/Project:Portage)'s
+`emerge` and `ebuild`. `mrg` was added later as a second front end with the
+same role as `emerge`, plus extra features and options. Both resolve
+dependencies, fetch sources, run the ebuild phases, merge and unmerge files,
+and handle binary packages (xpak and gpkg). It builds, merges and unmerges
+real Gentoo packages.
 
-The four hard goals it is built to (see
-[`LLM/agent-context.md`](LLM/agent-context.md) for the full rationale):
+The main goal is a healthy installation: dependencies hold, the build order
+is legal, packages are as new as possible, removal does not break running
+programs, and error messages help. The charter,
+[`docs/charter.md`](docs/charter.md), defines these five properties and
+what counts as correct.
 
-1. **Portability of change, not of source.** A behaviour change on either
-   side lands with contract-suite cases the other side must then pass —
-   not line-for-line structural mirroring.
-2. **Measurably faster than Python**, proven by a CI benchmark gate, not
-   assumed.
-3. **Runs on a minimal Linux system** — static musl build, zero dynamic
-   runtime dependencies.
-4. **Tests are written in Python for both implementations**, driven
-   black-box via the CLI.
+## Relation to Portage
+
+- portuale is not a fork and does not aim to replace Portage. We hope
+  Portage stays well maintained for a long time.
+- `portuale emerge` keeps the options of `emerge`, with the same meaning and
+  intentions. It may differ in build order and in the messages it prints.
+- Portage is a teacher, no longer the oracle. We watch how it evolves and
+  learn from it. Behaviour is derived from the PMS, the EAPIs and the
+  Devmanual; where those are silent, the owner decides.
+- The version number stays derived from Portage's release (see
+  [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md)).
+- The sibling `pmtest` repository is kept to support Portage's development
+  and as a regression and comparison tool.
 
 ## Status
 
-The core `emerge` / `ebuild` loop is **real and live** — it has built,
-merged, and unmerged `app-arch/unzip`, `sys-fs/fuse`, and
-`app-arch/xz-utils` end to end against an actual Gentoo tree. Shipped:
-full `emerge --pretend` dependency resolution (atoms, slots, USE deps,
-blockers, slot conflicts, `USE_EXPAND`, `REQUIRED_USE`, autounmask,
-profile/`make.conf` config, overlays, Portage's `resolver/output.py`
-layout with ANSI colour); real ebuild phase execution via an embedded
-`brush` (Rust-native bash) driving unmodified `bin/*.sh`; real `SRC_URI`
-fetch; real filesystem merge/unmerge with `CONFIG_PROTECT`,
-`collision-protect`, preserve-libs, and `env_update`; `emerge <atom>`,
-`-C`/`--unmerge`, `--depclean`/`--prune`, `--config`, `--deselect`,
-`--buildpkgonly`, `--getbinpkg`/`--getbinpkgonly`; xpak + gpkg binary
-packages.
+Shipped and used on real Gentoo trees: `emerge --pretend` dependency
+resolution (slots, USE dependencies, blockers, `REQUIRED_USE`, autounmask,
+profile and `make.conf` configuration, overlays); ebuild phase execution with
+a real `bash` or the embedded `brush` shell; `SRC_URI` fetch; merge and
+unmerge with `CONFIG_PROTECT`, collision protection and preserved
+libraries; `--unmerge`, `--depclean`, `--prune`, `--config`, `--deselect`,
+`--buildpkgonly`, `--getbinpkg`, `--getbinpkgonly`; xpak and gpkg binary
+packages; `mrg` remote merge of gpkg packages over SSH.
 
-It is **not yet a complete replacement**. The distance to one is now
-dominated by a single large item — a full backtracking resolver — plus a
-short incremental tail (scheduler odds and ends, the deliberate
-sandbox/`FEATURES` cuts, some binhost/gpkg gaps). See
-[`LLM/scope-backlog.md`](LLM/scope-backlog.md) for the honest
-distance-to-parity assessment, and
-[`LLM/what-this-proves.md`](LLM/what-this-proves.md) for the
-slice-by-slice record with its cited-source grounding.
+Not everything Portage does is ported. Some Portage behaviour is kept for
+now only because no check yet shows that dropping it is as good; it is
+removed gradually (see the charter). The agent-side record of what is done
+and open is in [`LLM/`](LLM/README.md).
 
 ## Layout
 
@@ -66,8 +63,11 @@ crates/                    the workspace crates
   portage-profile/         shared lib: USE / ACCEPT_KEYWORDS from a profile chain + make.conf
   portage-repo/            multi-repo/metadata/vdb access + resolution + dep-graph walk
   portage-fetch/           shared lib: SRC_URI fetch (Manifest digests, mirrors)
-  *-harness/               neutral CLI harnesses (contract + benchmark testing)
-  portuale/                the actual emerge / ebuild multicall binary
+  portage-util/            shared filesystem helpers
+  portage-vdb/             installed-package database and its backends
+  mrg-director/            trait contracts behind the `mrg` front end
+  *-harness/               neutral CLI harnesses (used by the pmtest suite)
+  portuale/                the multicall binary: emerge, ebuild, mrg, vdb, portageq
 fixtures/                  -> ../pmtest/fixtures (symlink): the one fixture tree,
                            read by the Rust tests here and by the contract suite there
 musl/                      musl static-build smoke test (minimal-Linux CI gate)
@@ -86,9 +86,9 @@ live") for the old-path → new-home map.
 cargo build --release
 ```
 
-Produces `target/release/portuale`; create `emerge` and `ebuild`
-symlinks next to it for multicall dispatch (the tests do this
-automatically).
+Produces `target/release/portuale`. The binary dispatches on its own
+name: create `emerge`, `ebuild` and `mrg` symlinks next to it (the tests do
+this automatically), or run `portuale <applet> ...`.
 
 ## Test
 
@@ -100,8 +100,9 @@ cargo test --release
 cd ../pmtest && python3 -m pytest pytests-contract-suite -q
 ```
 
-The contract suite, the container differential bed, the benchmark and
-the primitive-differential scripts live in the sibling `pmtest` repo,
+The contract suite, the health checker, the container differential bed,
+the benchmark and the primitive-differential scripts live in the sibling
+`pmtest` repo,
 which resolves this tree through its `managers/managers.yaml` registry
 (`PMTEST_PM=portuale`, the default) and rebuilds the binary itself. The
 fixture tree lives there too: `fixtures/` here is a symlink to it, so
@@ -125,10 +126,12 @@ target/release/versions-harness vercmp 1.0-r1 1.0
 
 | Doc | What it is |
 |---|---|
+| [`docs/charter.md`](docs/charter.md) | Read first. What portuale is, its relation to Portage, what counts as correct, how the code must look. |
+| [`docs/architecture.md`](docs/architecture.md), [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | How the code is organised; how to build, test and contribute. |
 | [`AGENTS.md`](AGENTS.md) | **Start here for agent work.** The "next slice" workflow and the verification / commit rules. |
 | [`LLM/agent-context.md`](LLM/agent-context.md) | The full context: goals, hard constraints, architecture decisions, the bash-backend investigation, current state, and the open backlog. |
 | [`LLM/what-this-proves.md`](LLM/what-this-proves.md) | The living, append-only per-slice record — every feature, with its Portage source grounding. |
-| [`LLM/scope-backlog.md`](LLM/scope-backlog.md) | What Portage behaviour is *not* yet ported (either side), the standing non-goals, and the distance to a drop-in replacement. |
+| [`LLM/scope-backlog.md`](LLM/scope-backlog.md) | What Portage behaviour is not yet ported, and the standing non-goals. |
 | [`LLM/lessons-of-backlog-ops-2026-10-03.md`](LLM/lessons-of-backlog-ops-2026-10-03.md), [`LLM/recap-of-backlog-ops-2026-10-03.md`](LLM/recap-of-backlog-ops-2026-10-03.md) | How to work on backlog items (condensed lessons) and the per-item status/residue/cut index for the closed batches. |
 | [`docs/brush-pin.md`](docs/brush-pin.md) | The `brush` (embedded bash) dependency pin and its re-pin checklist. |
 | [`docs/diagrams/operation-diagrams.md`](docs/diagrams/operation-diagrams.md) | Block diagrams tracing four representative `emerge` invocations through the code. |

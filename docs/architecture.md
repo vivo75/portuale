@@ -20,13 +20,16 @@ The workspace root is `Cargo.toml`. All crates live under `crates/`.
 - `portage-fetch`: `SRC_URI` fetching (Manifest digests, mirrors).
 - `portage-util`: filesystem helpers shared by the other crates.
 - `portage-vdb`: the installed-package database and its backends.
-- `mrg-director`: the trait contracts behind the `mrg` remote-merge director.
+- `mrg-director`: the trait contracts (solver, package database, repository
+  cache, binpkg fetch, merge engine, binpkg index, news, scheduler policy)
+  that the `mrg` front end is written against, so each part can be swapped.
 - `harness-common`: shared scaffolding for the test-harness binaries.
 - `versions-harness`: neutral CLI harness over `portage-versions`.
 - `atom-harness`: neutral CLI harness over `portage-dep`.
 - `use-reduce-harness`: neutral CLI harness over `portage-use-reduce`.
 - `required-use-harness`: neutral CLI harness over `portage-required-use`.
-- `portuale`: the `emerge` / `ebuild` multicall binary itself.
+- `portuale`: the multicall binary itself. It runs as `emerge`, `ebuild`,
+  `mrg`, `vdb` or `portageq`, depending on its own name.
 
 Dependencies flow upward toward `portuale`:
 
@@ -43,6 +46,26 @@ portage-versions, portage-use-reduce, portage-required-use, portage-util  (leave
 harness-common --> versions-harness, atom-harness,
                    use-reduce-harness, required-use-harness
 ```
+
+## The `mrg` front end
+
+`mrg` is a second front end with the same role as `emerge` and its own
+extra options. It lives in `crates/portuale/src/mrg.rs`. Today it parses
+the `emerge` option set with `clap`, translates it to canonical long-form
+arguments, and hands them to `pretend::run`, the function the `emerge`
+applet also runs. So resolution, merge order and display are shared with
+`emerge` for now. It adds these options:
+
+- `--solver=portage|pubgrub|resolvo` chooses the dependency solver
+  (default `portage`, the built-in resolver).
+- `--remote-*` options (hostname, user, port, root, vdb, ledger and more)
+  merge gpkg binary packages onto a remote host over SSH. Resolution runs
+  on the server; the phases run on the client. The design is in
+  `docs/remote-merge.md`, and `crates/portuale/src/remote/` holds the code.
+
+`mrg-director` defines the traits for a front end that uses its own
+components. Some of them (merge engine, scheduler policy, fetcher) already
+carry production traffic; others have a single implementation so far.
 
 ## Data flow of one `emerge -pv <atom>`
 
@@ -63,8 +86,8 @@ harness-common --> versions-harness, atom-harness,
 5. **Merge order** (`portage-repo`: `src/merge_order/`). The graph is sorted
    into install order, with cycle handling.
 6. **Display** (`portuale`: `src/pretend/merge_list.rs`,
-   `src/pretend/display/`). The ordered list prints in Portage's
-   `emerge --pretend` layout, with verbose counters under `-v`.
+   `src/pretend/display/`). The ordered list prints in a layout modelled on
+   `emerge --pretend`, with verbose counters under `-v`.
 
 Worked traces of representative invocations live in
 `docs/diagrams/operation-diagrams.md`.
@@ -91,8 +114,10 @@ A pretend run stops at display. A merge keeps going:
 ## Where the tests live
 
 Unit tests live in this repo, next to the code they cover.
-The black-box contract suite, the fixture tree, and the container
-differential test bed live in the sibling `pmtest` repository.
+The black-box contract suite, the health checker, the fixture tree, and
+the container differential test bed live in the sibling `pmtest`
+repository. They are a regression and comparison tool; see
+`docs/CONTRIBUTING.md`.
 `fixtures/` here is a symlink into that tree, so both sides read the same files.
 
 ## Where code notes live
