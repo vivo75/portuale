@@ -240,7 +240,7 @@ pub(crate) fn chain_arg_lines(
                     && at.package == cp.1
             })
         })
-        .map(|a| (argument_label(sets, a).to_string(), "argument".to_string()))
+        .flat_map(|a| argument_chain_rows(sets, a))
         .collect()
 }
 

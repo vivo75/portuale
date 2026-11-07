@@ -53,3 +53,6 @@ The counts and summary lines under the merge list, and the redisplay before a me
 
 ## fn render_tree_rows circular order (#517 (b))
 - Portage's circular re-display walks `handler.merge_list` (the reduced leaf-drain order) through the same `display()` reversal; `display_entries` (the abort `partial`) already is that reduced order, so it goes in as-is and `print_tree`'s reversal produces Portage's walk. Portage: `depgraph.py`, `_show_circular_deps`.
+
+## fn abort_unsat_after_autounmask (backlog #611 display order)
+- Portage's `display_problems` (`lib/_emerge/depgraph.py:11260+`) runs `_display_autounmask` before the `_unsatisfied_deps_for_display` loop, so an aborted resolve that also proposes autounmask changes prints the change blocks (and the "terminated early" notice) first, then the masked/unsatisfied blocks. The merge-list abort branch skips those disclosures in that case and `show_autounmask` prints them after its notice. `r594qtop` (default and `--backtrack=0`) is the probed shape (`LLM/evidence/2026-11-06-sweep/609/q*.portage.txt`).

@@ -204,10 +204,7 @@ fn truncate_to_replay(ctx: &ResolveCtx<'_>, result: &mut GraphResult, r: &merge_
         };
         chain.push(line);
         if let Some(ai) = r.admitted_arg[cur] {
-            chain.push((
-                ctx.top_level.label(&ctx.atoms[ai]).to_string(),
-                "argument".to_string(),
-            ));
+            chain.extend(ctx.top_level.chain_rows(&ctx.atoms[ai]));
             break;
         }
         let Some((p, _)) = r.admitted_by[cur] else {

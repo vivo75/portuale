@@ -471,6 +471,39 @@ pub(crate) struct ShowAbortDisclosuresArgs<'a> {
     pub(crate) verbose: bool,
 }
 
+/// Whether the aborted resolve's dependency disclosures wait for the
+/// autounmask block: Portage's `display_problems` shows the autounmask changes
+/// before the unsatisfied dependencies.
+// Portage: depgraph.py, display_problems (_display_autounmask, then _unsatisfied_deps_for_display)
+pub(crate) fn abort_unsat_after_autounmask(result: &GraphResult) -> bool {
+    portage_repo::abort_path_enabled()
+        && matches!(
+            &result.outcome,
+            portage_repo::ResolveOutcome::Aborted {
+                reason: portage_repo::AbortReason::MaskedDep { .. }
+                    | portage_repo::AbortReason::UnsatisfiedAtom { .. },
+                ..
+            }
+        )
+        && (!result.autounmask_keyword_changes.is_empty()
+            || !result.autounmask_mask_changes.is_empty()
+            || !result.autounmask_use_changes.is_empty()
+            || !result.autounmask_license_changes.is_empty())
+}
+
+/// The `NoVisibleCandidate` entries an aborted resolve discloses: not folded
+/// into a parent USE flip, not past Portage's fail-fast stop.
+pub(crate) fn abort_unsat_disclosed(result: &GraphResult, entry: &GraphEntry) -> bool {
+    matches!(
+        entry.outcome,
+        portage_repo::PretendOutcome::NoVisibleCandidate
+    ) && entry.parent_use_suggestion.is_none()
+        && !result
+            .fail_fast_unreached
+            .iter()
+            .any(|(c, p)| *c == entry.category && *p == entry.package)
+}
+
 /// The unsatisfied-dependency disclosures of an aborted resolve.
 pub(crate) fn show_abort_disclosures(args: ShowAbortDisclosuresArgs<'_>) {
     let ShowAbortDisclosuresArgs {
@@ -528,15 +561,11 @@ pub(crate) fn show_abort_disclosures(args: ShowAbortDisclosuresArgs<'_>) {
         for (i, entry) in result.entries.iter().enumerate() {
             // A dependency collected into a parent USE flip renders no row
             // (the USE-changes block below is its whole output).
-            if matches!(
-                entry.outcome,
-                portage_repo::PretendOutcome::NoVisibleCandidate
-            ) && entry.parent_use_suggestion.is_none()
-                && !result
-                    .fail_fast_unreached
-                    .iter()
-                    .any(|(c, p)| *c == entry.category && *p == entry.package)
-            {
+            if abort_unsat_disclosed(result, entry) {
+                // After the autounmask block, printed by `show_autounmask`.
+                if abort_unsat_after_autounmask(result) {
+                    continue;
+                }
                 // With a slot conflict recorded, this line waits until after
                 // the slot-conflict block (Portage's `display_problems` order).
                 if !result.slot_conflicts.is_empty() {

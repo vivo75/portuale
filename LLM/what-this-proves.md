@@ -20922,3 +20922,15 @@ chain; `dev-libs/hardmaskedpkg`, `repomaskedpkg`, `profilemaskedpkg`,
 `package.mask` files the same way, byte-identical to Portage 3.0.83
 (`LLM/evidence/2026-11-06-sweep/611c/`). The #609 fail-fast cut also learned to
 leave `||` edges alone (`dev-libs/opartly` keeps Portage's `1/20`).
+
+Backlog #611(e) (2026-11-07): a dependency chain that reaches a world-file atom
+through `@world` now names the nested set, and an aborted resolve prints its
+autounmask changes before its masked/unsatisfied blocks, both as Portage does.
+Live, on a fixture copy with `dev-libs/maskneedpkg` in the world file:
+`emerge -p --backtrack=0 @world` ends the `maskeddep` block's chain with
+`(dependency required by "@selected" [set])` and `(dependency required by "@world" [argument])`
+(`"@system" [set]` for a profile `*` atom), and with `dev-libs/r594qa` in the world
+file the USE change reads `# required by @selected` / `# required by @world (argument)`;
+`emerge -pv dev-libs/r594qtop` prints the `r594vdep` USE change and the
+"terminated early" notice before the `maskeddep` block. Same as Portage 3.0.83
+(`LLM/evidence/2026-11-06-sweep/611e/`, `../609/q*.portage.txt`).

@@ -29,15 +29,67 @@ impl<'a> FromIterator<&'a str> for TopLevel<'a> {
 }
 
 impl TopLevel<'_> {
-    /// How a chain names this argument: `@set` for a set member, else the atom.
-    pub(crate) fn label<'b>(&'b self, atom: &'b str) -> &'b str {
-        argument_label(self.sets, atom)
+    /// The `required by …` comment lines naming this argument.
+    pub(crate) fn required_by(&self, atom: &str) -> Vec<String> {
+        argument_required_by(self.sets, atom)
+    }
+
+    /// The dependency-chain rows naming this argument.
+    pub(crate) fn chain_rows(&self, atom: &str) -> Vec<(String, String)> {
+        argument_chain_rows(self.sets, atom)
     }
 }
 
-/// `@set` for a set member, else the atom as given.
+/// `@set` for a set member (the set given on the command line), else the
+/// atom as given. A set path is stored outermost first, space-separated
+/// (`@world @selected`, see `ResolveRequest::argument_sets`).
 pub(crate) fn argument_label<'b>(sets: &'b HashMap<String, String>, atom: &'b str) -> &'b str {
-    sets.get(atom).map_or(atom, String::as_str)
+    sets.get(atom)
+        .and_then(|p| p.split(' ').next())
+        .unwrap_or(atom)
+}
+
+/// The set nested in the argument set that holds `atom` (`@selected` for a
+/// world-file atom under `@world`), if any.
+pub(crate) fn argument_nested_set<'b>(
+    sets: &'b HashMap<String, String>,
+    atom: &str,
+) -> Option<&'b str> {
+    sets.get(atom)?.split(' ').nth(1)
+}
+
+/// The `(node, type)` chain rows for the argument `atom`: the nested set as
+/// `set`, then the argument.
+// Portage: depgraph.py, _get_dep_chain (SetArg parents of a SetArg)
+pub(crate) fn argument_chain_rows(
+    sets: &HashMap<String, String>,
+    atom: &str,
+) -> Vec<(String, String)> {
+    let mut rows: Vec<(String, String)> = argument_nested_set(sets, atom)
+        .map(|n| (n.to_string(), "set".to_string()))
+        .into_iter()
+        .collect();
+    rows.push((
+        argument_label(sets, atom).to_string(),
+        "argument".to_string(),
+    ));
+    rows
+}
+
+/// The autounmask `# required by …` lines for the argument `atom`: the
+/// nested set bare, then `<label> (argument)`.
+// Portage: depgraph.py, _get_dep_chain_as_comment
+pub(crate) fn argument_required_by(sets: &HashMap<String, String>, atom: &str) -> Vec<String> {
+    argument_chain_rows(sets, atom)
+        .into_iter()
+        .map(|(n, ty)| {
+            if ty == "argument" {
+                format!("required by {n} (argument)")
+            } else {
+                format!("required by {n}")
+            }
+        })
+        .collect()
 }
 
 /// Per-walk memo of [`merge_order::tree_solved_replacements`] verdicts.

@@ -151,6 +151,24 @@ pub(crate) fn show_autounmask(args: ShowAutounmaskArgs<'_>) -> Option<ExitCode> 
         }
     }
 
+    // The aborted resolve's dependency disclosures follow the autounmask
+    // block. Portage: depgraph.py, display_problems
+    if abort_unsat_after_autounmask(result) {
+        for entry in result
+            .entries
+            .iter()
+            .filter(|e| abort_unsat_disclosed(result, e))
+        {
+            print_no_visible_candidate(
+                &result.use_unsat_deps,
+                entry,
+                &result.masked_deps,
+                &result.plain_miss_deps,
+                color,
+            );
+        }
+    }
+
     if has_autounmask_changes && !autounmask_continue_active {
         pretend_end_news_notice(pretend, repos, root, config, color);
         return Some(ExitCode::from(1));

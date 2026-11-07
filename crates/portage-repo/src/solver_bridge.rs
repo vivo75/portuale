@@ -4640,7 +4640,7 @@ fn parent_flip_rescue(args: ParentFlipRescueArgs<'_>) -> Option<ParentFlipRescue
                 a.category == pc && a.package == pp && a.blocker == portage_dep::Blocker::None
             })
         })
-        .map(|atom| vec![format!("required by {} (argument)", top_level.label(atom))])
+        .map(|atom| top_level.required_by(atom))
         .unwrap_or_default();
     Some(ParentFlipRescue {
         change: AutounmaskChange {

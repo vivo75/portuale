@@ -229,3 +229,50 @@ fn a_failing_or_branch_keeps_its_missing_dependency_restart() {
     assert!(aborted(&r), "rc 1, got {:?}", r.outcome);
     assert_eq!(r.backtrack_restarts, 1, "{:?}", r.outcome);
 }
+
+#[test]
+fn a_world_file_member_chains_through_selected() {
+    // Backlog #611(e), Portage 3.0.83 on a fixture copy with the atom in the
+    // world file, `emerge -p --backtrack=0 @world`
+    // (`LLM/evidence/2026-11-06-sweep/611e/`): the masked block's chain ends
+    // `"@selected" [set]`, `"@world" [argument]`, and the autounmask comment
+    // `# required by @selected`, `# required by @world (argument)`.
+    let root = hermetic_root(&[]);
+    let mut req = request_in(&root, &["dev-libs/maskneedpkg"]);
+    req.backtrack_max = 0;
+    req.argument_sets.insert(
+        "dev-libs/maskneedpkg".to_string(),
+        "@world @selected".to_string(),
+    );
+    let r = req.resolve().expect("the library reports the miss");
+    assert_eq!(r.masked_deps.len(), 1, "{:?}", r.masked_deps);
+    let tail: Vec<(&str, &str)> = r.masked_deps[0]
+        .chain
+        .iter()
+        .map(|(n, t)| (n.as_str(), t.as_str()))
+        .collect();
+    assert_eq!(
+        tail,
+        [
+            ("dev-libs/maskneedpkg-1.0::testrepo", "ebuild"),
+            ("@selected", "set"),
+            ("@world", "argument")
+        ]
+    );
+    let mut req = request_use_in(&root, &["dev-libs/r594qa"]);
+    req.backtrack_max = 0;
+    req.argument_sets.insert(
+        "dev-libs/r594qa".to_string(),
+        "@world @selected".to_string(),
+    );
+    let r = req.resolve().expect("the library reports the change");
+    let chain = &r.autounmask_use_changes[0].dep_chain;
+    assert_eq!(
+        chain,
+        &[
+            "required by dev-libs/r594qa-2::testrepo",
+            "required by @selected",
+            "required by @world (argument)"
+        ]
+    );
+}

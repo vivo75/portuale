@@ -121,7 +121,7 @@ pub(crate) fn parent_use_flip(
                     a.category == pc && a.package == pp && a.blocker == portage_dep::Blocker::None
                 })
             })
-            .map(|t| vec![format!("required by {} (argument)", ctx.top_level.label(t))])
+            .map(|t| ctx.top_level.required_by(t))
             .unwrap_or_default(),
     });
     // A parent-flip rescue pre-empts the `_success_without_autounmask`

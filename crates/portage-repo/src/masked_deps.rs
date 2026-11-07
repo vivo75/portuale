@@ -1091,10 +1091,14 @@ fn render_all_masked_block(
     // top-level atom reports no chain. Portage: depgraph.py,
     // _show_unsatisfied_dep (the `atom_arg` dep-chain walk ends at the
     // set for `SetArg` members).
-    if let Some(set) = set_member_of {
-        out.push_str(&format!(
-            "\n(dependency required by \"{set}\" [argument])\n"
-        ));
+    // A set path (`@world @selected`) adds the nested set as a `[set]` row.
+    if let Some(path) = set_member_of {
+        out.push('\n');
+        let sets: Vec<&str> = path.split(' ').collect();
+        for (i, set) in sets.iter().enumerate().rev() {
+            let ty = if i == 0 { "argument" } else { "set" };
+            out.push_str(&format!("(dependency required by \"{set}\" [{ty}])\n"));
+        }
     } else {
         out.push('\n');
     }

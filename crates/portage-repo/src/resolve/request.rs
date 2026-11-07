@@ -12,7 +12,9 @@ pub struct ResolveRequest {
     pub root: PathBuf,
     pub atoms: Vec<String>,
     /// Expanded set members -> the `@name` of the set argument that supplied
-    /// them, for the `(argument)` lines of dependency chains.
+    /// them, for the `(argument)` lines of dependency chains. A member of a
+    /// set nested in it carries the path, outermost first and space-separated
+    /// (`@world @selected`): the nested set is the chain's `[set]` row.
     // Portage: depgraph.py, _get_dep_chain (SetArg is named by its set)
     pub argument_sets: HashMap<String, String>,
     pub config: portage_profile::Config,

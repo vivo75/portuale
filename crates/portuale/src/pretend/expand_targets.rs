@@ -70,6 +70,10 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
     // The `@name` of the set argument behind each expanded atom, parallel to
     // `expanded_atoms`; `None` for a plain atom argument.
     let mut expanded_set_name: Vec<Option<String>> = Vec::new();
+    // The set nested in `@world` that holds each of its atoms (`@selected`,
+    // `@system`); a later nested set wins, as in the expansion order.
+    // Portage: _sets (WorldSelectedSet), depgraph.py _get_dep_chain
+    let mut world_nested: HashMap<String, &'static str> = HashMap::new();
     // The `@name` set args (leading `@` stripped) resolved via a set file,
     // recorded in `world_sets` after a successful non-`--pretend` merge.
     // Portage: depgraph.py, saveNomergeFavorites
@@ -112,6 +116,11 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
             }
             match expand_selected(root, config_root) {
                 Ok(atoms) => {
+                    if *atom_str == "@world" {
+                        for a in &atoms {
+                            world_nested.insert(a.clone(), "@selected");
+                        }
+                    }
                     expanded_from_set.extend(std::iter::repeat_n(true, atoms.len()));
                     expanded_atoms.extend(atoms);
                 }
@@ -123,6 +132,9 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
             if *atom_str == "@world" {
                 let mut atoms = config.system_packages.clone();
                 atoms.sort();
+                for a in &atoms {
+                    world_nested.insert(a.clone(), "@system");
+                }
                 expanded_from_set.extend(std::iter::repeat_n(true, atoms.len()));
                 expanded_atoms.extend(atoms);
             }
@@ -315,7 +327,15 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
     let argument_sets: HashMap<String, String> = expanded_atoms
         .iter()
         .zip(expanded_set_name.iter())
-        .filter_map(|(a, n)| n.as_ref().map(|n| (a.clone(), n.clone())))
+        .filter_map(|(a, n)| {
+            let n = n.as_ref()?;
+            // Stored outermost first: `@world @selected`.
+            let path = match world_nested.get(a) {
+                Some(nested) if n == "@world" => format!("{n} {nested}"),
+                _ => n.clone(),
+            };
+            Some((a.clone(), path))
+        })
         .collect();
 
     for atom_str in &expanded_atoms {
