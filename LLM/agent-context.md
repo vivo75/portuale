@@ -1,101 +1,99 @@
-# Agent context: portuale, a Rust reimplementation of Portage
+# Agent context: portuale, an independent Gentoo package manager in Rust
 
-> **2026-11-07: the foundations changed.** Portuale is no longer a friendly
-> fork or a drop-in replacement and Portage is no longer the oracle. Read
-> `docs/charter.md` first. Everything below that says "drop-in", "same
-> behaviour", "mimic" or "oracle" is history until it is rewritten; hard
-> goals 1 and 4 (a shared suite for two implementations) predate the removal
-> of the Python copy and no longer apply as written.
+> **Read [`docs/charter.md`](../docs/charter.md) first.** Since 2026-11-07
+> portuale is not a Portage fork, not a drop-in replacement, and Portage is
+> not the oracle. Where an older paragraph further down still says
+> "drop-in", "same behaviour", "mimic" or "oracle", it is a record of how
+> things were done then; the charter wins. Dated "memory notes" and slice
+> records are history and are not rewritten.
 
 This file is the single entry point for (re)deriving where portuale
 stands and what to do next: goals, hard constraints, architecture
 decisions, the phase-execution/bash-backend findings, and pointers to the
-live state + open backlog. The original porting-strategy prompt (`history/porting-strategy-prompt.md`)
-was deleted 2026-10-03 and is in git history;
-the session-to-session operating rhythm is [`../AGENTS.md`](../AGENTS.md).
+live state and the open backlog. The session-to-session operating rhythm
+is [`../AGENTS.md`](../AGENTS.md).
 
 As with any settled decision below: if you disagree, say so explicitly
-and re-open it — don't silently override it.
+and re-open it, do not silently override it.
 
 ## Context
 
-Portage (this repository) is the Gentoo package manager, written in Python.
-Portuale is a Rust reimplementation of it, developed as a **friendly
-fork**: a separate, cooperating codebase, not a hostile competitor. It is
-a **working package manager** — it resolves, builds, merges, and unmerges
-real Gentoo packages — and the aim is a **drop-in, same-behaviour
-replacement** (and then some), reached one reviewed, contract-tested
-slice at a time. `scope-backlog.md` Part 2 is the honest list of what
-Portage still does that portuale doesn't.
+Portuale is a package manager for Gentoo, written in Rust. It started as a
+reimplementation of Portage's `emerge` and `ebuild`; `mrg` was added later
+as a second front end with the same role as `emerge` and extra features.
+It is a **working package manager**: it resolves, fetches, builds, merges
+and unmerges real Gentoo packages, and handles xpak and gpkg binary
+packages.
 
-**EAPI floor**: EAPI 0, 1, 2, 3, 4, and 6 are deprecated and removed in
-this repo/fork — no ebuild uses them, and all profiles are EAPI 5 or
-higher (5, 7, 8 are the live versions). Any EAPI-conditional logic being
-read or ported only needs to account for EAPI 5+ as the real, live
-baseline — branches that only apply to EAPI 0/1/2/3/4/6 are dead code and
-can be ignored rather than faithfully ported. (Portuale's own `portage-*`
-crates go further, as a deliberate simplification confirmed with the user:
-no EAPI parametrization at all within the 5+ floor — every EAPI in that
-range is treated identically. See `what-this-proves.md` for the many places
-this precedent is invoked.)
+The goal is a **healthy installation**: every package at the best version
+the others allow, programs that keep working when packages go away, and
+messages that say what is wrong and what to do (charter, "What counts as
+correct"). Expected behaviour comes from the PMS, the EAPIs and the
+Devmanual; where they are silent the owner decides. Portage is a teacher we
+keep watching, and its output is a useful comparison, not a specification.
+`emerge` keeps Portage's options with their meaning and intentions, and may
+differ in build order and in messages. Portuale does not try to replace
+Portage.
+
+**EAPI floor**: ebuilds are EAPI 7 or 8 and profiles are EAPI 5 or higher.
+Branches that only apply to older EAPIs are dead code: ignore them rather
+than port them. Portuale's own `portage-*` crates go further, as a
+deliberate simplification confirmed with the owner: no EAPI parametrization
+within that floor. See `what-this-proves.md` for the places this precedent
+is invoked.
 
 ## Team structure
 
-- A Python team continues to own and evolve the existing Python codebase.
-- A separate Rust team builds and owns the Rust implementation.
-- The two teams work independently, each writing idiomatic code in their
-  own language. Do not force Rust to mimic Python's structure line-for-line
-  — that trades away idiomatic Rust for a cosmetic diffability that doesn't
-  hold up in practice.
+Rust code only; there is no Python team to stay in sync with. The old
+"shared suite for two implementations" arrangement ended when the Python
+reference copy was removed (2026-09-15). The black-box suite lives in the
+sibling repository `../pmtest` and is kept in part as a way to support
+Portage's own development.
 
-## Hard goals (non-negotiable)
+## Hard goals
 
-1. **Portability of change, not of source.** After the initial port, a
-   behavior change made in either codebase must be reproducible in the
-   other. The mechanism for this is a **shared, jointly-owned Python
-   test suite acting as an executable behavioral spec** — not structural
-   mirroring of source code. A change lands with new/updated test cases;
-   the other implementation is "in sync" when it passes them, regardless
-   of how differently it's implemented internally.
-2. **Rust must be measurably faster than Python**, not just assumed faster
-   because it's Rust. This must be proven by benchmarks, tracked over time
-   in CI as a regression gate (not a one-time claim).
-3. **The Rust binary must run on a minimal Linux system**: statically
-   linked (musl target), zero dynamic runtime dependencies, no assumption
-   of glibc or a package manager being present. Prefer pure-Rust
-   dependencies; avoid dynamically-linked C libraries.
-4. **Tests are written in Python for both implementations.** Black-box,
-   driven via CLI/subprocess against each implementation's executable(s)
-   — not white-box bindings into Rust internals. This keeps the contract
-   suite implementation-agnostic and neutral to whatever the long-term
-   architecture turns out to be.
+1. **Healthy installs.** The five properties of the charter (dependencies
+   hold, order is legal, packages are as new as possible, removal does not
+   break running programs, messages help). Each should be checked by a
+   program; `pmtest`'s `health_checker.py` covers 1, 2 and 4 so far.
+2. **Fast.** A compiled language should show in speed, proven by
+   measurement (`pmtest/bench/`, `docs/performances-tuning.md`), not assumed.
+3. **Minimal-system friendly.** The binary should run on a minimal Linux:
+   static musl build, no dynamic runtime dependencies, no assumption of
+   glibc or a package manager being present. Prefer pure-Rust dependencies.
+4. **Black-box tests in Python.** Tests drive the CLI by subprocess, not
+   Rust internals (`../pmtest`), so they stay neutral to the architecture.
+5. **Readable by humans.** English comments and docs, small functions with a
+   well-defined behaviour; a change that adds features and removes code
+   beats one that only adds code (charter, "How the code must look").
 
 ## Open / deliberately undecided
 
-- **The end state is a real, complete, usable Portage** — a drop-in
-  same-behaviour replacement, and then some. What's still open is whether
-  it *replaces* Python Portage in Gentoo or stands permanently alongside
-  it (like `uutils` vs GNU coreutils). Do not pick an architecture that
-  forecloses either: subprocess/CLI-based testing keeps both open,
-  in-process FFI embedding (e.g. PyO3) would not — avoid it.
+- **Portage-copying code is removed gradually**, only after a check proves
+  portuale does at least as well without it. Until then it stays.
+- **`mrg` solvers**: `mrg` may have several, is not conditioned by `emerge`,
+  and may share crates with it. Not designed yet.
+- **Unserializable dependency cycles** (charter 2a) may one day be broken by
+  building a package twice. Not implemented; only be aware of it.
+- Do not pick an architecture that forecloses a standalone tool; in-process
+  FFI embedding (e.g. PyO3) is out.
 
 ## Scope
 
-1. **Core library**: version comparison (`portage.versions`), atom/dep
-   parsing and matching, config resolution, dependency graph (depgraph).
-2. **`emerge` and `ebuild` executables** — both dry-run resolution
-   (`--pretend`, `--json`) and real execution: ebuild-phase execution,
-   filesystem-mutating merge / unmerge / package / config, binpkg
-   build+merge, the parallel build scheduler, world-file management. See
-   "Real ebuild phase execution + filesystem merge" below and
-   `what-this-proves.md`.
+1. **Core library**: version comparison, atom/dep parsing and matching,
+   config resolution, dependency graph.
+2. **`emerge` and `ebuild` executables** (and `mrg`): dry-run resolution
+   (`--pretend`, `--json`) and real execution: ebuild phases, filesystem
+   merge / unmerge / package / config, binpkg build and merge, the parallel
+   build scheduler, world-file management. See "Real ebuild phase execution
+   + filesystem merge" below and `what-this-proves.md`.
 
 ### `emerge`/`ebuild` binary shape
 
 Ship `emerge` and `ebuild` as **one multicall binary** (busybox-style),
 dispatching behavior based on `argv[0]` via symlinks/hardlinks pointing at
 a single executable. This is both a good minimal-Linux fit (one static
-binary, no duplicated code) and drop-in compatible with tooling that
+binary, no duplicated code) and compatible with tooling that
 invokes `emerge`/`ebuild` by name directly. **Shipped**: `crates/portuale`.
 A bare `portuale` (or `portuale --help`/`-h`) lists the applets with a
 one-line description and exits 0; an unrecognized applet name still
@@ -165,9 +163,10 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   `emerge --pretend` slice and the contract suite asserted Rust == Python;
   it proved agreement with a portuale-authored copy, not with Portage,
   and was removed (`history/second_python_copy_removal.md`, in git history).
-  Expected `emerge` output now comes from Portage (the differential
-  beds, this host's `emerge`, upstream `lib/portage/tests/resolver/`
-  cases). In its place: expectation-free output invariants and cross-mode
+  Expected behaviour now comes from the charter (PMS, EAPIs, Devmanual,
+  the health properties); Portage's output (the differential beds, this
+  host's `emerge`, upstream `lib/portage/tests/resolver/` cases) is a
+  comparison and a hint. In its place: expectation-free output invariants and cross-mode
   checks (`pmtest/pytests-contract-suite/test_output_invariants.py`, also
   run over L0), repeated-run determinism (all directory reads go through
   the single `portage_util::read_dir_entries` seam — sorted by default,
@@ -188,9 +187,8 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   atoms/deps. `pmtest/bench/extract_snapshot.py` refreshes
   `gentoo_snapshot.json` against a live tree using Portage's
   `portage.versions.pkgsplit` as the authority.
-- CI gates on both: correctness suite must pass on both implementations;
-  benchmark suite must show Rust ahead of Python and must not regress
-  over time.
+- CI gates on both: the correctness suite must pass, and the benchmark
+  suite must not regress over time.
 - Rust CI also gates on a **musl static build** smoke-tested inside a
   minimal (`scratch`/busybox-level) container.
 - **Container-based real-system differential test bed**
@@ -227,20 +225,23 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
 
 ## Ownership
 
-- Python team: `pym/portage` core + the Python-side test harness.
-- Rust team: the Rust crate + the Rust-side test harness.
-- The **shared pytest contract suite is jointly owned** (separate repo or
-  shared submodule) — neither team may unilaterally narrow it to make
-  their side pass.
+The owner decides ambiguous option semantics and anything the PMS, the EAPIs
+and the Devmanual leave open. Options are rarely added or removed. The
+`pmtest` suite is shared by design (it tests several package managers); no
+one narrows it to make a pass, a red is fixed in the package manager and an
+accepted difference is recorded in
+`../pmtest/differential-test-bed/compare/known-divergences.yaml`.
 
 ## Current state
 
 portuale is a **working package manager**, used on real systems. It
 resolves, builds, merges, unmerges, and manages the world file for real
 Gentoo packages, with real ebuild-phase execution and real filesystem
-mutation. The `--pretend` resolver is validated against Portage's `emerge`
-at real-tree scale (pmtest's differential bed, L0: ~120 real atoms,
-96/120 byte-identical plans; L1: filesystem+VDB merge parity, clean).
+mutation. The `--pretend` resolver is compared with Portage's `emerge` at
+real-tree scale (pmtest's differential bed, L0: ~120 real atoms, 96/120
+byte-identical plans at the last full run; L1: filesystem+VDB merge
+comparison, clean), and its plans are checked against the charter's
+properties by `pmtest`'s `health_checker.py`.
 
 For the authoritative, cited-source record of every shipped capability
 read **[`what-this-proves.md`](what-this-proves.md)** (the living

@@ -3,11 +3,11 @@
 When a repository's documentation and its existing code disagree, follow the conventions used in the existing code, and in your final reply point out each inconsistency you found between the documentation and the code.
 
 Entrypoint for LLM/agent work on this repo. **Read
-[`docs/charter.md`](docs/charter.md) first: it states what portuale is and
-how it relates to Portage (an example and teacher, no longer the oracle or
-the goal). Where this file or `LLM/agent-context.md` still says "mimic
-Portage", "drop-in replacement" or "Portage is the oracle", the charter
-wins; those passages are being brought in line.** Then read
+[`docs/charter.md`](docs/charter.md) first: it states what portuale is (an
+independent Gentoo package manager, aiming at a healthy installation) and
+how it relates to Portage (a teacher, not the oracle and not the goal).
+The charter wins over any older passage that says "mimic Portage",
+"drop-in replacement" or "Portage is the oracle".** Then read
 [`LLM/agent-context.md`](LLM/agent-context.md): it holds the
 settled goals, hard constraints, architecture decisions, the bash-backend
 investigation, the current state, and the open backlog. This file is just
@@ -23,11 +23,14 @@ The user drives portuale forward by saying **"next slice"** (or "scope
 the next slice") and expects the same rhythm every time:
 
 1. **Ground candidates in real code, not guesses.** Grep for the actual
-   scope-cut / TODO / "deferred" doc comment, or read the corresponding
-   Portage's `lib/portage` / `lib/_emerge` source. Many slices come from
-   noticing a doc comment's own "still out of scope" wording is now
-   stale — or the backlog claiming something is open that `git log`
-   shows shipped.
+   scope-cut / TODO / "deferred" doc comment; for a user-visible health
+   problem, start from the charter's properties (a failing check, a wrong
+   plan, a misleading message). Portage's `lib/portage` / `lib/_emerge`
+   source is a place to learn how a problem was solved, not a spec. Many
+   slices come from noticing a doc comment's own "still out of scope"
+   wording is now stale — or the backlog claiming something is open that
+   `git log` shows shipped. A difference from Portage is not a candidate by
+   itself (step 4).
 2. **Present 2–4 concrete candidate slices via `AskUserQuestion`**, one
    marked "Recommended", each with a short source-grounded rationale.
    Let the user pick.
@@ -86,9 +89,10 @@ the next slice") and expects the same rhythm every time:
    also run the container differential test bed**
    (`differential-test-bed/run/l0-resolver.sh`, plus
    `differential-test-bed/run/l1-merge-from-binpkg.sh` if merge behaviour
-   changed, both from pmtest). It compares portuale against Portage's
+   changed, both from pmtest). It compares portuale with Portage's
    `emerge` on a real Gentoo tree and is the only thing that catches
-   regressions the fixture suite can't; it's heavier, so it's not part of
+   regressions the fixture suite can't (a difference is a hint to judge
+   against the charter's properties, not a failure by itself); it's heavier, so it's not part of
    every slice. See pmtest's `USAGE.AGENTS.md` and
    `differential-test-bed/README.md`. **Merge-path safety gate:** any
    change to the merge path (per `agent-context.md` "Merge-path safety
@@ -98,7 +102,7 @@ the next slice") and expects the same rhythm every time:
  9. **Only `git commit` / `git push` when explicitly asked** — separate,
     later requests each time, never implied by finishing a slice. Commit
     title `<what changed>: <short description>`; wrapped body explaining
-    the *why* and the Portage-source grounding; trailer
+    the *why* and what it is grounded in (the charter property, the PMS/EAPI/Devmanual text, or the Portage source it learned from); trailer
     `Co-Authored-By: …` replace `…` with actual model name. Commits and
     pushes are paired across the two repos — see "Two repos, one
     project" below; one ask covers both repos unless stated otherwise.

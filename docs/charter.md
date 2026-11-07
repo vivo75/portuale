@@ -1,9 +1,5 @@
 # Charter
 
-*Draft, 2026-11-07. Written by an LLM from the owner's statement of the
-project's new foundations; to be reviewed and amended by the owner before
-`AGENTS.md`, `architecture.md` and the contributing guide are brought in line.*
-
 ## What portuale is
 
 `portuale` is a package manager for Gentoo, written in Rust. It started as a
@@ -83,9 +79,6 @@ one machine.
 
 ## Open points
 
-- The version number stays derived from Portage's release (see
-  `docs/CONTRIBUTING.md`). The Portage-dependent part is updated when Portage
-  is, after we have checked what changed since the previous version.
 - The `pmtest` pins and the harvested corpus record what Portage printed.
   They are useful as a regression and comparison tool, no longer as a
   statement of what is right.
