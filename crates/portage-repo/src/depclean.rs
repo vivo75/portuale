@@ -65,11 +65,7 @@ pub(crate) fn topological_removal_order(
     if n < 2 {
         return (false, cleanlist);
     }
-    let cand_strs: Vec<String> = cleanlist
-        .iter()
-        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-        .map(|p| format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot))
-        .collect();
+    let cand_strs: Vec<String> = cleanlist.iter().map(|p| p.match_str(root)).collect();
     // `deps[i]` = indices `j` that `cleanlist[i]` depends on (`i` unmerges
     // before `j`); `edge_prio[(i, j)]` = the highest priority seen for it.
     let mut deps: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -254,17 +250,7 @@ pub(crate) fn unresolved_runtime_deps(
 ) -> Vec<(String, String)> {
     // Sub-slot included: Portage `_match_slot` checks it whenever the atom
     // specifies one -- a built `foo:2/3=` dep needs slot 2 sub-slot 3.
-    let candidate_strs: Vec<String> = installed
-        .iter()
-        .map(|p| {
-            let (_slot, sub_slot) = read_vdb_slot(root, &p.category, &p.package, &p.version);
-            format!(
-                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-                "{}/{}-{}:{}/{}",
-                p.category, p.package, p.version, p.slot, sub_slot
-            )
-        })
-        .collect();
+    let candidate_strs: Vec<String> = installed.iter().map(|p| p.match_str(root)).collect();
     let matches_any = |atom_str: &str, atom: &portage_dep::Atom| -> bool {
         for (p, cs) in installed.iter().zip(candidate_strs.iter()) {
             if p.category == atom.category
@@ -282,7 +268,7 @@ pub(crate) fn unresolved_runtime_deps(
     for pkg in kept {
         let use_flags = read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
         let parent_cpv = pkg.cpv();
-        for dep_key in ["RDEPEND", "PDEPEND"] {
+        for dep_key in ["RDEPEND", "PDEPEND", "IDEPEND"] {
             let depstr = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, dep_key);
             if depstr.trim().is_empty() {
                 continue;
@@ -374,16 +360,8 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
     let installed = all_installed_packages(root);
     // Candidate strings for `match_from_list`, one per installed package,
     // kept alongside the package itself.
-    let candidate_strs: Vec<(String, &InstalledPackage)> = installed
-        .iter()
-        .map(|p| {
-            (
-                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-                format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot),
-                p,
-            )
-        })
-        .collect();
+    let candidate_strs: Vec<(String, &InstalledPackage)> =
+        installed.iter().map(|p| (p.match_str(root), p)).collect();
     let matches_atom = |atom_str: &str| -> Vec<&InstalledPackage> {
         let Some(atom) = portage_dep::parse_atom(atom_str) else {
             return Vec::new();
@@ -401,8 +379,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
 
     let key = |p: &InstalledPackage| (p.category.clone(), p.package.clone(), p.version.clone());
     let matched_by_args = |p: &InstalledPackage| -> bool {
-        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-        let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+        let cs = p.match_str(root);
         args.iter().any(|a| {
             portage_dep::parse_atom(a)
                 .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
@@ -461,7 +438,7 @@ pub fn depclean_cleanlist(args: DepcleanCleanlistArgs<'_>) -> DepcleanResult {
     while let Some(p) = queue.pop() {
         let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
         let parent_cpv = p.cpv();
-        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"] {
             let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
             if depstr.trim().is_empty() {
                 continue;
@@ -696,8 +673,7 @@ pub fn prune_cleanlist(
         if args.is_empty() {
             return multi_version.contains(&(p.category.clone(), p.package.clone()));
         }
-        // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-        let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+        let cs = p.match_str(root);
         args.iter().any(|a| {
             portage_dep::parse_atom(a)
                 .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
@@ -709,16 +685,8 @@ pub fn prune_cleanlist(
     // everything else seeds the closure.
     let is_candidate = |p: &InstalledPackage| !is_highest(p) && matched_by_args(p);
 
-    let candidate_strs: Vec<(String, &InstalledPackage)> = installed
-        .iter()
-        .map(|p| {
-            (
-                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-                format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot),
-                p,
-            )
-        })
-        .collect();
+    let candidate_strs: Vec<(String, &InstalledPackage)> =
+        installed.iter().map(|p| (p.match_str(root), p)).collect();
     let matches_atom = |atom_str: &str| -> Vec<&InstalledPackage> {
         let Some(atom) = portage_dep::parse_atom(atom_str) else {
             return Vec::new();
@@ -753,7 +721,7 @@ pub fn prune_cleanlist(
     while let Some(p) = queue.pop() {
         let use_flags = read_vdb_flag_set(root, &p.category, &p.package, &p.version, "USE");
         let parent_cpv = p.cpv();
-        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND"] {
+        for dep_key in ["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"] {
             let depstr = read_vdb_string(root, &p.category, &p.package, &p.version, dep_key);
             if depstr.trim().is_empty() {
                 continue;
@@ -863,8 +831,7 @@ pub fn prune_nodeps_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp
         installed
             .iter()
             .filter(|p| {
-                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-                let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+                let cs = p.match_str(root);
                 args.iter().any(|a| {
                     portage_dep::parse_atom(a)
                         .is_some_and(|pa| pa.category == p.category && pa.package == p.package)
@@ -914,8 +881,7 @@ pub fn clean_selection(root: &Path, args: &[String]) -> Vec<PruneNodepsCp> {
         installed
             .iter()
             .filter(|p| {
-                // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo
-                let cs = format!("{}/{}-{}:{}", p.category, p.package, p.version, p.slot);
+                let cs = p.match_str(root);
                 args.iter().any(|a| {
                     portage_dep::parse_atom(a)
                         .is_some_and(|pa| pa.category == p.category && pa.package == p.package)

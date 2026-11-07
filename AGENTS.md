@@ -1,5 +1,7 @@
 # AGENTS.md
 
+When a repository's documentation and its existing code disagree, follow the conventions used in the existing code, and in your final reply point out each inconsistency you found between the documentation and the code.
+
 Entrypoint for LLM/agent work on this repo. **Read
 [`docs/charter.md`](docs/charter.md) first: it states what portuale is and
 how it relates to Portage (an example and teacher, no longer the oracle or

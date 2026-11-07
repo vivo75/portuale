@@ -844,3 +844,34 @@ fn strongly_connected_components_groups_cycles_and_survives_long_chains() {
     seen.dedup();
     assert_eq!(seen.len(), n);
 }
+
+/// #681: a kept package's `:0/8=` dependency keeps the installed `SLOT=0/8`
+/// copy, and a kept package's `IDEPEND` keeps its target. Expected behaviour
+/// from the PMS (slot operators, EAPI 8 `IDEPEND`), not from Portage's output.
+#[test]
+fn depclean_cleanlist_keeps_sub_slot_dependencies_and_idepend_targets() {
+    let root = masters_test_root("depclean-subslot-idepend");
+    let install = |name: &str, slot: &str, rdepend: &str, idepend: &str| {
+        let d = root.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        std::fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
+        std::fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        std::fs::write(d.join("IDEPEND"), format!("{idepend}\n")).unwrap();
+    };
+    install("sworld", "0", "dev-libs/slib:0/8=", "dev-libs/installer");
+    install("slib", "0/8", "", "");
+    install("installer", "0", "", "");
+    install("sorphan", "0/3", "", "");
+    let result = depclean_cleanlist(DepcleanCleanlistArgs {
+        root: &root,
+        world_seeds: &[("dev-libs/sworld".to_string(), "@selected".to_string())],
+        system_atoms: &[],
+        args: &[],
+        deselect: true,
+        lib_protected_providers: &[],
+        package_provided: &[],
+    });
+    let clean: Vec<String> = result.cleanlist.iter().map(|p| p.cpv()).collect();
+    assert_eq!(clean, vec!["dev-libs/sorphan-1.0".to_string()]);
+}

@@ -723,6 +723,15 @@ impl InstalledPackage {
     pub fn cpv(&self) -> String {
         format!("{}/{}-{}", self.category, self.package, self.version)
     }
+
+    /// `category/package-version:slot/sub_slot` for `match_from_list`: the vdb
+    /// `SLOT` sub-slot is kept, so an atom like `:0/8=` matches the installed copy.
+    // Portage: dep/__init__.py, match_from_list (Package slot and sub_slot attributes)
+    pub fn match_str(&self, root: &Path) -> String {
+        let (_, sub) =
+            crate::reinstall::read_vdb_slot(root, &self.category, &self.package, &self.version);
+        format!("{}:{}/{}", self.cpv(), self.slot, sub)
+    }
 }
 
 /// Every package recorded under `<root>/var/db/pkg`, each with its main slot. Directory names
