@@ -459,3 +459,10 @@ when a claim turns out false.
 - **Why it looked wrong**: `use` reads as "this package's USE", and a method object is not one.
 - **Checked 2026-11-07 (Portage 3.0.83)**: inert. `get_masking_status` only forwards `use` to `_get_masking_status` (`:12718-12724`), whose body never reads it (`:12727-12746`, `_getmaskingstatus` is called without it). Whatever is passed, the reasons are the same. Found as an unconfirmed candidate in the 2026-11-06 sweep (`LLM/evidence/2026-11-06-sweep/clusterC.md`).
 - **Portuale**: nothing to copy; `candidate_masking_reasons` takes no USE argument either.
+
+## Q28. A slot conflict reuses the lowest-version node of the slot (suspect, unconfirmed on the bed)
+
+- **What it does**: `_check_slot_conflict` takes the node to keep from the slot's candidates by the lowest version (`lib/_emerge/depgraph.py:3676-3690`, with `package_tracker.py:254-255`), not the highest or the one the walk preferred. Seen in the bed debug log `differential-test-bed/logs/tmp-601-order-debug/real.txt:6715-6735` (backlog #617: an installed consumer's optional perl dependency ends on the installed `dev-lang/perl-5.42.2` while portuale edges it to the merge-bound `5.44.0`).
+- **Why it looks wrong**: when the slot holds an installed and an upgrade node, keeping the lower one makes an unrelated consumer's edge land on the version that is about to be replaced.
+- **Status**: unconfirmed. The sweep (`LLM/evidence/2026-11-06-sweep/clusterA.md`, #617) could not reproduce the divergence on this host, and the portuale-side site (`resolve/pass_helpers.rs:348-367`) is a guess. It needs a bed S0 capture before this is called a quirk.
+- **Portuale**: not copied (no code touched); decide after the S0.
