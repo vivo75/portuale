@@ -1,0 +1,23 @@
+# Portage 3.0.83 (3rdparty/portage ae324a809), 2026-11-07T09:09:24Z; color codes stripped
+== built
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+dev-libs/p647prov:0
+  (dev-libs/p647prov-5.44.0:0/5.44::test_repo, ebuild scheduled for merge) USE="" conflicts with
+    dev-libs/p647prov:0/5.42= required by (virtual/p657mm-1:0/0::test_repo, installed) USE=""
+                     ^^^^^^^^
+    =dev-libs/p647prov-5.42* required by (virtual/p657mm-1:0/0::test_repo, installed) USE=""
+    ^                  ^^^^^
+    dev-libs/p647prov:0/5.42= required by (virtual/p657exp-1:0/0::test_repo, installed) USE=""
+                     ^^^^^^^^
+    =dev-libs/p647prov-5.42* required by (virtual/p657exp-1:0/0::test_repo, installed) USE=""
+    ^                  ^^^^^
+SUCCESS True MERGELIST ['dev-libs/p657try-1']
+== unbuilt
+WARNING: One or more updates/rebuilds have been skipped due to a dependency conflict:
+dev-libs/p647prov:0
+  (dev-libs/p647prov-5.44.0:0/5.44::test_repo, ebuild scheduled for merge) USE="" conflicts with
+    =dev-libs/p647prov-5.42* required by (virtual/p657mm-1:0/0::test_repo, installed) USE=""
+    ^                  ^^^^^
+    =dev-libs/p647prov-5.42* required by (virtual/p657exp-1:0/0::test_repo, installed) USE=""
+    ^                  ^^^^^
+SUCCESS True MERGELIST ['dev-libs/p657try-1']

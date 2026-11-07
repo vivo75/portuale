@@ -1,0 +1,207 @@
+diff --git a/crates/portage-repo/src/resolve/pass/unresolved_dep.rs b/crates/portage-repo/src/resolve/pass/unresolved_dep.rs
+index 314a35db..79f90cc2 100644
+--- a/crates/portage-repo/src/resolve/pass/unresolved_dep.rs
++++ b/crates/portage-repo/src/resolve/pass/unresolved_dep.rs
+@@ -393,6 +393,7 @@ pub(crate) struct EnqueueInstalledDepsArgs<'a> {
+     pub(crate) state: &'a mut PassState,
+     pub(crate) config: &'a Config,
+     pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
++    pub(crate) owner: Option<&'a (String, String)>,
+ }
+ 
+ /// Queue an installed package's own deps too once `deep` allows recursion at
+@@ -409,7 +410,30 @@ pub(crate) fn enqueue_installed_deps(args: EnqueueInstalledDepsArgs<'_>) -> Vec<
+         state,
+         config,
+         union_constraints,
++        owner,
+     } = args;
++    if let PretendOutcome::AlreadyInstalled { version } = outcome
++        && !ctx.nodeps
++        && !ctx.deep.recurses_at(depth)
++        && key.0 == "virtual"
++        && owner.is_some_and(|o| {
++            state.entries.iter().any(|e| {
++                e.category == o.0 && e.package == o.1 && merge_bound_version(&e.outcome).is_some()
++            })
++        })
++    {
++        enqueue_inline_virtual_atoms(InlineVirtualArgs {
++            ctx,
++            depth,
++            atom_root,
++            key,
++            version,
++            state: &mut *state,
++            config,
++            union_constraints,
++            puller: owner.expect("checked above"),
++        });
++    }
+     // An installed package's own deps walk too once `deep` allows recursion at
+     // this depth (never for a miss, never under `nodeps`); `deps` below is
+     // computed under the same condition. Portage: _add_pkg
+@@ -492,6 +516,143 @@ pub(crate) fn enqueue_installed_deps(args: EnqueueInstalledDepsArgs<'_>) -> Vec<
+     already_installed_deps
+ }
+ 
++/// The values [`enqueue_inline_virtual_atoms`] reads from its caller.
++struct InlineVirtualArgs<'a> {
++    ctx: &'a ResolveCtx<'a>,
++    depth: u32,
++    atom_root: &'a Path,
++    key: &'a (String, String),
++    version: &'a str,
++    state: &'a mut PassState,
++    config: &'a Config,
++    union_constraints: &'a HashMap<(String, String), Vec<String>>,
++    puller: &'a (String, String),
++}
++
++/// A kept installed new-style virtual of a merge-bound puller, outside `--deep`:
++/// queue the atoms its RDEPEND selects, its `||` judged now as part of the
++/// puller's expansion, so a higher arm (an upgrade) enters the graph (#658).
++// Portage: dep_check.py, _expand_new_virtuals; depgraph.py, _add_pkg_dep_string
++fn enqueue_inline_virtual_atoms(args: InlineVirtualArgs<'_>) {
++    let InlineVirtualArgs {
++        ctx,
++        depth,
++        atom_root,
++        key,
++        version,
++        state,
++        config,
++        union_constraints,
++        puller,
++    } = args;
++    let metadata = installed_walk_metadata(&ctx.repos, atom_root, &key.0, &key.1, version);
++    let use_flags = read_vdb_flag_set(atom_root, &key.0, &key.1, version, "USE");
++    let layer = if ctx.dynamic_deps {
++        InstalledMetaLayer::Effective
++    } else {
++        InstalledMetaLayer::Raw
++    };
++    let rdepend = installed_dep_string(InstalledDepStringArgs {
++        root: atom_root,
++        dynamic_deps: ctx.dynamic_deps,
++        ignore_built_slot_operator_deps: ctx.ignore_built_slot_operator_deps,
++        category: &key.0,
++        package: &key.1,
++        version,
++        live: Some(&metadata),
++        key: "RDEPEND",
++        layer,
++        memo: &mut state.installed_meta_memo,
++    });
++    let tokens: Vec<String> = rdepend.split_whitespace().map(String::from).collect();
++    let universe = or_group_universe(&tokens);
++    if universe.is_empty() {
++        return;
++    }
++    // A cp an arm names that is already being merged, queued, or replaced by
++    // the puller is judged by the seed machinery (`rev_dep_or.rs`), not here.
++    let arm_cps: HashSet<(String, String)> = universe
++        .iter()
++        .filter_map(|t| parse_dep_atom(t, "inline_virtual"))
++        .filter(|a| a.blocker == portage_dep::Blocker::None)
++        .map(|a| (a.category, a.package))
++        .collect();
++    let contested = arm_cps.iter().any(|cp| {
++        cp == puller
++            || state.entries.iter().any(|e| {
++                e.category == cp.0 && e.package == cp.1 && merge_bound_version(&e.outcome).is_some()
++            })
++    });
++    if contested {
++        return;
++    }
++    let self_node: RootCp = (false, key.0.clone(), key.1.clone());
++    let ControlFlow::Continue(flat) = flatten_deps_for_enqueue(FlattenDepsForEnqueueArgs {
++        queue: &mut state.queue,
++        tokens: &tokens,
++        use_flags: &use_flags,
++        cross_active: false,
++        running_tags: &HashSet::new(),
++        root_deps_running_root: None,
++        root: atom_root,
++        entries: &mut state.entries,
++        config,
++        disj_constraints: union_constraints,
++        self_node: &self_node,
++        update: ctx.update,
++        gate: ctx.gate(),
++    }) else {
++        return;
++    };
++    let (disj, plains): (Vec<String>, Vec<String>) = flat
++        .into_iter()
++        .filter(|t| {
++            t != "||"
++                && parse_dep_atom(t, "inline_virtual")
++                    .is_some_and(|a| a.blocker == portage_dep::Blocker::None)
++        })
++        .partition(|t| universe.contains(t));
++    // Portage selects the installed virtual only while every atom it picks has a
++    // visible package (`_virt_deps_visible`); otherwise the virtual stays silent.
++    let visible = |t: &String| {
++        let extra = parse_dep_atom(t, "inline_virtual")
++            .and_then(|a| union_constraints.get(&(a.category, a.package)))
++            .map_or(&[][..], Vec::as_slice);
++        atom_currently_satisfiable(ctx.gate(), portage_dep::without_use(t), config, extra)
++            || atom_matches_installed(atom_root, portage_dep::without_use(t), config)
++    };
++    if !disj.iter().chain(&plains).all(visible) {
++        return;
++    }
++    let disj: Vec<String> = disj
++        .into_iter()
++        .filter(|t| best_installed_matching(atom_root, t, config).is_none())
++        .collect();
++    let plains: Vec<String> = Vec::new();
++    if disj.is_empty() {
++        return;
++    }
++    enqueue_plain_tokens(EnqueuePlainTokensArgs {
++        plains,
++        disj,
++        use_flags: &use_flags,
++        buildtime_tokens: &HashSet::new(),
++        pending_blockers: &mut state.pending_blockers,
++        owner_key: key.clone(),
++        owner_version: version,
++        root_deps_split: None,
++        root_deps_satisfied: &HashSet::new(),
++        root_deps_unsatisfied: &[],
++        root: atom_root,
++        config,
++        slot_pullers: &mut state.slot_pullers,
++        queue: &mut state.queue,
++        child_depth: depth + 1,
++        entries: &mut state.entries,
++        running_tags: &HashSet::new(),
++    });
++}
++
+ /// What [`compute_nvc_suggestions`] hands back to its caller.
+ pub(crate) struct NvcSuggestionsOut {
+     pub(crate) keyword_suggestion: Option<(String, String)>,
+@@ -875,6 +1036,7 @@ pub(crate) fn record_unresolved_dep(args: RecordUnresolvedDepArgs<'_>) {
+         state: &mut *state,
+         config,
+         union_constraints,
++        owner: owner.as_ref(),
+     });
+     let NvcSuggestionsOut {
+         keyword_suggestion,
+diff --git a/crates/portage-repo/src/tests/tests_p647.rs b/crates/portage-repo/src/tests/tests_p647.rs
+index 769ec93d..aa126086 100644
+--- a/crates/portage-repo/src/tests/tests_p647.rs
++++ b/crates/portage-repo/src/tests/tests_p647.rs
+@@ -158,7 +158,6 @@ fn bare_consumer_keeps_the_installed_multi_version_virtual() {
+ /// RED before the fix: portuale keeps the installed 5.42 arm for the
+ /// installed virtual, never schedules 5.44.0, and prints no skip block.
+ #[test]
+-#[ignore = "RED #657: installed-virtual arm choice does not prefer the higher same-cp arm"]
+ fn installed_virtual_with_a_higher_perl_arm_schedules_then_skips_the_transient() {
+     let root = hermetic_root(&[]);
+     let result = resolve_in(&root, &["dev-libs/p657try"]);
