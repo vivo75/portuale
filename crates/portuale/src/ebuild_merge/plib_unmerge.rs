@@ -139,6 +139,51 @@ pub(crate) fn preserve_libs_on_unmerge_into(
     })
 }
 
+/// The libraries the `removed` packages (`(category, pf)`) own that a file
+/// outside them still links against, per package in `removed` order: what
+/// their unmerges, taken together, would have to preserve.
+// Portage: vartree.py, dblink._find_libs_to_preserve
+pub(crate) fn libs_still_linked(
+    root: &Path,
+    removed: &[(String, String)],
+) -> Vec<BTreeSet<String>> {
+    let owned: Vec<HashSet<String>> = removed
+        .iter()
+        .map(|(category, pf)| {
+            let text = read_contents_pf(root, category, pf).unwrap_or_default();
+            portage_vdb::paths(&text)
+                .map(|(_, p)| p.to_string())
+                .collect()
+        })
+        .collect();
+    let all: HashSet<&str> = owned.iter().flatten().map(String::as_str).collect();
+    let old_contents: Vec<String> = all.iter().map(|p| p.to_string()).collect();
+    let owner_entries =
+        owner_entries_with_preserved_orphans(root, &read_plib_registry(root).preserved_libs());
+    let map = crate::needed_elf::rebuild(root, &owner_entries);
+    let defpath =
+        crate::needed_elf::getlibpaths(root, std::env::var("LD_LIBRARY_PATH").ok().as_deref());
+    let linked =
+        crate::needed_elf::find_libs_to_preserve(crate::needed_elf::FindLibsToPreserveArgs {
+            root,
+            map: &map,
+            defpath: &defpath,
+            old_contents: &old_contents,
+            old_owner_is_owner: &|p: &str| all.contains(p),
+            new_owner_is_owner: &|_: &str| false,
+        });
+    owned
+        .iter()
+        .map(|paths| {
+            linked
+                .iter()
+                .filter(|p| paths.contains(*p))
+                .cloned()
+                .collect()
+        })
+        .collect()
+}
+
 /// Every registered preserved-library path, keyed by owning cpv.
 pub(crate) fn preserved_lib_paths(root: &Path) -> BTreeMap<String, Vec<String>> {
     read_plib_registry(root).preserved_libs()

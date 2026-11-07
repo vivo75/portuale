@@ -300,3 +300,49 @@ fn find_unneeded_preserved_drops_a_self_contained_cycle() {
     let unneeded = crate::needed_elf::find_unneeded_preserved(&root, &edges, &preserved);
     assert!(unneeded.is_empty(), "{unneeded:?}");
 }
+
+/// `libs_still_linked`: a library stays needed while a file outside the
+/// removed set links against it, and only then (charter property 4).
+#[test]
+fn libs_still_linked_counts_only_consumers_that_stay() {
+    let tmp = tempdir();
+    let root = tmp.join("root");
+    std::fs::create_dir_all(root.join("usr/lib")).unwrap();
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    for (pf, path, needed) in [
+        (
+            "libk-1",
+            "/usr/lib/libk.so.1",
+            "X86_64;/usr/lib/libk.so.1;libk.so.1;;\n",
+        ),
+        ("app-1", "/usr/bin/app", "X86_64;/usr/bin/app;;;libk.so.1\n"),
+        (
+            "tool-1",
+            "/usr/bin/tool",
+            "X86_64;/usr/bin/tool;;;libk.so.1\n",
+        ),
+    ] {
+        std::fs::write(root.join(&path[1..]), b"fake elf").unwrap();
+        let vdb = root.join("var/db/pkg/dev-libs").join(pf);
+        std::fs::create_dir_all(&vdb).unwrap();
+        std::fs::write(vdb.join("CONTENTS"), format!("obj {path} abc 1\n")).unwrap();
+        std::fs::write(vdb.join("NEEDED.ELF.2"), needed).unwrap();
+    }
+    let key = |pf: &str| ("dev-libs".to_string(), pf.to_string());
+    let lib = BTreeSet::from(["/usr/lib/libk.so.1".to_string()]);
+    let none = BTreeSet::new();
+    assert_eq!(
+        libs_still_linked(&root, &[key("libk-1")]),
+        std::slice::from_ref(&lib)
+    );
+    assert_eq!(
+        libs_still_linked(&root, &[key("app-1"), key("libk-1")]),
+        [none.clone(), lib],
+        "tool still links against it"
+    );
+    assert_eq!(
+        libs_still_linked(&root, &[key("libk-1"), key("app-1"), key("tool-1")]),
+        [none.clone(), none.clone(), none],
+        "every consumer leaves with it"
+    );
+}

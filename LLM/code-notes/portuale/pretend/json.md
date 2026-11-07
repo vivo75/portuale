@@ -24,3 +24,10 @@
 
 ## fn abort_outcome_to_json
 - Backlog #19 Slice 4: the `--json` `aborted` field for a resolve outcome — `null` on the complete path, `{"reason":…}` on an abort.
+
+## fn print_removal_json
+- Charter property 4 (health checker, 2026-11-07): the pretend removal paths (`-C`, `--rage-clean`, `--depclean`, `--prune`, `--clean`) printed no `--json` document at all; this one line is printed after the text display, so the text output is unchanged and `--json` stays additive. Both display tails call it (`run_unmerge_pretend` and `run_prune_nodeps_or_clean`), which is why `json` is threaded through every removal args struct.
+- `needed_libraries` comes from `ebuild_merge::libs_still_linked` (the same `_find_libs_to_preserve` machinery the real unmerge uses); `preserve_libs` is the same gate `ebuild_unmerge.rs` applies (`FEATURES=preserve-libs` and the installed `RESTRICT`), so `preserved` is what the real removal keeps. The checker (`pmtest/pytests-contract-suite/health_checker.py`, `check_removal_plan`) does not trust `needed_libraries`: it recomputes linkage from `NEEDED.ELF.2` and the disk and only reads `preserved`.
+
+## fn print_json (request)
+- `request` (with `-v`, next to `kept`): the raw command-line atoms and sets, so the property-3 checker can tell a version the user asked for (`=cat/pkg-1.2`) from one the resolver chose. Gated on `-v` like `kept` to keep the non-verbose pins unchanged.

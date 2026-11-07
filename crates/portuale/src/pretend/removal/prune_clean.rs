@@ -13,6 +13,7 @@ pub(crate) struct RunPrunePretendArgs<'a> {
     pub(crate) verbose: bool,
     pub(crate) lib_check: bool,
     pub(crate) pretend: bool,
+    pub(crate) json: bool,
     pub(crate) ask: bool,
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
@@ -38,6 +39,7 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
         verbose,
         lib_check,
         pretend,
+        json,
         ask,
         shell,
         debug,
@@ -111,6 +113,7 @@ pub(crate) fn run_prune_pretend(args: RunPrunePretendArgs<'_>) -> ExitCode {
         repos,
         preserve_order: result.ordered,
         pretend,
+        json,
         ask,
         shell,
         debug,
@@ -138,6 +141,7 @@ pub(crate) struct RunPruneNodepsPretendArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) pretend: bool,
+    pub(crate) json: bool,
     pub(crate) ask: bool,
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
@@ -162,6 +166,7 @@ pub(crate) fn run_prune_nodeps_pretend(args: RunPruneNodepsPretendArgs<'_>) -> E
         root,
         config_root,
         pretend,
+        json,
         ask,
         shell,
         debug,
@@ -176,6 +181,7 @@ pub(crate) fn run_prune_nodeps_pretend(args: RunPruneNodepsPretendArgs<'_>) -> E
         root,
         config_root,
         pretend,
+        json,
         ask,
         shell,
         debug,
@@ -195,6 +201,7 @@ pub(crate) struct RunCleanPretendArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) pretend: bool,
+    pub(crate) json: bool,
     pub(crate) ask: bool,
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
@@ -219,6 +226,7 @@ pub(crate) fn run_clean_pretend(args: RunCleanPretendArgs<'_>) -> ExitCode {
         root,
         config_root,
         pretend,
+        json,
         ask,
         shell,
         debug,
@@ -233,6 +241,7 @@ pub(crate) fn run_clean_pretend(args: RunCleanPretendArgs<'_>) -> ExitCode {
         root,
         config_root,
         pretend,
+        json,
         ask,
         shell,
         debug,
@@ -251,6 +260,7 @@ pub(crate) struct RunPruneNodepsOrCleanArgs<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config_root: &'a Path,
     pub(crate) pretend: bool,
+    pub(crate) json: bool,
     pub(crate) ask: bool,
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
@@ -276,6 +286,7 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
         root,
         config_root,
         pretend,
+        json,
         ask,
         shell,
         debug,
@@ -428,6 +439,9 @@ pub(crate) fn run_prune_nodeps_or_clean(args: RunPruneNodepsOrCleanArgs<'_>) -> 
             config,
             autoclean,
         });
+    }
+    if json {
+        print_removal_json(root, config, &removal_list);
     }
     ExitCode::SUCCESS
 }

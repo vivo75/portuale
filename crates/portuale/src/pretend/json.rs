@@ -459,6 +459,51 @@ pub(crate) fn abort_outcome_to_json(outcome: &portage_repo::ResolveOutcome) -> S
         },
     }
 }
+/// The `--json` document of a pretend removal, one line: each removed package
+/// with the libraries it owns that surviving files still link against
+/// (`needed_libraries`) and whether its unmerge may preserve them
+/// (`preserve_libs`: `FEATURES` and its own `RESTRICT`), then `preserved`,
+/// the libraries the removal keeps on disk.
+pub(crate) fn print_removal_json(
+    root: &Path,
+    config: &portage_profile::Config,
+    removal: &[(String, String, String)],
+) {
+    let keys: Vec<(String, String)> = removal
+        .iter()
+        .map(|(category, package, version)| (category.clone(), format!("{package}-{version}")))
+        .collect();
+    let feature = config_has_preserve_libs(config);
+    let mut preserved: BTreeSet<&str> = BTreeSet::new();
+    let libs = crate::ebuild_merge::libs_still_linked(root, &keys);
+    let items: Vec<String> = removal
+        .iter()
+        .zip(&keys)
+        .zip(&libs)
+        .map(|(((category, package, version), (_, pf)), libs)| {
+            let gate =
+                feature && !crate::ebuild_merge::installed_restricts_preserve_libs(root, category, pf);
+            if gate {
+                preserved.extend(libs.iter().map(String::as_str));
+            }
+            let slot = portage_repo::vdb_entry_slot(root, category, pf);
+            format!(
+                "{{\"category\":{},\"package\":{},\"version\":{},\"slot\":{},\"needed_libraries\":{},\"preserve_libs\":{gate}}}",
+                json_string(category),
+                json_string(package),
+                json_string(version),
+                json_string(slot.split('/').next().unwrap_or_default()),
+                json_string_array(libs.iter().map(String::as_str)),
+            )
+        })
+        .collect();
+    println!(
+        "{{\"removal\":[{}],\"preserved\":{}}}",
+        items.join(","),
+        json_string_array(preserved)
+    );
+}
+
 /// Arguments of [`print_json`].
 pub(crate) struct PrintJsonArgs<'a> {
     pub(crate) entries: &'a [GraphEntry],
@@ -479,12 +524,15 @@ pub(crate) struct PrintJsonArgs<'a> {
     pub(crate) running_root: Option<&'a Path>,
     /// The target root, read for the `-v` `kept` list.
     pub(crate) root: &'a Path,
+    /// The command-line atoms and sets, for the `-v` `request` list.
+    pub(crate) request: &'a [&'a str],
 }
 
 /// The whole `--json` output as one line, no pretty-printing (a
 /// portuale-specific convenience format, not a stable schema). With
-/// `verbose` it ends with `kept` (see [`kept_packages`]), so the document
-/// alone describes the final installed set for a plan checker.
+/// `verbose` it ends with `kept` (see [`kept_packages`]) and `request` (the
+/// command-line atoms), so the document alone describes the final installed
+/// set and the user's constraints for a plan checker.
 pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
     let PrintJsonArgs {
         entries,
@@ -502,6 +550,7 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
         verbose,
         running_root,
         root,
+        request,
     } = args;
     let entries_json: Vec<String> = entries
         .iter()
@@ -542,9 +591,14 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
     // On an abort the caller passes the partial display list, so a `--json`
     // consumer sees the same rows the text list shows.
     let aborted_json = abort_outcome_to_json(outcome);
-    // `-v` adds the installed packages the plan leaves alone, for plan checkers.
+    // `-v` adds, for plan checkers, the installed packages the plan leaves
+    // alone and the command-line request.
     let kept_json = if verbose {
-        format!(",\"kept\":{}", kept_to_json(&kept_packages(root, entries)))
+        format!(
+            ",\"kept\":{},\"request\":{}",
+            kept_to_json(&kept_packages(root, entries)),
+            json_string_array(request.iter().copied())
+        )
     } else {
         String::new()
     };

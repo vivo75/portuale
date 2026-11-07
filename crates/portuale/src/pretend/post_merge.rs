@@ -103,6 +103,7 @@ pub(crate) fn run_autoclean_after_merge(args: RunAutocleanAfterMergeArgs<'_>) {
         root,
         config_root,
         pretend: false,
+        json: false,
         ask,
         shell,
         debug,

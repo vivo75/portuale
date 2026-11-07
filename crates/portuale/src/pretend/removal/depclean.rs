@@ -295,6 +295,7 @@ pub(crate) struct RunDepcleanPretendArgs<'a> {
     /// is really removed, and the stats block reads `Number removed:`
     /// instead of `Number to remove:`.
     pub(crate) pretend: bool,
+    pub(crate) json: bool,
     pub(crate) ask: bool,
     pub(crate) shell: ebuild_phases::ShellBackend,
     pub(crate) debug: bool,
@@ -323,6 +324,7 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         lib_check,
         deselect,
         pretend,
+        json,
         ask,
         shell,
         debug,
@@ -552,6 +554,7 @@ pub(crate) fn run_depclean_pretend(args: RunDepcleanPretendArgs<'_>) -> ExitCode
         repos,
         preserve_order: result.ordered,
         pretend,
+        json,
         ask,
         shell,
         debug,

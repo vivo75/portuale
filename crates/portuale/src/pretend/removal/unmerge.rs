@@ -74,6 +74,9 @@ pub(crate) struct RunUnmergePretendArgs<'a> {
     /// removal runs after the display. `true` for `-pC` and for the
     /// `--depclean`/`--prune` preview reuse.
     pub(crate) pretend: bool,
+    /// `--json`: a pretend run also prints the removal document
+    /// ([`print_removal_json`]).
+    pub(crate) json: bool,
     /// `--ask`: prompt before the removal, then run the `CLEAN_DELAY`
     /// countdown. Always `false` when `pretend` is `true`.
     pub(crate) ask: bool,
@@ -110,6 +113,7 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
         repos,
         preserve_order,
         pretend,
+        json,
         ask,
         shell,
         debug,
@@ -349,6 +353,9 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
             config,
             autoclean: false,
         });
+    }
+    if json {
+        print_removal_json(root, config, &removal_list);
     }
     ExitCode::SUCCESS
 }
