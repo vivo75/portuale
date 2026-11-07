@@ -17,6 +17,7 @@ fn tree_simulation_solves_a_stalled_replacement_row() {
         disjunctive: false,
         alt: None,
         key: 3,
+        walk_chosen: false,
     };
     let mut owner = new_entry("dev-libs", "bparent", "1.1", Vec::new());
     owner.slot = Some("0".into());

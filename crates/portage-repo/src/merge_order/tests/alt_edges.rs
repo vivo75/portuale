@@ -16,6 +16,7 @@ fn resolved_dep_targets_ranks_by_vercmp_not_by_string_order() {
         disjunctive: false,
         alt: None,
         key: 3,
+        walk_chosen: false,
     };
     let mut low = new_entry("dev-libs", "slotted", "1.9", Vec::new());
     low.slot = Some("0".into());
@@ -70,6 +71,7 @@ fn unqualified_atom_collapses_onto_the_slot_qualified_sibling_target() {
         disjunctive: false,
         alt: None,
         key: 3,
+        walk_chosen: false,
     };
     let mut low = new_entry("dev-libs", "slotted", "1.9", Vec::new());
     low.slot = Some("0".into());
@@ -121,6 +123,7 @@ fn resolved_dep_targets_reports_an_installed_target_as_no_tree_edge() {
         disjunctive: false,
         alt: None,
         key: 3,
+        walk_chosen: false,
     };
     let mut installed = new_entry("dev-libs", "onlyinstalled", "1.0", Vec::new());
     installed.outcome = PretendOutcome::AlreadyInstalled {
@@ -159,6 +162,7 @@ fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
             disjunctive: true,
             alt: Some((0, 0)),
             key: 3,
+            walk_chosen: false,
         },
         DepEdge {
             atom: "dev-libs/olddep".to_string(),
@@ -172,6 +176,7 @@ fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
             disjunctive: true,
             alt: Some((0, 1)),
             key: 3,
+            walk_chosen: false,
         },
     ];
     let mut olddep = new_entry("dev-libs", "olddep", "1.0", Vec::new());
@@ -219,6 +224,7 @@ fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
             disjunctive: true,
             alt: Some((0, 0)),
             key: 4,
+            walk_chosen: false,
         },
         DepEdge {
             atom: ">=dev-lang/mogoboot-1.24".to_string(),
@@ -232,6 +238,7 @@ fn kept_alt_branches_agrees_with_build_digraph_on_a_multi_branch_group() {
             disjunctive: true,
             alt: Some((0, 1)),
             key: 4,
+            walk_chosen: false,
         },
     ];
     let entries = vec![
@@ -268,6 +275,7 @@ fn select_dep_target_eliminates_with_suppressed_sibling_sets() {
         disjunctive: true,
         alt: Some((0, 0)),
         key: 3,
+        walk_chosen: false,
     };
     let qualified = DepEdge {
         atom: "dev-libs/x:0".to_string(),
@@ -278,6 +286,7 @@ fn select_dep_target_eliminates_with_suppressed_sibling_sets() {
         disjunctive: true,
         alt: Some((0, 1)),
         key: 3,
+        walk_chosen: false,
     };
     let user = new_entry("dev-libs", "user", "1.0", vec![bare, qualified]);
     let entries = vec![x1, x2, user];
@@ -378,5 +387,57 @@ fn suppressed_alt_edges_requires_every_atom_of_a_branch_to_match() {
         kept_alt_branches(&entries, root, &HashMap::new())[0],
         HashSet::from([0usize, 1, 2]),
         "no branch fully resolves, so every branch is kept"
+    );
+}
+
+/// #625(b): two merge-bound arms of one `||`, the walk recorded the second.
+/// The edge goes to the recorded arm, not to the first all-in-graph branch.
+/// Portage: depgraph.py, _add_pkg_dep_string (edges only for the selected
+/// atoms); oracle `LLM/evidence/2026-11-06-sweep/625b/probe625b_oracle.py`.
+#[test]
+fn a_recorded_walk_choice_beats_the_first_merge_bound_branch() {
+    let arm = |slot: &str, branch: u32, chosen: bool| DepEdge {
+        atom: format!("dev-libs/ac:{slot}"),
+        evaluated: format!("dev-libs/ac:{slot}"),
+        category: "dev-libs".to_string(),
+        package: "ac".to_string(),
+        priority: DepPriority {
+            runtime: true,
+            ..DepPriority::default()
+        },
+        disjunctive: true,
+        alt: Some((0, branch)),
+        key: 0,
+        walk_chosen: chosen,
+    };
+    let mut two = new_entry("dev-libs", "ac", "2", Vec::new());
+    two.slot = Some("2".into());
+    two.sub_slot = Some("2".into());
+    let mut one = new_entry("dev-libs", "ac", "1", Vec::new());
+    one.slot = Some("1".into());
+    one.sub_slot = Some("1".into());
+    let root = Path::new("/nonexistent-root-for-unit-test");
+    let user = |chosen: bool| {
+        new_entry(
+            "dev-libs",
+            "r",
+            "1",
+            vec![arm("2", 0, false), arm("1", 1, chosen)],
+        )
+    };
+    let entries = vec![two.clone(), one.clone(), user(true)];
+    let targets = resolved_dep_targets(&entries, root, &HashMap::new());
+    assert_eq!(
+        targets[2],
+        vec![None, Some(1)],
+        "the recorded arm keeps the edge"
+    );
+    // No record: today's ranking (first all-merge-bound branch) stays the fallback.
+    let entries = vec![two, one, user(false)];
+    let targets = resolved_dep_targets(&entries, root, &HashMap::new());
+    assert_eq!(
+        targets[2],
+        vec![Some(0), None],
+        "fallback picks the first branch"
     );
 }

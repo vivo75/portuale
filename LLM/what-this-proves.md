@@ -21017,3 +21017,17 @@ trace (`LLM/evidence/2026-11-06-sweep/606/`). The w604 shapes A and C gain the
 installed virtual's `=5.44*` row and now equal Portage as sets. Not done: the
 same shape on the shared fixture ROOT, where `p590vpar` is reached only through
 `p590vpull-2` (#676).
+
+Backlog #625(b) (2026-11-07): the merge order now draws a `||` group's edge to
+the branch the walk chose, as Portage adds edges only for the atoms its
+`dep_check` selected (`depgraph.py` 4508-4515, 4536 -> `_add_dep`); the old
+post-walk re-pick ("first branch all of whose atoms match a merge-bound node")
+is only the fallback for groups the walk recorded no choice for. With
+`dev-libs/p625ac-1` (slot 1) installed in an ad-hoc ROOT, `emerge -pe
+dev-libs/p625r` (`|| ( p625ac:2 p625ac:1 )`, the slot-1 arm pulling
+`p625late`, which pulls `p625ac:2`) prints `NS p625ac-2 [1]`, `N p625late-1`,
+`R p625ac-1`, `N p625r-1` -- the order of Portage 3.0.83's playground
+(`LLM/evidence/2026-11-06-sweep/625b/`); before, `p625r` merged ahead of
+`p625ac-1`. On the bed the two `MULTI_emptytree-system` flag findings
+(`autoconf`/`automake` `[NS]` vs `[R]`) are gone: L0 `l0-20261107T085458Z`,
+91 clean, 43 unexplained (was 45), no other cell changed.

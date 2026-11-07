@@ -42,6 +42,8 @@ pub struct DepEdge {
     pub alt: Option<(u32, u32)>,
     /// Which `deps`-tuple key this came from (0=`RDEPEND` .. 4=`BDEPEND`).
     pub key: u8,
+    /// On a `||` branch the walk itself chose for this group (#625).
+    pub walk_chosen: bool,
 }
 
 /// Run over one USE-reduced dep key: returns `(inline, disjunctive)` atom lists.
@@ -212,6 +214,7 @@ pub(crate) fn dep_edges_from_metadata(
                     disjunctive,
                     alt,
                     key: key_index,
+                    walk_chosen: false,
                 });
             }
         }

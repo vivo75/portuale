@@ -25,6 +25,7 @@ fn edge_to(category: &str, package: &str, key: u8, priority: DepPriority) -> Dep
         disjunctive: false,
         alt: None,
         key,
+        walk_chosen: false,
     }
 }
 

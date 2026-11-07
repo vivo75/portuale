@@ -674,6 +674,16 @@ fn enqueue_chosen_atoms(args: EnqueueChosenAtomsArgs<'_>) {
         bp,
         union_constraints,
     } = args;
+    state
+        .walk_or_choices
+        .entry((
+            entry.owner.0.clone(),
+            entry.owner.1.clone(),
+            entry.owner_version.clone(),
+            entry.owner_targets_running_root,
+        ))
+        .or_default()
+        .extend(chosen.iter().cloned());
     match &entry.site {
         DeferredSite::Main {
             buildtime_atoms,

@@ -213,6 +213,7 @@ fn plain_edge(atom: &str, category: &str, package: &str, priority: DepPriority) 
         disjunctive: false,
         alt: None,
         key: 3,
+        walk_chosen: false,
     }
 }
 

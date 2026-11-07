@@ -1485,6 +1485,7 @@ fn rebuild_if_394_edge(buildtime: bool) -> DepEdge {
         disjunctive: false,
         alt: None,
         key: if buildtime { 3 } else { 0 },
+        walk_chosen: false,
     }
 }
 

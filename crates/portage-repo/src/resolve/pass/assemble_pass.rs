@@ -1,6 +1,7 @@
 //! The pass result from the finished walk state.
 
 use crate::resolve::pass::*;
+use std::collections::BTreeMap;
 
 /// The pass result from the finished walk state.
 ///
@@ -16,8 +17,10 @@ pub(crate) fn assemble_pass_result(
         return Err(Error::Detail(state.required_use_violations.join("")));
     }
 
+    let mut entries = state.entries;
+    mark_walk_or_choices(&mut entries, &state.walk_or_choices);
     let pass = PassResult {
-        entries: state.entries,
+        entries,
         suppressed_nvc: state.suppressed_nvc,
         slot_conflicts: state.slot_conflicts,
         skipped_updates: state.skipped_updates,
@@ -55,4 +58,52 @@ pub(crate) fn assemble_pass_result(
         installed_walked: state.installed_walked,
     };
     Ok(pass)
+}
+
+/// Mark, per entry and `||` group, the first branch whose atoms are all among
+/// the atoms the walk chose for that owner (#625).
+// Portage: depgraph.py, _add_pkg_dep_string (edges only for selected atoms)
+fn mark_walk_or_choices(
+    entries: &mut [GraphEntry],
+    choices: &HashMap<(String, String, String, bool), HashSet<String>>,
+) {
+    for e in entries.iter_mut() {
+        let version = match &e.outcome {
+            PretendOutcome::AlreadyInstalled { version }
+            | PretendOutcome::New { version }
+            | PretendOutcome::Reinstall { version, .. } => version,
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+            PretendOutcome::NoVisibleCandidate | PretendOutcome::Uninstall { .. } => continue,
+        };
+        let Some(chosen) = choices.get(&(
+            e.category.clone(),
+            e.package.clone(),
+            version.clone(),
+            e.targets_running_root,
+        )) else {
+            continue;
+        };
+        let mut branches: BTreeMap<(u8, u32), BTreeMap<u32, bool>> = BTreeMap::new();
+        for edge in &e.deps {
+            if let Some((g, b)) = edge.alt
+                && g != u32::MAX
+            {
+                let hit = chosen.contains(&edge.atom) || chosen.contains(&edge.evaluated);
+                *branches
+                    .entry((edge.key, g))
+                    .or_default()
+                    .entry(b)
+                    .or_insert(true) &= hit;
+            }
+        }
+        let picks: HashSet<(u8, u32, u32)> = branches
+            .into_iter()
+            .filter_map(|((k, g), bs)| bs.into_iter().find(|(_, all)| *all).map(|(b, _)| (k, g, b)))
+            .collect();
+        for edge in &mut e.deps {
+            if let Some((g, b)) = edge.alt {
+                edge.walk_chosen = picks.contains(&(edge.key, g, b));
+            }
+        }
+    }
 }

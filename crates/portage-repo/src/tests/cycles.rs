@@ -13,6 +13,7 @@ fn find_restart_cycles_reports_a_hard_two_cycle() {
         disjunctive: false,
         alt: None,
         key: 3,
+        walk_chosen: false,
     };
     let buildtime = DepPriority {
         buildtime: true,
@@ -74,6 +75,7 @@ fn find_restart_cycles_reports_a_runtime_closing_cycle() {
         disjunctive: false,
         alt: None,
         key,
+        walk_chosen: false,
     };
     let buildtime = DepPriority {
         buildtime: true,
@@ -120,6 +122,7 @@ fn find_restart_cycles_ignores_runtime_only_and_acyclic_graphs() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let runtime = DepPriority {
         runtime: true,
@@ -189,6 +192,7 @@ fn softened_buildtime_edge_hides_from_hard_cycles_but_not_restart_cycles() {
         disjunctive: false,
         alt: None,
         key,
+        walk_chosen: false,
     };
     let buildtime = DepPriority {
         buildtime: true,
@@ -365,6 +369,7 @@ fn find_hard_cycles_reports_a_true_self_loop_but_not_a_cross_slot_edge() {
         disjunctive: branch.is_some(),
         alt: branch.map(|b| (0, b)),
         key: 4,
+        walk_chosen: false,
     };
     let mut entries = vec![graph_entry("dev-libs", "hcs", "1.0")];
     entries[0].deps = vec![self_edge("hcs", ">=dev-libs/hcs-1.0", Some(0))];
@@ -449,6 +454,7 @@ fn cycle_restartable_gates_the_retry_to_fresh_branch_self_loops() {
         disjunctive: branch.is_some(),
         alt: branch.map(|b| (0, b)),
         key: 4,
+        walk_chosen: false,
     };
     let fresh_root = Path::new("/nonexistent-root");
     let mut fresh = vec![graph_entry("dev-libs", "hcs", "1.0")];
@@ -531,6 +537,7 @@ fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
         disjunctive: true,
         alt: Some((0, branch)),
         key: 0,
+        walk_chosen: false,
     };
     let mut own = graph_entry("dev-libs", "own", "1.0");
     own.deps = vec![
@@ -547,6 +554,7 @@ fn find_hard_cycles_ignores_a_suppressed_disjunctive_slot_op_branch() {
         disjunctive: false,
         alt: None,
         key: 3,
+        walk_chosen: false,
     }];
     let keb = graph_entry("dev-libs", "keb", "1.0");
     let entries = vec![own, kea, keb];
@@ -590,6 +598,7 @@ fn find_hard_cycles_slot_op_gate_requires_the_child_slot_like_portage() {
         disjunctive: false,
         alt: None,
         key,
+        walk_chosen: false,
     };
     let make_entries = || {
         let mut sown = graph_entry("dev-libs", "sown", "1.0");
@@ -663,6 +672,7 @@ fn find_virtual_cycles_reports_self_loop_ring_and_lollipop() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let virt = |pkg: &str, deps: Vec<DepEdge>| {
         let mut e = graph_entry("virtual", pkg, "1");
@@ -716,6 +726,7 @@ fn find_virtual_cycles_ignores_non_rdepend_and_non_virtual_shapes() {
         disjunctive: false,
         alt: None,
         key,
+        walk_chosen: false,
     };
     let fake = Path::new("/nonexistent-root");
     // virtual/V → dev-libs/P → virtual/V: no report.
@@ -764,6 +775,7 @@ fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
         disjunctive: true,
         alt: Some((0, branch)),
         key: 0,
+        walk_chosen: false,
     };
     let plain_edge = |pkg: &str| DepEdge {
         atom: format!("virtual/{pkg}"),
@@ -777,6 +789,7 @@ fn find_virtual_cycles_ignores_a_suppressed_disjunctive_branch() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let mut o = graph_entry("virtual", "O", "1");
     o.deps = vec![alt_edge("plain", 0), alt_edge("D", 1)];

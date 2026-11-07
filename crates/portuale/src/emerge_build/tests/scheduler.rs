@@ -235,6 +235,7 @@ fn cycle_post_merge_dep_does_not_gate_the_build() {
         disjunctive: false,
         alt: None,
         key,
+        walk_chosen: false,
     };
     let mut a = source_entry(
         "schedcyca",
@@ -541,6 +542,7 @@ fn queued_merges_land_before_a_freed_dependent_builds() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let mut first = new("schedsys");
     first.required_by = vec![("dev-libs".into(), "schedleaf-a".into())];
@@ -618,6 +620,7 @@ fn unrelated_build_waits_for_system_runtime_deps() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let runtime_post = |package: &str| DepEdge {
         atom: format!("dev-libs/{package}"),
@@ -631,6 +634,7 @@ fn unrelated_build_waits_for_system_runtime_deps() {
         disjunctive: false,
         alt: None,
         key: 2,
+        walk_chosen: false,
     };
     let new = |p: &str| {
         source_entry(
@@ -709,6 +713,7 @@ fn system_deps_gate_skipped_off_root() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let runtime_post = |package: &str| DepEdge {
         atom: format!("dev-libs/{package}"),
@@ -722,6 +727,7 @@ fn system_deps_gate_skipped_off_root() {
         disjunctive: false,
         alt: None,
         key: 2,
+        walk_chosen: false,
     };
     let new = |p: &str| {
         source_entry(
@@ -813,6 +819,7 @@ fn system_package_waits_even_without_merge_wait() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let runtime_post = |package: &str| DepEdge {
         atom: format!("dev-libs/{package}"),
@@ -826,6 +833,7 @@ fn system_package_waits_even_without_merge_wait() {
         disjunctive: false,
         alt: None,
         key: 2,
+        walk_chosen: false,
     };
     let new = |p: &str| {
         source_entry(

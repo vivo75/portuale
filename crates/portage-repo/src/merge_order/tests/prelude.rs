@@ -317,6 +317,7 @@ fn select_dep_target_runs_elimination_for_three_candidates() {
         disjunctive: true,
         alt: Some((0, 0)),
         key: 0,
+        walk_chosen: false,
     };
     let qualified = DepEdge {
         atom: "dev-libs/x:0".to_string(),
@@ -327,6 +328,7 @@ fn select_dep_target_runs_elimination_for_three_candidates() {
         disjunctive: true,
         alt: Some((0, 0)),
         key: 3,
+        walk_chosen: false,
     };
     let user = new_entry("dev-libs", "user", "1.0", vec![bare, qualified]);
     let entries = vec![x1, x2, x3, user];

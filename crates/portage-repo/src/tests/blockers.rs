@@ -477,6 +477,7 @@ fn resolve_blockers_uninstalls_a_settled_block_when_the_cp_moves_slot() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let mut rebuild = graph_entry("dev-libs", "bcons", "1");
     rebuild.outcome = PretendOutcome::Reinstall {
@@ -517,6 +518,7 @@ fn resolve_blockers_uninstalls_a_settled_block_when_the_cp_moves_slot() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let mut staying = graph_entry("dev-libs", "bcons", "1");
     staying.outcome = PretendOutcome::AlreadyInstalled {
@@ -549,6 +551,7 @@ fn resolve_blockers_classifies_final_graph_matches_by_parent_operation() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let pb = |atom: &str, owner: &str| PendingBlocker {
         atom_str: atom.to_string(),

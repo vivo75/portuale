@@ -18,6 +18,7 @@ fn self_referential_disjunctive_bdepend_skips_the_self_branch() {
             disjunctive: true,
             alt: Some((0, 0)),
             key: 4,
+            walk_chosen: false,
         },
         DepEdge {
             atom: ">=dev-lang/mogoboot-1.24".to_string(),
@@ -31,6 +32,7 @@ fn self_referential_disjunctive_bdepend_skips_the_self_branch() {
             disjunctive: true,
             alt: Some((0, 1)),
             key: 4,
+            walk_chosen: false,
         },
     ];
     let entries = vec![
@@ -78,6 +80,7 @@ fn nvc_entries_do_not_participate_in_minimize_elimination() {
         disjunctive: false,
         alt: None,
         key: 3,
+        walk_chosen: false,
     };
     let mut nvc = new_entry("dev-libs", "partly", "1.0", Vec::new());
     nvc.outcome = PretendOutcome::NoVisibleCandidate;

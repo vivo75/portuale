@@ -53,6 +53,7 @@ fn replacement_satisfied_blocker_rows_are_hidden_or_inline() {
             disjunctive: false,
             alt: None,
             key: 4,
+            walk_chosen: false,
         }];
         e
     };
@@ -227,6 +228,7 @@ fn replacement_wait_follows_the_selected_disjunctive_branch() {
         disjunctive: true,
         alt: Some((0, branch)),
         key: 4,
+        walk_chosen: false,
     };
 
     let entries = [
@@ -338,6 +340,7 @@ fn kept_alt_for_display_is_derived_once_and_shared() {
         disjunctive: true,
         alt: Some((0, 0)),
         key: 4,
+        walk_chosen: false,
     }];
     let entries = [owner, replacement];
     let shared = kept_alt_for_display(&entries, root, 0..entries.len(), &HashMap::new());

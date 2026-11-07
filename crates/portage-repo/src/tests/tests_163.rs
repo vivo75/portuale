@@ -3545,6 +3545,7 @@ fn assemble_result_triangle_reports_three_cycles_without_large_count() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let mut ea = entry_163("dev-libs", "ta", new_163("1.0"), &[]);
     ea.deps = vec![edge("tb")];

@@ -8586,6 +8586,7 @@ mod tests {
             disjunctive: false,
             alt: None,
             key,
+            walk_chosen: false,
         }
     }
 

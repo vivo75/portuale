@@ -13,6 +13,7 @@ fn topological_order_breaks_a_cycle_at_its_run_time_edge() {
         disjunctive: false,
         alt: None,
         key: if priority.buildtime { 3 } else { 0 },
+        walk_chosen: false,
     };
     let buildtime = DepPriority {
         buildtime: true,
@@ -74,6 +75,7 @@ fn topological_merge_order_stamps_discovery_before_sorting() {
         disjunctive: false,
         alt: None,
         key: 0,
+        walk_chosen: false,
     };
     let runtime = DepPriority {
         runtime: true,
@@ -193,6 +195,7 @@ fn skipped_update_roots_attributes_miss_and_parent_per_edge() {
             disjunctive: false,
             alt: None,
             key,
+            walk_chosen: false,
         }
     }
     // Cross-active: target parent plus a running entry elsewhere.

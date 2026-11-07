@@ -75,6 +75,9 @@ pub(crate) fn installed_walked_cps(walked: &InstalledWalked) -> HashSet<(String,
 /// pass (see `overlay_use_want`); `collect_feedback` + driver folds them into `bp`.
 #[derive(Default)]
 pub(crate) struct PassState {
+    /// The atoms each owner's `||` groups chose on the disjunctive stack, keyed
+    /// `(category, package, version, targets_running_root)`; marks `DepEdge::walk_chosen` (#625).
+    pub(crate) walk_or_choices: HashMap<(String, String, String, bool), HashSet<String>>,
     /// Skip-conflict rows from the direct-solve hook at this pass's tail. The
     /// constraint-withhold rows join in `collect_feedback`; both ride out through
     /// `PassResult::skipped_updates`.

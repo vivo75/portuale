@@ -94,6 +94,11 @@ pub(crate) fn suppressed_alt_edges(
                         demoted.insert(b, true);
                     }
                 }
+                // The walk's own recorded choice wins; the ranking is the fallback.
+                let walk_pick = members
+                    .iter()
+                    .find(|(_, ei)| e.deps[*ei].walk_chosen)
+                    .map(|(b, _)| *b);
                 let is_demoted = |b: &u32| demoted.get(b).is_some_and(|d| *d);
                 let rank = |tiers: &std::collections::BTreeMap<u32, bool>| {
                     tiers
@@ -102,7 +107,8 @@ pub(crate) fn suppressed_alt_edges(
                         .find(|(_, v)| **v)
                         .map(|(b, _)| *b)
                 };
-                let pick = rank(&all_graph)
+                let pick = walk_pick
+                    .or_else(|| rank(&all_graph))
                     .or_else(|| rank(&all_inst))
                     .or_else(|| rank(&all_any))
                     // Every branch demoted: fall back to the first-listed one.
