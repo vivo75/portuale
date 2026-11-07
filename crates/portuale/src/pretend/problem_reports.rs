@@ -539,8 +539,11 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                 });
             }
         }
+        // Portage ends every instance with a blank line, so the NOTE line
+        // follows one and the closing blank comes after it.
+        // Portage: resolver/slot_collision.py, get_conflict
+        println!();
         if any_omitted {
-            println!();
             println!(
                 "{}",
                 color.c(
@@ -548,11 +551,9 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
                     "NOTE: Use the '--verbose-conflicts' option to display parents omitted above"
                 )
             );
-            println!();
         }
         // Installed parents with built slot-operator atoms that cannot
         // be rebuilt.
-        // Portage: resolver/slot_collision.py
         if !need_rebuild.is_empty() {
             println!();
             println!("!!! The slot conflict(s) shown above involve package(s) which may need to");
@@ -562,6 +563,7 @@ pub(crate) fn show_slot_conflicts(args: ShowSlotConflictsArgs<'_>) {
             for (ppkg, reason) in &need_rebuild {
                 println!("  {ppkg}: {reason}");
             }
+            println!();
         }
         println!();
         // When the handler has something to say it replaces the generic advice.

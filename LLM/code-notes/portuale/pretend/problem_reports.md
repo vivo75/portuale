@@ -65,3 +65,6 @@ Missing arguments, and the abort reports for cycles and unsatisfied dependencies
 
 ## fn show_slot_conflicts: explanation (#597)
 - After the conflict block, Portage writes the handler's explanation and returns (`depgraph.py:1744-1750`): no package.mask paragraph, no `--backtrack=30` sentence, no "For more information". `--quiet` skips those three too (`:1752-1753`) but not the explanation.
+
+## fn show_slot_conflicts: blank lines around NOTE (#667)
+- Portage's `get_conflict` ends every instance with `"\n"`, writes the NOTE line with one `"\n"`, prints the `need_rebuild` paragraph with a trailing `"\n"`, then a final `"\n"` (`resolver/slot_collision.py:690-726`). So the block ends in one blank plus NOTE plus one blank, or in two blanks without NOTE. Raw captures: `LLM/evidence/2026-11-06-sweep/607/o209*-portage.txt`. Evidence files filtered with `grep -v '^$'` (e.g. `2026-11-07-613/`) hide these blanks.

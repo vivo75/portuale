@@ -21050,3 +21050,18 @@ Portage 3.0.83 apart from the known root-suffix cut in the conflict block
 (`LLM/evidence/2026-11-07-613/`). L0 bed `l0-20261107T100217Z`: 91 clean,
 43 unexplained, every cell identical to `l0-20261107T085458Z`.
 
+
+Backlog #667 and #678 (2026-11-07): a slot-conflict block now has the blank
+lines Portage 3.0.83 prints around the `NOTE: Use the '--verbose-conflicts'`
+line. On the r25 residual block (`LLM/evidence/2026-11-06-sweep/607/`) the NOTE
+is preceded and followed by exactly one blank line, and with
+`--verbose-conflicts` two blank lines follow the last parent line (before:
+two after the NOTE, one after the last parent line). Live check, from the
+pmtest root: `python3 -m pytest pytests-contract-suite -q -k
+"209_backtrack_zero_reports"` (three cells, tail pinned byte for byte). Twenty
+contract-corpus rows and 32 expanded-corpus rows moved, all blank-line-only. Separately, pmtest's corpus matcher
+no longer loses rows whose parameter id contains a `/` when pytest runs from
+inside `pytests-contract-suite/`; `python3 -m pytest
+test_harvested_corpus.py -q -k nodekey` (in that directory) shows the key rule.
+#672 was settled as real Portage behaviour (`to '<ROOT>'` follows ROOT, not the
+running root) but left open and re-scoped; a trial fix moved about twenty pins.
