@@ -20934,3 +20934,14 @@ file the USE change reads `# required by @selected` / `# required by @world (arg
 `emerge -pv dev-libs/r594qtop` prints the `r594vdep` USE change and the
 "terminated early" notice before the `maskeddep` block. Same as Portage 3.0.83
 (`LLM/evidence/2026-11-06-sweep/611e/`, `../609/q*.portage.txt`).
+
+Backlog #603 (2026-11-07): in complete mode, a dependency of an installed
+consumer the walk never recursed into no longer pins when no installed package
+matches it; Portage files it as initially unsatisfied (`depgraph.py` 8797-8806).
+Live, with `dev-libs/w603lib-3` and the world-only `app-misc/w603cons-1`
+(`RDEPEND="<dev-libs/w603lib-2"`) installed in an ad-hoc ROOT over the fixture
+config root: `emerge -p dev-libs/w603lib` and `emerge -pu @world` print
+`[ebuild     U  ] dev-libs/w603lib-3.1 [3]` with `backtrack: 0/20` and no skip
+block (was `UD w603lib-1 [3]`, the skip block and 1/20); with `w603lib-1`
+installed instead the atom matches and both PMs still print `R w603lib-1`, the
+skip row and 1/20. Same as Portage 3.0.83 (`LLM/evidence/2026-11-06-sweep/603/`).

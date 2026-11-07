@@ -1,0 +1,1 @@
+{"installed": {"dev-libs/w603lib-3": {}, "app-misc/w603cons-1": {"RDEPEND": "<dev-libs/w603lib-2"}}, "world": ["app-misc/w603cons"]}

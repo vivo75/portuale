@@ -280,6 +280,8 @@ fn collect_feedback_keeps_an_enforced_pin_single() {
         }
     };
     mk("pinner-1.0", "=dev-libs/souprov-1.0");
+    // The upgraded instance: an unwalked consumer atom matching nothing installed never pins (#603).
+    mk("souprov-1.0", "");
     let config = test_config();
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
     let reachable: HashSet<(String, String)> =
@@ -353,6 +355,8 @@ fn collect_feedback_collects_a_dropped_pin_once() {
         }
     };
     mk("pinner-1.0", "=dev-libs/souprov-1.0");
+    // The upgraded instance: an unwalked consumer atom matching nothing installed never pins (#603).
+    mk("souprov-1.0", "");
     let config = test_config();
     let repos = find_repos(&fixtures_root()).expect("fixture repos");
     let reachable: HashSet<(String, String)> =

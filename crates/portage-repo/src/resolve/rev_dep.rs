@@ -1173,6 +1173,22 @@ pub(crate) fn holder_enforce_open(args: HolderEnforceOpenArgs<'_>) -> bool {
     })
 }
 
+/// Whether no installed package matches `atom_str` (USE conditionals
+/// evaluated against the consumer's USE).
+fn matches_no_installed(
+    root: &Path,
+    atom_str: &str,
+    use_flags: &HashSet<String>,
+    config: &portage_profile::Config,
+) -> bool {
+    let evaluated = portage_dep::evaluate_atom_conditionals(atom_str, use_flags)
+        .unwrap_or_else(|| atom_str.to_string());
+    best_installed_match(root, &evaluated, Some(atom_str), &|| {
+        config.iuse_effective.clone()
+    })
+    .is_none()
+}
+
 /// Collect the reverse-dependency pins one dependency atom of a consumer places on the packages being upgraded.
 pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> ControlFlow<()> {
     let ConstraintsFromAtomArgs {
@@ -1215,6 +1231,19 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
     // Demoted `||` branches are no parent atoms: neither constraint nor
     // rendering may see them.
     if demoted.contains(atom_str) || demoted.contains(constraint.as_str()) {
+        return ControlFlow::Break(());
+    }
+    // A dependency of a consumer the walk never recursed into that matches no
+    // installed package is initially unsatisfied in complete mode: no parent atom.
+    // Portage: depgraph.py, _complete_graph (_initially_unsatisfied_deps)
+    let unwalked = post_merge.is_some_and(|scan| {
+        !scan.installed_walked.contains_key(&(
+            consumer.category.clone(),
+            consumer.package.clone(),
+            consumer.version.clone(),
+        ))
+    });
+    if unwalked && matches_no_installed(root, atom_str, use_flags, config) {
         return ControlFlow::Break(());
     }
     // The built atom rides to the printer verbatim; the stripped constraint

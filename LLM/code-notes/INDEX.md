@@ -243,6 +243,7 @@
 - [crates/portage-repo/src/tests/tests_p563.rs](portage-repo/tests/tests_p563.md) — The perl-5.44 stabilization shape (#563 heal) and the skip-block pin forms (#568/#569), hermetically.
 - [crates/portage-repo/src/tests/tests_p651.rs](portage-repo/tests/tests_p651.md) — #651: a seed committed BEFORE the slot conflict opens must not survive it.
 - [crates/portage-repo/src/tests/tests_p652b.rs](portage-repo/tests/tests_p652b.md) — #652 leg A (N-form consumer path) + leg B (H-form upgrade hold): RED pins.
+- [crates/portage-repo/src/tests/tests_unwalked_consumer.rs](portage-repo/tests/tests_unwalked_consumer.md) — Complete mode and the installed consumers the walk never recursed into (#603).
 - [crates/portage-repo/src/tests/unsat_probe.rs](portage-repo/tests/unsat_probe.md) — Dead-end pass seeding a replacement parent for an unsatisfiable built `:=` dep.
 - [crates/portage-repo/src/tests/updates.rs](portage-repo/tests/updates.md) — Update-command parsing and dep-string rewrite tests.
 - [crates/portage-repo/src/tests/use_display.rs](portage-repo/tests/use_display.md) — `build_use_expand_display` grouping, diff-marker and force-wrap tests.
