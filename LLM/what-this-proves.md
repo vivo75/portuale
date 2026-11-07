@@ -21087,3 +21087,16 @@ the same findings. L0 `l0-20261107T205456Z`: 91 clean, 44 unexplained (was 43):
 Portage at the same position (#21, #144) inside the perl-virtual cluster, but
 portuale now puts `virtual/perl-CPAN` there, so the first no longer matches the
 `perl-cluster-hash-order-601` allowlist entry.
+
+**#669: a downgrade picked through an argument's own dependency is `UD`, not `N`.**
+When a slot conflict is settled by keeping a version that will be merged, the
+slot may already hold a different version. That keeper was always recorded as
+`New`, so the row read `N` and `--json` said `new` for an occupied slot. It is
+now compared with what the slot holds (Portage `_get_installed_best`): older is
+`Downgrade` (`UD`), otherwise `Upgrade`, and `New` only for an empty slot.
+Runnable (grounded in Portage 3.0.83's own capture, not copied from its code):
+with `w603lib-3` and `w603cons-1` (`RDEPEND="<dev-libs/w603lib-2"`) installed,
+`emerge -p dev-libs/w603lib app-misc/w603cons` prints
+`[ebuild     UD ] dev-libs/w603lib-1 [3]`, then `R w603cons-1` and the skip
+block. Pin: `python3 -m pytest pytests-contract-suite -q -k test_669` in pmtest
+(fails with `[ebuild  N     ]` before the change).

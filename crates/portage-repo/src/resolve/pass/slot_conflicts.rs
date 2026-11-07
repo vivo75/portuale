@@ -84,7 +84,27 @@ pub(crate) fn solve_pass_slot_conflicts(
                             (f, on)
                         })
                         .collect();
-                    entry.outcome = PretendOutcome::New { version: k.clone() };
+                    // A slot that already holds a version is an update or a
+                    // downgrade of it, never `New`.
+                    // Portage: depgraph.py, _get_installed_best (slot_atom match)
+                    let held = installed_candidates(ctx.root, c, p)
+                        .into_iter()
+                        .filter(|(_, s, _)| Some(s) == entry.slot.as_ref())
+                        .map(|(v, _, _)| v)
+                        .max_by(|a, b| vercmp_ordering(a, b));
+                    entry.outcome = match held {
+                        Some(from) if vercmp_ordering(k, &from) == Ordering::Less => {
+                            PretendOutcome::Downgrade {
+                                from,
+                                to: k.clone(),
+                            }
+                        }
+                        Some(from) => PretendOutcome::Upgrade {
+                            from,
+                            to: k.clone(),
+                        },
+                        None => PretendOutcome::New { version: k.clone() },
+                    };
                 }
             }
             state.slot_conflicts = solved.surviving;
