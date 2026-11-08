@@ -175,7 +175,7 @@ pub(crate) fn run_unmerge_pretend(args: RunUnmergePretendArgs<'_>) -> ExitCode {
             "@profile" => expanded.extend(config.profile_packages.iter().cloned()),
             "@system" => expanded.extend(config.system_packages.iter().cloned()),
             "@installed" => expanded.extend(installed_set_atoms(root)),
-            "@preserved-rebuild" => expanded.extend(preserved_rebuild_atoms(root)),
+            "@preserved-rebuild" => expanded.extend(portage_repo::preserved_rebuild_atoms(root)),
             other if other.starts_with('@') => {
                 let mut seen = HashSet::new();
                 match resolve_custom_set(config_root, &other[1..], &mut seen) {

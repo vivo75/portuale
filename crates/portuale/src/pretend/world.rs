@@ -58,57 +58,6 @@ pub(crate) fn installed_set_atoms(root: &Path) -> Vec<String> {
     atoms
 }
 
-/// Installed packages still linking against a preserved library, as
-/// `cat/pkg:slot`, sorted and deduplicated. An empty registry gives empty.
-/// Portage: libs.py, PreservedLibraryConsumerSet.
-pub(crate) fn preserved_rebuild_atoms(root: &Path) -> Vec<String> {
-    let plib_dict = ebuild_merge::preserved_lib_paths(root);
-    if plib_dict.is_empty() {
-        return Vec::new();
-    }
-    let all_preserved: HashSet<String> = plib_dict.values().flatten().cloned().collect();
-
-    let owner_entries = needed_elf::read_all_needed_entries(root);
-    let map = needed_elf::rebuild(root, &owner_entries);
-    let defpath = needed_elf::getlibpaths(root, None);
-
-    let mut atoms: Vec<String> = Vec::new();
-    for lib in &all_preserved {
-        let consumers = match needed_elf::find_consumers(needed_elf::FindConsumersArgs {
-            root,
-            map: &map,
-            defpath: &defpath,
-            obj: lib,
-            exclude_provider: None,
-            greedy: false,
-        }) {
-            Ok(set) => set,
-            Err(_) => {
-                let soname = lib.rsplit('/').next().unwrap_or(lib);
-                needed_elf::soname_consumers(&map, soname)
-            }
-        };
-        for consumer in consumers {
-            if all_preserved.contains(&consumer) {
-                continue;
-            }
-            let ckey = needed_elf::obj_key(root, &consumer);
-            let Some(owner) = map.obj_properties.get(&ckey).map(|p| p.owner.as_str()) else {
-                continue;
-            };
-            let Some((cat, pn, version)) = portage_repo::split_cpv(owner) else {
-                continue;
-            };
-            let slot = ebuild_merge::read_installed_slot(root, &cat, &pn, &version)
-                .unwrap_or_else(|| "0".to_string());
-            atoms.push(format!("{cat}/{pn}:{slot}"));
-        }
-    }
-    atoms.sort();
-    atoms.dedup();
-    atoms
-}
-
 /// The new world atoms in argument order, for the pre-record `--ask` prompt.
 /// `@set` targets belong in `world_sets`, not here.
 /// Portage: depgraph.py, saveNomergeFavorites.

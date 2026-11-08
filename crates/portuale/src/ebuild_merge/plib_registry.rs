@@ -118,6 +118,13 @@ pub(crate) fn plib_entries_to_vdb(
         .collect()
 }
 
+/// Drops recorded paths no longer on disk (see [`portage_repo::prune_preserved_paths`])
+/// and entries left with nothing.
+// Portage: PreservedLibsRegistry.py, PreservedLibsRegistry.pruneNonExisting
+pub(crate) fn prune_non_existing(root: &Path, registry: &mut PlibRegistry) {
+    portage_repo::prune_preserved_paths(root, &mut registry.entries);
+}
+
 /// Loads the stored registry and prunes vanished paths; a missing or unparseable
 /// file degrades to an empty registry.
 // Portage: PreservedLibsRegistry.py, PreservedLibsRegistry.load
@@ -132,81 +139,6 @@ pub(crate) fn read_plib_registry(root: &Path) -> PlibRegistry {
     };
     prune_non_existing(root, &mut registry);
     registry
-}
-
-pub(crate) fn norm_posix_path(path: &str) -> String {
-    let absolute = path.starts_with('/');
-    let mut parts: Vec<&str> = Vec::new();
-    for comp in path.split('/') {
-        match comp {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            c => parts.push(c),
-        }
-    }
-    let mut out = parts.join("/");
-    if absolute {
-        out.insert(0, '/');
-    }
-    if out.is_empty() {
-        out.push('.');
-    }
-    out
-}
-
-/// The absolute path of a symlink's target: the target itself when absolute, else
-/// resolved against the symlink's directory.
-// Portage: lib/portage/__init__.py, portage.abssymlink
-pub(crate) fn plib_abssymlink(path: &str, target: &str) -> String {
-    if target.starts_with('/') {
-        norm_posix_path(target)
-    } else {
-        let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-        norm_posix_path(&format!("{dir}/{target}"))
-    }
-}
-
-/// Drops recorded paths no longer on disk, rebuilding survivors regular-files-first and
-/// keeping only symlinks pointing at a surviving file; drops entries left with nothing.
-// Portage: PreservedLibsRegistry.py, PreservedLibsRegistry.pruneNonExisting
-pub(crate) fn prune_non_existing(root: &Path, registry: &mut PlibRegistry) {
-    let mut dead_keys = Vec::new();
-    for (cps, (_cpv, _counter, paths)) in registry.entries.iter_mut() {
-        let mut ordered: Vec<String> = Vec::new();
-        let mut hardlinks: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut symlinks: Vec<(String, String)> = Vec::new();
-        for f in paths.iter() {
-            let full = root.join(f.trim_start_matches('/'));
-            let meta = match std::fs::symlink_metadata(&full) {
-                Ok(meta) => meta,
-                Err(_) => continue,
-            };
-            if meta.file_type().is_symlink() {
-                match std::fs::read_link(&full) {
-                    Ok(target) => symlinks.push((f.clone(), target.to_string_lossy().into_owned())),
-                    Err(_) => continue,
-                }
-            } else if meta.file_type().is_file() {
-                hardlinks.insert(f.clone());
-                ordered.push(f.clone());
-            }
-        }
-        for (f, target) in &symlinks {
-            if hardlinks.contains(&plib_abssymlink(f, target)) {
-                ordered.push(f.clone());
-            }
-        }
-        if ordered.is_empty() {
-            dead_keys.push(cps.clone());
-        } else {
-            *paths = ordered;
-        }
-    }
-    for key in dead_keys {
-        registry.entries.remove(&key);
-    }
 }
 
 /// Stores the registry unless unchanged since load (then not even the directory is

@@ -9,9 +9,9 @@
 //! Sets computed from the installed packages and the repositories:
 //! `VariableSet` (`@live-rebuild`, `@rust-rebuild`, …, installed metadata
 //! only), `OwnerSet` (`@module-rebuild`, `@x11-module-rebuild`),
-//! `ChangedDepsSet`, `RebuiltBinaries`, `UnavailableSet`, `DowngradeSet`
-//! and `SubslotChangedSet`.
-//! A set of any other class (`@security`, `@preserved-rebuild`) depends on
+//! `ChangedDepsSet`, `RebuiltBinaries`, `PreservedLibraryConsumerSet`
+//! (`@preserved-rebuild`), `UnavailableSet`, `DowngradeSet` and
+//! `SubslotChangedSet`. A set of any other class (`@security`) depends on
 //! state this experiment does not read; it is reported and skipped.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -43,6 +43,8 @@ enum SetDef {
     },
     /// Installed packages whose `RDEPEND`/`PDEPEND` differ from their ebuild's.
     ChangedDeps,
+    /// Installed packages still linking against a preserved library.
+    PreservedRebuild,
     /// Installed slots whose local binary package of the same version was
     /// built at another time.
     RebuiltBinaries,
@@ -159,6 +161,9 @@ impl<'a> SetResolver<'a> {
             ),
             Some(SetDef::Variable(v)) => Lookup::Lines(self.variable_set(v)),
             Some(SetDef::Owner { files, exclude }) => Lookup::Lines(self.owner_set(files, exclude)),
+            Some(SetDef::PreservedRebuild) => {
+                Lookup::Lines(portage_repo::preserved_rebuild_atoms(self.root))
+            }
             Some(SetDef::RebuiltBinaries) => Lookup::Lines(self.rebuilt_binaries()),
             Some(SetDef::ChangedDeps) => Lookup::Lines(self.changed_deps()),
             Some(SetDef::Unavailable) => {
@@ -460,6 +465,7 @@ fn read_sets_conf(text: &str, config_root: &Path, defs: &mut HashMap<String, Set
             },
             "ChangedDepsSet" => SetDef::ChangedDeps,
             "RebuiltBinaries" => SetDef::RebuiltBinaries,
+            "PreservedLibraryConsumerSet" => SetDef::PreservedRebuild,
             "UnavailableSet" => SetDef::Unavailable,
             "DowngradeSet" => SetDef::Downgrade,
             "SubslotChangedSet" => SetDef::SubslotChanged,
@@ -592,12 +598,14 @@ mod tests {
         read_sets_conf(
             "[cd]\nclass = portage.sets.dbapi.ChangedDepsSet\n\
              [rb]\nclass = portage.sets.dbapi.RebuiltBinaries\n\
+             [pr]\nclass = portage.sets.libs.PreservedLibraryConsumerSet\n\
              [sec]\nclass = portage.sets.security.NewAffectedSet\n",
             Path::new("/"),
             &mut defs,
         );
         assert!(matches!(defs["cd"], SetDef::ChangedDeps));
         assert!(matches!(defs["rb"], SetDef::RebuiltBinaries));
+        assert!(matches!(defs["pr"], SetDef::PreservedRebuild));
         assert!(matches!(defs["sec"], SetDef::Unsupported(_)));
     }
 }

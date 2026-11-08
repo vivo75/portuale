@@ -155,7 +155,7 @@ pub(crate) fn expand_targets(args: ExpandTargetsArgs<'_>) -> Result<ExpandTarget
             expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
             expanded_atoms.extend(atoms);
         } else if *atom_str == "@preserved-rebuild" {
-            let atoms = preserved_rebuild_atoms(root);
+            let atoms = portage_repo::preserved_rebuild_atoms(root);
             expanded_from_set.extend(std::iter::repeat_n(false, atoms.len()));
             expanded_atoms.extend(atoms);
         } else if let Some(name) = atom_str.strip_prefix('@') {
