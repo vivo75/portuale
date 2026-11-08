@@ -14,10 +14,10 @@ from `docs/charter.md` for the properties themselves.
 
 | Property | Checked by | Not covered |
 |---|---|---|
-| 1. Dependencies hold (runtime and post-merge atoms matched, no blocker, `REQUIRED_USE` holds, one package per slot) | `health_checker.py` `check_final_state`, on `emerge -pv --json`. Also `output_invariants.py` (every owner is an entry or installed, every entry reachable, no duplicate slot without a reported conflict) and the dependency-drop guard (see `portuale-resolver`) | the state *after* a real merge |
+| 1. Dependencies hold (runtime and post-merge atoms matched, no blocker, `REQUIRED_USE` holds, one package per slot) | `health_checker.py` `check_final_state`, on `emerge -pv --json` (a plan) and, with `--installed ROOT`, on the VDB a real merge left. Also `output_invariants.py` (every owner is an entry or installed, every entry reachable, no duplicate slot without a reported conflict) and the dependency-drop guard (see `portuale-resolver`) | |
 | 2. Order is legal (build dependencies merged earlier and usable, PMS 8.1) | `health_checker.py` `check_order`; `output_invariants.py` "merges after its owner" | 2a: an unserializable cycle is only *noted* (`cycle-noted`); building a package twice is not modelled |
 | 3. Newest visible version that every constraint allows | `health_checker.py` `check_best_versions` (needs the VDB and `-v --json`) | binary packages, and entries absent from the metadata cache (`checker-limitation`) |
-| 4. Removal keeps the libraries remaining programs link | `health_checker.py` `check_removal_plan` on `-C`, `--depclean`, `--prune` with `--pretend --json`; Rust tests `ebuild_merge/tests/plib_*.rs` for the preserve-libs mechanics | a real unmerge on a real tree is compared with Portage (the L32 cells), not gated |
+| 4. Removal keeps the libraries remaining programs link | `health_checker.py` `check_removal_plan` on `-C`, `--depclean`, `--prune` with `--pretend --json`; `--installed ROOT` checks that every installed ELF still finds its libraries after a real merge (a preserved library is a file on disk); Rust tests `ebuild_merge/tests/plib_*.rs` for the preserve-libs mechanics | a real unmerge on a real tree is compared with Portage (the L32 cells), not gated |
 | 5. Messages name the cause and an action | **no program** | everything; only pinned text exists, and it fixes known messages, not the rule |
 
 `health_checker.py` lives in `../pmtest/pytests-contract-suite/`. Its atom
@@ -38,19 +38,26 @@ python3 ../pmtest/pytests-contract-suite/health_checker.py --vdb /var/db/pkg pla
 #   -> differential-test-bed/logs/l0-health-<stamp>/health-report.txt
 #   exit 0: no plan portuale would run has a failure it introduced; 2: setup error
 
-# the checker's own tests, and its mutation test
+# the system a real merge left: before and after, only what the merge introduced fails
+python3 ../pmtest/pytests-contract-suite/health_checker.py --installed / > before.jsonl   # before merging
+python3 ../pmtest/pytests-contract-suite/health_checker.py --installed / --baseline before.jsonl
+#   the L1 bed (run/l1-merge-from-binpkg.sh, incl. the glibc+bash gate) does this and exits 1 on a failure
+
+# the checker's own tests, and its mutation tests
 python3 -m pytest pytests-contract-suite/test_health_checker.py      # from ../pmtest
 python3 ../pmtest/differential-test-bed/compare/health-mutants.py --vdb /var/db/pkg plan.json...
+python3 ../pmtest/differential-test-bed/compare/health-state-mutants.py /      # the installed-state check
 ```
 
 ## Reading a finding
 
 A finding is `(property, package, atom, reason, pre_existing)`.
 
-- It is a **failure** unless the property is `cycle-noted`, `checker-limitation`
-  or `removal-deps`. Those three are notes: a cycle the charter allows, a blind
-  spot of the checker, and a dependency a removal leaves unmatched (the user may
-  remove it; portuale warns).
+- It is a **failure** unless the property is `cycle-noted`, `checker-limitation`,
+  `removal-deps` or `private-library`. Those are notes: a cycle the charter
+  allows, a blind spot of the checker, a dependency a removal leaves unmatched
+  (the user may remove it; portuale warns), and a library installed outside the
+  linker's search path (a JDK, systemd), which its own program finds.
 - `pre_existing` means the system was already broken before the plan; it does
   not count against the plan.
 - A plan is **`refused`** when portuale itself would not run it (slot conflict,
@@ -87,8 +94,10 @@ go.
 ## Gaps, as of 2026-11-08
 
 1. Property 5 has no checker.
-2. Nothing checks the installed state after a real merge against properties 1–4;
-   the merge gate (`portuale-ebuild-merge`) compares files and VDB with Portage.
+2. The installed state after a real merge is checked for properties 1 and 4 only
+   (`--installed`); a final state does not record order (2) or visibility (3).
+   It runs in the L1 bed and in one hermetic merge test, not after the L3 source
+   builds or the L32 life-cycle cells.
 3. `health_checker.py` runs on the L0 plans and a few fixtures, not over every
    contract case.
 4. Property 2a (building a package twice to break a cycle) is not modelled.

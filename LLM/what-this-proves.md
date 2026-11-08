@@ -62,3 +62,25 @@ Pins: `version_order_is_total_with_missing_and_unparseable_versions` and
 `crates/portage-repo/src/merge_order/tests/cycles.rs`. Bed L0
 `l0-20261108T110937Z`: 91 clean, identical to the run before the change. The
 command still exits 1 on a real resolver result, filed as #685.
+
+Backlog #686 (2026-11-08): the system a real merge leaves is now checked
+against charter properties 1 and 4. `python3
+../pmtest/pytests-contract-suite/health_checker.py --installed /` reads the
+VDB and the files under a root as a plan that merges nothing and reports an
+unmatched runtime or post-merge dependency, a violated blocker or
+`REQUIRED_USE`, two packages in one slot, and an installed ELF file whose needed
+library the dynamic linker does not find. On this host's real root (2376
+packages) it prints no failure in about 30 s and 24 `private-library` notes
+(libraries a JDK, systemd or a vendored application keeps outside the search
+path). With `--baseline BEFORE.jsonl`, the output of the same run before a
+merge, only what the merge introduced fails. The L1 bed runs it in each
+consumer container and `compare/health-state-report.py` adds the verdict to
+`l1-report.txt`: the glibc + bash gate (`l1-merge-gate.txt`, build, then
+`L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1`) gave rc 0 twice, merged 2 of 2, 0 hard
+findings and `health of the installed state: 0 failure(s) introduced by the
+merge`. Its mutation test, `python3
+../pmtest/differential-test-bed/compare/health-state-mutants.py /`, breaks a copy
+of the VDB five ways and one harmless way: every mutant is reported and the
+control is not. Order (2) and newest version (3) cannot be read from a final
+state; property 3 for binary packages is #687 and running the check after the
+L3 and L32 cells is #688.

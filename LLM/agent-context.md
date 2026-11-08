@@ -428,6 +428,10 @@ L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
   differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
 ```
 
+Both runs also check the installed state after the merge against charter
+properties 1 and 4 (`health_checker.py --installed`, before and after, backlog
+#686): the run exits 1 when portuale's merge introduced a failure.
+
 **Evidence file (new convention, plan 02.493):** a branch that touches those
 paths records its gate result in `LLM/evidence/merge-gate-<branch>.md`
 (`/` in the branch name becomes `-`), naming a `sys-libs/glibc` and an
