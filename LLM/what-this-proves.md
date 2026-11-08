@@ -21116,3 +21116,5 @@ Pins: `version_order_is_total_with_missing_and_unparseable_versions` and
 `crates/portage-repo/src/merge_order/tests/cycles.rs`. Bed L0
 `l0-20261108T110937Z`: 91 clean, identical to the run before the change. The
 command still exits 1 on a real resolver result, filed as #685.
+
+**#683: a `||` choice under `--update` now prefers the alternative that holds the upgrade instead of always keeping the installed slot (Portage `dep_check.py:771-775`).** `promote_tied_alternative` (`crates/portage-repo/src/resolve/or_preference.rs`) ports the installed-slots promotion guard with a lazily computed per-choice `want_update`, so `dev-lang/python-3.15.2_p1` and `dev-lang/rust-bin-1.99.0` are added beside (not instead of) the still-needed installed slot. Runnable (live-verified 2026-11-09 on branch `backlog/683-or-upgrade-preference`): `cargo test --release -p portage-repo promote_tied_alternative` prints `19 passed; 0 failed`. Pins: 7 gate legs in `tests_162.rs`. Tester fresh pre-merge: full workspace 3360 passed / 0 failed, fmt clean, clippy 0 warnings. Not verified: the host `-uDNt --getbinpkg=n -p @world` diff and L0 were NOT RUN (owner step).

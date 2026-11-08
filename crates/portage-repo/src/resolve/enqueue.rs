@@ -575,6 +575,16 @@ pub(crate) fn flatten_deps_for_enqueue(
                     queued: queued_view,
                     gate,
                     view: OrView::Normal,
+                    // An installed parent is never merge-bound: its `||`
+                    // choice never wants an update (pinned `None`).
+                    parent: None,
+                    depth: 0,
+                    deep: Deep::NotRequested,
+                    update: false,
+                    arg_atoms: &[],
+                    set_args: &HashSet::new(),
+                    excluded: &[],
+                    complete: false,
                 })
             },
         },

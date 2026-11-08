@@ -373,6 +373,9 @@ pub(crate) struct FlattenDepStringArgs<'a> {
     pub(crate) union_constraints: &'a HashMap<(String, String), Vec<String>>,
     pub(crate) circular_view: &'a HashMap<RootCp, Vec<CircularDepChild>>,
     pub(crate) queued: &'a [QueueItem],
+    /// The effective child depth (`entry.depth + 1`), already resolved by
+    /// the caller, for the upgrade-preference promotion.
+    pub(crate) depth: u32,
 }
 
 /// Flatten the dep string with `||` branch selection.
@@ -394,6 +397,7 @@ pub(crate) fn flatten_dep_string(args: FlattenDepStringArgs<'_>) -> ControlFlow<
         union_constraints,
         circular_view,
         queued,
+        depth,
     } = args;
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
         portage_use_reduce::UseReduceFlatDisjunctiveArgs {
@@ -441,6 +445,16 @@ pub(crate) fn flatten_dep_string(args: FlattenDepStringArgs<'_>) -> ControlFlow<
                     queued: queued_view,
                     gate: ctx.gate(),
                     view: OrView::Normal,
+                    // The expanding node is the `||` owner: its deps want
+                    // an update exactly like `resolve_pretend` judges them.
+                    parent: Some((self_node.1.clone(), self_node.2.clone())),
+                    depth,
+                    deep: ctx.deep,
+                    update: ctx.update,
+                    arg_atoms: ctx.atoms,
+                    set_args: &ctx.set_args,
+                    excluded: ctx.excluded,
+                    complete: ctx.complete,
                 })
             },
         },
@@ -856,6 +870,8 @@ pub(crate) fn enqueue_entry_deps(args: EnqueueEntryDepsArgs<'_>) {
         union_constraints,
         circular_view,
         queued: &scope.queued,
+        // Children of this expansion live one deeper than the entry.
+        depth: depth + 1,
     }) else {
         return;
     };

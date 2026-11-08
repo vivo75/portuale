@@ -319,6 +319,8 @@ fn resolve_flip_group(args: ResolveFlipGroupArgs<'_>) -> ControlFlow<(), Vec<Str
         empty_groups_always_true: entry.empty_groups_always_true,
         owner: &entry.owner,
         owner_targets_running_root: entry.owner_targets_running_root,
+        // Chosen atoms queue one deeper than the deferred entry.
+        depth: entry.depth + 1,
         running_tags,
         circular: &bp.circular_dependency,
         queued,
@@ -336,6 +338,9 @@ struct ResolveTargetScopeGroupArgs<'a> {
     empty_groups_always_true: bool,
     owner: &'a (String, String),
     owner_targets_running_root: bool,
+    /// The effective child depth (`entry.depth + 1`), already resolved by
+    /// the caller, for the upgrade-preference promotion.
+    depth: u32,
     running_tags: &'a HashSet<String>,
     circular: &'a HashMap<RootCp, Vec<CircularDepChild>>,
     queued: &'a [QueueItem],
@@ -358,6 +363,7 @@ fn resolve_target_scope_group(
         empty_groups_always_true,
         owner,
         owner_targets_running_root,
+        depth,
         running_tags,
         circular,
         queued,
@@ -409,6 +415,17 @@ fn resolve_target_scope_group(
                     queued: queued_view,
                     gate: ctx.gate(),
                     view: OrView::Normal,
+                    // The deferred entry's owner is the `||` owner: the
+                    // drained-graph choice wants an update exactly like
+                    // the expansion-time one would have.
+                    parent: Some(owner.clone()),
+                    depth,
+                    deep: ctx.deep,
+                    update: ctx.update,
+                    arg_atoms: ctx.atoms,
+                    set_args: &ctx.set_args,
+                    excluded: ctx.excluded,
+                    complete: ctx.complete,
                 })
             },
         },
@@ -509,6 +526,8 @@ fn resolve_main_group(args: ResolveMainGroupArgs<'_>) -> ControlFlow<(), Vec<Str
         empty_groups_always_true: entry.empty_groups_always_true,
         owner: &entry.owner,
         owner_targets_running_root: entry.owner_targets_running_root,
+        // Chosen atoms queue one deeper than the deferred entry.
+        depth: entry.depth + 1,
         running_tags,
         circular: circular_view,
         queued,
@@ -600,6 +619,17 @@ fn resolve_installed_group(args: ResolveInstalledGroupArgs<'_>) -> ControlFlow<(
                     queued: queued_view,
                     gate: ctx.gate(),
                     view: OrView::Normal,
+                    // An installed parent is never merge-bound: its `||`
+                    // choice never wants an update (pinned `None`; the
+                    // entry depth is already the child depth).
+                    parent: None,
+                    depth: entry.depth,
+                    deep: Deep::NotRequested,
+                    update: false,
+                    arg_atoms: &[],
+                    set_args: &HashSet::new(),
+                    excluded: &[],
+                    complete: false,
                 })
             },
         },
