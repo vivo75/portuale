@@ -21100,3 +21100,19 @@ with `w603lib-3` and `w603cons-1` (`RDEPEND="<dev-libs/w603lib-2"`) installed,
 `[ebuild     UD ] dev-libs/w603lib-1 [3]`, then `R w603cons-1` and the skip
 block. Pin: `python3 -m pytest pytests-contract-suite -q -k test_669` in pmtest
 (fails with `[ebuild  N     ]` before the change).
+
+**#682: the merge-order candidate sort has a total order, so `emerge` no longer panics or varies between runs.**
+Among the mergeable nodes of one `cp`, an entry with no visible candidate
+(version `""`) compared equal to every real version, so the sort comparator was
+not a total order and the standard sort could panic ("user-provided comparison
+function does not correctly implement a total order") depending on the hash
+order of its input. A missing or unparseable version now sorts first, the
+graph index breaks remaining ties, and the same helper replaces the two other
+copies of the pattern. Runnable: `for i in $(seq 30); do portuale emerge -pvuDN
+--getbinpkg=n media-video/ffmpeg 2>&1 | md5sum; done | sort | uniq -c` prints
+one line with count 30 (before the change 7 runs in 10 aborted with rc 134).
+Pins: `version_order_is_total_with_missing_and_unparseable_versions` and
+`find_smallest_cycle_ignores_input_order_with_a_versionless_entry` in
+`crates/portage-repo/src/merge_order/tests/cycles.rs`. Bed L0
+`l0-20261108T110937Z`: 91 clean, identical to the run before the change. The
+command still exits 1 on a real resolver result, filed as #685.

@@ -45,17 +45,8 @@ pub(crate) fn find_smallest_cycle(
     } else {
         mergeable.iter().copied().collect()
     };
-    // Sort nodes for deterministic results (cp, then version).
-    cand.sort_by(|&a, &b| {
-        (entries[a].category.as_str(), entries[a].package.as_str())
-            .cmp(&(entries[b].category.as_str(), entries[b].package.as_str()))
-            .then_with(|| {
-                let ver = |i: usize| entry_version(&entries[i]).unwrap_or_default().to_string();
-                portage_versions::vercmp(&ver(a), &ver(b))
-                    .unwrap_or(0)
-                    .cmp(&0)
-            })
-    });
+    // Sort nodes for deterministic results (cp, then version, then index).
+    cand.sort_by(|&a, &b| candidate_order(entries, a, b));
     let mut best: Option<(HashSet<usize>, Option<Ignore>)> = None;
     for i in range.medium_post..=range.medium_soft {
         let ig = range.ig(i);
@@ -76,6 +67,14 @@ pub(crate) fn find_smallest_cycle(
         }
     }
     best
+}
+
+/// The `find_smallest_cycle` candidate order: `cp`, version, graph index.
+fn candidate_order(entries: &[GraphEntry], a: usize, b: usize) -> std::cmp::Ordering {
+    (entries[a].category.as_str(), entries[a].package.as_str())
+        .cmp(&(entries[b].category.as_str(), entries[b].package.as_str()))
+        .then_with(|| version_order(entry_version(&entries[a]), entry_version(&entries[b])))
+        .then(a.cmp(&b))
 }
 
 /// Harvest one node at a time from the induced subgraph, always taking a leaf

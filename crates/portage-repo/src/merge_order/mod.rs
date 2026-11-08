@@ -63,6 +63,20 @@ pub(crate) fn entry_version(e: &GraphEntry) -> Option<&str> {
     }
 }
 
+/// Total order on optional versions: a missing or unparseable version sorts
+/// before every parseable one (two of those by text), the rest by `vercmp`.
+pub(crate) fn version_order(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
+    fn valid(v: Option<&str>) -> Option<&str> {
+        v.filter(|v| portage_versions::ververify(v))
+    }
+    match (valid(a), valid(b)) {
+        (Some(x), Some(y)) => portage_versions::vercmp(x, y).map_or(x.cmp(y), |o| o.cmp(&0)),
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (None, None) => a.unwrap_or("").cmp(b.unwrap_or("")),
+    }
+}
+
 /// Arguments of [`serialize_merge_order`].
 pub(crate) struct SerializeMergeOrderArgs<'a> {
     pub(crate) entries: &'a [GraphEntry],

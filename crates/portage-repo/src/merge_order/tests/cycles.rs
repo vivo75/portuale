@@ -286,3 +286,83 @@ fn find_smallest_cycle_keeps_the_first_of_two_equal_rings() {
         "the first of the equal-size rings is kept"
     );
 }
+
+#[test]
+fn version_order_is_total_with_missing_and_unparseable_versions() {
+    use std::cmp::Ordering::*;
+    let vs = [
+        None,
+        Some(""),
+        Some("not a version"),
+        Some("22.1.8"),
+        Some("23.1.4"),
+    ];
+    for &a in &vs {
+        for &b in &vs {
+            assert_eq!(
+                version_order(a, b),
+                version_order(b, a).reverse(),
+                "{a:?} {b:?}"
+            );
+            for &c in &vs {
+                if version_order(a, b) != Greater && version_order(b, c) != Greater {
+                    assert_ne!(version_order(a, c), Greater, "{a:?} {b:?} {c:?}");
+                }
+            }
+        }
+    }
+    assert_eq!(version_order(None, Some("1")), Less);
+    assert_eq!(version_order(Some("22.1.8"), Some("23.1.4")), Less);
+}
+
+#[test]
+fn find_smallest_cycle_ignores_input_order_with_a_versionless_entry() {
+    // Three nodes of one cp (a real version, a `NoVisibleCandidate`, a
+    // second version), each in a 2-ring with a filler: the pick must not
+    // depend on the order `cand` arrives in (it comes from a HashSet).
+    let g = test_graph(
+        6,
+        &[
+            (0, 3, prio(2)),
+            (3, 0, prio(2)),
+            (1, 4, prio(2)),
+            (4, 1, prio(2)),
+            (2, 5, prio(2)),
+            (5, 2, prio(2)),
+        ],
+    );
+    let mut entries = vec![
+        new_entry("llvm-core", "llvm", "22.1.8", Vec::new()),
+        new_entry("llvm-core", "llvm", "x", Vec::new()),
+        new_entry("llvm-core", "llvm", "23.1.4", Vec::new()),
+        new_entry("dev-libs", "f1", "1", Vec::new()),
+        new_entry("dev-libs", "f2", "1", Vec::new()),
+        new_entry("dev-libs", "f3", "1", Vec::new()),
+    ];
+    entries[1].outcome = PretendOutcome::NoVisibleCandidate;
+    let mut seen = HashSet::new();
+    for asap in [
+        [0usize, 1, 2],
+        [2, 1, 0],
+        [1, 0, 2],
+        [1, 2, 0],
+        [0, 2, 1],
+        [2, 0, 1],
+    ] {
+        let mut frontier = SerializeFrontier::build(&g);
+        let (sub, _) = find_smallest_cycle(FindSmallestCycleArgs {
+            g: &g,
+            frontier: Some(&mut frontier),
+            entries: &entries,
+            range: &NORMAL,
+            asap: &asap,
+            prefer_asap: true,
+            ineligible: &HashSet::new(),
+        })
+        .expect("a mergeable cycle exists");
+        let mut v: Vec<usize> = sub.into_iter().collect();
+        v.sort();
+        seen.insert(v);
+    }
+    assert_eq!(seen.len(), 1, "same pick for every input order: {seen:?}");
+}

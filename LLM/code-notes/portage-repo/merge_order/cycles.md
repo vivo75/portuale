@@ -6,8 +6,11 @@ Cycle search and the circular-dependency report.
 
 ## fn find_smallest_cycle
 - Ports Portage's `find_smallest_cycle`: the smallest `gather_deps` closure among the currently-mergeable nodes, searched from the lowest `ignore_priority` rung upward so as few dependencies as possible are relaxed. "In the case of multiple runtime cycles, where some cycles may depend on smaller independent cycles, it's optimal to merge smaller independent cycles before other cycles that depend on them."
-- Sorts nodes for deterministic results -- Portage's `sorted(nodes)`, i.e. `Package.__lt__`: `cp` then version.
+- Sorts nodes for deterministic results -- Portage's `sorted(nodes)`, i.e. `Package.__lt__`: `cp` then version. `candidate_order` adds the graph index as the last key so equal keys keep a fixed order; `cand` is built from a `HashSet`, so without it the order changed per run.
 - "Exit this loop with the lowest possible priority, which minimizes the use of installed packages to break cycles."
+
+## fn candidate_order
+- Backlog #682. The sort closure used `vercmp(..).unwrap_or(0)`, which made a `NoVisibleCandidate` entry (version `""`, unparseable) equal to every version of its `cp`: not a total order, so `sort_by` panicked ("user-provided comparison function does not correctly implement a total order") on `media-video/ffmpeg` (`llvm-core/llvm` 22.1.8 / 23.1.4 / no candidate), about 7 runs in 10. `version_order` (mod.rs) is the total replacement.
 
 ## fn harvest_cycle
 - Ports Portage's `_serialize_tasks`' own final block for a multi-node cycle: harvest one node at a time from the induced subgraph, always taking a leaf at the lowest `ignore_priority` that produces one, and preferring an installed leaf "in order to avoid merging something too early as in bug 917259".

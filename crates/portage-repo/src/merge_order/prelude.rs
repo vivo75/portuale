@@ -92,13 +92,7 @@ impl DigraphPrelude<'_> {
             match (self.installed[a], self.installed[b]) {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
-                _ => {
-                    let av = outcome_version(&entries[a]).unwrap_or("");
-                    let bv = outcome_version(&entries[b]).unwrap_or("");
-                    portage_versions::vercmp(av, bv)
-                        .map(|o| o.cmp(&0))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }
+                _ => version_order(outcome_version(&entries[a]), outcome_version(&entries[b])),
             }
         });
         let mut alive: HashSet<usize> = union.iter().copied().collect();

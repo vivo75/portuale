@@ -11,6 +11,9 @@ Portage's merge-order scheduler over a typed dependency digraph.
 ## fn entry_version
 - The version a `GraphEntry` resolves to, whatever its outcome -- Portage's `Package.version`, which `find_smallest_cycle`'s `sorted(nodes)` compares after `cp`. A `Uninstall` removal (#72 B3) carries the installed version it removes, like Portage's uninstall `Package`.
 
+## fn version_order
+- Backlog #682. Total order on optional versions: missing or `ververify`-invalid sorts first (two of those by text), the rest by `vercmp`. Used by `candidate_order` (cycles.rs), the elimination sort in prelude.rs and the fallback `max_by` in installed_closure.rs, which all had the non-transitive `unwrap_or(0)` / `unwrap_or(Equal)` shape. Portage never meets the case (it only sorts parsed `Package` objects); the choice of "first" is ours and only has to be fixed.
+
 ## fn serialize_merge_order
 - The whole pipeline: build the digraph out of `entries`, prune its synthetic roots (the membership half of Portage's nomerge-root prune), bias it (with the post-prune parent counts), add the #680 usability edges (`add_usability_edges`, after the bias so they move no parent count), schedule it, and weave portuale's own non-merge-bound entries back in.
 - `implicit_system_deps` (Portage's `--implicit-system-deps`, default on) gates the bias re-sort only -- the digraph build, prune, schedule, and weave-back are identical either way.

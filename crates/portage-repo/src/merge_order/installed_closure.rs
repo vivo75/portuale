@@ -240,11 +240,10 @@ pub(crate) fn add_installed_dependency_closure(args: AddInstalledDependencyClosu
                 }
             }
             best.or_else(|| {
-                cands.iter().copied().max_by(|a, b| {
-                    portage_versions::vercmp(&a.version, &b.version)
-                        .unwrap_or(0)
-                        .cmp(&0)
-                })
+                cands
+                    .iter()
+                    .copied()
+                    .max_by(|a, b| version_order(Some(&a.version), Some(&b.version)))
             })
         };
 
