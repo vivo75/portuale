@@ -17,6 +17,27 @@ members = [
     "crates/use-reduce-harness",
     "crates/required-use-harness",
     "crates/portuale",
+    "crates/experiment-pre-sort-atoms",
+]
+# A bare `cargo build` / `cargo test` leaves the experiments out; build one
+# with `cargo build --release -p experiment-pre-sort-atoms`.
+default-members = [
+    "crates/portage-versions",
+    "crates/portage-util",
+    "crates/portage-vdb",
+    "crates/portage-dep",
+    "crates/portage-use-reduce",
+    "crates/portage-profile",
+    "crates/portage-repo",
+    "crates/portage-required-use",
+    "crates/portage-fetch",
+    "crates/harness-common",
+    "crates/mrg-director",
+    "crates/versions-harness",
+    "crates/atom-harness",
+    "crates/use-reduce-harness",
+    "crates/required-use-harness",
+    "crates/portuale",
 ]
 # Vendored upstream checkouts carry their own Cargo.toml files; they are
 # not workspace members.

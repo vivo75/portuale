@@ -1,0 +1,20 @@
+[package]
+name = "experiment-pre-sort-atoms"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Experiment: pre-sort the ebuilds of every @world atom and its dependencies, in parallel."
+
+# Not a default workspace member (see the root `Cargo.toml`): a bare
+# `cargo build` skips it. Build it explicitly with
+# `cargo build --release -p experiment-pre-sort-atoms`.
+[dependencies]
+portage-dep = { path = "../portage-dep" }
+portage-profile = { path = "../portage-profile" }
+portage-repo = { path = "../portage-repo" }
+portage-use-reduce = { path = "../portage-use-reduce" }
+portage-vdb = { path = "../portage-vdb" }
+portage-versions = { path = "../portage-versions" }
+
+[lints]
+workspace = true
