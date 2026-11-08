@@ -1,0 +1,30 @@
+PACKAGES: 2
+TIMESTAMP: 0
+VERSION: 0
+
+BUILD_ID: 1
+BUILD_TIME: 1
+CPV: dev-libs/oldpkg-1.0
+DEFINED_PHASES: -
+EAPI: 8
+IUSE: oldflag
+KEYWORDS: amd64
+PATH: dev-libs/oldpkg-1.0.tbz2
+RDEPEND: dev-libs/slotpkg:0
+SIZE: 549
+MTIME: 1792974070
+REPO: gutest
+
+BUILD_ID: 1
+BUILD_TIME: 2
+CPV: dev-libs/slotpkg-1.0
+DEFINED_PHASES: -
+EAPI: 8
+IUSE: slotflag
+KEYWORDS: amd64
+PATH: dev-libs/slotpkg-1.0.gpkg.tar
+RDEPEND: dev-libs/oldpkg
+SIZE: 10240
+MTIME: 1792974070
+REPO: gutest
+

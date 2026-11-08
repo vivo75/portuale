@@ -1,0 +1,4 @@
+# move dev-libs/oldpkg dev-libs/newpkg
+dev-libs/newpkg oldflag
+# slotmove dev-libs/slotpkg 0 1
+dev-libs/slotpkg:1 slotflag

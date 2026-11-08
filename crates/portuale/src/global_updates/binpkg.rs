@@ -1706,7 +1706,7 @@ mod tests {
     fn binpkg_files_and_index_match_the_portage_capture() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let fixture = manifest.join("../../fixtures/global-updates");
-        let capture = manifest.join("../../LLM/evidence/2026-10-25-review/t5/after");
+        let capture = manifest.join("src/global_updates/testdata/portage-capture/after");
         let scratch = portage_util::TempDir::new("global_updates_binpkg");
         let root = scratch.join("root");
         let repo = scratch.join("repo");

@@ -97,6 +97,10 @@ def main():
     archived = set()
     if os.path.exists(arch):
         archived = {l.strip() for l in open(arch)}
+    # the tracked manifest covers every later archive too
+    tracked = os.path.join(repo, "LLM", "ARCHIVE.manifest.tsv")
+    if os.path.exists(tracked):
+        archived |= {l.split("\t", 1)[0] for l in open(tracked).read().splitlines()[1:]}
     cite = re.compile(r"`(LLM/[^`\s]+?\.(?:md|html|tsv|txt))(?::\d+(?:-\d+)?)?`")
     for dirpath, _, files in os.walk(skroot):
         for fn in files:

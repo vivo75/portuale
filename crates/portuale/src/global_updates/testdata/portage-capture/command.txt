@@ -1,0 +1,7 @@
+ROOT=$T/root PORTAGE_CONFIGROOT=$T/root (single target root only)
+PORTAGE_REPOSITORIES=<[gutest] location=$T/repo>
+probe: load_emerge_config(action=pretend) then
+  _global_updates(target.root, trees, target.mtimedb[updates], quiet)
+  target.mtimedb.commit() when updates were applied
+(mirrors _emerge/actions.py run_action per-root; the running-root
+pass, the config reload and the AUTOCLEAN force belong to Task 11)

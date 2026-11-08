@@ -138,7 +138,7 @@ Two extra rules:
 | The rhythm, rules, numbering, two-repo pairing | `AGENTS.md` |
 | Hard-won working lessons, one idea per bullet | `LLM/lessons-of-backlog-ops-2026-10-03.md` |
 | Per-item status, residues, cuts for closed items | `LLM/recap-of-backlog-ops-2026-10-03.md` |
-| Open work and its numbers | `LLM/backlog-tasks.md`, `LLM/backlog-tasks-2026-10.md` |
+| Open work and its numbers | `LLM/backlog-tasks.md` |
 | A worked batch plan with blocking/default decisions | `LLM/2026-10-15-batch-plan.md` |
 | Subagent-per-task execution | `LLM/superpowers/plans/2026-10-21-backlogs-444-445-455-456.md` |
 | Doc/tooling invariants | skill `portuale-docs-and-charter` |

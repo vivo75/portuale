@@ -49,6 +49,29 @@ All 11 938 archived paths are listed, one per line, in the manifest that
 produced the archive (`work/manifest.tsv`, column `destination`). Every file in
 `LLM/` has exactly one row there: `keep`, `keep+index`, or `archive:<skill>`.
 
+## Second archive: plans, reviews, evidence (2026-11-08)
+
+A second, smaller archive took what the first left: 364 files, 3.8 MB, in
+`llm-archive-2026-11-08b.tar.zst` (sha256 `90d5bc59abebd9bb7c6dc3e56a5ab789446ebae862cb9bb863aee8765d092376`,
+next to the first one). It holds every finished plan and review
+(`LLM/0N.*`, `LLM/2026-10-*`, `plan-residui-514-555.md`), `LLM/plans/`,
+`LLM/superpowers/plans/`, all of `LLM/evidence/` and the frozen
+`backlog-tasks-2026-10.md`. Kept: `portage-quirks.md`, the Portage bug list,
+the unfinished plan `06.447`, and the errata `02.442`.
+
+**`LLM/ARCHIVE.manifest.tsv` lists every archived path** (both archives; the
+second also carries size and sha256). A path under `LLM/` cited in older text
+and not found in the tree is in the archive when it appears there;
+`check_links.py` and `portuale-distill/f4_check.py` read it for that reason.
+Restore one file with `tar --zstd -xf <archive> <path>`.
+
+`LLM/evidence/` stays as an empty, wanted directory (`.keep`): new
+`merge-gate-<branch>.md` files go there (`pair_check.sh`). Test data that code
+reads lives next to the code, not here: the Portage capture the
+`global_updates` tests compare against is
+`crates/portuale/src/global_updates/testdata/portage-capture/`, and
+`bt_compare.py` reads `LLM/tools/data/portage-debug-masks.txt`.
+
 ## The nine skills
 
 Sources are `LLM/skills/<name>/SKILL.md`; `.claude/skills/<name>` is a symlink,

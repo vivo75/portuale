@@ -183,7 +183,7 @@ mod tests {
         let (out, scratch) = drive_fixture(false);
         let expected = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../LLM/evidence/2026-10-25-review/t5/stdout.txt"),
+                .join("src/global_updates/testdata/portage-capture/stdout.txt"),
         )
         .unwrap()
         .replace("/var/tmp/gu-capture.WzRZsi", &scratch);
@@ -203,7 +203,7 @@ mod tests {
         let (out, scratch) = drive_fixture(true);
         let expected = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../LLM/evidence/2026-10-25-review/t5/stdout.quiet.txt"),
+                .join("src/global_updates/testdata/portage-capture/stdout.quiet.txt"),
         )
         .unwrap()
         .replace("/var/tmp/gu-capture.WzRZsi", &scratch);

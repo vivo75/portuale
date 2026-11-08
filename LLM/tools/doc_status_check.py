@@ -48,8 +48,6 @@ DONE_PLAN_OK = {"DONE", "CLOSED", "WITHDRAWN"}
 # (rule, number) -> one-line reason. Shrink only; see the module docstring.
 ALLOW = {
     ("a", 447): "multi-item plan 06.447 (#447-#451) stays `in progress` while #447 itself is DONE; #451 optional",
-    ("d", 443): "plan 06.443 predates the tier rule; its entry sits in Tier 1 by design, the prefix is the plan's theme (tests)",
-    ("d", 452): "plan 06.452 predates the tier rule; its entry sits in Tier 1 by design, the prefix is the plan's theme (tests)",
 }
 
 

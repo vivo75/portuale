@@ -26,7 +26,7 @@ one tarball).
 |---|---|
 | [`agent-context.md`](agent-context.md) | **Read first for any development work.** Goals, hard constraints, architecture decisions, pointers to the live state and backlog. |
 | skill `portuale-slice-delivery`, `portuale-oracle-probing` | **Read before any backlog slice.** The condensed how-to-work lessons (oracle method, gates, beds, numbering, performance) were distilled into those two skills; the source file is in the archive. |
-| [`backlog-tasks.md`](backlog-tasks.md), [`backlog-tasks-2026-10.md`](backlog-tasks-2026-10.md) | The open work, one line per task, with code and doc pointers. Item numbers are global and never reused. |
+| [`backlog-tasks.md`](backlog-tasks.md) | The open work, one line per task, with code and doc pointers. Item numbers are global and never reused. |
 | [`scope-backlog.md`](scope-backlog.md) | What Portage does that portuale doesn't (and the reverse), the standing non-goals. |
 | [`ARCHIVE.md`](ARCHIVE.md) | What left the tree on 2026-11-08, where it went, and how to restore it. Per-item status, residues and deliberate cuts for closed items are in the archived `recap-of-backlog-ops-2026-10-03.md`. |
 | [`what-this-proves.md`](what-this-proves.md) | Append-only per-slice record with Portage source grounding and a runnable example. |

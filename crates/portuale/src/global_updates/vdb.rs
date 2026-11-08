@@ -443,7 +443,7 @@ mod tests {
     fn vdb_moves_match_the_portage_capture() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let fixture = manifest.join("../../fixtures/global-updates");
-        let capture = manifest.join("../../LLM/evidence/2026-10-25-review/t5/after/var/db/pkg");
+        let capture = manifest.join("src/global_updates/testdata/portage-capture/after/var/db/pkg");
         let scratch = portage_util::TempDir::new("global_updates_vdb");
         let root = scratch.join("root");
         let repo = scratch.join("repo");
@@ -521,7 +521,7 @@ mod tests {
     fn vdb_dep_strings_match_the_portage_capture() {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let fixture = manifest.join("../../fixtures/global-updates");
-        let capture = manifest.join("../../LLM/evidence/2026-10-25-review/t5/after");
+        let capture = manifest.join("src/global_updates/testdata/portage-capture/after");
         let scratch = portage_util::TempDir::new("global_updates_ents");
         let root = scratch.join("root");
         let repo = scratch.join("repo");

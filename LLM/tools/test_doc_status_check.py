@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import doc_status_check as dsc  # noqa: E402
 
 # Pinned to the count written by the first run on the real tree; shrink only.
-ALLOW_COUNT = 3  # first real-tree run: (a,447) (d,443) (d,452)
+ALLOW_COUNT = 1  # (a,447); (d,443) and (d,452) went with their archived plans
 
 
 def tree(backlogs, plans):
