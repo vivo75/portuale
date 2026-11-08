@@ -47,7 +47,7 @@ The choke points:
 - `globals.rs:123-142` — the unparsed-token log is **debug-only**;
 - `queue.rs:215-304` — "enqueue everything, drop on pop".
 
-Known instances: slot ops `foo:0=` (`what-this-proves.md:61-66`), USE deps
+Known instances: slot ops `foo:0=` (`what-this-proves.until-2026-11-07.md:61-66`), USE deps
 (`:74-77`), slot visited-set (`:396`), sub-slot feed (`:1229`), blockers `!!`
 (`:1473`), `package.provided` (`:8504`), nested fragments (`:17303`),
 `[use]`-unsat (`:8461`).

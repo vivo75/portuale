@@ -72,6 +72,25 @@ reads lives next to the code, not here: the Portage capture the
 `crates/portuale/src/global_updates/testdata/portage-capture/`, and
 `bt_compare.py` reads `LLM/tools/data/portage-debug-masks.txt`.
 
+## Third archive: the old `what-this-proves.md` (2026-11-08)
+
+`LLM/what-this-proves.md` held 21 118 lines written while Portage was the
+oracle, and an agent grepping it found "mimic Portage" wording that the charter
+has withdrawn. Lines 1–21 068 (everything up to the 2026-11-07 charter) moved
+verbatim to `what-this-proves.until-2026-11-07.md` in
+`llm-archive-2026-11-08c.tar.zst` (sha256
+`e5ec0472064e2dd2c1efe10b053dc4956ba225e7a0e2425786a0d3285f49a238`, listed in
+`LLM/ARCHIVE.manifest.tsv`). The live file keeps a new header and the 50 lines
+written after the charter, and is append-only again.
+
+**Line numbers:** a citation `what-this-proves.md:L` written before 2026-11-08
+names the same line `L` of the archived file; the nine that existed
+(`scope-cuts.md`, `recurring-issues.md`, the resolver skill) are already
+repointed. Prose such as "see `what-this-proves.md`'s X section" means the
+archived file too. Restore with
+`tar --zstd -xf <archive> LLM/what-this-proves.until-2026-11-07.md`, or read
+`git show <this commit>^:LLM/what-this-proves.md`.
+
 ## The nine skills
 
 Sources are `LLM/skills/<name>/SKILL.md`; `.claude/skills/<name>` is a symlink,

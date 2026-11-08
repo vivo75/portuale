@@ -130,7 +130,7 @@ target/release/versions-harness vercmp 1.0-r1 1.0
 | [`docs/architecture.md`](docs/architecture.md), [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | How the code is organised; how to build, test and contribute. |
 | [`AGENTS.md`](AGENTS.md) | **Start here for agent work.** The "next slice" workflow and the verification / commit rules. |
 | [`LLM/agent-context.md`](LLM/agent-context.md) | The full context: goals, hard constraints, architecture decisions, the bash-backend investigation, current state, and the open backlog. |
-| [`LLM/what-this-proves.md`](LLM/what-this-proves.md) | The living, append-only per-slice record — every feature, with its Portage source grounding. |
+| [`LLM/what-this-proves.md`](LLM/what-this-proves.md) | The append-only per-slice record since 2026-11-07, each with a runnable example. Earlier entries are archived (see `LLM/ARCHIVE.md`). |
 | [`LLM/scope-backlog.md`](LLM/scope-backlog.md) | What Portage behaviour is not yet ported, and the standing non-goals. |
 | [`LLM/lessons-of-backlog-ops-2026-10-03.md`](LLM/lessons-of-backlog-ops-2026-10-03.md), [`LLM/recap-of-backlog-ops-2026-10-03.md`](LLM/recap-of-backlog-ops-2026-10-03.md) | How to work on backlog items (condensed lessons) and the per-item status/residue/cut index for the closed batches. |
 | [`docs/brush-pin.md`](docs/brush-pin.md) | The `brush` (embedded bash) dependency pin and its re-pin checklist. |
