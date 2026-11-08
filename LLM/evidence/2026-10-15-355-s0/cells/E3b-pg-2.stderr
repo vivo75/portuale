@@ -1,3 +1,0 @@
- * This action can remove important packages! In order to be safer, use
- * `emerge -pv --depclean <atom>` to check for reverse dependencies before
- * removing packages.

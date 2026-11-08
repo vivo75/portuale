@@ -1,4 +1,0 @@
-
-emerge: there are no ebuilds to satisfy "dev-libs/oldmovepkg".
-(dependency required by "dev-libs/movedepconsumer-1.0::testrepo" [ebuild])
-(dependency required by "dev-libs/movedepconsumer" [argument])

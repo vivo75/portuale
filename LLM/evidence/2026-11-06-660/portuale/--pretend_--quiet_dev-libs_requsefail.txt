@@ -1,8 +1,0 @@
-
-!!! The ebuild selected to satisfy "dev-libs/requsefail" has unmet requirements.
-- dev-libs/requsefail-1.0::testrepo USE="brokenflag" ELIBC="glibc"
-
-  The following REQUIRED_USE flag constraints are unsatisfied:
-    brokenflag? ( !brokenflag )
-
-

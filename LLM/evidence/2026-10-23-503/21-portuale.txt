@@ -1,3 +1,0 @@
-$ ../../../target/release/portuale emerge -p app-misc/nothing-here --cycle-break
-emerge: error: unrecognized arguments: --cycle-break
-rc=2

@@ -262,9 +262,9 @@ Paths written before 2026-10-10 may predate this: see
 
 **2026-10-03 close-out note:** the per-batch plans (`batch-2026-09-21` …
 `batch-2026-10-02`), the per-phase plans and `docs/history/` were deleted
-and condensed into [`lessons-of-backlog-ops-2026-10-03.md`](lessons-of-backlog-ops-2026-10-03.md)
+and condensed into the skills `portuale-slice-delivery` and `portuale-oracle-probing` (source archived as `lessons-of-backlog-ops-2026-10-03.md`)
 (how to work: oracle method, gates, beds, numbering — **read it before any
-slice**) and [`recap-of-backlog-ops-2026-10-03.md`](recap-of-backlog-ops-2026-10-03.md)
+slice**) and the archived `recap-of-backlog-ops-2026-10-03.md`
 (per-item status/residue/cuts). No batch is live; everything in the
 09-21 → 10-02 batches shipped or was filed with a number in
 `backlog-tasks.md`. The runbook those batches shared (paired branches

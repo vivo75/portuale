@@ -1,9 +1,0 @@
-
-These are the packages that would be merged, in order:
-
-Calculating dependencies ... done!
-Dependency resolution took (backtrack: 0/20).
-
-[ebuild     U  ] dev-libs/p590vprov-5.44 [5.42] to $S/cells/w604
-[ebuild  N     ] dev-libs/p590vpull-2 to $S/cells/w604
-### rc: 0

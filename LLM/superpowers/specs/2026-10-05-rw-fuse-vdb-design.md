@@ -10,7 +10,7 @@ dentries); a live rewrite is stored at `flush` (the kernel ignores
 inside a live entry rewrites the whole entry so the temp's mode/mtime and
 the stale stamp match disk; volatile lock files accept `chown`.
 Backlog: [`backlog-tasks-2026-10.md`](../../backlog-tasks-2026-10.md) Tier 2 #317.
-Parent feature: #305 / feat#157 ([`feat-157-authoritative-vdb-database.md`](../../feat-157-authoritative-vdb-database.md),
+Parent feature: #305 / feat#157 (archived `feat-157-authoritative-vdb-database.md`,
 decision D2 "read-only FUSE first"). Builds on the read-only view
 `rust/portuale/src/vdb_view.rs` (S7) and its fuser adapter `vdb_fuse.rs`.
 Branch: `backlog/317-rw-fuse` in both repos.

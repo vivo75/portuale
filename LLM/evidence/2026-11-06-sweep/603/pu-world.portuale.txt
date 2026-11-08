@@ -1,8 +1,0 @@
-### portuale argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$FX ROOT=$R PORTAGE_RUNNING_ROOT=$R DISTDIR=$FX/distfiles PORTAGE_TMPDIR=$S PYTHONHASHSEED=0 portuale emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pu @world
-Dependency resolution took (backtrack: 0/20).
-[ebuild  N     ] dev-libs/newpkg-1.0 to $R
-[ebuild  N     ] dev-libs/upgradepkg-2.0 to $R
-[ebuild  N     ] dev-libs/systempkg-1.0 to $R
-[ebuild     U  ] dev-libs/w603lib-3.1 [3] to $R
-[ebuild  N     ] dev-libs/withdeps-1.0 to $R
-### rc: 0

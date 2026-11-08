@@ -1,3 +1,0 @@
-### emerge -a @profile --color=n
-!!! "--ask" should only be used in a terminal. Exiting.
-rc=1

@@ -1,6 +1,0 @@
-{"desc": "fixture package: #605 [use] of an unwalked installed consumer",
- "ebuilds": {"dev-libs/w605x-1": {"IUSE": "w605flag"}, "dev-libs/w605x-2": {"IUSE": "w605flag"},
-             "dev-libs/w605y-1": {}, "dev-libs/w605w-1": {},
-             "app-misc/w605cona-1": {"RDEPEND": "|| ( dev-libs/w605x[w605flag] dev-libs/w605y )"},
-             "app-misc/w605conb-1": {"RDEPEND": "|| ( dev-libs/w605x[w605flag] dev-libs/w605w )"},
-             "app-misc/w605conc-1": {"RDEPEND": "dev-libs/w605x[w605flag]"}}}

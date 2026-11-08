@@ -1,7 +1,0 @@
---pretend_dev-libs_implicitiusepkgmusl	case	1	1
---pretend_--quiet_dev-libs_implicitiusepkgmusl	case	1	1
---pretend_--verbose_dev-libs_implicitiusepkgmusl	case	1	1
---pretend_--tree_dev-libs_implicitiusepkgmusl	case	1	1
---pretend_--emptytree_dev-libs_implicitiusepkgmusl	case	1	1
---pretend_--update_--deep_--newuse_dev-libs_implicitiusepkgmusl	case	1	1
---pretend_--update_dev-libs_implicitiusepkgmusl	case	1	1

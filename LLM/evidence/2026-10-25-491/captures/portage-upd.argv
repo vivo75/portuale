@@ -1,1 +1,0 @@
-emerge -pv --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -uDN =dev-libs/p491con-2

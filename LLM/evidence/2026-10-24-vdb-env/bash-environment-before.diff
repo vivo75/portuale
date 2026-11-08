@@ -1,3 +1,0 @@
-1923,1924d1922
-< declare -x QEMU_SOFTMMU_TARGETS=""
-< declare -x QEMU_USER_TARGETS=""

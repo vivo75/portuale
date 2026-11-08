@@ -1,1 +1,0 @@
-emerge --buildpkgonly --ignore-default-opts =t348-d-eapisp-1

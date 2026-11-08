@@ -1,1 +1,0 @@
-{"installed": {"dev-libs/w602prov-1": {"SLOT": "0/1"}, "app-misc/w602cons-1": {"RDEPEND": "dev-libs/w602prov:0/1="}}, "world": []}

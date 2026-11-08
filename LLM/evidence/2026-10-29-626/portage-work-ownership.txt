@@ -1,5 +1,0 @@
-portage:portage 700 /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/
-portage:portage 755 /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/
-portage:portage 755 /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo/
-portage:portage 755 /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo/difflib-0.4.0/
-portage:portage 644 /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo/difflib-0.4.0/src/differ.rs

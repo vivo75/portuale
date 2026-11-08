@@ -1,4 +1,0 @@
-
-emerge: there are no ebuilds to satisfy "dev-libs/ormiss-nonexistent".
-(dependency required by "dev-libs/ormissbad-1.0::testrepo" [ebuild])
-(dependency required by "dev-libs/ormissbad" [argument])

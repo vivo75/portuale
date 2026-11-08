@@ -1,3 +1,0 @@
-$ ../../../target/release/portuale emerge -p app-misc/nothing-here --merge-wait-scope
-emerge: error: argument --merge-wait-scope: expected one argument
-rc=2
