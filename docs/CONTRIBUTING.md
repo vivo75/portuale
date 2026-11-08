@@ -30,9 +30,12 @@ that rule:
 
 - `pmtest/pytests-contract-suite/health_checker.py` checks a plan (the
   `emerge --pretend -v --json` output) against charter properties 1
-  (dependencies hold) and 2 (order is legal). It is written from the PMS and
-  shares no code with portuale or Portage. The other properties have no
-  checker yet.
+  (dependencies hold), 2 (order is legal), 3 (newest visible versions) and,
+  for a removal plan, 4 (linked libraries are kept). It is written from the PMS
+  and shares no code with portuale or Portage. With `--installed ROOT` it checks
+  properties 1 and 4 on the system a real merge left behind (the L1 bed does
+  this before and after each merge). Property 5 (messages help) has no checker
+  yet.
 - `pmtest/differential-test-bed/run/l0-health.sh` runs it on every L0 plan
   of a real Gentoo tree in a container. Portage is not run.
 

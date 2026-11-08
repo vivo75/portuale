@@ -818,6 +818,12 @@ pub(crate) fn print_json_result(args: PrintJsonResultArgs<'_>) -> Option<ExitCod
             running_root: root_deps_running_root.as_deref(),
             root,
             request: &opts.atom_args,
+            candidate_options: CandidateOptions {
+                usepkg: opts.usepkg,
+                usepkgonly: opts.usepkgonly,
+                getbinpkg: opts.getbinpkg,
+                getbinpkgonly: opts.getbinpkgonly,
+            },
         });
         // Same non-zero-on-autounmask-changes contract as the text path: a
         // `--json` consumer's exit-code check must see the "config still needs

@@ -1,8 +1,0 @@
-
-!!! The ebuild selected to satisfy "dev-libs/requiredusebadpkg2" has unmet requirements.
-- dev-libs/requiredusebadpkg2-1.0::testrepo USE="baz -qux" ELIBC="glibc"
-
-  The following REQUIRED_USE flag constraints are unsatisfied:
-    baz? ( qux )
-
-

@@ -18,6 +18,8 @@ else
     python3 LLM/tools/doc_status_check.py >"$OUT/doc_status.txt" 2>&1
 fi
 echo "doc-status rc=$?"; sed 's/^/  /' "$OUT/doc_status.txt" | grep -v ': OK$'
+python3 LLM/tools/skills_check.py >"$OUT/skills.txt" 2>&1
+echo "skills rc=$?"; sed 's/^/  /' "$OUT/skills.txt" | grep -v ': OK$'
 python3 LLM/tools/cut_registry_check.py >"$OUT/cut_registry.txt" 2>&1
 echo "cut-registry rc=$?"; sed 's/^/  /' "$OUT/cut_registry.txt" | grep -v ': OK$'
 # Pairing / merge-path gate evidence (plan 02.493 Task 4).

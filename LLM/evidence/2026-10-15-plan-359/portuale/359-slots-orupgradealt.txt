@@ -1,2 +1,0 @@
-### emerge --pretend --update dev-libs/orupgradealt --color=n
-rc=0

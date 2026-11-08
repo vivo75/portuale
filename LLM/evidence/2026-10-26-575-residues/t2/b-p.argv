@@ -1,1 +1,0 @@
-ROOT=/var/tmp/t2s0-root2 emerge -p --color=n --oneshot sys-apps/baselayout

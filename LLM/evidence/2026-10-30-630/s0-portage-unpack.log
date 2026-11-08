@@ -1,5 +1,0 @@
-tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f zerocopy-derive-0.8.58.crate
-tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f zerocopy-0.8.58.crate
-tar -x -C /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work/cargo_home/gentoo -f zmij-1.0.23.crate
-[A[72C [34;01m[ [32;01mok[34;01m ][0m
->>> Source unpacked in /var/tmp/portage/app-benchmarks/hyperfine-1.21.0/work

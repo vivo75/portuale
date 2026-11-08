@@ -127,3 +127,17 @@ fn kept_packages_drop_replaced_slots_and_uninstalls() {
         .collect();
     assert_eq!(kept, vec!["dev-libs/bar-1.0:0", "dev-libs/foo-2.0:2"]);
 }
+
+#[test]
+fn candidate_options_json_names_the_four_binary_options() {
+    let options = CandidateOptions {
+        usepkg: true,
+        usepkgonly: false,
+        getbinpkg: true,
+        getbinpkgonly: false,
+    };
+    assert_eq!(
+        candidate_options_to_json(options),
+        r#"{"usepkg":true,"usepkgonly":false,"getbinpkg":true,"getbinpkgonly":false}"#
+    );
+}

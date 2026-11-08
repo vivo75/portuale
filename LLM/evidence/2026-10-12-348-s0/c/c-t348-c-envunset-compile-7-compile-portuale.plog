@@ -1,3 +1,0 @@
-=== P=t348-c-envunset-compile-7 EAPI=7 PHASE=compile ===
-ENV_UNSET=[T348_SENTINEL]
-T348_SENTINEL=[unset]

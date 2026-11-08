@@ -1,9 +1,0 @@
-### argv: env -u EMERGE_DEFAULT_OPTS PORTAGE_CONFIGROOT=$CFG ROOT=$FX PORTAGE_RUNNING_ROOT=$FX DISTDIR=$FX/distfiles PORTAGE_TMPDIR=$SP/ptmp PYTHONHASHSEED=0 emerge --ignore-default-opts --getbinpkg=n --usepkg=n --color=n -pv --backtrack=0 dev-libs/r592atop
-These are the packages that would be merged, in order:
-Calculating dependencies ... done!
-Dependency resolution took (backtrack: 0/0).
-emerge: there are no ebuilds to satisfy "dev-libs/r592agone" for $FX/.
-(dependency required by "dev-libs/r592ay-2::testrepo" [ebuild])
-(dependency required by "dev-libs/r592atop-1::testrepo" [ebuild])
-(dependency required by "dev-libs/r592atop" [argument])
-### rc: 1

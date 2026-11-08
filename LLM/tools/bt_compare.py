@@ -22,9 +22,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_PORTAGE = (
-    REPO / "LLM" / "evidence" / "2026-10-22-world-divergence" / "portage-debug-masks.txt"
-)
+DEFAULT_PORTAGE = Path(__file__).resolve().parent / "data" / "portage-debug-masks.txt"
 
 # `<Package ('binary', '/', 'cat/pkg-ver', 'merge', ...)>: {'reason': ...}`
 # The reason is read separately: captures can be cut mid-line (the 2026-10-22

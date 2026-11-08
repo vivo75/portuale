@@ -1,1 +1,0 @@
-emerge: error: Invalid Atom(s) in --exclude parameter: '=a/b-1' (only package names and slot atoms (with wildcards) allowed)

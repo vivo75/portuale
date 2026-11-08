@@ -1,3 +1,0 @@
-### emerge --pretend dev-libs/movedepconsumer --color=n
-[ebuild  N     ] dev-libs/movedepconsumer-1.0 to /var/tmp/plan359/stage/fixtures
-rc=0

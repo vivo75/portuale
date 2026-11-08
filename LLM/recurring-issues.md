@@ -10,7 +10,7 @@
 Same failure mode, different layer: real dep treated as "not a dep".
 No entry, no `NoVisibleCandidate`, no warning.
 
-* Slot ops `foo:0=` (`what-this-proves.md:61-66`), USE deps (`:74-77`),
+* Slot ops `foo:0=` (`what-this-proves.until-2026-11-07.md:61-66`), USE deps (`:74-77`),
   slot visited-set (`:396`), sub-slot feed (`:1229`),
   blockers `!!` (`:1473`), `package.provided` (`:8504`),
   nested fragments (`:17303`), `[use]`-unsat (`:8461`).

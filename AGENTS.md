@@ -11,11 +11,22 @@ The charter wins over any older passage that says "mimic Portage",
 [`LLM/agent-context.md`](LLM/agent-context.md): it holds the
 settled goals, hard constraints, architecture decisions, the bash-backend
 investigation, the current state, and the open backlog. This file is just
-the operating rhythm and the rules. Humans new to the tree start with
+the operating rhythm and the rules. The durable how-to knowledge — delivery,
+oracle probing, the resolver, ebuild and merge, the test harness, code
+conventions, the output contract, the Portage source map, the document rules —
+is in [`LLM/skills/`](LLM/skills/), one skill per kind of work, loaded on
+demand. What is not there is record: the per-item plans, and the capture
+corpus that [`LLM/ARCHIVE.md`](LLM/ARCHIVE.md) maps to its archive.
+Humans new to the tree start with
 [`docs/architecture.md`](docs/architecture.md) (what it is, how one
 `emerge` flows through the code) and
 [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) (build, test, comments,
 commits).
+
+Paths under `LLM/` that older text cites but the tree no longer has (finished
+plans, reviews, `LLM/evidence/…`) are in the archive: see
+[`LLM/ARCHIVE.md`](LLM/ARCHIVE.md) and `LLM/ARCHIVE.manifest.tsv`. Do not
+repoint those citations; they are history.
 
 ## The "next slice" workflow
 
@@ -158,7 +169,7 @@ content, never duplicated:
 
 Backlog item numbers are global across tiers and **never reused**. Before
 filing, take the next free number by scanning *all* tiers
-(`grep -nE '^[0-9]+\. \*\*' LLM/backlog-tasks*.md`, both files), not just the tier
+(`grep -nE '^[0-9]+\. \*\*' LLM/backlog-tasks*.md`), not just the tier
 you are writing in — two items filed 13 minutes apart into different
 tiers both claimed #58 on 2026-09-15. Plan filenames are
 `<tier>.<item>-<slug>.opus.md`, so the numeric prefix must match the tier

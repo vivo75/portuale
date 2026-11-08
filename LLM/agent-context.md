@@ -250,9 +250,9 @@ Paths written before 2026-10-10 may predate this: see
 
 **2026-10-03 close-out note:** the per-batch plans (`batch-2026-09-21` …
 `batch-2026-10-02`), the per-phase plans and `docs/history/` were deleted
-and condensed into [`lessons-of-backlog-ops-2026-10-03.md`](lessons-of-backlog-ops-2026-10-03.md)
+and condensed into the skills `portuale-slice-delivery` and `portuale-oracle-probing` (source archived as `lessons-of-backlog-ops-2026-10-03.md`)
 (how to work: oracle method, gates, beds, numbering — **read it before any
-slice**) and [`recap-of-backlog-ops-2026-10-03.md`](recap-of-backlog-ops-2026-10-03.md)
+slice**) and the archived `recap-of-backlog-ops-2026-10-03.md`
 (per-item status/residue/cuts). No batch is live; everything in the
 09-21 → 10-02 batches shipped or was filed with a number in
 `backlog-tasks.md`. The runbook those batches shared (paired branches
@@ -415,6 +415,10 @@ differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlist
 L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
   differential-test-bed/run/l1-merge-from-binpkg.sh differential-test-bed/atomlists/l1-merge-gate.txt
 ```
+
+Both runs also check the installed state after the merge against charter
+properties 1 and 4 (`health_checker.py --installed`, before and after, backlog
+#687): the run exits 1 when portuale's merge introduced a failure.
 
 **Evidence file (new convention, plan 02.493):** a branch that touches those
 paths records its gate result in `LLM/evidence/merge-gate-<branch>.md`

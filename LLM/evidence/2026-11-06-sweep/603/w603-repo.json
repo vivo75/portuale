@@ -1,3 +1,0 @@
-{"desc": "fixture package: #603 unwalked consumer, no installed match",
- "ebuilds": {"dev-libs/w603lib-1": {}, "dev-libs/w603lib-3": {}, "dev-libs/w603lib-3.1": {},
-             "app-misc/w603cons-1": {"RDEPEND": "<dev-libs/w603lib-2"}}}

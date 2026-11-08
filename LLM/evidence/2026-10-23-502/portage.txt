@@ -1,2 +1,0 @@
-wget -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}"
-wget -c -t 3 -T 60 --passive-ftp -U "Portage (Gentoo, gentoo.org) distfile-fetch" -O "${DISTDIR}/${FILE}" "${URI}"

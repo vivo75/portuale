@@ -1,2 +1,0 @@
-metadata/USER_PATCHES
-metadata/user_patch.digests
