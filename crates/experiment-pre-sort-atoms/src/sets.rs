@@ -206,14 +206,12 @@ impl SetResolver<'_> {
     }
 
     fn variable_set(&self, v: &VariableSet) -> Vec<String> {
+        let db = portage_vdb::for_root(self.root);
         let mut out = Vec::new();
         for p in portage_repo::all_installed_packages(self.root).iter() {
-            let dir = self
-                .root
-                .join("var/db/pkg")
-                .join(&p.category)
-                .join(format!("{}-{}", p.package, p.version));
-            let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+            let key =
+                portage_vdb::EntryKey::new(&p.category, format!("{}-{}", p.package, p.version));
+            let read = |name: &str| db.aux_get(&key, name).ok().flatten().unwrap_or_default();
             let slot = p.slot.split('/').next().unwrap_or_default();
             let cp = format!("{}/{}", p.category, p.package);
             let hit = if v.variable.contains("DEPEND") {

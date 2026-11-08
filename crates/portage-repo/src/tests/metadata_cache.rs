@@ -160,3 +160,34 @@ fn regen_writes_md5_cache_when_md5_dict_is_among_the_resolved_formats() {
     std::fs::create_dir_all(root.join("main/metadata/cache")).unwrap();
     assert!(!writes(&root));
 }
+
+/// A depcachedir entry or phase pipe is `KEY=value` lines; the value keeps
+/// any further `=`, and a line without one is dropped.
+#[test]
+fn parse_aux_entry_splits_at_the_first_equals_only() {
+    let map = parse_aux_entry("EAPI=8\nIUSE=a b\nbroken line\nDESCRIPTION=x=y\n");
+    assert_eq!(map.len(), 3);
+    assert_eq!(map["EAPI"], "8");
+    assert_eq!(map["DESCRIPTION"], "x=y");
+}
+
+/// The flat depcachedir path carries the repository location without its
+/// leading slash, then category and pf.
+#[test]
+fn depcache_entry_path_is_the_flat_hash_layout() {
+    let path = depcache_entry_path(Path::new("/.gentoo/repos/ovl/"), "dev-util", "foo-1");
+    assert_eq!(path, depcachedir().join(".gentoo/repos/ovl/dev-util/foo-1"));
+}
+
+/// The cache-read rung alone refuses what it cannot serve, with a reason.
+#[test]
+fn depcache_aux_metadata_errors_on_a_bad_name_a_missing_ebuild_and_no_entry() {
+    let repo = masters_test_root("depcache-rung");
+    assert!(depcache_aux_metadata(&repo, "dev-libs", "noversion").is_err());
+    let missing = depcache_aux_metadata(&repo, "dev-libs", "pkg-1.0").unwrap_err();
+    assert!(missing.contains("no ebuild"), "{missing}");
+    std::fs::create_dir_all(repo.join("dev-libs/pkg")).unwrap();
+    std::fs::write(repo.join("dev-libs/pkg/pkg-1.0.ebuild"), "EAPI=8\n").unwrap();
+    let none = depcache_aux_metadata(&repo, "dev-libs", "pkg-1.0").unwrap_err();
+    assert!(none.contains("no fresh depcachedir entry"), "{none}");
+}

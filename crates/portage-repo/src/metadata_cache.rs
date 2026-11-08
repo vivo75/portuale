@@ -67,6 +67,69 @@ pub fn register_aux_metadata_provider(provider: AuxMetadataProvider) {
     let _ = AUX_METADATA_PROVIDER.set(provider);
 }
 
+/// `$PORTAGE_DEPCACHEDIR` when set, else `/var/cache/edb/dep`; process env only.
+// Portage: config.py, settings.depcachedir
+pub fn depcachedir() -> PathBuf {
+    std::env::var_os("PORTAGE_DEPCACHEDIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/cache/edb/dep"))
+}
+
+/// Portage's flat depcachedir layout: `<depcachedir>/<repo path without
+/// '/'>/<cat>/<pf>`.
+// Portage: cache/flat_hash.py
+pub fn depcache_entry_path(repo_location: &Path, category: &str, pf: &str) -> PathBuf {
+    let location = repo_location.to_string_lossy();
+    depcachedir()
+        .join(location.trim_start_matches('/').trim_end_matches('/'))
+        .join(category)
+        .join(pf)
+}
+
+/// Splits the `KEY=value` lines of a phase pipe or depcachedir entry into
+/// the map `read_md5_cache` also returns. Lines without `=` are skipped.
+pub fn parse_aux_entry(text: &str) -> HashMap<String, String> {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+/// The depcachedir rung of the depend-phase fallback, alone: the aux dict of
+/// a fresh entry (same validator as the md5-cache, `_eclasses_` with eclass
+/// paths). Runs no phase, so it suits a program that cannot run ebuild
+/// phases; it has the shape of an [`AuxMetadataProvider`].
+///
+/// # Errors
+/// `pf` is not a package-version name, the ebuild is gone, or the entry is
+/// missing or stale.
+// Portage: porttree.py, _pull_valid_cache (depcachedir auxdb)
+pub fn depcache_aux_metadata(
+    repo_location: &Path,
+    category: &str,
+    pf: &str,
+) -> Result<HashMap<String, String>, String> {
+    let Some((package, _version)) = split_pf(pf) else {
+        return Err(format!("{pf}: not a package-version name"));
+    };
+    let ebuild = repo_location
+        .join(category)
+        .join(&package)
+        .join(format!("{pf}.ebuild"));
+    if !ebuild.is_file() {
+        return Err(format!("{}: no ebuild", ebuild.display()));
+    }
+    let masters = md5_dict::repo_masters_for_location(repo_location);
+    let entry = depcache_entry_path(repo_location, category, pf);
+    match std::fs::read_to_string(&entry) {
+        Ok(text) if md5_dict::entry_is_valid(&text, &ebuild, repo_location, &masters, true) => {
+            Ok(parse_aux_entry(&text))
+        }
+        _ => Err(format!("{}: no fresh depcachedir entry", entry.display())),
+    }
+}
+
 /// The single entry point for a repo's aux metadata for `category/pf`.
 /// Every production `read_md5_cache` call site goes through here.
 ///

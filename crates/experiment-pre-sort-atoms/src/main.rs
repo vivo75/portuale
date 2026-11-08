@@ -23,7 +23,9 @@
 //! by the candidate's own USE; the parent-relative forms (`[foo?]`, `[foo=]`)
 //! are first evaluated against the USE of the package that asks.
 //!
-//! Known cuts: virtuals are ordinary packages; a USE-dependency flag the
+//! Known cuts: a repository without `metadata/md5-cache` is read through
+//! `PORTAGE_DEPCACHEDIR` only (no depend phase is run), so an ebuild with no
+//! fresh entry there contributes nothing; virtuals are ordinary packages; a USE-dependency flag the
 //! candidate does not declare counts as declared when it is enabled, so an
 //! implicit-IUSE flag that is off is judged undeclared.
 
@@ -341,6 +343,9 @@ struct Options {
 }
 
 fn main() {
+    // A repository without `metadata/md5-cache` is read through the
+    // depcachedir; no ebuild phase is run here.
+    portage_repo::register_aux_metadata_provider(portage_repo::depcache_aux_metadata);
     let opts = match parse_args() {
         Ok(o) => o,
         Err(msg) => {

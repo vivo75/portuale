@@ -95,7 +95,7 @@ pub(crate) fn run_depend_phase(
         message: format!("{}: {e}", meta_path.display()),
     })?;
     let _ = std::fs::remove_file(&meta_path);
-    Ok(parse_aux_entry(&text))
+    Ok(portage_repo::parse_aux_entry(&text))
 }
 
 /// Cache-miss provider: regenerates one ebuild's aux metadata by running its
@@ -129,12 +129,10 @@ pub(crate) fn depend_phase_metadata(
 
     // The depcachedir auxdb sits between the repo pregen cache and the phase run;
     // same validator, but its `_eclasses_` carries eclass dir paths.
-    let depcache = depcache_entry_path(repo_location, category, pf);
-    if let Ok(text) = std::fs::read_to_string(&depcache)
-        && portage_repo::md5_dict::entry_is_valid(&text, &ebuild, repo_location, &masters, true)
-    {
-        return Ok(parse_aux_entry(&text));
+    if let Ok(md) = portage_repo::depcache_aux_metadata(repo_location, category, pf) {
+        return Ok(md);
     }
+    let depcache = portage_repo::depcache_entry_path(repo_location, category, pf);
 
     // Portage parses the EAPI head first and skips unsupported ones; portuale
     // returns a failure instead, so the cp drops out rather than masking by EAPI.
@@ -162,39 +160,4 @@ pub(crate) fn depend_phase_metadata(
         let _ = crate::regen::write_entry(dir, pf, &body);
     }
     Ok(md)
-}
-
-/// Splits the `KEY=value` lines from the phase pipe (or a depcachedir entry)
-/// into the map `read_md5_cache` also returns. Lines without `=` are skipped.
-pub(crate) fn parse_aux_entry(text: &str) -> std::collections::HashMap<String, String> {
-    let mut md = std::collections::HashMap::new();
-    for line in text.lines() {
-        if let Some((k, v)) = line.split_once('=') {
-            md.insert(k.to_string(), v.to_string());
-        }
-    }
-    md
-}
-
-/// Portage's flat depcachedir layout (`cache/flat_hash.py`):
-/// `<depcachedir>/<repo path without '/'>/<cat>/<pf>`.
-pub(crate) fn depcache_entry_path(
-    repo_location: &Path,
-    category: &str,
-    pf: &str,
-) -> std::path::PathBuf {
-    let location = repo_location.to_string_lossy();
-    depcachedir()
-        .join(location.trim_start_matches('/').trim_end_matches('/'))
-        .join(category)
-        .join(pf)
-}
-
-/// `$PORTAGE_DEPCACHEDIR` when set, else `/var/cache/edb/dep`; process env only.
-/// Portage: config.py, settings.depcachedir
-pub(crate) fn depcachedir() -> std::path::PathBuf {
-    std::env::var_os("PORTAGE_DEPCACHEDIR")
-        .filter(|v| !v.is_empty())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/var/cache/edb/dep"))
 }
