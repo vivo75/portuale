@@ -88,8 +88,10 @@ finding is a portuale bug (fix it), a Portage bug, or environmental
 (`compare/known-divergences.yaml`, with a `ticket:` or `reason:`), and a run is
 green when every finding is explained. A difference that violates no charter
 property is not a failure by itself. Properties that need no reference at all
-are checked by `output_invariants.py` over the same output
-(`differential-test-bed/compare/check-invariants.py`). Container preflight:
+are checked by `health_checker.py` (`run/l0-health.sh`) and by
+`output_invariants.py` over the same output
+(`differential-test-bed/compare/check-invariants.py`); see
+`portuale-health-checks`. Container preflight:
 `sudo differential-test-bed/create-container.bash`, run from pmtest.
 
 A **frozen binary** is mandatory for an L0 re-run: any non-baseline probe that

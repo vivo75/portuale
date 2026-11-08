@@ -25,7 +25,7 @@ the Devmanual, and from the charter's health properties; use a Portage capture
 as a comparison and a hint (`portuale-oracle-probing`). The order is not
 stylistic: a test written after the code proves the code does what it does,
 which is worthless. Name in the slice which charter property it serves and
-which program checks it.
+which program checks it (`portuale-health-checks`).
 
 ## S0 — the capture-only slice
 

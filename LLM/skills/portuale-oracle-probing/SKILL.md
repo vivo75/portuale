@@ -12,10 +12,10 @@ from, in this order:
    decides.
 2. **The charter's health properties** — dependencies hold, order is legal,
    packages are as new as possible, removal keeps running programs working,
-   messages help. Prefer a check that needs **no expected value**: the
-   pmtest `output_invariants.py` checks every contract case and every L0 plan
-   for a dependency merged after its owner, two packages in one slot, wrong
-   counters and similar, without comparing to anything.
+   messages help. Prefer a check that needs **no expected value**:
+   `health_checker.py` (properties 1–4 on a plan) and `output_invariants.py`
+   (consistency across output modes) compare with nothing. Which program checks
+   what, and what is still unchecked: `portuale-health-checks`.
 3. **Portage's behaviour**, as a *comparison and a hint*: it tells you what
    another careful implementation does, and where a difference is likely to
    hurt a user. It is never the last word, and its bugs are not copied

@@ -1,0 +1,100 @@
+---
+name: portuale-health-checks
+description: Use when you must show that a change keeps the installation healthy, when adding or extending a check for one of the charter's five properties, when reading an L0 health report or a health finding, or when deciding which program verifies a behaviour instead of comparing with Portage.
+---
+
+# Health checks
+
+The charter's goal is a healthy installation, and it wants each of its five
+properties "checked by a program". This skill says which program checks which
+property, how to run it, how to read it, and what is not covered yet. Start
+from `docs/charter.md` for the properties themselves.
+
+## Which program checks which property
+
+| Property | Checked by | Not covered |
+|---|---|---|
+| 1. Dependencies hold (runtime and post-merge atoms matched, no blocker, `REQUIRED_USE` holds, one package per slot) | `health_checker.py` `check_final_state`, on `emerge -pv --json`. Also `output_invariants.py` (every owner is an entry or installed, every entry reachable, no duplicate slot without a reported conflict) and the dependency-drop guard (see `portuale-resolver`) | the state *after* a real merge |
+| 2. Order is legal (build dependencies merged earlier and usable, PMS 8.1) | `health_checker.py` `check_order`; `output_invariants.py` "merges after its owner" | 2a: an unserializable cycle is only *noted* (`cycle-noted`); building a package twice is not modelled |
+| 3. Newest visible version that every constraint allows | `health_checker.py` `check_best_versions` (needs the VDB and `-v --json`) | binary packages, and entries absent from the metadata cache (`checker-limitation`) |
+| 4. Removal keeps the libraries remaining programs link | `health_checker.py` `check_removal_plan` on `-C`, `--depclean`, `--prune` with `--pretend --json`; Rust tests `ebuild_merge/tests/plib_*.rs` for the preserve-libs mechanics | a real unmerge on a real tree is compared with Portage (the L32 cells), not gated |
+| 5. Messages name the cause and an action | **no program** | everything; only pinned text exists, and it fixes known messages, not the rule |
+
+`health_checker.py` lives in `../pmtest/pytests-contract-suite/`. Its atom
+matcher, version comparison and dependency evaluator are written from the PMS
+and share no code with portuale or Portage, so it cannot inherit their bugs.
+(`docs/CONTRIBUTING.md` and the pmtest README still say it covers properties 1
+and 2 only; the code and `l0-health.sh` cover 1–4.)
+
+## Running it
+
+```
+# one plan, by hand (a Gentoo tree with a VDB)
+portuale emerge -pv --json <atoms> > plan.json
+python3 ../pmtest/pytests-contract-suite/health_checker.py --vdb /var/db/pkg plan.json
+
+# every plan of the L0 atom list, in the container (Portage is not run)
+../pmtest/differential-test-bed/run/l0-health.sh [atomlist]
+#   -> differential-test-bed/logs/l0-health-<stamp>/health-report.txt
+#   exit 0: no plan portuale would run has a failure it introduced; 2: setup error
+
+# the checker's own tests, and its mutation test
+python3 -m pytest pytests-contract-suite/test_health_checker.py      # from ../pmtest
+python3 ../pmtest/differential-test-bed/compare/health-mutants.py --vdb /var/db/pkg plan.json...
+```
+
+## Reading a finding
+
+A finding is `(property, package, atom, reason, pre_existing)`.
+
+- It is a **failure** unless the property is `cycle-noted`, `checker-limitation`
+  or `removal-deps`. Those three are notes: a cycle the charter allows, a blind
+  spot of the checker, and a dependency a removal leaves unmatched (the user may
+  remove it; portuale warns).
+- `pre_existing` means the system was already broken before the plan; it does
+  not count against the plan.
+- A plan is **`refused`** when portuale itself would not run it (slot conflict,
+  a needed configuration change, an unsolvable blocker). Its findings are
+  expected, and listed apart.
+- **`checker-limitation` is never "healthy".** It says the checker could not
+  see, for lack of dependency data, the VDB or cache metadata. Count them.
+
+## Extending or adding a check
+
+- Write it **from the PMS or the charter**, not from Portage's code and not by
+  calling portuale's. A check that shares code with the thing it checks agrees
+  with its bugs.
+- Give it **mutants**: add an operator to `health-mutants.py` that breaks a clean
+  plan so the new check must fire. The run exits 1 when a mutant survives, which
+  marks a blind spot. Add unit tests to `test_health_checker.py`, including a
+  healthy-plan control that must stay clean.
+- Make the failure/note classification explicit and keep finding names stable;
+  the report groups on them.
+- Prefer a check that needs **no expected value** to another pinned string. A
+  pin records what was printed; a check records what must be true.
+- A fix for a health defect starts from a red test whose expectation comes from
+  the checker or the spec, not from Portage (see the pin that cites
+  `health_checker.py` in `test_emerge_pretend_contract.py`).
+
+## Closing a slice against the charter
+
+Name the property the slice serves and the program that checks it. If the
+behaviour has no program, say so in the close-out and file the gap under a real
+backlog number. Until a check exists, code that merely copies Portage stays
+(charter); once a check shows that doing without it is at least as good, it can
+go.
+
+## Gaps, as of 2026-11-08
+
+1. Property 5 has no checker.
+2. Nothing checks the installed state after a real merge against properties 1–4;
+   the merge gate (`portuale-ebuild-merge`) compares files and VDB with Portage.
+3. `health_checker.py` runs on the L0 plans and a few fixtures, not over every
+   contract case.
+4. Property 2a (building a package twice to break a cycle) is not modelled.
+5. Property 3 skips binary packages.
+
+## History
+
+The checker landed on 2026-11-07, with the charter. The plans and reviews behind
+the other beds are archived: see [`LLM/ARCHIVE.md`](../../ARCHIVE.md).

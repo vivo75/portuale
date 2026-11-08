@@ -31,14 +31,14 @@ move content between them without a reason.
 | Invariant | Checker | What fails |
 |---|---|---|
 | Every relative markdown link resolves, or is listed in `LLM/ARCHIVE.manifest.tsv` | `python3 LLM/tools/check_links.py LLM docs` | a renamed file leaves a dangling link; an archived one is accepted if listed |
-| Every path a skill cites exists or is archived | `PORTUALE_DISTILL_WORK=<work dir> python3 LLM/tools/portuale-distill/f4_check.py` | a skill cites a vanished path |
+| A skill is well formed: name matches its directory, `description` starts "Use when", every cited path exists (an archived one is reported as archived), `.claude/skills/<name>` links to it, under 10 KB | `python3 LLM/tools/skills_check.py` | a skill cites a missing or archived file, or has no symlink |
 | A plan's `Status:` agrees with its backlog entry, and its tier prefix matches the tier it sits in | `python3 LLM/tools/doc_status_check.py` | `done` plan with an open entry, duplicated number, unknown status, wrong tier |
 | Backlog numbers are unique and never reused | same | the same number defined twice, within or across files |
 | Every scope cut is acknowledged | `python3 LLM/tools/cut_registry_check.py` | an open `CUT-n` whose follow-up is DONE; an unacknowledged `Still deferred` marker in the proof file |
 | `LLM/code-notes/INDEX.md` matches the notes tree | `python3 LLM/tools/code_notes_index.py` | a notes file not indexed |
 | A shortened comment lost no fact | `python3 LLM/tools/fact_coverage.py BASE FILE...` | a backticked span, `file:line`, `#NNN`, quoted string, date or version that disappeared |
 
-Run `LLM/tools/gate.sh` for the whole verification pass; the four document
+Run `LLM/tools/gate.sh` for the whole verification pass; the document
 checkers above are the part that fails on a docs-only change.
 
 ## The rules that are easy to break

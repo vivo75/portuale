@@ -39,8 +39,9 @@ Any change here is judged by **traces**, not by reading: capture the walk with
 empty). To learn why a list differs from Portage's, diff against Portage's
 `--debug` (`pd.out`) and name the pass that differs, then judge the difference
 by the charter — is the order legal, is every package the newest that fits —
-not by equality. Order legality is also checked without a reference
-(`output_invariants.py`: "a dependency merged after its owner").
+not by equality. Order legality and dependency satisfaction are checked
+without a reference by `health_checker.py`; run it on the plan
+(`portuale-health-checks`).
 
 ## The dominant bug family: the silent drop
 

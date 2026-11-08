@@ -100,7 +100,9 @@ plans, reviews or evidence inline. The tables are reproducible with
 `LLM/tools/portuale-distill/f3_sources.py` from the distillation work directory
 (`3rdparty/portuale-distill/work`), and remain in git history.
 
-## The nine skills
+## The skills
+
+Nine skills came out of the distillation; `portuale-health-checks` was added afterwards.
 
 Sources are `LLM/skills/<name>/SKILL.md`; `.claude/skills/<name>` is a symlink,
 so both harnesses see one copy.
@@ -115,6 +117,7 @@ so both harnesses see one copy.
 | `portuale-code-conventions` | function and module size, pure-move rules, closures and context structs, comments versus code notes, the refactor tools |
 | `portuale-output-contract` | display rows, streams, colours, counters, failure summary, news notices, helper exit codes |
 | `portage-source-map` | where a behaviour lives in Portage's Python source, and the 1 468 citations already recorded |
+| `portuale-health-checks` | which program checks each charter property, how to run and read it, how to add a check, and what is still unchecked |
 | `portuale-docs-and-charter` | authority order, the four document checkers, what is append-only, how a plan is written |
 
 ## The six distilled documents
