@@ -164,19 +164,7 @@ recorded in `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
   it proved agreement with a portuale-authored copy, not with Portage,
   and was removed (`history/second_python_copy_removal.md`, in git history).
   Expected behaviour now comes from the charter (PMS, EAPIs, Devmanual,
-  the health properties); Portage's output (the differential beds, this
-  host's `emerge`, upstream `lib/portage/tests/resolver/` cases) is a
-  comparison and a hint. In its place: expectation-free output invariants and cross-mode
-  checks (`pmtest/pytests-contract-suite/test_output_invariants.py`, also
-  run over L0), repeated-run determinism (all directory reads go through
-  the single `portage_util::read_dir_entries` seam — sorted by default,
-  seeded shuffle only under test-only `PORTUALE_SHUFFLE_DIRS`), the tree-wide primitive
-  differential (`pmtest/scripts/primitive_tree_differential.py`), the
-  unparsed-dependency-token counter, the re-pin review checklist
-  (`pmtest/scripts/portage_repin_review.py`), and the corpus harvested
-  from the last Rust/Python agreement
-  (`pmtest/pytests-contract-suite/corpus/`, drift is a warning). The primitive harnesses above
-  stay: they wrap Portage's `portage.versions`/`portage.dep`.
+  the health properties)
 - The harness needs **two modes**:
   - *Correctness mode*: one operation per process invocation, pytest-driven,
     exhaustive edge cases.
