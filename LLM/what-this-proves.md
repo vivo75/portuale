@@ -84,3 +84,21 @@ of the VDB five ways and one harmless way: every mutant is reported and the
 control is not. Order (2) and newest version (3) cannot be read from a final
 state; property 3 for binary packages is #687 and running the check after the
 L3 and L32 cells is #688.
+
+Backlog #687 (2026-11-08): charter property 3 (newest visible version) now
+covers binary packages. `emerge --pretend -v --json` ends with an `options`
+object (`usepkg`, `usepkgonly`, `getbinpkg`, `getbinpkgonly`, as given on the
+command line); runnable: `emerge --pretend -v --json --usepkgonly dev-libs/
+binaryonlypkg | grep -o '"options":{[^}]*}'` prints `"options":{"usepkg":false,
+"usepkgonly":true,"getbinpkg":false,"getbinpkgonly":false}`, and the same with
+`--usepkg` shows `"usepkg":true`. `health_checker.py` reads the local binary
+index (`PKGDIR/Packages`) next to the repositories' ebuilds: a higher visible
+binary than a merged binary is a failure in every mode, a higher ebuild is one
+with `--usepkg` and not with `--usepkgonly`, a higher binary than a merged
+ebuild is one only with `--usepkg`, and a binary whose baked USE differs from
+the configured one is not a candidate. Without `options` (an older plan) a
+higher ebuild beside a merged binary is a note. Pins: `python3 -m pytest
+pytests-contract-suite/test_health_checker.py -q` in pmtest (119 tests; the
+binary rules, the `options` key for both flags, and the mutation operator
+`older_visible_binary`); Rust `candidate_options_json_names_the_four_binary_options`.
+A remote binhost and a flat PKGDIR are not read: #689.

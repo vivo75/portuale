@@ -504,6 +504,25 @@ pub(crate) fn print_removal_json(
     );
 }
 
+/// The options that decide which candidates a plan could use: a plan checker
+/// reads them to know whether a binary package was picked over a newer ebuild
+/// on purpose (`--usepkgonly`) or by the version rule (`--usepkg`).
+#[derive(Clone, Copy)]
+pub(crate) struct CandidateOptions {
+    pub(crate) usepkg: bool,
+    pub(crate) usepkgonly: bool,
+    pub(crate) getbinpkg: bool,
+    pub(crate) getbinpkgonly: bool,
+}
+
+/// The `options` object of the `-v` `--json` document.
+pub(crate) fn candidate_options_to_json(options: CandidateOptions) -> String {
+    format!(
+        "{{\"usepkg\":{},\"usepkgonly\":{},\"getbinpkg\":{},\"getbinpkgonly\":{}}}",
+        options.usepkg, options.usepkgonly, options.getbinpkg, options.getbinpkgonly
+    )
+}
+
 /// Arguments of [`print_json`].
 pub(crate) struct PrintJsonArgs<'a> {
     pub(crate) entries: &'a [GraphEntry],
@@ -526,13 +545,16 @@ pub(crate) struct PrintJsonArgs<'a> {
     pub(crate) root: &'a Path,
     /// The command-line atoms and sets, for the `-v` `request` list.
     pub(crate) request: &'a [&'a str],
+    /// The binary-package options, for the `-v` `options` object.
+    pub(crate) candidate_options: CandidateOptions,
 }
 
 /// The whole `--json` output as one line, no pretty-printing (a
 /// portuale-specific convenience format, not a stable schema). With
-/// `verbose` it ends with `kept` (see [`kept_packages`]) and `request` (the
-/// command-line atoms), so the document alone describes the final installed
-/// set and the user's constraints for a plan checker.
+/// `verbose` it ends with `kept` (see [`kept_packages`]), `request` (the
+/// command-line atoms) and `options` (see [`CandidateOptions`]), so the
+/// document alone describes the final installed set, the user's constraints
+/// and the candidates the run could use, for a plan checker.
 pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
     let PrintJsonArgs {
         entries,
@@ -551,6 +573,7 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
         running_root,
         root,
         request,
+        candidate_options,
     } = args;
     let entries_json: Vec<String> = entries
         .iter()
@@ -595,9 +618,10 @@ pub(crate) fn print_json(args: PrintJsonArgs<'_>) {
     // alone and the command-line request.
     let kept_json = if verbose {
         format!(
-            ",\"kept\":{},\"request\":{}",
+            ",\"kept\":{},\"request\":{},\"options\":{}",
             kept_to_json(&kept_packages(root, entries)),
-            json_string_array(request.iter().copied())
+            json_string_array(request.iter().copied()),
+            candidate_options_to_json(candidate_options)
         )
     } else {
         String::new()
