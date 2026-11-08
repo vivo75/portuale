@@ -8,10 +8,11 @@
 //! `PackagesSystemSet`, which are resolved from the profile by the caller.
 //! Sets computed from the installed packages and the repositories:
 //! `VariableSet` (`@live-rebuild`, `@rust-rebuild`, …, installed metadata
-//! only), `UnavailableSet`, `DowngradeSet` and `SubslotChangedSet`.
-//! A set of any other class (`@security`, `@preserved-rebuild`,
-//! `@module-rebuild`, `@changed-deps`, …) depends on state this experiment
-//! does not read; it is reported and skipped.
+//! only), `OwnerSet` (`@module-rebuild`, `@x11-module-rebuild`),
+//! `ChangedDepsSet`, `RebuiltBinaries`, `UnavailableSet`, `DowngradeSet`
+//! and `SubslotChangedSet`.
+//! A set of any other class (`@security`, `@preserved-rebuild`) depends on
+//! state this experiment does not read; it is reported and skipped.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -34,6 +35,17 @@ enum SetDef {
     /// Installed packages whose `variable` holds an include (and no
     /// exclude); for a `*DEPEND` variable the flattened atoms are compared.
     Variable(VariableSet),
+    /// Installed packages owning a file under one of `files` (globs, below
+    /// the root) and none of `exclude`.
+    Owner {
+        files: Vec<String>,
+        exclude: Vec<String>,
+    },
+    /// Installed packages whose `RDEPEND`/`PDEPEND` differ from their ebuild's.
+    ChangedDeps,
+    /// Installed slots whose local binary package of the same version was
+    /// built at another time.
+    RebuiltBinaries,
     /// Installed slots with no visible ebuild.
     Unavailable,
     /// Installed slots whose best visible ebuild is older.
@@ -146,6 +158,9 @@ impl<'a> SetResolver<'a> {
                     .collect(),
             ),
             Some(SetDef::Variable(v)) => Lookup::Lines(self.variable_set(v)),
+            Some(SetDef::Owner { files, exclude }) => Lookup::Lines(self.owner_set(files, exclude)),
+            Some(SetDef::RebuiltBinaries) => Lookup::Lines(self.rebuilt_binaries()),
+            Some(SetDef::ChangedDeps) => Lookup::Lines(self.changed_deps()),
             Some(SetDef::Unavailable) => {
                 Lookup::Lines(self.installed_slots(|_, best| best.is_none()))
             }
@@ -199,6 +214,115 @@ impl SetResolver<'_> {
                         .cloned()
                 });
             if keep(p, best.as_ref()) {
+                out.push(format!("{}/{}:{slot}", p.category, p.package));
+            }
+        }
+        out
+    }
+
+    /// `OwnerSet.mapPathsToAtoms`: the `cat/pkg:slot` of every package whose
+    /// `CONTENTS` lists a path matching `files`, minus the packages that also
+    /// own a path matching `exclude`. Globs expand below the root.
+    // Portage: _sets/dbapi.py, OwnerSet.mapPathsToAtoms
+    fn owner_set(&self, files: &[String], exclude: &[String]) -> Vec<String> {
+        let paths = self.expand_globs(files);
+        let excluded = self.expand_globs(exclude);
+        let all: Vec<&[u8]> = paths
+            .iter()
+            .chain(&excluded)
+            .map(|p| p.as_bytes())
+            .collect();
+        let Ok(owners) = portage_vdb::for_root(self.root).owners(&all) else {
+            return Vec::new();
+        };
+        let mut atoms = BTreeSet::new();
+        let mut out_atoms = BTreeSet::new();
+        for (path, key) in owners {
+            let Some((package, _)) = portage_repo::split_pf(&key.pf) else {
+                continue;
+            };
+            let slot = portage_repo::vdb_entry_slot(self.root, &key.category, &key.pf);
+            let slot = slot.split('/').next().unwrap_or("0");
+            let atom = format!("{}/{package}:{slot}", key.category);
+            let path = String::from_utf8_lossy(&path)
+                .trim_start_matches('/')
+                .to_string();
+            if excluded.iter().any(|e| e.trim_start_matches('/') == path) {
+                out_atoms.insert(atom.clone());
+            }
+            atoms.insert(atom);
+        }
+        atoms.difference(&out_atoms).cloned().collect()
+    }
+
+    /// Each pattern (a path below the root, `*` and `?` allowed) expanded to
+    /// the paths that exist, with a leading `/` and without the root.
+    fn expand_globs(&self, patterns: &[String]) -> Vec<String> {
+        let mut out = Vec::new();
+        for p in patterns {
+            let full = self.root.join(p.trim_start_matches('/'));
+            let Some(full) = full.to_str() else { continue };
+            for hit in glob::glob(full).into_iter().flatten().flatten() {
+                if let Ok(rel) = hit.strip_prefix(self.root) {
+                    out.push(format!("/{}", rel.display()));
+                }
+            }
+        }
+        out
+    }
+
+    /// `=cat/pkg-ver` of every installed package whose run-time dependency
+    /// strings differ from its ebuild's (see
+    /// [`portage_repo::installed_deps_changed`]).
+    ///
+    /// Not `ChangedDepsSet.load` itself: that wraps `strip_slots`, which
+    /// returns `None`, in the comparison, so Portage's set is always empty
+    /// (`LLM/portage-quirks.md`). This is the set the class means to build.
+    // Portage: _sets/dbapi.py, ChangedDepsSet.load
+    fn changed_deps(&self) -> Vec<String> {
+        let categories = portage_repo::Categories::load(self.repos, self.config_root);
+        let gate = portage_repo::CategoryGate::new(self.repos, &categories, self.config_root);
+        portage_repo::all_installed_packages(self.root)
+            .iter()
+            .filter(|p| {
+                portage_repo::installed_deps_changed(
+                    self.root,
+                    (&p.category, &p.package, &p.version),
+                    gate,
+                )
+            })
+            .map(|p| format!("={}/{}-{}", p.category, p.package, p.version))
+            .collect()
+    }
+
+    /// `cat/pkg:slot` of each installed package for which `$PKGDIR` holds a
+    /// binary of the same version with a non-zero `BUILD_TIME` that differs
+    /// from the installed one (the newest such binary when several exist).
+    /// Only the local `$PKGDIR` is read.
+    // Portage: _sets/dbapi.py, RebuiltBinaries._filter
+    fn rebuilt_binaries(&self) -> Vec<String> {
+        let index = portage_repo::build_local_binpkg_index(self.config);
+        let db = portage_vdb::for_root(self.root);
+        let mut out = Vec::new();
+        for p in portage_repo::all_installed_packages(self.root).iter() {
+            let bin_time = portage_repo::list_binary_candidates(&index, &p.category, &p.package)
+                .iter()
+                .filter(|c| c.version == p.version)
+                .filter_map(|c| c.build_time)
+                .max()
+                .unwrap_or(0);
+            if bin_time == 0 {
+                continue;
+            }
+            let key =
+                portage_vdb::EntryKey::new(&p.category, format!("{}-{}", p.package, p.version));
+            let installed = db
+                .aux_get(&key, "BUILD_TIME")
+                .ok()
+                .flatten()
+                .and_then(|t| t.trim().parse::<i64>().ok());
+            if installed != Some(bin_time) {
+                let slot = p.slot.split('/').next().unwrap_or("0");
                 out.push(format!("{}/{}:{slot}", p.category, p.package));
             }
         }
@@ -324,6 +448,18 @@ fn read_sets_conf(text: &str, config_root: &Path, defs: &mut HashMap<String, Set
             // The two halves of `@selected` are covered by it.
             "WorldSelectedPackagesSet" | "WorldSelectedSetsSet" => SetDef::Selected,
             "EverythingSet" => SetDef::Installed,
+            "OwnerSet" => match keys.get("files") {
+                Some(files) => SetDef::Owner {
+                    files: shlex::split(files).unwrap_or_default(),
+                    exclude: keys
+                        .get("exclude-files")
+                        .and_then(|e| shlex::split(e))
+                        .unwrap_or_default(),
+                },
+                None => SetDef::Unsupported(class.to_string()),
+            },
+            "ChangedDepsSet" => SetDef::ChangedDeps,
+            "RebuiltBinaries" => SetDef::RebuiltBinaries,
             "UnavailableSet" => SetDef::Unavailable,
             "DowngradeSet" => SetDef::Downgrade,
             "SubslotChangedSet" => SetDef::SubslotChanged,
@@ -428,5 +564,40 @@ mod tests {
         assert!(matches!(defs["live"], SetDef::Variable(_)));
         assert!(matches!(defs["other"], SetDef::Unsupported(_)));
         assert!(matches!(defs["down"], SetDef::Downgrade));
+    }
+
+    #[test]
+    fn sets_conf_reads_an_owner_set_with_quoted_and_excluded_paths() {
+        let mut defs = HashMap::new();
+        read_sets_conf(
+            "[mod]\nclass = portage.sets.dbapi.OwnerSet\nfiles = /lib/modules \"/opt/my dir\"\n\
+             exclude-files = /usr/src/linux*\n\
+             [bad]\nclass = portage.sets.dbapi.OwnerSet\n",
+            Path::new("/"),
+            &mut defs,
+        );
+        match &defs["mod"] {
+            SetDef::Owner { files, exclude } => {
+                assert_eq!(files, &["/lib/modules", "/opt/my dir"]);
+                assert_eq!(exclude, &["/usr/src/linux*"]);
+            }
+            _ => panic!("not an owner set"),
+        }
+        assert!(matches!(defs["bad"], SetDef::Unsupported(_)));
+    }
+
+    #[test]
+    fn sets_conf_reads_changed_deps_and_rebuilt_binaries() {
+        let mut defs = HashMap::new();
+        read_sets_conf(
+            "[cd]\nclass = portage.sets.dbapi.ChangedDepsSet\n\
+             [rb]\nclass = portage.sets.dbapi.RebuiltBinaries\n\
+             [sec]\nclass = portage.sets.security.NewAffectedSet\n",
+            Path::new("/"),
+            &mut defs,
+        );
+        assert!(matches!(defs["cd"], SetDef::ChangedDeps));
+        assert!(matches!(defs["rb"], SetDef::RebuiltBinaries));
+        assert!(matches!(defs["sec"], SetDef::Unsupported(_)));
     }
 }

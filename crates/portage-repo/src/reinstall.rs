@@ -233,20 +233,45 @@ pub(crate) struct DepsChangedArgs<'a> {
 }
 
 pub(crate) fn deps_changed(args: DepsChangedArgs<'_>) -> bool {
+    let dep_keys: &[&str] = if args.with_bdeps {
+        &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+    } else {
+        &["RDEPEND", "PDEPEND", "IDEPEND"]
+    };
+    deps_changed_for(args, dep_keys)
+}
+
+/// Whether the installed `category/package-version` has run-time dependency
+/// strings (`RDEPEND`, `PDEPEND`) that differ from the ones of its repository
+/// ebuild, each reduced with the installed `USE`, slot operators cut to `:=`
+/// and the libc dependency injected at merge time left out. False when the
+/// package has no ebuild.
+// Portage: depgraph.py, _changed_deps; _sets/dbapi.py, ChangedDepsSet
+pub fn installed_deps_changed(
+    root: &Path,
+    (category, package, version): (&str, &str, &str),
+    gate: CategoryGate<'_>,
+) -> bool {
+    let args = DepsChangedArgs {
+        root,
+        category,
+        package,
+        version,
+        with_bdeps: false,
+        gate,
+    };
+    deps_changed_for(args, &["RDEPEND", "PDEPEND"])
+}
+
+fn deps_changed_for(args: DepsChangedArgs<'_>, dep_keys: &[&str]) -> bool {
     let DepsChangedArgs {
         root,
         category,
         package,
         version,
-        with_bdeps,
         gate,
+        ..
     } = args;
-    let dep_keys: &[&str] = if with_bdeps {
-        &["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
-    } else {
-        &["RDEPEND", "PDEPEND", "IDEPEND"]
-    };
-
     let installed_use = read_vdb_flag_set(root, category, package, version, "USE");
 
     let Ok(repo_candidates) = gate.repo_candidates(category, package) else {
