@@ -106,3 +106,18 @@ pytests-contract-suite/test_health_checker.py -q` in pmtest (119 tests; the
 binary rules, the `options` key for both flags, and the mutation operator
 `older_visible_binary`); Rust `candidate_options_json_names_the_four_binary_options`.
 A remote binhost and a flat PKGDIR are not read: #690.
+
+Backlog #686, #689, #690 (2026-11-08): three loose ends of the health work.
+#686: `emerge -pvuDN --getbinpkg=n --backtrack=0 media-video/ffmpeg` used to
+print a different `~llvm-core/llvm-23.1.4[llvm_targets_X=]` row per consumer on
+each run (a hash-set walk of the consumer's atoms); `for i in 1 2 3 4 5 6; do
+emerge -pvuDN --getbinpkg=n --backtrack=0 media-video/ffmpeg 2>&1 | md5sum;
+done` now prints one md5 six times. #689: the L3 and L32 beds run
+`health_checker.py --installed /` before and after each build or cell and fail
+on what portuale introduced (Portage's run is the control); the wiring was
+checked with `bash -n` and `compare/test-l3-concurrent-mock.sh` (51 passed), a
+real L3/L32 run is still to be done. #690: property 3 reads the cached remote
+binhost indexes and the PKGDIR files outside the index; `python3 -m pytest
+pytests-contract-suite/test_health_checker.py -q` in pmtest (122 tests) pins
+a cached `binrepos.conf` index, `PORTAGE_BINHOST`, and a `.tbz2` plus a
+`.gpkg.tar` read for their slot.

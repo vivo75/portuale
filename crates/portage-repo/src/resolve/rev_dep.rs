@@ -1021,6 +1021,10 @@ pub(crate) fn constraints_from_consumer(args: ConstraintsFromConsumerArgs<'_>) -
                 out: merge_parents,
             });
         }
+        // `atoms` is a hash set: sorted, so the pin filed first (and the
+        // skip-block row it becomes) does not change between runs.
+        let mut atoms: Vec<String> = atoms.into_iter().collect();
+        atoms.sort();
         'atom: for atom_str in atoms {
             if constraints_from_atom(ConstraintsFromAtomArgs {
                 atom_str: &atom_str,
