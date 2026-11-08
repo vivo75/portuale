@@ -5,8 +5,15 @@ description: Use when changing what emerge or mrg prints — display rows, colou
 
 # The output contract
 
-What the user reads is part of the behaviour. A wrong message is a defect in
-the charter's sense, and a moved pin is a decision, not an accident.
+What the user reads is part of the behaviour. The charter's property 5 is the
+rule: **every error names the cause (which package, which atom, which flag) and
+says at least one thing the user can do about it.** A wrong or unhelpful message
+is a defect; a moved pin is a decision, not an accident.
+
+`portuale emerge` may differ from Portage in wording and order. The pins
+below mostly record what Portage printed and portuale reproduces today; they
+are a regression guard, not a statement that Portage's text is right. Improve
+a message through a reviewed pin move, and keep the cause and the action.
 
 ## Three properties define a row
 
@@ -21,6 +28,13 @@ Every output change is a change to one of:
    the same warning after it.
 
 Pins encode all three. A pin that compares only text misses the other two.
+
+Some properties are checked with **no expected text at all**:
+`../pmtest/pytests-contract-suite/output_invariants.py` runs over every contract
+case and the harvested corpus (counters add up, a dependency is not merged
+after its owner, no slot twice, plain, `--tree`, `--quiet` and `--json`
+describe the same graph). Prefer adding an invariant there to adding another
+pinned string.
 
 ## What is genuinely tty-only
 
@@ -37,10 +51,10 @@ caller's environment does not turn colour off on a tty in a fixture.
 
 ## Root and attribution
 
-- Real's **running root is always the host**; when `ROOT != /` it also loads
+- Portage's **running root is always the host**; when `ROOT != /` it also loads
   the target root's config. Portuale paints every node from **its own**
   `root_config`.
-- The root suffix is not a wider rule: real prints it in `--columns` too.
+- The root suffix is not a wider rule: Portage prints it in `--columns` too.
 - Root paths in pins are **normalised**; entry lines are compared as a
   root-normalised multiset plus verbatim anchors.
 
@@ -67,14 +81,16 @@ contract tests (`LLM/evidence/2026-09-28-batch0927-reports/n196-report.md`).
 
 ## Error text
 
-For unrecognised arguments and invalid parameters, portuale must pass the
-message **exactly as Portage does**, including trailing newlines and phrasing.
-Portage also recycles unrecognised trailing arguments into argv; that is part
-of the contract, not an accident.
+For unrecognised arguments and invalid parameters, portuale currently passes
+Portage's message through **unchanged**, including trailing newlines and
+phrasing, and recycles unrecognised trailing arguments into argv as Portage
+does. That is pinned so it does not drift; it is not a requirement. A clearer
+message is welcome when it still names the cause and an action.
 
 ## Helper exit codes
 
-The `portageq`-family helpers have their own contract, and it is not uniform:
+The `portageq`-family helpers are called by ebuilds and scripts, so their exit
+codes are an interface to keep, and they are not uniform:
 
 | Helper | 0 | 1 | 2 | 3 |
 |---|---|---|---|---|

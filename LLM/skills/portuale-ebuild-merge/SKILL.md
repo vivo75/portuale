@@ -6,32 +6,40 @@ description: Use when changing how portuale executes ebuild phases or puts files
 # Ebuild execution and the merge path
 
 This is the part of portuale where a mistake is not a wrong message but a
-broken machine. Two packages — `sys-libs/glibc` and `app-shells/bash` — have
+broken machine. Where the notes below say "Portage does X", it is the
+compatibility constraint of sharing one VDB and one set of installed files with
+Portage, or a safety rule, not parity for its own sake (charter property 4:
+removal and replacement must not break running programs). Two packages — `sys-libs/glibc` and `app-shells/bash` — have
 files that every running process maps; a merge that gets them wrong has no
 undo.
 
 ## The safety gate before anything else
 
 Any change touching the merge or unmerge path is not done until a **successful
-test merge of `sys-libs/glibc` and `app-shells/bash`** passes. The full gate is
-three invocations and runs after *every* slice that touches that path
-(`LLM/02.355-reinstall-unmerge-parity.opus.md`: "This full gate (all three
-invocations) runs after **every** slice that touches the merge or unmerge
-path"), starting with:
+test merge of `sys-libs/glibc` and `app-shells/bash`** passes, after *every*
+slice that touches that path. The merge path is
+`crates/portuale/src/ebuild_merge/`, `emerge_build/`, `emerge_getbinpkg.rs` and
+`ebuild_unmerge.rs` (the list lives in `LLM/tools/pair_check.sh`, which fails a
+commit that touches it without `LLM/evidence/merge-gate-<branch>.md`). The
+authoritative text is `LLM/agent-context.md`, "Merge-path safety gate"; the
+commands, run from `../pmtest`, are:
 
 ```
-../pmtest/differential-test-bed/run/l1-merge-from-binpkg.sh \
-    ../pmtest/differential-test-bed/atomlists/l1-merge-gate.txt
+differential-test-bed/run/l1-merge-from-binpkg.sh \
+    differential-test-bed/atomlists/l1-merge-gate.txt      # first run builds the pair
+L1_SKIP_BUILD=1 L1_CONSUME_REINSTALL=1 \
+    differential-test-bed/run/l1-merge-from-binpkg.sh \
+    differential-test-bed/atomlists/l1-merge-gate.txt      # re-merge over the running pair
 ```
 
 Both the sqlite and the redb VDB backends must merge them with identical
-counters (`LLM/evidence/305-s5-gate-redb.md`: "merged 2/2, 0 hard / 0
-unexplained, 1415 mtime-only; same database counters").
+counters (a passing run reports `merged 2/2, 0 hard / 0 unexplained`).
 
 ## The VDB is a database with a write order
 
-- **Lock it.** Real Portage holds `vardbapi.lock()` for the whole merge;
-  portuale took no lock (`LLM/evidence/305-s0-vartree-write-order.md`).
+- **Lock it.** The merge holds an exclusive lock on the VDB for its whole
+  duration (`VdbLock` in `crates/portage-vdb/src/files_write.rs`, Portage's
+  `lockdir`), so portuale and Portage can share one database safely.
 - **Delete the old entry, then rename the new one in.** Not the other way
   round (`V:5219` then `V:5238` in the same source).
 - **Restore directory mtimes *before* writing the stamp.** Applying
@@ -78,8 +86,9 @@ wrong and is correct; a unit test pins it.
 - The incremental fold cannot distinguish "negated" from "never set". When
   `make.globals` was not read, seed a synthetic base layer under the stack, or
   a `make.conf` append form silently loses its base.
-- `PORTAGE_OVERRIDE_EPREFIX` is not implemented; it exists only in a whitelist
-  and is hardcoded empty in `phase_env.rs`. Do not assume it works.
+- EPREFIX is not supported in the phase environment: `phase_env.rs` exports it
+  empty and `ED` collapses to `D`. `PORTAGE_OVERRIDE_EPREFIX` is read only on
+  the binpkg path (`emerge_getbinpkg.rs`). Do not assume it works elsewhere.
 - The direct `ebuild … merge/qmerge` path must consult `make.conf` for
   `PORTAGE_TMPDIR`; falling back to a host default is a known divergence.
 

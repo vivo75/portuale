@@ -14,7 +14,7 @@ do not have to guess which file wins.
 1. **`docs/charter.md`** — what portuale is, its relation to Portage, "what
    counts as correct", and "how the code must look". It wins over any older
    passage in `LLM/` that says "drop-in", "mimic Portage" or "Portage is the
-   oracle".
+   oracle". (Older text still says so; it is history, not instruction.)
 2. **The PMS, the EAPIs and the Devmanual** — expected behaviour for package
    management itself.
 3. **`AGENTS.md`** — the operating rhythm and the hard process rules.
@@ -30,7 +30,8 @@ move content between them without a reason.
 
 | Invariant | Checker | What fails |
 |---|---|---|
-| Every relative markdown link resolves | `python3 LLM/tools/check_links.py LLM docs` | a renamed or archived file leaves a dangling link |
+| Every relative markdown link resolves, or is listed in `LLM/ARCHIVE.manifest.tsv` | `python3 LLM/tools/check_links.py LLM docs` | a renamed file leaves a dangling link; an archived one is accepted if listed |
+| Every path a skill cites exists or is archived | `PORTUALE_DISTILL_WORK=<work dir> python3 LLM/tools/portuale-distill/f4_check.py` | a skill cites a vanished path |
 | A plan's `Status:` agrees with its backlog entry, and its tier prefix matches the tier it sits in | `python3 LLM/tools/doc_status_check.py` | `done` plan with an open entry, duplicated number, unknown status, wrong tier |
 | Backlog numbers are unique and never reused | same | the same number defined twice, within or across files |
 | Every scope cut is acknowledged | `python3 LLM/tools/cut_registry_check.py` | an open `CUT-n` whose follow-up is DONE; an unacknowledged `Still deferred` marker in the proof file |
@@ -43,9 +44,11 @@ checkers above are the part that fails on a docs-only change.
 ## The rules that are easy to break
 
 - **`LLM/what-this-proves.md` is append-only.** Never rewrite a prior slice's
-  paragraph. The file is also line-addressed: `LLM/scope-cuts.md` cites
-  `what-this-proves.md:<L>`, so inserting lines in the middle silently
-  re-points every entry below. Append; never insert.
+  paragraph; a stale claim is corrected by a later entry. Its text up to
+  2026-11-07 is archived (`LLM/ARCHIVE.md`); a citation
+  `what-this-proves.md:L` written before 2026-11-08 means line `L` of the
+  archived `what-this-proves.until-2026-11-07.md`. Append at the end; never
+  insert.
 - **Backlog numbers are global across tiers.** Scan every `backlog-tasks*.md`
   before filing; plan filenames are `<tier>.<item>-<slug>.opus.md` and the
   numeric prefix must match the tier the entry actually sits in.
@@ -62,20 +65,25 @@ checkers above are the part that fails on a docs-only change.
 
 ## Writing a plan
 
-- Title `<tier>.<item> — <what changes>`, then a `Status:` line.
+- File name `LLM/<tier>.<item>-<slug>.opus.md` while the plan is live (finished
+  plans are archived, see `LLM/ARCHIVE.md`). Title `<tier>.<item> — <what
+  changes>`, then a `Status:` line.
 - §0 tells the next agent what to read first and what would make the plan
   wrong.
 - Every step names one test or one file, the command to run, and the expected
   output.
-- `Global Constraints` lists the non-negotiables: oracle source, determinism,
+- `Global Constraints` lists the non-negotiables: where expected behaviour comes from, determinism,
   branch pairing, gates.
 - `Review Focus` says what must still be true elsewhere after the change.
-- A slice that claims a Portage expectation with no capture is a gap.
+- A slice that claims a Portage behaviour with no capture is a gap; a slice
+  that claims a behaviour is *right* needs the PMS, the Devmanual or a charter
+  property behind it, not only a Portage capture.
 
 ## Traps
 
-- **Editing `what-this-proves.md` in place** breaks line-addressed citations in
-  `scope-cuts.md` and the checker will say so.
+- **Editing `what-this-proves.md` in place** rewrites history and, for a
+  deferred-cut marker, can orphan its `scope-cuts.md` acknowledgment, which the
+  checker reports.
 - **A new backlog number taken from the top of one file** collides with the
   other file. Numbers are allocated globally.
 - **A link to a path you are about to archive** is a broken link; archive first,

@@ -1,6 +1,6 @@
 ---
 name: portuale-slice-delivery
-description: Use when turning a backlog entry into a finished piece of work in portuale — scoping a slice, writing its plan, deciding what blocks, running the oracle→fixture→red→green rhythm, choosing which gates to run, or closing it out across the two repositories. Load it before starting a slice, not after the code is written.
+description: Use when turning a backlog entry into a finished piece of work in portuale — scoping a slice, writing its plan, deciding what blocks, running the ground→fixture→red→green rhythm, choosing which gates to run, or closing it out across the two repositories. Load it before starting a slice, not after the code is written.
 ---
 
 # Delivering a slice
@@ -20,21 +20,22 @@ done.").
 The rhythm, unchanged across every plan in this tree:
 
 ```
-oracle → fixture → red test → code → green test → gates → close-out
+ground → fixture → red test → code → green test → gates → close-out
 ```
 
-`LLM/superpowers/plans/2026-10-21-backlogs-444-445-455-456.md` names it
-"oracle → fixture → contract-pin + rust-unit". The order is not stylistic: a
-test written after the code proves the code does what it does, which is
-worthless.
+*Ground* means: find out what correct is. Take it from the PMS, the EAPIs and
+the Devmanual, and from the charter's health properties; use a Portage capture
+as a comparison and a hint (`portuale-oracle-probing`). The order is not
+stylistic: a test written after the code proves the code does what it does,
+which is worthless. Name in the slice which charter property it serves and
+which program checks it.
 
 ## S0 — the capture-only slice
 
 Every investigation slice starts with **zero product code**: one failing run
-with full logs, plus the oracle capture of what correct looks like
-(`LLM/superpowers/plans/2026-10-29-626-hyperfine.md`: "S0 is capture-only (no
-product code): one failing run with full logs plus the Portage success slice
-as oracle").
+with full logs, plus the evidence of what correct looks like (spec text, a
+property, or a Portage capture as a comparison)
+("S0 is capture-only, no product code").
 
 S0 has a stop rule. If the capture contradicts the entry's premise, the slice
 STOPs and reports `NEEDS_CONTEXT` with the traces — it does not build a
@@ -91,9 +92,11 @@ repo contemporaneamente, con lo stesso nome**").
 
 ## Gates
 
-The full pass — `cargo fmt --check`, `cargo clippy --release --all-targets`,
-`cargo test --release`, then the pmtest suite — runs before a slice is done.
-Two extra rules:
+`sh LLM/tools/gate.sh` runs the whole pass: the document checkers, the pairing
+and merge-path check (`pair_check.sh`), `cargo fmt --check`,
+`cargo clippy --release --all-targets`, a release build, `cargo test --release`,
+then the pmtest suite, and compares failures by test name. Never run it while a
+bed run is active. Two extra rules:
 
 - **Merge-path safety gate.** Any change touching the merge path requires a
   successful test merge of `sys-libs/glibc` and `app-shells/bash`. Plans
@@ -121,8 +124,10 @@ Two extra rules:
 - **A residue without a number is a lost residue.** It disappears from the
   backlog and resurfaces as a "new" bug months later.
 - **A contract pin derived from portuale's own output** proves only that
-  portuale is consistent with itself. Pins come from a live Portage capture
-  (`LLM/superpowers/plans/2026-10-29-626-hyperfine.md`).
+  portuale is consistent with itself. A pin's docstring names where its
+  expected text came from: spec text, a charter property, or a Portage capture
+  with its version. A Portage capture shows what Portage does, not that it is
+  right.
 - **A plan whose premise is wrong must stop, not adapt.** Rewriting the fixture
   to fit the implementation is how a wrong premise becomes a shipped bug.
 - **A batch plan accumulates uncommitted slices** unless it names the evidence

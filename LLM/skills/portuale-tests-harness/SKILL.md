@@ -81,10 +81,16 @@ unexplained drift blocks the commit. Then accept it with
 |---|---|---|
 | `l0-resolver.sh` | merge lists, USE, order, errors, exit codes for ~120 real atoms | periodically, and after resolver/merge-order/phase changes |
 | `l1-merge-from-binpkg.sh` | filesystem + VDB after merging an identical binpkg set | whenever merge behaviour changed — and it **must** run with the portage upgrade (`L1_SKIP_PORTAGE_UPGRADE=1` produces spurious `metadata` findings) |
-| `l0-fixture-oracle-all.sh` | the same ground per fixture, against Portage oracles | when a per-fixture question needs a real tree |
+| `l0-fixture-oracle-all.sh` | the same ground per fixture, compared with Portage | when a per-fixture question needs a real tree |
 
 The beds are the only thing that catches a regression at real-tree scale; the
-fixture suite cannot. Container preflight:
+fixture suite cannot. **Read a bed result by the charter, not by equality**: a
+finding is a portuale bug (fix it), a Portage bug, or environmental
+(`compare/known-divergences.yaml`, with a `ticket:` or `reason:`), and a run is
+green when every finding is explained. A difference that violates no charter
+property is not a failure by itself. Properties that need no reference at all
+are checked by `output_invariants.py` over the same output
+(`differential-test-bed/compare/check-invariants.py`). Container preflight:
 `sudo differential-test-bed/create-container.bash`, run from pmtest.
 
 A **frozen binary** is mandatory for an L0 re-run: any non-baseline probe that
@@ -109,7 +115,9 @@ python3 -m pytest pytests-contract-suite -q   # serial fallback, ~8 min
 - **Running the gate in a parallel worktree** builds and tests the main
   checkout instead.
 - **A fixture without a real md5-cache entry** makes the pin meaningless.
-- **A pin derived from portuale's output** proves self-consistency only.
+- **A pin derived from portuale's output** proves self-consistency only; one
+  copied from Portage proves agreement with Portage. Its docstring names the
+  source (spec, charter property, or a Portage capture and version).
 
 ## Where to look
 

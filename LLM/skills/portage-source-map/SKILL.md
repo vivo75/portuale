@@ -5,16 +5,20 @@ description: Use when you need to find where a behaviour lives in Portage's own 
 
 # Navigating Portage's source
 
-Portage is the teacher. When portuale must reproduce a behaviour, the first
-question is *where Portage implements it*, and the second is *whether the
-answer is in Python, in the bash runtime, or in the C fast path*.
+Portage is the teacher, not the oracle (`docs/charter.md`). When portuale needs
+to learn how Portage solved a problem, the first question is *where Portage
+implements it*, and the second is *whether the answer is in Python, in the bash
+runtime, or in the C fast path*. What Portage does is a hint for what portuale
+should do, to be judged against the PMS, the Devmanual and the charter's
+properties.
 
 ## Where the checkout is
 
 `3rdparty/portage`, pinned to tag `portage-3.0.83` by
 `3rdparty/repos.toml`; `$PORTUALE_PORTAGE_CHECKOUT` overrides it at runtime.
 The checkout is **not needed to run portuale** — every phase helper is native
-since #326 S2–S7. It remains the oracle (`PORTUALE_PYTHON_HELPERS=real`), the
+since #326 S2–S7. It remains the comparison reference
+(`PORTUALE_PYTHON_HELPERS=real`), the
 source of the D4 fixture generators, and the source of the vendored
 `bin/` + `cnf/sets/portage.conf`.
 
@@ -78,8 +82,8 @@ already established the correspondence.
   ignores `eapi_attrs`; only `slot_operator`, `slot_deps`, `use_deps`,
   `use_dep_defaults`, `strong_blocks` and `repo_deps` are consulted by atom
   parsing. An atom can be grammatical and still illegal for the EAPI.
-- **A source reading is not an oracle.** Three items in one batch misread
-  `depgraph.py` and the "gap" did not exist. Confirm with a probe.
+- **A source reading is not evidence of behaviour.** Three items in one batch
+  misread `depgraph.py` and the "gap" did not exist. Confirm with a probe.
 
 ## Python, bash, or Rust
 
@@ -90,7 +94,7 @@ is, not wherever Portage happened to put it:
 
 - **bash** — `bin/ebuild.sh`, `bin/phase-helpers.sh`, vendored from upstream;
 - **Rust** — `crates/`, for everything portuale answers natively;
-- **Python** — only the oracle and the fixture generators.
+- **Python** — only the comparison reference and the fixture generators.
 
 ## Known bugs not to copy
 
@@ -105,7 +109,7 @@ looks like a bug — it probably is one.
 | Symbol → Portage file:line | `LLM/code-notes/` (483 files) |
 | Confirmed upstream defects | `LLM/portage-quirks.md` |
 | The pin, the overlay and the runtime-independence decision | `3rdparty/repos.toml`, `LLM/agent-context.md` |
-| Which Portage version the oracle is | tag `portage-3.0.83` |
+| Which Portage version is the reference | tag `portage-3.0.83` (`3rdparty/repos.toml`) |
 
 ## Provenance
 

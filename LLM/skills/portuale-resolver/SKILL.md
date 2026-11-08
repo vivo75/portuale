@@ -7,9 +7,14 @@ description: Use when changing or debugging dependency resolution in portuale �
 
 Two engines, one contract: the **default walk**, whose output order is
 `topological_merge_order`, and **`--solver=pubgrub`**, bridged to external
-crates through `solver_bridge.rs`. Both must produce the same `cat/pkg-version`
-set and the same action letters as Portage, or the difference is allowlisted
-with a backlog number (`LLM/04.34-pubgrub-parity.opus.md`).
+crates through `solver_bridge.rs`. Both are judged against the charter's
+properties: every kept package has its dependencies, no blocker or
+`REQUIRED_USE` is violated, no slot holds two packages, build dependencies come
+before the package that needs them, and each package ends as new as the others
+allow. Portage's merge list is the comparison, not the target: a different set
+or order is a defect only if one of those properties fails. A difference that
+is understood is recorded in the bed's `known-divergences.yaml` (a portuale
+bug is fixed, never listed).
 
 ## Merge order is not a topological sort
 
@@ -31,8 +36,12 @@ the *set* and not the order — that history is why `merge_order.rs` exists
 (`LLM/Paragone_solver_portage.md`).
 
 Any change here is judged by **traces**, not by reading: capture the walk with
-`PORTUALE_BT_TRACE=1` and diff against Portage's `--debug` (`pd.out`), naming
-the pass that differs.
+`PORTUALE_BT_TRACE=1`. For a refactor, diff before against after (it must be
+empty). To learn why a list differs from Portage's, diff against Portage's
+`--debug` (`pd.out`) and name the pass that differs, then judge the difference
+by the charter — is the order legal, is every package the newest that fits —
+not by equality. Order legality is also checked without a reference
+(`output_invariants.py`: "a dependency merged after its owner").
 
 ## The dominant bug family: the silent drop
 
@@ -40,22 +49,35 @@ Roughly 40 core issues, ~285 visited and deduplicated
 (`LLM/recurring-issues.md`). The shape is always the same: a real dependency is
 treated as "not a dependency" — no entry, no `NoVisibleCandidate`, no warning.
 
-The choke points:
+The choke points were `resolve/pass/prepare_atom.rs` (an unparsable atom ended
+the walk of that dependency), `resolve/queue.rs` (`enqueue_flat_deps`: enqueue
+everything, drop on pop) and the unparsed-token handling in
+`crates/portage-repo/src/globals.rs`.
 
-- `crates/portage-repo/src/resolve/pass/prepare_atom.rs:48-52` —
-  `note_unparsed_dep_token` followed by `Break`;
-- `globals.rs:123-142` — the unparsed-token log is **debug-only**;
-- `queue.rs:215-304` — "enqueue everything, drop on pop".
+**This family is now guarded by a program** (backlog #492), and the guard is the
+rule to follow:
 
-Known instances: slot ops `foo:0=` (`what-this-proves.until-2026-11-07.md:61-66`), USE deps
+- A new dependency-token parse uses `portage_repo::parse_dep_atom(token,
+  "<site>")`, which **counts** every unparsable token per site; counting is
+  always on, debug builds also name the token on stderr.
+- Where skipping is intended, keep `portage_dep::parse_atom` and add
+  `// drop-ok: <reason>` on the same or the previous line. The source lint
+  `every_dep_atom_parse_is_counted_or_justified`
+  (`crates/portage-repo/src/tests/dep_drop_lint.rs`) fails otherwise.
+- `PORTUALE_REPORT_UNPARSED_DEP_TOKENS=1` prints the total and the per-site
+  counts; the L0 bed and the contract suite assert that total is zero
+  (`check_unparsed_dep_tokens` in `output_invariants.py`).
+
+Historical instances, for orientation only: slot ops `foo:0=` (`what-this-proves.until-2026-11-07.md:61-66`), USE deps
 (`:74-77`), slot visited-set (`:396`), sub-slot feed (`:1229`), blockers `!!`
 (`:1473`), `package.provided` (`:8504`), nested fragments (`:17303`),
 `[use]`-unsat (`:8461`).
 
 The invariant that governs every fix is **never silently wrong**
-(`LLM/code-notes/portage-use-reduce/lib.md:77,113`). A dependency portuale
-cannot honour must produce a visible outcome — an entry, a candidate, or a
-message — not silence.
+(`LLM/code-notes/portage-use-reduce/lib.md:77,113`; charter properties 1 and
+5). A dependency portuale cannot honour must produce a visible outcome — an
+entry, a candidate, or a message that names the cause and an action — not
+silence. Prefer extending a guard like the one above over adding a one-off fix.
 
 ## The second family: a scope cut whose doc outlived it
 
@@ -97,8 +119,9 @@ the flag, so `--usepkg=n` still counts (`LLM/2026-10-15-batch-plan.md`).
 - **`Ok(None)` and "not configured" are different states.** Any reader that
   distinguishes them must be audited the same way when a synthetic base layer
   is introduced.
-- **A heal that fires where Portage aborts** is a bug, not a fix: those pins
-  stay red-guarded.
+- **A heal that fires where Portage aborts** is a difference that needs a
+  reason. It is acceptable only if the resulting plan satisfies the charter
+  properties; do not assume it is a fix, and do not assume it is a bug.
 - **Backtrack count is deliberately unasserted** (#572 precedent) — do not pin
   it.
 - **Order changes without a trace diff** hide in "no output change" claims.
