@@ -2,16 +2,28 @@
 
 > Paths and identifiers written before 2026-10-10 may predate the #336 refactor: see [`renames.tsv`](renames.tsv).
 
-What real portage does that portuale doesn't, the standing non-goals, and
-the honest distance to a drop-in replacement. Expected behaviour comes
-from real Portage (the differential beds, now in the sibling `pmtest`
-repo — `agent-context.md`, "Where the tests live" — the host's `emerge`,
-upstream resolver tests). The second Python copy of the resolver
+What Portage does that portuale doesn't yet, the standing non-goals,
+and what is deliberately cut.
+
+> Charter wins (2026-11-07, `docs/charter.md`): expected behaviour
+> comes from the PMS, EAPIs, Devmanual, the five health properties,
+> owner decides where silent. Portage output (differential beds in
+> sibling `pmtest`, host `emerge`, upstream
+> `lib/portage/tests/resolver/`) is comparison/hint only. A difference
+> from Portage alone opens no entry — an OPEN entry needs user-worse-off
+> (wrong set, illegal order, misleading message) or a charter-property
+> violation. Portage bugs are never copied; accepted non-bugs go in
+> `known-divergences.yaml`.
+
+The second Python copy of the resolver
 (`python/emerge_pretend_reference.py`) was **removed 2026-09-15**
 ([`history/second_python_copy_removal.md`](history/second_python_copy_removal.md)); its
 checks were replaced by output invariants, determinism runs, a
 tree-wide primitive differential and a harvested corpus. Entries below
-that say "dual-language" / "Rust==Python" record how a slice shipped.
+that say "dual-language" / "Rust==Python" / "oracle-grounded" /
+"byte-identical" record how a slice shipped when Portage was the oracle.
+If the entry is DONE/CLOSED, leave the wording — history, not rewritten.
+Only OPEN entries must pass the charter test above.
 
 `what-this-proves.md` is the authoritative record of what has shipped;
 `git log` is the slice history. Re-verify any entry here against both
