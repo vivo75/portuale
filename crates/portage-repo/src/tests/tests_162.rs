@@ -1486,6 +1486,76 @@ fn promote_162(args: Promote162Args<'_>) -> usize {
         queued,
         gate: crate::test_gate(repos),
         view: OrView::Normal,
+        // Unit legs without an owner never want an update (pinned).
+        parent: None,
+        depth: 0,
+        deep: Deep::NotRequested,
+        update: false,
+        arg_atoms: &[],
+        set_args: &HashSet::new(),
+        excluded: &[],
+        complete: false,
+    })
+}
+
+/// Arguments of [`promote_162_want`]: the [`promote_162`] inputs plus the
+/// upgrade-preference promotion's owner and run flags.
+struct Promote162WantArgs<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    alts: &'a [&'a [&'a str]],
+    queued: &'a [QueueItem],
+    parent: Option<(String, String)>,
+    depth: u32,
+    deep: Deep,
+    update: bool,
+    arg_atoms: Vec<String>,
+    set_args: HashSet<String>,
+    excluded: Vec<String>,
+    complete: bool,
+}
+
+/// [`promote_162`] with the upgrade-preference promotion threaded through.
+fn promote_162_want(args: Promote162WantArgs<'_>) -> usize {
+    let Promote162WantArgs {
+        repos,
+        config,
+        root,
+        entries,
+        alts,
+        queued,
+        parent,
+        depth,
+        deep,
+        update,
+        arg_atoms,
+        set_args,
+        excluded,
+        complete,
+    } = args;
+    let owned: Vec<Vec<String>> = alts
+        .iter()
+        .map(|a| a.iter().map(|s| s.to_string()).collect())
+        .collect();
+    promote_tied_alternative(PromoteTiedAlternativeArgs {
+        config,
+        root,
+        entries,
+        constraints: &HashMap::new(),
+        alts: &owned,
+        queued,
+        gate: crate::test_gate(repos),
+        view: OrView::Normal,
+        parent,
+        depth,
+        deep,
+        update,
+        arg_atoms: &arg_atoms,
+        set_args: &set_args,
+        excluded: &excluded,
+        complete,
     })
 }
 
@@ -1983,5 +2053,279 @@ fn alternative_downgrade_demoted_uses_the_tree_hypothetical_under_update() {
         queued: &[qatom_162("test/pkg")],
         update: true
     }));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- `promote_tied_alternative`'s `want_update` gate (backlog #683). ----
+//
+// Portage `dep_zapdeps` (dep_check.py:771-775) skips the installed-slots
+// promotion when the staying choice wants an update
+// (`_want_update_pkg`, depgraph.py:7332-7362). The legs below pin the gate:
+// (a)/(c)/(e)/(f)/(g) go red with the guard reverted, (b)/(d) pin the kept behavior.
+
+/// The two-slot tree for the gate legs: `slota` spans slots 0 and 1.
+fn gate_repo_683(dir: &Path) -> Vec<RepoConfig> {
+    repo_pkgs_162(
+        dir,
+        &[
+            ("test/slota", "1.0", "0", ""),
+            ("test/slota", "2.0", "1", ""),
+        ],
+    )
+}
+
+/// The gate legs' `||` shape: the new slot first, the installed slot second.
+fn gate_alts_683() -> Vec<Vec<String>> {
+    vec![
+        vec!["test/slota:1".to_string()],
+        vec!["=test/slota-1.0".to_string()],
+    ]
+}
+
+/// Arguments of [`gate_683`].
+struct Gate683Args<'a> {
+    repos: &'a [RepoConfig],
+    config: &'a portage_profile::Config,
+    root: &'a Path,
+    entries: &'a [GraphEntry],
+    update: bool,
+    deep: Deep,
+    depth: u32,
+    arg_atoms: Vec<String>,
+    set_args: HashSet<String>,
+}
+
+/// [`promote_162_want`] over the gate shape: `slota-1.0` installed in slot 0,
+/// owner `test/consumer`, child depth 1 unless given.
+fn gate_683(args: Gate683Args<'_>) -> usize {
+    let Gate683Args {
+        repos,
+        config,
+        root,
+        entries,
+        update,
+        deep,
+        depth,
+        arg_atoms,
+        set_args,
+    } = args;
+    let alts = gate_alts_683();
+    let owned_refs: Vec<Vec<&str>> = alts
+        .iter()
+        .map(|a| a.iter().map(String::as_str).collect())
+        .collect();
+    let alt_refs: Vec<&[&str]> = owned_refs.iter().map(Vec::as_slice).collect();
+    promote_162_want(Promote162WantArgs {
+        repos,
+        config,
+        root,
+        entries,
+        alts: &alt_refs,
+        queued: &[],
+        parent: Some(("test".to_string(), "consumer".to_string())),
+        depth,
+        deep,
+        update,
+        arg_atoms,
+        set_args,
+        excluded: Vec::new(),
+        complete: false,
+    })
+}
+
+/// (a) A new-slot-first choice with `want_update` wins: under `--update` the
+/// staying new slot is wanted, so the installed second alternative is not
+/// promoted ahead of it.
+#[test]
+fn promote_tied_alternative_want_update_keeps_the_new_slot_first() {
+    let dir = dir_162("prom-want-new");
+    let repos = gate_repo_683(&dir);
+    install_162(&dir, "test", "slota-1.0", "0", &[]);
+    let config = cfg_162();
+    assert_eq!(
+        gate_683(Gate683Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            update: true,
+            deep: Deep::Unlimited,
+            depth: 1,
+            arg_atoms: Vec::new(),
+            set_args: HashSet::new(),
+        }),
+        0
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// (b) Without `--update` (and no argument) nothing is wanted, so the
+/// installed second alternative still promotes ahead: the installed slot
+/// is kept.
+#[test]
+fn promote_tied_alternative_without_update_keeps_the_installed_slot() {
+    let dir = dir_162("prom-want-kept");
+    let repos = gate_repo_683(&dir);
+    install_162(&dir, "test", "slota-1.0", "0", &[]);
+    let config = cfg_162();
+    assert_eq!(
+        gate_683(Gate683Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            update: false,
+            deep: Deep::Unlimited,
+            depth: 1,
+            arg_atoms: Vec::new(),
+            set_args: HashSet::new(),
+        }),
+        1
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// (c) An argument naming the package resets the depth to 0, so it is wanted
+/// even at depth 5 with no `--deep`: the new slot wins without `--update`.
+#[test]
+fn promote_tied_alternative_arg_member_promotes_without_deep() {
+    let dir = dir_162("prom-want-arg");
+    let repos = gate_repo_683(&dir);
+    install_162(&dir, "test", "slota-1.0", "0", &[]);
+    let config = cfg_162();
+    assert_eq!(
+        gate_683(Gate683Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            update: false,
+            deep: Deep::NotRequested,
+            depth: 5,
+            arg_atoms: vec!["test/slota".to_string()],
+            set_args: HashSet::new(),
+        }),
+        0
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// (d) With no `--deep` a depth-1 dependency is too deep, so nothing is
+/// wanted even under `--update`: the installed slot is kept.
+#[test]
+fn promote_tied_alternative_deep_off_at_depth_keeps_the_installed_slot() {
+    let dir = dir_162("prom-want-deepoff");
+    let repos = gate_repo_683(&dir);
+    install_162(&dir, "test", "slota-1.0", "0", &[]);
+    let config = cfg_162();
+    assert_eq!(
+        gate_683(Gate683Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            update: true,
+            deep: Deep::NotRequested,
+            depth: 1,
+            arg_atoms: Vec::new(),
+            set_args: HashSet::new(),
+        }),
+        1
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// (e) The winner adds the new slot while the needed installed slot stays:
+/// with the installed instance already graphed, the new slot still wins
+/// under `--update` (the walk merges both, one per slot).
+#[test]
+fn promote_tied_alternative_new_slot_adds_beside_the_needed_installed_slot() {
+    let dir = dir_162("prom-want-add");
+    let repos = gate_repo_683(&dir);
+    install_162(&dir, "test", "slota-1.0", "0", &[]);
+    let config = cfg_162();
+    let entries = vec![entry_162(
+        "test",
+        "slota",
+        PretendOutcome::AlreadyInstalled {
+            version: "1.0".to_string(),
+        },
+        Some("0"),
+        false,
+    )];
+    assert_eq!(
+        gate_683(Gate683Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &entries,
+            update: true,
+            deep: Deep::Unlimited,
+            depth: 1,
+            arg_atoms: Vec::new(),
+            set_args: HashSet::new(),
+        }),
+        0
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// (f) The arg wants the staying 2.0 candidate (nothing higher, so the
+/// guard passes) but is suppressed for the installed 1.0 candidate (2.0
+/// sits in slot 1): with update:false the arg leg is the only want source,
+/// so the staying choice wants an update and the installed second
+/// alternative is not promoted ahead of it.
+#[test]
+fn promote_tied_alternative_arg_suppressed_by_higher_slot() {
+    let dir = dir_162("prom-want-suppr");
+    let repos = gate_repo_683(&dir);
+    install_162(&dir, "test", "slota-1.0", "0", &[]);
+    let config = cfg_162();
+    // update:false + deep Unlimited isolates the higher-slot guard: depth
+    // never blocks (arg resets it, Unlimited allows the rest), so the only
+    // reason the installed candidate is unwanted is the suppression.
+    assert_eq!(
+        gate_683(Gate683Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            update: false,
+            deep: Deep::Unlimited,
+            depth: 1,
+            arg_atoms: vec!["test/slota".to_string()],
+            set_args: HashSet::new(),
+        }),
+        0
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// (g) A set-arg match wants the new slot without `--deep`: with empty
+/// `arg_atoms` and `set_args={"test/slota"}`, the staying 2.0 candidate
+/// matches via the set (depth reset to 0), so the installed second
+/// alternative is not promoted ahead of it.
+#[test]
+fn promote_tied_alternative_set_arg_promotes_without_deep() {
+    let dir = dir_162("prom-want-setarg");
+    let repos = gate_repo_683(&dir);
+    install_162(&dir, "test", "slota-1.0", "0", &[]);
+    let config = cfg_162();
+    let mut set_args = HashSet::new();
+    set_args.insert("test/slota".to_string());
+    assert_eq!(
+        gate_683(Gate683Args {
+            repos: &repos,
+            config: &config,
+            root: &dir,
+            entries: &[],
+            update: false,
+            deep: Deep::NotRequested,
+            depth: 5,
+            arg_atoms: Vec::new(),
+            set_args,
+        }),
+        0
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

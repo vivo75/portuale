@@ -132,6 +132,14 @@ pub(crate) fn consumer_or_arms(args: ConsumerOrArmsArgs<'_>) -> Option<HashSet<S
             root_deps_running_root: scan.root_deps_running_root,
             gate,
             view: OrView::PostMerge(&scan.post_merge),
+            // PostMerge consumers never want an update (pinned).
+            want_parent: None,
+            want_depth: 0,
+            want_deep: Deep::NotRequested,
+            want_arg_atoms: &[],
+            want_set_args: None,
+            want_excluded: &[],
+            want_complete: false,
         },
     ))
 }
@@ -283,6 +291,13 @@ pub(crate) fn sibling_virtual_leaks(args: SiblingVirtualLeaksArgs<'_>) -> LeakMa
                 gate,
                 update: scan.update,
                 root_deps_running_root: scan.root_deps_running_root,
+                want_deep: Deep::NotRequested,
+                want_excluded: &[],
+                want_arg_atoms: &[],
+                want_set_args: None,
+                want_complete: false,
+                // Installed parents never thread the upgrade preference.
+                want_enabled: false,
             },
             meta_memo,
             // The depgraph parses every parent's atoms with the package's own EAPI.
@@ -322,6 +337,13 @@ pub(crate) fn sibling_virtual_leaks(args: SiblingVirtualLeaksArgs<'_>) -> LeakMa
             gate,
             update: scan.update,
             root_deps_running_root: scan.root_deps_running_root,
+            want_deep: Deep::NotRequested,
+            want_excluded: &[],
+            want_arg_atoms: &[],
+            want_set_args: None,
+            want_complete: false,
+            // Installed parents never thread the upgrade preference.
+            want_enabled: false,
         },
         meta_memo,
         &mut leaks,
@@ -337,6 +359,14 @@ pub(crate) struct MergeBoundVirtualLeaksArgs<'a> {
     pub(crate) gate: CategoryGate<'a>,
     pub(crate) update: bool,
     pub(crate) root_deps_running_root: Option<&'a Path>,
+    /// The run's `--deep` setting, `--exclude` atoms, top-level atoms plus
+    /// set members, and complete mode: the upgrade-preference promotion's
+    /// run flags (see `AlternativeWantUpdateArgs`).
+    pub(crate) deep: Deep,
+    pub(crate) excluded: &'a [String],
+    pub(crate) arg_atoms: &'a [String],
+    pub(crate) set_args: &'a HashSet<String>,
+    pub(crate) complete: bool,
 }
 
 /// Quirk Q19 for merge-bound virtuals: per merge-bound virtual, the atoms of its tree
@@ -351,6 +381,11 @@ pub(crate) fn merge_bound_virtual_leaks(args: MergeBoundVirtualLeaksArgs<'_>) ->
         gate,
         update,
         root_deps_running_root,
+        deep,
+        excluded,
+        arg_atoms,
+        set_args,
+        complete,
     } = args;
     let mut leaks = VirtualLeaks::default();
     let deps = DepSource {
@@ -370,6 +405,14 @@ pub(crate) fn merge_bound_virtual_leaks(args: MergeBoundVirtualLeaksArgs<'_>) ->
             gate,
             update,
             root_deps_running_root,
+            want_deep: deep,
+            want_excluded: excluded,
+            want_arg_atoms: arg_atoms,
+            want_set_args: Some(set_args),
+            want_complete: complete,
+            // Only this path threads the upgrade-preference promotion;
+            // the installed-parent path below pins it off.
+            want_enabled: true,
         },
         &mut HashMap::new(),
         &mut leaks,
@@ -432,6 +475,18 @@ fn merge_bound_parents_leak(cx: &LeakCtx<'_>, meta_memo: &mut MetaMemo, leaks: &
                     root_deps_running_root: cx.root_deps_running_root,
                     gate: cx.gate,
                     view: OrView::Normal,
+                    // The merge-bound parent owns this `||`: thread the
+                    // upgrade preference only on the enabled path (the
+                    // exact walk depth is post-walk unknown; 1 is the
+                    // shallowest non-zero child depth, exact under
+                    // `--deep`, the only setting where it can fire).
+                    want_parent: cx.want_enabled.then(|| cp.clone()),
+                    want_depth: 1,
+                    want_deep: cx.want_deep,
+                    want_arg_atoms: cx.want_arg_atoms,
+                    want_set_args: cx.want_set_args,
+                    want_excluded: cx.want_excluded,
+                    want_complete: cx.want_complete,
                 })
             },
             leaks,
@@ -451,6 +506,16 @@ struct LeakCtx<'a> {
     gate: CategoryGate<'a>,
     update: bool,
     root_deps_running_root: Option<&'a Path>,
+    /// The upgrade-preference promotion's run flags (see
+    /// `AlternativeWantUpdateArgs`). Read only when `want_enabled` is set.
+    want_deep: Deep,
+    want_excluded: &'a [String],
+    want_arg_atoms: &'a [String],
+    want_set_args: Option<&'a HashSet<String>>,
+    want_complete: bool,
+    /// Whether the merge-bound leak path threads the upgrade preference.
+    /// Installed parents pin it off.
+    want_enabled: bool,
 }
 
 /// An atom as Portage interns it here: its text and the EAPI it was parsed with,
@@ -633,6 +698,17 @@ fn merge_bound_member(cx: &LeakCtx<'_>, atom: &str) -> Option<LeakMember> {
             root_deps_running_root: cx.root_deps_running_root,
             gate: cx.gate,
             view: OrView::Normal,
+            // Same merge-bound path as the parent closure above (the
+            // virtual owns its own RDEPEND `||`).
+            want_parent: cx
+                .want_enabled
+                .then(|| (entry.category.clone(), entry.package.clone())),
+            want_depth: 1,
+            want_deep: cx.want_deep,
+            want_arg_atoms: cx.want_arg_atoms,
+            want_set_args: cx.want_set_args,
+            want_excluded: cx.want_excluded,
+            want_complete: cx.want_complete,
         },
     ));
     Some(LeakMember {

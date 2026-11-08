@@ -325,6 +325,8 @@ pub(crate) fn expand_resolved_slot_with_flipped_use(
         existing_idx,
         key,
         bp,
+        // Delta atoms queue one deeper than the flipped package.
+        depth: existing_depth + 1,
     }) {
         ControlFlow::Continue(out) => out,
         ControlFlow::Break(()) => return,
@@ -474,6 +476,9 @@ pub(crate) struct FlattenDepsForFlipArgs<'a> {
     pub(crate) existing_idx: usize,
     pub(crate) key: &'a (String, String),
     pub(crate) bp: &'a BacktrackParams,
+    /// The effective child depth (`existing_depth + 1`), already resolved by
+    /// the caller, for the upgrade-preference promotion.
+    pub(crate) depth: u32,
 }
 
 /// Flatten the flipped dependency strings, choosing one branch of each disjunction as the walk does.
@@ -493,6 +498,7 @@ pub(crate) fn flatten_deps_for_flip(
         existing_idx,
         key,
         bp,
+        depth,
     } = args;
     let queued: Vec<QueueItem> = state.queue.iter().cloned().collect();
     let Ok(flat_deps) = portage_use_reduce::use_reduce_flat_disjunctive(
@@ -542,6 +548,16 @@ pub(crate) fn flatten_deps_for_flip(
                     queued: queued_view,
                     gate: ctx.gate(),
                     view: OrView::Normal,
+                    // The flipped package owns this `||`: its delta deps
+                    // want an update exactly like a fresh expansion's.
+                    parent: Some(key.clone()),
+                    depth,
+                    deep: ctx.deep,
+                    update: ctx.update,
+                    arg_atoms: ctx.atoms,
+                    set_args: &ctx.set_args,
+                    excluded: ctx.excluded,
+                    complete: ctx.complete,
                 })
             },
         },

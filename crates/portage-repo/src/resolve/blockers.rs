@@ -470,6 +470,16 @@ pub(crate) fn collect_unwalked_installed_blockers(args: CollectUnwalkedInstalled
                         queued: &[],
                         gate,
                         view: OrView::Normal,
+                        // Blocker collection never wants an update: blockers
+                        // are skipped on both sides (`update: false` below).
+                        parent: None,
+                        depth: 0,
+                        deep: Deep::NotRequested,
+                        update: false,
+                        arg_atoms: &[],
+                        set_args: &HashSet::new(),
+                        excluded: &[],
+                        complete: false,
                     })
                 },
             },

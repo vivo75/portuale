@@ -50,6 +50,11 @@ fn record_merge_bound_virtual_leaks(state: &mut PassState, ctx: &ResolveCtx<'_>,
         gate: ctx.gate(),
         update: ctx.update,
         root_deps_running_root: ctx.root_deps_running_root,
+        deep: ctx.deep,
+        excluded: ctx.excluded,
+        arg_atoms: ctx.atoms,
+        set_args: &ctx.set_args,
+        complete: ctx.complete,
     });
     let mut leaks: Vec<_> = leaks.into_iter().collect();
     leaks.sort_by(|a, b| a.0.cmp(&b.0));

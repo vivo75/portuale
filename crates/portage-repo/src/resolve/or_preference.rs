@@ -433,6 +433,275 @@ pub(crate) fn candidate_version(
     rest.split(':').next().map(str::to_string)
 }
 
+/// Arguments of [`alternative_want_update`].
+pub(crate) struct AlternativeWantUpdateArgs<'a> {
+    pub(crate) config: &'a portage_profile::Config,
+    pub(crate) gate: CategoryGate<'a>,
+    pub(crate) parent: Option<(String, String)>,
+    pub(crate) depth: u32,
+    pub(crate) deep: Deep,
+    pub(crate) update: bool,
+    pub(crate) arg_atoms: &'a [String],
+    pub(crate) set_args: &'a HashSet<String>,
+    pub(crate) excluded: &'a [String],
+    pub(crate) complete: bool,
+    pub(crate) atoms: &'a [String],
+    pub(crate) constraints: &'a HashMap<(String, String), Vec<String>>,
+}
+
+/// Portage's per-choice `want_update`: whether any available package of the
+/// choice wants an update for `parent` (dep_check.py `dep_zapdeps`, gated at
+/// :771-775). Per package (depgraph.py `_want_update_pkg`): not complete
+/// mode, not `--exclude`d, an argument match (depth reset to 0) or
+/// `--update`, and not `_too_deep` at the effective depth.
+///
+/// The argument leg is candidate-based with the higher-slot guard
+/// (depgraph.py `_iter_atoms_for_pkg`): an argument matching the candidate is
+/// ignored while a higher visible version sits in another slot. `PackageArg`
+/// vs `SetArg` (`reset_depth=False` internal sets, the identity skip, the
+/// virtual-cp skip) has no portuale counterpart, so every argument counts and
+/// resets the depth; with `--update` the leg is dead anyway (the `-uDN`
+/// `@world` path only needs the update leg).
+// Portage: dep_check.py:771-775; depgraph.py:7332-7362, 7387-7403, 4988-5012
+pub(crate) fn alternative_want_update(args: AlternativeWantUpdateArgs<'_>) -> bool {
+    let AlternativeWantUpdateArgs {
+        config,
+        gate,
+        parent,
+        depth,
+        deep,
+        update,
+        arg_atoms,
+        set_args,
+        excluded,
+        complete,
+        atoms,
+        constraints,
+    } = args;
+    // No parent (installed walk, blocker scan, PostMerge view): never wanted.
+    if parent.is_none() {
+        return false;
+    }
+    if complete {
+        return false;
+    }
+    let extra_for = |a: &str| -> &[String] {
+        parse_dep_atom(a, "or_preference")
+            .and_then(|at| constraints.get(&(at.category, at.package)))
+            .map_or(&[][..], Vec::as_slice)
+    };
+    for a in atoms {
+        let Some(atom) = parse_dep_atom(a, "or_preference") else {
+            continue;
+        };
+        if atom.blocker != portage_dep::Blocker::None {
+            continue;
+        }
+        // The choice's available package for this atom (USE ignored, like
+        // Portage's `avail_pkg`).
+        let Some(candidate) = best_available_candidate(BestAvailableCandidateArgs {
+            gate,
+            config,
+            atom_str: a,
+            category: &atom.category,
+            package: &atom.package,
+            extra_constraints: extra_for(a),
+        }) else {
+            continue;
+        };
+        let candidate_str = candidate.match_str(&atom.category, &atom.package);
+        // `--exclude` opts this package out.
+        if excluded
+            .iter()
+            .any(|ex| matches_cli_option_atom(ex, &candidate_str))
+        {
+            continue;
+        }
+        if update {
+            if !update_too_deep(deep, depth) {
+                return true;
+            }
+        } else if candidate_matches_argument(CandidateMatchesArgumentArgs {
+            gate,
+            config,
+            arg_atoms,
+            set_args,
+            category: &atom.category,
+            package: &atom.package,
+            candidate: &candidate,
+            candidate_str: &candidate_str,
+        }) {
+            // An argument match resets the depth to 0, which is never too deep.
+            return true;
+        }
+    }
+    false
+}
+
+/// Arguments of [`best_available_candidate`].
+struct BestAvailableCandidateArgs<'a> {
+    gate: CategoryGate<'a>,
+    config: &'a portage_profile::Config,
+    atom_str: &'a str,
+    category: &'a str,
+    package: &'a str,
+    extra_constraints: &'a [String],
+}
+
+/// The highest visible candidate matching `atom_str` (USE ignored), cloned
+/// for the slot-aware checks. Mirrors
+/// [`highest_available_candidate_ignoring_use`]'s pool and mask.
+fn best_available_candidate(args: BestAvailableCandidateArgs<'_>) -> Option<Candidate> {
+    let BestAvailableCandidateArgs {
+        gate,
+        config,
+        atom_str,
+        category,
+        package,
+        extra_constraints,
+    } = args;
+    let stripped = portage_dep::without_use(atom_str);
+    let pool = gate.repo_candidates(category, package).ok()?;
+    let visible: Vec<&Candidate> = pool
+        .iter()
+        .filter(|c| is_visible(c, category, package, config))
+        .collect();
+    if visible.is_empty() {
+        return None;
+    }
+    let candidate_strs: Vec<String> = visible
+        .iter()
+        .map(|c| c.match_str(category, package))
+        .collect();
+    let candidate_str_refs: Vec<&str> = candidate_strs.iter().map(String::as_str).collect();
+    let matched = portage_dep::match_from_list(stripped, &candidate_str_refs)?;
+    let matched: Vec<&str> = if extra_constraints.is_empty() {
+        matched
+    } else {
+        matched
+            .into_iter()
+            .filter(|m| {
+                extra_constraints.iter().all(|c| {
+                    if is_instance_only_mask(c) {
+                        return true;
+                    }
+                    if let Some(neg) = c.strip_prefix('!') {
+                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    } else {
+                        portage_dep::match_from_list(c, std::slice::from_ref(m))
+                            .is_some_and(|r| !r.is_empty())
+                    }
+                })
+            })
+            .collect()
+    };
+    let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
+    for (s, c) in candidate_str_refs.iter().zip(visible.iter()) {
+        by_str.insert(*s, *c);
+    }
+    matched
+        .iter()
+        .filter_map(|m| by_str.get(m).copied())
+        .max_by(|a, b| vercmp_ordering(&a.version, &b.version))
+        .cloned()
+}
+
+/// Arguments of [`candidate_matches_argument`].
+struct CandidateMatchesArgumentArgs<'a, 'b> {
+    gate: CategoryGate<'a>,
+    config: &'a portage_profile::Config,
+    arg_atoms: &'a [String],
+    set_args: &'a HashSet<String>,
+    category: &'a str,
+    package: &'a str,
+    candidate: &'b Candidate,
+    candidate_str: &'a str,
+}
+
+/// Whether the available `candidate` matches a top-level argument, with
+/// Portage's higher-slot guard: an argument is ignored while a higher visible
+/// version sits in another slot. Every argument counts and resets the depth
+/// (see [`alternative_want_update`]).
+// Portage: depgraph.py, _iter_atoms_for_pkg
+fn candidate_matches_argument(args: CandidateMatchesArgumentArgs<'_, '_>) -> bool {
+    let CandidateMatchesArgumentArgs {
+        gate,
+        config,
+        arg_atoms,
+        set_args,
+        category,
+        package,
+        candidate,
+        candidate_str,
+    } = args;
+    for arg_text in arg_atoms.iter().chain(set_args.iter()) {
+        let Some(arg) = parse_dep_atom(arg_text, "or_preference") else {
+            continue;
+        };
+        if arg.category != category || arg.package != package {
+            continue;
+        }
+        // Higher-slot guard: a higher visible version in another slot
+        // suppresses this argument.
+        if higher_visible_in_other_slot(gate, config, arg_text, candidate) {
+            continue;
+        }
+        if portage_dep::match_from_list(arg_text, std::slice::from_ref(&candidate_str))
+            .is_some_and(|m| !m.is_empty())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a higher visible version of the candidate's package sits in another
+/// slot (Portage `_iter_atoms_for_pkg`'s `higher_slot` guard, which matches
+/// the argument atom's own visible list in descending order).
+fn higher_visible_in_other_slot(
+    gate: CategoryGate<'_>,
+    config: &portage_profile::Config,
+    arg_text: &str,
+    candidate: &Candidate,
+) -> bool {
+    let Some(arg) = parse_dep_atom(arg_text, "or_preference") else {
+        return false;
+    };
+    let Ok(pool) = gate.repo_candidates(&arg.category, &arg.package) else {
+        return false;
+    };
+    let visible: Vec<&Candidate> = pool
+        .iter()
+        .filter(|c| is_visible(c, &arg.category, &arg.package, config))
+        .collect();
+    if visible.is_empty() {
+        return false;
+    }
+    let strs: Vec<String> = visible
+        .iter()
+        .map(|c| c.match_str(&arg.category, &arg.package))
+        .collect();
+    let refs: Vec<&str> = strs.iter().map(String::as_str).collect();
+    let Some(matched) = portage_dep::match_from_list(arg_text, &refs) else {
+        return false;
+    };
+    let mut by_str: HashMap<&str, &Candidate> = HashMap::new();
+    for (s, c) in refs.iter().zip(visible.iter()) {
+        by_str.insert(*s, *c);
+    }
+    let mut higher: Vec<&Candidate> = matched
+        .iter()
+        .filter_map(|m| by_str.get(m).copied())
+        .filter(|c| vercmp_ordering(&c.version, &candidate.version).is_gt())
+        .collect();
+    higher.sort_by(|a, b| vercmp_ordering(&b.version, &a.version));
+    higher.into_iter().any(|c| {
+        (c.slot.as_str(), c.sub_slot.as_str())
+            != (candidate.slot.as_str(), candidate.sub_slot.as_str())
+    })
+}
+
 /// Arguments of [`promote_tied_alternative`].
 pub(crate) struct PromoteTiedAlternativeArgs<'a> {
     pub(crate) config: &'a portage_profile::Config,
@@ -443,6 +712,25 @@ pub(crate) struct PromoteTiedAlternativeArgs<'a> {
     pub(crate) queued: &'a [QueueItem],
     pub(crate) gate: CategoryGate<'a>,
     pub(crate) view: OrView<'a>,
+    /// The `||` owner's `(category, package)`: `None` pins every choice's
+    /// `want_update` to `false` (installed/PostMerge/blocker callers never
+    /// want an update). `Some` only at merge-bound `Normal`-view sites.
+    pub(crate) parent: Option<(String, String)>,
+    /// The effective child depth (`parent.depth + 1`), already resolved by
+    /// the caller. Read only when `parent` is `Some`.
+    pub(crate) depth: u32,
+    /// The run's `--deep` setting, for `_too_deep`.
+    pub(crate) deep: Deep,
+    /// The run's `--update` flag.
+    pub(crate) update: bool,
+    /// The run's top-level atom texts plus set members, for the
+    /// `_iter_atoms_for_pkg` argument match (a match resets depth to 0).
+    pub(crate) arg_atoms: &'a [String],
+    pub(crate) set_args: &'a HashSet<String>,
+    /// The run's `--exclude` atoms: an excluded package never wants update.
+    pub(crate) excluded: &'a [String],
+    /// Portage's `_complete_mode`: nothing is ever wanted for update in it.
+    pub(crate) complete: bool,
 }
 
 /// Portage's in-bin upgrade-preference pass as `use_reduce_flat_disjunctive`'s
@@ -450,8 +738,8 @@ pub(crate) struct PromoteTiedAlternativeArgs<'a> {
 /// `Vec`, not a stable sort -- the promotion isn't transitive. Returns the WINNING
 /// alternative's original index. Portage: dep_check.py, dep_zapdeps.
 ///
-/// `minimize_slots` and `want_update` are pinned to Portage's default (`False`), which
-/// only ever WIDENS the installed-slots promotion; and a same-`cp` repeat inside one
+/// `minimize_slots` stays pinned to Portage's default (`False`), which only ever
+/// WIDENS the installed-slots promotion; a same-`cp` repeat inside one
 /// alternative always just keeps the higher version (see notes).
 pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> usize {
     let PromoteTiedAlternativeArgs {
@@ -463,6 +751,14 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
         queued,
         gate,
         view,
+        parent,
+        depth,
+        deep,
+        update,
+        arg_atoms,
+        set_args,
+        excluded,
+        complete,
     } = args;
     let probe = OrProbe { gate, root, config };
     struct Choice {
@@ -470,12 +766,21 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
         all_installed_slots: bool,
         all_in_graph: bool,
         cp_map: HashMap<String, String>,
+        // Portage's per-choice `want_update` (dep_check.py:771-775), computed
+        // lazily below: only the installed-slots arm reads it, and single
+        // alternatives never promote.
+        want_update: Option<bool>,
     }
     let constraints_for = |a: &str| -> &[String] {
         parse_dep_atom(a, "or_preference")
             .and_then(|at| constraints.get(&(at.category, at.package)))
             .map_or(&[][..], Vec::as_slice)
     };
+    // Single-alternative groups never promote: return before the per-choice
+    // scans (`best_available_candidate` repo walks).
+    if alts.len() < 2 {
+        return 0;
+    }
     let mut choices: Vec<Choice> = alts
         .iter()
         .enumerate()
@@ -508,13 +813,10 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
                         .all(|a| view.installed_in_slot_of(probe, a, constraints_for(a))),
                 all_in_graph: view.all_in_graph(atoms, entries, config, queued),
                 cp_map,
+                want_update: None,
             }
         })
         .collect();
-
-    if choices.len() < 2 {
-        return 0;
-    }
     // Snapshot of every choice BUT the first, by identity, before mutation.
     let snapshot_ids: Vec<usize> = choices[1..].iter().map(|c| c.id).collect();
     for id1 in snapshot_ids {
@@ -525,14 +827,38 @@ pub(crate) fn promote_tied_alternative(args: PromoteTiedAlternativeArgs<'_>) -> 
         let choice1_all_in_graph = choices[pos1].all_in_graph;
         let choice1_cp_map = choices[pos1].cp_map.clone();
         let mut promote_before: Option<usize> = None;
-        for (pos2, choice2) in choices.iter().enumerate() {
+        for (pos2, choice2) in choices.iter_mut().enumerate() {
             if choice2.id == id1 {
                 // Own position reached with no promotion: stop.
                 break;
             }
+            // `None` parents (installed/PostMerge/blocker sites) never want
+            // an update, exactly like before.
             if choice1_all_installed_slots && !choice2.all_installed_slots {
-                promote_before = Some(pos2);
-                break;
+                if choice2.want_update.is_none() {
+                    let id2 = choice2.id;
+                    choice2.want_update =
+                        Some(alternative_want_update(AlternativeWantUpdateArgs {
+                            config,
+                            gate,
+                            parent: parent.clone(),
+                            depth,
+                            deep,
+                            update,
+                            arg_atoms,
+                            set_args,
+                            excluded,
+                            complete,
+                            atoms: &alts[id2],
+                            constraints,
+                        }));
+                }
+                // Portage: dep_check.py (the installed-slots promotion is
+                // skipped when the staying choice wants an update).
+                if !choice2.want_update.is_some_and(|w| w) {
+                    promote_before = Some(pos2);
+                    break;
+                }
             }
             let mut has_upgrade = false;
             let mut has_downgrade = false;
@@ -625,6 +951,17 @@ pub(crate) struct InstalledConsumerOrSelectionArgs<'a> {
     pub(crate) root_deps_running_root: Option<&'a Path>,
     pub(crate) gate: CategoryGate<'a>,
     pub(crate) view: OrView<'a>,
+    /// The `||` owner's `(category, package)` for the upgrade-preference
+    /// promotion: `None` pins it off (installed/PostMerge callers). `Some`
+    /// only on the merge-bound `Normal`-view path, with the caller's
+    /// already-resolved effective child depth and run flags.
+    pub(crate) want_parent: Option<(String, String)>,
+    pub(crate) want_depth: u32,
+    pub(crate) want_deep: Deep,
+    pub(crate) want_arg_atoms: &'a [String],
+    pub(crate) want_set_args: Option<&'a HashSet<String>>,
+    pub(crate) want_excluded: &'a [String],
+    pub(crate) want_complete: bool,
 }
 
 /// The atoms `dep_zapdeps` selects from each `||` group of an installed consumer's
@@ -645,8 +982,16 @@ pub(crate) fn installed_consumer_or_selection(
         root_deps_running_root,
         gate,
         view,
+        want_parent,
+        want_depth,
+        want_deep,
+        want_arg_atoms,
+        want_set_args,
+        want_excluded,
+        want_complete,
     } = args;
     let no_constraints: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let no_set_args: HashSet<String> = HashSet::new();
     let no_circular: HashMap<RootCp, Vec<CircularDepChild>> = HashMap::new();
     let self_node: RootCp = (false, consumer.0.clone(), consumer.1.clone());
     let mut selected: HashSet<String> = HashSet::new();
@@ -667,6 +1012,16 @@ pub(crate) fn installed_consumer_or_selection(
                         queued: &[],
                         gate,
                         view,
+                        // Only the merge-bound leak path fills these in (see
+                        // rev_dep_or.rs); every other caller pins `None`.
+                        parent: want_parent.clone(),
+                        depth: want_depth,
+                        deep: want_deep,
+                        update,
+                        arg_atoms: want_arg_atoms,
+                        set_args: want_set_args.unwrap_or(&no_set_args),
+                        excluded: want_excluded,
+                        complete: want_complete,
                     })
                 },
             },

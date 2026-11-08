@@ -290,6 +290,14 @@ fn postmerge_selection(
         root_deps_running_root: None,
         gate: ctx.gate(),
         view: OrView::PostMerge(&set),
+        // PostMerge consumers never want an update (pinned).
+        want_parent: None,
+        want_depth: 0,
+        want_deep: Deep::NotRequested,
+        want_arg_atoms: &[],
+        want_set_args: None,
+        want_excluded: &[],
+        want_complete: false,
     })
 }
 
