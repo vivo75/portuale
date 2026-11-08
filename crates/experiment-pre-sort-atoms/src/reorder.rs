@@ -67,8 +67,8 @@ pub fn reorder(category: &str, package: &str, atoms: &[&String], ctx: &Ctx<'_>) 
         return Vec::new();
     };
     let matches = |atom: &str, c: &Candidate| {
-        let s = c.match_str(category, package);
-        portage_dep::match_from_list(atom, &[s.as_str()]).is_some_and(|m| !m.is_empty())
+        ctx.memo
+            .atom_matches(atom, c, (category, package), ctx.config)
     };
     let visible = |c: &Candidate| ctx.memo.visible(c, category, package, ctx.config);
     let mut slots: BTreeMap<&str, Vec<&Candidate>> = BTreeMap::new();
