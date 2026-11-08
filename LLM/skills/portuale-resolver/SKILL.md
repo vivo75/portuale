@@ -32,8 +32,7 @@ order comes from `_emerge/depgraph.py::_serialize_tasks`, which:
 
 Two implementations can therefore produce the same graph and different orders,
 both legal. The previous Kahn walk with a discovery-rank tie-break reproduced
-the *set* and not the order — that history is why `merge_order.rs` exists
-(`LLM/Paragone_solver_portage.md`).
+the *set* and not the order — that history is why `merge_order.rs` exists.
 
 Any change here is judged by **traces**, not by reading: capture the walk with
 `PORTUALE_BT_TRACE=1`. For a refactor, diff before against after (it must be
@@ -107,7 +106,7 @@ record is append-only. Traps of this shape accumulate in the module docs of
 `_emerge/create_depgraph_params.py` is where CLI flags become resolver
 parameters; portuale's counterpart is the `--update`/`--deep`/bdeps parameter
 set. `--usepkg` is special: Portage's `bdeps=auto` keys on the **presence** of
-the flag, so `--usepkg=n` still counts (`LLM/2026-10-15-batch-plan.md`).
+the flag, so `--usepkg=n` still counts.
 
 ## Traps
 
@@ -131,13 +130,13 @@ the flag, so `--usepkg=n` still counts (`LLM/2026-10-15-batch-plan.md`).
 | Question | Source |
 |---|---|
 | The recurring families, with line citations | `LLM/recurring-issues.md` |
-| Why the order differs from a topological sort | `LLM/Paragone_solver_portage.md` |
-| The pubgrub bridge and its four defects | `LLM/04.34-pubgrub-parity.opus.md` |
-| World updates, `--update`, demoters | `LLM/02.359-default-solver-update-parity.opus.md`, `LLM/2026-10-20-world-plan-preelaboration.md` |
-| Per-item mechanisms and their evidence | `LLM/02.6*.opus.md`, `LLM/evidence/<date>-<item>/` |
+| The pubgrub bridge | `crates/portage-repo/src/solver_bridge.rs`, `LLM/code-notes/portage-repo/solver_bridge.md`, backlog #34 |
+| Merge order | `crates/portage-repo/src/merge_order/`, `LLM/code-notes/portage-repo/merge_order/` |
+| Per-mechanism notes (demoters, seeds, post-skip) | `LLM/code-notes/portage-repo/resolve/` |
 | What Portage does, exact lines | skill `portage-source-map` |
 
-## Provenance
+## History
 
-The documents this skill was distilled from, and how many verified facts each
-contributed: [`references/sources.md`](references/sources.md).
+The plans, reviews and captures this rule came from are archived: see
+[`LLM/ARCHIVE.md`](../../ARCHIVE.md); `git log` and the backlog entries in
+`LLM/backlog-tasks.md` hold the per-item story.

@@ -91,6 +91,15 @@ archived file too. Restore with
 `tar --zstd -xf <archive> LLM/what-this-proves.until-2026-11-07.md`, or read
 `git show <this commit>^:LLM/what-this-proves.md`.
 
+## Skill provenance tables
+
+Each skill used to carry `references/sources.md`, a table of the documents its
+facts came from. They cited mostly archived files, so an agent could not follow
+them; they were removed on 2026-11-08, and the skills no longer cite archived
+plans, reviews or evidence inline. The tables are reproducible with
+`LLM/tools/portuale-distill/f3_sources.py` from the distillation work directory
+(`3rdparty/portuale-distill/work`), and remain in git history.
+
 ## The nine skills
 
 Sources are `LLM/skills/<name>/SKILL.md`; `.claude/skills/<name>` is a symlink,

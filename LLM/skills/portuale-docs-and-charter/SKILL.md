@@ -104,8 +104,8 @@ checkers above are the part that fails on a docs-only change.
 | Old → new paths and identifiers | `LLM/renames.tsv` |
 | Where everything went after the distillation | `LLM/ARCHIVE.md` |
 
-## Provenance
+## History
 
-This skill was not distilled from the per-item record: its sources are the
-authoritative text — `docs/charter.md`, `AGENTS.md`, `docs/CONTRIBUTING.md` —
-and the checkers in `LLM/tools/` whose behaviour it describes.
+The plans, reviews and captures this rule came from are archived: see
+[`LLM/ARCHIVE.md`](../../ARCHIVE.md); `git log` and the backlog entries in
+`LLM/backlog-tasks.md` hold the per-item story.

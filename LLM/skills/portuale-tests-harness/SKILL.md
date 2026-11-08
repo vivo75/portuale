@@ -36,8 +36,7 @@ less.
   the product; an accepted divergence goes in
   `../pmtest/differential-test-bed/compare/known-divergences.yaml`.
 - **Compare by test name, never by count.** The suite has an order-dependent
-  isolation bug, so a count change can hide a swapped verdict
-  (`LLM/lessons-of-backlog-ops-2026-10-03.md`).
+  isolation bug, so a count change can hide a swapped verdict.
 - **Re-take baselines on `main` before the first slice**, then each slice's
   guard is "row-identical to the baseline, or better on a row it names".
 - **Never edit the harness to make an output pin move**: a moved pin is a
@@ -107,7 +106,7 @@ python3 -m pytest pytests-contract-suite -q   # serial fallback, ~8 min
 ## Traps
 
 - **A test that lacks the pending entry** goes through the live fallback and
-  discriminates nothing (`LLM/02.354-reinstall-stale-files.review.md`).
+  discriminates nothing.
 - **A harness that compares only post-merge `CONTENTS`** cannot see a file one
   side removed and the other kept.
 - **A lint test that scans zero files** passes vacuously; assert the file list
@@ -127,9 +126,9 @@ python3 -m pytest pytests-contract-suite -q   # serial fallback, ~8 min
 | Layout, modes, beds, known-divergences | `LLM/agent-context.md`, "Where the tests live" |
 | Bed cells and their atoms | `../pmtest/differential-test-bed/atomlists/` |
 | The contract suite and its invariants | `../pmtest/pytests-contract-suite/` |
-| Recorded evidence for a slice | `LLM/evidence/<date>-<item>/` |
 
-## Provenance
+## History
 
-The documents this skill was distilled from, and how many verified facts each
-contributed: [`references/sources.md`](references/sources.md).
+The plans, reviews and captures this rule came from are archived: see
+[`LLM/ARCHIVE.md`](../../ARCHIVE.md); `git log` and the backlog entries in
+`LLM/backlog-tasks.md` hold the per-item story.

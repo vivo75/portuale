@@ -54,8 +54,7 @@ PORTAGE_GNUPGHOME=<chmod 700 keyring copy>
 - **Merge the streams.** Separating stdout and stderr hid walk/solver/dump
   ordering and produced a wrong theory that cost two implementation attempts.
 - **Record argv and the binary's mtime** alongside the output, or the capture
-  cannot be replayed (`LLM/2026-10-19-open-backlog-plan.md`, "captures
-  verbatim with argv and binary mtime").
+  cannot be replayed.
 - **Stop the `gpg-agent`** the probe spawns and delete its `/tmp` home, or the
   leaks accumulate across runs.
 - **Determinism lives in resolved config**, never in the calling shell's env.
@@ -143,13 +142,12 @@ each as a portuale bug, a Portage bug, or environmental) and move on.
 
 | Question | Source |
 |---|---|
-| Prose capture discipline, one idea per bullet | `LLM/lessons-of-backlog-ops-2026-10-03.md` |
 | How to run the bed, its cells and verdicts | `../pmtest/differential-test-bed/README.md` |
 | Known Portage bugs not to copy | `LLM/portage-quirks.md` |
 | Contract pins and how they are re-derived | `../pmtest/pytests-contract-suite/` |
-| The recorded S0 reports, per item | `LLM/evidence/*/SUMMARY.md`, `LLM/evidence/*/matrix.md` |
 
-## Provenance
+## History
 
-The documents this skill was distilled from, and how many verified facts each
-contributed: [`references/sources.md`](references/sources.md).
+The plans, reviews and captures this rule came from are archived: see
+[`LLM/ARCHIVE.md`](../../ARCHIVE.md); `git log` and the backlog entries in
+`LLM/backlog-tasks.md` hold the per-item story.

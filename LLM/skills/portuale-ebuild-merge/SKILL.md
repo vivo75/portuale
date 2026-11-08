@@ -54,7 +54,7 @@ counters (a passing run reports `merged 2/2, 0 hard / 0 unexplained`).
 The rule that everything else hangs off: on a reinstall the **new image is
 merged first**, the old instance is then unmerged with `others_in_slot=[new]`,
 so every path the new image owns is left alone — including type changes such as
-object → symlink (`LLM/evidence/2026-10-14-354-s0/matrix.md`).
+object → symlink.
 
 From there:
 
@@ -68,8 +68,7 @@ From there:
   new instance while recording the dependency.
 - On a same-version reinstall the just-preserved paths are keyed by the same
   string as the exclusion, so a naive linkage map drops them and the library is
-  deleted. Keep two owner sources and do not dedupe across them
-  (`LLM/02.355-reinstall-unmerge-parity.opus.md`).
+  deleted. Keep two owner sources and do not dedupe across them.
 
 `CONTENTS` parsing is shared, not per-site: one parser in `portage-vdb` with
 Portage's `_contents_re` rules, where `sym` uses a **greedy** match so the
@@ -148,14 +147,12 @@ child. Three details are unit-pinned because each one silently breaks parity:
 | Question | Source |
 |---|---|
 | What "install into the filesystem" means, and the merge gate | `LLM/agent-context.md` |
-| Reinstall/unmerge parity, arm by arm | `LLM/02.355-reinstall-unmerge-parity.opus.md` |
-| Config-chain parity | `LLM/02.346-ebuild-config-options-parity.opus.md` |
-| EAPI phase audit | `LLM/02.348-eapi-phase-audit.opus.md` |
-| VDB write order | `LLM/evidence/305-s0-vartree-write-order.md` |
-| Sandbox, namespaces, umask | `LLM/superpowers/plans/2026-10-30-630-namespaces.md`, `…-631-umask.md` |
+| The code, with Portage citations per symbol | `LLM/code-notes/portuale/ebuild_merge/`, `LLM/code-notes/portage-vdb/` |
+| Sandbox, namespaces, umask | backlog #630, #631 in `LLM/backlog-tasks.md` |
 | The bed that proves it | `../pmtest/differential-test-bed/` |
 
-## Provenance
+## History
 
-The documents this skill was distilled from, and how many verified facts each
-contributed: [`references/sources.md`](references/sources.md).
+The plans, reviews and captures this rule came from are archived: see
+[`LLM/ARCHIVE.md`](../../ARCHIVE.md); `git log` and the backlog entries in
+`LLM/backlog-tasks.md` hold the per-item story.

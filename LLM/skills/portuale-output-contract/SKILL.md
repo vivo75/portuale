@@ -77,7 +77,7 @@ The news machinery (`FilesystemNews`, `run_check_news`) has no `FEATURES` gate
 of its own; the resolved `FEATURES` must contain `news` or nothing is printed.
 The `--pretend`-end arm is deliberately **not** ported: printing there would
 write `.unread`/`.skip` into the shared, git-tracked fixture root during
-contract tests (`LLM/evidence/2026-09-28-batch0927-reports/n196-report.md`).
+contract tests.
 
 ## Error text
 
@@ -119,13 +119,12 @@ conditionals stay unevaluated rather than failing.
 
 | Question | Source |
 |---|---|
-| Per-site audits and their matrices | `LLM/evidence/*-display-sites.md`, `LLM/evidence/*/matrix.md` |
-| Failure-output contract | `LLM/evidence/2026-10-19-b426-design.md` |
 | Pins and their re-derivation | `../pmtest/pytests-contract-suite/test_emerge_pretend_contract.py` |
 | Output invariants run over every case | `../pmtest/pytests-contract-suite/test_output_invariants.py` |
 | The display module's own notes | `LLM/code-notes/portuale/pretend/` |
 
-## Provenance
+## History
 
-The documents this skill was distilled from, and how many verified facts each
-contributed: [`references/sources.md`](references/sources.md).
+The plans, reviews and captures this rule came from are archived: see
+[`LLM/ARCHIVE.md`](../../ARCHIVE.md); `git log` and the backlog entries in
+`LLM/backlog-tasks.md` hold the per-item story.

@@ -160,8 +160,9 @@ git rm --pathspec-from-file="$PORTUALE_DISTILL_WORK/to-archive.txt"
 `f1_cards.py` needs only the standard library plus a running `llama-server`;
 `f2_*.py` need `numpy` and scikit-learn (`hdbscan` does not build on Python
 3.15, which is why k-means and agglomerative are used instead), and
-`f3_sources.py` rewrites files under `LLM/skills/`, so run it only when the
-skills should be regenerated.
+`f3_sources.py` writes `references/sources.md` under `LLM/skills/`; those files
+were removed on 2026-11-08 (see `LLM/ARCHIVE.md`), so run it only to look at
+provenance and do not commit its output.
 
 ## Decisions
 

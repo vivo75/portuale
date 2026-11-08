@@ -10,21 +10,19 @@ and a comment must be short enough that the context lives somewhere findable.
 
 ## Size limits
 
-- **A production function is at most 200 code lines.** `LLM/02.339-giant-functions.opus.md`
-  states the goal for every production function in `crates/`, with no change in
-  behaviour or output. At that time 44 production and 5 test functions
-  exceeded it; `run` in `pretend.rs` was the longest at 6,070 lines.
-- **A production file is around 500 lines where natural**
-  (`LLM/plans/2026-10-10-split-map.md`, "production file <= ~500 lines where
-  natural"). Modules are split by responsibility, not by line count target.
+- **A production function is at most 200 code lines.** This is the goal for
+  every production function in `crates/`, reached with no change in behaviour or
+  output. It is a target, not an enforced gate: `python3 LLM/tools/fn_lengths.py`
+  lists the functions over it (34 over 200 on 2026-11-08; pass a number to change
+  the threshold). Do not add to that list, and shrink a function you touch.
+- **A production file is around 500 lines where natural.** Modules are split by responsibility, not by line count target.
 - **More than five parameters → an `Args` struct.** `LLM/tools/args_struct.py`
   generates it, matching the clippy configuration.
 
 ## A pure move is a pure move
 
 - Statements move **verbatim and in order** into a named function next to the
-  host. No renames, no signature changes, no reordering of `impl` blocks
-  (`LLM/plans/2026-10-10-split-map.md`).
+  host. No renames, no signature changes, no reordering of `impl` blocks.
 - **Closures become private functions** whose parameters are the captured
   locals, or one context struct — never a 50-parameter function.
   Convert closures **before** splitting the surrounding logic, so the extracted
@@ -32,7 +30,7 @@ and a comment must be short enough that the context lives somewhere findable.
 - **Cut the straight-line, side-effect-free code first.** Leave the function's
   core decision inline: in one case the right cut was the
   `let prune_unresolved = …` binding, and the backtrack `match` — the actual
-  subject of the function — stayed put (`LLM/02.339-giant-functions.review.md`).
+  subject of the function — stayed put.
 - **One function per arm group** once arms exceed ~30 lines; small arms stay in
   the `match`.
 - **A context struct whose fields serve two unrelated statement groups means
@@ -42,8 +40,7 @@ and a comment must be short enough that the context lives somewhere findable.
 
 - **No output change.** For resolver refactors, capture merge-order traces
   before and after and diff them:
-  `diff -r <(cat $T-pre/*.trace) <(cat $T-post/*.trace)` must be empty
-  (`LLM/02.339-giant-functions.opus.md`).
+  `diff -r <(cat $T-pre/*.trace) <(cat $T-post/*.trace)` must be empty.
 - **L0 identical, no corpus drift** for anything that touches output.
 - **No new clippy warnings.** `cargo clippy --release --all-targets` is
   zero-warning; the count is recorded before and after.
@@ -111,12 +108,12 @@ output; do not trust its silence.
 | Question | Source |
 |---|---|
 | The comment rule and the notes layout | `AGENTS.md`, "Code comments and code notes" |
-| Giant functions: method and gates | `LLM/02.339-giant-functions.opus.md` |
-| Module split map, per crate | `LLM/plans/2026-10-10-split-map.md` |
-| Readability refactor decisions | `LLM/plans/2026-10-10-readability-refactor.review.md` |
+| Function lengths now | `python3 LLM/tools/fn_lengths.py` |
+| Module layout | `graft map`, `docs/architecture.md` |
 | Per-symbol context and Portage citations | `LLM/code-notes/` |
 
-## Provenance
+## History
 
-The documents this skill was distilled from, and how many verified facts each
-contributed: [`references/sources.md`](references/sources.md).
+The plans, reviews and captures this rule came from are archived: see
+[`LLM/ARCHIVE.md`](../../ARCHIVE.md); `git log` and the backlog entries in
+`LLM/backlog-tasks.md` hold the per-item story.

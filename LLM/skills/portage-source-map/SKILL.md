@@ -77,7 +77,7 @@ already established the correspondence.
   C parser that disagrees with the Python one — it rejects `::repo` and
   build-id atoms the Python path accepts, and produces different error text.
   On this host the C path is taken. Verify which path ran before citing
-  "Portage says" (`LLM/evidence/2026-10-11-341-oracle/report.md`).
+  "Portage says".
 - **EAPI is applied after the grammar.** `_get_atom_re` is a module global and
   ignores `eapi_attrs`; only `slot_operator`, `slot_deps`, `use_deps`,
   `use_dep_defaults`, `strong_blocks` and `repo_deps` are consulted by atom
@@ -111,7 +111,8 @@ looks like a bug — it probably is one.
 | The pin, the overlay and the runtime-independence decision | `3rdparty/repos.toml`, `LLM/agent-context.md` |
 | Which Portage version is the reference | tag `portage-3.0.83` (`3rdparty/repos.toml`) |
 
-## Provenance
+## History
 
-The documents this skill was distilled from, and how many verified facts each
-contributed: [`references/sources.md`](references/sources.md).
+The plans, reviews and captures this rule came from are archived: see
+[`LLM/ARCHIVE.md`](../../ARCHIVE.md); `git log` and the backlog entries in
+`LLM/backlog-tasks.md` hold the per-item story.
