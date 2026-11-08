@@ -601,3 +601,63 @@ fn missing_dep_trigger_names_the_installed_parent_instance() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// #685: a positive constraint that names a slot admits every candidate of the
+/// other slots, so a pin on slot 23 cannot empty a request for slot 22.
+#[test]
+fn slot_scoped_positive_constraint_spares_other_slots() {
+    let pin = "~dev-libs/souprov-1.0:3".to_string();
+    let admits = |candidate: &str| extra_constraint_admits(&pin, candidate);
+    assert!(admits("dev-libs/souprov-1.0:3/3::testrepo"));
+    assert!(!admits("dev-libs/souprov-2.0:3/3::testrepo"));
+    assert!(admits("dev-libs/souprov-2.0:4/4::testrepo"));
+    // An unscoped positive and a negative keep their meaning.
+    assert!(!extra_constraint_admits(
+        "~dev-libs/souprov-1.0",
+        "dev-libs/souprov-2.0:4/4::r"
+    ));
+    assert!(!extra_constraint_admits(
+        "!=dev-libs/souprov-2.0",
+        "dev-libs/souprov-2.0:4/4::r"
+    ));
+}
+
+/// #685: an enforced pin whose atom has no slot is filed under the one slot
+/// whose update it breaks; two broken slots leave it unscoped.
+#[test]
+fn enforced_pin_is_filed_under_the_broken_slot() {
+    let upgrade = |slot: &str, to: &str| GraphEntry {
+        outcome: PretendOutcome::Upgrade {
+            from: "1.0".into(),
+            to: to.into(),
+        },
+        slot: Some(slot.into()),
+        sub_slot: Some(slot.into()),
+        repo_name: Some("testrepo".into()),
+        ..graph_entry("dev-libs", "souprov", to)
+    };
+    let cp = ("dev-libs".to_string(), "souprov".to_string());
+    let pin = RevDepPin {
+        cp: cp.clone(),
+        atom: "~dev-libs/souprov-1.0".to_string(),
+        raw_atom: "~dev-libs/souprov-1.0".to_string(),
+        built_render: Vec::new(),
+        holder_open: false,
+        consumer: ("dev-libs".into(), "pinner".into(), "1.0".into()),
+    };
+    let mut pass = pass_161();
+    pass.entries = vec![upgrade("3", "2.0")];
+    let mut grown = BacktrackParams::default();
+    assert!(apply_enforced_pin(&mut grown, &pass, &pin, 20));
+    assert_eq!(
+        grown.slot_constraints.get(&cp),
+        Some(&vec!["~dev-libs/souprov-1.0:3".to_string()])
+    );
+    pass.entries = vec![upgrade("3", "2.0"), upgrade("4", "5.0")];
+    let mut grown = BacktrackParams::default();
+    assert!(apply_enforced_pin(&mut grown, &pass, &pin, 20));
+    assert_eq!(
+        grown.slot_constraints.get(&cp),
+        Some(&vec!["~dev-libs/souprov-1.0".to_string()])
+    );
+}

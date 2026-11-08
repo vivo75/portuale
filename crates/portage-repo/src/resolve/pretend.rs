@@ -316,13 +316,7 @@ fn tree_knows_use_dep_flags(
 fn installed_probe_satisfies_extra_constraints(probe: &str, extra_constraints: &[String]) -> bool {
     extra_constraints
         .iter()
-        .all(|ec| match ec.strip_prefix('!') {
-            Some(_) if is_instance_only_mask(ec) => true,
-            Some(neg) => {
-                !portage_dep::match_from_list(neg, &[probe]).is_some_and(|r| !r.is_empty())
-            }
-            None => portage_dep::match_from_list(ec, &[probe]).is_some_and(|r| !r.is_empty()),
-        })
+        .all(|ec| extra_constraint_admits(ec, probe))
 }
 
 /// The values [`avoid_update_outcome`] reads from its caller.
@@ -1062,20 +1056,9 @@ pub(crate) fn narrow_matched_candidates<'a, 'b>(
         matched
             .into_iter()
             .filter(|m| {
-                extra_constraints.iter().all(|c| {
-                    // A per-instance negative hides no tree candidate (see
-                    // [`is_instance_only_mask`]).
-                    if is_instance_only_mask(c) {
-                        return true;
-                    }
-                    if let Some(neg) = c.strip_prefix('!') {
-                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
-                            .is_some_and(|r| !r.is_empty())
-                    } else {
-                        portage_dep::match_from_list(c, std::slice::from_ref(m))
-                            .is_some_and(|r| !r.is_empty())
-                    }
-                })
+                extra_constraints
+                    .iter()
+                    .all(|c| extra_constraint_admits(c, m))
             })
             .collect()
     };
@@ -1806,6 +1789,31 @@ pub(crate) fn classify_best_against_installed(
     }
 }
 
+/// Whether one extra constraint admits the match string `m`
+/// (`cat/pkg-ver:slot/sub::repo`). A negative must not match, a positive must;
+/// per-instance marks hide no tree candidate; a positive naming a slot says
+/// nothing about the other slots (a slot-23 pin cannot reject slot 22).
+// Portage: depgraph.py, _slot_operator_check_reverse_dependencies (per slot node)
+pub(crate) fn extra_constraint_admits(constraint: &str, m: &str) -> bool {
+    let matches =
+        |atom: &str| portage_dep::match_from_list(atom, &[m]).is_some_and(|r| !r.is_empty());
+    if is_instance_only_mask(constraint) {
+        return true;
+    }
+    if let Some(neg) = constraint.strip_prefix('!') {
+        return !matches(neg);
+    }
+    let scoped_elsewhere = parse_dep_atom(constraint, "extra_constraint")
+        .and_then(|a| a.slot)
+        .is_some_and(|slot| {
+            let candidate_slot = m
+                .split_once(':')
+                .map(|(_, rest)| rest.split(['/', ':']).next());
+            candidate_slot.flatten().is_some_and(|s| s != slot)
+        });
+    scoped_elsewhere || matches(constraint)
+}
+
 /// Whether the candidate satisfies every extra constraint of the request.
 pub(crate) fn satisfies_extra_constraints(
     c: &Candidate,
@@ -1818,15 +1826,7 @@ pub(crate) fn satisfies_extra_constraints(
     let s = c.match_str(&atom.category, &atom.package);
     extra_constraints
         .iter()
-        .all(|ec| match ec.strip_prefix('!') {
-            // A per-instance negative hides no tree candidate (see
-            // [`is_instance_only_mask`]).
-            Some(_) if is_instance_only_mask(ec) => true,
-            Some(neg) => {
-                !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
-            }
-            None => portage_dep::match_from_list(ec, &[s.as_str()]).is_some_and(|r| !r.is_empty()),
-        })
+        .all(|ec| extra_constraint_admits(ec, &s))
 }
 
 /// Whether the candidate satisfies `atom_str` plus every extra constraint.
@@ -1852,18 +1852,9 @@ fn usable(
     {
         return false;
     }
-    extra_constraints.iter().all(|ec| {
-        // A per-instance negative hides no tree candidate (see
-        // [`is_instance_only_mask`]).
-        if is_instance_only_mask(ec) {
-            return true;
-        }
-        if let Some(neg) = ec.strip_prefix('!') {
-            !portage_dep::match_from_list(neg, &[s.as_str()]).is_some_and(|r| !r.is_empty())
-        } else {
-            portage_dep::match_from_list(ec, &[s.as_str()]).is_some_and(|r| !r.is_empty())
-        }
-    })
+    extra_constraints
+        .iter()
+        .all(|ec| extra_constraint_admits(ec, &s))
 }
 
 /// True when no visible candidate satisfies the whole request.

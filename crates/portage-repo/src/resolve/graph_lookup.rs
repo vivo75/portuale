@@ -343,13 +343,9 @@ pub(crate) fn visible_tree_matches(
         return Vec::new();
     };
     let passes_constraints = |m: &str| {
-        extra_constraints.iter().all(|c| match c.strip_prefix('!') {
-            // A per-instance negative hides no tree candidate (see
-            // [`is_instance_only_mask`]).
-            Some(_) if is_instance_only_mask(c) => true,
-            Some(neg) => !portage_dep::match_from_list(neg, &[m]).is_some_and(|r| !r.is_empty()),
-            None => portage_dep::match_from_list(c, &[m]).is_some_and(|r| !r.is_empty()),
-        })
+        extra_constraints
+            .iter()
+            .all(|c| extra_constraint_admits(c, m))
     };
     visible
         .iter()

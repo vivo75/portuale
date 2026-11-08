@@ -413,6 +413,32 @@ fn merge_candidate(pass: &PassResult, cp: &(String, String), version: &str) -> O
         })
 }
 
+/// The pin's atom as a positive constraint: a slotless atom is filed under the
+/// one slot whose merge entry it breaks, so the constraint leaves the other
+/// slots of the package alone. Two broken slots (or none) keep it unscoped.
+// Portage: depgraph.py, _slot_operator_check_reverse_dependencies (the slot node's parents)
+fn slot_scoped_pin_atom(pass: &PassResult, pin: &RevDepPin) -> String {
+    if parse_dep_atom(&pin.atom, "pin_scope").is_none_or(|a| a.slot.is_some()) {
+        return pin.atom.clone();
+    }
+    let broken_slots: HashSet<&str> = pass
+        .entries
+        .iter()
+        .filter(|e| e.category == pin.cp.0 && e.package == pin.cp.1)
+        .filter_map(|e| {
+            let version = merge_bound_version(&e.outcome)?;
+            let candidate = merge_candidate(pass, &pin.cp, version)?;
+            let holds = portage_dep::match_from_list(&pin.atom, &[candidate.as_str()])
+                .is_some_and(|m| !m.is_empty());
+            (!holds).then(|| e.slot.as_deref().unwrap_or("0"))
+        })
+        .collect();
+    match broken_slots.into_iter().collect::<Vec<_>>()[..] {
+        [slot] => format!("{}:{slot}", pin.atom),
+        _ => pin.atom.clone(),
+    }
+}
+
 /// Apply one enforced pin to the search state (positive constraint plus the
 /// mask on the merge-bound version it breaks). Shared by the ordinary pin
 /// step and the holder-open early apply (backlog #656 leg (a)): both latch
@@ -494,7 +520,7 @@ pub(crate) fn apply_enforced_pin(
             .slot_constraints
             .entry(pin.cp.clone())
             .or_default()
-            .push(pin.atom.clone());
+            .push(slot_scoped_pin_atom(pass, pin));
         return true;
     }
     false

@@ -57,19 +57,9 @@ pub(crate) fn atom_currently_satisfiable(
         matched
             .into_iter()
             .filter(|m| {
-                extra_constraints.iter().all(|c| {
-                    // Per-instance negatives hide no tree candidate.
-                    if is_instance_only_mask(c) {
-                        return true;
-                    }
-                    if let Some(neg) = c.strip_prefix('!') {
-                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
-                            .is_some_and(|r| !r.is_empty())
-                    } else {
-                        portage_dep::match_from_list(c, std::slice::from_ref(m))
-                            .is_some_and(|r| !r.is_empty())
-                    }
-                })
+                extra_constraints
+                    .iter()
+                    .all(|c| extra_constraint_admits(c, m))
             })
             .collect()
     };
@@ -257,19 +247,9 @@ pub(crate) fn highest_available_candidate_ignoring_use(
         matched
             .into_iter()
             .filter(|m| {
-                extra_constraints.iter().all(|c| {
-                    // Per-instance negatives hide no tree candidate.
-                    if is_instance_only_mask(c) {
-                        return true;
-                    }
-                    if let Some(neg) = c.strip_prefix('!') {
-                        !portage_dep::match_from_list(neg, std::slice::from_ref(m))
-                            .is_some_and(|r| !r.is_empty())
-                    } else {
-                        portage_dep::match_from_list(c, std::slice::from_ref(m))
-                            .is_some_and(|r| !r.is_empty())
-                    }
-                })
+                extra_constraints
+                    .iter()
+                    .all(|c| extra_constraint_admits(c, m))
             })
             .collect()
     };
