@@ -13,7 +13,19 @@ pub(crate) struct SlotOperatorEliminateRebuildsArgs<'a> {
     pub(crate) changed_slot: bool,
     pub(crate) top_level_cps: &'a HashSet<(String, String)>,
     pub(crate) empty: bool,
+    pub(crate) config: &'a portage_profile::Config,
     pub(crate) gate: CategoryGate<'a>,
+}
+
+/// The USE-dependency conditionals (`[flag?]`, `[flag=]`) of every atom
+/// resolved against `use_flags`, so a vdb atom (stored resolved) and an ebuild
+/// atom (stored conditional) compare equal. Portage: `use_reduce` with
+/// `token_class=Atom` evaluates them while reducing.
+fn evaluate_conditionals(atoms: HashSet<String>, use_flags: &HashSet<String>) -> HashSet<String> {
+    atoms
+        .into_iter()
+        .map(|a| portage_dep::evaluate_atom_conditionals(&a, use_flags).unwrap_or(a))
+        .collect()
 }
 
 /// Portage's `_eliminate_rebuilds`: the undo path. For every cp in the replace
@@ -35,6 +47,7 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
         changed_slot,
         top_level_cps,
         empty,
+        config,
         gate,
     } = args;
     let mut demoted: BTreeSet<(String, String)> = BTreeSet::new();
@@ -118,24 +131,49 @@ pub(crate) fn slot_operator_eliminate_rebuilds(
         let Some(metadata) = tree_metadata_for(gate, cp, version) else {
             continue;
         };
-        let new_use: HashSet<String> = entry
+        // The flags the entry displays plus the ones it hides (implicit arch
+        // flags): `amd64? ( ... )` would otherwise read as off and the rebuild
+        // would never look unnecessary.
+        // Portage: pkg.use.enabled (via _pkg_use_enabled)
+        let mut new_use: HashSet<String> = entry
             .use_flags_display
             .iter()
             .filter(|(_, on)| *on)
             .map(|(f, _)| f.clone())
             .collect();
+        let keywords: Vec<String> = metadata
+            .get("KEYWORDS")
+            .map(|k| k.split_whitespace().map(String::from).collect())
+            .unwrap_or_default();
+        let repo = entry.repo_name.as_deref().unwrap_or_default();
+        // match-str-ok: the entry carries its slot, sub-slot and repo separately
+        let candidate_str = format!("{}/{}-{version}:{e_slot}/{e_sub}::{repo}", cp.0, cp.1);
+        new_use.extend(
+            effective_use_flags(EffectiveUseFlagsArgs {
+                config,
+                iuse: metadata.get("IUSE").map(String::as_str).unwrap_or_default(),
+                keywords: &keywords,
+                candidate_str: &candidate_str,
+                build_id: None,
+                category: &cp.0,
+                package: &cp.1,
+            })
+            .iter()
+            .cloned(),
+        );
         let mut equal = true;
         for key in dep_keys {
             let installed_atoms =
-                flat_dep_atoms(&read_vdb_string(root, &cp.0, &cp.1, version, key), &new_use)
-                    .map(|atoms| strip_libc_atoms(atoms, &libc_cps));
+                flat_dep_atoms(&read_vdb_string(root, &cp.0, &cp.1, version, key), &new_use).map(
+                    |atoms| strip_libc_atoms(evaluate_conditionals(atoms, &new_use), &libc_cps),
+                );
             let bound = bind_slot_operator_deps(
                 metadata.get(key).map(String::as_str).unwrap_or_default(),
                 entries,
                 root,
             );
-            let new_atoms =
-                flat_dep_atoms(&bound, &new_use).map(|atoms| strip_libc_atoms(atoms, &libc_cps));
+            let new_atoms = flat_dep_atoms(&bound, &new_use)
+                .map(|atoms| strip_libc_atoms(evaluate_conditionals(atoms, &new_use), &libc_cps));
             let key_equal = match (installed_atoms, new_atoms) {
                 (Some(a), Some(b)) => a == b,
                 // Either side's parse failure counts as "not equal", keeping
@@ -364,6 +402,20 @@ impl InstalledReachability {
             root: root.to_path_buf(),
             edges: RefCell::new(HashMap::new()),
             build_deps: true,
+        }
+    }
+
+    /// The installed index with the edges a run walks: build-time edges only
+    /// under `--with-bdeps`, else a build-only tool no package needs at run
+    /// time (cargo-c) is not reachable and cannot hold a runtime update back.
+    // Portage: depgraph.py, _add_pkg_deps (built packages, bdeps unset)
+    #[must_use]
+    pub fn for_run(root: &Path, with_bdeps: bool) -> Self {
+        let graph = Self::new(root);
+        if with_bdeps {
+            graph
+        } else {
+            graph.runtime_edges_only()
         }
     }
 

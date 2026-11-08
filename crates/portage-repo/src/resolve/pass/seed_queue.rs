@@ -85,7 +85,7 @@ pub(crate) fn seed_queue(
     }
     // The probe's upgraded child rides the same auto set, seeded at the exact
     // candidate the probe chose (Portage's `abi_reinstalls`).
-    for (cat, pkg, ver) in &bp.slot_operator_forced_upgrade {
+    for (cat, pkg, ver) in bp.live_forced_upgrades() {
         state.queue.push_back(QueueItem {
             atom: format!("={cat}/{pkg}-{ver}"),
             depth: 1,

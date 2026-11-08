@@ -151,6 +151,7 @@ pub(crate) fn step_unsatisfied_dead_end(
                 changed_slot: ctx.changed_slot,
                 top_level_cps: &ctx.top_level_cps,
                 empty: ctx.empty,
+                config,
                 gate: ctx.gate(),
             });
             if !demoted.is_empty() {

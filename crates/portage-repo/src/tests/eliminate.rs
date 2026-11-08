@@ -153,6 +153,7 @@ fn slot_operator_eliminate_rebuilds_lookup_matches_the_replace_cp() {
         changed_slot: false,
         top_level_cps: &HashSet::new(),
         empty: false,
+        config: &portage_profile::Config::default(),
         gate: crate::test_gate(&repos),
     });
     assert_eq!(
@@ -309,6 +310,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
             changed_slot,
             top_level_cps: top,
             empty,
+            config: &portage_profile::Config::default(),
             gate: crate::test_gate(&repos),
         })
     };
@@ -367,6 +369,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
             changed_slot,
             top_level_cps: &no_top,
             empty: false,
+            config: &portage_profile::Config::default(),
             gate: crate::test_gate(&repos),
         })
     };
@@ -413,6 +416,7 @@ fn slot_operator_eliminate_rebuilds_applies_the_eight_rules_in_order() {
         changed_slot: false,
         top_level_cps: &no_top,
         empty: false,
+        config: &portage_profile::Config::default(),
         gate: crate::test_gate(&repos),
     });
     assert!(demoted.is_empty());
@@ -612,5 +616,108 @@ fn reachable_without_does_not_follow_a_replaced_package() {
     let live = graph.reachable_without(&seeds, &[], &skip);
     assert!(live.contains(&cp("mid")), "the replaced package is listed");
     assert!(!live.contains(&cp("leaf")), "but its deps are not followed");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Rule 8 compares the installed dependencies with the tree ebuild's under the
+/// package's whole USE: an implicit arch flag (`amd64?`) and a USE-dependency
+/// conditional (`[soflag?]`) must resolve the way the vdb already stored them.
+/// Both used to read as "deps differ", so a rebuild nothing asked for stayed.
+/// Portage: depgraph.py, _eliminate_rebuilds (`pkg.use.enabled`, `use_reduce`
+/// with `token_class=Atom`)
+#[test]
+fn slot_operator_eliminate_rebuilds_resolves_arch_flags_and_use_dep_conditionals() {
+    let dir = slotundo_temp_dir("elim-arch");
+    // The vdb holds the dependencies resolved, as a merged package does.
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souarch",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "dev-libs/souprov:0/1= dev-libs/soulib[soflag]",
+        installed_use: "soflag",
+    });
+    slotundo_vdb(SlotundoVdbArgs {
+        dir: &dir,
+        name: "souprov",
+        version: "1.0",
+        slot: "0/1",
+        rdepend: "",
+        installed_use: "",
+    });
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    // The provider keeps its sub-slot, so the bound `:=` equals the vdb's.
+    let provider = GraphEntry {
+        sub_slot: Some("1".into()),
+        ..slotundo_provider_entry()
+    };
+    let entry = slotundo_rebuild_entry("souarch", "1.0", "0", "1", &[("soflag", true)]);
+    let souarch = ("dev-libs".to_string(), "souarch".to_string());
+    // The hand-built `Config` states `amd64` as a profile USE token.
+    let config = portage_profile::Config {
+        use_tokens: vec!["amd64".to_string()],
+        use_flags: HashSet::from(["amd64".to_string()]),
+        ..test_config()
+    };
+    let run = |config: &portage_profile::Config| {
+        slot_operator_eliminate_rebuilds(SlotOperatorEliminateRebuildsArgs {
+            root: &dir,
+            entries: &[provider.clone(), entry.clone()],
+            replace: &BTreeSet::from([souarch.clone()]),
+            slot_want: &HashMap::from([(souarch.clone(), vec!["dev-libs/souarch".to_string()])]),
+            reverse_pins: &[],
+            selective: false,
+            changed_slot: false,
+            top_level_cps: &HashSet::new(),
+            empty: false,
+            config,
+            gate: crate::test_gate(&repos),
+        })
+    };
+    assert_eq!(
+        run(&config),
+        BTreeSet::from([souarch.clone()]),
+        "same dependencies once `amd64?` and `[soflag?]` resolve: the rebuild goes"
+    );
+    // Control: without the arch flag the souprov dependency drops out of the
+    // tree side, the sides differ and the rebuild stays.
+    assert!(
+        run(&test_config()).is_empty(),
+        "a dependency the arch flag guards is not silently ignored"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A package only another installed package's build-time dependencies name
+/// (`cargo-c` of a world member's `BDEPEND`) is not reachable without
+/// `--with-bdeps`. Reachable, it held `openssl` back from an update because it
+/// could not be rebuilt, which Portage never even looks at.
+/// Portage: depgraph.py, _add_pkg_deps (built packages, bdeps unset)
+#[test]
+fn installed_reachability_follows_build_deps_only_with_bdeps() {
+    let dir = slotundo_temp_dir("reach-bdeps");
+    let write = |name: &str, key: &str, dep: &str| {
+        let d = dir.join("var/db/pkg/dev-libs").join(format!("{name}-1.0"));
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(d.join("SLOT"), "0\n").unwrap();
+        fs::write(d.join("repository"), "testrepo\n").unwrap();
+        if !dep.is_empty() {
+            fs::write(d.join(key), format!("{dep}\n")).unwrap();
+        }
+    };
+    write("worldpkg", "BDEPEND", "dev-libs/buildtool");
+    write("buildtool", "RDEPEND", "dev-libs/runlib");
+    write("runlib", "RDEPEND", "");
+    let seeds = ["dev-libs/worldpkg".to_string()];
+    let cp = |p: &str| ("dev-libs".to_string(), p.to_string());
+    let with = InstalledReachability::for_run(&dir, true).reachable(&seeds, &[]);
+    assert!(with.contains(&cp("buildtool")) && with.contains(&cp("runlib")));
+    let without = InstalledReachability::for_run(&dir, false).reachable(&seeds, &[]);
+    assert!(without.contains(&cp("worldpkg")), "the seed itself stays");
+    assert!(
+        !without.contains(&cp("buildtool")) && !without.contains(&cp("runlib")),
+        "build-only tool and what it needs are not reachable: {without:?}"
+    );
     let _ = fs::remove_dir_all(&dir);
 }

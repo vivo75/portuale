@@ -172,3 +172,33 @@ fn slot_conflict_mask_choices_skips_an_already_masked_sibling() {
     );
     let _ = root;
 }
+
+/// The probe seeds the child at one exact version (`=cat/pkg-ver`). Once the
+/// backtracker masks that version the seed can only fail, and the dead end it
+/// caused used to end the whole search while a plan existed (a world update
+/// that pulled `ffmpeg-9` against an installed `<ffmpeg-9` consumer).
+#[test]
+fn live_forced_upgrades_skip_a_version_the_backtracker_masked() {
+    let mut params = BacktrackParams::default();
+    for ver in ["9.0.2", "8.1.3"] {
+        params.slot_operator_forced_upgrade.insert((
+            "media-video".to_string(),
+            "ffmpeg".to_string(),
+            ver.to_string(),
+        ));
+    }
+    let live = |p: &BacktrackParams| -> Vec<String> {
+        p.live_forced_upgrades()
+            .map(|(_, _, v)| v.clone())
+            .collect()
+    };
+    assert_eq!(live(&params), ["8.1.3", "9.0.2"], "nothing masked yet");
+    params.runtime_pkg_mask.insert(
+        ("media-video".to_string(), "ffmpeg".to_string()),
+        vec![MaskEntry {
+            neg: "!=media-video/ffmpeg-9.0.2".to_string(),
+            reason: MaskReason::SlotConflict { parents: vec![] },
+        }],
+    );
+    assert_eq!(live(&params), ["8.1.3"], "the masked version is not seeded");
+}

@@ -334,7 +334,7 @@ impl<'a> ResolveCtx<'a> {
         // Requested atoms seed the required-set walk too; an empty seed set
         // still means "not complete mode".
         // One index and one set of parsed `*DEPEND` edges serve all three walks.
-        let installed_graph = InstalledReachability::new(&req.root);
+        let installed_graph = InstalledReachability::for_run(&req.root, req.with_bdeps);
         let mut slot_op_seeds = req.config.complete_seed_atoms.clone();
         slot_op_seeds.extend(req.atoms.iter().cloned());
         slot_op_seeds.sort();

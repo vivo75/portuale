@@ -528,6 +528,20 @@ impl BacktrackParams {
         out
     }
 
+    /// The probe's forced upgrades the walk may still seed. One whose exact
+    /// version the backtracker has since masked is skipped: an `=cat/pkg-ver`
+    /// root could only fail, and the dead end it caused ended the whole search.
+    /// Portage: depgraph.py, `_slot_operator_update_probe` (re-run on every pass)
+    pub(crate) fn live_forced_upgrades(&self) -> impl Iterator<Item = &(String, String, String)> {
+        self.slot_operator_forced_upgrade
+            .iter()
+            .filter(|(cat, pkg, ver)| {
+                !self
+                    .masked_negatives_for(&(cat.clone(), pkg.clone()))
+                    .contains(&format!("!={cat}/{pkg}-{ver}"))
+            })
+    }
+
     /// Just the `runtime_pkg_mask` negatives for one `cat/pkg` (no
     /// positives): tells mask-induced unsatisfiability (retry with the
     /// parent masked) from genuine absence and USE-only failure.
