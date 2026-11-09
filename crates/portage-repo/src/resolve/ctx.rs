@@ -94,19 +94,39 @@ pub(crate) fn argument_required_by(sets: &HashMap<String, String>, atom: &str) -
 
 /// Per-walk memo of [`merge_order::tree_solved_replacements`] verdicts.
 ///
-/// Everything but the pass entries and the circular-dependency map is fixed
-/// for one `ResolveCtx`, so those two are the whole key. Compared by value
-/// (`==`), newest last, bounded.
+/// The key is the pass entries, the circular-dependency map and the other
+/// inputs of the simulation ([`TreeSimScope`]); the memo may be shared by
+/// the several `ResolveCtx` of one run. Compared by value (`==`), newest
+/// last, bounded.
 #[derive(Default)]
-pub(crate) struct TreeSimMemo {
+pub struct TreeSimMemo {
     rows: std::cell::RefCell<Vec<TreeSimRow>>,
 }
 
+/// What [`merge_order::tree_solved_replacements`] reads besides the entries
+/// and the circular map: the top-level atoms, the system set, the two
+/// flags and the root. Nothing else of the config reaches the simulation.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct TreeSimScope {
+    pub(crate) atoms: Vec<String>,
+    pub(crate) system_packages: Vec<String>,
+    pub(crate) implicit_system_deps: bool,
+    pub(crate) dynamic_deps: bool,
+    pub(crate) root: PathBuf,
+}
+
 type TreeSimRow = (
+    TreeSimScope,
     Vec<GraphEntry>,
     HashMap<RootCp, Vec<CircularDepChild>>,
     Vec<(usize, usize)>,
 );
+
+impl std::fmt::Debug for TreeSimMemo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TreeSimMemo({} rows)", self.rows.borrow().len())
+    }
+}
 
 impl TreeSimMemo {
     const CAP: usize = 64;
@@ -114,6 +134,7 @@ impl TreeSimMemo {
     /// The memoised verdicts for this exact input, else `compute()`'s.
     pub(crate) fn get_or_compute(
         &self,
+        scope: &TreeSimScope,
         entries: &[GraphEntry],
         circular: &HashMap<RootCp, Vec<CircularDepChild>>,
         compute: impl FnOnce() -> Vec<(usize, usize)>,
@@ -122,16 +143,21 @@ impl TreeSimMemo {
             .rows
             .borrow()
             .iter()
-            .find(|(e, c, _)| e.as_slice() == entries && c == circular)
+            .find(|(s, e, c, _)| s == scope && e.as_slice() == entries && c == circular)
         {
-            return hit.2.clone();
+            return hit.3.clone();
         }
         let out = compute();
         let mut rows = self.rows.borrow_mut();
         if rows.len() >= Self::CAP {
             rows.remove(0);
         }
-        rows.push((entries.to_vec(), circular.clone(), out.clone()));
+        rows.push((
+            scope.clone(),
+            entries.to_vec(),
+            circular.clone(),
+            out.clone(),
+        ));
         out
     }
 }
@@ -244,7 +270,7 @@ pub(crate) struct ResolveCtx<'a> {
     /// unlisted-category `!!!` line's path render from.
     pub(crate) config_root: PathBuf,
     /// Tree-mode blocker verdicts already computed this walk.
-    pub(crate) tree_sim_memo: TreeSimMemo,
+    pub(crate) tree_sim_memo: std::rc::Rc<TreeSimMemo>,
     /// Binary-candidate answers shared by the passes of this walk.
     pub(crate) pool_memo: std::rc::Rc<crate::resolve::pool_memo::PoolMemo>,
     /// `installed_dep_string`'s `Effective` layer, keyed `(category,
@@ -467,7 +493,7 @@ impl<'a> ResolveCtx<'a> {
                 .map(|a| (a.category, a.package))
                 .collect(),
             local_binpkg: build_local_binpkg_index(&req.config),
-            tree_sim_memo: TreeSimMemo::default(),
+            tree_sim_memo: req.tree_sim_memo.clone().unwrap_or_default(),
             pool_memo: std::rc::Rc::default(),
             slot_conflict_seen: std::cell::Cell::new(false),
             installed_meta_memo: std::cell::RefCell::default(),

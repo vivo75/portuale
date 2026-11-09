@@ -157,6 +157,11 @@ pub struct ResolveRequest {
     /// unlisted-category `!!!` once. `None` (unit tests, other binaries)
     /// builds a fresh one per walk, like before.
     pub categories: Option<std::rc::Rc<Categories>>,
+    /// The run-shared [`TreeSimMemo`], when the caller built one: the
+    /// non-complete and the complete pass of one `emerge` walk the same
+    /// graphs, so the second reuses the first's tree-mode verdicts. `None`
+    /// gives each resolve its own.
+    pub tree_sim_memo: Option<std::rc::Rc<TreeSimMemo>>,
     /// Portuale-only `--solver=` selection (see [`SolverKind`]).
     pub solver: SolverKind,
 }
@@ -238,6 +243,7 @@ impl ResolveRequest {
             seed_masks: SettledMasks::default(),
             set_args: std::collections::HashSet::new(),
             categories: None,
+            tree_sim_memo: None,
             solver: SolverKind::Portage,
         }
     }

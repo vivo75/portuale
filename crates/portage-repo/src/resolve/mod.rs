@@ -49,6 +49,7 @@ pub(crate) use backtracker::*;
 pub use blockers::*;
 pub use complete_graph::*;
 pub use conflict_use_display::*;
+pub use ctx::TreeSimMemo;
 pub(crate) use ctx::*;
 pub use cycle_report::*;
 pub use cycles::*;

@@ -1937,18 +1937,30 @@ fn enqueue_dependencies_queues_plains_before_disjunction_choices() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// `TreeSimMemo` runs the simulation once per distinct (entries, circular
-/// map) input and recomputes when either changes.
+/// `TreeSimMemo` runs the simulation once per distinct (scope, entries,
+/// circular map) input and recomputes when any of them changes.
 #[test]
 fn tree_sim_memo_computes_once_per_distinct_input() {
     use std::cell::Cell;
     let memo = TreeSimMemo::default();
     let calls = Cell::new(0);
-    let run = |entries: &[GraphEntry], circ: &HashMap<RootCp, Vec<CircularDepChild>>| {
-        memo.get_or_compute(entries, circ, || {
+    let scope = TreeSimScope {
+        atoms: vec!["@world".to_string()],
+        system_packages: Vec::new(),
+        implicit_system_deps: false,
+        dynamic_deps: false,
+        root: PathBuf::from("/"),
+    };
+    let run_in = |scope: &TreeSimScope,
+                  entries: &[GraphEntry],
+                  circ: &HashMap<RootCp, Vec<CircularDepChild>>| {
+        memo.get_or_compute(scope, entries, circ, || {
             calls.set(calls.get() + 1);
             vec![(entries.len(), calls.get())]
         })
+    };
+    let run = |entries: &[GraphEntry], circ: &HashMap<RootCp, Vec<CircularDepChild>>| {
+        run_in(&scope, entries, circ)
     };
     let none = HashMap::new();
     let a = vec![new_165("dev-libs", "a", "1")];
@@ -1967,4 +1979,24 @@ fn tree_sim_memo_computes_once_per_distinct_input() {
     assert_eq!(calls.get(), 3, "changed circular map recomputes");
     assert_eq!(run(&a, &none), first, "older input still memoised");
     assert_eq!(calls.get(), 3);
+    // A memo shared by two resolves must not answer across different
+    // top-level atoms, system sets or flags.
+    for other in [
+        TreeSimScope {
+            atoms: vec!["dev-libs/a".to_string()],
+            ..scope.clone()
+        },
+        TreeSimScope {
+            system_packages: vec!["sys-libs/glibc".to_string()],
+            ..scope.clone()
+        },
+        TreeSimScope {
+            dynamic_deps: true,
+            ..scope.clone()
+        },
+    ] {
+        let before = calls.get();
+        run_in(&other, &a, &none);
+        assert_eq!(calls.get(), before + 1, "a different scope recomputes");
+    }
 }

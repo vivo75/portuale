@@ -109,6 +109,8 @@ pub(crate) struct ResolveOnceArgs<'a> {
     pub(crate) seed_masks: &'a portage_repo::SettledMasks,
     /// The run-shared allow-list, built once by the caller.
     pub(crate) categories: std::rc::Rc<portage_repo::Categories>,
+    /// Shared by the passes of one run: they walk the same graphs.
+    pub(crate) tree_sim_memo: std::rc::Rc<portage_repo::TreeSimMemo>,
 }
 
 /// One resolver run: the request built from the plan and the options.
@@ -128,6 +130,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         reuse,
         seed_masks,
         categories,
+        tree_sim_memo,
     } = args;
     let &ResolvePlan {
         ref complete_seed_atoms,
@@ -271,6 +274,7 @@ pub(crate) fn resolve_once(args: ResolveOnceArgs<'_>) -> Result<GraphResult, por
         argument_sets: argument_sets.clone(),
         solver,
         categories: Some(categories),
+        tree_sim_memo: Some(tree_sim_memo),
     };
     let _span = portage_util::profile::span(format!("resolve_once complete={complete}"));
     active_resolver_for(solver).resolve(&req)
@@ -291,6 +295,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         color,
         categories,
     } = args;
+    let tree_sim_memo = std::rc::Rc::<portage_repo::TreeSimMemo>::default();
     let &ResolvePlan {
         ref root_deps_running_root,
         complete_if_new_use,
@@ -327,6 +332,7 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
             reuse,
             seed_masks,
             categories: std::rc::Rc::clone(&categories),
+            tree_sim_memo: std::rc::Rc::clone(&tree_sim_memo),
         })
     };
     let handle = |r: Result<portage_repo::GraphResult, crate::error::Error>| match r {

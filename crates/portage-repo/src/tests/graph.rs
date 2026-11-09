@@ -4501,6 +4501,7 @@ fn exact_version_update_keeps_arg_pinned_provider() {
             seed_masks: crate::SettledMasks::default(),
             set_args: std::collections::HashSet::new(),
             categories: None,
+            tree_sim_memo: None,
             solver: SolverKind::Portage,
         };
         active_resolver()

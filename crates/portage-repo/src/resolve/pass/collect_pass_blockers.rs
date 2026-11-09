@@ -62,20 +62,29 @@ pub(crate) fn collect_pass_blockers(
         })
     });
     if needs_tree_sim {
-        let solved =
-            ctx.tree_sim_memo
-                .get_or_compute(&state.entries, &bp.circular_dependency, || {
-                    merge_order::tree_solved_replacements(merge_order::TreeSolvedReplacementsArgs {
-                        entries: &state.entries,
-                        top_level_atoms: ctx.atoms,
-                        config: ctx.config,
-                        root: ctx.root,
-                        implicit_system_deps: ctx.implicit_system_deps,
-                        repos: &ctx.repos,
-                        dynamic_deps: ctx.dynamic_deps,
-                        circular: &bp.circular_dependency,
-                    })
-                });
+        let solved = ctx.tree_sim_memo.get_or_compute(
+            &TreeSimScope {
+                atoms: ctx.atoms.to_vec(),
+                system_packages: ctx.config.system_packages.clone(),
+                implicit_system_deps: ctx.implicit_system_deps,
+                dynamic_deps: ctx.dynamic_deps,
+                root: ctx.root.to_path_buf(),
+            },
+            &state.entries,
+            &bp.circular_dependency,
+            || {
+                merge_order::tree_solved_replacements(merge_order::TreeSolvedReplacementsArgs {
+                    entries: &state.entries,
+                    top_level_atoms: ctx.atoms,
+                    config: ctx.config,
+                    root: ctx.root,
+                    implicit_system_deps: ctx.implicit_system_deps,
+                    repos: &ctx.repos,
+                    dynamic_deps: ctx.dynamic_deps,
+                    circular: &bp.circular_dependency,
+                })
+            },
+        );
         for (owner, blocker) in solved {
             if let Some(b) = state
                 .entries
