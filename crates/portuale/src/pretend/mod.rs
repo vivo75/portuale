@@ -329,6 +329,11 @@ pub fn run(args: &[String]) -> ExitCode {
     }) {
         return code;
     }
+    // The resolve reads every installed package's metadata; start now, while
+    // the targets are expanded and the binhost indexes are fetched.
+    if opts.pretend {
+        portage_repo::prewarm_installed(&root, &repos);
+    }
     let _expand_span = portage_util::profile::span("expand_targets");
     let ExpandTargetsOut {
         expanded_atoms,

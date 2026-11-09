@@ -762,6 +762,41 @@ pub fn all_installed_packages(root: &Path) -> std::sync::Arc<Vec<InstalledPackag
     packages
 }
 
+/// Starts, on background threads, the reads a `--pretend` resolve is about to
+/// make for every installed package: its vdb metadata (dependency strings,
+/// `USE`, `SLOT`) and the metadata of the ebuild it was built from. The
+/// resolver then finds them in the shared memos instead of waiting on the
+/// disk one package at a time. Only for a run that writes no vdb; the memos
+/// are validated like any other read, so what the resolver sees is unchanged.
+/// Threads the warm-up takes: it runs beside the main thread, not instead of it.
+const PREWARM_THREADS: usize = 4;
+
+/// See [`PREWARM_THREADS`].
+pub fn prewarm_installed(root: &Path, repos: &[RepoConfig]) {
+    let root = root.to_path_buf();
+    let repos = repos.to_vec();
+    std::thread::spawn(move || {
+        let installed = all_installed_packages(&root);
+        crate::resolve::par::for_each_job(
+            &installed,
+            PREWARM_THREADS,
+            || (),
+            |p, ()| {
+                for field in ["SLOT", "RDEPEND", "PDEPEND", "IDEPEND", "USE", "EAPI"] {
+                    vdb_aux_get(&root, &p.category, &p.package, &p.version, field);
+                }
+                let _ = crate::resolve::live_metadata_for_installed(
+                    &repos,
+                    &root,
+                    &p.category,
+                    &p.package,
+                    &p.version,
+                );
+            },
+        );
+    });
+}
+
 pub(crate) fn all_installed_packages_uncached(root: &Path) -> Vec<InstalledPackage> {
     let mut out = Vec::new();
     // `-MERGING-` entries already skipped.

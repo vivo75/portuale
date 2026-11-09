@@ -11,6 +11,7 @@ const CHUNK: usize = 16;
 /// commutative step (union, then sort).
 pub(crate) fn for_each_job<T, L>(
     jobs: &[T],
+    max_threads: usize,
     make_local: impl Fn() -> L + Sync,
     one: impl Fn(&T, &mut L) + Sync,
 ) -> Vec<L>
@@ -20,6 +21,7 @@ where
 {
     let threads = std::thread::available_parallelism()
         .map_or(1, usize::from)
+        .min(max_threads)
         .min(jobs.len().div_ceil(CHUNK))
         .max(1);
     let next = AtomicUsize::new(0);
@@ -57,7 +59,9 @@ mod tests {
     #[test]
     fn every_job_runs_exactly_once_whatever_the_thread_count() {
         let jobs: Vec<usize> = (0..1000).collect();
-        let locals = for_each_job(&jobs, Vec::new, |j, seen: &mut Vec<usize>| seen.push(*j));
+        let locals = for_each_job(&jobs, usize::MAX, Vec::new, |j, seen: &mut Vec<usize>| {
+            seen.push(*j)
+        });
         let mut all: Vec<usize> = locals.into_iter().flatten().collect();
         all.sort_unstable();
         assert_eq!(all, jobs);
@@ -65,7 +69,7 @@ mod tests {
 
     #[test]
     fn no_jobs_still_gives_one_empty_local() {
-        let locals = for_each_job(&[] as &[u8], || 0u8, |_, _| {});
+        let locals = for_each_job(&[] as &[u8], usize::MAX, || 0u8, |_, _| {});
         assert_eq!(locals, vec![0]);
     }
 }

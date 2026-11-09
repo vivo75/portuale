@@ -694,6 +694,7 @@ pub(crate) fn reverse_dependency_scan(
         .collect();
     let parts = crate::resolve::par::for_each_job(
         &jobs,
+        usize::MAX,
         || ScanLocal::warm(&meta_memo),
         |&(consumer, report_only), local| {
             let which = if report_only { &report_scope } else { &scope };

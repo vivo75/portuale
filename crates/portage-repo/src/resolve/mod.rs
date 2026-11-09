@@ -21,7 +21,7 @@ mod merge_bound;
 mod or_preference;
 mod or_view;
 mod outcome;
-mod par;
+pub(crate) mod par;
 mod pass;
 mod pass_helpers;
 mod pass_state;

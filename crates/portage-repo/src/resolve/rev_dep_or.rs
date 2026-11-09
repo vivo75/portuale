@@ -310,6 +310,7 @@ pub(crate) fn sibling_virtual_leaks(args: SiblingVirtualLeaksArgs<'_>) -> LeakMa
     // and the maps are united.
     let locals = crate::resolve::par::for_each_job(
         &parents,
+        usize::MAX,
         || (VirtualLeaks::default(), meta_memo.clone()),
         |parent, (leaks, memo)| {
             let parent_deps = consumer_deps(
@@ -431,6 +432,7 @@ fn virtual_mentions(
         .collect();
     let computed = crate::resolve::par::for_each_job(
         &unknown,
+        usize::MAX,
         || (Vec::new(), meta_memo.clone()),
         |p, (out, memo)| {
             let d = consumer_deps(deps, memo, &p.category, &p.package, &p.version);
