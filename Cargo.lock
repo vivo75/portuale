@@ -701,6 +701,7 @@ dependencies = [
  "portage-vdb",
  "portage-versions",
  "shlex",
+ "tempfile",
 ]
 
 [[package]]

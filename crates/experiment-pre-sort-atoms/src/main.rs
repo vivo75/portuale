@@ -342,10 +342,50 @@ struct Options {
     show_seeds: bool,
 }
 
+/// `ROOT` and `PORTAGE_CONFIGROOT` the `portuale` child runs its phase with.
+static PHASE_ROOTS: std::sync::OnceLock<(PathBuf, PathBuf)> = std::sync::OnceLock::new();
+
+/// Metadata of an ebuild the repository has no md5-cache entry for: the
+/// depcachedir first, then `portuale __aux-metadata`, which runs the
+/// `depend` phase (this program cannot) and fills the depcachedir.
+/// The binary is `$PORTUALE_BIN`, else `portuale` beside this executable.
+///
+/// # Errors
+/// No `portuale` binary found, or it could not read the ebuild.
+fn aux_metadata(
+    repo: &Path,
+    category: &str,
+    pf: &str,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    if let Ok(md) = portage_repo::depcache_aux_metadata(repo, category, pf) {
+        return Ok(md);
+    }
+    let bin = std::env::var_os("PORTUALE_BIN")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()?
+                .parent()
+                .map(|d| d.join("portuale"))
+        })
+        .filter(|p| p.is_file())
+        .ok_or("no portuale binary (set PORTUALE_BIN) to run the depend phase")?;
+    let mut cmd = std::process::Command::new(bin);
+    cmd.arg("__aux-metadata").arg(repo).arg(category).arg(pf);
+    if let Some((root, config_root)) = PHASE_ROOTS.get() {
+        cmd.env("ROOT", root).env("PORTAGE_CONFIGROOT", config_root);
+    }
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(portage_repo::parse_aux_entry(&String::from_utf8_lossy(
+        &out.stdout,
+    )))
+}
+
 fn main() {
-    // A repository without `metadata/md5-cache` is read through the
-    // depcachedir; no ebuild phase is run here.
-    portage_repo::register_aux_metadata_provider(portage_repo::depcache_aux_metadata);
+    portage_repo::register_aux_metadata_provider(aux_metadata);
     let opts = match parse_args() {
         Ok(o) => o,
         Err(msg) => {
@@ -353,6 +393,7 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let _ = PHASE_ROOTS.set((opts.root.clone(), opts.config_root.clone()));
     if let Err(msg) = run(&opts) {
         eprintln!("experiment-pre-sort-atoms: {msg}");
         std::process::exit(1);
