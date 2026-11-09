@@ -55,6 +55,7 @@ struct Opt {
 /// Splits `OPTIONS` into "Actions" and everything else, for clap's help headings.
 const ACTION_IDS: &[&str] = &[
     "clean",
+    "check_world",
     "config",
     "depclean",
     "info",
@@ -111,6 +112,19 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "show system information for the package manager",
+    },
+    // Portuale-only (Portage has no `--check-world`): `@world` and its
+    // dependencies must be satisfiable by visible ebuilds. Handled in `run`
+    // by `check_world`, never forwarded to the emerge codepath.
+    Opt {
+        id: "check_world",
+        long: "--check-world",
+        alias: None,
+        short: None,
+        kind: Kind::Flag,
+        choices: &[],
+        missing: "",
+        help: "list the @world slots no visible ebuild satisfies (exit 1 if any)",
     },
     Opt {
         id: "list_sets",
@@ -1378,6 +1392,7 @@ pub fn run(args: &[String]) -> ExitCode {
     let joined = join_optional_values(args);
     let argv = std::iter::once(bin).chain(joined.iter().map(String::as_str));
     match command().try_get_matches_from(argv) {
+        Ok(matches) if matches.get_flag("check_world") => crate::check_world::run(&matches),
         Ok(matches) => match crate::remote::check_remote(&matches) {
             Ok(remote) => {
                 // A remote run whose VDB is `client:` (the default) keeps

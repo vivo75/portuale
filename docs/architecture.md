@@ -58,6 +58,10 @@ applet also runs. So resolution, merge order and display are shared with
 
 - `--solver=portage|pubgrub|resolvo` chooses the dependency solver
   (default `portage`, the built-in resolver).
+- `--check-world` lists the `@world` slots no visible ebuild satisfies and
+  the atoms no ebuild matches (exit 1 if there are any). It uses the
+  `portage-world` crate, not the resolver, so it is fast (about 0.4 s) and
+  knows nothing of blockers or backtracking.
 - `--remote-*` options (hostname, user, port, root, vdb, ledger and more)
   merge gpkg binary packages onto a remote host over SSH. Resolution runs
   on the server; the phases run on the client. The design is in

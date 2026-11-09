@@ -8,12 +8,12 @@ use portage_repo::{Candidate, RepoConfig};
 
 /// One package slot with its versions in final order.
 pub struct SlotSet {
-    cp: String,
-    slot: String,
+    pub cp: String,
+    pub slot: String,
     /// `(candidate, visible, satisfies every requester)`, final order.
     versions: Vec<(Candidate, bool, bool)>,
     /// Each atom aimed at this slot and who asked for it.
-    atoms: Vec<(String, Vec<String>)>,
+    pub atoms: Vec<(String, Vec<String>)>,
     /// How many visible versions satisfy every atom.
     satisfying: usize,
     /// No visible version satisfies the requesters, here or in another slot.

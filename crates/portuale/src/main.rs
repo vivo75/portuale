@@ -7,6 +7,7 @@
 // lists the applets.
 
 mod binpkg;
+mod check_world;
 mod color;
 mod difflib;
 mod ebuild;

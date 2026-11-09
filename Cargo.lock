@@ -693,14 +693,8 @@ dependencies = [
 name = "experiment-pre-sort-atoms"
 version = "300.83.0"
 dependencies = [
- "glob",
- "portage-dep",
- "portage-profile",
  "portage-repo",
- "portage-use-reduce",
- "portage-vdb",
- "portage-versions",
- "shlex",
+ "portage-world",
  "tempfile",
 ]
 
@@ -1774,6 +1768,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "portage-world"
+version = "300.83.0"
+dependencies = [
+ "glob",
+ "portage-dep",
+ "portage-profile",
+ "portage-repo",
+ "portage-use-reduce",
+ "portage-vdb",
+ "portage-versions",
+ "shlex",
+]
+
+[[package]]
 name = "portuale"
 version = "300.83.0"
 dependencies = [
@@ -1797,6 +1805,7 @@ dependencies = [
  "portage-util",
  "portage-vdb",
  "portage-versions",
+ "portage-world",
  "regex",
  "ripemd",
  "sha1",
