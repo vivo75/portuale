@@ -121,3 +121,18 @@ binhost indexes and the PKGDIR files outside the index; `python3 -m pytest
 pytests-contract-suite/test_health_checker.py -q` in pmtest (122 tests) pins
 a cached `binrepos.conf` index, `PORTAGE_BINHOST`, and a `.tbz2` plus a
 `.gpkg.tar` read for their slot.
+
+#491 (second step, 2026-11-09): `emerge -uDpvN =kde-frameworks/kdbusaddons-6.31.0`
+on the current host tree ends rc 0 with `backtrack: 5/20` and 30 packages
+(Portage 3.0.83: rc 0, `2/20`, 29), where it was rc 1 with `20/20` and 71
+packages with `openssl` 3.6.5 and 4.1.0 in one slot. The installed parents a new
+child version must satisfy now include the world members the request does not
+reach (their pending upgrade no longer excuses them), the dynamic-deps view of
+every installed parent (`opencv`'s live `<media-video/ffmpeg-9:=`), and, on a
+plain pass, the blocker-retry closure; an unsatisfiable built dep of a
+merge-bound binary masks that binary instead of seeding its installed twin.
+Run `target/release/portuale emerge -uDpvN =kde-frameworks/kdbusaddons-6.31.0;
+echo rc=$?` and compare with `emerge` on the same request; the captures are in
+`LLM/evidence/2026-11-09-491/` (taken before the fix). Unit tests: the three in
+`tests/built_parent_update_probe.rs` and the `binary-twin` case of
+`tests/unsat_probe.rs` (both fail on the old code). Left over: #695, #696.

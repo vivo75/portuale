@@ -349,6 +349,31 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         )]),
         "the stale binary parent is masked"
     );
+    // The graph's merge-bound binary is the parent even when another build of
+    // the package is installed: it is masked, the installed twin not seeded
+    // (backlog #491; Portage's `parent.installed` is false for the graph's pick).
+    let (base_t, repos_t) = unsat_base(
+        "binary-twin",
+        &[("unsatpar", built)],
+        &[("unsatpar", "1", "0")],
+    );
+    let (seeds_t, masks_t) =
+        slot_operator_unsatisfied_probe_full(SlotOperatorUnsatisfiedProbeFullArgs {
+            root: &base_t,
+            entries: &entries_b,
+            slot_want: &slot_want_b,
+            pullers: &pullers_b,
+            masked: &masked,
+            with_bdeps: false,
+            excluded: &[],
+            config: &config,
+            gate: crate::test_gate(&repos_t),
+        });
+    assert!(
+        seeds_t.is_empty(),
+        "an installed twin of a merge-bound binary is not the parent"
+    );
+    assert_eq!(masks_t.len(), 1, "the merge-bound binary is masked");
     // An already-masked binary stops the loop.
     let mut masked_b = masked.clone();
     masked_b.insert(

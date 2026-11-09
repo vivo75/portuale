@@ -158,31 +158,33 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
             if !paired {
                 continue;
             }
-            // The installed parent, else a merge-bound binary parent.
-            let mut installed: Vec<(String, String, bool)> =
-                installed_candidates(root, &owner.0, &owner.1)
+            // The parent is the instance the graph holds: a merge-bound binary
+            // (masked), else the installed one (seeded). A binary the run
+            // replaces is the parent even when an older build is installed.
+            // Portage: depgraph.py, _slot_operator_unsatisfied_backtrack (`parent.installed`)
+            let graph_binary = entries.iter().find_map(|x| {
+                if x.category != owner.0
+                    || x.package != owner.1
+                    || x.source != CandidateSource::Binary
+                {
+                    return None;
+                }
+                let v = merge_bound_version(&x.outcome)?;
+                Some((
+                    v.clone(),
+                    x.slot.clone().unwrap_or_else(|| "0".to_string()),
+                    true,
+                ))
+            });
+            let installed: Vec<(String, String, bool)> = match graph_binary {
+                Some(b) => vec![b],
+                None => installed_candidates(root, &owner.0, &owner.1)
                     .into_iter()
                     .map(|(v, slot, _)| (v, slot, false))
-                    .collect();
+                    .collect(),
+            };
             if installed.is_empty() {
-                let binary = entries.iter().find_map(|x| {
-                    if x.category != owner.0
-                        || x.package != owner.1
-                        || x.source != CandidateSource::Binary
-                    {
-                        return None;
-                    }
-                    let v = merge_bound_version(&x.outcome)?;
-                    Some((
-                        v.clone(),
-                        x.slot.clone().unwrap_or_else(|| "0".to_string()),
-                        true,
-                    ))
-                });
-                match binary {
-                    Some(b) => installed.push(b),
-                    None => continue,
-                }
+                continue;
             }
             // An installed parent matching `--exclude` refuses the probe.
             let excluded_parent = installed.iter().any(|(v, _, _)| {
