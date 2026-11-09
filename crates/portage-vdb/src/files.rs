@@ -12,8 +12,8 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::files_write::FilesTxn;
 use crate::{
@@ -99,9 +99,23 @@ fn dir_mtime_nanos(p: &Path) -> u64 {
 /// Memo key: vdb dir, category, pf.
 type CacheKey = (PathBuf, String, String);
 /// dir `st_mtime_ns`, epoch last validated in, fields.
-type AuxCache = HashMap<CacheKey, (i128, u64, Rc<HashMap<String, String>>)>;
-thread_local! {
-    static AUX_CACHE: RefCell<AuxCache> = RefCell::new(HashMap::new());
+type AuxCache = HashMap<CacheKey, (i128, AtomicU64, Arc<HashMap<String, String>>)>;
+/// One memo for every thread: a worker thread of the resolver finds what
+/// another already read instead of opening the same files again. Entries
+/// are validated on the dir's mtime, so sharing them changes no answer.
+static AUX_CACHE: std::sync::LazyLock<std::sync::RwLock<AuxCache>> =
+    std::sync::LazyLock::new(|| std::sync::RwLock::new(HashMap::new()));
+
+fn aux_read() -> std::sync::RwLockReadGuard<'static, AuxCache> {
+    AUX_CACHE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn aux_write() -> std::sync::RwLockWriteGuard<'static, AuxCache> {
+    AUX_CACHE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// `field` out of a validated memo entry (resolved lazily when absent),
@@ -111,26 +125,22 @@ fn aux_from_cached(
     dir: &Path,
     field: &str,
     epoch: u64,
-    map: Rc<HashMap<String, String>>,
+    map: Arc<HashMap<String, String>>,
 ) -> String {
     let value = if let Some(v) = map.get(field) {
         translate_aux_slot(field, v.clone())
     } else {
-        // Drop the shared handle so `Rc::make_mut` can reuse it.
+        // Drop the shared handle so `Arc::make_mut` can reuse it.
         drop(map);
         let value = translate_aux_slot(field, read_vdb_file(&dir.join(field)));
-        AUX_CACHE.with(|c| {
-            if let Some((_, _, m)) = c.borrow_mut().get_mut(cache_key) {
-                Rc::make_mut(m).insert(field.to_string(), value.clone());
-            }
-        });
+        if let Some((_, _, m)) = aux_write().get_mut(cache_key) {
+            Arc::make_mut(m).insert(field.to_string(), value.clone());
+        }
         value
     };
-    AUX_CACHE.with(|c| {
-        if let Some(e) = c.borrow_mut().get_mut(cache_key) {
-            e.1 = epoch;
-        }
-    });
+    if let Some(e) = aux_read().get(cache_key) {
+        e.1.store(epoch, Ordering::Relaxed);
+    }
     value
 }
 
@@ -300,12 +310,10 @@ impl FilesDb {
         // Inside a freeze scope an entry validated in this epoch is served
         // with no `statx` at all.
         if epoch != 0 {
-            let fresh = AUX_CACHE.with(|c| {
-                c.borrow()
-                    .get(&cache_key)
-                    .filter(|(_, ep, _)| *ep == epoch)
-                    .map(|(_, _, map)| Rc::clone(map))
-            });
+            let fresh = aux_read()
+                .get(&cache_key)
+                .filter(|(_, ep, _)| ep.load(Ordering::Relaxed) == epoch)
+                .map(|(_, _, map)| Arc::clone(map));
             if let Some(map) = fresh {
                 return Some(aux_from_cached(&cache_key, &dir, field, epoch, map));
             }
@@ -319,14 +327,11 @@ impl FilesDb {
         // Per-instance metadata keyed on the dir's `st_mtime_ns`: a snapshot
         // fills all 23 fields at once, the fallback resolves lazily per
         // key. An in-place field rewrite leaves the dir mtime alone, so a
-        // value read once is served until the dir changes. Thread-local,
-        // so the lookup stays lock-free.
-        let cached = AUX_CACHE.with(|c| {
-            c.borrow()
-                .get(&cache_key)
-                .filter(|(mtime, _, _)| *mtime == dir_mtime_ns)
-                .map(|(_, _, map)| Rc::clone(map))
-        });
+        // value read once is served until the dir changes.
+        let cached = aux_read()
+            .get(&cache_key)
+            .filter(|(mtime, _, _)| *mtime == dir_mtime_ns)
+            .map(|(_, _, map)| Arc::clone(map));
         if let Some(map) = cached {
             return Some(aux_from_cached(&cache_key, &dir, field, epoch, map));
         }
@@ -351,10 +356,10 @@ impl FilesDb {
             .unwrap_or_else(|| read_vdb_file(&dir.join(field)));
         let value = translate_aux_slot(field, value);
         map.insert(field.to_string(), value.clone());
-        AUX_CACHE.with(|c| {
-            c.borrow_mut()
-                .insert(cache_key, (dir_mtime_ns, epoch, Rc::new(map)));
-        });
+        aux_write().insert(
+            cache_key,
+            (dir_mtime_ns, AtomicU64::new(epoch), Arc::new(map)),
+        );
         Some(value)
     }
 }

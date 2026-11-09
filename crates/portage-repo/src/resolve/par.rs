@@ -24,6 +24,9 @@ where
         .max(1);
     let next = AtomicUsize::new(0);
     let work = || {
+        // The caller is inside a resolve, which never writes the vdb: so
+        // is this thread, or every read would `statx` again.
+        let _frozen = portage_vdb::freeze();
         let mut local = make_local();
         loop {
             let start = next.fetch_add(CHUNK, Ordering::Relaxed);
