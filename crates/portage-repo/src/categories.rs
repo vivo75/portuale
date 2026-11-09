@@ -1,6 +1,7 @@
 //! The repo-traversal category allow-list (`settings.categories`).
 
 use crate::*;
+use std::sync::Mutex;
 
 /// Portage's `settings.categories`: the incremental union of every repo's
 /// `profiles/categories` (main repo first, then overlays) plus
@@ -35,7 +36,7 @@ pub struct Categories {
     /// The resolved allow-list (repo files stacked, then the user file).
     pub set: BTreeSet<String>,
     /// `(category, package)` pairs the `!!!` already fired for.
-    pub warned: RefCell<HashSet<(String, String)>>,
+    pub warned: Mutex<HashSet<(String, String)>>,
 }
 
 impl Categories {
@@ -43,7 +44,7 @@ impl Categories {
     pub fn load(repos: &[RepoConfig], config_root: &Path) -> Self {
         Self {
             set: repo_categories(repos, config_root),
-            warned: RefCell::new(HashSet::new()),
+            warned: Mutex::new(HashSet::new()),
         }
     }
 }

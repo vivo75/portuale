@@ -228,6 +228,9 @@ pub(crate) struct SiblingVirtualLeaksArgs<'a> {
     pub(crate) deps: DepSource<'a>,
     pub(crate) meta_memo: &'a mut MetaMemo,
     pub(crate) in_scope: &'a dyn Fn(&InstalledPackage) -> bool,
+    /// The virtuals (`cat/pkg`) whose leaks the caller will read; a parent
+    /// that names none of them cannot change the answer.
+    pub(crate) wanted_virtuals: &'a HashSet<(String, String)>,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
@@ -256,76 +259,108 @@ pub(crate) fn sibling_virtual_leaks(args: SiblingVirtualLeaksArgs<'_>) -> LeakMa
         deps,
         meta_memo,
         in_scope,
+        wanted_virtuals,
         entries,
         root,
         config,
         gate,
     } = args;
-    let mut leaks = VirtualLeaks::default();
-    for parent in all_installed_packages(root).iter() {
-        let parent_key = (
-            parent.category.clone(),
-            parent.package.clone(),
-            parent.version.clone(),
-        );
-        // A parent is evaluated when the walk recursed into it, or a complete graph reaches it.
-        if !scan.installed_walked.contains_key(&parent_key)
-            && !(scan.portage_complete && in_scope(parent))
-        {
-            continue;
-        }
-        let parent_deps = consumer_deps(
-            deps,
-            meta_memo,
-            &parent.category,
-            &parent.package,
-            &parent.version,
-        );
-        leak_one_parent(
-            &LeakCtx {
-                scan: Some(scan),
+    let cx = LeakCtx {
+        scan: Some(scan),
+        deps,
+        entries,
+        root,
+        config,
+        gate,
+        update: scan.update,
+        root_deps_running_root: scan.root_deps_running_root,
+        want_deep: Deep::NotRequested,
+        want_excluded: &[],
+        want_arg_atoms: &[],
+        want_set_args: None,
+        want_complete: false,
+        // Installed parents never thread the upgrade preference.
+        want_enabled: false,
+    };
+    // A parent is evaluated when the walk recursed into it, or a complete graph reaches it.
+    let installed = all_installed_packages(root);
+    let parents: Vec<&InstalledPackage> = installed
+        .iter()
+        .filter(|parent| {
+            let key = (
+                parent.category.clone(),
+                parent.package.clone(),
+                parent.version.clone(),
+            );
+            scan.installed_walked.contains_key(&key) || (scan.portage_complete && in_scope(parent))
+        })
+        .collect();
+    let mentions = virtual_mentions(deps, meta_memo, &parents);
+    let parents: Vec<&InstalledPackage> = parents
+        .into_iter()
+        .zip(mentions)
+        .filter(|(_, named)| {
+            (**named)
+                .as_ref()
+                .is_none_or(|cps| cps.iter().any(|cp| wanted_virtuals.contains(cp)))
+        })
+        .map(|(p, _)| p)
+        .collect();
+    // Each parent only adds to the leak maps, so the parents run on all cores
+    // and the maps are united.
+    let locals = crate::resolve::par::for_each_job(
+        &parents,
+        || (VirtualLeaks::default(), meta_memo.clone()),
+        |parent, (leaks, memo)| {
+            let parent_deps = consumer_deps(
                 deps,
-                entries,
-                root,
-                config,
-                gate,
-                update: scan.update,
-                root_deps_running_root: scan.root_deps_running_root,
-                want_deep: Deep::NotRequested,
-                want_excluded: &[],
-                want_arg_atoms: &[],
-                want_set_args: None,
-                want_complete: false,
-                // Installed parents never thread the upgrade preference.
-                want_enabled: false,
-            },
-            meta_memo,
-            // The depgraph parses every parent's atoms with the package's own EAPI.
-            (
-                &parent_deps,
-                &read_vdb_string(
-                    root,
-                    &parent.category,
-                    &parent.package,
-                    &parent.version,
-                    "EAPI",
+                memo,
+                &parent.category,
+                &parent.package,
+                &parent.version,
+            );
+            leak_one_parent(
+                &cx,
+                memo,
+                // The depgraph parses every parent's atoms with the package's own EAPI.
+                (
+                    &parent_deps,
+                    &read_vdb_string(
+                        root,
+                        &parent.category,
+                        &parent.package,
+                        &parent.version,
+                        "EAPI",
+                    ),
                 ),
-            ),
-            &|split: &OrSplit| {
-                consumer_or_arms(ConsumerOrArmsArgs {
-                    scan,
-                    consumer: parent,
-                    split,
-                    use_flags: &parent_deps.use_flags,
-                    entries,
-                    root,
-                    config,
-                    gate,
-                })
-                .unwrap_or_default()
-            },
-            &mut leaks,
-        );
+                &|split: &OrSplit| {
+                    consumer_or_arms(ConsumerOrArmsArgs {
+                        scan,
+                        consumer: parent,
+                        split,
+                        use_flags: &parent_deps.use_flags,
+                        entries,
+                        root,
+                        config,
+                        gate,
+                    })
+                    .unwrap_or_default()
+                },
+                leaks,
+            );
+        },
+    );
+    let mut leaks = VirtualLeaks::default();
+    for (part, memo) in locals {
+        for (mine, theirs) in [
+            (&mut leaks.installed, part.installed),
+            (&mut leaks.merge_bound, part.merge_bound),
+        ] {
+            for (key, atoms) in theirs {
+                mine.entry(key).or_default().extend(atoms);
+            }
+        }
+        meta_memo.extend(memo);
     }
     merge_bound_parents_leak(
         &LeakCtx {
@@ -349,6 +384,89 @@ pub(crate) fn sibling_virtual_leaks(args: SiblingVirtualLeaksArgs<'_>) -> LeakMa
         &mut leaks,
     );
     leaks.installed
+}
+
+/// Key of [`VIRTUAL_MENTIONS`]: the installed instance and what its dependency
+/// strings were read with.
+/// What [`mentioned_virtuals`] found, shared.
+type Mentions = std::sync::Arc<Option<Vec<(String, String)>>>;
+
+type MentionKey = (PathBuf, String, String, String, u8, Vec<String>);
+
+/// Per installed instance, the `cat/pkg` of every `virtual/` atom in its
+/// dependency strings; `None` when an atom did not parse (then the parent
+/// must be evaluated). The strings come from the vdb and the tree, which do
+/// not change during a run, so the answer holds across backtrack passes.
+static VIRTUAL_MENTIONS: std::sync::Mutex<Option<HashMap<MentionKey, Mentions>>> =
+    std::sync::Mutex::new(None);
+
+/// [`VIRTUAL_MENTIONS`] for each of `parents`, in order, reading the ones
+/// not yet known on all cores.
+fn virtual_mentions(
+    deps: DepSource<'_>,
+    meta_memo: &MetaMemo,
+    parents: &[&InstalledPackage],
+) -> Vec<Mentions> {
+    let key_of = |p: &InstalledPackage| -> MentionKey {
+        (
+            deps.root.to_path_buf(),
+            p.category.clone(),
+            p.package.clone(),
+            p.version.clone(),
+            u8::from(deps.dynamic_deps) | (u8::from(deps.ignore_built_slot_operator_deps) << 1),
+            deps.dep_keys.iter().map(|k| (*k).to_string()).collect(),
+        )
+    };
+    let lookup = |p: &InstalledPackage| {
+        VIRTUAL_MENTIONS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|m| m.get(&key_of(p)).cloned())
+    };
+    let unknown: Vec<&InstalledPackage> = parents
+        .iter()
+        .copied()
+        .filter(|p| lookup(p).is_none())
+        .collect();
+    let computed = crate::resolve::par::for_each_job(
+        &unknown,
+        || (Vec::new(), meta_memo.clone()),
+        |p, (out, memo)| {
+            let d = consumer_deps(deps, memo, &p.category, &p.package, &p.version);
+            out.push((key_of(p), std::sync::Arc::new(mentioned_virtuals(&d))));
+        },
+    );
+    {
+        let mut guard = VIRTUAL_MENTIONS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let map = guard.get_or_insert_with(HashMap::new);
+        for (out, _) in computed {
+            map.extend(out);
+        }
+    }
+    parents
+        .iter()
+        .map(|p| lookup(p).unwrap_or_else(|| std::sync::Arc::new(None)))
+        .collect()
+}
+
+/// The `virtual/` packages named anywhere in `deps`, or `None` if one atom
+/// does not parse.
+fn mentioned_virtuals(deps: &ConsumerDeps) -> Option<Vec<(String, String)>> {
+    let mut cps = Vec::new();
+    for (_, depstr) in &deps.strings {
+        for token in depstr.split_whitespace().filter(|t| t.contains("virtual/")) {
+            let atom = parse_dep_atom(token, "rev_dep_or")?;
+            if atom.category == "virtual" {
+                cps.push((atom.category, atom.package));
+            }
+        }
+    }
+    cps.sort();
+    cps.dedup();
+    Some(cps)
 }
 
 /// The values [`merge_bound_virtual_leaks`] reads from its caller.
@@ -1864,6 +1982,45 @@ impl Expander<'_> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    fn deps_of(strings: &[&str]) -> ConsumerDeps {
+        ConsumerDeps {
+            use_flags: HashSet::new(),
+            strings: strings
+                .iter()
+                .map(|s| ("RDEPEND".to_string(), (*s).to_string()))
+                .collect(),
+        }
+    }
+
+    /// The parent pre-filter (backlog #694's sibling): every `virtual/` atom
+    /// counts, under a USE group, an `||` group, a blocker, a version
+    /// operator or a slot, and a string without one names nothing.
+    #[test]
+    fn mentioned_virtuals_finds_every_virtual_atom_however_it_is_wrapped() {
+        let d = deps_of(&[
+            "foo? ( >=virtual/jdk-1.8:* ) || ( virtual/a:0= dev-libs/x ) !virtual/b dev-libs/y[z(+)]",
+        ]);
+        assert_eq!(
+            mentioned_virtuals(&d),
+            Some(
+                ["a", "b", "jdk"]
+                    .iter()
+                    .map(|p| ("virtual".to_string(), (*p).to_string()))
+                    .collect()
+            )
+        );
+        assert_eq!(
+            mentioned_virtuals(&deps_of(&["dev-libs/x dev-libs/y"])),
+            Some(vec![])
+        );
+    }
+
+    /// An atom that does not parse is "unknown", so the parent is evaluated.
+    #[test]
+    fn mentioned_virtuals_is_unknown_for_an_unparseable_atom() {
+        assert_eq!(mentioned_virtuals(&deps_of(&["virtual/"])), None);
+    }
 
     fn split_of(depstr: &str) -> Option<OrSplit> {
         split_or_groups(depstr, &HashSet::from(["amd64".to_string()]))

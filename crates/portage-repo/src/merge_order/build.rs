@@ -381,6 +381,7 @@ pub(crate) fn seed_toolchain_asap(entries: &[GraphEntry]) -> Vec<usize> {
     asap
 }
 
+#[cfg(test)]
 /// The closure of `node` under `ig`, or `None` when it escapes `mergeable`.
 /// Portage: depgraph.py, _serialize_tasks (gather_deps)
 pub(crate) fn gather_deps(

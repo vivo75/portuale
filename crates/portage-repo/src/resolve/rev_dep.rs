@@ -516,8 +516,6 @@ pub(crate) fn reverse_dependency_scan(
     let mut dropped: Vec<RevDepPin> = Vec::new();
     let mut report: Vec<RevDepPin> = Vec::new();
     let mut merge_parents: Vec<RevDepPin> = Vec::new();
-    let mut seen: HashSet<SeenPin> = HashSet::new();
-    let mut built_seen: BuiltSeenMap = HashMap::new();
     // Per-pass `Effective`-layer cache (one overlay per instance).
     let mut meta_memo: MetaMemo = HashMap::new();
     let or_scan = OrScan {
@@ -540,6 +538,26 @@ pub(crate) fn reverse_dependency_scan(
         world_reachable,
         excluded,
     };
+    let report_scope = ConsumerScope {
+        being_replaced: &being_replaced,
+        being_removed: &being_removed,
+        reachable: report_reachable,
+        graph_cps: &graph_cps,
+        already_installed_top_level: &already_installed_top_level,
+        world_reachable,
+        excluded,
+    };
+    let with_report_rows = portage_complete && !report_reachable.is_empty();
+    // `leaked` is read only for a virtual the scans below visit.
+    let wanted_virtuals: HashSet<(String, String)> = all_installed_packages(root)
+        .iter()
+        .filter(|c| {
+            c.category == "virtual"
+                && (consumer_in_scope(&scope, c)
+                    || (with_report_rows && consumer_in_scope(&report_scope, c)))
+        })
+        .map(|c| (c.category.clone(), c.package.clone()))
+        .collect();
     let leaked = if or_scan.portage_complete || !installed_walked.is_empty() {
         sibling_virtual_leaks(SiblingVirtualLeaksArgs {
             scan: &or_scan,
@@ -552,6 +570,7 @@ pub(crate) fn reverse_dependency_scan(
             },
             meta_memo: &mut meta_memo,
             in_scope: &|c: &InstalledPackage| consumer_in_scope(&scope, c),
+            wanted_virtuals: &wanted_virtuals,
             entries,
             root,
             config,
@@ -618,11 +637,18 @@ pub(crate) fn reverse_dependency_scan(
             }
         }
     }
-    let mut or_memo = OrSelectedMemo::default();
-    'consumer: for consumer in all_installed_packages(root).iter() {
-        if constraints_from_consumer(ConstraintsFromConsumerArgs {
+    // Each consumer's pins depend on that consumer alone (every output key
+    // carries it), so the consumers are scanned on all cores and the pieces
+    // joined; the sorts and dedups below make the join order irrelevant.
+    let everyone = all_installed_packages(root);
+    let walked: Vec<&InstalledPackage> = everyone.iter().collect();
+    let scan_one = |consumer: &InstalledPackage,
+                    scope: &ConsumerScope<'_>,
+                    report_only: bool,
+                    local: &mut ScanLocal| {
+        let _ = constraints_from_consumer(ConstraintsFromConsumerArgs {
             consumer,
-            scope: &scope,
+            scope,
             or_scan: &or_scan,
             leaked: &leaked,
             entries,
@@ -631,73 +657,56 @@ pub(crate) fn reverse_dependency_scan(
             dep_keys,
             dynamic_deps,
             ignore_built_slot_operator_deps,
-            meta_memo: &mut meta_memo,
+            meta_memo: &mut local.meta_memo,
             upgrading: &upgrading,
             use_breaks: &use_breaks,
-            seen: &mut seen,
-            built_seen: &mut built_seen,
-            dropped: &mut dropped,
-            report: &mut report,
-            merge_parents: &mut merge_parents,
+            seen: &mut local.seen,
+            built_seen: &mut local.built_seen,
+            dropped: &mut local.dropped,
+            report: &mut local.report,
+            merge_parents: &mut local.merge_parents,
             portage_complete,
-            report_only: false,
+            report_only,
             hard_want,
-            enforced: &mut enforced,
+            enforced: &mut local.enforced,
             gate,
             virt_selected: &virt_selected,
-            or_memo: &mut or_memo,
-        })
-        .is_break()
-        {
-            continue 'consumer;
-        }
-    }
+            or_memo: &mut local.or_memo,
+        });
+    };
+    let mut unwalked: Vec<&InstalledPackage> = Vec::new();
     // Portage's "Record missed updates" tail takes the parent atoms of every
     // consumer the *completed* graph contains, including consumers this pass never
     // walked into (depgraph.py:2107-2121). They are report-only: the analysis below
     // never feeds `enforced`/`dropped`, so no merge decision can move.
-    if portage_complete && !report_reachable.is_empty() {
-        let report_scope = ConsumerScope {
-            being_replaced: &being_replaced,
-            being_removed: &being_removed,
-            reachable: report_reachable,
-            graph_cps: &graph_cps,
-            already_installed_top_level: &already_installed_top_level,
-            world_reachable,
-            excluded,
-        };
-        for consumer in all_installed_packages(root).iter() {
-            if consumer_in_scope(&scope, consumer) || !consumer_in_scope(&report_scope, consumer) {
-                continue;
-            }
-            let _ = constraints_from_consumer(ConstraintsFromConsumerArgs {
-                consumer,
-                scope: &report_scope,
-                or_scan: &or_scan,
-                leaked: &leaked,
-                entries,
-                config,
-                root,
-                dep_keys,
-                dynamic_deps,
-                ignore_built_slot_operator_deps,
-                meta_memo: &mut meta_memo,
-                upgrading: &upgrading,
-                use_breaks: &use_breaks,
-                seen: &mut seen,
-                built_seen: &mut built_seen,
-                dropped: &mut dropped,
-                report: &mut report,
-                merge_parents: &mut merge_parents,
-                portage_complete,
-                report_only: true,
-                hard_want,
-                enforced: &mut enforced,
-                gate,
-                virt_selected: &virt_selected,
-                or_memo: &mut or_memo,
-            });
-        }
+
+    if with_report_rows {
+        unwalked = walked
+            .iter()
+            .copied()
+            .filter(|c| !consumer_in_scope(&scope, c) && consumer_in_scope(&report_scope, c))
+            .collect();
+    }
+    let jobs: Vec<(&InstalledPackage, bool)> = walked
+        .iter()
+        .map(|c| (*c, false))
+        .chain(unwalked.iter().map(|c| (*c, true)))
+        .collect();
+    let parts = crate::resolve::par::for_each_job(
+        &jobs,
+        || ScanLocal::warm(&meta_memo),
+        |&(consumer, report_only), local| {
+            let which = if report_only { &report_scope } else { &scope };
+            scan_one(consumer, which, report_only, local);
+        },
+    );
+    let mut built_seen: BuiltSeenMap = HashMap::new();
+    for part in parts {
+        enforced.extend(part.enforced);
+        dropped.extend(part.dropped);
+        report.extend(part.report);
+        merge_parents.extend(part.merge_parents);
+        built_seen.extend(part.built_seen);
     }
     // The built atoms rode along untouched by every mask/restart decision
     // above; attach them to their consumer's pins for the printer only. The
@@ -1693,4 +1702,28 @@ fn scan_rebuild_probe_applies(
     scan.is_some_and(|s| {
         s.backtrack_allowed && !s.want_installed_pkg(root, category, package, version)
     })
+}
+
+/// What one worker of the consumer scan collects: the outputs and the
+/// per-scan memos of [`constraints_from_consumer`].
+#[derive(Default)]
+struct ScanLocal {
+    enforced: Vec<RevDepPin>,
+    dropped: Vec<RevDepPin>,
+    report: Vec<RevDepPin>,
+    merge_parents: Vec<RevDepPin>,
+    seen: HashSet<SeenPin>,
+    built_seen: BuiltSeenMap,
+    meta_memo: MetaMemo,
+    or_memo: OrSelectedMemo,
+}
+
+impl ScanLocal {
+    /// An empty local whose `meta_memo` starts as a copy of `warm`.
+    fn warm(warm: &MetaMemo) -> Self {
+        Self {
+            meta_memo: warm.clone(),
+            ..Self::default()
+        }
+    }
 }

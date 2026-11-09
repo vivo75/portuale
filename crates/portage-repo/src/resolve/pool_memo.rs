@@ -207,7 +207,7 @@ mod tests {
                 Box::leak(Box::new(Vec::<RepoConfig>::new())),
                 Box::leak(Box::new(Categories {
                     set: BTreeSet::new(),
-                    warned: RefCell::new(HashSet::new()),
+                    warned: std::sync::Mutex::new(HashSet::new()),
                 })),
                 Path::new("/"),
             ),

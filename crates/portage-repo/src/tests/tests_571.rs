@@ -109,23 +109,23 @@ fn gate_returns_empty_for_unlisted_categories() {
     let categories = Categories::load(&repos, &cfg);
     let gate = CategoryGate::new(&repos, &categories, &cfg);
     assert_eq!(gate.repo_candidates("shared", "shared").unwrap().len(), 1);
-    assert!(categories.warned.borrow().is_empty());
+    assert!(categories.warned.lock().unwrap().is_empty());
     assert!(gate.repo_candidates("hidden", "hidden").unwrap().is_empty());
     assert_eq!(
-        categories.warned.borrow().clone(),
+        categories.warned.lock().unwrap().clone(),
         HashSet::from([("hidden".to_string(), "hidden".to_string())])
     );
     // Second lookup of the same cp: still empty (the record suppresses
     // the repeat notice).
     assert!(gate.repo_candidates("hidden", "hidden").unwrap().is_empty());
-    assert_eq!(categories.warned.borrow().len(), 1);
+    assert_eq!(categories.warned.lock().unwrap().len(), 1);
     // No ebuilds on disk: empty and silent.
     assert!(
         gate.repo_candidates("hidden", "nosuchpkg")
             .unwrap()
             .is_empty()
     );
-    assert_eq!(categories.warned.borrow().len(), 1);
+    assert_eq!(categories.warned.lock().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&_base);
 }
 
@@ -168,14 +168,14 @@ fn two_walks_sharing_categories_warn_once() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(categories.warned.borrow().len(), 1);
+    assert_eq!(categories.warned.lock().unwrap().len(), 1);
     assert!(
         second
             .repo_candidates("hidden", "hidden")
             .unwrap()
             .is_empty()
     );
-    assert_eq!(categories.warned.borrow().len(), 1);
+    assert_eq!(categories.warned.lock().unwrap().len(), 1);
     std::fs::remove_dir_all(&_base).unwrap();
 }
 
@@ -222,7 +222,7 @@ fn cloned_request_shares_the_warning_record_across_walks() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(ctx1.categories.warned.borrow().len(), 1);
+    assert_eq!(ctx1.categories.warned.lock().unwrap().len(), 1);
 }
 
 /// End to end over the shared fixtures (whose committed

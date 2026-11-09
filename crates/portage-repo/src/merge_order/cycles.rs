@@ -37,7 +37,7 @@ pub(crate) fn find_smallest_cycle(
     if mergeable.is_empty() {
         return None;
     }
-    let mut cand: Vec<usize> = if prefer_asap && !asap.is_empty() {
+    let cand: Vec<usize> = if prefer_asap && !asap.is_empty() {
         asap.iter()
             .copied()
             .filter(|i| mergeable.contains(i))
@@ -45,20 +45,32 @@ pub(crate) fn find_smallest_cycle(
     } else {
         mergeable.iter().copied().collect()
     };
-    // Sort nodes for deterministic results (cp, then version, then index).
-    cand.sort_by(|&a, &b| candidate_order(entries, a, b));
+    // Ties on closure size go to the first node in (cp, version, index)
+    // order, so the candidates need no sort: compare only on a tie.
     let mut best: Option<(HashSet<usize>, Option<Ignore>)> = None;
+    let mut best_node = 0;
+    let mut mergeable_flag = vec![false; g.alive.len()];
+    for &m in &mergeable {
+        mergeable_flag[m] = true;
+    }
+    let mut seen = Stamps::new(mergeable_flag);
     for i in range.medium_post..=range.medium_soft {
         let ig = range.ig(i);
         for &node in &cand {
             if !g.has_parents(node) {
                 continue;
             }
-            let Some(cl) = gather_deps(g, node, ig, &mergeable) else {
+            let bound = best.as_ref().map(|(b, _)| b.len() + 1);
+            let Some(cl) = gather_bounded(g, node, ig, &mut seen, bound) else {
                 continue;
             };
-            if best.as_ref().is_none_or(|(b, _)| cl.len() < b.len()) {
-                best = Some((cl, ig));
+            let wins = best.as_ref().is_none_or(|(b, _)| {
+                cl.len() < b.len()
+                    || candidate_order(entries, node, best_node) == std::cmp::Ordering::Less
+            });
+            if wins {
+                best_node = node;
+                best = Some((cl.into_iter().collect(), ig));
             }
         }
         // Exit with the lowest possible priority.
@@ -67,6 +79,69 @@ pub(crate) fn find_smallest_cycle(
         }
     }
     best
+}
+
+/// Membership marks that reset in O(1): a node is in the set when its stamp
+/// is the current generation.
+struct Stamps {
+    mark: Vec<u32>,
+    generation: u32,
+    /// The nodes a closure may contain.
+    mergeable: Vec<bool>,
+}
+
+impl Stamps {
+    fn new(mergeable: Vec<bool>) -> Self {
+        Self {
+            mark: vec![0; mergeable.len()],
+            generation: 0,
+            mergeable,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.generation += 1;
+    }
+
+    /// True when `i` was not yet in the set.
+    fn insert(&mut self, i: usize) -> bool {
+        let fresh = self.mark[i] != self.generation;
+        self.mark[i] = self.generation;
+        fresh
+    }
+}
+
+/// [`gather_deps`] on flat arrays, giving up as soon as the closure is no
+/// larger than `bound` (the caller keeps a smaller closure, or an equal one
+/// that sorts first).
+fn gather_bounded(
+    g: &Digraph,
+    node: usize,
+    ig: Option<Ignore>,
+    seen: &mut Stamps,
+    bound: Option<usize>,
+) -> Option<Vec<usize>> {
+    seen.clear();
+    let mut sel: Vec<usize> = Vec::new();
+    let mut stack = vec![node];
+    while let Some(x) = stack.pop() {
+        if !seen.mergeable[x] {
+            return None;
+        }
+        if !seen.insert(x) {
+            continue;
+        }
+        sel.push(x);
+        if bound.is_some_and(|b| sel.len() >= b) {
+            return None;
+        }
+        for (c, prios) in &g.children[x] {
+            if g.alive[*c] && ig.is_none_or(|f| prios.iter().any(|p| !f.ignores(p))) {
+                stack.push(*c);
+            }
+        }
+    }
+    Some(sel)
 }
 
 /// The `find_smallest_cycle` candidate order: `cp`, version, graph index.
