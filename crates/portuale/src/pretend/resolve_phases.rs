@@ -404,177 +404,220 @@ pub(crate) fn run_resolve_phases(args: RunResolvePhasesArgs<'_>) -> Result<Graph
         }
     };
 
-    // Phase 1 is always non-complete: the authoritative merge list.
-    // Portage's `_complete_graph` runs after the normal graph is built
-    // and only extends it, never adding a new merge.
-    // Portage: depgraph.py, _complete_graph
-    let empty_reuse: HashMap<(String, String), portage_repo::PretendOutcome> = HashMap::new();
-    let no_masks = portage_repo::SettledMasks::default();
-    let result = match handle(
-        run_resolve(false, &[], false, &empty_reuse, &no_masks).map_err(crate::error::Error::from),
-    ) {
-        Ok(result) => result,
-        Err(code) => {
-            pretend_end_news_notice(pretend, repos, root, config, color);
-            return Err(code);
-        }
-    };
-    // The `cp`s phase 1 would actually merge. The complete pass may not
-    // merge anything outside this set.
-    let locked_merges: Vec<String> = result
-        .entries
-        .iter()
-        .filter(|e| {
-            matches!(
-                e.outcome,
-                portage_repo::PretendOutcome::New { .. }
-                    | portage_repo::PretendOutcome::Upgrade { .. }
-                    | portage_repo::PretendOutcome::Downgrade { .. }
-                    | portage_repo::PretendOutcome::Reinstall { .. }
-            )
-        })
-        .map(|e| format!("{}/{}", e.category, e.package))
-        .collect();
-    // Phase 1's `New`/`Upgrade`/`Downgrade` picks for the complete walk:
-    // complete mode never wants an update, so without this a non-top-level
-    // merge demotes to kept; Portage keeps the graph node
-    // (`_select_pkg_from_graph`). `Reinstall`s stay out, all of them: the
-    // complete walk re-derives a reinstall through its own machinery --
-    // the slot-operator scan + eliminate, the `--rebuild-if-*` restart
-    // step, the `--reinstall-atoms`/USE/argument flips -- which is also
-    // what records (or withholds) its red `r` and what latches a refused
-    // display pair. Reusing a reinstall record would freeze a flag the
-    // re-derivation drops -- e.g. a top-level consumer Portage rebuilds
-    // as a plain argument `R`, never `rR` (oracle `soc` cell, host Portage
-    // 3.0.82.2: no pair, no block).
-    // Portage: depgraph.py, _complete_graph
-    let complete_reuse: HashMap<(String, String), portage_repo::PretendOutcome> = result
-        .entries
-        .iter()
-        .filter(|e| {
-            matches!(
-                e.outcome,
-                portage_repo::PretendOutcome::New { .. }
-                    | portage_repo::PretendOutcome::Upgrade { .. }
-                    | portage_repo::PretendOutcome::Downgrade { .. }
-            )
-        })
-        .map(|e| ((e.category.clone(), e.package.clone()), e.outcome.clone()))
-        .collect();
-    // A cp with picks in more than one slot is keyed once but settles per
-    // slot: reusing one slot's pick would drop the other (firefox's
-    // rust-bin:1.96.1 next to :1.94.1), so those re-resolve as before.
-    let multi_slot: std::collections::HashSet<(String, String)> = {
-        let mut seen = std::collections::HashSet::new();
-        result
+    let (result, phase1_missed, phase1_restarts) = std::thread::scope(|scope| {
+        // Phase 1 is always non-complete: the authoritative merge list.
+        // Portage's `_complete_graph` runs after the normal graph is built
+        // and only extends it, never adding a new merge.
+        // Portage: depgraph.py, _complete_graph
+        // With `--deep` the run walks the whole graph a second time, with the
+        // seeds fed in, when phase 1 shows a complete graph is wanted. That walk
+        // reads nothing phase 1 produces, so it starts now on another core and
+        // is used (or dropped) once phase 1 has decided. Same function, same
+        // inputs, so the result is the one the later call would have given.
+        let speculate = !nodeps
+            && !complete_graph
+            && deep != portage_repo::Deep::NotRequested
+            && !portage_repo::resolver_debug()
+            && !std::env::vars().any(|(k, _)| {
+                k.starts_with("PORTUALE_") && (k.contains("TRACE") || k.contains("DEBUG"))
+            });
+        let spec = speculate.then(|| {
+            scope.spawn(|| {
+                let categories =
+                    std::rc::Rc::new(portage_repo::Categories::load_quiet(repos, config_root));
+                resolve_once(ResolveOnceArgs {
+                    plan,
+                    opts,
+                    config,
+                    config_root,
+                    root,
+                    expanded_atoms,
+                    set_args,
+                    argument_sets,
+                    complete: false,
+                    locked: &[],
+                    with_seeds: true,
+                    reuse: &HashMap::new(),
+                    seed_masks: &portage_repo::SettledMasks::default(),
+                    categories,
+                    tree_sim_memo: std::rc::Rc::default(),
+                })
+            })
+        });
+        let empty_reuse: HashMap<(String, String), portage_repo::PretendOutcome> = HashMap::new();
+        let no_masks = portage_repo::SettledMasks::default();
+        let result = match handle(
+            run_resolve(false, &[], false, &empty_reuse, &no_masks)
+                .map_err(crate::error::Error::from),
+        ) {
+            Ok(result) => result,
+            Err(code) => {
+                pretend_end_news_notice(pretend, repos, root, config, color);
+                return Err(code);
+            }
+        };
+        // The `cp`s phase 1 would actually merge. The complete pass may not
+        // merge anything outside this set.
+        let locked_merges: Vec<String> = result
             .entries
             .iter()
-            .map(|e| (e.category.clone(), e.package.clone()))
-            .filter(|k| !seen.insert(k.clone()))
-            .collect()
-    };
-    let mut complete_reuse = complete_reuse;
-    complete_reuse.retain(|k, _| !multi_slot.contains(k));
-    // A `--rebuild-if-*` restart consumes a backtrack try, so phase 1's
-    // count carries into the second walk -- but only then: an unseeded
-    // first walk can misfire a probe the seeded re-walk avoids (r25).
-    // Portage: depgraph.py, _complete_graph
-    let phase1_restarts = result.backtrack_restarts;
-    // The complete walk starts from the masks phase 1 settled under: Portage
-    // runs `_complete_graph` inside that same depgraph, so a version phase 1
-    // backtracked away (a top-level pick included) stays masked there.
-    // Portage: depgraph.py, _resolve_conflicts
-    let phase1_masks = result.settled_masks.clone();
-    let phase1_rebuild_if = !result.rebuild_if_reinstalls.is_empty();
-    // Phase 2 (`_complete_graph`): run when `--complete-graph` is explicit
-    // or auto-enabled (first graph changes an installed package while a
-    // `--complete-graph-if-new-*` / `--rebuild-if-new-slot` switch is on).
-    // Skipped entirely under `--nodeps`. It never changes the visible
-    // merge list (the locked set gates it); it only widens `--json` /
-    // `--changed-deps-report` / slot-op accounting.
-    // Portage: depgraph.py, _complete_graph
-    let auto_enable = !nodeps && {
-        // The allow-list for the complete-graph decision: entries are
-        // merge-bound (listed), so this gate never fires its `!!!`.
-        let gate = portage_repo::CategoryGate::new(repos, &categories, config_root);
-        portage_repo::complete_graph_auto_enable(portage_repo::CompleteGraphAutoEnableArgs {
-            entries: &result.entries,
-            if_new_use: complete_if_new_use,
-            if_new_ver: complete_if_new_ver,
-            if_new_slot: rebuild_if_new_slot,
-            root,
-            config,
-            gate,
-        })
-    };
-    // A slot conflict while backtracking puts Portage in complete mode too.
-    // That run's missed updates and backtracks stay the first walk's: the
-    // second walk reuses its picks and never meets the conflict again.
-    // Portage: depgraph.py, _resolve_conflicts
-    let conflict_only =
-        !complete_graph && !auto_enable && !nodeps && result.slot_conflict_backtracking;
-    let auto_enable = auto_enable || conflict_only;
-    let phase1_missed = conflict_only.then(|| {
-        (
-            result.skipped_updates.clone(),
-            result.skipped_missing_deps.clone(),
-            result.skipped_missing_dep_full.clone(),
-        )
-    });
-    let want_complete = complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
-    // A first walk that already aborted (a masked or flip-only dependency) keeps its
-    // report: Portage reaches `_complete_graph` only after `_create_graph()` succeeded.
-    // Portage: depgraph.py, _resolve (select_files)
-    let phase1_aborted = matches!(result.outcome, portage_repo::ResolveOutcome::Aborted { .. });
-    // The `--debug` trace narrates the first walk only for a conflict-only
-    // second walk: it changes no row the trace shows.
-    let trace_on = portage_repo::resolver_debug();
-    if conflict_only {
-        portage_repo::set_resolver_debug(false);
-    }
-    let result = if phase1_aborted {
-        result
-    } else if want_complete {
-        match handle(
-            run_resolve(true, &locked_merges, true, &complete_reuse, &phase1_masks)
-                .map_err(crate::error::Error::from),
-        ) {
-            Ok(mut result) => {
-                if phase1_rebuild_if {
-                    result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);
-                }
-                result
-            }
-            Err(code) => {
-                pretend_end_news_notice(pretend, repos, root, config, color);
-                return Err(code);
-            }
-        }
-    } else if auto_enable {
-        // `--deep` in force (the only way to reach here with `auto_enable`
-        // true): re-run the phase-1 walk with the seeds fed in. A
-        // deterministic input means an identical walk; the only delta is
-        // the slot-operator-rebuild scan now seeing `slot_op_reachable`.
+            .filter(|e| {
+                matches!(
+                    e.outcome,
+                    portage_repo::PretendOutcome::New { .. }
+                        | portage_repo::PretendOutcome::Upgrade { .. }
+                        | portage_repo::PretendOutcome::Downgrade { .. }
+                        | portage_repo::PretendOutcome::Reinstall { .. }
+                )
+            })
+            .map(|e| format!("{}/{}", e.category, e.package))
+            .collect();
+        // Phase 1's `New`/`Upgrade`/`Downgrade` picks for the complete walk:
+        // complete mode never wants an update, so without this a non-top-level
+        // merge demotes to kept; Portage keeps the graph node
+        // (`_select_pkg_from_graph`). `Reinstall`s stay out, all of them: the
+        // complete walk re-derives a reinstall through its own machinery --
+        // the slot-operator scan + eliminate, the `--rebuild-if-*` restart
+        // step, the `--reinstall-atoms`/USE/argument flips -- which is also
+        // what records (or withholds) its red `r` and what latches a refused
+        // display pair. Reusing a reinstall record would freeze a flag the
+        // re-derivation drops -- e.g. a top-level consumer Portage rebuilds
+        // as a plain argument `R`, never `rR` (oracle `soc` cell, host Portage
+        // 3.0.82.2: no pair, no block).
         // Portage: depgraph.py, _complete_graph
-        match handle(
-            run_resolve(false, &[], true, &empty_reuse, &no_masks)
-                .map_err(crate::error::Error::from),
-        ) {
-            Ok(mut result) => {
-                if phase1_rebuild_if {
-                    result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);
-                }
-                result
-            }
-            Err(code) => {
-                pretend_end_news_notice(pretend, repos, root, config, color);
-                return Err(code);
-            }
+        let complete_reuse: HashMap<(String, String), portage_repo::PretendOutcome> = result
+            .entries
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.outcome,
+                    portage_repo::PretendOutcome::New { .. }
+                        | portage_repo::PretendOutcome::Upgrade { .. }
+                        | portage_repo::PretendOutcome::Downgrade { .. }
+                )
+            })
+            .map(|e| ((e.category.clone(), e.package.clone()), e.outcome.clone()))
+            .collect();
+        // A cp with picks in more than one slot is keyed once but settles per
+        // slot: reusing one slot's pick would drop the other (firefox's
+        // rust-bin:1.96.1 next to :1.94.1), so those re-resolve as before.
+        let multi_slot: std::collections::HashSet<(String, String)> = {
+            let mut seen = std::collections::HashSet::new();
+            result
+                .entries
+                .iter()
+                .map(|e| (e.category.clone(), e.package.clone()))
+                .filter(|k| !seen.insert(k.clone()))
+                .collect()
+        };
+        let mut complete_reuse = complete_reuse;
+        complete_reuse.retain(|k, _| !multi_slot.contains(k));
+        // A `--rebuild-if-*` restart consumes a backtrack try, so phase 1's
+        // count carries into the second walk -- but only then: an unseeded
+        // first walk can misfire a probe the seeded re-walk avoids (r25).
+        // Portage: depgraph.py, _complete_graph
+        let phase1_restarts = result.backtrack_restarts;
+        // The complete walk starts from the masks phase 1 settled under: Portage
+        // runs `_complete_graph` inside that same depgraph, so a version phase 1
+        // backtracked away (a top-level pick included) stays masked there.
+        // Portage: depgraph.py, _resolve_conflicts
+        let phase1_masks = result.settled_masks.clone();
+        let phase1_rebuild_if = !result.rebuild_if_reinstalls.is_empty();
+        // Phase 2 (`_complete_graph`): run when `--complete-graph` is explicit
+        // or auto-enabled (first graph changes an installed package while a
+        // `--complete-graph-if-new-*` / `--rebuild-if-new-slot` switch is on).
+        // Skipped entirely under `--nodeps`. It never changes the visible
+        // merge list (the locked set gates it); it only widens `--json` /
+        // `--changed-deps-report` / slot-op accounting.
+        // Portage: depgraph.py, _complete_graph
+        let auto_enable = !nodeps && {
+            // The allow-list for the complete-graph decision: entries are
+            // merge-bound (listed), so this gate never fires its `!!!`.
+            let gate = portage_repo::CategoryGate::new(repos, &categories, config_root);
+            portage_repo::complete_graph_auto_enable(portage_repo::CompleteGraphAutoEnableArgs {
+                entries: &result.entries,
+                if_new_use: complete_if_new_use,
+                if_new_ver: complete_if_new_ver,
+                if_new_slot: rebuild_if_new_slot,
+                root,
+                config,
+                gate,
+            })
+        };
+        // A slot conflict while backtracking puts Portage in complete mode too.
+        // That run's missed updates and backtracks stay the first walk's: the
+        // second walk reuses its picks and never meets the conflict again.
+        // Portage: depgraph.py, _resolve_conflicts
+        let conflict_only =
+            !complete_graph && !auto_enable && !nodeps && result.slot_conflict_backtracking;
+        let auto_enable = auto_enable || conflict_only;
+        let phase1_missed = conflict_only.then(|| {
+            (
+                result.skipped_updates.clone(),
+                result.skipped_missing_deps.clone(),
+                result.skipped_missing_dep_full.clone(),
+            )
+        });
+        let want_complete =
+            complete_graph || (deep == portage_repo::Deep::NotRequested && auto_enable);
+        // A first walk that already aborted (a masked or flip-only dependency) keeps its
+        // report: Portage reaches `_complete_graph` only after `_create_graph()` succeeded.
+        // Portage: depgraph.py, _resolve (select_files)
+        let phase1_aborted = matches!(result.outcome, portage_repo::ResolveOutcome::Aborted { .. });
+        // The `--debug` trace narrates the first walk only for a conflict-only
+        // second walk: it changes no row the trace shows.
+        let trace_on = portage_repo::resolver_debug();
+        if conflict_only {
+            portage_repo::set_resolver_debug(false);
         }
-    } else {
-        result
-    };
-    portage_repo::set_resolver_debug(trace_on);
+        let result = if phase1_aborted {
+            result
+        } else if want_complete {
+            match handle(
+                run_resolve(true, &locked_merges, true, &complete_reuse, &phase1_masks)
+                    .map_err(crate::error::Error::from),
+            ) {
+                Ok(mut result) => {
+                    if phase1_rebuild_if {
+                        result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);
+                    }
+                    result
+                }
+                Err(code) => {
+                    pretend_end_news_notice(pretend, repos, root, config, color);
+                    return Err(code);
+                }
+            }
+        } else if auto_enable {
+            // `--deep` in force (the only way to reach here with `auto_enable`
+            // true): re-run the phase-1 walk with the seeds fed in. A
+            // deterministic input means an identical walk; the only delta is
+            // the slot-operator-rebuild scan now seeing `slot_op_reachable`.
+            // Portage: depgraph.py, _complete_graph
+            let rerun = match spec {
+                Some(handle) => handle
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                None => run_resolve(false, &[], true, &empty_reuse, &no_masks),
+            };
+            match handle(rerun.map_err(crate::error::Error::from)) {
+                Ok(mut result) => {
+                    if phase1_rebuild_if {
+                        result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);
+                    }
+                    result
+                }
+                Err(code) => {
+                    pretend_end_news_notice(pretend, repos, root, config, color);
+                    return Err(code);
+                }
+            }
+        } else {
+            result
+        };
+        portage_repo::set_resolver_debug(trace_on);
+        Ok((result, phase1_missed, phase1_restarts))
+    })?;
     let mut result = result;
     if let Some((updates, missing, missing_full)) = phase1_missed {
         result.backtrack_restarts = result.backtrack_restarts.max(phase1_restarts);

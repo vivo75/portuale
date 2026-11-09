@@ -1694,6 +1694,7 @@ fn ctx_161<'a>(
         categories: std::rc::Rc::new(Categories {
             set: test_categories(&repos),
             warned: Default::default(),
+            quiet: false,
         }),
         repos,
         slot_op_reachable: o.reachable.clone(),

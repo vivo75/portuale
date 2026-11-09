@@ -2690,6 +2690,7 @@ fn ctx_163<'a>(args: Ctx163Args<'a>) -> ResolveCtx<'a> {
         categories: std::rc::Rc::new(Categories {
             set: test_categories(&repos),
             warned: Default::default(),
+            quiet: false,
         }),
         repos,
         slot_op_reachable: reachable.clone(),

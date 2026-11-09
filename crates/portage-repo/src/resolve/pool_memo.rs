@@ -208,6 +208,7 @@ mod tests {
                 Box::leak(Box::new(Categories {
                     set: BTreeSet::new(),
                     warned: std::sync::Mutex::new(HashSet::new()),
+                    quiet: false,
                 })),
                 Path::new("/"),
             ),

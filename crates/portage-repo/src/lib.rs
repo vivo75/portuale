@@ -63,6 +63,7 @@ pub(crate) fn test_gate(repos: &[crate::RepoConfig]) -> crate::CategoryGate<'sta
         Box::leak(Box::new(crate::Categories {
             set: test_categories(repos),
             warned: std::sync::Mutex::new(std::collections::HashSet::new()),
+            quiet: false,
         })),
         Box::leak(Box::new(std::path::PathBuf::from("/"))),
     )

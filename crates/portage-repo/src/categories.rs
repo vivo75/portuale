@@ -37,6 +37,9 @@ pub struct Categories {
     pub set: BTreeSet<String>,
     /// `(category, package)` pairs the `!!!` already fired for.
     pub warned: Mutex<HashSet<(String, String)>>,
+    /// Records the pairs but never prints the `!!!`: for a walk run ahead of
+    /// time whose notice the run's shared record prints once, in order.
+    pub quiet: bool,
 }
 
 impl Categories {
@@ -45,6 +48,15 @@ impl Categories {
         Self {
             set: repo_categories(repos, config_root),
             warned: Mutex::new(HashSet::new()),
+            quiet: false,
+        }
+    }
+
+    /// [`Categories::load`] that never prints the unlisted-category notice.
+    pub fn load_quiet(repos: &[RepoConfig], config_root: &Path) -> Self {
+        Self {
+            quiet: true,
+            ..Self::load(repos, config_root)
         }
     }
 }

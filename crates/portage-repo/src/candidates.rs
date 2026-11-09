@@ -336,6 +336,7 @@ impl CategoryGate<'_> {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert((category.to_string(), package.to_string()))
+            && !self.categories.quiet
         {
             eprintln!("{}", self.unlisted_category_line(category, package));
         }
