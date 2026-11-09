@@ -197,3 +197,68 @@ fn classify_inner_member_matches_portage_extract_filename_compression() {
     assert!(classify_inner_member("metadata", "image.tar.zst").is_none());
     assert!(classify_inner_member("metadata", "Manifest").is_none());
 }
+
+/// The `zstd` binary's output for `bytes`.
+fn zstd_compress(bytes: &[u8], extra: &[&str]) -> Vec<u8> {
+    use std::io::Write;
+    let mut child = Command::new("zstd")
+        .args(["-q", "-c"])
+        .args(extra)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let data = bytes.to_vec();
+    let pump = std::thread::spawn(move || stdin.write_all(&data));
+    let out = child.wait_with_output().unwrap();
+    pump.join().unwrap().unwrap();
+    assert!(out.status.success());
+    out.stdout
+}
+
+/// The in-process zstd read gives the members the `zstd` binary's output
+/// gives, for the default level, a long window and a stream with a content
+/// checksum, and declines (so the binary runs) for everything it cannot
+/// vouch for: a corrupt stream, a truncated one, two frames in a row.
+#[test]
+fn zstd_in_process_agrees_with_the_binary_and_declines_what_it_cannot_vouch_for() {
+    let tar = build_inner_tar(&[
+        inner_entry("metadata/SLOT", b"0\n"),
+        inner_entry("metadata/RDEPEND", &b"dev-libs/newpkg\n".repeat(2000)),
+    ]);
+    let gpkg = Path::new("/test/pkg.gpkg.tar");
+    let want = collect_inner_members(gpkg, tar.as_slice()).unwrap();
+    for extra in [&[][..], &["--long=27"][..], &["--check"][..], &["-19"][..]] {
+        let compressed = zstd_compress(&tar, extra);
+        let got = collect_zstd_in_process(gpkg, &compressed)
+            .unwrap_or_else(|| panic!("declined a good stream ({extra:?})"));
+        assert_eq!(got.len(), want.len(), "{extra:?}");
+        for (g, w) in got.iter().zip(&want) {
+            assert_eq!(
+                (&g.key, g.mode, &g.data),
+                (&w.key, w.mode, &w.data),
+                "{extra:?}"
+            );
+        }
+    }
+    let good = zstd_compress(&tar, &["--check"]);
+    assert!(collect_zstd_in_process(gpkg, b"this is not a zstd stream").is_none());
+    assert!(collect_zstd_in_process(gpkg, &good[..good.len() / 2]).is_none());
+    // A flipped byte in the body: the checksum or the blocks refuse it.
+    let mut flipped = good.clone();
+    let mid = flipped.len() / 2;
+    flipped[mid] ^= 0xff;
+    assert!(collect_zstd_in_process(gpkg, &flipped).is_none());
+    // Two frames in a row: the binary reads both, this reads one, so it declines.
+    let twice = [good.clone(), good.clone()].concat();
+    assert!(collect_zstd_in_process(gpkg, &twice).is_none());
+    // And `read_inner_metadata` still answers for all of them.
+    let metadata = read_inner_metadata(
+        gpkg,
+        "metadata.tar.zst",
+        &twice,
+        Some(&["zstd", "-dc", "--long=31"]),
+    );
+    assert!(metadata.is_ok(), "{metadata:?}");
+}

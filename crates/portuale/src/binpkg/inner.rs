@@ -199,6 +199,31 @@ pub(crate) fn decompress_member_to_file<R: Read>(
     Ok(())
 }
 
+/// The inner members of a zstd-compressed `metadata.tar`, decompressed in
+/// process. `Some` only when the whole stream decoded cleanly (frame
+/// checksum checked here, exactly one frame, tar parsed); any other outcome is
+/// `None` and the caller runs the `zstd` binary, so a corrupt or unusual
+/// package is reported as it always was.
+pub(crate) fn collect_zstd_in_process(
+    gpkg: &Path,
+    member_bytes: &[u8],
+) -> Option<Vec<InnerMember>> {
+    let mut rest = member_bytes;
+    let mut decoder = ruzstd::decoding::StreamingDecoder::new(&mut rest).ok()?;
+    let members = collect_inner_members(gpkg, &mut decoder).ok()?;
+    // The tar ends before the stream does: read the rest so the frame's
+    // checksum is verified, as `zstd -dc` does.
+    std::io::copy(&mut decoder, &mut std::io::sink()).ok()?;
+    // The decoder does not compare the frame's content checksum itself.
+    let frame = decoder.into_frame_decoder();
+    if let Some(stored) = frame.get_checksum_from_data()
+        && Some(stored) != frame.get_calculated_checksum()
+    {
+        return None;
+    }
+    rest.is_empty().then_some(members)
+}
+
 /// Read the inner `metadata.tar` into resolved `(key, bytes)` members in
 /// first-appearance order with last-wins values. `member_bytes` is the
 /// outer container's `metadata.tar[.<comp>]` member, already read and
@@ -215,42 +240,54 @@ pub(crate) fn read_inner_metadata(
     let members = match comp {
         None => collect_inner_members(gpkg, member_bytes)?,
         Some(argv) => {
-            // A missing decompressor is the skip class.
-            let mut child = Command::new(argv[0])
-                .args(&argv[1..])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .spawn()
-                .map_err(|e| BinpkgError::Invalid(format!("failed to spawn {}: {e}", argv[0])))?;
-            let mut stdin = child.stdin.take().expect("stdin is piped");
-            let stdout = child.stdout.take().expect("stdout is piped");
-            // Feed the bytes on a scope thread: the child's stdout is read
-            // here, so writing its stdin inline could deadlock on a pipe.
-            let collected = std::thread::scope(|scope| {
-                let pump = scope.spawn(move || {
-                    let copied = std::io::copy(&mut { member_bytes }, &mut stdin);
-                    drop(stdin);
-                    copied
+            // zstd, the usual compressor, is read in process; anything it
+            // cannot read, and every other compressor, goes through the
+            // binary, whose errors are the ones reported.
+            if let Some(members) = (argv[0] == "zstd")
+                .then(|| collect_zstd_in_process(gpkg, member_bytes))
+                .flatten()
+            {
+                members
+            } else {
+                // A missing decompressor is the skip class.
+                let mut child = Command::new(argv[0])
+                    .args(&argv[1..])
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .spawn()
+                    .map_err(|e| {
+                        BinpkgError::Invalid(format!("failed to spawn {}: {e}", argv[0]))
+                    })?;
+                let mut stdin = child.stdin.take().expect("stdin is piped");
+                let stdout = child.stdout.take().expect("stdout is piped");
+                // Feed the bytes on a scope thread: the child's stdout is read
+                // here, so writing its stdin inline could deadlock on a pipe.
+                let collected = std::thread::scope(|scope| {
+                    let pump = scope.spawn(move || {
+                        let copied = std::io::copy(&mut { member_bytes }, &mut stdin);
+                        drop(stdin);
+                        copied
+                    });
+                    let collected = collect_inner_members(gpkg, stdout);
+                    let _ = pump.join();
+                    collected
                 });
-                let collected = collect_inner_members(gpkg, stdout);
-                let _ = pump.join();
-                collected
-            });
-            let status = child
-                .wait()
-                .map_err(|e| BinpkgError::Fatal(format!("waiting for {}: {e}", argv[0])))?;
-            match (collected, status.success()) {
-                (Ok(members), true) => members,
-                // A failed decompressor with a member-level error behind it
-                // lets the member error speak for itself; otherwise the
-                // decompress failure (skip class).
-                (Ok(_), false) => {
-                    return Err(BinpkgError::Invalid(format!(
-                        "{} failed to decompress {member_label} ({status})",
-                        argv[0]
-                    )));
+                let status = child
+                    .wait()
+                    .map_err(|e| BinpkgError::Fatal(format!("waiting for {}: {e}", argv[0])))?;
+                match (collected, status.success()) {
+                    (Ok(members), true) => members,
+                    // A failed decompressor with a member-level error behind it
+                    // lets the member error speak for itself; otherwise the
+                    // decompress failure (skip class).
+                    (Ok(_), false) => {
+                        return Err(BinpkgError::Invalid(format!(
+                            "{} failed to decompress {member_label} ({status})",
+                            argv[0]
+                        )));
+                    }
+                    (Err(error), _) => return Err(error),
                 }
-                (Err(error), _) => return Err(error),
             }
         }
     };

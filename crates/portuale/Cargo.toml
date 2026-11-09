@@ -85,6 +85,13 @@ regex = "1"
 # untouched; already in Cargo.lock via brush). Same waiver as md-5
 # above.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The gpkg `metadata.tar.zst` member (a few KB per package) is decompressed
+# in process: spawning `zstd -dc --long=31` per local package cost about
+# 3.5 ms each on the resolve's critical path. Pure Rust, like the two
+# crates above, so the musl-static story is unchanged; anything it cannot
+# read (a corrupt or unusual stream) goes through the `zstd` binary as
+# before, and every other compressor still does.
+ruzstd = "0.9"
 # Real merge/filesystem mutation (task #55, first slice): CONTENTS's own
 # "obj" lines record a real MD5 digest of each merged regular file
 # (mergeme()'s own `perform_md5`, `lib/portage/checksum.py`) -- another
