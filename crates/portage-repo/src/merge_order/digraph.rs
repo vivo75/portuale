@@ -22,19 +22,6 @@ pub(crate) struct Digraph {
 }
 
 impl Digraph {
-    #[cfg(test)]
-    /// A child counts when at least one of the edge's priorities survives the filter.
-    /// Portage: portage/util/digraph.py, child_nodes
-    pub(crate) fn child_nodes(&self, i: usize, ig: Option<Ignore>) -> Vec<usize> {
-        self.children[i]
-            .iter()
-            .filter(|(c, prios)| {
-                self.alive[*c] && ig.is_none_or(|f| prios.iter().any(|p| !f.ignores(p)))
-            })
-            .map(|(c, _)| *c)
-            .collect()
-    }
-
     pub(crate) fn is_leaf(&self, i: usize, ig: Option<Ignore>) -> bool {
         !self.children[i].iter().any(|(c, prios)| {
             self.alive[*c] && ig.is_none_or(|f| prios.iter().any(|p| !f.ignores(p)))

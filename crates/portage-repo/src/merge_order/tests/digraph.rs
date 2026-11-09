@@ -148,16 +148,10 @@ fn frontier_add_edge_only_grows_survival() {
 // -----------------------------------------------------------------
 
 #[test]
-fn digraph_child_nodes_and_has_parents_pin_the_alive_filter() {
+fn digraph_has_parents_ignores_dead_parents() {
     let mut g = test_graph(3, &[(0, 1, prio(2)), (0, 2, prio(32))]);
-    assert_eq!(g.child_nodes(0, None), vec![1, 2]);
     assert!(g.has_parents(1));
     assert!(!g.has_parents(0));
-    // The optional edge drops under `n_ignore_optional`.
-    assert_eq!(g.child_nodes(0, Some(Ignore::NOptional)), vec![1]);
-    // A dead child disappears.
-    g.alive[1] = false;
-    assert_eq!(g.child_nodes(0, None), vec![2]);
     // A dead parent does not count.
     g.alive[0] = false;
     assert!(!g.has_parents(2));

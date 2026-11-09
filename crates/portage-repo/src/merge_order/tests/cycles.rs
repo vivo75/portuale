@@ -366,3 +366,54 @@ fn find_smallest_cycle_ignores_input_order_with_a_versionless_entry() {
     }
     assert_eq!(seen.len(), 1, "same pick for every input order: {seen:?}");
 }
+
+/// Stand-in for Portage's `gather_deps`: the closure of `node` under `ig`.
+fn closure(
+    g: &Digraph,
+    node: usize,
+    ig: Option<Ignore>,
+    mergeable: &[usize],
+    bound: Option<usize>,
+) -> Option<HashSet<usize>> {
+    let mut flags = vec![false; g.alive.len()];
+    for &m in mergeable {
+        flags[m] = true;
+    }
+    gather_bounded(g, node, ig, &mut Stamps::new(flags), bound).map(|v| v.into_iter().collect())
+}
+
+#[test]
+fn gather_bounded_collects_the_filtered_closure_and_rejects_escapes() {
+    let mut g = test_graph(4, &[(0, 1, prio(2)), (1, 2, prio(2)), (0, 3, prio(32))]);
+    assert_eq!(
+        closure(&g, 0, None, &[0, 1, 2, 3], None),
+        Some(HashSet::from([0, 1, 2, 3]))
+    );
+    // The optional child 3 escapes the mergeable set.
+    assert_eq!(closure(&g, 0, None, &[0, 1, 2], None), None);
+    // The filter drops the escaping optional edge.
+    assert_eq!(
+        closure(&g, 0, Some(Ignore::NOptional), &[0, 1, 2], None),
+        Some(HashSet::from([0, 1, 2]))
+    );
+    // A deeper escape is rejected too.
+    assert_eq!(closure(&g, 0, None, &[0], None), None, "1 escapes");
+    // A dead child is not followed.
+    g.alive[1] = false;
+    assert_eq!(
+        closure(&g, 0, Some(Ignore::NOptional), &[0], None),
+        Some(HashSet::from([0]))
+    );
+}
+
+#[test]
+fn gather_bounded_gives_up_once_the_closure_outgrows_the_bound() {
+    let g = test_graph(3, &[(0, 1, prio(2)), (1, 2, prio(2))]);
+    let all = [0, 1, 2];
+    // Bound = best size + 1: a closure of that size cannot improve on it.
+    assert_eq!(closure(&g, 0, None, &all, Some(3)), None);
+    assert_eq!(
+        closure(&g, 0, None, &all, Some(4)),
+        Some(HashSet::from([0, 1, 2]))
+    );
+}

@@ -626,27 +626,6 @@ fn seed_toolchain_asap_pins_the_provider_lookup() {
 }
 
 #[test]
-fn gather_deps_collects_the_filtered_closure_and_rejects_escapes() {
-    let g = test_graph(4, &[(0, 1, prio(2)), (1, 2, prio(2)), (0, 3, prio(32))]);
-    let mergeable: HashSet<usize> = [0, 1, 2, 3].into_iter().collect();
-    assert_eq!(
-        gather_deps(&g, 0, None, &mergeable),
-        Some([0, 1, 2, 3].into_iter().collect())
-    );
-    // The optional child 3 escapes the mergeable set.
-    let mergeable: HashSet<usize> = [0, 1, 2].into_iter().collect();
-    assert_eq!(gather_deps(&g, 0, None, &mergeable), None);
-    // The filter drops the escaping optional edge.
-    assert_eq!(
-        gather_deps(&g, 0, Some(Ignore::NOptional), &mergeable),
-        Some([0, 1, 2].into_iter().collect())
-    );
-    // A deeper escape is rejected too.
-    let mergeable: HashSet<usize> = [0].into_iter().collect();
-    assert_eq!(gather_deps(&g, 0, None, &mergeable), None, "1 escapes");
-}
-
-#[test]
 fn add_usability_edges_waits_for_the_unsatisfied_runtime_closure_of_a_build_dep() {
     // #680: 0 builds with 1 (BDEPEND). 1 needs 2 at run time and 2 needs 3,
     // none installed; 1's need of 4 is met by an installed package.

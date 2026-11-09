@@ -6,9 +6,6 @@ The merge-order digraph and the serialize frontier.
 - Node `i` is `entries[i]`; `children[i]` = `(child, priorities)`, in edge-creation order.
 - `installed`: Portage's `node.installed` -- a "nomerge" node, present only to constrain and inform merge order, never emitted.
 
-## impl Digraph::child_nodes
-- Ports Portage's `digraph.child_nodes(node, ignore_priority)`: a child counts when at least one of the edge's priorities survives the filter.
-
 ## impl Digraph::leaf_nodes
 - Ports Portage's `digraph.leaf_nodes(ignore_priority)` -- every alive leaf, in `order` sequence.
 

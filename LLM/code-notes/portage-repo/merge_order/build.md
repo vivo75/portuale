@@ -40,9 +40,6 @@ Building the digraph and biasing it toward Portage's order.
 - Portage: `pkg.operation == "merge" and not vardb.cpv_exists(pkg.cpv)` -- a genuine new-version/upgrade merge, NOT a bare `[ebuild R]` reinstall at a cpv already in the vdb. A `@world` re-emerge where `virtual/libc` / `virtual/os-headers` just reinstall must not seed `asap`, or they front-load past dep-free `@system` leaves like `sys-devel/gnuconfig`.
 - The virtual itself, if it is a genuine merge (Portage's `_package_tracker.match` returns it too).
 
-## fn gather_deps
-- Ports Portage's `_serialize_tasks`' `gather_deps`: the closure of `node` under `ig`, or `None` when it escapes `mergeable`. "Recursively gather a group of nodes that RDEPEND on eachother. This ensures that they are merged as a group and get their RDEPENDs satisfied as soon as possible."
-
 ## fn add_usability_edges
 - #680: charter property 2 / PMS 8.1 -- a build-time dependency is usable only when its RDEPEND closure is met. The scheduler relaxes run-time edges freely (Portage's ladder), so before this an installed BDEPEND tool (`sys-apps/help2man`) whose run-time dep (`dev-perl/Locale-gettext`) waited on a slot-operator rebuild let `dev-build/automake` build at #260 while the module merged at #299 (`-puvDN @world`, bed run `l0-health-20261107T195447Z`).
 - Only run-time edges no installed package satisfies are followed (`satisfied` comes from `usable_installed_by_cp`, so a package the plan breaks counts as unsatisfied). A satisfied run-time edge means the installed copy already works.

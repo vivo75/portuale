@@ -15,7 +15,7 @@ pub(crate) struct FindSmallestCycleArgs<'a> {
     pub(crate) ineligible: &'a HashSet<usize>,
 }
 
-/// The smallest `gather_deps` closure among the currently-mergeable nodes,
+/// The smallest `gather_deps` closure (`gather_bounded` here) among the currently-mergeable nodes,
 /// searched from the lowest `ignore_priority` rung upward.
 /// Portage: depgraph.py, find_smallest_cycle
 pub(crate) fn find_smallest_cycle(
@@ -83,7 +83,7 @@ pub(crate) fn find_smallest_cycle(
 
 /// Membership marks that reset in O(1): a node is in the set when its stamp
 /// is the current generation.
-struct Stamps {
+pub(crate) struct Stamps {
     mark: Vec<u32>,
     generation: u32,
     /// The nodes a closure may contain.
@@ -91,7 +91,7 @@ struct Stamps {
 }
 
 impl Stamps {
-    fn new(mergeable: Vec<bool>) -> Self {
+    pub(crate) fn new(mergeable: Vec<bool>) -> Self {
         Self {
             mark: vec![0; mergeable.len()],
             generation: 0,
@@ -111,10 +111,11 @@ impl Stamps {
     }
 }
 
-/// [`gather_deps`] on flat arrays, giving up as soon as the closure is no
+/// Portage's `gather_deps` on flat arrays: the closure of `node` under `ig`,
+/// or `None` when it escapes the mergeable set; it also gives up as soon as the closure is no
 /// larger than `bound` (the caller keeps a smaller closure, or an equal one
 /// that sorts first).
-fn gather_bounded(
+pub(crate) fn gather_bounded(
     g: &Digraph,
     node: usize,
     ig: Option<Ignore>,
