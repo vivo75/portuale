@@ -12,6 +12,8 @@ pub(crate) type SlotOpForceScan = (
 
 /// Arguments of [`slot_operator_update_force_scan`].
 pub(crate) struct SlotOperatorUpdateForceScanArgs<'a> {
+    /// Dynamic-deps view of the installed parents that veto a candidate.
+    pub(crate) effective: Option<EffectiveDeps<'a>>,
     pub(crate) root: &'a Path,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) entries: &'a [GraphEntry],
@@ -36,6 +38,7 @@ pub(crate) fn slot_operator_update_force_scan(
     args: SlotOperatorUpdateForceScanArgs<'_>,
 ) -> SlotOpForceScan {
     let SlotOperatorUpdateForceScanArgs {
+        effective,
         root,
         config,
         entries,
@@ -77,6 +80,7 @@ pub(crate) fn slot_operator_update_force_scan(
         excluded.iter().any(|a| matches_cli_option_atom(a, &cpv))
     };
     let probe_parents = collect_probe_parents(CollectProbeParentsArgs {
+        effective,
         root,
         entries,
         reachable,

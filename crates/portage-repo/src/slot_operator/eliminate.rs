@@ -235,6 +235,7 @@ pub(crate) fn slot_operator_rebuild_entries(
         let mut combined: Vec<GraphEntry> = entries.to_vec();
         combined.extend(out.iter().cloned());
         let (next, pairs, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+            effective: None,
             root,
             entries: &combined,
             reachable,

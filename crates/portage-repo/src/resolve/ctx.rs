@@ -288,6 +288,28 @@ pub(crate) struct ResolveCtx<'a> {
 }
 
 impl<'a> ResolveCtx<'a> {
+    /// The dynamic-deps view the update probes read an installed parent through.
+    // Portage: FakeVartree.py, _apply_dynamic_deps
+    pub(crate) fn effective_deps(&self) -> EffectiveDeps<'_> {
+        EffectiveDeps {
+            gate: self.gate(),
+            dynamic_deps: self.dynamic_deps,
+            ignore_built_slot_operator_deps: self.ignore_built_slot_operator_deps,
+        }
+    }
+
+    /// The installed parents that veto a forced child update. Portage holds
+    /// every installed parent its `_complete_graph` pulled in; a plain pass
+    /// (no complete seeds) stands in with the blocker-retry closure.
+    // Portage: depgraph.py, _slot_operator_check_reverse_dependencies
+    pub(crate) fn force_scan_reachable(&self) -> &HashSet<(String, String)> {
+        if self.slot_op_reachable.is_empty() {
+            &self.blocker_retry_closure
+        } else {
+            &self.slot_op_reachable
+        }
+    }
+
     /// The consumers the slot-operator scans may rebuild. A `--deep` walk of
     /// a set target (`@world`) reaches every installed dependency itself, so
     /// only what the pass walked counts (Portage probes the graph, never an

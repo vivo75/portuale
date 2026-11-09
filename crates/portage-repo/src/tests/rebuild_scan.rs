@@ -37,6 +37,7 @@ fn slot_operator_rebuild_scan_treats_a_pin_forced_downgrade_as_a_missed_update()
     let empty: BTreeSet<(String, String)> = BTreeSet::new();
     let scan = |update: bool, top: &HashSet<(String, String)>| {
         slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+            effective: None,
             root: &dir,
             entries: std::slice::from_ref(&bar_downgrade),
             reachable: &reach,
@@ -119,6 +120,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         .collect();
     let empty: BTreeSet<(String, String)> = BTreeSet::new();
     let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
@@ -152,6 +154,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
 
     // Nothing changing `bar` -> no rebuilds.
     let (empty_sched, empty_abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: &[],
         reachable: &reach,
@@ -174,6 +177,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     // sets). The slot-operator-dep probe is not complete-mode gated, but `bar`'s
     // upgrade carries no unbuilt `:=` dep, so nothing fires here.
     let (none_sched, none_abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &HashSet::new(),
@@ -217,6 +221,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         ("dev-libs".to_string(), "stale".to_string()),
     ]);
     let (again, again_abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: &[bar_upgrade.clone(), stale_rebuild],
         reachable: &reach,
@@ -343,6 +348,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     let empty: BTreeSet<(String, String)> = BTreeSet::new();
     let massc = ("dev-libs".to_string(), "massc".to_string());
     let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -372,6 +378,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     // No `--update` and provider not directly requested: withheld,
     // mirroring Portage's `want_update` gate.
     let (withheld, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -392,6 +399,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     let top = HashSet::from([("dev-libs".to_string(), "massb".to_string())]);
     let top_atoms = HashSet::from(["dev-libs/massb".to_string()]);
     let (via_arg, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -412,6 +420,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     // the installed slot and the replace set stays empty.
     let top_atoms = HashSet::from(["dev-libs/massb".to_string()]);
     let (greedy_pinned, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -442,6 +451,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
         ..graph_entry("dev-libs", "massb", "0.9")
     };
     let (downgraded, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &[older.clone(), consumer.clone()],
         reachable: &HashSet::new(),
@@ -497,6 +507,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     // The vdb half lives on `base` (installed `massb-1` + `massc-1`);
     // only the tree is downgrade-only here.
     let (pure_downgrade, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &[older, consumer.clone()],
         reachable: &HashSet::new(),
@@ -517,6 +528,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     // No tree candidate for the consumer: no replacement parent, no
     // schedule (Portage finds nothing and does nothing).
     let (nocand, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -535,6 +547,7 @@ fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider() {
     assert!(nocand.is_empty(), "no candidate means no schedule");
     // Neither walked nor reachable: outside the probe's population.
     let (unwalked, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: std::slice::from_ref(&fresh),
         reachable: &HashSet::new(),
@@ -632,6 +645,7 @@ fn slot_operator_rebuild_scan_pin_gate_cuts_probe() {
     let top = HashSet::from([massb.clone()]);
     let scan = |atoms: &HashSet<String>| {
         slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+            effective: None,
             root: &base,
             entries: &entries,
             reachable: &HashSet::new(),
@@ -750,6 +764,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
     let massc = ("dev-libs".to_string(), "massc".to_string());
     let scan = |entries: &[GraphEntry], excluded: &[String]| {
         slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+            effective: None,
             root: &base,
             entries,
             reachable: &HashSet::new(),
@@ -793,6 +808,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
     let reach_massc: HashSet<(String, String)> =
         HashSet::from([massc.clone(), ("dev-libs".to_string(), "massv".to_string())]);
     let (same_refused, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &[upgrade.clone(), consumer.clone(), veto_parent.clone()],
         reachable: &reach_massc,
@@ -810,6 +826,7 @@ fn slot_operator_update_probe_refusal_vetoes_both_arms() {
     });
     assert!(same_refused.is_empty(), "the same-slot arm refuses too");
     let (same_kept, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &[upgrade, consumer, veto_parent],
         reachable: &reach_massc,
@@ -912,6 +929,7 @@ fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
     // upgrade; `masso` (bound to the entry's own slot 1) must not
     // leak that entry into the new arm.
     let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &[upgrade, walked_consumer("massn"), walked_consumer("masso")],
         reachable: &HashSet::new(),
@@ -1015,6 +1033,7 @@ fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot
     };
     let empty: BTreeSet<(String, String)> = BTreeSet::new();
     let (scheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &[upgrade, walked_consumer("pinned"), walked_consumer("open")],
         reachable: &HashSet::new(),
@@ -1101,6 +1120,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
 
     // bdeps off, consumers only reachable: runtime/install-time keys.
     let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
@@ -1128,6 +1148,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
     // Reachable-but-unwalked consumers keep build-time keys off.
     // Portage: _emerge/depgraph.py
     let (scheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: std::slice::from_ref(&bar_upgrade),
         reachable: &reach,
@@ -1155,6 +1176,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
         walked.push(walked_entry(name));
     }
     let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: &walked,
         reachable: &reach,
@@ -1200,6 +1222,7 @@ fn slot_operator_rebuild_scan_honours_with_bdeps() {
     // The reachability gate beats the walk test: even a walked consumer's
     // build-time keys stay out when bdeps is off.
     let (scheduled, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: &walked,
         reachable: &reach,
@@ -1257,6 +1280,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
     // The Reinstall parent feeds `new_slot`, so the stale `:2/2=`
     // binding schedules a rebuild.
     let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: std::slice::from_ref(&bar_reinstall),
         reachable: &reach,
@@ -1286,6 +1310,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
     // An `undone` consumer is skipped even though it is reachable.
     let undone = BTreeSet::from([stale.clone()]);
     let (done_sched, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: std::slice::from_ref(&bar_reinstall),
         reachable: &reach,
@@ -1307,6 +1332,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
     let elsewhere: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "other".to_string())]);
     let (far_sched, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &dir,
         entries: std::slice::from_ref(&bar_reinstall),
         reachable: &elsewhere,
@@ -1399,6 +1425,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
     let top = HashSet::from([mmcons.clone()]);
     let top_atoms = HashSet::from(["app-misc/mmcons".to_string()]);
     let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -1428,6 +1455,7 @@ fn slot_operator_rebuild_scan_newslot_arm_fires_without_a_scheduled_provider() {
     both.insert(mmprov.clone());
     let both_atoms = HashSet::from(["app-misc/mmcons".to_string(), "app-misc/mmprov".to_string()]);
     let (greedy_pinned, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -1773,6 +1801,7 @@ fn slot_operator_rebuild_scan_schedules_a_walked_installed_consumer_outside_reac
     let empty: BTreeSet<(String, String)> = BTreeSet::new();
     let scan = |walked: &HashSet<(String, String)>| {
         slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+            effective: None,
             root: &dir,
             entries: std::slice::from_ref(&bar_upgrade),
             reachable: &HashSet::new(),
@@ -1908,6 +1937,7 @@ fn slot_operator_rebuild_scan_pairs_a_consumer_upgrading_in_the_same_run() {
         ("dev-libs".to_string(), "p589dvirt".to_string()),
     ]);
     let (_, abi, _) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+        effective: None,
         root: &base,
         entries: &[provider, consumer],
         reachable: &reach,

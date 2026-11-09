@@ -13,6 +13,8 @@ pub(crate) type SlotOpRebuildScan = (
 
 /// Arguments of [`slot_operator_rebuild_scan`].
 pub(crate) struct SlotOperatorRebuildScanArgs<'a> {
+    /// Dynamic-deps view of the installed parents that veto a candidate.
+    pub(crate) effective: Option<EffectiveDeps<'a>>,
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) reachable: &'a HashSet<(String, String)>,
@@ -42,6 +44,7 @@ pub(crate) fn slot_operator_rebuild_scan(
     args: SlotOperatorRebuildScanArgs<'_>,
 ) -> SlotOpRebuildScan {
     let SlotOperatorRebuildScanArgs {
+        effective,
         root,
         entries,
         reachable,
@@ -145,6 +148,7 @@ pub(crate) fn slot_operator_rebuild_scan(
     // same-slot arm; the new-slot arm additionally accepts walked
     // consumers, and the `_slot_change_probe` half below is never gated.
     let mut probe_parents = collect_probe_parents(CollectProbeParentsArgs {
+        effective,
         root,
         entries,
         reachable,

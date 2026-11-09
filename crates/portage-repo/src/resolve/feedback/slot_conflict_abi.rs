@@ -42,9 +42,10 @@ pub(crate) fn step_slot_conflict_abi(
             }
         }
         let probe_parents = collect_probe_parents(CollectProbeParentsArgs {
+            effective: Some(ctx.effective_deps()),
             root: ctx.root,
             entries: &pass.entries,
-            reachable: &ctx.slot_op_reachable,
+            reachable: ctx.force_scan_reachable(),
             walked: &walked,
             in_graph: &in_graph,
             already: &grown.slot_operator_replace_installed,

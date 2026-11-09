@@ -46,6 +46,7 @@ pub(crate) fn assemble_result(
                 _ => installed_walked_cps(&pass.installed_walked),
             };
             slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+                effective: Some(ctx.effective_deps()),
                 root: ctx.root,
                 entries: &pass.entries,
                 reachable: &ctx.slot_op_reachable,

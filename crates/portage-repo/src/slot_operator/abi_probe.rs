@@ -2,6 +2,16 @@
 
 use crate::*;
 
+/// What the dynamic-deps overlay of an installed parent needs: the repos its
+/// live ebuild comes from and the two run flags.
+// Portage: FakeVartree.py, _apply_dynamic_deps
+#[derive(Clone, Copy)]
+pub(crate) struct EffectiveDeps<'a> {
+    pub(crate) gate: CategoryGate<'a>,
+    pub(crate) dynamic_deps: bool,
+    pub(crate) ignore_built_slot_operator_deps: bool,
+}
+
 /// One installed parent's atom on a provider, for the update-probe refusal:
 /// the parent's identity plus the effective atom text to match the fresh
 /// candidate against.
@@ -16,6 +26,9 @@ pub(crate) struct ProbeParent {
 
 /// Arguments of [`collect_probe_parents`].
 pub(crate) struct CollectProbeParentsArgs<'a> {
+    /// Portage's dynamic-deps view of an installed parent (`None`: the vdb
+    /// record verbatim).
+    pub(crate) effective: Option<EffectiveDeps<'a>>,
     pub(crate) root: &'a Path,
     pub(crate) entries: &'a [GraphEntry],
     pub(crate) reachable: &'a HashSet<(String, String)>,
@@ -36,6 +49,7 @@ pub(crate) fn collect_probe_parents(
     args: CollectProbeParentsArgs<'_>,
 ) -> HashMap<(String, String), Vec<ProbeParent>> {
     let CollectProbeParentsArgs {
+        effective,
         root,
         entries,
         reachable,
@@ -52,6 +66,7 @@ pub(crate) fn collect_probe_parents(
         }
     }
     let mut parents: HashMap<(String, String), Vec<ProbeParent>> = HashMap::new();
+    let mut memo: HashMap<(String, String, String, String), String> = HashMap::new();
     for pkg in all_installed_packages(root).iter() {
         let qcp = (pkg.category.clone(), pkg.package.clone());
         if !reachable.contains(&qcp) && !walked.contains(&qcp) {
@@ -78,8 +93,31 @@ pub(crate) fn collect_probe_parents(
             true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
             false => &["RDEPEND", "PDEPEND", "IDEPEND"],
         };
+        let live = effective.as_ref().and_then(|e| {
+            live_metadata_for_installed(
+                e.gate.repos,
+                root,
+                &pkg.category,
+                &pkg.package,
+                &pkg.version,
+            )
+        });
         for key in dep_keys {
-            let recorded = read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key);
+            let recorded = match &effective {
+                Some(e) => installed_dep_string(InstalledDepStringArgs {
+                    root,
+                    dynamic_deps: e.dynamic_deps,
+                    ignore_built_slot_operator_deps: e.ignore_built_slot_operator_deps,
+                    category: &pkg.category,
+                    package: &pkg.package,
+                    version: &pkg.version,
+                    live: live.as_deref(),
+                    key,
+                    layer: InstalledMetaLayer::Effective,
+                    memo: &mut memo,
+                }),
+                None => read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key),
+            };
             let use_flags =
                 read_vdb_flag_set(root, &pkg.category, &pkg.package, &pkg.version, "USE");
             for token in selected_parent_atoms(&recorded, root, entries, &use_flags) {

@@ -39,6 +39,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         }
         let empty_reach: HashSet<(String, String)> = HashSet::new();
         let parents = collect_probe_parents(CollectProbeParentsArgs {
+            effective: None,
             root: &base,
             entries,
             reachable: &empty_reach,
@@ -157,6 +158,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
         }
     }
     let bare_parents = collect_probe_parents(CollectProbeParentsArgs {
+        effective: None,
         root: &bare_base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -232,6 +234,7 @@ fn slot_conflict_abi_probe_rebuilds_the_built_parent() {
             .map(|e| (e.category.clone(), e.package.clone()))
             .collect();
         let parents = collect_probe_parents(CollectProbeParentsArgs {
+            effective: None,
             root: &cond_base,
             entries: &cond_entries,
             reachable: &HashSet::new(),
@@ -380,6 +383,7 @@ fn slot_conflict_abi_probe_accepts_an_or_group_arm_for_the_new_child() {
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
     let parents = collect_probe_parents(CollectProbeParentsArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -434,6 +438,7 @@ fn collect_probe_parents_chooses_the_selected_or_arm() {
         HashSet::from([("app-misc".to_string(), "abior".to_string())]);
     let atoms = |entries: &[GraphEntry]| -> Vec<String> {
         collect_probe_parents(CollectProbeParentsArgs {
+            effective: None,
             root: &base,
             entries,
             reachable: &HashSet::new(),
@@ -546,6 +551,7 @@ fn slot_conflict_abi_probe_keeps_an_or_arm_bound_to_the_installed_instance() {
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
     let parents = collect_probe_parents(CollectProbeParentsArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -602,6 +608,7 @@ fn slot_conflict_abi_probe_subsumed_child_is_display_only() {
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
     let parents = collect_probe_parents(CollectProbeParentsArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -669,6 +676,7 @@ fn slot_conflict_abi_probe_kept_child_files_the_seed_set() {
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
     let parents = collect_probe_parents(CollectProbeParentsArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -750,6 +758,7 @@ fn slot_conflict_abi_probe_ignores_an_unselected_or_arm_for_the_new_child() {
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
     let parents = collect_probe_parents(CollectProbeParentsArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),
@@ -819,6 +828,7 @@ fn slot_conflict_abi_probe_files_when_the_selected_or_arm_accepts() {
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
     let parents = collect_probe_parents(CollectProbeParentsArgs {
+        effective: None,
         root: &base,
         entries: &entries,
         reachable: &HashSet::new(),

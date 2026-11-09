@@ -41,6 +41,7 @@ pub(crate) fn step_unsatisfied_dead_end(
         let scan_scope = ctx.scan_reachable(&pass.entries);
         let (scheduled, abi_rebuilds, masked_binaries) =
             slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
+                effective: Some(ctx.effective_deps()),
                 root: ctx.root,
                 entries: &pass.entries,
                 reachable: &ctx.slot_op_reachable,
@@ -58,12 +59,14 @@ pub(crate) fn step_unsatisfied_dead_end(
             });
         // The update probe's forcing half, for a child the walk left installed.
         let mut scheduled = scheduled;
+        let force_reachable = ctx.force_scan_reachable();
         let (force_consumers, forced) =
             slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
+                effective: Some(ctx.effective_deps()),
                 root: ctx.root,
                 config,
                 entries: &pass.entries,
-                reachable: &ctx.slot_op_reachable,
+                reachable: force_reachable,
                 already: &scheduled,
                 undone: &grown.slot_operator_undone,
                 with_bdeps: ctx.with_bdeps,

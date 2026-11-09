@@ -217,3 +217,41 @@ fn built_parent_update_probe_leaves_a_child_another_installed_consumer_restricts
         "a consumer the request's walk reaches has an edge to the child and is exempt"
     );
 }
+
+#[test]
+fn built_parent_update_probe_counts_a_restricting_consumer_the_walk_never_reaches_despite_its_upgrade()
+ {
+    // Portage: `_slot_operator_check_reverse_dependencies` excuses a parent that
+    // has an upgrade available only when `_too_deep(parent.depth)` is false; a
+    // `@world` member the request does not reach has an unreachable depth, so
+    // its `<dev-libs/mbabilib-2.0` atom still refuses mbabilib-2.0 (backlog #491).
+    let root = mbabilib_vdb("0/1");
+    // `dev-libs/abk0a` has a tree ebuild above the installed 0.1.
+    let d = root.join("var/db/pkg/dev-libs/abk0a-0.1");
+    fs::create_dir_all(&d).unwrap();
+    fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
+    fs::write(d.join("SLOT"), "0\n").unwrap();
+    fs::write(d.join("RDEPEND"), "<dev-libs/mbabilib-2.0:0/1=\n").unwrap();
+    let repos = find_repos(&fixtures_root()).expect("fixture repos");
+    let local = BinaryIndex::from_pkgdir(&fixtures_root().join("pkgdir"));
+    let entries = [mbabicons_binary()];
+    let installed = InstalledReachability::new(&root);
+    let consumer = ("dev-libs".to_string(), "abk0a".to_string());
+    let (replace, masks) = built_parent_update_probe(BuiltParentUpdateProbeArgs {
+        root: &root,
+        config: &test_config(),
+        local_binpkg: &local,
+        entries: &entries,
+        with_bdeps: false,
+        excluded: &[],
+        masked: &HashMap::new(),
+        installed: &installed,
+        live: &HashSet::from([consumer]),
+        walked: &HashSet::new(),
+        gate: crate::test_gate(&repos),
+    });
+    assert!(
+        replace.is_empty() && masks.is_empty(),
+        "an unreached consumer's pending upgrade does not excuse its restriction"
+    );
+}

@@ -591,6 +591,7 @@ fn slot_operator_update_force_scan_forces_the_installed_childs_update() {
     let config = test_config();
     let scan = |entries: &[GraphEntry], reachable: &HashSet<(String, String)>, update: bool| {
         slot_operator_update_force_scan(SlotOperatorUpdateForceScanArgs {
+            effective: None,
             root: &base,
             config: &config,
             entries,
