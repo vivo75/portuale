@@ -36,10 +36,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 mod memo;
+mod order;
 mod reorder;
 mod sets;
 
-pub use reorder::SlotSet;
+pub use order::Order;
+pub use reorder::{Change, SlotSet};
 
 use memo::Memo;
 use portage_dep::Blocker;
@@ -328,7 +330,8 @@ const DEP_KEYS: [&str; 5] = ["DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND
 /// The result for one atom: for every slot it can match, the best ebuild
 /// of that slot (as `cat/pkg-ver`) with the atoms it depends on.
 struct AtomResult {
-    per_slot: Vec<(String, Arc<BTreeSet<String>>)>,
+    /// `(cat/pkg-ver, cat/pkg:slot, dependency atoms)` per slot.
+    per_slot: Vec<(String, String, Arc<BTreeSet<String>>)>,
     /// No ebuild of any repository matches the atom (the package is gone,
     /// or no version or USE setting fits it): it points at no slot at all.
     unmatched: bool,
@@ -368,6 +371,12 @@ pub struct World {
     pub slots: Vec<SlotSet>,
     /// Atoms no ebuild matches at all, with who asked for each.
     pub unmatched: Vec<(String, Vec<String>)>,
+    /// `cat/pkg:slot` -> the slots it depends on, as the first pass followed them.
+    pub edges: BTreeMap<String, BTreeSet<String>>,
+    /// The slots the first pass followed (`cat/pkg:slot`): the ones `@world`
+    /// actually needs. An atom without a slot aims at every slot of its
+    /// package, so a [`SlotSet`] alone does not tell.
+    pub reached: BTreeSet<String>,
 }
 
 impl World {
@@ -408,6 +417,9 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
     let mut frontier: Vec<String> = seeds.into_iter().collect();
     let mut done: BTreeSet<String> = BTreeSet::new();
     let mut unmatched: BTreeSet<String> = BTreeSet::new();
+    // atom -> the slots it reaches; slot -> the atoms it depends on.
+    let mut atom_nodes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut node_atoms: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     while !frontier.is_empty() {
         let results = parallel_map(&frontier, opts.threads, |atom| {
@@ -419,7 +431,15 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
             if res.unmatched {
                 unmatched.insert(atom.clone());
             }
-            for (by, deps) in res.per_slot {
+            for (by, node, deps) in res.per_slot {
+                atom_nodes
+                    .entry(atom.clone())
+                    .or_default()
+                    .insert(node.clone());
+                node_atoms
+                    .entry(node)
+                    .or_default()
+                    .extend(deps.iter().cloned());
                 for dep in deps.iter().cloned() {
                     requesters
                         .entry(dep.clone())
@@ -464,10 +484,27 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
             (atom, by)
         })
         .collect();
+    let reached: BTreeSet<String> = atom_nodes.values().flatten().cloned().collect();
+    // slot -> the slots it depends on (itself left out).
+    let edges = node_atoms
+        .into_iter()
+        .map(|(node, atoms)| {
+            let to: BTreeSet<String> = atoms
+                .iter()
+                .filter_map(|a| atom_nodes.get(a))
+                .flatten()
+                .filter(|n| **n != node)
+                .cloned()
+                .collect();
+            (node, to)
+        })
+        .collect();
     Ok(World {
         atoms: done.len(),
         slots,
         unmatched,
+        edges,
+        reached,
     })
 }
 
@@ -535,6 +572,7 @@ fn process_atom(atom_str: &str, repos: &[RepoConfig], config: &Config, memo: &Me
             .map(|(c, _)| {
                 (
                     format!("{}/{}-{}", atom.category, atom.package, c.version),
+                    format!("{}/{}:{}", atom.category, atom.package, c.slot),
                     memo.deps(c, &atom.category, &atom.package, config),
                 )
             })

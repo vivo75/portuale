@@ -56,6 +56,7 @@ struct Opt {
 const ACTION_IDS: &[&str] = &[
     "clean",
     "check_world",
+    "plan_world",
     "config",
     "depclean",
     "info",
@@ -125,6 +126,28 @@ const OPTIONS: &[Opt] = &[
         choices: &[],
         missing: "",
         help: "list the @world slots no visible ebuild satisfies (exit 1 if any)",
+    },
+    // Portuale-only: what `-uDNp @world` would install, from `portage-world`
+    // (see `plan_world`); `--sort` orders its rows.
+    Opt {
+        id: "plan_world",
+        long: "--plan-world",
+        alias: None,
+        short: None,
+        kind: Kind::Flag,
+        choices: &[],
+        missing: "",
+        help: "list what updating @world would install, without the resolver",
+    },
+    Opt {
+        id: "sort",
+        long: "--sort",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &["alpha", "depend", "resolver"],
+        missing: "",
+        help: "with --plan-world: order of the rows (default alpha)",
     },
     Opt {
         id: "list_sets",
@@ -1393,6 +1416,13 @@ pub fn run(args: &[String]) -> ExitCode {
     let argv = std::iter::once(bin).chain(joined.iter().map(String::as_str));
     match command().try_get_matches_from(argv) {
         Ok(matches) if matches.get_flag("check_world") => crate::check_world::run(&matches),
+        Ok(matches) if matches.get_flag("plan_world") => crate::plan_world::run(&matches),
+        Ok(matches)
+            if matches.contains_id("sort") && matches.get_one::<String>("sort").is_some() =>
+        {
+            eprintln!("mrg: --sort needs --plan-world");
+            ExitCode::from(2)
+        }
         Ok(matches) => match crate::remote::check_remote(&matches) {
             Ok(remote) => {
                 // A remote run whose VDB is `client:` (the default) keeps

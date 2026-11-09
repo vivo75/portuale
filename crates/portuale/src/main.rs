@@ -32,6 +32,7 @@ mod merge_engines;
 mod mrg;
 mod mtimedb;
 mod needed_elf;
+mod plan_world;
 mod portage_lock;
 mod portageq;
 mod preserved_libs;

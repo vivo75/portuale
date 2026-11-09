@@ -55,13 +55,17 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::Path;
     use std::process::Command;
 
-    /// A copy of the fixture tree whose world file gets `extra` appended,
-    /// and `mrg --check-world` run on it: (exit code, stdout).
     fn check(extra: &[&str]) -> (i32, String) {
+        mrg_on_fixtures(&["--check-world"], extra)
+    }
+
+    /// A copy of the fixture tree whose world file gets `extra` appended,
+    /// and `mrg <args>` run on it: (exit code, stdout).
+    pub(crate) fn mrg_on_fixtures(args: &[&str], extra: &[&str]) -> (i32, String) {
         let tmp = tempfile::tempdir_in("/var/tmp").unwrap();
         let root = tmp.path().join("root");
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
@@ -82,7 +86,9 @@ mod tests {
         }
         std::fs::write(&world, text).unwrap();
         let out = Command::new(crate::self_exe::built_portuale_bin())
-            .args(["mrg", "--check-world", "--root"])
+            .arg("mrg")
+            .args(args)
+            .arg("--root")
             .arg(&root)
             .arg("--config-root")
             .arg(&root)

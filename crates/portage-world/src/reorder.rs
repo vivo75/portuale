@@ -20,6 +20,49 @@ pub struct SlotSet {
     pub invalid: bool,
     /// Nothing satisfies them here, but another slot of the package does.
     pub unneeded: bool,
+    /// The version installed in this slot, if any.
+    pub installed: Option<String>,
+}
+
+/// What a plan would do to a slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    New,
+    Upgrade,
+    Downgrade,
+}
+
+impl SlotSet {
+    /// `cat/pkg:slot`, the name the dependency edges use.
+    #[must_use]
+    pub fn node(&self) -> String {
+        format!("{}:{}", self.cp, self.slot)
+    }
+
+    /// The version a plan would install: the first visible one that satisfies
+    /// every requester.
+    #[must_use]
+    pub fn chosen(&self) -> Option<&Candidate> {
+        self.versions
+            .iter()
+            .find(|(_, visible, ok)| *visible && *ok)
+            .map(|(c, _, _)| c)
+    }
+
+    /// What installing [`chosen`](Self::chosen) would change, `None` when the
+    /// slot already has that version or has no choice.
+    #[must_use]
+    pub fn change(&self) -> Option<Change> {
+        let chosen = self.chosen()?;
+        match &self.installed {
+            None => Some(Change::New),
+            Some(have) => match crate::version_cmp(&chosen.version, have) {
+                std::cmp::Ordering::Greater => Some(Change::Upgrade),
+                std::cmp::Ordering::Less => Some(Change::Downgrade),
+                std::cmp::Ordering::Equal => None,
+            },
+        }
+    }
 }
 
 impl SlotSet {
@@ -108,6 +151,11 @@ pub fn reorder(category: &str, package: &str, atoms: &[&String], ctx: &Ctx<'_>) 
                 satisfying,
                 invalid: satisfying == 0 || (ctx.unique && satisfying > 1),
                 unneeded: false,
+                installed: ctx
+                    .memo
+                    .installed_versions
+                    .get(&(format!("{category}/{package}"), (*slot).to_string()))
+                    .cloned(),
             };
             (set, aimed)
         })
