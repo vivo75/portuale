@@ -1,0 +1,128 @@
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took (backtrack: 20/20).
+
+[binary    gU  ] app-misc/ca-certificates-20260816.3.131.1-r1-1::gentoo [20260816.3.131.1::gentoo] USE="-cacert" 150 KiB
+[binary    gU  ] dev-libs/wayland-protocols-1.50-1::gentoo [1.49::gentoo] USE="-test" 190 KiB
+[ebuild     U  ] sys-apps/hwdata-0.413::gentoo [0.401::gentoo] 2607 KiB
+[binary    gU  ] llvm-core/llvm-common-23.1.5-1::gentoo [23.1.4::gentoo] USE="-emacs -verify-sig" 30 KiB
+[binary   Rg   ] app-misc/mime-types-2.1.54-1::gentoo  USE="-nginx*" 30 KiB
+[binary    gU  ] media-fonts/noto-20261101-1::gentoo [20261001::gentoo] USE="X extra" 114790 KiB
+[ebuild     U  ] sys-libs/readline-8.3_p6-r2:0/8::gentoo [8.3_p6:0/8::gentoo] USE="(unicode) -static-libs -utils -verify-sig" ABI_X86="32 (64) (-x32)" 0 KiB
+[binary    gU  ] sys-libs/libxcrypt-4.5.2-r1-1:0/1::gentoo [4.5.2:0/1::gentoo] USE="(compat) (system) (-headers-only) -static-libs -test" ABI_X86="32 (64) (-x32)" 1170 KiB
+[binary    gU  ] sys-libs/timezone-data-2026f-1::gentoo [2026e::gentoo] USE="nls -leaps-timezone -verify-sig -zic-slim" 500 KiB
+[ebuild     U  ] sys-libs/zlib-1.4:0/1::gentoo [1.3.2-r1:0/1::gentoo] USE="minizip -static-libs -verify-sig" ABI_X86="32 (64) (-x32)" 1290 KiB
+[ebuild  rS    ] dev-libs/openssl-3.6.5:0::gentoo  USE="asm quic -fips -ktls -rfc3779 -sctp -static-libs -test -tls-compression -vanilla -verify-sig -weak-ssl-ciphers" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="(sse2)" 0 KiB
+[binary    gU  ] dev-libs/expat-2.10.0-1::gentoo [2.9.0::gentoo] USE="unicode -examples -static-libs -test" ABI_X86="32 (64) (-x32)" 1200 KiB
+[ebuild  r  U  ] dev-libs/openssl-4.1.0:0/4::gentoo [3.6.5:0/3::gentoo] USE="asm quic -fips -ktls -rfc3779 -sctp -static-libs -test -tls-compression -vanilla -verify-sig -weak-ssl-ciphers" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="(sse2)" 54432 KiB
+[binary    gU  ] app-arch/lz4-1.11.0-1:0/1.10.0-meson::gentoo [1.10.0-r1:0/1.10.0-meson::gentoo] USE="-static-libs -test" ABI_X86="32 (64) (-x32)" 1470 KiB
+[binary    gU  ] net-libs/nghttp3-1.19.0-1::gentoo [1.18.0::gentoo] USE="-verify-sig" ABI_X86="32 (64) (-x32)" 640 KiB
+[binary  r gU  ] dev-libs/libfmt-12.2.0-1:0/12.2.0::gentoo [12.1.0:0/12.1.0::gentoo] USE="-test" ABI_X86="32 (64) (-x32)" 1220 KiB
+[binary    gU  ] app-crypt/libmd-1.3.0-1::gentoo [1.2.0::gentoo] USE="-verify-sig" ABI_X86="32 (64) (-x32)" 220 KiB
+[binary    gU  ] dev-util/patchelf-0.19.3-1::gentoo [0.19.1::gentoo] USE="-test%" 1240 KiB
+[binary    gU  ] dev-libs/nss-3.133-1::gentoo [3.132::gentoo] USE="utils -cacert -test -test-full" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="avx2 sse3" 22430 KiB
+[binary    gU  ] app-text/editorconfig-core-c-0.12.11-r1-1::gentoo [0.12.11::gentoo] USE="-cli -doc" 80 KiB
+[ebuild     U  ] net-misc/rsync-3.5.2::gentoo [3.5.1::gentoo] USE="acl iconv lz4 ssl xattr xxhash zstd -examples -idn -rrsync -stunnel -system-zlib -test -verify-sig" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 -python3_15" 1932 KiB
+[binary    gU  ] llvm-core/llvm-23.1.5-1:23/23.1::gentoo [23.1.4:23/23.1::gentoo] USE="binutils-plugin libffi xml zstd -debug (-debuginfod) -doc -exegesis -libedit -test -verify-sig -z3" ABI_X86="32 (64) (-x32)" LLVM_TARGETS="(AArch64) (AMDGPU) (ARM) (AVR) (BPF) (Hexagon) (Lanai) (LoongArch) (MSP430) (Mips) (NVPTX) (PowerPC) (RISCV) (SPIRV) (Sparc) (SystemZ) (VE) (WebAssembly) (X86) (XCore) -ARC -CSKY -DirectX -M68k -Xtensa" 4425590 KiB
+[binary    gU  ] app-text/tesseract-5.5.4-1:0/5::gentoo [5.5.3:0/5::gentoo] USE="jpeg openmp png tiff webp -doc -float32 -static-libs -training" ABI_X86="32 (64) (-x32)" 45080 KiB
+[binary  NSg   ] dev-lang/python-3.15.2_p1-1:3.15::gentoo [3.14.10:3.14::gentoo] USE="bluetooth debug ensurepip gdbm ncurses pgo readline sqlite ssl tail-call-interp tk -build -examples (-jit) -libedit -test -valgrind -verify-sig" LLVM_SLOT="-21% (-19%*)" 35710 KiB
+[binary  rRg   ] dev-util/android-tools-36.0.1-2::gentoo  USE="udev -python" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 49750 KiB
+[binary    gU  ] dev-util/debugedit-5.4-1::gentoo [5.3::gentoo] USE="-test -verify-sig" 180 KiB
+[binary    gU  ] x11-themes/adwaita-icon-theme-legacy-46.2-r1-1::gentoo [46.2::gentoo] 2060 KiB
+[binary    gU  ] x11-themes/adwaita-icon-theme-50.0-r1-1::gentoo [50.0::gentoo] USE="branding" 740 KiB
+[binary    gU  ] kde-apps/libkexiv2-26.08.3-1:6::gentoo [26.08.2:6::gentoo] USE="xmp -debug" 3680 KiB
+[binary    gU  ] kde-apps/kio-extras-26.08.3-1:6::gentoo [26.08.2:6::gentoo] USE="X activities libproxy man mtp samba sftp -debug -handbook -ios -nfs -openexr -taglib -test" 34490 KiB
+[binary    gU  ] kde-plasma/union-6.8.2-r1-1:6::gentoo [6.8.2:6::gentoo] USE="widgets -debug -doc -examples -test -tools" 48170 KiB
+[binary   Rg   ] media-libs/mesa-26.2.6-2::gentoo  USE="X llvm (opengl) proprietary-codecs vaapi vulkan wayland zstd -debug -lm-sensors -opencl -sysprof -test -unwind -valgrind" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="sse2" LLVM_SLOT="22 -19 -20 -21 (-18%)" VIDEO_CARDS="nouveau radeon radeonsi virgl -asahi -d3d12 (-freedreno) -i915 (-imagination) -intel -lavapipe (-lima) -nvk (-panfrost) -r300 -r600 (-v3d) (-vc4) (-vivante) -vmware -zink" 310700 KiB
+[ebuild  rS    ] media-video/ffmpeg-8.1.3:0::gentoo  USE="X alsa bzip2 cairo dav1d drm dvd fdk fontconfig gnutls gpl jpegxl lcms libass lzma opengl openh264 opus pulseaudio sdl svg theora truetype v4l vaapi vorbis vpx vulkan webp x264 x265 xml xvid zlib -amf -amr -amrenc (-appkit) -bluray -bs2b -cdio -chromaprint -chromium -codec2 -cuda-clang -doc -flite -frei0r -fribidi -gcrypt -gme -gmp -gsm -iec61883 -ieee1394 -jack -jpeg2k -kvazaar -ladspa -lame -libaom -libaribb24 -libcaca -libilbc -liblc3 -libplacebo -librtmp -libsoxr -lv2 -modplug -nvenc -ocr -openal -opencl -opencolorio -openmpt -openssl -qrcode -qsv -quirc -rabbitmq -rav1e -rist -rubberband -samba -snappy -sndio -soc -sofa -speex -srt -ssh -svt-av1 -twolame -vdpau -verify-sig -vidstab -vmaf -zeromq -zimg -zvbi" ABI_X86="32 (64) (-x32)" 0 KiB
+[binary  r gU  ] media-video/ffmpeg-9.0.2-1:0/61.63.63::gentoo [8.1.3:0/60.62.62::gentoo] USE="X alsa bzip2 cairo dav1d drm dvd fdk fontconfig gnutls gpl jpegxl lcms libass lzma opengl openh264 opus pulseaudio sdl svg theora truetype v4l vaapi vorbis vpx vulkan webp x264 x265 xml xvid zlib -amf -amr -amrenc (-appkit) -bluray -bs2b -cdio -chromaprint -chromium -codec2 -cuda-clang -doc -flite -frei0r -fribidi -gcrypt -gme -gmp -gsm -iec61883 -ieee1394 -jack -jpeg2k -kvazaar -ladspa -lame -libaom -libaribb24 -libcaca -libilbc -liblc3 -libplacebo -librtmp -libsoxr -lv2 -modplug -nvenc -ocr -openal -opencl -opencolorio -openmpt -openssl -qrcode -qsv -quirc -rabbitmq -rav1e -rist -rubberband -samba -snappy -sndio -sofa -speex -srt -ssh -svt-av1 -twolame -vdpau -verify-sig -vidstab -vmaf -zeromq -zimg -zvbi (-soc%)" ABI_X86="32 (64) (-x32)" 88140 KiB
+[binary  rRg   ] media-plugins/gst-plugins-libav-1.26.11-2:1.0::gentoo  USE="nls -test" ABI_X86="32 (64) (-x32)" 1140 KiB
+[binary  rRg   ] kde-frameworks/kfilemetadata-6.31.0-3:6/6.31::gentoo  USE="exif ffmpeg pdf taglib -debug -epub -mobi -test" 12070 KiB
+[binary  r gU  ] media-libs/mlt-7.42.0-2:0/7::gentoo [7.40.0:0/7::gentoo] USE="ffmpeg frei0r gpl%* gtk opengl qt6 rubberband sdl vorbis xml -debug -jack -ladspa% -libplacebo% -libsamplerate -lv2% -opencv -openfx% -python -rnnoise -rtaudio -sox -test (-vdpau) -vidstab -xine" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13 -python3_15" 59370 KiB
+[ebuild     U  ] net-libs/ngtcp2-1.26.0::gentoo [1.25.0::gentoo] USE="gnutls openssl ssl -verify-sig" ABI_X86="32 (64) (-x32)" 0 KiB
+[binary    gU  ] sys-block/parted-3.8-1::gentoo [3.7::gentoo] USE="debug nls readline -device-mapper -static-libs -verify-sig" 1300 KiB
+[ebuild     U  ] app-arch/libarchive-3.8.11:0/13::gentoo [3.8.10:0/13::gentoo] USE="acl blake2 bzip2 e2fsprogs iconv lz4 lzma xattr zstd -expat -lzo -nettle -static-libs -test -verify-sig" ABI_X86="32 (64) (-x32)" 0 KiB
+[binary    gU  ] kde-frameworks/extra-cmake-modules-6.31.0-1::gentoo [6.30.0::gentoo] USE="-doc -test" 210 KiB
+[ebuild  rR    ] media-libs/opencv-4.14.0:0/4.14.0::gentoo  USE="avif contrib contribdnn eigen features2d ffmpeg gif jpeg non-free opengl openmp png qt6 tesseract tiff truetype vaapi vulkan wayland webp -atlas -contribcvv -contribfreetype -contribhdf (-contribovis) -contribsfm -contribxfeatures2d -cuda -cudnn -debug -doc -examples -gdal -gflags -glog -gphoto2 -gstreamer -gtk3 -ieee1394 -jasper -java -jpeg2k -lapack -mkl -opencl -opencvapps -openexr -openni -openni2 -python -quirc -spng -tbb -test -testprograms -v4l -vtk -wechat-qrcode -xine" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="avx avx2 f16c fma3 popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3 -avx512_4fmaps -avx512_4vnniw -avx512_bitalg -avx512_vbmi2 -avx512_vnni -avx512_vpopcntdq -avx512bw -avx512cd -avx512dq -avx512er -avx512f -avx512ifma -avx512pf -avx512vbmi -avx512vl" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" VIDEO_CARDS="intel" 0 KiB
+[binary    gU  ] net-libs/nghttp2-1.71.0-1:0/1.14::gentoo [1.70.0:0/1.14::gentoo] USE="systemd xml -debug -hpack-tools -test -utils -verify-sig" ABI_X86="32 (64) (-x32)" 770 KiB
+[binary    gU  ] dev-libs/libei-1.6.0-r1-1::gentoo [1.6.0::gentoo] USE="(systemd) (-elogind) -test" 590 KiB
+[binary  r gU  ] net-dialup/ppp-2.5.5-1:0/2.5.5::gentoo [2.5.4-r1:0/2.5.4::gentoo] USE="pam systemd -activefilter -atm (-selinux)" 1100 KiB
+[binary    gU  ] net-fs/samba-4.25.1-3:0/2.11.0::gentoo [4.25.0:0/2.11.0::gentoo] USE="acl client cups pam regedit system-mitkrb5 systemd -addc -ads -ceph -cluster -debug (-fam) -glusterfs -gpg -iprint -json -ldap -llvm-libunwind -lmdb -profiling-data -python -quota (-selinux) -snapper -spotlight -syslog (-system-heimdal) (-test) -unwind -winbind -zeroconf" ABI_X86="32 (64) (-x32)" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 61870 KiB
+[binary  rRg   ] net-misc/networkmanager-1.58.1-r3-3::gentoo  USE="bluetooth concheck introspection modemmanager nftables nss (policykit) ppp systemd tools wext wifi -audit -clat -connection-sharing -debug -dhcpcd (-elogind) -gnutls -gtk-doc -iptables -iwd -libedit -nbft -ofono -ovs -psl -resolvconf (-selinux) -syslog -teamd -test -vala" ABI_X86="32 (64) (-x32)" 25040 KiB
+[binary    gU  ] x11-libs/libnotify-0.8.9-1::gentoo [0.8.8::gentoo] USE="introspection -gtk-doc -test" ABI_X86="32 (64) (-x32)" 240 KiB
+[ebuild     U  ] dev-lang/python-3.14.10_p1:3.14::gentoo [3.14.10:3.14::gentoo] USE="bluetooth debug ensurepip gdbm ncurses pgo readline sqlite ssl tail-call-interp tk -build -examples -libedit -test -valgrind -verify-sig (-jit%)" LLVM_SLOT="(-19%*)" 0 KiB
+[ebuild     U  ] media-video/pipewire-1.6.11:0/0.4::gentoo [1.6.9-r1:0/0.4::gentoo] USE="X bluetooth dbus extra ffmpeg pipewire-alsa pulseaudio readline sound-server ssl systemd v4l -doc -echo-cancel (-elogind) -fftw -flatpak -gsettings -gstreamer -ieee1394 -jack-client -jack-sdk -libcamera -loudness -lv2 -man -modemmanager -roc (-selinux) -sofa (-system-service) -test -zeroconf" ABI_X86="32 (64) (-x32)" 0 KiB
+[binary    gU  ] dev-python/ensurepip-pip-26.3-1::gentoo [26.2.2-r1::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_14t -python3_15 -python3_15t" 1260 KiB
+[binary    gU  ] media-video/wireplumber-0.5.19-1:0/0.5::gentoo [0.5.18-r1:0/0.5::gentoo] USE="systemd -doc (-elogind) (-selinux) (-system-service) -test" LUA_SINGLE_TARGET="lua5-4 -lua5-3" 2190 KiB
+[binary  rRg   ] dev-qt/qtmultimedia-6.11.3-3:6/6.11.3::gentoo  USE="X alsa custom-cflags dbus ffmpeg opengl pipewire pulseaudio qml v4l vaapi vulkan wayland -eglfs -gstreamer -test" 60320 KiB
+[binary    gU  ] media-libs/libsdl3-3.4.20-1::gentoo [3.4.18::gentoo] USE="X alsa dbus io-uring opengl pipewire pulseaudio udev usb vulkan wayland (-aqua) -bidi -doc -ibus -jack -kms -oss -sndio -test" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="avx avx2 mmx sse sse2 sse3 sse4_1 sse4_2 -avx512f" 15280 KiB
+[ebuild     U  ] sys-libs/pam-1.7.3::gentoo [1.7.2::gentoo] USE="nls systemd -audit -berkdb -debug (-elogind) -examples -nis (-selinux) -verify-sig" ABI_X86="32 (64) (-x32)" 0 KiB
+[binary  rRg   ] kde-plasma/kpipewire-6.8.2-3:6::gentoo  USE="-debug -test" 8780 KiB
+[ebuild     U  ] dev-libs/kirigami-addons-1.16.1:6::gentoo [1.15.0:6::gentoo] USE="-debug -test" 3041 KiB
+[binary    gU  ] kde-plasma/kwin-6.8.2-r2-1:6::gentoo [6.8.2:6::gentoo] USE="X (activities) (filecaps) lock screencast shortcuts systemd -accessibility -debug -gamepad -gles2-only -handbook (-selinux) -test" 219400 KiB
+[binary  rSg   ] app-emulation/wine-staging-11.21-2:11.21::gentoo [11.20:11.20::gentoo] USE="X alsa bluetooth cups dbus ffmpeg fontconfig gecko gstreamer mingw mono nls opengl pulseaudio sdl ssl strip truetype udev usb vaapi vulkan wayland wow64 xinerama (-arm64ec) -crossdev-mingw -custom-cflags -dos -gphoto2 -kerberos -netapi -odbc -opencl -pcap -perl -samba -scanner (-selinux) -smartcard -v4l" ABI_X86="64 -32" 109720 KiB
+[binary  rRg   ] app-mobilephone/scrcpy-5.0.1-2::gentoo  USE="X wayland" 1520 KiB
+[binary  r gU  ] kde-apps/dragon-26.08.3-1:6::gentoo [26.08.2:6::gentoo] USE="-debug" 4490 KiB
+[ebuild     U  ] sys-apps/util-linux-2.42.4::gentoo [2.42.3::gentoo] USE="cramfs hardlink logger ncurses nls pam readline su suid systemd tty-helpers udev (unicode) -audit -build -caps -cryptsetup -fdformat -kill -magic -python (-rtas) (-selinux) -slang -static-libs -test -uuidd -verify-sig" ABI_X86="32 (64) (-x32)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" 10479 KiB
+[ebuild     U  ] dev-python/platformdirs-4.14.5::gentoo [4.13.5::gentoo] USE="-test -verify-provenance" PYTHON_TARGETS="python3_14 -pypy3_12 -python3_12 -python3_13 -python3_14t -python3_15 -python3_15t" 70 KiB
+[ebuild     U  ] net-misc/openssh-10.6_p2::gentoo [10.6_p1::gentoo] USE="pam seccomp ssl -audit (-debug) -kerberos -ldns -libedit -livecd -security-key (-selinux) -static -test -verify-sig" 0 KiB
+[binary    gU  ] kde-plasma/plasma-workspace-6.8.2-r1-1:6::gentoo [6.8.2:6::gentoo] USE="X fontconfig ksysguard networkmanager (policykit) screencast semantic-desktop systemd wallpaper-metadata -appstream -debug -flatpak -handbook -telemetry -test" 272760 KiB
+[binary    gU  ] net-fs/cifs-utils-7.8-r1-1::gentoo [7.8::gentoo] USE="acl ads caps pam python systemd -creds" PYTHON_SINGLE_TARGET="python3_14 -python3_12 -python3_13" 450 KiB
+[ebuild  r  U  ] kde-apps/kdenlive-26.08.3:6::gentoo [26.08.2:6::gentoo] USE="semantic-desktop -debug -designer -doc -gles2-only -handbook -test" 19486 KiB
+[ebuild     U  ] sys-apps/xdg-desktop-portal-1.22.1-r1::gentoo [1.20.4-r1::gentoo] USE="seccomp systemd udev -flatpak -geolocation -gstreamer -test" 1236 KiB
+[binary  rRg   ] net-misc/freerdp-3.32.2-3:3::gentoo  USE="X alsa client cups ffmpeg fuse icu jpeg kerberos openh264 pulseaudio sdl server systemd usb xinerama xv -aad -camera -debug -gstreamer -smartcard -test -valgrind -verify-sig (-wayland) -winpr-tools" 17810 KiB
+[binary    gU  ] dev-python/pygobject-3.58.1-1:3::gentoo [3.58.0:3::gentoo] USE="cairo -debug -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 -python3_15" 1060 KiB
+[binary  rRg   ] media-libs/gegl-0.4.72-2:0.4::gentoo  USE="cairo ffmpeg introspection lcms openmp pdf sdl svg tiff webp -debug -gtk-doc -jpeg2k -openexr -raw -sdl2 -sdl3 -test -umfpack -v4l -vala" 12570 KiB
+
+Total: 71 packages (55 upgrades, 4 in new slots, 12 reinstalls, 52 binaries), Size of downloads: 6175529 KiB
+
+!!! Multiple package instances within a single package slot have been pulled
+!!! into the dependency graph, resulting in a slot conflict:
+
+dev-libs/openssl:0
+
+  (dev-libs/openssl-4.1.0:0/4::gentoo, ebuild scheduled for merge) USE="asm quic -fips -ktls -rfc3779 -sctp -static-libs -test -tls-compression -vanilla -verify-sig -weak-ssl-ciphers" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="(sse2)" pulled in by
+
+  (dev-libs/openssl-3.6.5:0/3::gentoo, ebuild scheduled for merge) USE="asm quic -fips -ktls -rfc3779 -sctp -static-libs -test -tls-compression -vanilla -verify-sig -weak-ssl-ciphers" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="(sse2)" pulled in by
+    dev-libs/openssl:0/3= required by (net-dialup/ppp-2.5.5:0/2.5.5::gentoo, ebuild scheduled for merge) USE="pam systemd -activefilter -atm (-selinux)" ABI_X86="(64)"
+                    ^^^^^                                                                                                                                               
+    (and 19 more with the same problem)
+
+media-video/ffmpeg:0
+
+  (media-video/ffmpeg-9.0.2:0/61.63.63::gentoo, ebuild scheduled for merge) USE="X alsa bzip2 cairo dav1d drm dvd fdk fontconfig gnutls gpl jpegxl lcms libass lzma opengl openh264 opus pulseaudio sdl svg theora truetype v4l vaapi vorbis vpx vulkan webp x264 x265 xml xvid zlib -amf -amr -amrenc (-appkit) -bluray -bs2b -cdio -chromaprint -chromium -codec2 -cuda-clang -doc -flite -frei0r -fribidi -gcrypt -gme -gmp -gsm -iec61883 -ieee1394 -jack -jpeg2k -kvazaar -ladspa -lame -libaom -libaribb24 -libcaca -libilbc -liblc3 -libplacebo -librtmp -libsoxr -lv2 -modplug -nvenc -ocr -openal -opencl -opencolorio -openmpt -openssl -qrcode -qsv -quirc -rabbitmq -rav1e -rist -rubberband -samba -snappy -sndio -sofa -speex -srt -ssh -svt-av1 -twolame -vdpau -verify-sig -vidstab -vmaf -zeromq -zimg -zvbi" ABI_X86="32 (64) (-x32)" pulled in by
+    media-video/ffmpeg:0/61.63.63=[abi_x86_64(-)] required by (app-emulation/wine-staging-11.21:11.21/11.21::gentoo, ebuild scheduled for merge) USE="X alsa bluetooth cups dbus ffmpeg fontconfig gecko gstreamer mingw mono nls opengl pulseaudio sdl ssl strip truetype udev usb vaapi vulkan wayland wow64 xinerama (-arm64ec) -crossdev-mingw -custom-cflags -dos -gphoto2 -kerberos -netapi -odbc -opencl -pcap -perl -samba -scanner (-selinux) -smartcard -v4l" ABI_X86="64 -32"
+                      ^^^^^^^^^^^^                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+    (and 9 more with the same problem)
+
+  (media-video/ffmpeg-8.1.3:0/60.62.62::gentoo, ebuild scheduled for merge) USE="X alsa bzip2 cairo dav1d drm dvd fdk fontconfig gnutls gpl jpegxl lcms libass lzma opengl openh264 opus pulseaudio sdl svg theora truetype v4l vaapi vorbis vpx vulkan webp x264 x265 xml xvid zlib -amf -amr -amrenc (-appkit) -bluray -bs2b -cdio -chromaprint -chromium -codec2 -cuda-clang -doc -flite -frei0r -fribidi -gcrypt -gme -gmp -gsm -iec61883 -ieee1394 -jack -jpeg2k -kvazaar -ladspa -lame -libaom -libaribb24 -libcaca -libilbc -liblc3 -libplacebo -librtmp -libsoxr -lv2 -modplug -nvenc -ocr -openal -opencl -opencolorio -openmpt -openssl -qrcode -qsv -quirc -rabbitmq -rav1e -rist -rubberband -samba -snappy -sndio -soc -sofa -speex -srt -ssh -svt-av1 -twolame -vdpau -verify-sig -vidstab -vmaf -zeromq -zimg -zvbi" ABI_X86="32 (64) (-x32)" pulled in by
+    <media-video/ffmpeg-9:=[abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?] required by (media-libs/opencv-4.14.0:0/4.14.0::gentoo, ebuild scheduled for merge) USE="avif contrib contribdnn eigen features2d ffmpeg gif jpeg non-free opengl openmp png qt6 tesseract tiff truetype vaapi vulkan wayland webp -atlas -contribcvv -contribfreetype -contribhdf (-contribovis) -contribsfm -contribxfeatures2d -cuda -cudnn -debug -doc -examples -gdal -gflags -glog -gphoto2 -gstreamer -gtk3 -ieee1394 -jasper -java -jpeg2k -lapack -mkl -opencl -opencvapps -openexr -openni -openni2 -python -quirc -spng -tbb -test -testprograms -v4l -vtk -wechat-qrcode -xine" ABI_X86="32 (64) (-x32)" CPU_FLAGS_X86="avx avx2 f16c fma3 popcnt sse sse2 sse3 sse4_1 sse4_2 ssse3 -avx512_4fmaps -avx512_4vnniw -avx512_bitalg -avx512_vbmi2 -avx512_vnni -avx512_vpopcntdq -avx512bw -avx512cd -avx512dq -avx512er -avx512f -avx512ifma -avx512pf -avx512vbmi -avx512vl" PYTHON_TARGETS="python3_14 -python3_12 -python3_13" VIDEO_CARDS="intel"
+    ^                     ^                                                                                                                        ^                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+
+dev-libs/libfmt:0
+
+  (dev-libs/libfmt-12.2.0:0/12.2.0::gentoo, ebuild scheduled for merge) USE="-test" ABI_X86="32 (64) (-x32)" pulled in by
+    >=dev-libs/libfmt-11:0/12.2.0= required by (dev-util/android-tools-36.0.1:0/0::gentoo, ebuild scheduled for merge) USE="udev -python" ABI_X86="(64)" PYTHON_TARGETS="python3_14 -python3_12 -python3_13"
+                        ^^^^^^^^^^                                                                                                                                                                           
+
+  (dev-libs/libfmt-12.1.0:0/12.1.0::gentoo, installed) USE="-test" ABI_X86="32 (64) (-x32)" pulled in by
+    dev-libs/libfmt:0/12.1.0= required by (dev-db/mariadb-12.3.3-r1:12.3/18::gentoo, installed) USE="backup columnstore extraengine numa oqgraph pam perl server systemd xml -aws-km -bindist -cracklib -debug -galera -innodb-lz4 -innodb-lzo -innodb-snappy -jdbc -jemalloc -kerberos -latin1 -mroonga -odbc -profiling -rocksdb -s3 (-selinux) -sphinx -sst-mariabackup -sst-rsync -static -systemtap -tcmalloc -test -yassl" ABI_X86="(64)"
+                   ^^^^^^^^^^                                                                                                                                                                                                                                                                                                                                                                                                                   
+    (and 1 more with the same problem)
+
+NOTE: Use the '--verbose-conflicts' option to display parents omitted above
+
+It may be possible to solve this problem by using package.mask to
+prevent one of those packages from being selected. However, it is also
+possible that conflicting dependencies exist such that they are
+impossible to satisfy simultaneously.  If such a conflict exists in
+the dependencies of two different packages, then those packages can
+not be installed simultaneously. You may want to try a larger value of
+the --backtrack option, such as --backtrack=30, in order to see if
+that will solve this conflict automatically.
+
+For more information, see MASKED PACKAGES section in the emerge man
+page or refer to the Gentoo Handbook.
+
