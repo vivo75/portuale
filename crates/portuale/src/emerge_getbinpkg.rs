@@ -140,6 +140,7 @@ pub fn refresh_binhost_indexes(args: RefreshBinhostIndexesArgs<'_>) {
     // higher-priority repo already injected shadows the same instance
     // below, before its `gpkg_only` check.
     let mut seen: std::collections::HashSet<RemoteInstanceKey> = std::collections::HashSet::new();
+    let mut prefetched = prefetch_remote_indexes(binrepos, root);
     for binrepo in binrepos.iter().rev() {
         let filter = GetbinpkgFilter::for_binrepo(binrepo, cli_exclude, cli_include);
         let gpkg_only = binrepo_gpkg_only(binrepo, binpkg_request_signature);
@@ -150,6 +151,7 @@ pub fn refresh_binhost_indexes(args: RefreshBinhostIndexesArgs<'_>) {
             filter: &filter,
             gpkg_only,
             seen: &mut seen,
+            prefetched: &mut prefetched,
         });
         if let Some(warning) = outcome.stderr_warning {
             eprint!("{warning}");
@@ -391,6 +393,89 @@ struct RefreshOneBinrepoArgs<'a> {
     filter: &'a GetbinpkgFilter,
     gpkg_only: bool,
     seen: &'a mut std::collections::HashSet<RemoteInstanceKey>,
+    /// Index fetches already done ahead of time, by (fetch URL, `If-Modified-Since`).
+    prefetched: &'a mut PrefetchedIndexes,
+}
+
+/// What [`fetch_remote_index_text`] returned, by the arguments it was given.
+type PrefetchedIndexes = std::collections::HashMap<(String, Option<i64>), FetchedIndex>;
+
+/// The result of one [`fetch_remote_index_text`].
+type FetchedIndex = Result<Option<String>, Vec<portage_fetch::QuietFetchError>>;
+
+/// Why a binrepo's cached index is used with no fetch: a frozen repo keeps
+/// whatever it has, and an index inside its `TTL` is still valid.
+fn cache_serves_without_fetch(
+    have_cache: bool,
+    header: &std::collections::HashMap<String, String>,
+    binrepo: &BinRepo,
+) -> Option<&'static str> {
+    if have_cache && header.get("TIMESTAMP").is_some_and(|s| !s.is_empty()) && binrepo.frozen {
+        return Some("frozen");
+    }
+    let ttl_secs: f64 = header
+        .get("TTL")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    let downloaded_at: f64 = header
+        .get("DOWNLOAD_TIMESTAMP")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    (downloaded_at > 0.0 && ttl_secs > 0.0 && downloaded_at + ttl_secs > unix_now())
+        .then_some("within TTL")
+}
+
+/// The fetches [`refresh_one_binrepo`] will make, started together: network
+/// latency is out of our hands and varies a lot, so the waits overlap
+/// instead of adding up. Only the fetch runs here; the cache checks, the
+/// cross-repo `seen` gate and every message stay in refresh order. A fetch
+/// whose `If-Modified-Since` changed meanwhile (two binrepos on one host
+/// share a cache file, so the first one's write moves the second's) is not
+/// in the map and is simply made when its turn comes.
+fn prefetch_remote_indexes(binrepos: &[BinRepo], root: &Path) -> PrefetchedIndexes {
+    let mut wanted: Vec<(String, Option<i64>)> = Vec::new();
+    for binrepo in binrepos {
+        let uri = binrepo.sync_uri.trim_end_matches('/').to_string();
+        let cached_text =
+            std::fs::read_to_string(edb_cache_packages_file(root, &binrepo.sync_uri)).ok();
+        // The header is the first block; the rest of a big index is not read twice.
+        let (header, _) = portage_repo::parse_packages_index(
+            cached_text
+                .as_deref()
+                .and_then(|t| t.split("\n\n").next())
+                .unwrap_or_default(),
+        );
+        if cache_serves_without_fetch(cached_text.is_some(), &header, binrepo).is_some() {
+            continue;
+        }
+        let ims = header
+            .get("TIMESTAMP")
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|_| cached_text.is_some());
+        if !wanted.contains(&(uri.clone(), ims)) {
+            wanted.push((uri, ims));
+        }
+    }
+    if wanted.len() < 2 {
+        return PrefetchedIndexes::new();
+    }
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = wanted
+            .iter()
+            .map(|(uri, ims)| scope.spawn(|| fetch_remote_index_text(uri, *ims)))
+            .collect();
+        wanted
+            .iter()
+            .cloned()
+            .zip(handles)
+            .map(|(key, h)| {
+                (
+                    key,
+                    h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
+                )
+            })
+            .collect()
+    })
 }
 
 fn refresh_one_binrepo(args: RefreshOneBinrepoArgs<'_>) -> RefreshOutcome {
@@ -401,6 +486,7 @@ fn refresh_one_binrepo(args: RefreshOneBinrepoArgs<'_>) -> RefreshOutcome {
         filter,
         gpkg_only,
         seen,
+        prefetched,
     } = args;
     // Messages print the configured URI; fetch URLs use the stripped form.
     let raw = binrepo.sync_uri.as_str();
@@ -451,33 +537,12 @@ fn refresh_one_binrepo(args: RefreshOneBinrepoArgs<'_>) -> RefreshOutcome {
         .unwrap_or_default();
 
     // Refresh is always requested here, so a cached index on a frozen repo is
-    // used as-is.
-    if cached_text.is_some()
-        && cached_header
-            .get("TIMESTAMP")
-            .is_some_and(|s| !s.is_empty())
-        && binrepo.frozen
-    {
+    // used as-is, and a still-valid cache is used without any fetch.
+    if let Some(why) = cache_serves_without_fetch(cached_text.is_some(), &cached_header, binrepo) {
         ok_entries(&cached_header, cached_entries.clone());
         return RefreshOutcome {
             stderr_warning: None,
-            stdout_note: Some(use_cached_note(&binrepo.name, "frozen")),
-        };
-    }
-    // A still-valid cache is used without any fetch.
-    let ttl_secs: f64 = cached_header
-        .get("TTL")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0);
-    let downloaded_at: f64 = cached_header
-        .get("DOWNLOAD_TIMESTAMP")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0);
-    if downloaded_at > 0.0 && ttl_secs > 0.0 && downloaded_at + ttl_secs > unix_now() {
-        ok_entries(&cached_header, cached_entries.clone());
-        return RefreshOutcome {
-            stderr_warning: None,
-            stdout_note: Some(use_cached_note(&binrepo.name, "within TTL")),
+            stdout_note: Some(use_cached_note(&binrepo.name, why)),
         };
     }
 
@@ -489,7 +554,10 @@ fn refresh_one_binrepo(args: RefreshOneBinrepoArgs<'_>) -> RefreshOutcome {
     // The fetch runs BEFORE any cache-dir write and lands in temp files, never
     // straight into the cache: a stale cache must survive a failed or older
     // remote index.
-    match fetch_remote_index_text(uri, if_modified_since) {
+    let fetched = prefetched
+        .remove(&(uri.to_string(), if_modified_since))
+        .unwrap_or_else(|| fetch_remote_index_text(uri, if_modified_since));
+    match fetched {
         Err(failures) => {
             let warning = Some(binhost_fetch_warning(
                 &binrepo.name,
@@ -3898,6 +3966,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         });
         assert_eq!(
             outcome.stdout_note.as_deref(),
@@ -4266,6 +4335,87 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// A binhost that answers every request after `delay`, one connection at
+    /// a time: `/Packages` is the index, every other path 404s.
+    fn slow_binhost(host: &str, index: Vec<u8>, delay: std::time::Duration) -> String {
+        let listener = TcpListener::bind(format!("{host}:0")).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+                std::thread::sleep(delay);
+                let (status, body) = if req.split_whitespace().nth(1) == Some("/Packages") {
+                    ("200 OK", index.clone())
+                } else {
+                    ("404 Not Found", Vec::new())
+                };
+                let header = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+        format!("http://{host}:{port}")
+    }
+
+    /// Two binhosts that each take about a second to give their index are
+    /// refreshed in about one second, not two, and each lands in its own
+    /// cache: the waits overlap, the work after them stays in order.
+    #[test]
+    fn refresh_binhost_indexes_overlaps_the_waits_of_several_binhosts() {
+        let tmp = tempdir();
+        let root = tmp.join("root");
+        let delay = std::time::Duration::from_millis(350);
+        let binrepos: Vec<BinRepo> = ["one", "two"]
+            .iter()
+            .enumerate()
+            .map(|(n, name)| BinRepo {
+                name: (*name).to_string(),
+                // Another host each: the cache directory is named after it.
+                sync_uri: slow_binhost(
+                    &format!("127.0.0.{}", n + 1),
+                    packages_index(&[&format!("CPV: dev-libs/{name}-1.0")]),
+                    delay,
+                ),
+                priority: n as i32 + 1,
+                location: None,
+                verify_signature: true,
+                frozen: false,
+                fetchcommand: None,
+                resumecommand: None,
+                getbinpkg_exclude: Vec::new(),
+                getbinpkg_include: Vec::new(),
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        refresh_binhost_indexes(RefreshBinhostIndexesArgs {
+            binrepos: &binrepos,
+            root: &root,
+            pretend: false,
+            cli_exclude: &[],
+            cli_include: &[],
+            binpkg_request_signature: false,
+        });
+        let took = started.elapsed();
+        for binrepo in &binrepos {
+            let cached =
+                std::fs::read_to_string(binrepo.packages_dir(&root).join("Packages")).unwrap();
+            let (_, entries) = portage_repo::parse_packages_index(&cached);
+            assert_eq!(entries.len(), 1, "{} is cached", binrepo.name);
+        }
+        // Each repo needs three requests (`.gz`, `.zst`, plain), 3 x 350 ms.
+        // One after the other that is over 2.1 s; overlapped, about 1.05 s.
+        assert!(
+            took < std::time::Duration::from_millis(1900),
+            "took {took:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn refresh_binhost_indexes_warns_immediately_on_a_corrupt_packages_gz() {
         // A downloaded-but-corrupt `Packages.gz` must NOT fall back to plain
@@ -4349,6 +4499,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         })
         .stderr_warning
         .expect("a 500ing binhost warns");
@@ -4807,6 +4958,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         });
         assert!(
             outcome.stderr_warning.is_none(),
@@ -4872,6 +5024,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         });
         assert!(
             outcome
@@ -4938,6 +5091,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         });
         assert!(
             outcome
@@ -4994,6 +5148,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         });
         assert!(outcome.stderr_warning.is_none());
         assert_eq!(
@@ -5045,6 +5200,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         });
         assert!(outcome.stderr_warning.is_none());
         assert!(outcome.stdout_note.is_none());
@@ -5099,6 +5255,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         });
         assert!(outcome.stderr_warning.is_none());
         assert!(outcome.stdout_note.is_none());
@@ -5143,6 +5300,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         });
         assert!(outcome.stderr_warning.is_none());
         assert_eq!(
@@ -5264,6 +5422,7 @@ mod tests {
             filter: &GetbinpkgFilter::for_binrepo(&binrepo, &[], &[]),
             gpkg_only: false,
             seen: &mut std::collections::HashSet::new(),
+            prefetched: &mut PrefetchedIndexes::new(),
         });
         assert_eq!(
             outcome.stderr_warning.as_deref(),
