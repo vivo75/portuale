@@ -473,3 +473,12 @@ when a claim turns out false.
 - **Why it looks wrong**: the set's description promises the packages whose vdb `*DEPEND` entries are outdated; it can never name one. First seen: 3.0.83 (only this version was checked).
 - **Status**: suspect, not reported upstream.
 - **Portuale**: not copied. The experiment `experiment-pre-sort-atoms` builds the set the class means to build, through `portage_repo::installed_deps_changed` (the `--changed-deps` comparison, run-time keys only); it therefore differs from Portage's output by design (backlog #684).
+
+## Q30. `-puD @world` exits 1 when a held-back-able update needs a USE change for an installed consumer
+
+- **What it does**: with installed `dev-libs/w605x-1` built with `w605flag` and a world consumer whose `RDEPEND` is `dev-libs/w605x[w605flag]`, Portage keeps `U w605x-2` (flag off) in the `-puD @world` plan, then reports the USE change `>=dev-libs/w605x-2 w605flag` and returns rc 1 (`_complete_graph`, `depgraph.py:8807-8834`).
+- **Observed 2026-11-10 (Portage 3.0.83)**: same root, `emerge -puD @world` prints the five merge rows including `U w605x-2`, then "The following USE changes are necessary to proceed", rc 1.
+- **Why it looks wrong**: the update is optional and the installed state is healthy; staying on `w605x-1` satisfies every dependency. Refusing the whole plan for it makes a routine `-uD` fail.
+- **Status**: suspect, not reported upstream.
+- **Portuale**: not copied. It leaves `w605x` at 1 and exits 0; the missing hold-back note is backlog #699 (was #673).
+
