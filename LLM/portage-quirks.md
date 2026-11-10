@@ -56,7 +56,7 @@ when a claim turns out false.
   `pass_helpers.rs`), because the merge list must match. `portuale mrg`:
   **decided 2026-10-22: diverge** -- always pick the newest visible version,
   independent of walk order (then a slot conflict and the skipped-update
-  notice, if any, follow normally). Implementation filed as #489, not done
+  notice, if any, follow normally). Implementation filed as #489, closed WONTFIX 2026-11-10 (owner dropped the `mrg`-only divergence)
   yet. Fixture: pmtest `f484b-*`.
 
 ## Q2. The missed-update notice depends on binhost build timestamps (suspect)
