@@ -12,10 +12,11 @@
 //! not the tree.
 //!
 //! Deliberate v1 cuts (each would be its own slice):
-//! - No autounmask relaxation levels: invisible versions are never offered, but
-//!   a candidate needing a keyword/license/mask flip fails instead of
-//!   suggesting one.
-//! - `slot_conflicts` stays empty and a bridge failure is one `Error::Detail`
+//! - Keyword/license/mask suggestions come from a relaxed re-solve after a
+//!   failed strict one (#431 S2); USE flips go through the post-solve
+//!   validator (#429).
+//! - `slot_conflicts` and `skipped_updates` stay empty (no missed-update
+//!   warning for a solvable plan) and a bridge failure is one `Error::Detail`
 //!   line of engine-native text, not a Portage notice. Since S9 the pubgrub
 //!   path replays the walk's abort predicates read-only over the solved plan,
 //!   so `autounmask_use_changes` and the miss disclosures can fill.
@@ -45,13 +46,15 @@ use super::{
     MaskedDepChainArgs, MaskedDepReport, PlainMissDepReport, PretendOutcome,
     ReinstallFlagsForUseChangeArgs, RenderRequiredUseBlockArgs, RepoConfig, ResolveRequest,
     Resolver as PortualeResolver, TopLevel, UseUnsatCandidatesForAtomArgs, UseUnsatDepReport,
-    abort_outcome, all_installed_packages, autounmask_use_atom_form, effective_use_flags,
+    VisibilityChangesArgs, VisibleWithRelaxArgs, abort_outcome, all_installed_packages,
+    autounmask_use_atom_form, effective_use_flags, fill_non_use_change_chains,
     fill_use_change_chains, find_repos, implicit_iuse_set, installed_candidates,
     installed_dep_string, installed_pkg_iuse_and_use, installed_pkg_repo, is_visible,
     live_metadata_for_installed, masked_candidates_for_atom, masked_dep_chain, pkg_use_display_for,
     read_vdb_flag_set, read_vdb_slot, read_vdb_string, reinstall_flags_for_use_change,
     render_required_use_block, repo_aux_metadata, required_use_dep_chain, split_slot,
     suggested_parent_use_candidate, suggested_use_flip, use_unsat_candidates_for_atom,
+    visibility_changes, visible_with_relax,
 };
 use crate::CategoryGate;
 
@@ -119,6 +122,28 @@ fn cp_exists(repos: &[RepoConfig], categories: &BTreeSet<String>, cp: &str) -> b
         .any(|repo| repo.location.join(category).join(package).is_dir())
 }
 
+/// Which visibility checks the candidate pool relaxes: one autounmask level
+/// (`--autounmask*`), `(licence, keywords, masks)`. The default is the strict
+/// pool of [`is_visible`].
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Relax {
+    license: bool,
+    keywords: bool,
+    masks: bool,
+}
+
+/// What a pool build is told besides the request: the autounmask level.
+#[derive(Clone, Default)]
+struct PoolOpts {
+    relax: Relax,
+}
+
+impl Relax {
+    fn any(self) -> bool {
+        self.license || self.keywords || self.masks
+    }
+}
+
 /// Repo facts loaded on demand per `cat/pkg` and memoized, over a reachability
 /// closure BFS-seeded from the target + installed CPNs.
 ///
@@ -150,6 +175,8 @@ struct LazyRepo {
     uses: RefCell<HashMap<String, HashSet<String>>>,
     /// Per-run memo for the installed-deps reader below.
     installed_dep_memo: RefCell<HashMap<(String, String, String, String), String>>,
+    /// The autounmask level the pool is relaxed to (strict unless a retry set it).
+    relax: Relax,
 }
 
 impl LazyRepo {
@@ -168,6 +195,25 @@ impl LazyRepo {
         shallow: &[String],
         seeds_first: bool,
     ) -> Result<Self, super::Error> {
+        Self::build_relaxed(
+            req,
+            repos,
+            (seeds, shallow),
+            seeds_first,
+            &PoolOpts::default(),
+        )
+    }
+
+    /// [`Self::build`] over the pool relaxed to `relax` (the closure follows
+    /// the relaxed versions' deps too, so it is rebuilt per level).
+    fn build_relaxed(
+        req: &ResolveRequest,
+        repos: Vec<RepoConfig>,
+        (seeds, shallow): (&[String], &[String]),
+        seeds_first: bool,
+        opts: &PoolOpts,
+    ) -> Result<Self, super::Error> {
+        let relax = opts.relax;
         let categories = req
             .categories
             .clone()
@@ -185,6 +231,7 @@ impl LazyRepo {
             loaded: RefCell::new(HashMap::new()),
             uses: RefCell::new(HashMap::new()),
             installed_dep_memo: RefCell::new(HashMap::new()),
+            relax,
         };
         // Under deep, an installed cpv's own vdb deps decide what it reaches
         // (#34 S3) -- including versions gone from the repo -- so installed
@@ -280,7 +327,18 @@ impl LazyRepo {
             for candidate in candidates.iter() {
                 // Same visibility-filtered pool as the walk: invisible versions are
                 // never offered to either engine.
-                if !is_visible(candidate, category, package, &self.config) {
+                if !is_visible(candidate, category, package, &self.config)
+                    && !(self.relax.any()
+                        && visible_with_relax(VisibleWithRelaxArgs {
+                            candidate,
+                            category,
+                            package,
+                            config: &self.config,
+                            relax_license: self.relax.license,
+                            relax_keywords: self.relax.keywords,
+                            relax_masks: self.relax.masks,
+                        }))
+                {
                     continue;
                 }
                 let pf = format!("{package}-{}", candidate.version);
@@ -4807,7 +4865,40 @@ fn bridge_apply_validation(
     }
 }
 
+/// The strict solve first; when it fails and an autounmask kind is allowed,
+/// re-solve over a pool relaxed one level at a time (least invasive first) and
+/// return the first plan that stands, carrying the changes it needs. Strict
+/// first so an accepted-as-is solution is never replaced by a relaxed one.
+// Portage: depgraph.py, _autounmask_levels (per-level retry)
 fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
+    let strict = resolve_pubgrub_at(req, &PoolOpts::default());
+    if matches!(&strict, Ok(r) if !reports_failure(r)) {
+        return strict;
+    }
+    for (license, keywords, masks) in super::autounmask_levels((
+        req.autounmask_suggest_license,
+        req.autounmask_suggest_keywords,
+        req.autounmask_suggest_masks,
+    )) {
+        let relaxed = resolve_pubgrub_at(
+            req,
+            &PoolOpts {
+                relax: Relax {
+                    license,
+                    keywords,
+                    masks,
+                },
+            },
+        );
+        if matches!(&relaxed, Ok(r) if !reports_failure(r)) {
+            return relaxed;
+        }
+    }
+    strict
+}
+
+fn resolve_pubgrub_at(req: &ResolveRequest, opts: &PoolOpts) -> Result<GraphResult, String> {
+    let relax = opts.relax;
     let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
     let (seeds, shallow) = closure_seeds(req)?;
     let seed_cpns: Vec<portage_solver::Cpn> = seeds
@@ -4815,7 +4906,7 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
         .chain(shallow.iter())
         .filter_map(|cp| portage_solver::Cpn::parse(cp).ok())
         .collect();
-    let lazy = LazyRepo::build(req, repos, &seeds, &shallow, true)
+    let lazy = LazyRepo::build_relaxed(req, repos, (&seeds, &shallow), true, opts)
         .map_err(|e| format!("reading repo facts: {e}"))?;
     // The kept/rebuild set is computed before the provider exists (deps are
     // converted inside `new_for_targets`).
@@ -4940,7 +5031,83 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
     if let Some(validation) = bridge_validate_aborts(req, &lazy, &parents, &result.entries)? {
         bridge_apply_validation(req, &lazy, &mut result, validation);
     }
+    if relax.any() {
+        record_relaxed_changes(req, &lazy, &order, &mut result);
+    }
     Ok(result)
+}
+
+/// Name the keyword, licence and mask changes the relaxed plan's members need
+/// (the walk's own [`visibility_changes`]), mark their rows, and fill the
+/// `#required by` chains from the settled entries.
+fn record_relaxed_changes(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    order: &[(String, String)],
+    result: &mut GraphResult,
+) {
+    for (cp, version) in order {
+        let Some(record) = lazy.record(cp, version) else {
+            continue;
+        };
+        let Ok(candidates) = lazy
+            .gate()
+            .repo_candidates(&record.category, &record.package)
+        else {
+            continue;
+        };
+        let Some(resolved) = candidates
+            .iter()
+            .filter(|c| c.version == record.version && c.repo_name == record.repo_name)
+            .max_by_key(|c| c.repo_priority)
+        else {
+            continue;
+        };
+        let provenance =
+            super::visibility_provenance(resolved, &record.category, &record.package, &req.config);
+        let cpv_str = resolved.match_str(&record.category, &record.package);
+        let changes = visibility_changes(VisibilityChangesArgs {
+            resolved,
+            category: &record.category,
+            package: &record.package,
+            version: &record.version,
+            cpv_str: &cpv_str,
+            config: &req.config,
+            mask_entry: &provenance,
+            suggest_keywords: req.autounmask_suggest_keywords,
+            suggest_license: req.autounmask_suggest_license,
+            suggest_masks: req.autounmask_suggest_masks,
+            all_candidates: &|| candidates.clone(),
+        });
+        result.autounmask_keyword_changes.extend(changes.keyword);
+        result.autounmask_license_changes.extend(changes.license);
+        result.autounmask_mask_changes.extend(changes.mask);
+        if let Some(entry) = result
+            .entries
+            .iter_mut()
+            .find(|e| e.category == record.category && e.package == record.package)
+        {
+            entry.keyword_mask = super::keyword_mask_marker(
+                resolved,
+                &record.category,
+                &record.package,
+                &req.config,
+                &provenance.mask_entry,
+            );
+            entry.provenance = provenance;
+        }
+    }
+    let top_level = TopLevel {
+        atoms: req.atoms.iter().map(String::as_str).collect(),
+        sets: &req.argument_sets,
+    };
+    for changes in [
+        &mut result.autounmask_keyword_changes,
+        &mut result.autounmask_license_changes,
+        &mut result.autounmask_mask_changes,
+    ] {
+        fill_non_use_change_chains(&result.entries, changes, &top_level, &req.root);
+    }
 }
 
 // --- resolvo backend -------------------------------------------------------
@@ -5339,8 +5506,9 @@ mod tests {
         assert_eq!(newpkg[0].version, "1.0");
     }
 
-    /// Unsatisfiable targets render the engine-native conflict naming the
-    /// packages, never the internals dump.
+    /// #430 S1: with `--usepkg` a visible binary joins the pool and replaces the
+    /// ebuild of its version, keeping the USE it was built with; without the flag
+    /// the pool is ebuilds only.
     #[test]
     fn resolvo_failure_text_is_engine_native_not_a_debug_dump() {
         use super::super::active_resolver_for;

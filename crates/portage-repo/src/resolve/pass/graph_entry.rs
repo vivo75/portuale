@@ -31,6 +31,105 @@ pub(crate) struct PushGraphEntryArgs<'a> {
     pub(crate) item_targets_running_root: bool,
 }
 
+/// The values [`visibility_changes`] reads from its caller.
+pub(crate) struct VisibilityChangesArgs<'a> {
+    pub(crate) resolved: &'a Candidate,
+    pub(crate) category: &'a str,
+    pub(crate) package: &'a str,
+    pub(crate) version: &'a str,
+    /// `cat/pkg-ver:slot/sub::repo` spelling of `resolved`.
+    pub(crate) cpv_str: &'a str,
+    pub(crate) config: &'a Config,
+    pub(crate) mask_entry: &'a VisibilityProvenance,
+    pub(crate) suggest_keywords: bool,
+    pub(crate) suggest_license: bool,
+    pub(crate) suggest_masks: bool,
+    /// Every candidate of the cp, loaded only when a licence change needs the
+    /// `>=` / `:slot` / `=` atom form.
+    pub(crate) all_candidates: &'a dyn Fn() -> std::sync::Arc<Vec<Candidate>>,
+}
+
+/// The keyword, licence and `package.mask` changes a candidate accepted
+/// over its visibility needs; each is `None` when its gate is off or the
+/// candidate needs nothing of that kind.
+#[derive(Default)]
+pub(crate) struct VisibilityChanges {
+    pub(crate) keyword: Option<AutounmaskChange>,
+    pub(crate) license: Option<AutounmaskChange>,
+    pub(crate) mask: Option<AutounmaskChange>,
+}
+
+/// Shared by the default walk ([`push_graph_entry`]) and the solver bridge, so
+/// both name the same changes for the same chosen candidate. The gate is
+/// per-category, so a multi-masked candidate still records every part.
+// Portage: depgraph.py, _display_autounmask (unstable_keyword_msg, license_msg, p_mask_change_msg)
+pub(crate) fn visibility_changes(args: VisibilityChangesArgs<'_>) -> VisibilityChanges {
+    let VisibilityChangesArgs {
+        resolved,
+        category,
+        package,
+        version,
+        cpv_str,
+        config,
+        mask_entry,
+        suggest_keywords,
+        suggest_license,
+        suggest_masks,
+        all_candidates,
+    } = args;
+    let mut out = VisibilityChanges::default();
+    if suggest_keywords
+        && !keywords_accepted(KeywordsAcceptedArgs {
+            keywords: &effective_keywords(config, cpv_str, category, package, &resolved.keywords),
+            candidate_str: cpv_str,
+            build_id: resolved.build_id.as_deref(),
+            category,
+            package,
+            accept_keywords: &config.accept_keywords,
+            package_accept_keywords: &config.package_accept_keywords,
+        })
+        && let Some(kw) = suggested_keyword(resolved)
+    {
+        out.keyword = Some(AutounmaskChange {
+            atom: format!("={category}/{package}-{version}"),
+            token: kw.to_string(),
+            dep_chain: Vec::new(),
+            trigger: None,
+            mask_entry: None,
+        });
+    }
+    if suggest_license {
+        let missing = missing_licenses(resolved, category, package, cpv_str, config);
+        if !missing.is_empty() {
+            let all = all_candidates();
+            out.license = Some(AutounmaskChange {
+                atom: check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
+                    resolved,
+                    all_candidates: &all,
+                    category,
+                    package,
+                    config,
+                    check_visibility: false,
+                }),
+                token: missing.join(" "),
+                dep_chain: Vec::new(),
+                trigger: None,
+                mask_entry: None,
+            });
+        }
+    }
+    if suggest_masks && mask_entry.mask_entry.is_some() && mask_entry.unmask_entry.is_none() {
+        out.mask = Some(AutounmaskChange {
+            atom: format!("={category}/{package}-{version}"),
+            token: String::new(),
+            dep_chain: Vec::new(),
+            trigger: None,
+            mask_entry: mask_entry.mask_entry.clone(),
+        });
+    }
+    out
+}
+
 /// Add the chosen candidate to the graph, with its autounmask suggestions.
 pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOut {
     let PushGraphEntryArgs {
@@ -74,73 +173,26 @@ pub(crate) fn push_graph_entry(args: PushGraphEntryArgs<'_>) -> PushGraphEntryOu
         "{}/{}-{version}:{slot}/{sub_slot}::{repo_name}",
         key.0, key.1
     );
-    // Record the implicit `=<cpv> <keyword>` change for a candidate accepted
-    // over unaccepted KEYWORDS; the gate is per-category, so a multi-masked
-    // candidate still records every part.
-    // Portage: depgraph.py, _display_autounmask (unstable_keyword_msg)
-    if bp.autounmask_suggest_keywords
-        && !keywords_accepted(KeywordsAcceptedArgs {
-            keywords: &effective_keywords(
-                config,
-                &resolved_cpv_str,
-                &key.0,
-                &key.1,
-                &resolved.keywords,
-            ),
-            candidate_str: &resolved_cpv_str,
-            build_id: resolved.build_id.as_deref(),
-            category: &key.0,
-            package: &key.1,
-            accept_keywords: &config.accept_keywords,
-            package_accept_keywords: &config.package_accept_keywords,
-        })
-        && let Some(kw) = suggested_keyword(resolved)
-    {
-        state.autounmask_keyword_changes.push(AutounmaskChange {
-            atom: format!("={}/{}-{version}", key.0, key.1),
-            token: kw.to_string(),
-            dep_chain: Vec::new(),
-            trigger: None,
-            mask_entry: None,
-        });
-    }
-    // Record the missing licenses for a candidate accepted over unaccepted
-    // LICENSE (`>=` / `>=…:slot` / `=` form). Per-category gate.
-    // Portage: depgraph.py, _display_autounmask (license_msg)
-    if bp.autounmask_suggest_license {
-        let missing = missing_licenses(resolved, &key.0, &key.1, &resolved_cpv_str, config);
-        if !missing.is_empty() {
-            let all = ctx.repo_candidates(&key.0, &key.1).unwrap_or_default();
-            state.autounmask_license_changes.push(AutounmaskChange {
-                atom: check_if_latest_atom_form(CheckIfLatestAtomFormArgs {
-                    resolved,
-                    all_candidates: &all,
-                    category: &key.0,
-                    package: &key.1,
-                    config,
-                    check_visibility: false,
-                }),
-                token: missing.join(" "),
-                dep_chain: Vec::new(),
-                trigger: None,
-                mask_entry: None,
-            });
-        }
-    }
-    // Record `=<cpv>` for a candidate accepted over an active `package.mask`.
-    // Per-category gate. Portage: _display_autounmask (p_mask_change_msg)
-    if bp.autounmask_suggest_masks
-        && provenance.mask_entry.is_some()
-        && provenance.unmask_entry.is_none()
-    {
-        state.autounmask_mask_changes.push(AutounmaskChange {
-            atom: format!("={}/{}-{version}", key.0, key.1),
-            token: String::new(),
-            dep_chain: Vec::new(),
-            trigger: None,
-            mask_entry: provenance.mask_entry.clone(),
-        });
-    }
+    let VisibilityChanges {
+        keyword,
+        license,
+        mask,
+    } = visibility_changes(VisibilityChangesArgs {
+        resolved,
+        category: &key.0,
+        package: &key.1,
+        version,
+        cpv_str: &resolved_cpv_str,
+        config,
+        mask_entry: &provenance,
+        suggest_keywords: bp.autounmask_suggest_keywords,
+        suggest_license: bp.autounmask_suggest_license,
+        suggest_masks: bp.autounmask_suggest_masks,
+        all_candidates: &|| ctx.repo_candidates(&key.0, &key.1).unwrap_or_default(),
+    });
+    state.autounmask_keyword_changes.extend(keyword);
+    state.autounmask_license_changes.extend(license);
+    state.autounmask_mask_changes.extend(mask);
     // A `New` entry whose cat/pkg is installed in some other slot (the
     // in-slot decision already happened in `resolve_pretend`).
     // Portage: _get_installed_best (new_slot)

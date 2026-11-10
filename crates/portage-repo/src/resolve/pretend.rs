@@ -1194,6 +1194,33 @@ pub(crate) struct RelaxUntilUsableArgs<'a, 'b> {
     pub(crate) root: &'a Path,
 }
 
+/// The autounmask relaxation levels for the allowed `(license, keywords, masks)`, least to most invasive, as
+/// `(relax_license, relax_keywords, relax_masks)`; a later level relaxes
+/// `LICENSE` only if the first was allowed to.
+// Portage: depgraph.py, _autounmask_levels
+pub(crate) fn autounmask_levels(
+    (autounmask_license, autounmask_keywords, autounmask_masks): (bool, bool, bool),
+) -> Vec<(bool, bool, bool)> {
+    let mut levels: Vec<(bool, bool, bool)> = Vec::new();
+    let mut relax_license = false;
+    if autounmask_license {
+        relax_license = true;
+        levels.push((true, false, false)); // 1. +license
+    }
+    if autounmask_keywords {
+        levels.push((relax_license, true, false)); // 2. +~arch (+license)
+    }
+    if autounmask_masks {
+        // 4. +masks, keywords still respected.
+        levels.push((relax_license, false, true));
+        if autounmask_keywords {
+            // 5. +~arch +masks (+license).
+            levels.push((relax_license, true, true));
+        }
+    }
+    levels
+}
+
 /// Relax licence, keyword and mask checks level by level until a candidate is usable; answer early when none is.
 pub(crate) fn relax_until_usable(
     args: RelaxUntilUsableArgs<'_, '_>,
@@ -1220,23 +1247,7 @@ pub(crate) fn relax_until_usable(
     // only if level 1 was allowed to. The `missing keywords` steps are skipped (no
     // `**` suggestion). `(relax_license, relax_keywords, relax_masks)`:
     // Portage: depgraph.py
-    let mut levels: Vec<(bool, bool, bool)> = Vec::new();
-    let mut relax_license = false;
-    if autounmask_license {
-        relax_license = true;
-        levels.push((true, false, false)); // 1. +license
-    }
-    if autounmask_keywords {
-        levels.push((relax_license, true, false)); // 2. +~arch (+license)
-    }
-    if autounmask_masks {
-        // 4. +masks, keywords still respected.
-        levels.push((relax_license, false, true));
-        if autounmask_keywords {
-            // 5. +~arch +masks (+license).
-            levels.push((relax_license, true, true));
-        }
-    }
+    let levels = autounmask_levels((autounmask_license, autounmask_keywords, autounmask_masks));
     for (rl, rk, rm) in levels {
         if !need_fallback(visible, atom, atom_str, extra_constraints) {
             break;

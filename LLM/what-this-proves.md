@@ -164,3 +164,24 @@ newer one stale: `[binary N] u257par-1-3`, not `[ebuild N]`). Unit test
 `binary_mask_hides_reads_only_marked_negatives_and_honours_the_build_id`. The
 `@world` merge rows were not re-compared byte for byte against the previous
 binary. Left over: #697.
+
+#431 S2 (2026-11-10): `--solver=pubgrub` now offers the same keyword, licence and
+`package.mask` suggestions as the default solver. When the strict solve has no
+plan, the bridge re-solves over a pool relaxed one autounmask level at a time
+(licence, then `~arch`, then masks, as the walk's `autounmask_levels`), and the
+first plan that stands carries the change blocks and the `~`/`#` row markers.
+Run `target/release/portuale emerge --solver=pubgrub --pretend
+--autounmask-keep-keywords=n dev-libs/akk0a` in `pmtest/fixtures` (environment as in
+`fixtures/` tests): it prints `[ebuild  N    ~] dev-libs/akk0b-1`, the
+`akk0a-2` row and `=dev-libs/akk0b-1 ~amd64` under "keyword changes are
+necessary", exit 1 — before this it printed `!!! All ebuilds that could satisfy
+"dev-libs/akk0b" have been masked`. Same for `dev-libs/hardmaskedpkg
+--autounmask` (mask) and `dev-libs/crossrepolicensepkg --autounmask
+--autounmask-license=y` (licence). In pmtest,
+`python3 -m pytest pytests-contract-suite -q -k suggests_keyword_license_mask`
+compares stdout, stderr and exit code with the default solver on those four
+cells; unit test `autounmask_levels_order_license_keywords_masks_least_invasive_first`.
+The expected text is the default solver's, not a fresh Portage capture, and the L0
+real-tree bed with `--solver=pubgrub` was not run. S1 (the informational
+"updates/rebuilds have been skipped" warning on a solvable plan, `btparent`) stays a
+documented cut: it needs backtracking state the engines lack.

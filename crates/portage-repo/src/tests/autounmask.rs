@@ -1042,3 +1042,28 @@ fn autounmask_use_suggests_an_implicit_iuse_flag() {
     );
     assert_eq!(resolved.autounmask_use_changes[0].token, "elibc_musl");
 }
+
+/// Backlog #431 S2: the level list both the walk and the solver bridge retry over.
+#[test]
+fn autounmask_levels_order_license_keywords_masks_least_invasive_first() {
+    use crate::autounmask_levels;
+    assert!(autounmask_levels((false, false, false)).is_empty());
+    assert_eq!(
+        autounmask_levels((true, true, true)),
+        vec![
+            (true, false, false),
+            (true, true, false),
+            (true, false, true),
+            (true, true, true),
+        ]
+    );
+    // A later level relaxes LICENSE only when level 1 was allowed to.
+    assert_eq!(
+        autounmask_levels((false, true, true)),
+        vec![
+            (false, true, false),
+            (false, false, true),
+            (false, true, true)
+        ]
+    );
+}
