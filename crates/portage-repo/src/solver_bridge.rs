@@ -28,7 +28,10 @@
 //!   order only seeds positions.
 //! - Unparsable dep-string classes feed empty deps; unparsable versions and
 //!   top-level blocker atoms are skipped.
-//! - Binary candidates (`--usepkg`) are not offered; `--deep=N` bounds kept
+//! - Binaries join the pool under `--usepkg` (#430: a built package's
+//!   DEPEND/BDEPEND are dropped unless bdeps is on, a binary whose built
+//!   `:S/SS=` dep went stale is masked and re-solved, and `--usepkgonly` drops
+//!   the ebuild pool); `--deep=N` bounds kept
 //!   expansion through a pre-solve BFS allowlist (the engine cannot carry
 //!   depth).
 
@@ -56,7 +59,11 @@ use super::{
     suggested_parent_use_candidate, suggested_use_flip, use_unsat_candidates_for_atom,
     visibility_changes, visible_with_relax,
 };
-use crate::CategoryGate;
+use crate::{
+    BinaryIndex, CandidateSource, CategoryGate, CollectBinaryCandidatesArgs,
+    ReadBinaryMetadataAnyInstanceArgs, build_local_binpkg_index, collect_binary_candidates,
+    installed_refs, read_binary_metadata_any_instance,
+};
 
 // --- Lazy fact loading -----------------------------------------------------
 
@@ -80,6 +87,40 @@ struct LoadedVersion {
     /// The raw md5-cache strings the trees parsed from, for merge-order edge
     /// building over the exact walk-path helper.
     raw_deps: [String; 5],
+    /// `Some` for a binary package (`--usepkg`): the build-time facts that
+    /// replace what an ebuild computes. `None` for an ebuild or an installed-only record.
+    binary: Option<BinaryFacts>,
+}
+
+/// What a binary candidate carries that an ebuild computes: the USE it was
+/// built with (not recomputed), where it lives, and which build it is.
+#[derive(Clone)]
+struct BinaryFacts {
+    use_set: HashSet<String>,
+    remote: bool,
+    build_id: Option<String>,
+    build_time: Option<i64>,
+    /// `SIZE` from the `Packages` index (the download size of a remote binary).
+    size: Option<u64>,
+}
+
+/// The `--usepkg` request options the binary pool needs, with the local index.
+#[derive(Clone)]
+struct BinPool {
+    index: std::sync::Arc<BinaryIndex>,
+    usepkg: bool,
+    usepkgonly: bool,
+    getbinpkg: bool,
+    respect_use: bool,
+    respect_user_patches: bool,
+    newuse: bool,
+    changed_use: bool,
+    with_bdeps: bool,
+    exclude: Vec<String>,
+    include: Vec<String>,
+    /// `cat/pkg-ver` of binaries a solve found stale: not offered, so the
+    /// ebuild of that version is.
+    masked: HashSet<String>,
 }
 
 impl LoadedVersion {
@@ -132,10 +173,12 @@ struct Relax {
     masks: bool,
 }
 
-/// What a pool build is told besides the request: the autounmask level.
+/// What a pool build is told besides the request: the autounmask level and the
+/// binaries a previous solve found stale (their ebuilds stay offered instead).
 #[derive(Clone, Default)]
 struct PoolOpts {
     relax: Relax,
+    masked_binaries: HashSet<String>,
 }
 
 impl Relax {
@@ -177,6 +220,11 @@ struct LazyRepo {
     installed_dep_memo: RefCell<HashMap<(String, String, String, String), String>>,
     /// The autounmask level the pool is relaxed to (strict unless a retry set it).
     relax: Relax,
+    /// The binary pool, when `--usepkg`/`--usepkgonly` asks for one.
+    bin: Option<BinPool>,
+    /// Whether ebuilds are offered: false under `--usepkgonly` or the explicit
+    /// `=n` spelling that drops the ebuild db.
+    ebuilds: bool,
 }
 
 impl LazyRepo {
@@ -232,6 +280,21 @@ impl LazyRepo {
             uses: RefCell::new(HashMap::new()),
             installed_dep_memo: RefCell::new(HashMap::new()),
             relax,
+            ebuilds: !(req.usepkgonly || crate::globals::ebuild_db_dropped()),
+            bin: (req.usepkg || req.usepkgonly).then(|| BinPool {
+                index: build_local_binpkg_index(&req.config),
+                usepkg: req.usepkg,
+                usepkgonly: req.usepkgonly,
+                getbinpkg: req.getbinpkg,
+                respect_use: req.binpkg_respect_use,
+                respect_user_patches: req.binpkg_respect_user_patches,
+                newuse: req.newuse,
+                changed_use: req.changed_use,
+                with_bdeps: req.with_bdeps,
+                exclude: req.usepkg_exclude.clone(),
+                include: req.usepkg_include.clone(),
+                masked: opts.masked_binaries.clone(),
+            }),
         };
         // Under deep, an installed cpv's own vdb deps decide what it reaches
         // (#34 S3) -- including versions gone from the repo -- so installed
@@ -323,7 +386,14 @@ impl LazyRepo {
         }
         let mut versions = Vec::new();
         if let Some((category, package)) = cp.split_once('/') {
-            let candidates = self.gate().repo_candidates(category, package)?;
+            // `--usepkgonly` (or an explicit `=n`) drops the ebuild db: only binaries
+            // (below) and installed records are offered.
+            // Portage: depgraph.py, dbs construction
+            let candidates = if self.ebuilds {
+                self.gate().repo_candidates(category, package)?
+            } else {
+                Default::default()
+            };
             for candidate in candidates.iter() {
                 // Same visibility-filtered pool as the walk: invisible versions are
                 // never offered to either engine.
@@ -375,13 +445,139 @@ impl LazyRepo {
                     required_use: metadata.get("REQUIRED_USE").cloned().unwrap_or_default(),
                     deps,
                     raw_deps,
+                    binary: None,
                 });
             }
+        }
+        if let Some(pool) = &self.bin
+            && let Some((category, package)) = cp.split_once('/')
+        {
+            self.add_binary_versions(pool, cp, (category, package), &mut versions)?;
         }
         self.loaded
             .borrow_mut()
             .insert(cp.to_string(), versions.clone());
         Ok(versions)
+    }
+
+    /// Offer the binaries the walk would (`collect_binary_candidates`: the same
+    /// respect-USE, user-patches, changed-deps, ebuild-visibility, exclude/include
+    /// filters), each replacing the ebuild record of its version: with `--usepkg`
+    /// the binary wins the same-version tie.
+    // Portage: depgraph.py, _iter_match_pkgs (binary before ebuild)
+    fn add_binary_versions(
+        &self,
+        pool: &BinPool,
+        cp: &str,
+        (category, package): (&str, &str),
+        versions: &mut Vec<LoadedVersion>,
+    ) -> Result<(), super::Error> {
+        let Some(atom) = parse_dep_atom(cp, "solver_bridge_binary_pool") else {
+            return Ok(());
+        };
+        let mut candidates: Vec<crate::Candidate> = if self.ebuilds {
+            self.gate().repo_candidates(category, package)?.to_vec()
+        } else {
+            Vec::new()
+        };
+        collect_binary_candidates(CollectBinaryCandidatesArgs {
+            usepkg: pool.usepkg,
+            usepkgonly: pool.usepkgonly,
+            local_binpkg: &pool.index,
+            atom: &atom,
+            getbinpkg: pool.getbinpkg,
+            config: &self.config,
+            root: &self.root,
+            binpkg_respect_use: pool.respect_use,
+            binpkg_respect_user_patches: pool.respect_user_patches,
+            newuse: pool.newuse,
+            changed_use: pool.changed_use,
+            candidates: &mut candidates,
+            with_bdeps: pool.with_bdeps,
+            atom_str: cp,
+            extra_constraints: &[],
+            usepkg_exclude: &pool.exclude,
+            usepkg_include: &pool.include,
+            gate: self.gate(),
+        });
+        for candidate in candidates
+            .iter()
+            .filter(|c| c.source == CandidateSource::Binary)
+        {
+            if !is_visible(candidate, category, package, &self.config)
+                || portage_solver::Cpv::parse(&format!("{cp}-{}", candidate.version)).is_err()
+                || pool.masked.contains(&format!("{cp}-{}", candidate.version))
+            {
+                continue;
+            }
+            let Some(metadata) =
+                read_binary_metadata_any_instance(ReadBinaryMetadataAnyInstanceArgs {
+                    config: &self.config,
+                    root: &self.root,
+                    local: &pool.index,
+                    category,
+                    package,
+                    version: &candidate.version,
+                    build_id: candidate.build_id.as_deref(),
+                })
+            else {
+                continue;
+            };
+            let mut deps: [Vec<portage_solver::DepEntry>; 5] = Default::default();
+            let mut raw_deps: [String; 5] = Default::default();
+            for (i, key) in ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+                .iter()
+                .enumerate()
+            {
+                if let Some(text) = metadata.get(*key) {
+                    raw_deps[i] = text.clone();
+                    if let Ok(parsed) = portage_solver::DepEntry::parse(text) {
+                        deps[i] = parsed;
+                    }
+                }
+            }
+            // A built package's build-time deps are never traversed unless bdeps is
+            // on (`--usepkg` turns the `auto` default off): its DEPEND/BDEPEND are
+            // blanked before anything reads them, blockers and merge-order edges
+            // included.
+            // Portage: depgraph.py, _add_pkg_deps (built and not bdeps)
+            if !pool.with_bdeps {
+                for class in [0, 2] {
+                    deps[class].clear();
+                    raw_deps[class].clear();
+                }
+            }
+            // The binary replaces the ebuild of the same version; two builds of one
+            // version keep the first (the newest, as the walk's dedup orders them).
+            if versions
+                .iter()
+                .any(|v| v.version == candidate.version && v.binary.is_some())
+            {
+                continue;
+            }
+            versions.retain(|v| v.version != candidate.version);
+            versions.push(LoadedVersion {
+                category: category.to_string(),
+                package: package.to_string(),
+                version: candidate.version.clone(),
+                slot: candidate.slot.clone(),
+                sub_slot: candidate.sub_slot.clone(),
+                repo_name: candidate.repo_name.clone(),
+                iuse: metadata.get("IUSE").cloned().unwrap_or_default(),
+                keywords: candidate.keywords.clone(),
+                required_use: metadata.get("REQUIRED_USE").cloned().unwrap_or_default(),
+                deps,
+                raw_deps,
+                binary: Some(BinaryFacts {
+                    use_set: candidate.binary_use.clone().unwrap_or_default(),
+                    remote: candidate.remote,
+                    build_id: candidate.build_id.clone(),
+                    build_time: candidate.build_time,
+                    size: metadata.get("SIZE").and_then(|s| s.parse().ok()),
+                }),
+            });
+        }
+        Ok(())
     }
 
     /// One memoized record by `cat/pkg-version`.
@@ -481,11 +677,16 @@ impl LazyRepo {
             keywords: Vec::new(),
             deps,
             raw_deps,
+            binary: None,
         })
     }
 
     /// Resolved USE for one loaded version, memoized per cpv.
     fn use_of(&self, version: &LoadedVersion) -> HashSet<String> {
+        // A binary keeps the USE it was built with.
+        if let Some(binary) = &version.binary {
+            return binary.use_set.clone();
+        }
         let cpv = version.cpv();
         if let Some(cached) = self.uses.borrow().get(&cpv) {
             return cached.clone();
@@ -1111,17 +1312,26 @@ fn bridge_entry_for(
         interactive: false,
         fetch_restrict: false,
         fetch_restrict_satisfied: false,
-        download_files: Vec::new(),
+        download_files: record
+            .binary
+            .as_ref()
+            .filter(|b| b.remote)
+            .and_then(|b| b.size.map(|size| vec![(format!("{cp}-{version}"), size)]))
+            .unwrap_or_default(),
         required_by,
-        source: super::CandidateSource::Ebuild,
+        source: if record.binary.is_some() {
+            super::CandidateSource::Binary
+        } else {
+            super::CandidateSource::Ebuild
+        },
         provenance: super::VisibilityProvenance::default(),
         keyword_suggestion: None,
         use_suggestion: None,
         parent_use_suggestion: None,
         targets_running_root: false,
-        remote_binary: false,
-        build_id: None,
-        build_time: None,
+        remote_binary: record.binary.as_ref().is_some_and(|b| b.remote),
+        build_id: record.binary.as_ref().and_then(|b| b.build_id.clone()),
+        build_time: record.binary.as_ref().and_then(|b| b.build_time),
         deps,
     })
 }
@@ -4871,7 +5081,7 @@ fn bridge_apply_validation(
 /// first so an accepted-as-is solution is never replaced by a relaxed one.
 // Portage: depgraph.py, _autounmask_levels (per-level retry)
 fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
-    let strict = resolve_pubgrub_at(req, &PoolOpts::default());
+    let strict = resolve_pubgrub_unstale(req, Relax::default());
     if matches!(&strict, Ok(r) if !reports_failure(r)) {
         return strict;
     }
@@ -4880,14 +5090,12 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
         req.autounmask_suggest_keywords,
         req.autounmask_suggest_masks,
     )) {
-        let relaxed = resolve_pubgrub_at(
+        let relaxed = resolve_pubgrub_unstale(
             req,
-            &PoolOpts {
-                relax: Relax {
-                    license,
-                    keywords,
-                    masks,
-                },
+            Relax {
+                license,
+                keywords,
+                masks,
             },
         );
         if matches!(&relaxed, Ok(r) if !reports_failure(r)) {
@@ -4897,7 +5105,101 @@ fn resolve_pubgrub(req: &ResolveRequest) -> Result<GraphResult, String> {
     strict
 }
 
-fn resolve_pubgrub_at(req: &ResolveRequest, opts: &PoolOpts) -> Result<GraphResult, String> {
+/// Most re-solves one request spends masking stale binaries.
+const STALE_BINARY_MAX_ROUNDS: usize = 8;
+
+/// Solve; when a planned binary's built `:S/SS=` dep no longer matches how the
+/// plan leaves that slot, mask that binary (its ebuild stays offered) and solve
+/// again, until nothing is stale.
+// Portage: depgraph.py, _slot_change_backtrack (slot_operator_mask_built)
+fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphResult, String> {
+    let mut opts = PoolOpts {
+        relax,
+        masked_binaries: HashSet::new(),
+    };
+    for _ in 0..STALE_BINARY_MAX_ROUNDS {
+        let (result, stale) = resolve_pubgrub_at(req, &opts)?;
+        if stale.is_empty() {
+            return Ok(result);
+        }
+        opts.masked_binaries.extend(stale);
+    }
+    resolve_pubgrub_at(req, &opts).map(|(result, _)| result)
+}
+
+/// The planned binaries (`cat/pkg-ver`) whose recorded built slot-operator
+/// atom names a sub-slot the plan leaves differently: the provider is in the
+/// plan (its entry's sub-slot) or kept installed (the vdb's). A `||` group's
+/// alternatives all count, so this may mask a binary Portage would keep; the
+/// ebuild stays offered, so the plan is still sound. Not applied under
+/// `--usepkgonly`, which has no ebuild to fall back to.
+fn stale_built_binaries(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    entries: &[GraphEntry],
+) -> Vec<String> {
+    if lazy.bin.is_none() || req.usepkgonly {
+        return Vec::new();
+    }
+    let mut stale = Vec::new();
+    for entry in entries
+        .iter()
+        .filter(|e| e.source == super::CandidateSource::Binary)
+    {
+        let cp = format!("{}/{}", entry.category, entry.package);
+        let version = match &entry.outcome {
+            PretendOutcome::New { version } | PretendOutcome::Reinstall { version, .. } => version,
+            PretendOutcome::Upgrade { to, .. } | PretendOutcome::Downgrade { to, .. } => to,
+            _ => continue,
+        };
+        let Some(record) = lazy.record(&cp, version) else {
+            continue;
+        };
+        let use_set = lazy.use_of(&record);
+        let mismatched = record.raw_deps.iter().any(|raw| {
+            let toks: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
+            let Ok(flat) = portage_use_reduce::use_reduce_flat(
+                &toks,
+                &use_set,
+                portage_use_reduce::MatchMode::Normal,
+            ) else {
+                return false;
+            };
+            flat.iter().any(|tok| {
+                let Some(atom) = parse_dep_atom(tok, "solver_bridge_stale_built") else {
+                    return false;
+                };
+                if !super::is_built_slot_op(&atom) || atom.blocker != portage_dep::Blocker::None {
+                    return false;
+                }
+                let planned = entries
+                    .iter()
+                    .find(|e| {
+                        e.category == atom.category
+                            && e.package == atom.package
+                            && e.slot.as_deref() == atom.slot.as_deref()
+                    })
+                    .and_then(|e| e.sub_slot.clone())
+                    .or_else(|| {
+                        installed_refs(&req.root, &atom.category, &atom.package)
+                            .into_iter()
+                            .find(|r| Some(r.slot.as_str()) == atom.slot.as_deref())
+                            .map(|r| r.sub_slot)
+                    });
+                planned.is_some_and(|sub| Some(sub.as_str()) != atom.sub_slot.as_deref())
+            })
+        });
+        if mismatched {
+            stale.push(format!("{cp}-{version}"));
+        }
+    }
+    stale
+}
+
+fn resolve_pubgrub_at(
+    req: &ResolveRequest,
+    opts: &PoolOpts,
+) -> Result<(GraphResult, Vec<String>), String> {
     let relax = opts.relax;
     let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
     let (seeds, shallow) = closure_seeds(req)?;
@@ -5034,7 +5336,8 @@ fn resolve_pubgrub_at(req: &ResolveRequest, opts: &PoolOpts) -> Result<GraphResu
     if relax.any() {
         record_relaxed_changes(req, &lazy, &order, &mut result);
     }
-    Ok(result)
+    let stale = stale_built_binaries(req, &lazy, &result.entries);
+    Ok((result, stale))
 }
 
 /// Name the keyword, licence and mask changes the relaxed plan's members need
@@ -5509,6 +5812,112 @@ mod tests {
     /// #430 S1: with `--usepkg` a visible binary joins the pool and replaces the
     /// ebuild of its version, keeping the USE it was built with; without the flag
     /// the pool is ebuilds only.
+    #[test]
+    fn load_versions_offers_a_binary_that_replaces_its_ebuild_under_usepkg() {
+        use super::super::find_repos;
+        let binary = std::collections::HashMap::from([
+            ("CPV".to_string(), "dev-libs/newpkg-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("EAPI".to_string(), "8".to_string()),
+            ("USE".to_string(), "bakedflag".to_string()),
+            ("BUILD_ID".to_string(), "1".to_string()),
+        ]);
+        let pool_of = |usepkg: bool| {
+            let mut req = fixture_request(&["dev-libs/newpkg"]);
+            req.config.scanned_binpkgs = Some(vec![binary.clone()]);
+            req.usepkg = usepkg;
+            let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+            let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+            let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow, true)
+                .expect("closure builds");
+            lazy.load_versions("dev-libs/newpkg").expect("loads newpkg")
+        };
+        let ebuilds = pool_of(false);
+        assert_eq!(ebuilds.len(), 1);
+        assert!(ebuilds[0].binary.is_none(), "no binary without --usepkg");
+        let pool = pool_of(true);
+        assert_eq!(pool.len(), 1, "the binary replaces the ebuild of 1.0");
+        let built = pool[0]
+            .binary
+            .as_ref()
+            .expect("the 1.0 record is the binary");
+        assert!(built.use_set.contains("bakedflag"));
+        assert_eq!(built.build_id.as_deref(), Some("1"));
+    }
+
+    /// #430 S3: `--usepkgonly` drops the ebuild pool, so a cp with an ebuild but
+    /// no binary offers nothing, and one with a binary offers only the binary.
+    #[test]
+    fn usepkgonly_offers_binaries_and_no_ebuilds() {
+        use super::super::find_repos;
+        let binary = std::collections::HashMap::from([
+            ("CPV".to_string(), "dev-libs/newpkg-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("EAPI".to_string(), "8".to_string()),
+        ]);
+        let pool_of = |binaries: Vec<std::collections::HashMap<String, String>>| {
+            let mut req = fixture_request(&["dev-libs/newpkg"]);
+            req.config.scanned_binpkgs = Some(binaries);
+            req.usepkgonly = true;
+            let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+            let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+            let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow, true)
+                .expect("closure builds");
+            lazy.load_versions("dev-libs/newpkg").expect("loads newpkg")
+        };
+        assert!(
+            pool_of(Vec::new()).is_empty(),
+            "the ebuild of newpkg-1.0 must not be offered"
+        );
+        let pool = pool_of(vec![binary]);
+        assert_eq!(pool.len(), 1);
+        assert!(pool[0].binary.is_some());
+    }
+
+    /// #430 S2: a binary's recorded DEPEND/BDEPEND are dropped (parsed and raw)
+    /// unless bdeps is on; its RDEPEND stays either way.
+    #[test]
+    fn a_binary_record_drops_build_time_deps_unless_bdeps_is_on() {
+        use super::super::find_repos;
+        let binary = std::collections::HashMap::from([
+            ("CPV".to_string(), "dev-libs/newpkg-1.0".to_string()),
+            ("SLOT".to_string(), "0".to_string()),
+            ("KEYWORDS".to_string(), "amd64".to_string()),
+            ("EAPI".to_string(), "8".to_string()),
+            ("DEPEND".to_string(), "dev-libs/builddep".to_string()),
+            ("BDEPEND".to_string(), "dev-libs/buildtool".to_string()),
+            ("RDEPEND".to_string(), "dev-libs/rundep".to_string()),
+        ]);
+        let record_with = |with_bdeps: bool| {
+            let mut req = fixture_request(&["dev-libs/newpkg"]);
+            req.config.scanned_binpkgs = Some(vec![binary.clone()]);
+            // `--usepkgonly` keeps the changed-deps filter off, so the binary's own
+            // recorded deps may differ from the ebuild's.
+            req.usepkgonly = true;
+            req.with_bdeps = with_bdeps;
+            let repos = find_repos(&req.config_root).expect("fixture repos.conf must resolve");
+            let (seeds, shallow) = super::closure_seeds(&req).expect("seeds parse");
+            let lazy = super::LazyRepo::build(&req, repos, &seeds, &shallow, true)
+                .expect("closure builds");
+            lazy.load_versions("dev-libs/newpkg")
+                .expect("loads newpkg")
+                .into_iter()
+                .find(|v| v.binary.is_some())
+                .expect("the binary record")
+        };
+        let off = record_with(false);
+        assert!(off.raw_deps[0].is_empty() && off.raw_deps[2].is_empty());
+        assert!(off.deps[0].is_empty() && off.deps[2].is_empty());
+        assert_eq!(off.raw_deps[1], "dev-libs/rundep");
+        let on = record_with(true);
+        assert_eq!(on.raw_deps[0], "dev-libs/builddep");
+        assert_eq!(on.raw_deps[2], "dev-libs/buildtool");
+    }
+
+    /// Unsatisfiable targets render the engine-native conflict naming the
+    /// packages, never the internals dump.
     #[test]
     fn resolvo_failure_text_is_engine_native_not_a_debug_dump() {
         use super::super::active_resolver_for;
@@ -7394,6 +7803,7 @@ mod tests {
             required_use: String::new(),
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
+            binary: None,
         };
         let (_, versions) = super::version_row(&record, Default::default()).expect("row builds");
         assert!(
@@ -7431,6 +7841,7 @@ mod tests {
             required_use: String::new(),
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
+            binary: None,
         };
         let installed = super::InstalledView {
             by_slot: HashMap::from([(
@@ -7553,6 +7964,7 @@ mod tests {
             required_use: String::new(),
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
+            binary: None,
         };
         let (outcome, oldbest, new_slot) =
             super::bridge_outcome_for("dev-libs/pg359-gsblk", &record, "2", &installed, None, &vdb);
@@ -7591,6 +8003,7 @@ mod tests {
             required_use: String::new(),
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
+            binary: None,
         };
         let outcome = super::super::PretendOutcome::Reinstall {
             version: "1".to_string(),
@@ -7638,6 +8051,7 @@ mod tests {
                 String::new(),
                 String::new(),
             ],
+            binary: None,
         };
         let use_set = std::collections::HashSet::new();
         let mut pending = Vec::new();

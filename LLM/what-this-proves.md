@@ -185,3 +185,62 @@ The expected text is the default solver's, not a fresh Portage capture, and the 
 real-tree bed with `--solver=pubgrub` was not run. S1 (the informational
 "updates/rebuilds have been skipped" warning on a solvable plan, `btparent`) stays a
 documented cut: it needs backtracking state the engines lack.
+
+#430 S1 (2026-11-10): `--solver=pubgrub` now plans binaries. With `--usepkg` the
+bridge's pool takes the visible binaries the default walk would accept (same
+respect-USE, user-patches, changed-deps and ebuild-visibility filters) and a
+binary replaces the ebuild of its version, keeping the USE it was built with.
+Run in `pmtest/fixtures` (environment as in the fixture tests):
+`target/release/portuale emerge --solver=pubgrub -pv --getbinpkg=y --usepkg=y
+dev-libs/remotebinpkg` prints `[binary  N g   ] dev-libs/remotebinpkg-1.0-1::gentoo
+... USE="-rbfoo" 560 KiB`, rc 0, the same as the default solver; before this it
+printed no plan for that atom, and `dev-libs/binebuildtie` showed an `[ebuild]`
+row instead of `[binary  N g   ]`. In pmtest,
+`python3 -m pytest pytests-contract-suite -q -k plans_binaries_like` compares
+stdout, stderr and exit code on three cells; unit test
+`load_versions_offers_a_binary_that_replaces_its_ebuild_under_usepkg`. Not yet
+done: a built package's DEPEND/BDEPEND are still traversed (`dev-libs/binbdepconsumer`
+still lists `binbdeponly`, #430 S2), `--usepkgonly` still offers ebuilds (S3), and the
+L0 bed with `--usepkg` (S4) was not run.
+
+#430 S2 (2026-11-10): the binaries `--solver=pubgrub` plans now behave like the
+default solver's on build-time deps and on a stale ABI. A binary's recorded
+DEPEND/BDEPEND are not traversed unless bdeps is on (`--usepkg` turns the `auto`
+default off): in `pmtest/fixtures`, `portuale emerge --solver=pubgrub -pv
+--getbinpkg=y --usepkg=y dev-libs/binbdepconsumer` now prints the single
+`[binary  N g   ]` row without `binbdeponly`, as the default solver does (before:
+two rows); with `--with-bdeps=y` both solvers still agree. A binary whose built
+`mbabilib:0/1=` no longer matches the planned `0/2` provider is masked and its
+ebuild planned: `emerge --solver=pubgrub --pretend --verbose --update --deep
+--usepkg dev-libs/mbabicons` prints `[ebuild  N     ] dev-libs/mbabicons-1.0`
+and no `[binary` row (S1 alone planned the stale binary, found by sweeping the
+existing `--usepkg` cases). In pmtest: `python3 -m pytest pytests-contract-suite
+-q -k "drops_a_built or went_stale"`; unit test
+`a_binary_record_drops_build_time_deps_unless_bdeps_is_on`. The stale-binary check
+itself has only the pmtest pin, no Rust unit test. Differences that remain on the
+`--usepkg` cases (the `mbabilib` `r` marker and old sub-slot, `f484`'s extra `R` row,
+the `=n` flag cases) predate binaries; `--usepkgonly` still keeps the ebuild pool (S3).
+
+#430 S3 (2026-11-10): `--usepkgonly` now leaves `--solver=pubgrub` with binaries
+and installed packages only, as the default solver does (and the explicit
+`--usepkgonly=n`, which Portage treats as dropping the ebuild db). In
+`pmtest/fixtures`, `portuale emerge --solver=pubgrub -pv --usepkgonly
+dev-libs/newpkg` fails like `emerge -pv --usepkgonly dev-libs/newpkg` (an ebuild
+exists, no binary does), and `-pv --usepkgonly=n dev-libs/pg367-top` and
+`-pvuD --usepkgonly=n dev-libs/pg34-blib` give the default solver's output; before,
+pubgrub planned source builds for all three. In pmtest, `python3 -m pytest
+pytests-contract-suite -q -k usepkgonly_drops` compares stdout, stderr and exit code
+on six cells; unit test `usepkgonly_offers_binaries_and_no_ebuilds`. Re-running the
+existing `--usepkg` cells under both solvers leaves four differences, none about
+binaries (`pg34-gone` with `--usepkg=n` twice, the `mbabicons` `r` marker and old
+sub-slot, `f484`'s extra `R` row). The L0 bed with `--usepkg` (S4) was not run.
+
+#430 S4 (2026-11-10): the L0 real-tree bed was run with `L0_PORTUALE_OPTS=--solver=pubgrub`
+in both `L0_EMERGE_OPTS=-pv` and `-pv --usepkg` (`differential-test-bed/run/l0-resolver.sh`,
+no bed change needed; 120 probes each), once on the tree with #430/#431 and once on a frozen
+copy of the unmodified binary (`PMTEST_PM=portuale-bed PMTEST_NO_BUILD=1`, binary in
+`/var/tmp/bedbin`). The portuale output is byte-identical on all 120 probes in both modes, so
+the changes move nothing on the real tree. That is also the limit of the evidence: the container
+has no usable binpkgs (no `[binary` row in any output), so the binary pool is covered by the
+fixture pins, not by this bed. The unexplained graded findings both runs share (25 in `-pv`, 34 in
+`-pv --usepkg`) are filed as #698.
