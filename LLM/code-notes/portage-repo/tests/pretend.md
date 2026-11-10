@@ -17,8 +17,8 @@
 ## fn resolve_pretend_matches_a_sub_slot_restricted_atom_against_the_real_sub_slot
 - Unlike a slot-operator atom (`:=`/`pkg:slot=`), which `matches_slot`'s own doc comment already established needs no candidate-side sub-slot data at all to match correctly, the plain PMS 8.3.3 `cat/pkg:slot/sub-slot` restriction form DOES need it -- see `Candidate::sub_slot` for the bug this closes.
 
-## fn slot_operator_binary_masked_version_reads_only_marked_negatives
-- Backlog #212 (v2 `#24c`): a plain `!=cpv` is Portage's slot-conflict / missing-dependency negatives; only `!=cpv[binary]` reads as a `slot_operator_mask_built` record. `is_binary_only_mask` answers the same question for the string-constraint readers.
+## fn binary_mask_hides_reads_only_marked_negatives_and_honours_the_build_id
+- Backlog #212 (v2 `#24c`), #696: a plain `!=cpv` is Portage's slot-conflict / missing-dependency negatives; only `!=cpv[binary]` and `!=cpv[binary:ID]` read as a `slot_operator_mask_built` record, the latter hiding one build. `is_binary_only_mask` answers the same question for the string-constraint readers.
 
 ## fn stale_built_slot_operator_dep_with_no_ebuild_reports_at_this_level
 - Backlog #233: the live shape is an installed world member's stale recorded built slot-operator atom `dev-libs/reinstslottarget:0/1=` (installed 1.0 at `SLOT="0/1"`, only the `0/2` ebuild left in the tree). The `@world` walk aborted `NoVisibleCandidate` on it (rc 1) before the #210 reverse-dependency scan could withhold the reinstall, while Portage 3.0.82.2 merges the unrelated world updates and withholds silently (rc 0; S0 probe `probe.log`, offline comparator simulation clean).

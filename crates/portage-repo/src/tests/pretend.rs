@@ -154,39 +154,26 @@ fn resolve_pretend_rejects_a_sub_slot_restricted_atom_that_does_not_match() {
     assert_eq!(outcome, PretendOutcome::NoVisibleCandidate);
 }
 
-/// Only a `!=cpv[binary]` negative reads as a
-/// `slot_operator_mask_built` record; other negatives read as `None`.
+/// Only a binary-marked negative hides a binary candidate, and one that names a
+/// build hides that build only (Portage masks one package object).
 #[test]
-fn slot_operator_binary_masked_version_reads_only_marked_negatives() {
+fn binary_mask_hides_reads_only_marked_negatives_and_honours_the_build_id() {
+    let mut c = candidate("1.0", &["amd64"]);
+    c.build_id = Some("4".to_string());
+    let hides = |neg: &str| binary_mask_hides(neg, "dev-libs", "maskchild", &c);
+    assert!(hides("!=dev-libs/maskchild-1.0[binary]"));
+    assert!(hides("!=dev-libs/maskchild-1.0[binary:4]"));
+    assert!(!hides("!=dev-libs/maskchild-1.0[binary:3]"));
+    assert!(!hides("!=dev-libs/maskchild-1.0"));
+    assert!(!hides("!=dev-libs/other-1.0[binary]"));
+    assert!(!hides("!=dev-libs/maskchild-2.0[binary]"));
+    assert!(!hides("=dev-libs/maskchild-1.0[binary]"));
     assert_eq!(
-        slot_operator_binary_masked_version(
-            "!=dev-libs/maskchild-1.0[binary]",
-            "dev-libs",
-            "maskchild"
-        ),
-        Some("1.0".to_string())
-    );
-    assert_eq!(
-        slot_operator_binary_masked_version("!=dev-libs/maskchild-1.0", "dev-libs", "maskchild"),
-        None
-    );
-    assert_eq!(
-        slot_operator_binary_masked_version(
-            "!=dev-libs/other-1.0[binary]",
-            "dev-libs",
-            "maskchild"
-        ),
-        None
-    );
-    assert_eq!(
-        slot_operator_binary_masked_version(
-            "=dev-libs/maskchild-1.0[binary]",
-            "dev-libs",
-            "maskchild"
-        ),
-        None
+        binary_mask_neg("dev-libs", "maskchild", "1.0", Some("4")),
+        "!=dev-libs/maskchild-1.0[binary:4]"
     );
     assert!(is_binary_only_mask("!=dev-libs/maskchild-1.0[binary]"));
+    assert!(is_binary_only_mask("!=dev-libs/maskchild-1.0[binary:4]"));
     assert!(!is_binary_only_mask("!=dev-libs/maskchild-1.0"));
     assert!(!is_binary_only_mask("=dev-libs/maskchild-1.0[binary]"));
 }

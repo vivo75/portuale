@@ -44,7 +44,7 @@ fn slot_operator_slot_change_probe_schedules_a_moved_installed_child() {
     let empty = BTreeSet::new();
 
     let mut scheduled = BTreeSet::new();
-    let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut masked: BTreeSet<BinaryMask> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &dir,
         entries: &[parent.clone(), child.clone()],
@@ -231,7 +231,7 @@ fn slot_operator_slot_change_probe_fires_for_upgrade_and_ignores_plain_slot_deps
         ..graph_entry("dev-libs", "probeparentA", "1.0")
     };
     let mut scheduled = BTreeSet::new();
-    let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut masked: BTreeSet<BinaryMask> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
         entries: &[upgrade_a, child.clone()],
@@ -346,7 +346,7 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
     ];
     let empty = BTreeSet::new();
     let mut scheduled = BTreeSet::new();
-    let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut masked: BTreeSet<BinaryMask> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
         entries: &entries,
@@ -362,7 +362,8 @@ fn slot_operator_slot_change_probe_keeps_a_binary_whose_ebuild_is_invisible() {
         BTreeSet::from([(
             "dev-libs".to_string(),
             "stalechild".to_string(),
-            "1.0".to_string()
+            "1.0".to_string(),
+            None
         )]),
         "the visible stale binary is masked, the one behind a hidden ebuild is kept"
     );
@@ -450,7 +451,7 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
 
     // Only the slot-moved binary reports; nothing schedules here.
     let mut scheduled = BTreeSet::new();
-    let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut masked: BTreeSet<BinaryMask> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
         entries: &entries,
@@ -467,14 +468,15 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
         BTreeSet::from([(
             "dev-libs".to_string(),
             "maskchild".to_string(),
-            "1.0".to_string()
+            "1.0".to_string(),
+            None
         )]),
         "the stale binary is masked; the unmoved one, the ebuild-less \
          one and the scheduled set are untouched"
     );
 
     // `--exclude` on the tree ebuild vetoes the mask (Portage).
-    let mut masked_excl: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut masked_excl: BTreeSet<BinaryMask> = BTreeSet::new();
     let mut scheduled_excl = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,
@@ -496,7 +498,7 @@ fn slot_operator_slot_change_probe_masks_a_stale_binary() {
         source: CandidateSource::Binary,
         ..parent.clone()
     };
-    let mut masked_bpar: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut masked_bpar: BTreeSet<BinaryMask> = BTreeSet::new();
     let mut scheduled_bpar = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root: &base,

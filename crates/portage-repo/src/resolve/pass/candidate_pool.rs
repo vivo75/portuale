@@ -112,20 +112,17 @@ pub(crate) fn candidate_pool(args: CandidatePoolArgs<'_>) -> ControlFlow<(), Vec
                 });
             }
         }
-        let binary_candidates = dedup_binary_instances(binary_candidates, atom, config);
-        // Mirror `resolve_pretend`'s `slot_operator_mask_built` pool filter:
-        // a masked binary must not be re-derived here either. Plain
-        // (`!=cpv`) negatives read as `None` and are ignored.
+        // Mirror `resolve_pretend`'s `slot_operator_mask_built` pool filter, before the
+        // dedup so an older build survives a mask on the newest. Plain (`!=cpv`)
+        // negatives are not binary-marked and are ignored.
         let masked_here = bp.masked_negatives_for(key);
-        let binary_candidates: Vec<Candidate> = binary_candidates
-            .into_iter()
-            .filter(|c| {
-                !masked_here.iter().any(|neg| {
-                    slot_operator_binary_masked_version(neg, &key.0, &key.1)
-                        .is_some_and(|ver| ver == c.version)
-                })
-            })
-            .collect();
+        let mut binary_candidates = binary_candidates;
+        binary_candidates.retain(|c| {
+            !masked_here
+                .iter()
+                .any(|neg| binary_mask_hides(neg, &key.0, &key.1, c))
+        });
+        let binary_candidates = dedup_binary_instances(binary_candidates, atom, config);
         repo_candidates.extend(filter_usepkg_exclude_include(
             binary_candidates,
             &key.0,

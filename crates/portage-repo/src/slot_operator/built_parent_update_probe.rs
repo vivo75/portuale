@@ -24,10 +24,7 @@ pub(crate) struct BuiltParentUpdateProbeArgs<'a> {
 
 /// [`built_parent_update_probe`]'s result: the installed children joining the
 /// replace set and the `(category, package, version)` binary parents to mask.
-pub(crate) type BuiltParentUpdateProbe = (
-    BTreeSet<(String, String)>,
-    BTreeSet<(String, String, String)>,
-);
+pub(crate) type BuiltParentUpdateProbe = (BTreeSet<(String, String)>, BTreeSet<BinaryMask>);
 
 /// Merge-bound binary parents whose built `:S=` dep is missing a slot ABI
 /// update: the installed child in the bound slot has a tree instance with
@@ -154,7 +151,12 @@ pub(crate) fn built_parent_update_probe(
         }
         if let Some(child) = hit {
             replace.insert(child);
-            masks.insert((parent.0, parent.1, bin_version.clone()));
+            masks.insert((
+                parent.0,
+                parent.1,
+                bin_version.clone(),
+                entry.build_id.clone(),
+            ));
         }
     }
     (replace, masks)

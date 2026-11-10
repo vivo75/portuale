@@ -241,7 +241,7 @@ pub(crate) struct SlotOperatorSlotChangeProbeArgs<'a> {
     pub(crate) excluded: &'a [String],
     /// Every merge-bound binary the arm below finds stale, for
     /// `collect_feedback`'s `slot_operator_mask_built` records.
-    pub(crate) masked: &'a mut BTreeSet<(String, String, String)>,
+    pub(crate) masked: &'a mut BTreeSet<BinaryMask>,
     pub(crate) config: &'a portage_profile::Config,
     pub(crate) gate: CategoryGate<'a>,
 }
@@ -394,6 +394,7 @@ pub(crate) fn slot_operator_slot_change_probe(args: SlotOperatorSlotChangeProbeA
                             child_cp.0.clone(),
                             child_cp.1.clone(),
                             binary_version.clone(),
+                            child_entry.build_id.clone(),
                         ));
                     }
                 }

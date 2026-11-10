@@ -8,7 +8,7 @@ use crate::*;
 pub(crate) type SlotOpRebuildScan = (
     BTreeSet<(String, String)>,
     Vec<(String, String)>,
-    BTreeSet<(String, String, String)>,
+    BTreeSet<BinaryMask>,
 );
 
 /// Arguments of [`slot_operator_rebuild_scan`].
@@ -297,7 +297,7 @@ pub(crate) fn slot_operator_rebuild_scan(
 
     // The slot-move-without-revbump arm below runs even when the vdb scan
     // above is gated off; see the helper's doc comment.
-    let mut masked: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut masked: BTreeSet<BinaryMask> = BTreeSet::new();
     slot_operator_slot_change_probe(SlotOperatorSlotChangeProbeArgs {
         root,
         entries,

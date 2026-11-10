@@ -449,29 +449,57 @@ pub(crate) fn avoid_update_outcome(
     Ok(flip)
 }
 
-// Reads one `slot_operator_mask_built` negative in binary-marked form
-// (`!=cat/pkg-ver[binary]`). Portage keys the mask by package object so only the
-// binary instance hides; portuale's string readers match both, so the marker keeps
-// them apart: tree readers skip marked entries, only the binary-pool filter honours
-// them (via this function).
+// Renders one `slot_operator_mask_built` negative in binary-marked form:
+// `!=cat/pkg-ver[binary:BUILD_ID]`, or `[binary]` when the build is unknown
+// (every build of that version). Portage keys the mask by package object, so
+// only the named build hides; portuale's string readers match both forms, so
+// the marker keeps them apart: tree readers skip marked entries, only the
+// binary-pool filter honours them.
 // Portage: depgraph.py, _slot_change_backtrack; MaskReason::SlotOperatorBuilt
-pub(crate) fn slot_operator_binary_masked_version(
-    neg: &str,
+/// A stale binary to mask: `(category, package, version, build id)`.
+pub(crate) type BinaryMask = (String, String, String, Option<String>);
+
+pub(crate) fn binary_mask_neg(cat: &str, pkg: &str, ver: &str, build_id: Option<&str>) -> String {
+    match build_id {
+        Some(id) => format!("!={cat}/{pkg}-{ver}[binary:{id}]"),
+        None => format!("!={cat}/{pkg}-{ver}[binary]"),
+    }
+}
+
+// Reads one binary-marked negative: the version and the build id it names.
+fn parse_binary_mask<'a>(
+    neg: &'a str,
     category: &str,
     package: &str,
-) -> Option<String> {
-    let rest = neg.strip_prefix("!=")?.strip_suffix("[binary]")?;
-    let (c, p, v) = split_cpv(rest)?;
-    (c == category && p == package).then_some(v)
+) -> Option<(String, Option<&'a str>)> {
+    let rest = neg.strip_prefix("!=")?.strip_suffix(']')?;
+    let (cpv, mark) = rest.split_once('[')?;
+    let build_id = match mark.strip_prefix("binary")? {
+        "" => None,
+        id => Some(id.strip_prefix(':')?),
+    };
+    let (c, p, v) = split_cpv(cpv)?;
+    (c == category && p == package).then_some((v, build_id))
+}
+
+// Whether a binary-marked negative hides this binary candidate: same version,
+// and the same build unless the mask names none.
+pub(crate) fn binary_mask_hides(neg: &str, category: &str, package: &str, c: &Candidate) -> bool {
+    parse_binary_mask(neg, category, package).is_some_and(|(v, id)| {
+        v == c.version && id.is_none_or(|id| c.build_id.as_deref() == Some(id))
+    })
 }
 
 // Whether a string constraint is a binary-only `slot_operator_mask_built` negative:
 // every `extra_constraints` filter and the missing-dep probe skip these (the
 // same-version ebuild stays visible); only the binary-pool filter honours them.
 pub(crate) fn is_binary_only_mask(constraint: &str) -> bool {
-    constraint
-        .strip_prefix('!')
-        .is_some_and(|neg| neg.ends_with("[binary]"))
+    constraint.strip_prefix('!').is_some_and(|neg| {
+        neg.ends_with("[binary]")
+            || neg
+                .rsplit_once("[binary:")
+                .is_some_and(|(_, id)| id.ends_with(']'))
+    })
 }
 
 // The installed-only half of the same per-instance distinction
@@ -1402,22 +1430,22 @@ pub(crate) fn collect_binary_candidates(args: CollectBinaryCandidatesArgs<'_>) {
                 });
             }
         }
+        // `slot_operator_mask_built` steers the backtrack-config restart away from the
+        // stale binary. A candidate-level filter like the rejections above: the
+        // same-version ebuild must survive, so the marked negative must not reach the
+        // matched-string pipeline below. It runs before the dedup so an older build of
+        // the same version stays a candidate when only the newest one is masked.
+        // Portage: depgraph.py, _slot_change_backtrack; resolver/backtracking.py _feedback_config
+        binary_candidates.retain(|c| {
+            !extra_constraints
+                .iter()
+                .any(|ec| binary_mask_hides(ec, &atom.category, &atom.package, c))
+        });
         // binpkg-multi-instance: keep only the highest-`BUILD_TIME` build of each
         // `cpv:slot::repo` (Portage yields instances newest-first and stops at the
         // first acceptable one).
         // Portage: depgraph.py, _iter_match_pkgs
-        let mut binary_candidates = dedup_binary_instances(binary_candidates, atom, config);
-        // `slot_operator_mask_built` steers the backtrack-config restart away from the
-        // stale binary. A candidate-level filter like the rejections above: the
-        // same-version ebuild must survive, so the marked negative must not reach the
-        // matched-string pipeline below.
-        // Portage: depgraph.py, _slot_change_backtrack; resolver/backtracking.py _feedback_config
-        binary_candidates.retain(|c| {
-            !extra_constraints.iter().any(|ec| {
-                slot_operator_binary_masked_version(ec, &atom.category, &atom.package)
-                    .is_some_and(|ver| ver == c.version)
-            })
-        });
+        let binary_candidates = dedup_binary_instances(binary_candidates, atom, config);
         candidates.extend(filter_usepkg_exclude_include(
             binary_candidates,
             &atom.category,

@@ -345,7 +345,8 @@ fn slot_operator_unsatisfied_probe_seeds_a_replacement_parent() {
         BTreeSet::from([(
             "app-misc".to_string(),
             "unsatpar".to_string(),
-            "1".to_string()
+            "1".to_string(),
+            None
         )]),
         "the stale binary parent is masked"
     );

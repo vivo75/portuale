@@ -59,7 +59,8 @@ fn built_parent_update_probe_masks_a_binary_whose_installed_child_has_a_tree_upd
         BTreeSet::from([(
             "dev-libs".to_string(),
             "mbabicons".to_string(),
-            "1.0".to_string()
+            "1.0".to_string(),
+            None
         )]),
         "the stale binary parent is masked, not the tree ebuild"
     );

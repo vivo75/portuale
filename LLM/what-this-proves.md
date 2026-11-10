@@ -149,3 +149,18 @@ Run, in pmtest: `python3 -m pytest pytests-contract-suite -q -k f695`
 (`dev-lang/f484-py` with `www-servers/f484-ng` in @world: no merge row);
 unit test `reverse_dependency_constraints_enforces_a_use_break_when_only_a_dependency_pulls_the_reinstall`.
 Left over: #696.
+
+#696 (2026-11-10): a binary mask hides one build, not every build of that
+version. `emerge -uDpvN =kde-frameworks/kdbusaddons-6.31.0` on the host tree now
+plans `[binary gU] media-video/pipewire-1.6.11-3` (29 packages, 21 binaries, rc 0,
+the same totals as Portage) instead of compiling `pipewire-1.6.11` from source:
+when the newest build (4) carries a built `:S/SS=` dep that cannot be met, only
+that build is masked, and build 3 stays a legal candidate. The mask is now
+`!=cat/pkg-ver[binary:BUILD_ID]` and the filter runs before the per-version
+dedup. Run `target/release/portuale emerge -uDpvN =kde-frameworks/kdbusaddons-6.31.0;
+echo rc=$?` and compare with `emerge`; in pmtest, `python3 -m pytest
+pytests-contract-suite -q -k test_696` (two builds of `app-misc/u257par-1`, the
+newer one stale: `[binary N] u257par-1-3`, not `[ebuild N]`). Unit test
+`binary_mask_hides_reads_only_marked_negatives_and_honours_the_build_id`. The
+`@world` merge rows were not re-compared byte for byte against the previous
+binary. Left over: #697.

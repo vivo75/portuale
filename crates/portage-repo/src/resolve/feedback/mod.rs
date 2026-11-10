@@ -68,7 +68,7 @@ pub(crate) struct MaskEntry {
 pub(crate) fn file_unsat_probe_results(
     grown: &mut BacktrackParams,
     fresh: BTreeSet<(String, String)>,
-    binary_masks: BTreeSet<(String, String, String)>,
+    binary_masks: BTreeSet<BinaryMask>,
     usepkgonly: bool,
     root: &Path,
 ) -> bool {
@@ -79,8 +79,8 @@ pub(crate) fn file_unsat_probe_results(
     } else {
         binary_masks
     };
-    for (cat, pkg, ver) in &binary_masks {
-        let neg = format!("!={cat}/{pkg}-{ver}[binary]");
+    for (cat, pkg, ver, build_id) in &binary_masks {
+        let neg = binary_mask_neg(cat, pkg, ver, build_id.as_deref());
         let bucket = grown
             .runtime_pkg_mask
             .entry((cat.clone(), pkg.clone()))

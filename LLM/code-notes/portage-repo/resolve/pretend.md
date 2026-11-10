@@ -16,8 +16,11 @@ Selecting one atom's candidate (`resolve_pretend`).
 - Portuale's candidate pool is already tree-only, so `empty` just forces the "would be `AlreadyInstalled`" fallback to a bare `Reinstall` instead (Portage `output.py`: `attr_display.replace` still set from `vardb.cpv_exists`, no `[oldver]`, no reason -- exactly the portuale's own reasonless `[ebuild R]`).
 - Original comment citations: Portage: create_depgraph_params.py:176; depgraph.py:7889; output.py attr_display
 
-## fn slot_operator_binary_masked_version
-- Backlog #212 (v2 `#24c`). `match_from_list` ignores USE-deps, so the marker would otherwise match the same-version ebuild too.
+## fn binary_mask_neg
+- Backlog #212 (v2 `#24c`), #696. `match_from_list` ignores USE-deps, so the marker would otherwise match the same-version ebuild too. Portage keys the mask by package object, so the negative names the build (`[binary:BUILD_ID]`); `[binary]` alone hides every build of the version (a producer with no build id).
+
+## fn binary_mask_hides
+- Backlog #696. The filter runs before `dedup_binary_instances`, otherwise the older build is gone before the mask is read.
 
 ## fn is_binary_only_mask
 - Backlog #212 (v2 `#24c`). Portage keys by package object.

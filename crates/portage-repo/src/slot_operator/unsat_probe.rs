@@ -53,10 +53,7 @@ pub(crate) fn slot_operator_unsatisfied_probe(
 /// [`slot_operator_unsatisfied_probe_full`]'s result: the installed
 /// parents to reinstall and the `(category, package, version)` binary
 /// parents to mask.
-pub(crate) type SlotOpUnsatProbe = (
-    BTreeSet<(String, String)>,
-    BTreeSet<(String, String, String)>,
-);
+pub(crate) type SlotOpUnsatProbe = (BTreeSet<(String, String)>, BTreeSet<BinaryMask>);
 
 /// Arguments of [`slot_operator_unsatisfied_probe_full`].
 pub(crate) struct SlotOperatorUnsatisfiedProbeFullArgs<'a> {
@@ -114,7 +111,7 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
         })
     };
     let mut seeds: BTreeSet<(String, String)> = BTreeSet::new();
-    let mut binary_masks: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let mut binary_masks: BTreeSet<BinaryMask> = BTreeSet::new();
     for e in entries {
         if !matches!(e.outcome, PretendOutcome::NoVisibleCandidate) {
             continue;
@@ -174,20 +171,21 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
                     v.clone(),
                     x.slot.clone().unwrap_or_else(|| "0".to_string()),
                     true,
+                    x.build_id.clone(),
                 ))
             });
-            let installed: Vec<(String, String, bool)> = match graph_binary {
+            let installed: Vec<(String, String, bool, Option<String>)> = match graph_binary {
                 Some(b) => vec![b],
                 None => installed_candidates(root, &owner.0, &owner.1)
                     .into_iter()
-                    .map(|(v, slot, _)| (v, slot, false))
+                    .map(|(v, slot, _)| (v, slot, false, None))
                     .collect(),
             };
             if installed.is_empty() {
                 continue;
             }
             // An installed parent matching `--exclude` refuses the probe.
-            let excluded_parent = installed.iter().any(|(v, _, _)| {
+            let excluded_parent = installed.iter().any(|(v, _, _, _)| {
                 let q_str = format!("{}/{}-{v}", owner.0, owner.1);
                 excluded
                     .iter()
@@ -196,11 +194,12 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
             if excluded_parent {
                 continue;
             }
-            for (installed_version, parent_slot, is_binary) in &installed {
+            for (installed_version, parent_slot, is_binary, build_id) in &installed {
                 // An instance already in `runtime_pkg_mask` would
                 // restart-loop; for a binary parent, its own `[binary]`
                 // mask is that instance.
-                let binary_neg = format!("!={}/{}-{installed_version}[binary]", owner.0, owner.1);
+                let binary_neg =
+                    binary_mask_neg(&owner.0, &owner.1, installed_version, build_id.as_deref());
                 if (!is_binary && masked_version(owner, installed_version))
                     || (*is_binary
                         && masked
@@ -294,6 +293,7 @@ pub(crate) fn slot_operator_unsatisfied_probe_full(
                             owner.0.clone(),
                             owner.1.clone(),
                             installed_version.clone(),
+                            build_id.clone(),
                         ));
                     } else {
                         seeds.insert(owner.clone());

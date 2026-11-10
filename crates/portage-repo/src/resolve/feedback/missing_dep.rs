@@ -127,11 +127,11 @@ fn edge_index(deps: &[crate::DepEdge], atom: &str) -> Option<usize> {
 /// Whether the probe heals the trigger's own parent, seeded or masked.
 fn unsat_trigger_hit(
     fresh: &BTreeSet<(String, String)>,
-    binary_masks: &BTreeSet<(String, String, String)>,
+    binary_masks: &BTreeSet<BinaryMask>,
     owner: (&String, &String),
 ) -> bool {
     fresh.iter().any(|(c, p)| (c, p) == owner)
-        || binary_masks.iter().any(|(c, p, _)| (c, p) == owner)
+        || binary_masks.iter().any(|(c, p, _, _)| (c, p) == owner)
 }
 
 #[cfg(test)]
@@ -146,6 +146,7 @@ mod tests {
             "kde-plasma".to_string(),
             "kwin".to_string(),
             "6.8.0".to_string(),
+            None,
         )]);
         let (kc, kp) = s("kde-plasma", "libplasma");
         assert!(!unsat_trigger_hit(&fresh, &masks, (&kc, &kp)));

@@ -86,8 +86,8 @@ pub(crate) fn step_unsatisfied_dead_end(
         // string readers match both. Repeats replace nothing and take no `mask_order`
         // entry; mask-only growth still restarts (Portage sets `_need_restart` always).
         let mut masks_new = false;
-        for (cat, pkg, ver) in &masked_binaries {
-            let neg = format!("!={cat}/{pkg}-{ver}[binary]");
+        for (cat, pkg, ver, build_id) in &masked_binaries {
+            let neg = binary_mask_neg(cat, pkg, ver, build_id.as_deref());
             let bucket = grown
                 .runtime_pkg_mask
                 .entry((cat.clone(), pkg.clone()))
