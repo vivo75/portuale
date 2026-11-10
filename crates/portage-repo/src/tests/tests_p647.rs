@@ -158,7 +158,7 @@ fn bare_consumer_keeps_the_installed_multi_version_virtual() {
 /// RED before the fix: portuale keeps the installed 5.42 arm for the
 /// installed virtual, never schedules 5.44.0, and prints no skip block.
 #[test]
-#[ignore = "RED #657: installed-virtual arm choice does not prefer the higher same-cp arm"]
+#[ignore = "RED #658 (withdrawn 2026-11-10): hermetic shape prints no skip block; only the bed parent list differs"]
 fn installed_virtual_with_a_higher_perl_arm_schedules_then_skips_the_transient() {
     let root = hermetic_root(&[]);
     let result = resolve_in(&root, &["dev-libs/p657try"]);
