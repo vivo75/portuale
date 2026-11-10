@@ -4,10 +4,12 @@ use crate::resolve::feedback::*;
 use crate::resolve::{DepTree, reduced_dep_tree};
 
 /// The installed consumers a pass's complete graph can contain: the required
-/// sets' closure that does not run through a package the pass replaces.
+/// sets' closure that does not run through a package the pass replaces, plus
+/// the installed packages the pass's merge-bound entries depend on.
 /// Only graph nodes pull their deps in, and a replaced installed package is
 /// not one, so its installed deps are consumers only if something else
-/// reaches them.
+/// reaches them. A new or upgraded entry is one: its own deps name installed
+/// packages (and, through them, their virtuals) the plan must not break.
 // Portage: depgraph.py, _complete_graph
 pub(crate) fn live_reachable_consumers(
     ctx: &ResolveCtx<'_>,
@@ -21,8 +23,21 @@ pub(crate) fn live_reachable_consumers(
         .filter(|e| merge_bound_cpv(e).is_some())
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
+    let mut seeds = ctx.slot_op_seeds.clone();
+    seeds.extend(
+        entries
+            .iter()
+            .filter(|e| merge_bound_cpv(e).is_some())
+            .flat_map(|e| e.deps.iter())
+            // A `||` arm the walk did not take is no graph edge.
+            .filter(|d| d.alt.is_none() || d.walk_chosen)
+            .filter(|d| !replaced.contains(&(d.category.clone(), d.package.clone())))
+            .map(|d| d.atom.clone()),
+    );
+    seeds.sort();
+    seeds.dedup();
     ctx.installed_graph
-        .reachable_without(&ctx.slot_op_seeds, &[], &replaced)
+        .reachable_without(&seeds, &[], &replaced)
 }
 
 /// The installed packages the request's own atoms reach, not running through a

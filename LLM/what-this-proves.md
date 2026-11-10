@@ -257,3 +257,15 @@ loop against its own rule, not a Portage capture: a bed cell with Portage's `eme
 (step 2 of #596) stays open only if doubt remains. The expectation rests on the charter's
 healthy-installation property (no build against a half-merged system); Portage 3.0.83
 `_system_merge_started` is the hint.
+
+#676 (2026-11-10): an installed package reached only through a package the run merges is now a
+consumer. On the Q19 ROOT (`p590vpar`, `virtual/p590vva`, `virtual/p590vvb`, `p590vprov-5.42`
+installed, world = `dev-libs/p590vprov`), `emerge -p dev-libs/p590vpull` used to print
+`U p590vprov-5.44` + `N p590vpull-2`, which leaves `virtual/p590vvb-1` (`5.42` or `5.38` only) without
+an accepted provider and says nothing; it now prints `N p590vpull-1` and the skip block naming both
+virtuals' `=5.42*`, the same plan host Portage 3.0.83 gives. Live check:
+`pytests-contract-suite/test_emerge_pretend_contract.py -k test_676`; reverting
+`live_reachable_consumers` turns it red (checked). The closure follows only the `||` arms the walk
+took: taking all of them broke the #643/#647 pins. The expectation rests on the charter's
+dependency-satisfied property; Portage's `_complete_graph` is the hint. With an empty world and no
+`@system` the scope is still off (#700).
