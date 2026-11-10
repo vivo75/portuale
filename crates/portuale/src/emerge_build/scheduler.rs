@@ -589,6 +589,7 @@ pub(crate) struct NoteLandedArgs<'a, 'b> {
     pub(crate) unsatisfied_system_deps: &'a mut BTreeSet<usize>,
     pub(crate) cp_to_idx: &'a HashMap<(String, String), usize>,
     pub(crate) root: &'a Path,
+    pub(crate) system_gate_forced: bool,
     pub(crate) keep_going: bool,
     pub(crate) registry: &'a std::sync::Mutex<ebuild_phases::SchedulerRegistry>,
     pub(crate) report: &'a FailReport<'b>,
@@ -618,6 +619,7 @@ fn note_landed(args: NoteLandedArgs<'_, '_>) -> Landed {
         unsatisfied_system_deps,
         cp_to_idx,
         root,
+        system_gate_forced,
         keep_going,
         registry,
         report,
@@ -645,6 +647,7 @@ fn note_landed(args: NoteLandedArgs<'_, '_>) -> Landed {
                         system_idx: idx,
                         merged,
                         root,
+                        forced: system_gate_forced,
                     },
                 ));
             }
@@ -681,6 +684,7 @@ fn note_landed(args: NoteLandedArgs<'_, '_>) -> Landed {
                             system_idx: idx,
                             merged,
                             root,
+                            forced: system_gate_forced,
                         },
                     ));
                 }
@@ -714,6 +718,8 @@ pub(crate) struct UnsatisfiedSystemDepsArgs<'a> {
     pub(crate) system_idx: usize,
     pub(crate) merged: &'a HashSet<usize>,
     pub(crate) root: &'a Path,
+    /// Test seam: act as on `/` while `root` stays the merge target.
+    pub(crate) forced: bool,
 }
 
 /// The direct runtime children of a landed system entry that still need a
@@ -732,8 +738,9 @@ pub(crate) fn unsatisfied_system_runtime_deps(
         system_idx,
         merged,
         root,
+        forced,
     } = args;
-    if root != Path::new("/") {
+    if root != Path::new("/") && !forced {
         return BTreeSet::new();
     }
     let system = &entries[system_idx];
@@ -974,6 +981,7 @@ pub(crate) fn run_build_scheduler(
                         unsatisfied_system_deps: &mut unsatisfied_system_deps,
                         cp_to_idx: &cp_to_idx,
                         root,
+                        system_gate_forced: options.system_gate_forced,
                         keep_going,
                         registry: &registry,
                         report: &report,
@@ -1118,6 +1126,7 @@ pub(crate) fn run_build_scheduler(
                         unsatisfied_system_deps: &mut unsatisfied_system_deps,
                         cp_to_idx: &cp_to_idx,
                         root,
+                        system_gate_forced: options.system_gate_forced,
                         keep_going,
                         registry: &registry,
                         report: &report,

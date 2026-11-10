@@ -64,6 +64,10 @@ capture. What stays here is the `stdout`-lock replay sink and the single
 - Differences from Portage, all forced by the serial-merge shape: the fill runs when the system merge *lands* rather than on a start-listener (merges run one at a time on the main thread, so start and land are atomic — no concurrent merge can observe the difference); membership is the scheduler's own `wait_set` (the `_deep_system_deps` equivalent) rather than a separate flag; and merge-wait-off system merges are already queued by `merge_wait_set` (see `merge_wait.md`), so the fill sees them exactly as Portage's listener does. The `/`-only skip mirrors `:1699-1702` and reads the run's target root.
 - The runtime child edges come from the scheduler's own `deps` (the `required_by` inversion) narrowed by the entry's `deps` priorities: `runtime || runtime_post` and not satisfied. The `satisfied` bit lives on the merge-order digraph's edge copies only, so the check asks `dep_edge_satisfied_by_installed` against the target root's vdb at fill time (equivalent outcome: a child merged mid-run is already in `merged`; an installed-but-replaced match reads the same either way). `required_by`-only fallback edges count as runtime, like the digraph's synthesized edge; non-build entries (`scheduler_needs_build` false) and the system entry itself never enter the set.
 
+Test seam (#596): `MergeOptions.system_gate_forced` makes the gate act as on `/` while `root`
+stays the merge target (and the installed-package check keeps reading that root), so a test can run
+the real dispatch loop without merging into the host. Production never sets it.
+
 ## display slot on queue (#512)
 - A queued build frees its `running` slot at build exit (`build_finished` in the recv arm, before the gate), not at merge time: Portage's `_build_exit` tail drops `running` unconditionally, and the `>>> Jobs:` line would otherwise claim two builders while one builds. `land_built_entry` therefore never touches `running`; the drain path lands without it (already freed at queue time).
 

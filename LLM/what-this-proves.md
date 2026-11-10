@@ -244,3 +244,16 @@ the changes move nothing on the real tree. That is also the limit of the evidenc
 has no usable binpkgs (no `[binary` row in any output), so the binary pool is covered by the
 fixture pins, not by this bed. The unexplained graded findings both runs share (25 in `-pv`, 34 in
 `-pv --usepkg`) are filed as #698.
+
+#596 (2026-11-10): the `_unsatisfied_system_deps` gate is now run through the real dispatch loop,
+not only as two pure functions. `cargo test --release -p portuale system_gate` builds S (`@system`,
+`PDEPEND` on the slow X = `schedwait`, `sleep 8`) and U (`schedmark`, whose `src_compile` touches a
+marker), runs `--jobs 2`, and compares U's start marker with X's vdb entry. Under
+`--merge-wait-scope=deep` and `system` U starts only after X landed; under `none` and `toolchain`
+(`schedsys` is no core-toolchain package) U starts beside X. Disabling `system_deps_hold_new_builds`
+or the `wait_set.contains` arm in `note_landed` turns the first test red (both checked). The `/`
+condition is simulated by the test seam `MergeOptions.system_gate_forced`, so this is portuale's
+loop against its own rule, not a Portage capture: a bed cell with Portage's `emerge.log` order
+(step 2 of #596) stays open only if doubt remains. The expectation rests on the charter's
+healthy-installation property (no build against a half-merged system); Portage 3.0.83
+`_system_merge_started` is the hint.

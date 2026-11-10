@@ -87,6 +87,9 @@ pub struct MergeOptions {
     /// `--merge-wait-scope`: which merges barrier on idle builders.
     /// `Deep` is Portage's default.
     pub merge_wait_scope: crate::pretend::MergeWaitScope,
+    /// Test seam: the scheduler's system-deps gate acts as on `/` although
+    /// the merge root is elsewhere.
+    pub system_gate_forced: bool,
     /// The up-front `pkg_pretend` pass already ran it: binary merges skip
     /// their inline `pretend` hook and source merges start at `setup`
     /// (the per-entry `skip_pretend` plumbing covers the source direct
@@ -127,6 +130,7 @@ impl Default for MergeOptions {
             quiet: false,
             quiet_fail: false,
             merge_wait_scope: crate::pretend::MergeWaitScope::default(),
+            system_gate_forced: false,
             skip_pretend: false,
         }
     }
@@ -199,6 +203,7 @@ impl MergeOptions {
             quiet: false,
             quiet_fail: false,
             merge_wait_scope: crate::pretend::MergeWaitScope::default(),
+            system_gate_forced: false,
             skip_pretend: false,
         }
     }

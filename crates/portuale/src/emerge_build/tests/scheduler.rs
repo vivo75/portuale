@@ -676,6 +676,7 @@ fn unrelated_build_waits_for_system_runtime_deps() {
         system_idx: si,
         merged: &merged,
         root: slash,
+        forced: false,
     });
     assert_eq!(held, [xi].into_iter().collect());
     // While a build runs, nothing new starts; the idle build keeps forward
@@ -691,6 +692,7 @@ fn unrelated_build_waits_for_system_runtime_deps() {
         system_idx: si,
         merged: &merged,
         root: slash,
+        forced: false,
     });
     assert!(held.is_empty());
     assert!(!system_deps_hold_new_builds(1, &held));
@@ -770,6 +772,7 @@ fn system_deps_gate_skipped_off_root() {
         system_idx: si,
         merged: &merged,
         root: &root,
+        forced: false,
     });
     assert!(held.is_empty(), "{held:?}");
     let options = scope_options(
@@ -1480,5 +1483,114 @@ fn pretend_pass_replays_a_real_failing_pretend_output() {
         assert!(ok < bad, "jobs={jobs}: merge-list order:\n{text}");
         let _removed = std::fs::remove_dir_all(&root);
         let _removed = std::fs::remove_dir_all(&portage_tmpdir);
+    }
+}
+
+/// Runs the S/X/U graph with the system-deps gate forced on and returns
+/// `(U's start marker, X's vdb entry)` modification times. S (`@system`)
+/// has the slow X as a `PDEPEND` child; U (`schedmark`, which records
+/// when its build starts) is freed by S's landing; two jobs, so only the
+/// gate keeps U from starting beside X.
+fn system_gate_run(
+    system: &str,
+    scope: crate::pretend::MergeWaitScope,
+) -> (std::time::SystemTime, std::time::SystemTime) {
+    use portage_repo::{DepEdge, DepPriority};
+    let edge = |package: &str, priority: DepPriority, key: u8| DepEdge {
+        atom: format!("dev-libs/{package}"),
+        evaluated: format!("dev-libs/{package}"),
+        category: "dev-libs".into(),
+        package: package.into(),
+        priority,
+        disjunctive: false,
+        alt: None,
+        key,
+        walk_chosen: false,
+    };
+    let runtime = DepPriority {
+        runtime: true,
+        ..DepPriority::default()
+    };
+    let runtime_post = DepPriority {
+        runtime_post: true,
+        ..DepPriority::default()
+    };
+    let new = |p: &str| {
+        source_entry(
+            p,
+            PretendOutcome::New {
+                version: "1.0".into(),
+            },
+        )
+    };
+    let mut s = new("schedsys");
+    s.deps = vec![edge("schedwait", runtime_post, 2)];
+    s.required_by = vec![
+        ("dev-libs".into(), "schedwait".into()),
+        ("dev-libs".into(), "schedmark".into()),
+    ];
+    let mut x = new("schedwait");
+    x.deps = vec![edge("schedsys", runtime, 0)];
+    x.required_by = vec![("dev-libs".into(), "schedsys".into())];
+    let mut u = new("schedmark");
+    u.deps = vec![edge("schedsys", runtime, 0)];
+    let entries = vec![s, x, u];
+    let config_root = fixtures_root();
+    let repos = find_repos(&config_root).unwrap();
+    let root = tempdir();
+    let portage_tmpdir = tempdir();
+    let mut options = scope_options(&config_root, &[system], scope);
+    options.system_gate_forced = true;
+    let display = scheduler_display(2);
+    let policy = mrg_director::LoadAwarePolicy::new(2, None);
+    run_build_scheduler(RunBuildSchedulerArgs {
+        entries: &entries,
+        repos: &repos,
+        root: &root,
+        portage_tmpdir: &portage_tmpdir,
+        options: &options,
+        keep_going: false,
+        buildpkg: None,
+        buildpkg_exclude: &[],
+        policy: &policy,
+        display: &display,
+    })
+    .expect("all entries merge");
+    let started = std::fs::metadata(portage_tmpdir.join("schedmark-started"))
+        .expect("U's build left its start marker")
+        .modified()
+        .unwrap();
+    let landed = vdb_mtime(&root, "dev-libs/schedwait-1.0");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&portage_tmpdir);
+    (started, landed)
+}
+
+/// The gate through the real dispatch loop: with the system package in the
+/// merge-wait set, an unrelated build starts only after the system
+/// package's runtime child landed, never beside it on a half-merged
+/// system. Portage: _emerge/Scheduler.py, _system_merge_started
+#[test]
+fn system_gate_holds_unrelated_build_until_runtime_child_lands() {
+    for scope in [
+        crate::pretend::MergeWaitScope::Deep,
+        crate::pretend::MergeWaitScope::System,
+    ] {
+        let (started, landed) = system_gate_run("*dev-libs/schedsys", scope);
+        assert!(started >= landed, "{scope:?}: U started before X landed");
+    }
+}
+
+/// `--merge-wait-scope=none` and `toolchain` (the fixture system package
+/// is no core-toolchain package) register no gate: U builds beside the
+/// slow X.
+#[test]
+fn system_gate_is_off_for_scopes_that_do_not_cover_the_package() {
+    for scope in [
+        crate::pretend::MergeWaitScope::None,
+        crate::pretend::MergeWaitScope::Toolchain,
+    ] {
+        let (started, landed) = system_gate_run("*dev-libs/schedsys", scope);
+        assert!(started < landed, "{scope:?}: U waited for X");
     }
 }
