@@ -602,6 +602,54 @@ fn missing_dep_trigger_names_the_installed_parent_instance() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// #697: a merge-bound binary parent whose dependency cannot be met is masked
+/// as that build only. The plain `!=cat/pkg-ver` form is ignored by the binary
+/// pool and would hide the ebuild instead, so the binary came back every pass.
+/// Portage: depgraph.py `_add_dep` masks the binary package object.
+#[test]
+fn missing_dep_trigger_masks_a_binary_parent_by_build() {
+    let dir = slotundo_temp_dir("697-missing-dep-binary-parent");
+    let config = test_config();
+    let opts = CtxOpts161 {
+        backtrack_max: 20,
+        ..Default::default()
+    };
+    let ctx = ctx_161(&dir, &config, Vec::new(), &opts);
+    let mut parent = graph_entry("app-misc", "u257par", "1");
+    parent.outcome = PretendOutcome::New {
+        version: "1".to_string(),
+    };
+    parent.source = CandidateSource::Binary;
+    parent.build_id = Some("4".to_string());
+    let mut state = PassState {
+        entries: vec![parent],
+        expanding_owner_version: Some("1".to_string()),
+        ..Default::default()
+    };
+    let bp = BacktrackParams::default();
+    let key = ("app-misc".to_string(), "u701gone".to_string());
+    let owner = Some(("app-misc".to_string(), "u257par".to_string()));
+    maybe_missing_dep_backtrack(MaybeMissingDepBacktrackArgs {
+        current_atom: "app-misc/u701gone",
+        outcome: &PretendOutcome::NoVisibleCandidate,
+        ctx: &ctx,
+        bp: &bp,
+        key: &key,
+        state: &mut state,
+        config: &config,
+        owner: &owner,
+    });
+    assert_eq!(
+        state.missing_dep_trigger,
+        Some((
+            ("app-misc".to_string(), "u257par".to_string()),
+            "!=app-misc/u257par-1[binary:4]".to_string(),
+            "app-misc/u701gone".to_string(),
+        ))
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// #685: a positive constraint that names a slot admits every candidate of the
 /// other slots, so a pin on slot 23 cannot empty a request for slot 22.
 #[test]

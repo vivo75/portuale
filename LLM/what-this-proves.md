@@ -269,3 +269,14 @@ virtuals' `=5.42*`, the same plan host Portage 3.0.83 gives. Live check:
 took: taking all of them broke the #643/#647 pins. The expectation rests on the charter's
 dependency-satisfied property; Portage's `_complete_graph` is the hint. With an empty world and no
 `@system` the scope is still off (#700).
+
+#697 (2026-11-10): a binary package whose own dependency cannot be met now yields to the ebuild
+instead of failing the run. With one binary build of `app-misc/u257par-1` recording
+`RDEPEND: app-misc/u701gone` (a package no repository has) and a fine ebuild of the same version,
+`emerge --pretend --usepkg --binpkg-changed-deps=n app-misc/u257par` used to print
+`emerge: there are no ebuilds to satisfy "app-misc/u701gone"` and exit 1; it now plans
+`[ebuild  N     ] app-misc/u257prov-2` and `[ebuild  N     ] app-misc/u257par-1`, rc 0, the plan host
+Portage 3.0.83 gives (`backtrack: 1/20`). Live check:
+`pytests-contract-suite/test_emerge_pretend_contract.py -k test_697`; reverting the binary-marked mask in
+`unresolved_dep.rs` turns it and the Rust test `missing_dep_trigger_masks_a_binary_parent_by_build` red
+(checked). The expectation rests on the charter's dependency-satisfied property; Portage is the hint.

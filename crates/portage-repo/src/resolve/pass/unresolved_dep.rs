@@ -102,7 +102,15 @@ pub(crate) fn maybe_missing_dep_backtrack(args: MaybeMissingDepBacktrackArgs<'_>
             _ => None,
         });
         if let Some(pv) = parent_cpv {
-            let neg = format!("!={pc}/{pp}-{pv}");
+            // A binary parent hides as that build only; a plain negative would
+            // not touch the binary pool and would hide the ebuild instead.
+            // Portage: depgraph.py, _add_dep (missing-dependency mask)
+            let neg = match owner_entry {
+                Some(e) if e.source == CandidateSource::Binary => {
+                    binary_mask_neg(&pc, &pp, &pv, e.build_id.as_deref())
+                }
+                _ => format!("!={pc}/{pp}-{pv}"),
+            };
             if !bp.missing_dep_masked.contains(&neg) {
                 state.missing_dep_trigger = Some(((pc, pp), neg, current_atom.to_string()));
             }
