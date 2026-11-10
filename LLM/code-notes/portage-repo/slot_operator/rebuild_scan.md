@@ -43,3 +43,14 @@ Rebuilds triggered by slot-operator dependencies.
 
 ## gate threading (#571)
 - `SlotOperatorRebuildScanArgs`, `SlotOpEdgeCtx`, `ReplacementAcceptsArgs` and the `highest_visible_slot`/`greedy_*`/`replacement_parent_accepts` sites carry the gate.
+
+## block merge_bound_consumer in slot_operator_rebuild_scan
+
+The pair for a consumer merge-bound for a plain upgrade is listed even when the
+consumer is not in the slot-operator replace set. Portage only lists a pair
+whose parent is in its force-reinstall set (`_compute_abi_rebuild_info` reads
+atoms from `force_reinstall` initial args only), so it prints no block for such
+a consumer. Backlog #675, withdrawn 2026-11-10 as a charter difference (the
+plan is right; only a redundant "causing rebuilds" block). If wanted, gate the
+pair on `GraphResult::slot_operator_replaced`.
+

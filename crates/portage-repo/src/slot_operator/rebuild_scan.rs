@@ -179,8 +179,9 @@ pub(crate) fn slot_operator_rebuild_scan(
                 continue;
             }
             // A consumer merge-bound for an upgrade in this same run is not
-            // scheduled (its own walk re-binds the live atom), but Portage
-            // still lists it under its replacement in the rebuild block.
+            // scheduled (its own walk re-binds the live atom). Its pair is
+            // still listed, under the replacement; Portage lists it only if
+            // the consumer is also in its force-reinstall set.
             // Portage: depgraph.py, _compute_abi_rebuild_info (`:931-1145`)
             let merge_bound_consumer = merge_bound.contains_key(&cp) && !already.contains(&cp);
             // Any other merge-bound consumer (its own reinstall: `--changed-slot`
