@@ -492,7 +492,8 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         "complete mode off must yield no USE-break pin, got enforced={enforced:?} dropped={dropped:?}"
     );
 
-    // Complete mode on: the broken pin drops for the residual report.
+    // Complete mode on, the package requested by name: the broken pin drops for
+    // the residual report (Portage's `(Argument)` excludes the installed twin).
     let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
         root: &root,
         entries: &[entry],
@@ -502,7 +503,7 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
         reachable: &reachable,
         dynamic_deps: true,
         ignore_built_slot_operator_deps: false,
-        top_level_cps: &HashSet::new(),
+        top_level_cps: &HashSet::from([("dev-libs".to_string(), "cgp0x".to_string())]),
         world_reachable: &reachable,
         report_reachable: &HashSet::new(),
         config: &portage_profile::Config::default(),
@@ -577,6 +578,63 @@ fn reverse_dependency_constraints_drops_a_use_break_from_a_use_change_reinstall(
 /// skipped update in Portage's missed-update tail, but never a pin: it must
 /// not constrain the merge. Report-only, and only in complete mode.
 /// Portage: depgraph.py, `_process_slot_conflicts` ("Record missed updates").
+
+#[test]
+fn reverse_dependency_constraints_enforces_a_use_break_when_only_a_dependency_pulls_the_reinstall()
+{
+    // Same shape as the test above, but nobody requested `cgp0x`: only a
+    // dependency pulls it, the installed instance meets that too, so the
+    // reinstall is held back (Portage removes the merge instance, keeps the
+    // installed one). Portage: depgraph.py, _solve_non_slot_operator_slot_conflicts
+    let root = fixtures_root();
+    let repos = find_repos(&root).expect("fixture repos.conf must resolve");
+    let entry = GraphEntry {
+        outcome: PretendOutcome::Reinstall {
+            version: "2.8.0".into(),
+            changed_flags: vec!["icu".to_string()],
+            deps_changed: false,
+            slot_changed: false,
+            rebuilt_binary: false,
+            new_repo: false,
+            slot_operator_rebuild: false,
+        },
+        slot: Some("2".into()),
+        sub_slot: Some("0".into()),
+        ..graph_entry("dev-libs", "cgp0x", "2.8.0")
+    };
+    let hard_want: HashMap<(String, String), Vec<String>> = HashMap::from([(
+        ("dev-libs".to_string(), "cgp0x".to_string()),
+        vec!["dev-libs/cgp0x".to_string()],
+    )]);
+    let reachable: HashSet<(String, String)> =
+        HashSet::from([("dev-libs".to_string(), "cgp0q".to_string())]);
+    let (enforced, dropped) = reverse_dependency_constraints(ReverseDependencyConstraintsArgs {
+        root: &root,
+        entries: &[entry],
+        with_bdeps: false,
+        excluded: &[],
+        hard_want: &hard_want,
+        reachable: &reachable,
+        dynamic_deps: true,
+        ignore_built_slot_operator_deps: false,
+        top_level_cps: &HashSet::new(),
+        world_reachable: &reachable,
+        report_reachable: &HashSet::new(),
+        config: &portage_profile::Config::default(),
+        complete: true,
+        portage_complete: false,
+        installed_walked: &HashMap::new(),
+        update: false,
+        selective: true,
+        backtrack_allowed: true,
+        arg_atoms: &[],
+        root_deps_running_root: None,
+        gate: crate::test_gate(&repos),
+    });
+    assert!(dropped.is_empty(), "got dropped={dropped:?}");
+    assert_eq!(enforced.len(), 1, "got enforced={enforced:?}");
+}
+
 #[test]
 fn built_atom_the_kept_instance_satisfies_is_a_report_only_parent() {
     let dir = TempDir::new("portage-repo-573-report");

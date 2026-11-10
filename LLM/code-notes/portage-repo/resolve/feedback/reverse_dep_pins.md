@@ -90,3 +90,6 @@ Backlog #490. Portage's `_complete_graph` pulls in an installed package only thr
 - With backtracking off (`--backtrack=0`, the best-run re-pass) `scan_reverse_dependencies` moves such a pin from `enforced` to `dropped`: nothing chooses between the two packages, so the merge version stays and the assembly-time residual record prints the conflict, as Portage does (`bt0` and `aby-bt1` cells). Pins whose installed instance satisfies the merge side keep the #209 in-pass feed.
 - Probes: `LLM/evidence/2026-11-07-613/` (8 option cells plus 5 plain-shape cells with `x y` preset, Portage 3.0.83 and portuale before/after).
 
+
+## fn merge_use_meets_pin
+- Backlog #695. The version-only `match_from_list` never sees `[use]` deps, so a USE-break pin matched the merge instance it breaks and no mask was filed. The check reads the flags the entry displays (a binary's baked USE included, not the ebuild's), so a `-nginx` binary of an installed `+nginx` twin is masked and the installed instance stays. A pin with no `[use]` deps is met by its version match alone.

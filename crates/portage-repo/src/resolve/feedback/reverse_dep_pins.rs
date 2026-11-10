@@ -98,7 +98,7 @@ fn scan_reverse_dependencies_inner(
             world_reachable: &ctx.world_reachable,
             report_reachable: &ctx.report_reachable,
             config: ctx.config,
-            complete: ctx.complete,
+            complete: ctx.complete || portage_complete,
             portage_complete,
             installed_walked: &pass.installed_walked,
             update: ctx.update,
@@ -395,6 +395,37 @@ fn masked_versions(pass: &PassResult, cp: &(String, String)) -> Vec<(String, Str
         .collect()
 }
 
+/// Whether the merge of `cp` at `version` has the USE the pin's `[use]` deps ask
+/// for, read from the flags the entry displays (a binary's baked USE included).
+/// A pin without `[use]` deps is met by its version match alone.
+fn merge_use_meets_pin(pass: &PassResult, pin: &RevDepPin, version: &str) -> bool {
+    let Some(deps) = parse_dep_atom(&pin.atom, "pin_merge_use")
+        .and_then(|a| a.use_deps)
+        .filter(|d| !d.is_empty())
+    else {
+        return true;
+    };
+    let Some(entry) = pass.entries.iter().find(|e| {
+        e.category == pin.cp.0
+            && e.package == pin.cp.1
+            && merge_bound_version(&e.outcome).is_some_and(|v| v == version)
+    }) else {
+        return true;
+    };
+    let iuse: HashSet<String> = entry
+        .use_flags_display
+        .iter()
+        .map(|(f, _)| f.clone())
+        .collect();
+    let on: HashSet<String> = entry
+        .use_flags_display
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(f, _)| f.clone())
+        .collect();
+    portage_dep::use_deps_satisfied(&deps, &iuse, &on)
+}
+
 /// The candidate string this pass would merge for `cp` at `version`.
 fn merge_candidate(pass: &PassResult, cp: &(String, String), version: &str) -> Option<String> {
     pass.entries
@@ -482,7 +513,8 @@ pub(crate) fn apply_enforced_pin(
             let candidate = merge_candidate(pass, &pin.cp, &ver);
             if candidate.as_deref().is_some_and(|candidate| {
                 portage_dep::match_from_list(&pin.atom, &[candidate]).is_some_and(|m| !m.is_empty())
-            }) {
+            }) && merge_use_meets_pin(pass, pin, &ver)
+            {
                 continue;
             }
             let bucket = grown.runtime_pkg_mask.entry(pin.cp.clone()).or_default();

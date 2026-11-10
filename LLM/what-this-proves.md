@@ -136,3 +136,16 @@ echo rc=$?` and compare with `emerge` on the same request; the captures are in
 `LLM/evidence/2026-11-09-491/` (taken before the fix). Unit tests: the three in
 `tests/built_parent_update_probe.rs` and the `binary-twin` case of
 `tests/unsat_probe.rs` (both fail on the old code). Left over: #695, #696.
+
+#695 (2026-11-09): an installed consumer the request does not reach now keeps
+its `[use]` dependency. `emerge -uDpvN =kde-frameworks/kdbusaddons-6.31.0` on the
+host tree no longer plans `[binary Rg] app-misc/mime-types-2.1.54-1
+USE="-nginx*"` (the installed `www-servers/nginx` needs `mime-types[nginx]`);
+rc 0, like Portage, which removes that binary in its slot-conflict handler.
+Two causes: `-D` ran the complete-mode re-walk with the USE-break table off,
+and a break from a reinstall nobody requested by name was only reported, never
+held back. A package requested by name keeps the conflict block and rc 1.
+Run, in pmtest: `python3 -m pytest pytests-contract-suite -q -k f695`
+(`dev-lang/f484-py` with `www-servers/f484-ng` in @world: no merge row);
+unit test `reverse_dependency_constraints_enforces_a_use_break_when_only_a_dependency_pulls_the_reinstall`.
+Left over: #696.

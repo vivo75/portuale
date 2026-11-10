@@ -227,6 +227,11 @@ pub(crate) struct UseBreakSource {
     pub(crate) candidate: String,
     pub(crate) merge_use: HashSet<String>,
     pub(crate) merge_iuse: HashSet<String>,
+    /// A same-version reinstall nobody asked for by name: only
+    /// dependencies pull it, and the installed instance meets those too, so holding
+    /// the reinstall back resolves the break (Portage removes the merge instance).
+    // Portage: depgraph.py, _solve_non_slot_operator_slot_conflicts
+    pub(crate) reinstall: bool,
 }
 
 /// The decided merge USE/IUSE for `category/package-version`. `None` when no
@@ -436,6 +441,7 @@ pub(crate) fn reverse_dependency_scan(
             use_breaks.insert(
                 (cp.clone(), slot.clone()),
                 UseBreakSource {
+                    reinstall: !top_level_cps.contains(&cp),
                     candidate: format!(
                         // match-str-ok: merge-list entry (Option slot/repo), not a Candidate
                         "{}/{}-{version}:{slot}/{}::{}",
@@ -462,6 +468,7 @@ pub(crate) fn reverse_dependency_scan(
             use_breaks
                 .entry((cp.clone(), slot.clone()))
                 .or_insert(UseBreakSource {
+                    reinstall: false,
                     candidate: format!(
                         // match-str-ok: merge-list entry (Option slot/repo), not a Candidate
                         "{}/{}-{to}:{slot}/{}::{}",
@@ -1495,6 +1502,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
         if !use_deps.is_empty() && !is_build_time_dep_key(dep_key) && !built_slot_op {
             let pin_slot = atom.slot.as_deref();
             let mut broken = false;
+            let mut holds_back = false;
             for ((ucp, uslot), source) in use_breaks {
                 if *ucp != cp {
                     continue;
@@ -1514,6 +1522,7 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
                     &source.merge_iuse,
                 ) {
                     broken = true;
+                    holds_back = source.reinstall;
                     break;
                 }
             }
@@ -1536,6 +1545,8 @@ pub(crate) fn constraints_from_atom(args: ConstraintsFromAtomArgs<'_>) -> Contro
                 if seen.insert((pin.cp.clone(), pin.atom.clone(), pin.consumer.clone())) {
                     if report_only {
                         report.push(pin);
+                    } else if holds_back {
+                        enforced.push(pin);
                     } else {
                         dropped.push(pin);
                     }
