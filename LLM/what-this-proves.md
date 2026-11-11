@@ -375,3 +375,12 @@ block naming the holder, so it prints no second note. Live check:
 `cargo test --release -p portage-repo p703`; forcing `holder_has_route` to `Some` turns both solvers' pins red
 (checked). The expectation rests on charter property 5; Portage prints the block only. On the L0 bed the default
 solver has 0 invariant violations; pubgrub keeps the 8 `plain != --json` ones it had before.
+
+#702 (2026-11-11): `--solver=resolvo` and the perl co-upgrade, recorded as a cut (CUT-12). On the scratch ROOT of the
+#698 pins (`p569prov-5.42` installed, 5.44 in the tree, three holders in the world), `emerge --pretend
+--solver=resolvo dev-libs/p569prov` prints no merge row and exits 0, and so do `--update --deep dev-libs/p569prov` and
+`--update --deep dev-libs/p698upg`; `dev-libs/p590vpull`, which is not installed, still merges. Resolvo keeps
+installed packages as they are: no holder is left without its dependency, and there is no upgrade for the holders to
+follow, so nothing was wired. Live check: `pytests-contract-suite/test_emerge_pretend_contract.py -k test_702`; the
+pin goes red once resolvo plans an upgrade of an installed package. Source: the capture itself, Portage not
+consulted. Resolvo not upgrading installed packages is the engine-side gap the #211 pin docstring already mentions.
