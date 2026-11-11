@@ -308,3 +308,17 @@ plan is healthy so the exit code stays 0. Live check:
 `pytests-contract-suite/test_emerge_pretend_contract.py -k test_699`; making `held_back_use_updates` return
 an empty list turns the first cell and the Rust test `update_held_back_by_an_installed_consumers_use_dep_is_reported`
 red (checked). The expectation rests on the charter's property 5 (say what the user can do); Portage is the hint.
+
+#704/#705 (2026-11-11): measurements and triage only, no product code. The co-upgrade's second walk costs
+about one more resolve on a probe where an upgrade is withheld and the holders can follow: in the bed
+container `emerge -pv dev-lang/perl` takes 0.23 s with the pre-#698 binary and 0.53 s on `bc31ebc9`,
+`kde-apps/kdecore-meta` 1.84 s and 3.68 s, while five probes with no perl in them stay within 1 %; in seven
+of the ten slower cells the plan is unchanged, so the walk is dropped after it ran. The bed findings #698
+left behind are sorted by cause: the default-solver run has 0 unexplained findings and 0 failing plans in
+`l0-health.sh`, but 136 invariant violations (#713); the pubgrub run keeps 224 unexplained, of which two
+are bridge defects (#714 misleading rows, #715 rebuilds merged before the perl upgrade) and 22 are legal
+order differences; the `--usepkg` cell keeps 4 legal order differences that Portage itself introduces.
+Four corpus records that had drifted since 2026-11-07 are blessed after review; the fifth is #711. Live
+check: `python3 differential-test-bed/compare/resolve-compare.py differential-test-bed/logs/l0-20261111T110117Z
+differential-test-bed/compare/known-divergences.yaml` prints `UNEXPLAINED : 224`. The verdicts rest on the
+charter's properties; Portage's output is the comparison.
