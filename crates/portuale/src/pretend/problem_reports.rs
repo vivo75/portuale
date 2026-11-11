@@ -226,6 +226,38 @@ pub(crate) fn show_held_back_use(quiet: bool, debug: bool, result: &GraphResult,
     }
 }
 
+/// Updates left alone because installed packages cannot follow them (#703): the
+/// holders with no visible version that accepts the new provider. A note; the
+/// exit code stays 0, and `--quiet` hides it like the USE note above.
+pub(crate) fn show_held_back_no_route(quiet: bool, debug: bool, result: &GraphResult, root: &Path) {
+    if (quiet && !debug) || result.held_back_no_route.is_empty() {
+        return;
+    }
+    let root_suffix = skipped_header_root_suffix(false, root, None);
+    println!();
+    println!(
+        "NOTE: One or more updates were not merged because an installed package cannot follow them:"
+    );
+    for h in &result.held_back_no_route {
+        println!();
+        println!("{}/{}:{}{root_suffix}", h.category, h.package, h.slot);
+        println!();
+        println!("  installed: {}", h.installed_version);
+        for (holder, version, atom) in &h.holders {
+            println!(
+                "  not merged: {} ({holder}-{version} needs {atom})",
+                h.skipped_version
+            );
+        }
+        for (holder, _, _) in &h.holders {
+            println!(
+                "  No visible version of {holder} accepts {}/{}-{}.",
+                h.category, h.package, h.skipped_version
+            );
+        }
+    }
+}
+
 /// The ` in '<root>'` an installed package's description carries, empty at `/`.
 // Portage: Package.py, __str__
 fn installed_in_root(root: &Path) -> String {

@@ -240,3 +240,42 @@ fn p715_pubgrub_rebuild_rows_follow_the_provider() {
 fn p715_portage_rebuild_rows_follow_the_provider() {
     assert_provider_before_holders(SolverKind::Portage);
 }
+
+/// The note #703 records: the provider slot, both versions and each route-less
+/// holder with the recorded atom that pins the old version. `p698rebuild` has a
+/// route, so it is not listed.
+fn expected_no_route() -> Vec<HeldBackNoRoute> {
+    vec![HeldBackNoRoute {
+        category: "dev-libs".to_string(),
+        package: "p569prov".to_string(),
+        slot: "0".to_string(),
+        installed_version: "5.42".to_string(),
+        skipped_version: "5.44".to_string(),
+        holders: vec![(
+            "dev-libs/p573virt".to_string(),
+            "1".to_string(),
+            "=dev-libs/p569prov-5.42*".to_string(),
+        )],
+    }]
+}
+
+/// #703, charter property 5 (messages help): the withheld upgrade names the one
+/// holder that cannot follow it (default solver).
+#[test]
+fn p703_route_less_holder_is_recorded() {
+    let world = ["dev-libs/p698rebuild", "dev-libs/p573virt"];
+    let root = p698_root(&world);
+    let result = resolve_with(SolverKind::Portage, &root, &world);
+    // The skipped-update block already names the holder: no second note.
+    assert!(result.held_back_no_route.is_empty());
+    assert!(!result.skipped_updates.is_empty());
+}
+
+/// Same record from the pubgrub bridge, which prints no skipped-update block.
+#[test]
+fn p703_route_less_holder_is_recorded_pubgrub() {
+    let world = ["dev-libs/p698rebuild", "dev-libs/p573virt"];
+    let root = p698_root(&world);
+    let result = resolve_with(SolverKind::PubGrub, &root, &world);
+    assert_eq!(result.held_back_no_route, expected_no_route());
+}

@@ -363,6 +363,7 @@ pub(crate) fn assemble_result(
         skipped_missing_deps,
         skipped_missing_dep_full,
         held_back_use,
+        held_back_no_route: Vec::new(),
         installed_masked,
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,

@@ -48,6 +48,22 @@ pub struct HeldBackUse {
     pub changes: Vec<String>,
 }
 
+/// An update left alone because installed packages cannot follow it: their
+/// recorded dependency pins the old version and no visible version of them
+/// accepts the new one (#703). A note, never a failure. Not [`HeldBackUse`]:
+/// one group lists several holders and the closing sentence differs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldBackNoRoute {
+    pub category: String,
+    pub package: String,
+    pub slot: String,
+    pub installed_version: String,
+    pub skipped_version: String,
+    /// `(category/package, version, recorded dependency atom)` per holder with
+    /// no route, sorted.
+    pub holders: Vec<(String, String, String)>,
+}
+
 /// One slot for the abbreviated skipped-update tail: a masked version higher
 /// than the chosen one whose missing-dependency mask still bites at settle
 /// time. Only the slot renders.

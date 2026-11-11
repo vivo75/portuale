@@ -278,6 +278,9 @@ pub struct GraphResult {
     /// Updates `-u` left alone for an installed consumer's `[use]` dependency (see
     /// [`HeldBackUse`]); a note the renderer prints, rc untouched.
     pub held_back_use: Vec<HeldBackUse>,
+    /// Updates withheld because an installed holder has no route to follow them
+    /// (see [`HeldBackNoRoute`]); a note the renderer prints, rc untouched.
+    pub held_back_no_route: Vec<HeldBackNoRoute>,
     /// Unresolved blocker rows whose owner has no display entry (scan-collected,
     /// absent from the graph). The renderer prints them in the trailing blocker group,
     /// counts them in `Conflict:`, and fails the run (Portage's n1b/n6b shape).

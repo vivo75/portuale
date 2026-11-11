@@ -11,7 +11,8 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
     result.slot_conflict_backtracking = ctx.slot_conflict_seen.get();
     // Installed holders that can follow a withheld upgrade join it (#698): one
     // more walk with them as roots, kept only when it withholds less.
-    if let Some((extra, followers)) = co_upgrade_request(&ctx, req, &result)
+    let (request, mut no_route) = co_upgrade_request(&ctx, req, &result);
+    if let Some((extra, followers)) = request
         && let Ok(ctx_again) = ResolveCtx::new(&extra)
         && let Ok(mut again) = backtrack_search(&ctx_again, &extra)
         && again.skipped_updates.len() < result.skipped_updates.len()
@@ -32,6 +33,15 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
         }
         result = again;
     }
+    // #703: name the holders that cannot follow, unless the skipped-update block
+    // already names them.
+    no_route.retain(|n| {
+        !result
+            .skipped_updates
+            .iter()
+            .any(|r| (&r.category, &r.package, &r.slot) == (&n.category, &n.package, &n.slot))
+    });
+    result.held_back_no_route = no_route;
     Ok(result)
 }
 

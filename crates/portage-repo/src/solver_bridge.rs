@@ -16,7 +16,8 @@
 //!   failed strict one (#431 S2); USE flips go through the post-solve
 //!   validator (#429).
 //! - `slot_conflicts` and `skipped_updates` stay empty (no missed-update
-//!   warning for a solvable plan) and a bridge failure is one `Error::Detail`
+//!   warning for a solvable plan; the route-less-holder note, #703, is filled
+//!   from repo facts and is not this cut) and a bridge failure is one `Error::Detail`
 //!   line of engine-native text, not a Portage notice. Since S9 the pubgrub
 //!   path replays the walk's abort predicates read-only over the solved plan,
 //!   so `autounmask_use_changes` and the miss disclosures can fill.
@@ -936,6 +937,7 @@ fn graph_result_from_order(
         skipped_missing_deps: Vec::new(),
         skipped_missing_dep_full: Vec::new(),
         held_back_use: Vec::new(),
+        held_back_no_route: Vec::new(),
         orphan_blockers,
         changed_deps_report: Vec::new(),
         installed_masked: Vec::new(),
@@ -5126,8 +5128,12 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
         masked_binaries: HashSet::new(),
         ..PoolOpts::default()
     };
+    // A withheld provider is pinned to its installed version in the next round,
+    // so the round that found its route-less holder is the one that knows them.
+    let mut no_route: Vec<super::HeldBackNoRoute> = Vec::new();
     for _ in 0..STALE_BINARY_MAX_ROUNDS {
-        let (result, stale, fix) = resolve_pubgrub_at(req, &opts)?;
+        let (mut result, stale, fix) = resolve_pubgrub_at(req, &opts)?;
+        no_route.extend(fix.no_route);
         let fresh_rebuild: Vec<String> = fix
             .rebuild
             .into_iter()
@@ -5139,13 +5145,17 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
             .filter(|atom| !opts.extra_atoms.contains(atom))
             .collect();
         if stale.is_empty() && fresh_rebuild.is_empty() && fresh_atoms.is_empty() {
+            result.held_back_no_route = no_route;
             return Ok(result);
         }
         opts.masked_binaries.extend(stale);
         opts.extra_rebuild.extend(fresh_rebuild);
         opts.extra_atoms.extend(fresh_atoms);
     }
-    resolve_pubgrub_at(req, &opts).map(|(result, _, _)| result)
+    resolve_pubgrub_at(req, &opts).map(|(mut result, _, _)| {
+        result.held_back_no_route = no_route;
+        result
+    })
 }
 
 /// The planned binaries (`cat/pkg-ver`) whose recorded built slot-operator
@@ -5377,6 +5387,8 @@ fn resolve_pubgrub_at(
 struct HolderFix {
     rebuild: Vec<String>,
     atoms: Vec<String>,
+    /// Withheld moves with a route-less holder, for the #703 note.
+    no_route: Vec<super::HeldBackNoRoute>,
 }
 
 /// Installed packages whose recorded dependency on a package the plan moves no
@@ -5428,7 +5440,7 @@ fn holder_fix(
             continue;
         };
         let old_str = old.match_str(&req.root);
-        let mut broken: Vec<(String, String, String)> = Vec::new();
+        let mut broken: Vec<((String, String, String), String)> = Vec::new();
         for holder in installed {
             if !reachable.contains(&(holder.category.clone(), holder.package.clone()))
                 || (holder.category == e.category && holder.package == e.package)
@@ -5470,31 +5482,39 @@ fn holder_fix(
                 && provider_atoms_accept(&atoms, &old_str)
                 && !provider_atoms_accept(&atoms, &new)
             {
+                let pin = atoms
+                    .iter()
+                    .find(|a| !provider_atoms_accept(std::slice::from_ref(*a), &new));
                 broken.push((
-                    holder.category.clone(),
-                    holder.package.clone(),
-                    holder.version.clone(),
+                    (
+                        holder.category.clone(),
+                        holder.package.clone(),
+                        holder.version.clone(),
+                    ),
+                    pin.or(atoms.first()).cloned().unwrap_or_default(),
                 ));
             }
         }
         if broken.is_empty() {
             continue;
         }
-        let routes: Vec<Option<String>> = broken
-            .iter()
-            .map(|(c, p, v)| {
-                super::holder_has_route(super::HolderRouteArgs {
-                    gate: lazy.gate(),
-                    root: &req.root,
-                    holder: &(c.clone(), p.clone(), v.clone()),
-                    provider: &provider,
-                    new_provider: std::slice::from_ref(&new),
-                    with_bdeps: req.with_bdeps,
-                })
-            })
-            .collect();
-        if routes.iter().all(Option::is_some) {
-            for ((c, p, v), route) in broken.iter().zip(routes) {
+        let (routes, note) = super::holder_routes(super::WithheldProvider {
+            gate: lazy.gate(),
+            root: &req.root,
+            with_bdeps: req.with_bdeps,
+            provider: &provider,
+            new: &new,
+            slot,
+            installed_version: &old.version,
+            skipped_version: &new_ver,
+            holders: &broken,
+        });
+        if let Some(note) = note {
+            fix.no_route.push(note);
+            fix.atoms
+                .push(format!("={}/{}-{}", e.category, e.package, old.version));
+        } else {
+            for (((c, p, v), _), route) in broken.iter().zip(routes) {
                 let target = route.expect("every holder has a route");
                 if target == *v {
                     fix.rebuild.push(format!("{c}/{p}-{v}"));
@@ -5502,9 +5522,6 @@ fn holder_fix(
                     fix.atoms.push(format!("={c}/{p}-{target}"));
                 }
             }
-        } else {
-            fix.atoms
-                .push(format!("={}/{}-{}", e.category, e.package, old.version));
         }
     }
     fix

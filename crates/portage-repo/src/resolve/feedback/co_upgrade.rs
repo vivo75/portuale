@@ -79,6 +79,59 @@ pub(crate) fn holder_has_route(args: HolderRouteArgs<'_>) -> Option<String> {
         .map(|c| c.version.clone())
 }
 
+/// Arguments of [`holder_routes`].
+pub(crate) struct WithheldProvider<'a> {
+    pub(crate) gate: CategoryGate<'a>,
+    pub(crate) root: &'a Path,
+    pub(crate) with_bdeps: bool,
+    pub(crate) provider: &'a (String, String),
+    /// The version the upgrade moves to, `cat/pkg-ver:slot/sub`.
+    pub(crate) new: &'a str,
+    pub(crate) slot: &'a str,
+    pub(crate) installed_version: &'a str,
+    pub(crate) skipped_version: &'a str,
+    /// The installed holders, each with the recorded atom that pins the old version.
+    pub(crate) holders: &'a [((String, String, String), String)],
+}
+
+/// The route of each holder of one withheld provider, and the note that names
+/// the holders without one (`None` when all can follow). Shared by every solver.
+pub(crate) fn holder_routes(
+    args: WithheldProvider<'_>,
+) -> (Vec<Option<String>>, Option<HeldBackNoRoute>) {
+    let routes: Vec<Option<String>> = args
+        .holders
+        .iter()
+        .map(|(holder, _)| {
+            holder_has_route(HolderRouteArgs {
+                gate: args.gate,
+                root: args.root,
+                holder,
+                provider: args.provider,
+                new_provider: &[args.new.to_string()],
+                with_bdeps: args.with_bdeps,
+            })
+        })
+        .collect();
+    let mut stuck: Vec<(String, String, String)> = args
+        .holders
+        .iter()
+        .zip(&routes)
+        .filter(|(_, route)| route.is_none())
+        .map(|(((c, p, v), atom), _)| (format!("{c}/{p}"), v.clone(), atom.clone()))
+        .collect();
+    stuck.sort();
+    let note = (!stuck.is_empty()).then(|| HeldBackNoRoute {
+        category: args.provider.0.clone(),
+        package: args.provider.1.clone(),
+        slot: args.slot.to_string(),
+        installed_version: args.installed_version.to_string(),
+        skipped_version: args.skipped_version.to_string(),
+        holders: stuck,
+    });
+    (routes, note)
+}
+
 /// The request that lets every installed holder of a withheld provider follow
 /// its upgrade, when each of them has a route: the walk is run again with the
 /// holders as extra roots (`=cat/pkg-ver` for those that must move to a newer
@@ -86,20 +139,20 @@ pub(crate) fn holder_has_route(args: HolderRouteArgs<'_>) -> Option<String> {
 /// holder that cannot follow (or whose pin is a USE dependency) stay withheld.
 /// `None` when nothing is withheld or nothing can follow. Next to the request
 /// comes each `(holder, provider)` `(category, package)` pair, so the result of
-/// the second walk can name why a holder is in the plan.
+/// the second walk can name why a holder is in the plan. The notes (#703) name
+/// the holders that cannot follow, whether or not a second walk runs.
 pub(crate) fn co_upgrade_request(
     ctx: &ResolveCtx<'_>,
     req: &ResolveRequest,
     first: &GraphResult,
-) -> Option<(ResolveRequest, Vec<Followers>)> {
+) -> (
+    Option<(ResolveRequest, Vec<Followers>)>,
+    Vec<HeldBackNoRoute>,
+) {
     // Without a world (no complete-graph seeds) nobody is protected and nobody
     // follows, as in the bridge.
-    // `--backtrack=0` asks for no second walk.
-    if ctx.backtrack_max == 0 {
-        return None;
-    }
     if ctx.config.complete_seed_atoms.is_empty() && ctx.config.blocker_retry_seed_atoms.is_empty() {
-        return None;
+        return (None, Vec::new());
     }
     let mut providers: Vec<(String, String)> = first
         .skipped_updates
@@ -111,6 +164,7 @@ pub(crate) fn co_upgrade_request(
     let installed = all_installed_packages(ctx.root);
     let mut extra = req.clone();
     let mut followers: Vec<Followers> = Vec::new();
+    let mut notes: Vec<HeldBackNoRoute> = Vec::new();
     for cp in providers {
         let rows: Vec<&SkippedUpdate> = first
             .skipped_updates
@@ -126,7 +180,7 @@ pub(crate) fn co_upgrade_request(
         }) else {
             continue;
         };
-        let mut holders: Vec<(String, String, String)> = Vec::new();
+        let mut holders: Vec<((String, String, String), String)> = Vec::new();
         let mut usable = true;
         for row in &rows {
             let head = row
@@ -146,33 +200,35 @@ pub(crate) fn co_upgrade_request(
             let found = found.map(|i| (i.category.clone(), i.package.clone(), i.version.clone()));
             match found {
                 Some(holder) if row.consumer_installed && !row.atom.contains('[') => {
-                    holders.push(holder);
+                    holders.push((holder, row.atom.clone()));
                 }
                 _ => usable = false,
             }
         }
         holders.sort();
-        holders.dedup();
+        holders.dedup_by(|b, a| a.0 == b.0);
         if !usable || holders.is_empty() {
             continue;
         }
-        let routes: Vec<Option<String>> = holders
-            .iter()
-            .map(|holder| {
-                holder_has_route(HolderRouteArgs {
-                    gate: ctx.gate(),
-                    root: ctx.root,
-                    holder,
-                    provider: &cp,
-                    new_provider: std::slice::from_ref(&new),
-                    with_bdeps: ctx.with_bdeps,
-                })
-            })
-            .collect();
-        if routes.iter().any(Option::is_none) {
+        let (routes, note) = holder_routes(WithheldProvider {
+            gate: ctx.gate(),
+            root: ctx.root,
+            with_bdeps: ctx.with_bdeps,
+            provider: &cp,
+            new: &new,
+            slot: &rows[0].slot,
+            installed_version: installed
+                .iter()
+                .find(|i| (&i.category, &i.package, &i.slot) == (&cp.0, &cp.1, &rows[0].slot))
+                .map_or("", |i| i.version.as_str()),
+            skipped_version: &rows[0].skipped_version,
+            holders: &holders,
+        });
+        if let Some(note) = note {
+            notes.push(note);
             continue;
         }
-        for ((cat, pkg, ver), route) in holders.iter().zip(routes) {
+        for (((cat, pkg, ver), _), route) in holders.iter().zip(routes) {
             let target = route.expect("every holder has a route");
             if target == *ver {
                 extra.atoms.push(format!("{cat}/{pkg}"));
@@ -183,7 +239,9 @@ pub(crate) fn co_upgrade_request(
             followers.push(((cat.clone(), pkg.clone()), cp.clone()));
         }
     }
-    (!followers.is_empty()).then_some((extra, followers))
+    // `--backtrack=0` asks for no second walk.
+    let request = (ctx.backtrack_max != 0 && !followers.is_empty()).then_some((extra, followers));
+    (request, notes)
 }
 
 /// Every non-blocker atom the dependency strings `texts` (flattened against

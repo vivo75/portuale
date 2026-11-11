@@ -363,3 +363,15 @@ default solver has 0 invariant violations (136 before) and exits 0. Live check:
 removing the line that sets the parent in `resolve/driver.rs` or in `resolve/assemble.rs` turns the matching Rust
 test red (checked). The expectation rests on charter property 5 and the project's own output invariants; Portage is
 not consulted. Pubgrub holders and `--tree` are #718.
+
+#703 (2026-11-11): a holder that cannot follow an upgrade is now named where nothing else names it. On the scratch
+ROOT of the #698 pin (installed `p573virt-1` pins `=p569prov-5.42*`, no visible version accepts 5.44),
+`emerge --pretend --solver=pubgrub dev-libs/p569prov` keeps the provider at 5.42 and prints `NOTE: One or more updates
+were not merged because an installed package cannot follow them:` with `installed: 5.42`, `not merged: 5.44
+(dev-libs/p573virt-1 needs =dev-libs/p569prov-5.42*)` and `No visible version of dev-libs/p573virt accepts
+dev-libs/p569prov-5.44.`; before, pubgrub printed nothing. The default solver already prints the skipped-update
+block naming the holder, so it prints no second note. Live check:
+`pytests-contract-suite/test_emerge_pretend_contract.py -k "test_698 or test_703"` and
+`cargo test --release -p portage-repo p703`; forcing `holder_has_route` to `Some` turns both solvers' pins red
+(checked). The expectation rests on charter property 5; Portage prints the block only. On the L0 bed the default
+solver has 0 invariant violations; pubgrub keeps the 8 `plain != --json` ones it had before.

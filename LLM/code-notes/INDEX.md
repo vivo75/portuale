@@ -119,6 +119,7 @@
 - [crates/portage-repo/src/resolve/entry.rs](portage-repo/resolve/entry.md) — Graph entries and their edges: blocker rows, per-entry display facts, and merge-order inputs.
 - [crates/portage-repo/src/resolve/feedback/autounmask.rs](portage-repo/resolve/feedback/autounmask.md) — Autounmask breakage reporting and grown --autounmask-use config re-runs.
 - [crates/portage-repo/src/resolve/feedback/circular_dead_end.rs](portage-repo/resolve/feedback/circular_dead_end.md) — Fresh-self-loop circular dead-end arm: record the cycle edge and retry so `||` demotion breaks it.
+- [crates/portage-repo/src/resolve/feedback/co_upgrade.rs](portage-repo/resolve/feedback/co_upgrade.md) — Co-upgrade (#698): installed holders of a pin follow an upgrade when each has a route; the route-less ones are named (#703).
 - [crates/portage-repo/src/resolve/feedback/missing_dep.rs](portage-repo/resolve/feedback/missing_dep.md) — Missing-dependency feedback: mask the parent of an unsatisfiable dep and re-run.
 - [crates/portage-repo/src/resolve/feedback/mod.rs](portage-repo/resolve/feedback/mod.md) — Feedback hub: one pass's problems packaged into the next pass's backtrack input.
 - [crates/portage-repo/src/resolve/feedback/no_leaf_restart.rs](portage-repo/resolve/feedback/no_leaf_restart.md) — General no-leaf restart arm for multi-node hard cycles the merge-order walk strands on.
