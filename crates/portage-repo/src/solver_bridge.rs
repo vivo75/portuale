@@ -5233,6 +5233,7 @@ fn resolve_pubgrub_at(
 ) -> Result<(GraphResult, Vec<String>, HolderFix), String> {
     let relax = opts.relax;
     let with_extra_atoms;
+    let asked: &[String] = &req.atoms;
     let req = if opts.extra_atoms.is_empty() {
         req
     } else {
@@ -5254,6 +5255,13 @@ fn resolve_pubgrub_at(
     // converted inside `new_for_targets`).
     let installed = all_installed_packages(&req.root);
     let mut kept = KeptInstalled::of(req, &lazy, &installed);
+    // An atom the holder pass added only pins a version; it is not a request to
+    // reinstall it, so it prints no `R` row (#729).
+    for atom in opts.extra_atoms.iter().filter(|a| !asked.contains(a)) {
+        if let Some(cpv) = atom.strip_prefix('=') {
+            kept.rebuild.remove(cpv);
+        }
+    }
     kept.rebuild.extend(opts.extra_rebuild.iter().cloned());
     // Root-target cps for the `||` pass: an alternative naming the probe
     // target itself is in-graph trivially (the texinfo/emacs shape).

@@ -393,3 +393,5 @@ holder in the #703 NOTE; it also prints an `R p590vprov-5.42` row (#729). Live c
 `pytests-contract-suite/test_emerge_pretend_contract.py -k test_700` and `cargo test --release -p portage-repo p700`; both
 solvers' pins and the Rust test fail on the previous commit (checked). The expectation rests on charter property 1; Portage was
 not consulted for this shape.
+
+**2026-11-11 — #729: a provider the pubgrub bridge holds back prints no `R` row.** The holder pass pins the installed version with an extra `=cat/pkg-ver` atom; the non-selective rule "an installed requested package is rebuilt" turned it into `[ebuild   R    ]`. The atom is now dropped from the rebuild set unless the user asked for it. Check: `emerge --pretend --solver=pubgrub dev-libs/p590vpull` on the #676 ROOT with an empty world (`test_700_empty_world_still_protects_an_installed_consumer[pubgrub]`) merges only `N p590vpull-1`, with the #703 NOTE naming `virtual/p590vvb`. Oracle: charter property 5 (messages help).
