@@ -276,17 +276,44 @@ pub(crate) fn slot_operator_rebuild_entries(
                 // The rebuild lands at the tree ebuild's SLOT, not the vdb's.
                 let (v_slot, v_sub) =
                     read_vdb_slot(root, &pkg.category, &pkg.package, &pkg.version);
-                let (slot, sub_slot, tree_repo) = gate
+                let (slot, sub_slot, tree_repo, deps) = gate
                     .repo_candidates(&pkg.category, &pkg.package)
                     .ok()
                     .and_then(|cands| {
-                        cands
-                            .iter()
-                            .find(|c| c.version == pkg.version)
-                            .map(|c| (c.slot.clone(), c.sub_slot.clone(), c.repo_name.clone()))
+                        cands.iter().find(|c| c.version == pkg.version).map(|c| {
+                            // The rebuild's own dependencies order it after the
+                            // provider it is rebuilt for (a leaf would sort first).
+                            let deps = repo_aux_metadata(
+                                &c.repo_location,
+                                &pkg.category,
+                                &format!("{}-{}", pkg.package, c.version),
+                            )
+                            .map(|meta| {
+                                let use_flags = read_vdb_flag_set(
+                                    root,
+                                    &pkg.category,
+                                    &pkg.package,
+                                    &pkg.version,
+                                    "USE",
+                                );
+                                crate::merge_order::dep_edges_from_metadata(
+                                    &meta,
+                                    &use_flags,
+                                    &["RDEPEND", "IDEPEND", "PDEPEND", "DEPEND", "BDEPEND"],
+                                    false,
+                                )
+                            })
+                            .unwrap_or_default();
+                            (
+                                c.slot.clone(),
+                                c.sub_slot.clone(),
+                                c.repo_name.clone(),
+                                deps,
+                            )
+                        })
                     })
-                    .map(|(slot, sub_slot, repo)| (slot, sub_slot, Some(repo)))
-                    .unwrap_or_else(|| (v_slot.clone(), v_sub.clone(), None));
+                    .map(|(slot, sub_slot, repo, deps)| (slot, sub_slot, Some(repo), deps))
+                    .unwrap_or_else(|| (v_slot.clone(), v_sub.clone(), None, Vec::new()));
                 // The installed repo, `__unknown__` when the vdb records none.
                 let installed_repo =
                     installed_pkg_repo(root, &pkg.category, &pkg.package, &pkg.version);
@@ -352,7 +379,7 @@ pub(crate) fn slot_operator_rebuild_entries(
                     remote_binary: false,
                     build_id: None,
                     build_time: None,
-                    deps: Vec::new(),
+                    deps,
                 }
             })
             .collect();

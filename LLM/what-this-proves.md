@@ -342,3 +342,14 @@ perl 0.99 to 1.01 times. The cost is one extra resolve, paid only when an upgrad
 can follow it; the 18 holders of perl pins that the world does not reach on the measuring host are left
 unprotected, as before #698. The numbers and the rows they come from are in the `#704` entry of
 `LLM/backlog-tasks.md`.
+
+#715 (2026-11-11): `--solver=pubgrub` now merges a provider before the packages that are rebuilt for it. On
+the shape `dev-libs/p715prov` (version 2 builds with an uninstalled `p715lib`) with two installed holders of
+`p715prov:=` in the world, `emerge --pretend --solver=pubgrub dev-libs/p715prov` printed `p715lib`, the two
+holders as `rR`, then `p715prov-2`, which builds the holders against the old provider again; it now prints
+`p715lib`, `p715prov-2`, then the holders, as the default solver does. Live check:
+`pytests-contract-suite/test_emerge_pretend_contract.py -k test_715` and `cargo test --release -p portage-repo p715`;
+restoring `deps: Vec::new()` in `slot_operator_rebuild_entries` turns the pubgrub variants red (checked). On the
+bed, `L0_PORTUALE_OPTS=--solver=pubgrub l0-resolver.sh` has no `rR` row before the perl upgrade in the ten
+cells that had 18 to 31 of them. The expectation rests on charter property 2 and PMS `dependencies.tex`,
+"Slot dependencies"; the default solver already ordered it this way (Portage not probed on this shape).

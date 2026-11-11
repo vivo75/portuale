@@ -122,3 +122,76 @@ fn a_holder_without_a_route_still_withholds_the_upgrade() {
         );
     }
 }
+
+/// The shared fixture vdb plus the installed #715 provider (sub-slot `0/1`) and
+/// two holders built against it (`p715prov:0/1=`).
+fn p715_root(world: &[&str]) -> TempDir {
+    let base = hermetic_root(world);
+    for (cpv, slot, pin) in [
+        ("dev-libs/p715prov-1", "0/1", ""),
+        ("dev-libs/p715h1-1", "0", "dev-libs/p715prov:0/1="),
+        ("dev-libs/p715h2-1", "0", "dev-libs/p715prov:0/1="),
+    ] {
+        let dir = base.join("var/db/pkg").join(cpv);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(dir.join("EAPI"), "8\n").unwrap();
+        fs::write(dir.join("SLOT"), format!("{slot}\n")).unwrap();
+        fs::write(dir.join("repository"), "testrepo\n").unwrap();
+        if !pin.is_empty() {
+            fs::write(dir.join("RDEPEND"), format!("{pin}\n")).unwrap();
+            fs::write(dir.join("DEPEND"), format!("{pin}\n")).unwrap();
+        }
+    }
+    base
+}
+
+/// Position of each `dev-libs/<name>` entry in the merge order.
+fn p715_order(kind: SolverKind) -> Vec<String> {
+    let world = ["dev-libs/p715h1", "dev-libs/p715h2", "dev-libs/p715prov"];
+    let root = p715_root(&world);
+    let mut req = request_in(&root, &["dev-libs/p715prov"]);
+    req.solver = kind;
+    req.selective = false;
+    req.config.complete_seed_atoms = world.iter().map(|w| (*w).to_string()).collect();
+    let result = active_resolver_for(kind)
+        .resolve(&req)
+        .expect("the #715 request resolves");
+    result
+        .entries
+        .iter()
+        .map(|entry| entry.package.clone())
+        .collect()
+}
+
+fn assert_provider_before_holders(kind: SolverKind) {
+    let order = p715_order(kind);
+    let at = |name: &str| {
+        order
+            .iter()
+            .position(|p| p == name)
+            .unwrap_or_else(|| panic!("{kind}: {name} is in the plan {order:?}"))
+    };
+    // PMS dependencies.tex, "Slot dependencies": a `:=` holder breaks unless the
+    // provider's new slot/sub-slot is available, so it is rebuilt after it.
+    assert!(at("p715lib") < at("p715prov"), "{kind}: {order:?}");
+    for holder in ["p715h1", "p715h2"] {
+        assert!(
+            at("p715prov") < at(holder),
+            "{kind}: {holder} is rebuilt before the provider it is rebuilt for: {order:?}"
+        );
+    }
+}
+
+/// #715 (charter property 2): holders rebuilt for a new provider sub-slot come
+/// after the provider, even when the provider waits for a dependency of its own.
+#[test]
+fn p715_pubgrub_rebuild_rows_follow_the_provider() {
+    assert_provider_before_holders(SolverKind::PubGrub);
+}
+
+/// The default solver already orders the same plan correctly.
+#[test]
+fn p715_portage_rebuild_rows_follow_the_provider() {
+    assert_provider_before_holders(SolverKind::Portage);
+}
