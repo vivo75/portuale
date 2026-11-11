@@ -214,3 +214,60 @@ fn upgrade_breaking_an_unwalked_consumer_use_dep_conflicts() {
         result.slot_conflicts
     );
 }
+
+/// `emerge -puD @world`: the world atoms are both the request and the seeds.
+fn resolve_update_deep_world(root: &Path) -> GraphResult {
+    let world: Vec<String> = fs::read_to_string(root.join("var/lib/portage/world"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@'))
+        .map(String::from)
+        .collect();
+    let atoms: Vec<&str> = world.iter().map(String::as_str).collect();
+    let mut req = request_in(root, &atoms);
+    req.update = true;
+    req.deep = Deep::Unlimited;
+    req.selective = true;
+    req.config.blocker_retry_seed_atoms = world.clone();
+    req.config.complete_seed_atoms = world;
+    req.resolve()
+        .unwrap_or_else(|e| panic!("resolving -uD @world failed: {e}"))
+}
+
+#[test]
+fn update_held_back_by_an_installed_consumers_use_dep_is_reported() {
+    // #699. Installed `w605x-1` (built `w605flag`), world consumer `w605conc-1`
+    // (`dev-libs/w605x[w605flag]`), visible `w605x-2` with the flag off. `-uD`
+    // keeps `w605x-1`; the plan is healthy but the user must be told that
+    // `w605x-2` exists and `+w605flag` lets it in (charter property 5).
+    // Portage 3.0.83 fails with the same hint (comparison only).
+    let root = w605_root('c');
+    let result = resolve_update_deep_world(&root);
+    assert_eq!(
+        result.held_back_use,
+        vec![HeldBackUse {
+            category: "dev-libs".to_string(),
+            package: "w605x".to_string(),
+            slot: "0".to_string(),
+            installed_version: "1".to_string(),
+            skipped_version: "2".to_string(),
+            atom: "dev-libs/w605x[w605flag]".to_string(),
+            consumer: "app-misc/w605conc-1".to_string(),
+            changes: vec!["+w605flag".to_string()],
+        }]
+    );
+}
+
+#[test]
+fn an_or_arm_the_installed_consumer_does_not_need_holds_nothing_back() {
+    // #699 negative: `|| ( w605x[w605flag] w605y )` with `w605y` installed is
+    // met without `w605x`, so `w605x-2` is simply not required by the consumer.
+    let root = w605_root('a');
+    let result = resolve_update_deep_world(&root);
+    assert!(
+        result.held_back_use.is_empty(),
+        "{:?}",
+        result.held_back_use
+    );
+}

@@ -167,6 +167,9 @@ pub(crate) fn assemble_result(
 
     collect_withheld_updates(ctx, params, config, &mut pass);
 
+    // Updates `-u` leaves alone for an installed consumer's `[use]` dependency.
+    let held_back_use = held_back_use_updates(ctx, config, &pass.entries);
+
     finalize_dep_reports(&mut pass, ctx);
 
     // Classify the settled graph the way Portage's abandon sites would
@@ -341,6 +344,7 @@ pub(crate) fn assemble_result(
         skipped_updates: pass.skipped_updates,
         skipped_missing_deps,
         skipped_missing_dep_full,
+        held_back_use,
         installed_masked,
         orphan_blockers: pass.orphan_blockers,
         changed_deps_report: pass.changed_deps_report_entries,

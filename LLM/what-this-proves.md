@@ -295,3 +295,16 @@ still pins `=5.42*`) the provider stays at 5.42, as before. Live check:
 `pytests-contract-suite/test_emerge_pretend_contract.py -k test_698`; making `holder_has_route` return
 `None` for every holder (`co_upgrade.rs`) turns the first test red (checked). The expectation rests on
 the charter's dependency-satisfied property and "as up to date as it can be"; Portage is the hint only.
+
+#699 (2026-11-11): `emerge -pu` now says when it holds an update back for an installed package's `[use]`
+dependency. On a scratch ROOT with `dev-libs/w605x-1` installed with `w605flag`, a world consumer
+`app-misc/w605conc-1` (`RDEPEND="dev-libs/w605x[w605flag]"`) and `w605x-2` visible with the flag off,
+`emerge --pretend --update --deep @world` still plans no `w605x` row and exits 0, and now also prints
+`NOTE: One or more updates were not merged because an installed package needs a USE flag:` with
+`not merged: 2 (app-misc/w605conc-1 needs dev-libs/w605x[w605flag])` and
+`Change USE: dev-libs/w605x +w605flag`. With the `||` consumer `w605cona` (`|| ( w605x[w605flag] w605y )`,
+`w605y` installed) nothing is printed. Portage 3.0.83 fails the first root with the same USE hint; here the
+plan is healthy so the exit code stays 0. Live check:
+`pytests-contract-suite/test_emerge_pretend_contract.py -k test_699`; making `held_back_use_updates` return
+an empty list turns the first cell and the Rust test `update_held_back_by_an_installed_consumers_use_dep_is_reported`
+red (checked). The expectation rests on the charter's property 5 (say what the user can do); Portage is the hint.

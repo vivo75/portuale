@@ -30,6 +30,24 @@ pub struct SkippedUpdate {
     pub consumer_targets_running_root: bool,
 }
 
+/// An update `-u` left alone because an installed consumer's `[use]` dependency
+/// only the installed instance meets, and the USE change that would let it in.
+/// A note, never a failure (charter property 5: say what the user can do).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldBackUse {
+    pub category: String,
+    pub package: String,
+    pub slot: String,
+    pub installed_version: String,
+    pub skipped_version: String,
+    /// The consumer's dependency atom as recorded, `[use]` deps included.
+    pub atom: String,
+    /// The installed consumer, `category/package-version`.
+    pub consumer: String,
+    /// The `+flag` / `-flag` changes that would let `skipped_version` in.
+    pub changes: Vec<String>,
+}
+
 /// One slot for the abbreviated skipped-update tail: a masked version higher
 /// than the chosen one whose missing-dependency mask still bites at settle
 /// time. Only the slot renders.

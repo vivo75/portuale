@@ -196,6 +196,36 @@ pub(crate) fn show_skipped_missing_deps(
     }
 }
 
+/// Updates `-u` left alone because an installed package's `[use]` dependency
+/// only the installed version meets, with the USE change that would allow them.
+/// A note: the plan is healthy and the exit code stays 0.
+pub(crate) fn show_held_back_use(quiet: bool, debug: bool, result: &GraphResult, root: &Path) {
+    if (quiet && !debug) || result.held_back_use.is_empty() {
+        return;
+    }
+    let root_suffix = skipped_header_root_suffix(false, root, None);
+    println!();
+    println!(
+        "NOTE: One or more updates were not merged because an installed package needs a USE flag:"
+    );
+    for h in &result.held_back_use {
+        println!();
+        println!("{}/{}:{}{root_suffix}", h.category, h.package, h.slot);
+        println!();
+        println!("  installed: {}", h.installed_version);
+        println!(
+            "  not merged: {} ({} needs {})",
+            h.skipped_version, h.consumer, h.atom
+        );
+        println!(
+            "  Change USE: {}/{} {}",
+            h.category,
+            h.package,
+            h.changes.join(" ")
+        );
+    }
+}
+
 /// The ` in '<root>'` an installed package's description carries, empty at `/`.
 // Portage: Package.py, __str__
 fn installed_in_root(root: &Path) -> String {

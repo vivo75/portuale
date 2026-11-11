@@ -935,6 +935,7 @@ fn graph_result_from_order(
         // No backtrack loop: no trial masks, nothing for either notice.
         skipped_missing_deps: Vec::new(),
         skipped_missing_dep_full: Vec::new(),
+        held_back_use: Vec::new(),
         orphan_blockers,
         changed_deps_report: Vec::new(),
         installed_masked: Vec::new(),

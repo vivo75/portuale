@@ -275,6 +275,9 @@ pub struct GraphResult {
     /// Updates Portage reports through the full unsatisfied-dependencies form (see
     /// [`SkippedMissingDepFull`]). Rendered right after `skipped_missing_deps`.
     pub skipped_missing_dep_full: Vec<SkippedMissingDepFull>,
+    /// Updates `-u` left alone for an installed consumer's `[use]` dependency (see
+    /// [`HeldBackUse`]); a note the renderer prints, rc untouched.
+    pub held_back_use: Vec<HeldBackUse>,
     /// Unresolved blocker rows whose owner has no display entry (scan-collected,
     /// absent from the graph). The renderer prints them in the trailing blocker group,
     /// counts them in `Conflict:`, and fails the run (Portage's n1b/n6b shape).
