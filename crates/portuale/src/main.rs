@@ -24,6 +24,7 @@ mod emerge_options;
 mod env_update;
 mod error;
 mod fetch;
+mod future_options;
 mod global_updates;
 mod helpers;
 mod info_files;

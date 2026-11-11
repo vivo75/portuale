@@ -1100,6 +1100,18 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "installed-package database backend: files (default, the classic VDB tree), sqlite or redb; also PORTUALE_VDB_BACKEND (environment, then make.conf)",
     },
+    // mrg-only: behaviour that is not a plain option yet (`future_options.rs`,
+    // #706). Consumed by the action that uses it; never reaches `emerge`.
+    Opt {
+        id: "future_options",
+        long: "--future-options",
+        alias: None,
+        short: None,
+        kind: Kind::Value,
+        choices: &[],
+        missing: "",
+        help: "switch on behaviour that is not a plain option yet: name,other=value (see docs/future-options.md); also PORTUALE_FUTURE_OPTIONS (environment, then make.conf)",
+    },
     Opt {
         id: "vdb_path",
         long: "--vdb-path",
@@ -1148,7 +1160,8 @@ fn build_arg(opt: &Opt) -> Arg {
 /// package atoms as positionals.
 pub fn command() -> Command {
     let mut cmd = Command::new("mrg")
-        .about("a modern command-line front end for the Portuale package manager");
+        .about("a modern command-line front end for the Portuale package manager")
+        .after_help(crate::future_options::describe());
     cmd = cmd.arg(
         Arg::new("package")
             .action(ArgAction::Append)
@@ -1267,7 +1280,7 @@ fn to_emerge_argv(matches: &ArgMatches) -> Vec<String> {
         }
         // `--vdb-backend` / `--vdb-path` are mrg-only: `setup_vdb`
         // consumes them before `pretend::run`, which never sees them.
-        if opt.id.starts_with("vdb_") {
+        if opt.id.starts_with("vdb_") || opt.id == "future_options" {
             continue;
         }
         let long = opt.long;
@@ -1756,12 +1769,18 @@ fn open_redb_backend(
 /// config that fails to load yields no value here; `pretend::run` reports
 /// that error itself.
 pub(crate) fn make_conf_lookup(root: &Path) -> impl FnMut(&str) -> Option<String> {
+    make_conf_lookup_at(portage_repo::config_root_from_env(), root.to_path_buf())
+}
+
+/// [`make_conf_lookup`] for a config root given explicitly (`--config-root`).
+pub(crate) fn make_conf_lookup_at(
+    config_root: PathBuf,
+    root: PathBuf,
+) -> impl FnMut(&str) -> Option<String> {
     let mut loaded: Option<Option<portage_profile::Config>> = None;
-    let root = root.to_path_buf();
     move |key: &str| {
-        let config = loaded.get_or_insert_with(|| {
-            crate::pretend::load_config_quiet(&portage_repo::config_root_from_env(), &root).ok()
-        });
+        let config = loaded
+            .get_or_insert_with(|| crate::pretend::load_config_quiet(&config_root, &root).ok());
         config.as_ref()?.other_vars.get(key).cloned()
     }
 }
