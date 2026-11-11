@@ -322,3 +322,15 @@ Four corpus records that had drifted since 2026-11-07 are blessed after review; 
 check: `python3 differential-test-bed/compare/resolve-compare.py differential-test-bed/logs/l0-20261111T110117Z
 differential-test-bed/compare/known-divergences.yaml` prints `UNEXPLAINED : 224`. The verdicts rest on the
 charter's properties; Portage's output is the comparison.
+
+#701 (2026-11-11): the `@world` analysis in `crates/portage-world` (the engine behind `mrg --check-world`
+and `--plan-world`) now has a test for each rule its entry in #684 lists. Run
+`cargo test --release -p portage-world`: 46 tests pass, among them one per rule: newest version first and
+repository priority as the tie-break, `=`, `<` and `~` narrowing, `||` taking the installed branch, the four
+relative USE dependency forms, an unneeded slot against an invalid one under `unique`, the five rebuild sets,
+and a result that is the same at 1, 2 and 8 threads. Each test was seen to fail when its rule was broken
+(for instance reversing the version comparison, or making `parallel_map` return results in completion
+order). The expected values come from PMS `dependencies.tex` and `names.tex` and from the charter, not from
+Portage. The unique, thread-count and unneeded-slot rules are reachable only through the library (#706), and
+the set tests use their own `sets.conf`, so they show the set engine works, not that Portage's shipped
+definitions are right.
