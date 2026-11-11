@@ -280,3 +280,18 @@ Portage 3.0.83 gives (`backtrack: 1/20`). Live check:
 `pytests-contract-suite/test_emerge_pretend_contract.py -k test_697`; reverting the binary-marked mask in
 `unresolved_dep.rs` turns it and the Rust test `missing_dep_trigger_masks_a_binary_parent_by_build` red
 (checked). The expectation rests on the charter's dependency-satisfied property; Portage is the hint.
+
+#698 (2026-11-11): a provider upgrade is no longer withheld when every installed package that pins the
+old version can follow it. On a scratch ROOT where `dev-libs/p569prov` is at 5.42 and three installed
+@world holders recorded the old pins (`p698rebuild` built `:0/5.42=` only, `p698reinst` pinned
+`=p569prov-5.42*` with a tree ebuild that already accepts 5.44, `p698upg` pinned `=5.42*` and has a `-2`
+that wants `=5.44*`), `emerge --pretend dev-libs/p569prov` plans the provider 5.44 together with an `R`
+for `p698rebuild`, an `R` for `p698reinst` and a `U` for `p698upg`, and prints no skipped-update block,
+with `--solver=portage` (the default) and `--solver=pubgrub` alike. Portage 3.0.83 keeps 5.42 with an
+`R` and the block (Q31 in `LLM/portage-quirks.md`); on the real tree that is perl 5.42.2 held by 69
+installed `virtual/perl-*` and `dev-perl/*` pins, each of which has a route to 5.44, so portuale plans
+perl 5.44.0 and the 48 holders it reaches. With a holder that has no route (`p573virt`, whose tree ebuild
+still pins `=5.42*`) the provider stays at 5.42, as before. Live check:
+`pytests-contract-suite/test_emerge_pretend_contract.py -k test_698`; making `holder_has_route` return
+`None` for every holder (`co_upgrade.rs`) turns the first test red (checked). The expectation rests on
+the charter's dependency-satisfied property and "as up to date as it can be"; Portage is the hint only.

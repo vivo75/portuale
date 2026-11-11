@@ -9,6 +9,17 @@ pub(crate) fn backtracking_resolve(req: &ResolveRequest) -> Result<GraphResult, 
     let ctx = ResolveCtx::new(req)?;
     let mut result = backtrack_search(&ctx, req)?;
     result.slot_conflict_backtracking = ctx.slot_conflict_seen.get();
+    // Installed holders that can follow a withheld upgrade join it (#698): one
+    // more walk with them as roots, kept only when it withholds less.
+    if let Some(extra) = co_upgrade_request(&ctx, req, &result)
+        && let Ok(ctx_again) = ResolveCtx::new(&extra)
+        && let Ok(mut again) = backtrack_search(&ctx_again, &extra)
+        && again.skipped_updates.len() < result.skipped_updates.len()
+        && again.slot_conflicts.len() <= result.slot_conflicts.len()
+    {
+        again.slot_conflict_backtracking = ctx_again.slot_conflict_seen.get();
+        result = again;
+    }
     Ok(result)
 }
 

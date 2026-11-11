@@ -5,6 +5,7 @@ use std::ops::ControlFlow;
 
 mod autounmask;
 mod circular_dead_end;
+mod co_upgrade;
 mod missing_dep;
 mod no_leaf_restart;
 mod rebuild_if_restart;
@@ -16,6 +17,7 @@ mod solvable_slot_conflicts;
 mod unsatisfied_dead_end;
 pub(crate) use autounmask::*;
 pub(crate) use circular_dead_end::*;
+pub(crate) use co_upgrade::*;
 pub(crate) use missing_dep::*;
 pub(crate) use no_leaf_restart::*;
 pub(crate) use rebuild_if_restart::*;

@@ -179,6 +179,13 @@ struct Relax {
 struct PoolOpts {
     relax: Relax,
     masked_binaries: HashSet<String>,
+    /// Installed cpvs a holder pass (#698) schedules as rebuilds so they follow
+    /// an upgrade.
+    extra_rebuild: HashSet<String>,
+    /// Extra root atoms of the same pass: `=cat/pkg-ver` to move a holder to the
+    /// version that follows the upgrade, or the provider's installed version to
+    /// withhold the upgrade a holder cannot follow.
+    extra_atoms: Vec<String>,
 }
 
 impl Relax {
@@ -5116,15 +5123,28 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
     let mut opts = PoolOpts {
         relax,
         masked_binaries: HashSet::new(),
+        ..PoolOpts::default()
     };
     for _ in 0..STALE_BINARY_MAX_ROUNDS {
-        let (result, stale) = resolve_pubgrub_at(req, &opts)?;
-        if stale.is_empty() {
+        let (result, stale, fix) = resolve_pubgrub_at(req, &opts)?;
+        let fresh_rebuild: Vec<String> = fix
+            .rebuild
+            .into_iter()
+            .filter(|cpv| !opts.extra_rebuild.contains(cpv))
+            .collect();
+        let fresh_atoms: Vec<String> = fix
+            .atoms
+            .into_iter()
+            .filter(|atom| !opts.extra_atoms.contains(atom))
+            .collect();
+        if stale.is_empty() && fresh_rebuild.is_empty() && fresh_atoms.is_empty() {
             return Ok(result);
         }
         opts.masked_binaries.extend(stale);
+        opts.extra_rebuild.extend(fresh_rebuild);
+        opts.extra_atoms.extend(fresh_atoms);
     }
-    resolve_pubgrub_at(req, &opts).map(|(result, _)| result)
+    resolve_pubgrub_at(req, &opts).map(|(result, _, _)| result)
 }
 
 /// The planned binaries (`cat/pkg-ver`) whose recorded built slot-operator
@@ -5199,8 +5219,17 @@ fn stale_built_binaries(
 fn resolve_pubgrub_at(
     req: &ResolveRequest,
     opts: &PoolOpts,
-) -> Result<(GraphResult, Vec<String>), String> {
+) -> Result<(GraphResult, Vec<String>, HolderFix), String> {
     let relax = opts.relax;
+    let with_extra_atoms;
+    let req = if opts.extra_atoms.is_empty() {
+        req
+    } else {
+        let mut grown = req.clone();
+        grown.atoms.extend(opts.extra_atoms.iter().cloned());
+        with_extra_atoms = grown;
+        &with_extra_atoms
+    };
     let repos = find_repos(&req.config_root).map_err(|e| format!("finding repos: {e}"))?;
     let (seeds, shallow) = closure_seeds(req)?;
     let seed_cpns: Vec<portage_solver::Cpn> = seeds
@@ -5214,6 +5243,7 @@ fn resolve_pubgrub_at(
     // converted inside `new_for_targets`).
     let installed = all_installed_packages(&req.root);
     let mut kept = KeptInstalled::of(req, &lazy, &installed);
+    kept.rebuild.extend(opts.extra_rebuild.iter().cloned());
     // Root-target cps for the `||` pass: an alternative naming the probe
     // target itself is in-graph trivially (the texinfo/emacs shape).
     let mut root_cps = HashSet::new();
@@ -5337,7 +5367,146 @@ fn resolve_pubgrub_at(
         record_relaxed_changes(req, &lazy, &order, &mut result);
     }
     let stale = stale_built_binaries(req, &lazy, &result.entries);
-    Ok((result, stale))
+    let fix = holder_fix(req, &lazy, &installed, &result.entries);
+    Ok((result, stale, fix))
+}
+
+/// What the holder pass asks of the next solve (see [`holder_fix`]).
+#[derive(Default)]
+struct HolderFix {
+    rebuild: Vec<String>,
+    atoms: Vec<String>,
+}
+
+/// Installed packages whose recorded dependency on a package the plan moves no
+/// longer holds (charter property 1): each either follows the move (a rebuild,
+/// or the version whose tree dependencies accept it, see
+/// [`super::holder_has_route`]) or, when one of them cannot, the move is
+/// withheld by also asking for the provider's installed version.
+/// Read-only over the solved plan; the caller re-solves with the answer.
+fn holder_fix(
+    req: &ResolveRequest,
+    lazy: &LazyRepo,
+    installed: &[super::InstalledPackage],
+    entries: &[GraphEntry],
+) -> HolderFix {
+    use super::{provider_atoms, provider_atoms_accept};
+    let bound = |e: &GraphEntry| super::merge_bound_version(&e.outcome).cloned();
+    let keys: &[usize] = if req.with_bdeps {
+        &[0, 1, 2, 3, 4]
+    } else {
+        &[1, 3, 4]
+    };
+    let mut fix = HolderFix::default();
+    // Only holders the world reaches matter, like the default solver's reverse
+    // scan; without a world (no seeds) there is nobody to protect.
+    if req.config.complete_seed_atoms.is_empty() {
+        return fix;
+    }
+    let mut seeds = req.config.complete_seed_atoms.clone();
+    seeds.extend(req.atoms.iter().cloned());
+    seeds.sort();
+    seeds.dedup();
+    let reachable = crate::slot_operator::InstalledReachability::for_run(&req.root, req.with_bdeps)
+        .reachable(&seeds, &[]);
+    for e in entries {
+        let Some(new_ver) = bound(e) else { continue };
+        let provider = (e.category.clone(), e.package.clone());
+        let slot = e.slot.as_deref().unwrap_or("0");
+        let new = format!(
+            // match-str-ok: merge-list entry (Option slot/sub-slot), not a Candidate
+            "{}/{}-{new_ver}:{slot}/{}",
+            e.category,
+            e.package,
+            e.sub_slot.as_deref().unwrap_or(slot)
+        );
+        let Some(old) = installed
+            .iter()
+            .find(|i| i.category == e.category && i.package == e.package && i.slot == slot)
+        else {
+            continue;
+        };
+        let old_str = old.match_str(&req.root);
+        let mut broken: Vec<(String, String, String)> = Vec::new();
+        for holder in installed {
+            if !reachable.contains(&(holder.category.clone(), holder.package.clone()))
+                || (holder.category == e.category && holder.package == e.package)
+            {
+                continue;
+            }
+            // A holder the plan moves is judged by the version it moves to
+            // (its tree dependencies), a kept one by what the vdb recorded.
+            let planned = entries.iter().find_map(|h| {
+                (h.category == holder.category && h.package == holder.package)
+                    .then(|| bound(h))
+                    .flatten()
+            });
+            let deps: [String; 5] = match &planned {
+                Some(ver) => {
+                    let Some(rec) = lazy
+                        .load_versions(&format!("{}/{}", holder.category, holder.package))
+                        .ok()
+                        .and_then(|vs| vs.into_iter().find(|v| &v.version == ver))
+                    else {
+                        continue;
+                    };
+                    rec.raw_deps.clone()
+                }
+                None => {
+                    lazy.installed_dep_strings(&holder.category, &holder.package, &holder.version)
+                }
+            };
+            let texts: Vec<&str> = keys.iter().map(|k| deps[*k].as_str()).collect();
+            let use_flags = super::read_vdb_flag_set(
+                &req.root,
+                &holder.category,
+                &holder.package,
+                &holder.version,
+                "USE",
+            );
+            let atoms = provider_atoms(&texts, &use_flags, &provider);
+            if !atoms.is_empty()
+                && provider_atoms_accept(&atoms, &old_str)
+                && !provider_atoms_accept(&atoms, &new)
+            {
+                broken.push((
+                    holder.category.clone(),
+                    holder.package.clone(),
+                    holder.version.clone(),
+                ));
+            }
+        }
+        if broken.is_empty() {
+            continue;
+        }
+        let routes: Vec<Option<String>> = broken
+            .iter()
+            .map(|(c, p, v)| {
+                super::holder_has_route(super::HolderRouteArgs {
+                    gate: lazy.gate(),
+                    root: &req.root,
+                    holder: &(c.clone(), p.clone(), v.clone()),
+                    provider: &provider,
+                    new_provider: std::slice::from_ref(&new),
+                    with_bdeps: req.with_bdeps,
+                })
+            })
+            .collect();
+        if routes.iter().all(Option::is_some) {
+            for ((c, p, v), route) in broken.iter().zip(routes) {
+                let target = route.expect("every holder has a route");
+                if target == *v {
+                    fix.rebuild.push(format!("{c}/{p}-{v}"));
+                } else {
+                    fix.atoms.push(format!("={c}/{p}-{target}"));
+                }
+            }
+        } else {
+            fix.atoms
+                .push(format!("={}/{}-{}", e.category, e.package, old.version));
+        }
+    }
+    fix
 }
 
 /// Name the keyword, licence and mask changes the relaxed plan's members need

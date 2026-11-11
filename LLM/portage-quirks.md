@@ -482,3 +482,11 @@ when a claim turns out false.
 - **Status**: suspect, not reported upstream.
 - **Portuale**: not copied. It leaves `w605x` at 1 and exits 0; the missing hold-back note is backlog #699 (was #673).
 
+
+## Q31. A provider upgrade is skipped even when every installed package that pins the old version could follow it
+
+- **What it does**: with `dev-lang/perl-5.42.2` installed and `5.44.0` visible, `emerge -pv dev-lang/perl` plans `[ebuild R] dev-lang/perl-5.42.2` and prints "One or more updates/rebuilds have been skipped due to a dependency conflict", naming 48 installed packages (`virtual/perl-*` with `=dev-lang/perl-5.42*`, `dev-perl/*` with `dev-lang/perl:0/5.42=`). The conflict handler masks `5.44.0` and stops there (`_slot_confict_backtrack`, `depgraph.py`; the missed-update block is `_show_missed_update`).
+- **Observed 2026-11-10 (Portage 3.0.83, bed `l0-20261110T162505Z` and later)**: all 69 pins have a way to 5.44. The 26 `dev-perl/*` plus `app-text/po4a` bind `dev-lang/perl:0/5.42=`, so a rebuild rebinds them. 12 `virtual/perl-*` already accept 5.44 in today's ebuild (a same-version reinstall mends them). 17 need a newer version that the tree already has (`virtual/perl-CPAN-Meta-2.150.13`, `-IO-1.560.0`, `-Encode-3.240.0`, ...). Read off the md5-cache of the `gentoo` tree at commit `61107b97` (a one-off script, not kept); not checked with Portage's own resolver.
+- **Why it looks wrong**: nothing needs to stay at 5.42; the system could be brought to 5.44 consistently. Portage's backtracker only masks the new version and never tries to move the holders with it, so a routine update is withheld for good.
+- **Status**: suspect, not reported upstream. Only the bare request was observed; the `-uD @world` form was not compared.
+- **Portuale**: not copied (backlog #698). Holders that can follow are planned with the provider; a holder with no route (or a USE-dependency pin) still withholds the update, with the same skipped-update block. Portage's `R` + skip stays the hint for the withheld case. Under `--backtrack=0` the old behaviour is kept (no second walk).

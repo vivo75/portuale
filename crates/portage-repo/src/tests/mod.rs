@@ -3830,6 +3830,7 @@ mod tests_p650;
 mod tests_p651;
 mod tests_p652b;
 mod tests_p656;
+mod tests_p698;
 mod tests_printed_count;
 mod tests_unwalked_consumer;
 mod unsat_probe;
