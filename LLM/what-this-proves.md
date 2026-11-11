@@ -353,3 +353,13 @@ restoring `deps: Vec::new()` in `slot_operator_rebuild_entries` turns the pubgru
 bed, `L0_PORTUALE_OPTS=--solver=pubgrub l0-resolver.sh` has no `rR` row before the perl upgrade in the ten
 cells that had 18 to 31 of them. The expectation rests on charter property 2 and PMS `dependencies.tex`,
 "Slot dependencies"; the default solver already ordered it this way (Portage not probed on this shape).
+
+#713 (2026-11-11): the plan now says why a package is in it when the only reason is an upgrade. On the scratch
+ROOT of the #698 pin, `emerge --pretend --json dev-libs/p569prov` lists the three holders (`p698rebuild`,
+`p698reinst`, `p698upg`) with `requested: false` and `required_by: [dev-libs/p569prov]`; before, `required_by` was
+empty and the bed's output invariants reported 6 violations on that document, none now. On the L0 bed the
+default solver has 0 invariant violations (136 before) and exits 0. Live check:
+`pytests-contract-suite/test_emerge_pretend_contract.py -k test_713` and `cargo test --release -p portage-repo p713`;
+removing the line that sets the parent in `resolve/driver.rs` or in `resolve/assemble.rs` turns the matching Rust
+test red (checked). The expectation rests on charter property 5 and the project's own output invariants; Portage is
+not consulted. Pubgrub holders and `--tree` are #718.

@@ -334,6 +334,24 @@ pub(crate) fn assemble_result(
         root: ctx.root,
         gate: ctx.gate(),
     });
+    // A slot-operator rebuild joins the walk as a parentless root, so no edge says why it is in
+    // the plan: name the provider whose new sub-slot caused it (#713).
+    for (provider_cpv, consumer_cpv) in &abi_rebuilds {
+        let provider = pass
+            .entries
+            .iter()
+            .find(|e| merge_bound_cpv(e).as_deref() == Some(provider_cpv))
+            .map(|e| (e.category.clone(), e.package.clone()));
+        if let Some(provider) = provider {
+            for entry in &mut pass.entries {
+                if entry.required_by.is_empty()
+                    && merge_bound_cpv(entry).as_deref() == Some(consumer_cpv)
+                {
+                    entry.required_by.push(provider.clone());
+                }
+            }
+        }
+    }
     GraphResult {
         entries: pass.entries,
         backtrack_restarts,

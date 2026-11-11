@@ -103,6 +103,51 @@ fn holders_with_a_route_join_the_upgrade() {
     }
 }
 
+/// #713, charter property 5: a holder that joins the plan only because the provider
+/// moves names that provider as its parent, so the plan says why it is there.
+#[test]
+fn p713_co_upgraded_holders_name_the_provider_as_parent() {
+    let world = [
+        "dev-libs/p698rebuild",
+        "dev-libs/p698reinst",
+        "dev-libs/p698upg",
+    ];
+    let root = p698_root(&world);
+    let result = resolve_with(SolverKind::Portage, &root, &world);
+    let provider = ("dev-libs".to_string(), "p569prov".to_string());
+    for name in ["p698rebuild", "p698reinst", "p698upg"] {
+        let entry = result
+            .entries
+            .iter()
+            .find(|e| e.package == name)
+            .unwrap_or_else(|| panic!("{name} is in the plan"));
+        assert_eq!(entry.required_by, std::slice::from_ref(&provider), "{name}");
+    }
+}
+
+/// #713, charter property 5: a consumer rebuilt only because the provider's sub-slot changed
+/// names that provider as its parent (the walk queues such rebuilds as parentless roots).
+#[test]
+fn p713_slot_operator_rebuilds_name_the_provider_as_parent() {
+    let world = ["dev-libs/p715h1", "dev-libs/p715h2", "dev-libs/p715prov"];
+    let root = p715_root(&world);
+    let mut req = request_in(&root, &["dev-libs/p715prov"]);
+    req.selective = false;
+    req.config.complete_seed_atoms = world.iter().map(|w| (*w).to_string()).collect();
+    let result = active_resolver_for(SolverKind::Portage)
+        .resolve(&req)
+        .expect("the #715 request resolves");
+    let provider = ("dev-libs".to_string(), "p715prov".to_string());
+    for name in ["p715h1", "p715h2"] {
+        let entry = result
+            .entries
+            .iter()
+            .find(|e| e.package == name)
+            .unwrap_or_else(|| panic!("{name} is in the plan"));
+        assert_eq!(entry.required_by, std::slice::from_ref(&provider), "{name}");
+    }
+}
+
 /// One holder (`p573virt`, whose tree ebuild still pins `=5.42*`) has no route:
 /// the provider stays at 5.42 and the update is reported as skipped.
 #[test]

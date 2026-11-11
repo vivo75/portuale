@@ -18,6 +18,9 @@ pub(crate) struct HolderRouteArgs<'a> {
     pub(crate) with_bdeps: bool,
 }
 
+/// A holder that follows an upgrade: `(holder, provider)` as `(category, package)`.
+pub(crate) type Followers = ((String, String), (String, String));
+
 /// The version the installed holder `(category, package, version)` should move to so it can follow an
 /// upgrade of `provider` to the versions rendered in `new_provider`
 /// (`cat/pkg-ver:slot/sub::repo`): some visible candidate of the holder, in
@@ -81,12 +84,14 @@ pub(crate) fn holder_has_route(args: HolderRouteArgs<'_>) -> Option<String> {
 /// holders as extra roots (`=cat/pkg-ver` for those that must move to a newer
 /// version, a forced reinstall for those a rebuild mends). Providers with a
 /// holder that cannot follow (or whose pin is a USE dependency) stay withheld.
-/// `None` when nothing is withheld or nothing can follow.
+/// `None` when nothing is withheld or nothing can follow. Next to the request
+/// comes each `(holder, provider)` `(category, package)` pair, so the result of
+/// the second walk can name why a holder is in the plan.
 pub(crate) fn co_upgrade_request(
     ctx: &ResolveCtx<'_>,
     req: &ResolveRequest,
     first: &GraphResult,
-) -> Option<ResolveRequest> {
+) -> Option<(ResolveRequest, Vec<Followers>)> {
     // Without a world (no complete-graph seeds) nobody is protected and nobody
     // follows, as in the bridge.
     // `--backtrack=0` asks for no second walk.
@@ -105,7 +110,7 @@ pub(crate) fn co_upgrade_request(
     providers.dedup();
     let installed = all_installed_packages(ctx.root);
     let mut extra = req.clone();
-    let mut changed = false;
+    let mut followers: Vec<Followers> = Vec::new();
     for cp in providers {
         let rows: Vec<&SkippedUpdate> = first
             .skipped_updates
@@ -175,10 +180,10 @@ pub(crate) fn co_upgrade_request(
             } else {
                 extra.atoms.push(format!("={cat}/{pkg}-{target}"));
             }
-            changed = true;
+            followers.push(((cat.clone(), pkg.clone()), cp.clone()));
         }
     }
-    changed.then_some(extra)
+    (!followers.is_empty()).then_some((extra, followers))
 }
 
 /// Every non-blocker atom the dependency strings `texts` (flattened against
