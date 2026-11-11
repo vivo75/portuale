@@ -82,7 +82,14 @@ pub(super) fn resolve_in(root: &Path, atoms: &[&str]) -> GraphResult {
 /// required-set walk. The installed-consumer pins of the keeper, igw, cgp
 /// and triangle shapes act only here.
 pub(super) fn complete_request_in(root: &Path, atoms: &[&str]) -> ResolveRequest {
-    let first = resolve_in(root, atoms);
+    // Portage's first walk adds no installed-consumer pin: with no backtracking
+    // the upgrade stays in the plan the complete walk then starts from (#700).
+    let first = ResolveRequest {
+        backtrack_max: 0,
+        ..request_in(root, atoms)
+    }
+    .resolve()
+    .unwrap_or_else(|e| panic!("resolving {atoms:?} failed: {e}"));
     let merges: Vec<&GraphEntry> = first
         .entries
         .iter()

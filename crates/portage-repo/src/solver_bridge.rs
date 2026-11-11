@@ -5411,13 +5411,14 @@ fn holder_fix(
         &[1, 3, 4]
     };
     let mut fix = HolderFix::default();
-    // Only holders the world reaches matter, like the default solver's reverse
-    // scan; without a world (no seeds) there is nobody to protect.
-    if req.config.complete_seed_atoms.is_empty() {
-        return fix;
-    }
+    // Only holders the plan or the world reaches matter, like the default
+    // solver's reverse scan; with no world the plan's own dependencies seed it (#700).
     let mut seeds = req.config.complete_seed_atoms.clone();
-    seeds.extend(req.atoms.iter().cloned());
+    if seeds.is_empty() {
+        seeds = super::merge_bound_dep_atoms(entries);
+    } else {
+        seeds.extend(req.atoms.iter().cloned());
+    }
     seeds.sort();
     seeds.dedup();
     let reachable = crate::slot_operator::InstalledReachability::for_run(&req.root, req.with_bdeps)

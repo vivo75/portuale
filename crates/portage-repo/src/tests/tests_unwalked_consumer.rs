@@ -271,3 +271,28 @@ fn an_or_arm_the_installed_consumer_does_not_need_holds_nothing_back() {
         result.held_back_use
     );
 }
+
+#[test]
+fn p700_empty_world_consumer_reached_through_a_merge_bound_package() {
+    // #700, charter property 1. The #676 shape with an empty world: `p590vpull-2` names the
+    // installed `virtual/p590vvb-1` (`=p590vprov-5.42*` or `=5.38*`), which keeps
+    // `p590vprov-5.44` out of the plan even though no world atom reaches it.
+    let root = hermetic_root(&[]);
+    let result = resolve_with_world(root.path(), &["dev-libs/p590vpull"]);
+    assert!(matches!(
+        outcome_of(&result, "p590vpull"),
+        PretendOutcome::New { version } if version == "1"
+    ));
+    assert!(matches!(
+        outcome_of(&result, "p590vprov"),
+        PretendOutcome::AlreadyInstalled { version } if version == "5.42"
+    ));
+    assert!(
+        result
+            .skipped_updates
+            .iter()
+            .any(|r| r.package == "p590vprov" && r.consumer_cpv.starts_with("virtual/p590vvb-1")),
+        "{:?}",
+        result.skipped_updates
+    );
+}

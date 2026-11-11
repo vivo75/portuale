@@ -3,6 +3,25 @@
 use crate::resolve::feedback::*;
 use crate::resolve::{DepTree, reduced_dep_tree};
 
+/// The atoms the merge-bound entries' walk-chosen dependencies name, leaving out the packages
+/// the plan itself replaces: where the installed closure of a plan starts when no world does.
+pub(crate) fn merge_bound_dep_atoms(entries: &[GraphEntry]) -> Vec<String> {
+    let replaced: HashSet<(&str, &str)> = entries
+        .iter()
+        .filter(|e| merge_bound_cpv(e).is_some())
+        .map(|e| (e.category.as_str(), e.package.as_str()))
+        .collect();
+    entries
+        .iter()
+        .filter(|e| merge_bound_cpv(e).is_some())
+        .flat_map(|e| e.deps.iter())
+        // A `||` arm the walk did not take is no graph edge.
+        .filter(|d| d.alt.is_none() || d.walk_chosen)
+        .filter(|d| !replaced.contains(&(d.category.as_str(), d.package.as_str())))
+        .map(|d| d.atom.clone())
+        .collect()
+}
+
 /// The installed consumers a pass's complete graph can contain: the required
 /// sets' closure that does not run through a package the pass replaces, plus
 /// the installed packages the pass's merge-bound entries depend on.
@@ -15,25 +34,19 @@ pub(crate) fn live_reachable_consumers(
     ctx: &ResolveCtx<'_>,
     entries: &[GraphEntry],
 ) -> HashSet<(String, String)> {
-    if ctx.slot_op_reachable.is_empty() {
-        return HashSet::new();
-    }
     let replaced: HashSet<(String, String)> = entries
         .iter()
         .filter(|e| merge_bound_cpv(e).is_some())
         .map(|e| (e.category.clone(), e.package.clone()))
         .collect();
-    let mut seeds = ctx.slot_op_seeds.clone();
-    seeds.extend(
-        entries
-            .iter()
-            .filter(|e| merge_bound_cpv(e).is_some())
-            .flat_map(|e| e.deps.iter())
-            // A `||` arm the walk did not take is no graph edge.
-            .filter(|d| d.alt.is_none() || d.walk_chosen)
-            .filter(|d| !replaced.contains(&(d.category.clone(), d.package.clone())))
-            .map(|d| d.atom.clone()),
-    );
+    // With no complete seeds the closure starts from the merge-bound entries'
+    // own dependencies only (#700).
+    let mut seeds = if ctx.slot_op_reachable.is_empty() {
+        Vec::new()
+    } else {
+        ctx.slot_op_seeds.clone()
+    };
+    seeds.extend(merge_bound_dep_atoms(entries));
     seeds.sort();
     seeds.dedup();
     ctx.installed_graph

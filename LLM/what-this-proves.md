@@ -384,3 +384,12 @@ installed packages as they are: no holder is left without its dependency, and th
 follow, so nothing was wired. Live check: `pytests-contract-suite/test_emerge_pretend_contract.py -k test_702`; the
 pin goes red once resolvo plans an upgrade of an installed package. Source: the capture itself, Portage not
 consulted. Resolvo not upgrading installed packages is the engine-side gap the #211 pin docstring already mentions.
+
+#700 (2026-11-11): an installed consumer is protected also when the world is empty. On the scratch ROOT of the #676 pin with
+`world = []`, `emerge --pretend dev-libs/p590vpull` used to plan `U dev-libs/p590vprov-5.44` and `N p590vpull-2`, leaving the
+installed `virtual/p590vvb-1` (`=p590vprov-5.42*` or `=5.38*`) with nothing that satisfies it and no warning; it now plans
+`N p590vpull-1` only and prints the skip block naming `virtual/p590vvb-1`. `--solver=pubgrub` holds 5.44 back too and names the
+holder in the #703 NOTE; it also prints an `R p590vprov-5.42` row (#729). Live check:
+`pytests-contract-suite/test_emerge_pretend_contract.py -k test_700` and `cargo test --release -p portage-repo p700`; both
+solvers' pins and the Rust test fail on the previous commit (checked). The expectation rests on charter property 1; Portage was
+not consulted for this shape.
