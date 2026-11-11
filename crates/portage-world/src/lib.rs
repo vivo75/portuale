@@ -39,6 +39,37 @@ mod memo;
 mod order;
 mod reorder;
 mod sets;
+/// Test-only helpers: run [`analyse`] on the shared fixture config root with
+/// a private ROOT that holds the world file and the installed packages.
+#[cfg(test)]
+pub(crate) mod testkit {
+    use std::fs;
+    use std::path::Path;
+
+    use crate::{Options, World, analyse};
+
+    /// `@world` made of `world` atoms, with `installed` (`category/pf`, `SLOT`)
+    /// in the vdb, analysed against the fixture repositories. The ROOT lives in
+    /// a temporary directory; the fixtures are only read.
+    pub(crate) fn analyse_fixture(world: &[&str], installed: &[(&str, &str)]) -> World {
+        let root = tempfile::tempdir().expect("temporary root");
+        let portage = root.path().join("var/lib/portage");
+        fs::create_dir_all(&portage).expect("world dir");
+        fs::write(portage.join("world"), world.join("\n") + "\n").expect("world file");
+        for (cpf, slot) in installed {
+            let (category, _) = cpf.split_once('/').expect("category/pf");
+            let dir = root.path().join("var/db/pkg").join(cpf);
+            fs::create_dir_all(&dir).expect("vdb entry");
+            fs::write(dir.join("CATEGORY"), format!("{category}\n")).expect("CATEGORY");
+            fs::write(dir.join("SLOT"), format!("{slot}\n")).expect("SLOT");
+            fs::write(dir.join("EAPI"), "8\n").expect("EAPI");
+        }
+        let config_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let mut opts = Options::new(root.path().to_path_buf(), config_root);
+        opts.threads = 2;
+        analyse(&opts).expect("the fixture tree analyses")
+    }
+}
 
 pub use order::Order;
 pub use reorder::{Change, SlotSet};
@@ -783,5 +814,97 @@ mod tests {
     #[test]
     fn a_single_slot_is_left_alone() {
         assert_eq!(narrow(&[("0", 1, false)], &[]), ["0"]);
+    }
+
+    /// The slots `parent` (`cat/pkg:0`) depends on, as the first pass followed them.
+    fn edges_of(world: &World, parent: &str) -> BTreeSet<String> {
+        world
+            .edges
+            .get(parent)
+            .unwrap_or_else(|| panic!("{parent} was not followed"))
+            .clone()
+    }
+
+    fn set(slots: &[&str]) -> BTreeSet<String> {
+        slots.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// One parent per (form, own-flag state). Each asks for `w701flagon`
+    /// (flag ON) and `w701flagoff` (flag OFF) with the same relative `[...]`,
+    /// so which child it still reaches tells how the form was evaluated:
+    /// `[flag]` reaches the ON child, `[-flag]` the OFF one, a dropped
+    /// dependency both.
+    fn relative_use_edges(form: &str, state: &str) -> BTreeSet<String> {
+        let parent = format!("dev-libs/w701par-{form}-{state}");
+        let world = testkit::analyse_fixture(&[&parent], &[]);
+        edges_of(&world, &format!("{parent}:0"))
+    }
+
+    const ON: &str = "dev-libs/w701flagon:0";
+    const OFF: &str = "dev-libs/w701flagoff:0";
+
+    /// PMS `dependencies.tex`, "2-style and 4-style USE dependencies" (`[opt?]`) / charter property 1: `[flag?]` means `[flag]`
+    /// when the asking package has the flag on and no constraint when off.
+    #[test]
+    fn a_use_dep_if_on_follows_the_asking_package_flag() {
+        assert_eq!(relative_use_edges("ifp", "on"), set(&[ON]));
+        assert_eq!(relative_use_edges("ifp", "off"), set(&[ON, OFF]));
+    }
+
+    /// PMS `dependencies.tex`, "2-style and 4-style USE dependencies" (`[!opt?]`) / charter property 1: `[!flag?]` means
+    /// no constraint when the asker has the flag on and `[-flag]` when off.
+    #[test]
+    fn a_use_dep_if_off_follows_the_asking_package_flag() {
+        assert_eq!(relative_use_edges("ifn", "on"), set(&[ON, OFF]));
+        assert_eq!(relative_use_edges("ifn", "off"), set(&[OFF]));
+    }
+
+    /// PMS `dependencies.tex`, "2-style and 4-style USE dependencies" (`[opt=]`) / charter property 1: `[flag=]` copies the
+    /// asking package's flag state.
+    #[test]
+    fn a_use_dep_equal_copies_the_asking_package_flag() {
+        assert_eq!(relative_use_edges("eqp", "on"), set(&[ON]));
+        assert_eq!(relative_use_edges("eqp", "off"), set(&[OFF]));
+    }
+
+    /// PMS `dependencies.tex`, "2-style and 4-style USE dependencies" (`[!opt=]`) / charter property 1: `[!flag=]` is the
+    /// opposite of the asking package's flag state.
+    #[test]
+    fn a_use_dep_opposite_inverts_the_asking_package_flag() {
+        assert_eq!(relative_use_edges("eqn", "on"), set(&[OFF]));
+        assert_eq!(relative_use_edges("eqn", "off"), set(&[ON]));
+    }
+
+    /// Charter property 1: a `||` branch whose packages are installed is
+    /// taken before an earlier branch that is merely available.
+    #[test]
+    fn an_installed_branch_is_taken_first() {
+        let world = testkit::analyse_fixture(&["dev-libs/w701or"], &[("dev-libs/w701orb-1", "0")]);
+        assert_eq!(
+            edges_of(&world, "dev-libs/w701or:0"),
+            set(&["dev-libs/w701orb:0"])
+        );
+    }
+
+    /// Charter property 1: with no branch installed, the first visible
+    /// branch is taken.
+    #[test]
+    fn with_nothing_installed_the_first_visible_branch_is_taken() {
+        let world = testkit::analyse_fixture(&["dev-libs/w701or"], &[]);
+        assert_eq!(
+            edges_of(&world, "dev-libs/w701or:0"),
+            set(&["dev-libs/w701ora:0"])
+        );
+    }
+
+    /// Charter property 1: a first branch no visible ebuild satisfies
+    /// (keyworded `~amd64`) yields to the next one.
+    #[test]
+    fn a_masked_first_branch_yields_to_the_next() {
+        let world = testkit::analyse_fixture(&["dev-libs/w701orm"], &[]);
+        assert_eq!(
+            edges_of(&world, "dev-libs/w701orm:0"),
+            set(&["dev-libs/w701orb:0"])
+        );
     }
 }

@@ -184,3 +184,111 @@ pub fn reorder(category: &str, package: &str, atoms: &[&String], ctx: &Ctx<'_>) 
     }
     out.into_iter().map(|(set, _)| set).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::testkit::analyse_fixture;
+
+    /// The versions of slot 0 of `cp` in final order, as `version` (with a
+    /// trailing `*` when it satisfies every atom aimed at the slot).
+    fn order(world_atoms: &[&str], cp: &str) -> Vec<String> {
+        let world = analyse_fixture(world_atoms, &[]);
+        let slot = world
+            .slots
+            .iter()
+            .find(|s| s.cp == cp && s.slot == "0")
+            .unwrap_or_else(|| panic!("{cp}:0 is not in the world"));
+        slot.versions
+            .iter()
+            .map(|(c, _, ok)| format!("{}{}", c.version, if *ok { "*" } else { "" }))
+            .collect()
+    }
+
+    /// PMS `names.tex`, "Version comparison" / charter property 3: the newest version
+    /// (a revision after its base) leads the slot.
+    #[test]
+    fn the_highest_version_leads_its_slot() {
+        assert_eq!(
+            order(&["dev-libs/w701ver"], "dev-libs/w701ver"),
+            ["2.0*", "1.1-r1*", "1.1*", "1.0*"]
+        );
+    }
+
+    /// Charter property 3: with equal versions the repository of higher
+    /// priority comes first (overlay 10 before testrepo -1000).
+    #[test]
+    fn equal_versions_follow_repo_priority() {
+        let world = analyse_fixture(&["dev-libs/overlaytiepkg"], &[]);
+        let slot = world
+            .slots
+            .iter()
+            .find(|s| s.cp == "dev-libs/overlaytiepkg")
+            .expect("overlaytiepkg in the world");
+        let repos: Vec<&str> = slot
+            .versions
+            .iter()
+            .map(|(c, _, _)| c.repo_name.as_str())
+            .collect();
+        assert_eq!(repos, ["overlay", "testrepo"]);
+        assert_eq!(slot.chosen().expect("chosen").repo_name, "overlay");
+    }
+
+    /// Charter property 3: the version outranks the repository, so 2.0 in
+    /// the lower-priority repo leads 1.0 in the higher-priority one.
+    #[test]
+    fn a_lower_priority_repo_wins_with_a_higher_version() {
+        let world = analyse_fixture(&["dev-libs/w701lowhi"], &[]);
+        let slot = world
+            .slots
+            .iter()
+            .find(|s| s.cp == "dev-libs/w701lowhi")
+            .expect("w701lowhi in the world");
+        let got: Vec<(&str, &str)> = slot
+            .versions
+            .iter()
+            .map(|(c, _, _)| (c.version.as_str(), c.repo_name.as_str()))
+            .collect();
+        assert_eq!(got, [("2.0", "testrepo"), ("1.0", "overlay")]);
+    }
+
+    /// PMS `dependencies.tex`, "Operators" (`=`): exact version and revision, so `1.1-r1` does not
+    /// match `=...-1.1`; the one match leads the slot.
+    #[test]
+    fn an_equal_atom_keeps_one_version() {
+        assert_eq!(
+            order(&["=dev-libs/w701ver-1.1"], "dev-libs/w701ver"),
+            ["1.1*", "2.0", "1.1-r1", "1.0"]
+        );
+    }
+
+    /// PMS `dependencies.tex`, "Operators" (`<`): strictly older only; the newer ones stay behind.
+    #[test]
+    fn a_less_than_atom_drops_the_newer_versions() {
+        assert_eq!(
+            order(&["<dev-libs/w701ver-1.1"], "dev-libs/w701ver"),
+            ["1.0*", "2.0", "1.1-r1", "1.1"]
+        );
+    }
+
+    /// PMS `dependencies.tex`, "Operators" (`~`): every revision of the named version, none of the others.
+    #[test]
+    fn a_tilde_atom_keeps_every_revision_of_one_version() {
+        assert_eq!(
+            order(&["~dev-libs/w701ver-1.1"], "dev-libs/w701ver"),
+            ["1.1-r1*", "1.1*", "2.0", "1.0"]
+        );
+    }
+
+    /// Charter property 1: a version must satisfy every atom aimed at the
+    /// slot, so two atoms keep only their intersection.
+    #[test]
+    fn two_atoms_on_one_slot_keep_their_intersection() {
+        assert_eq!(
+            order(
+                &[">=dev-libs/w701ver-1.1", "<dev-libs/w701ver-2.0"],
+                "dev-libs/w701ver"
+            ),
+            ["1.1-r1*", "1.1*", "2.0", "1.0"]
+        );
+    }
+}
