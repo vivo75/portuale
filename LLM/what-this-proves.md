@@ -334,3 +334,11 @@ order). The expected values come from PMS `dependencies.tex` and `names.tex` and
 Portage. The unique, thread-count and unneeded-slot rules are reachable only through the library (#706), and
 the set tests use their own `sets.conf`, so they show the set engine works, not that Portage's shipped
 definitions are right.
+
+#704 (2026-11-11, decision): the co-upgrade's second walk stays as it is. Live check, in the bed
+container: `emerge -pv dev-lang/perl` takes 0.23 s before #698 and 0.53 s after, `emerge -pv app-text/texlive`
+0.92 s and 1.89 s with the same 146 rows, a full `@world` update 0.85 s and 0.87 s, and five probes without
+perl 0.99 to 1.01 times. The cost is one extra resolve, paid only when an upgrade is withheld and every holder
+can follow it; the 18 holders of perl pins that the world does not reach on the measuring host are left
+unprotected, as before #698. The numbers and the rows they come from are in the `#704` entry of
+`LLM/backlog-tasks.md`.
