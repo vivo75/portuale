@@ -187,7 +187,7 @@ pub fn reorder(category: &str, package: &str, atoms: &[&String], ctx: &Ctx<'_>) 
 
 #[cfg(test)]
 mod tests {
-    use crate::testkit::analyse_fixture;
+    use crate::testkit::{analyse_fixture, analyse_fixture_with};
 
     /// The versions of slot 0 of `cp` in final order, as `version` (with a
     /// trailing `*` when it satisfies every atom aimed at the slot).
@@ -290,5 +290,114 @@ mod tests {
             ),
             ["1.1-r1*", "1.1*", "2.0", "1.0"]
         );
+    }
+
+    /// `(slot, invalid, unneeded, satisfying)` of every slot of `cp`.
+    fn slot_flags(world: &crate::World, cp: &str) -> Vec<(String, bool, bool, usize)> {
+        world
+            .slots
+            .iter()
+            .filter(|s| s.cp == cp)
+            .map(|s| (s.slot.clone(), s.invalid, s.unneeded, s.satisfying))
+            .collect()
+    }
+
+    /// Charter property 1: a slot no visible version fills (slot 1 is `~amd64` only) is not a
+    /// failure when another slot satisfies the same atom; it is "unneeded", not invalid.
+    #[test]
+    fn a_slot_another_slot_serves_is_unneeded() {
+        let world = analyse_fixture(&["dev-libs/w701two"], &[]);
+        assert_eq!(
+            slot_flags(&world, "dev-libs/w701two"),
+            [
+                ("0".to_string(), false, false, 1),
+                ("1".to_string(), false, true, 0)
+            ]
+        );
+    }
+
+    /// Charter property 1: `--unique` asks for exactly one satisfying version per slot, so two
+    /// make the slot invalid.
+    #[test]
+    fn unique_marks_a_slot_with_two_satisfying_versions() {
+        let world = analyse_fixture_with(&["dev-libs/w701dup"], &[], |o| o.unique = true);
+        assert_eq!(
+            slot_flags(&world, "dev-libs/w701dup"),
+            [("0".to_string(), true, false, 2)]
+        );
+    }
+
+    /// Charter property 1: without `--unique` several satisfying versions are fine, the first leads.
+    #[test]
+    fn without_unique_two_satisfying_versions_are_fine() {
+        let world = analyse_fixture(&["dev-libs/w701dup"], &[]);
+        assert_eq!(
+            slot_flags(&world, "dev-libs/w701dup"),
+            [("0".to_string(), false, false, 2)]
+        );
+        let slot = &world
+            .slots
+            .iter()
+            .find(|s| s.cp == "dev-libs/w701dup")
+            .unwrap();
+        assert_eq!(slot.chosen().expect("chosen").version, "1.1");
+    }
+
+    /// Every fact of `world` as text, in the order it is stored (`World` has no `Debug`).
+    fn render(world: &crate::World) -> String {
+        let mut out = format!("atoms {}\n", world.atoms);
+        for s in &world.slots {
+            out += &format!(
+                "{} invalid={} unneeded={} installed={:?} satisfying={} atoms={:?}\n",
+                s.node(),
+                s.invalid,
+                s.unneeded,
+                s.installed,
+                s.satisfying,
+                s.atoms
+            );
+            for (c, visible, ok) in &s.versions {
+                out += &format!(
+                    "  {} {} visible={visible} ok={ok}\n",
+                    c.version, c.repo_name
+                );
+            }
+        }
+        out += &format!(
+            "unmatched {:?}\nedges {:?}\nreached {:?}\n",
+            world.unmatched, world.edges, world.reached
+        );
+        out
+    }
+
+    /// Charter property 3 (the same input gives the same plan): the analysis result does not depend
+    /// on how many threads computed it.
+    #[test]
+    fn the_output_is_the_same_for_any_thread_count() {
+        let atoms = [
+            "dev-libs/newpkg",
+            "dev-libs/withdeps",
+            "dev-libs/w701ver",
+            "dev-libs/w701two",
+            "dev-libs/w701dup",
+            "dev-libs/w701or",
+            "dev-libs/overlaytiepkg",
+        ];
+        let rendered: Vec<String> = [1, 2, 8]
+            .into_iter()
+            .map(|n| render(&analyse_fixture_with(&atoms, &[], |o| o.threads = n)))
+            .collect();
+        assert!(
+            rendered[0].contains("dev-libs/w701ver:0"),
+            "not vacuous: {}",
+            rendered[0]
+        );
+        assert!(
+            rendered[0].lines().count() > 20,
+            "not vacuous: {}",
+            rendered[0]
+        );
+        assert_eq!(rendered[0], rendered[1]);
+        assert_eq!(rendered[0], rendered[2]);
     }
 }

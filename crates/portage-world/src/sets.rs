@@ -608,4 +608,168 @@ mod tests {
         assert!(matches!(defs["pr"], SetDef::PreservedRebuild));
         assert!(matches!(defs["sec"], SetDef::Unsupported(_)));
     }
+
+    /// The five sets, written the way Portage's shipped `portage.conf` defines them (the
+    /// host file is read first, but these later definitions replace it).
+    const SETS_CONF: &str = "[live-rebuild]\nclass = portage.sets.dbapi.VariableSet\n\
+        variable = PROPERTIES\nincludes = live\n\
+        [changed-subslot]\nclass = portage.sets.dbapi.SubslotChangedSet\n\
+        [unavailable]\nclass = portage.sets.dbapi.UnavailableSet\n\
+        [golang-rebuild]\nclass = portage.sets.dbapi.VariableSet\nvariable = BDEPEND\n\
+        includes = dev-lang/go\nexcludes_output = dev-lang/go dev-lang/go-bootstrap\n\
+        [rust-rebuild]\nclass = portage.sets.dbapi.VariableSet\nvariable = BDEPEND\n\
+        includes = dev-lang/rust dev-lang/rust-bin\n\
+        excludes_output = dev-lang/rust dev-lang/rust-bin\n";
+
+    /// `(category/pf, SLOT, extra vdb files)` of one installed package.
+    type Installed<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+    /// `set` expanded on a private ROOT that holds only `installed`
+    /// (`category/pf`, `SLOT`, extra vdb files) and the fixture repository,
+    /// with the test's own `sets.conf`. Nothing is written to the fixtures.
+    fn expand(set: &str, installed: &[Installed]) -> Vec<String> {
+        let dir = tempfile::tempdir().expect("temporary root");
+        let root = dir.path();
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures")
+            .canonicalize()
+            .expect("fixtures");
+        let etc = root.join("etc/portage");
+        std::fs::create_dir_all(etc.join("repos.conf")).expect("repos.conf dir");
+        std::fs::write(
+            etc.join("repos.conf/repos.conf"),
+            format!(
+                "[DEFAULT]\nmain-repo = testrepo\n[testrepo]\nlocation = {}\n\
+                 [overlay]\nlocation = {}\npriority = 10\n",
+                fixtures.join("repo").display(),
+                fixtures.join("overlay").display()
+            ),
+        )
+        .expect("repos.conf");
+        std::os::unix::fs::symlink(
+            fixtures.join("repo/profiles/default"),
+            etc.join("make.profile"),
+        )
+        .expect("make.profile");
+        std::fs::write(etc.join("sets.conf"), SETS_CONF).expect("sets.conf");
+        for (cpf, slot, files) in installed {
+            let (category, _) = cpf.split_once('/').expect("category/pf");
+            let entry = root.join("var/db/pkg").join(cpf);
+            std::fs::create_dir_all(&entry).expect("vdb entry");
+            for (name, text) in [("CATEGORY", category), ("SLOT", slot), ("EAPI", "8")]
+                .iter()
+                .chain(files.iter())
+            {
+                std::fs::write(entry.join(name), format!("{text}\n")).expect("vdb file");
+            }
+        }
+        let repos = portage_repo::find_repos_quiet(root).expect("repos");
+        let config = crate::load_config(root, root, &repos).expect("config");
+        let mut out = BTreeSet::new();
+        SetResolver::new(root, root, &repos, &config).expand(set, &mut out);
+        out.into_iter().collect()
+    }
+
+    /// Devmanual "ebuild-writing/variables" (`PROPERTIES`): `live` marks a package built from a
+    /// moving upstream; `@live-rebuild` lists the installed ones. Include, exclude, near miss.
+    #[test]
+    fn live_rebuild_lists_exactly_these_packages() {
+        let got = expand(
+            "live-rebuild",
+            &[
+                ("dev-libs/w701live-9999", "0", &[("PROPERTIES", "live")]),
+                (
+                    "dev-libs/w701notlive-1",
+                    "0",
+                    &[("PROPERTIES", "interactive")],
+                ),
+                (
+                    "dev-libs/w701livelike-1",
+                    "0",
+                    &[("PROPERTIES", "live-ish")],
+                ),
+            ],
+        );
+        assert_eq!(got, ["dev-libs/w701live:0"]);
+    }
+
+    /// Charter property 2 (installed software follows its toolchain): `@rust-rebuild` lists
+    /// installed packages with a `dev-lang/rust` build dependency, never rust itself, never an
+    /// inactive `USE` branch.
+    #[test]
+    fn rust_rebuild_lists_exactly_these_packages() {
+        let got = expand(
+            "rust-rebuild",
+            &[
+                (
+                    "dev-libs/w701userust-1",
+                    "0",
+                    &[("BDEPEND", "dev-lang/rust")],
+                ),
+                ("dev-lang/rust-bin-1", "0", &[("BDEPEND", "dev-lang/rust")]),
+                (
+                    "dev-libs/w701maybe-1",
+                    "0",
+                    &[("BDEPEND", "rust? ( dev-lang/rust )"), ("USE", "doc")],
+                ),
+            ],
+        );
+        assert_eq!(got, ["dev-libs/w701userust:0"]);
+    }
+
+    /// Same rule for `@golang-rebuild` (`dev-lang/go`, not `dev-lang/go-bootstrap` itself, not
+    /// a package that only needs another Go tool).
+    #[test]
+    fn golang_rebuild_lists_exactly_these_packages() {
+        let got = expand(
+            "golang-rebuild",
+            &[
+                ("dev-libs/w701usego-1", "0", &[("BDEPEND", "dev-lang/go")]),
+                (
+                    "dev-lang/go-bootstrap-1",
+                    "0",
+                    &[("BDEPEND", "dev-lang/go")],
+                ),
+                (
+                    "dev-libs/w701gotool-1",
+                    "0",
+                    &[("BDEPEND", "dev-go/w701tool")],
+                ),
+            ],
+        );
+        assert_eq!(got, ["dev-libs/w701usego:0"]);
+    }
+
+    /// PMS `ebuild-vars.tex`, "SLOT": a changed sub-slot is a rebuild signal. `@changed-subslot`
+    /// lists the installed slot whose best visible ebuild has another sub-slot; an equal
+    /// sub-slot is excluded, a masked newer ebuild is a near miss (not visible, so not a change).
+    #[test]
+    fn changed_subslot_lists_exactly_these_packages() {
+        let got = expand(
+            "changed-subslot",
+            &[
+                ("dev-libs/w701subup-1", "0/1", &[]),
+                ("dev-libs/w701subsame-1", "0/1", &[]),
+                ("dev-libs/w701submask-1", "0/1", &[]),
+            ],
+        );
+        assert_eq!(got, ["dev-libs/w701subup:0"]);
+    }
+
+    /// Charter property 1: `@unavailable` lists installed slots no visible ebuild offers
+    /// (no ebuild at all, or only a masked one); an older installed version of a visible
+    /// package is a near miss.
+    #[test]
+    fn unavailable_lists_exactly_these_packages() {
+        let got = expand(
+            "unavailable",
+            &[
+                ("dev-libs/w701gone-1", "0", &[]),
+                ("dev-libs/w701submask-1", "0/1", &[]),
+                ("dev-libs/w701subsame-1", "0/1", &[]),
+                ("dev-libs/w701subup-1", "0/1", &[]),
+            ],
+        );
+        assert_eq!(got, ["dev-libs/w701gone:0", "dev-libs/w701submask:0"]);
+    }
 }

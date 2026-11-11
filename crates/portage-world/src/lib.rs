@@ -52,6 +52,15 @@ pub(crate) mod testkit {
     /// in the vdb, analysed against the fixture repositories. The ROOT lives in
     /// a temporary directory; the fixtures are only read.
     pub(crate) fn analyse_fixture(world: &[&str], installed: &[(&str, &str)]) -> World {
+        analyse_fixture_with(world, installed, |_| {})
+    }
+
+    /// [`analyse_fixture`] with `tune` applied to the [`Options`] first.
+    pub(crate) fn analyse_fixture_with(
+        world: &[&str],
+        installed: &[(&str, &str)],
+        tune: impl FnOnce(&mut Options),
+    ) -> World {
         let root = tempfile::tempdir().expect("temporary root");
         let portage = root.path().join("var/lib/portage");
         fs::create_dir_all(&portage).expect("world dir");
@@ -67,6 +76,7 @@ pub(crate) mod testkit {
         let config_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
         let mut opts = Options::new(root.path().to_path_buf(), config_root);
         opts.threads = 2;
+        tune(&mut opts);
         analyse(&opts).expect("the fixture tree analyses")
     }
 }
