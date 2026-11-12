@@ -252,3 +252,7 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 ## fn bridge_entry_for
 
 #733: an entry of a kept installed package that `KeptInstalled::expands` does not expand has empty `deps`. The edges were the only way `--tree` could nest a row under a hidden installed leaf (a PDEPEND/RDEPEND cycle such as `dev-build/ninja` and `app-alternatives/ninja`).
+
+## fn bridge_dep_input
+
+#716: `GraphEntry::dep_input` feeds only the `--json` fields `sub_slot`, `dependencies`, `required_use`, `iuse`, `use` (`pretend/json.rs`, `dep_input_fields`). The bridge left it `None`; the health checker needs it to evaluate a planned package alone.

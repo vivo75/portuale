@@ -1324,7 +1324,7 @@ fn bridge_entry_for(
     collect_bridge_blockers(&record, &use_set, version, pending_blockers, seen_blockers);
     Some(GraphEntry {
         discovery: 0,
-        dep_input: None,
+        dep_input: Some(bridge_dep_input(&record, &use_set)),
         category: record.category.clone(),
         package: record.package.clone(),
         outcome,
@@ -1357,6 +1357,27 @@ fn bridge_entry_for(
         build_id: record.binary.as_ref().and_then(|b| b.build_id.clone()),
         build_time: record.binary.as_ref().and_then(|b| b.build_time),
         deps,
+    })
+}
+
+/// What `--json` reports of one pick so a plan can be checked on its own: the
+/// raw dependency strings, `IUSE` and `REQUIRED_USE` the solver read, and the
+/// USE they were evaluated against (#716).
+fn bridge_dep_input(
+    record: &LoadedVersion,
+    use_set: &HashSet<String>,
+) -> std::sync::Arc<super::DepInput> {
+    let mut metadata: HashMap<String, String> =
+        ["DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND"]
+            .into_iter()
+            .zip(record.raw_deps.iter())
+            .map(|(key, text)| (key.to_string(), text.clone()))
+            .collect();
+    metadata.insert("IUSE".to_string(), record.iuse.clone());
+    metadata.insert("REQUIRED_USE".to_string(), record.required_use.clone());
+    std::sync::Arc::new(super::DepInput {
+        metadata: std::sync::Arc::new(metadata),
+        use_flags: use_set.clone(),
     })
 }
 
@@ -6538,6 +6559,24 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(body, "added%* keep -change* (-drop%)");
+    }
+
+    /// #716: a merge-bound pubgrub entry carries what `--json` needs to check the plan on
+    /// its own: the dependency strings, `IUSE` and the USE they were evaluated against.
+    #[test]
+    fn p716_merge_bound_entry_carries_its_dep_input() {
+        let mut req = fixture_request(&["dev-libs/upgradeusepkg"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        req.update = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("upgradeusepkg resolves");
+        let input = result.entries[0]
+            .dep_input
+            .as_ref()
+            .expect("the entry has a dep input");
+        assert_eq!(input.metadata["IUSE"], "+keep -change +added");
+        assert!(input.use_flags.contains("added") && !input.use_flags.contains("change"));
     }
 
     /// The bridge reports the unbreakable build-time cycle through the walk's own
