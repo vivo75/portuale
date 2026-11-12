@@ -97,7 +97,7 @@ fn plan_json(world: &World, rows: &[&SlotSet], root: &Path) -> String {
         })
         .collect();
     format!(
-        "{{\"entries\":[{}],\"kept\":[{}],\"aborted\":null}}",
+        "{{\"entries\":[{}],\"kept\":[{}],\"request\":[\"@world\"],\"aborted\":null}}",
         entries.join(","),
         kept.join(",")
     )
