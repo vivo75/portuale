@@ -80,3 +80,37 @@ fn list_candidates_keeps_unsupported_eapi_ebuilds_as_masked() {
     assert!(candidates.is_empty());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// `unreadable_ebuilds` lists a supported-EAPI ebuild with no metadata and
+/// neither an unsupported-EAPI one (already a masked candidate) nor one the
+/// cache can read. Source: PMS, metadata cache (an entry may be missing).
+#[test]
+fn unreadable_ebuilds_lists_only_what_list_candidates_loses() {
+    let base = TempDir::new("portage-repo-692-unreadable");
+    let repo = base.join("repo");
+    let dir = repo.join("app-misc/pkg");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pkg-1.ebuild"), "EAPI=8\nSLOT=\"0\"\n").unwrap();
+    std::fs::write(dir.join("pkg-2.ebuild"), "EAPI=99\nSLOT=\"0\"\n").unwrap();
+    std::fs::write(dir.join("pkg-bar-3.ebuild"), "EAPI=8\n").unwrap();
+    let repos = vec![RepoConfig {
+        name: "t692".to_string(),
+        location: repo,
+        priority: 50,
+        is_main: false,
+        masters: vec![],
+        profile_formats: vec![],
+        cache_formats: vec![],
+        aliases: vec![],
+        sync_type: None,
+        sync_uri: None,
+        volatile: false,
+        module_specific_options: vec![],
+    }];
+    assert_eq!(
+        unreadable_ebuilds(&repos, "app-misc", "pkg"),
+        ["app-misc/pkg-1"]
+    );
+    assert!(unreadable_ebuilds(&repos, "app-misc", "absent").is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}

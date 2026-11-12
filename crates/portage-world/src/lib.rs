@@ -25,7 +25,8 @@
 //!
 //! Known cuts: a repository without `metadata/md5-cache` is read through the
 //! aux-metadata provider the caller registers (`portage_repo::register_aux_metadata_provider`);
-//! an ebuild the provider cannot read contributes nothing; virtuals are ordinary packages; a USE-dependency flag the
+//! an ebuild the provider cannot read is no candidate and is listed in
+//! `World::unreadable`; virtuals are ordinary packages; a USE-dependency flag the
 //! candidate does not declare counts as declared when it is enabled, so an
 //! implicit-IUSE flag that is off is judged undeclared.
 
@@ -427,9 +428,30 @@ pub struct World {
     /// actually needs. An atom without a slot aims at every slot of its
     /// package, so a [`SlotSet`] alone does not tell.
     pub reached: BTreeSet<String>,
+    /// `cat/pkg-ver` of the ebuilds of every reached package whose metadata
+    /// could not be read: they are no candidates, so their dependencies
+    /// are missing from the walk. Sorted.
+    pub unreadable: Vec<String>,
 }
 
 impl World {
+    /// The unreadable ebuilds of the package `atom` names.
+    #[must_use]
+    pub fn unreadable_for(&self, atom: &str) -> Vec<&str> {
+        let Some(a) = portage_dep::parse_atom(atom) else {
+            return Vec::new();
+        };
+        let prefix = format!("{}/{}-", a.category, a.package);
+        self.unreadable
+            .iter()
+            .map(String::as_str)
+            .filter(|u| {
+                u.strip_prefix(&prefix)
+                    .is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+            })
+            .collect()
+    }
+
     /// Slots no visible version satisfies the requesters of.
     pub fn invalid(&self) -> impl Iterator<Item = &SlotSet> {
         self.slots.iter().filter(|s| s.invalid)
@@ -512,6 +534,7 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         }
     }
     let jobs: Vec<_> = by_cp.into_iter().collect();
+    let unreadable = unreadable_of(&jobs, &repos, opts.threads);
     let ctx = reorder::Ctx {
         requesters: &requesters,
         repos: &repos,
@@ -556,7 +579,23 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         edges,
         edge_kinds,
         reached,
+        unreadable,
     })
+}
+
+/// The unreadable ebuilds of every reached package, sorted and unique.
+fn unreadable_of<T: Sync>(
+    jobs: &[((String, String), T)],
+    repos: &[RepoConfig],
+    threads: usize,
+) -> Vec<String> {
+    let found = parallel_map(jobs, threads, |((cat, pkg), _)| {
+        portage_repo::unreadable_ebuilds(repos, cat, pkg)
+    });
+    let mut all: Vec<String> = found.into_iter().flatten().collect();
+    all.sort();
+    all.dedup();
+    all
 }
 
 /// index; results keep the order of `items`.
@@ -1014,5 +1053,39 @@ mod tests {
             edges_of(&world, "dev-libs/w701orm:0"),
             set(&["dev-libs/w701orb:0"])
         );
+    }
+
+    /// Charter properties 1 and 5 (PMS, metadata cache: an entry may be
+    /// missing): an ebuild whose metadata cannot be read is reported, not
+    /// taken for a missing package.
+    #[test]
+    fn an_unreadable_ebuild_is_reported() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status()
+            .expect("cp runs");
+        assert!(copied.success());
+        let dir = tree.path().join("repo/dev-libs/w692unread");
+        std::fs::create_dir_all(&dir).expect("package dir");
+        std::fs::write(
+            dir.join("w692unread-1.ebuild"),
+            "EAPI=8\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\n",
+        )
+        .expect("ebuild without a cache entry");
+        for threads in [1, 4] {
+            let world = testkit::analyse_fixture_with(&["dev-libs/w692unread"], &[], |o| {
+                o.config_root = tree.path().to_path_buf();
+                o.threads = threads;
+            });
+            assert_eq!(world.unreadable, ["dev-libs/w692unread-1"]);
+            assert_eq!(
+                world.unreadable_for("dev-libs/w692unread"),
+                ["dev-libs/w692unread-1"]
+            );
+        }
     }
 }

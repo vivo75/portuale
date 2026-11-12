@@ -127,6 +127,17 @@ const OPTIONS: &[Opt] = &[
         missing: "",
         help: "list the @world slots no visible ebuild satisfies (exit 1 if any)",
     },
+    // Portuale-only: with `--check-world`, one JSON finding per line.
+    Opt {
+        id: "json",
+        long: "--json",
+        alias: None,
+        short: None,
+        kind: Kind::Flag,
+        choices: &[],
+        missing: "",
+        help: "with --check-world: print one JSON object per finding, then a summary object",
+    },
     // Portuale-only: what `-uDNp @world` would install, from `portage-world`
     // (see `plan_world`); `--sort` orders its rows.
     Opt {
@@ -1430,6 +1441,10 @@ pub fn run(args: &[String]) -> ExitCode {
     match command().try_get_matches_from(argv) {
         Ok(matches) if matches.get_flag("check_world") => crate::check_world::run(&matches),
         Ok(matches) if matches.get_flag("plan_world") => crate::plan_world::run(&matches),
+        Ok(matches) if matches.get_flag("json") => {
+            eprintln!("mrg: --json needs --check-world");
+            ExitCode::from(2)
+        }
         Ok(matches)
             if matches.contains_id("sort") && matches.get_one::<String>("sort").is_some() =>
         {

@@ -61,7 +61,9 @@ applet also runs. So resolution, merge order and display are shared with
 - `--check-world` lists the `@world` slots no visible ebuild satisfies and
   the atoms no ebuild matches (exit 1 if there are any). It uses the
   `portage-world` crate, not the resolver, so it is fast (about 0.4 s) and
-  knows nothing of blockers or backtracking.
+  knows nothing of blockers or backtracking. An ebuild whose metadata cannot be
+  read is listed apart (`UNREADABLE`) and also exits 1. `--json` prints one
+  health-checker finding per line, then a summary object.
 - `--plan-world [--sort alpha|depend|resolver]` lists what updating `@world`
   would install, from the same crate; `resolver` orders the rows as
   `emerge --pretend` would (it runs it, about 20 s), the other two do not.

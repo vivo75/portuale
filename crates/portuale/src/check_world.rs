@@ -5,15 +5,17 @@
 //! must be able to keep its dependencies; a world nothing can satisfy is a
 //! plan that fails, or a wrong one). The calculation is `portage-world`; it
 //! knows nothing of blockers, `REQUIRED_USE` or backtracking, so a clean
-//! report is not a promise that `emerge` succeeds.
+//! report is not a promise that `emerge` succeeds. An ebuild whose metadata
+//! cannot be read is reported apart (`UNREADABLE`) and fails the check.
 
 use clap::ArgMatches;
-use portage_world::Options;
+use portage_world::{Options, World};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-/// Prints the invalid slots and returns 1 if there are any, 0 if not, 2 if
-/// the repositories or the configuration cannot be read.
+/// Prints the findings (text, or JSON lines with `--json`) and returns 1 if
+/// there are unsatisfiable slots or ebuilds not read, 0 if not, 2 if the
+/// repositories or the configuration cannot be read.
 pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
     let path = |id: &str, fallback: PathBuf| {
         matches
@@ -57,32 +59,189 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut invalid = 0;
-    for slot in world.invalid() {
-        invalid += 1;
-        println!("INVALID {}:{}", slot.cp, slot.slot);
-        for (atom, by) in &slot.atoms {
-            println!("    wants {atom}  <- {}", by.join(", "));
+    let findings = findings(&world, future.on("check-world-unneeded"));
+    let unsatisfiable = findings.iter().filter(|f| f.is_unsatisfiable()).count();
+    let not_read = world.unreadable.len();
+    if matches.get_flag("json") {
+        for line in findings.iter().flat_map(Finding::json_lines) {
+            println!("{line}");
         }
-    }
-    if future.on("check-world-unneeded") {
-        for slot in world.slots.iter().filter(|s| s.unneeded) {
-            println!(
-                "UNNEEDED {}:{}  (another slot serves its requesters)",
-                slot.cp, slot.slot
-            );
+        println!(
+            "{{\"atoms\":{},\"slots\":{},\"unsatisfiable\":{unsatisfiable},\"not_read\":{not_read}}}",
+            world.atoms,
+            world.slots.len()
+        );
+    } else {
+        for line in findings.iter().flat_map(Finding::text_lines) {
+            println!("{line}");
         }
+        let unread = if not_read > 0 {
+            format!(", {not_read} not read")
+        } else {
+            String::new()
+        };
+        println!(
+            "check-world: {} atoms, {} package slots, {unsatisfiable} unsatisfiable{unread}",
+            world.atoms,
+            world.slots.len()
+        );
     }
-    for (atom, by) in &world.unmatched {
-        invalid += 1;
-        println!("NO MATCH {atom}  <- {}", by.join(", "));
+    ExitCode::from(u8::from(unsatisfiable > 0 || not_read > 0))
+}
+
+/// One thing the check found. The text and the JSON form are both rendered
+/// from the list of these, so they cannot disagree.
+enum Finding {
+    /// A slot no visible version satisfies: `(atom, who asked)` per atom.
+    Invalid {
+        slot: String,
+        atoms: Vec<(String, Vec<String>)>,
+    },
+    /// An atom no ebuild matches; `unread` are the package's ebuilds whose
+    /// metadata could not be read.
+    NoMatch {
+        atom: String,
+        by: Vec<String>,
+        unread: Vec<String>,
+    },
+    Unneeded {
+        slot: String,
+    },
+    Unreadable {
+        ebuild: String,
+    },
+}
+
+/// Every finding, in the order the text prints them.
+fn findings(world: &World, unneeded: bool) -> Vec<Finding> {
+    let mut out: Vec<Finding> = world
+        .invalid()
+        .map(|slot| Finding::Invalid {
+            slot: format!("{}:{}", slot.cp, slot.slot),
+            atoms: slot.atoms.clone(),
+        })
+        .collect();
+    if unneeded {
+        out.extend(
+            world
+                .slots
+                .iter()
+                .filter(|s| s.unneeded)
+                .map(|s| Finding::Unneeded {
+                    slot: format!("{}:{}", s.cp, s.slot),
+                }),
+        );
     }
-    println!(
-        "check-world: {} atoms, {} package slots, {invalid} unsatisfiable",
-        world.atoms,
-        world.slots.len()
+    out.extend(world.unmatched.iter().map(|(atom, by)| {
+        Finding::NoMatch {
+            atom: atom.clone(),
+            by: by.clone(),
+            unread: world
+                .unreadable_for(atom)
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        }
+    }));
+    out.extend(
+        world
+            .unreadable
+            .iter()
+            .map(|e| Finding::Unreadable { ebuild: e.clone() }),
     );
-    ExitCode::from(u8::from(invalid > 0))
+    out
+}
+
+impl Finding {
+    /// Counts in the "unsatisfiable" total of the summary.
+    fn is_unsatisfiable(&self) -> bool {
+        matches!(self, Finding::Invalid { .. } | Finding::NoMatch { .. })
+    }
+
+    fn text_lines(&self) -> Vec<String> {
+        match self {
+            Finding::Invalid { slot, atoms } => {
+                let mut lines = vec![format!("INVALID {slot}")];
+                lines.extend(
+                    atoms
+                        .iter()
+                        .map(|(atom, by)| format!("    wants {atom}  <- {}", by.join(", "))),
+                );
+                lines
+            }
+            Finding::NoMatch { atom, by, unread } => {
+                let note = if unread.is_empty() {
+                    String::new()
+                } else {
+                    format!("  (ebuilds not read: {})", unread.join(", "))
+                };
+                vec![format!("NO MATCH {atom}  <- {}{note}", by.join(", "))]
+            }
+            Finding::Unneeded { slot } => {
+                vec![format!(
+                    "UNNEEDED {slot}  (another slot serves its requesters)"
+                )]
+            }
+            Finding::Unreadable { ebuild } => vec![format!(
+                "UNREADABLE {ebuild}  (metadata not read: no usable cache entry, and the ebuild could not be sourced)"
+            )],
+        }
+    }
+
+    /// The fields of the health checker's `Finding`, one object per line.
+    fn json_lines(&self) -> Vec<String> {
+        match self {
+            Finding::Invalid { slot, atoms } => atoms
+                .iter()
+                .map(|(atom, by)| {
+                    json_line(
+                        "world-invalid",
+                        slot,
+                        atom,
+                        &format!(
+                            "no visible version satisfies every requester; asked by {}",
+                            by.join(", ")
+                        ),
+                    )
+                })
+                .collect(),
+            Finding::NoMatch { atom, by, unread } => {
+                let mut reason = format!("no ebuild matches; asked by {}", by.join(", "));
+                if !unread.is_empty() {
+                    reason.push_str(&format!("; ebuilds not read: {}", unread.join(", ")));
+                }
+                vec![json_line(
+                    "world-no-match",
+                    by.first().map_or("", String::as_str),
+                    atom,
+                    &reason,
+                )]
+            }
+            Finding::Unneeded { slot } => vec![json_line(
+                "world-unneeded",
+                slot,
+                "",
+                "another slot serves its requesters",
+            )],
+            Finding::Unreadable { ebuild } => vec![json_line(
+                "checker-limitation",
+                ebuild,
+                "",
+                "dependencies not read",
+            )],
+        }
+    }
+}
+
+fn json_line(property: &str, package: &str, atom: &str, reason: &str) -> String {
+    use crate::pretend::json::json_string as q;
+    format!(
+        "{{\"property\":{},\"package\":{},\"atom\":{},\"reason\":{},\"pre_existing\":false}}",
+        q(property),
+        q(package),
+        q(atom),
+        q(reason)
+    )
 }
 
 #[cfg(test)]
@@ -107,6 +266,18 @@ pub(crate) mod tests {
         extra: &[&str],
         env: &[(&str, &str)],
         make_conf: &str,
+    ) -> (i32, String) {
+        run_on_copy(args, extra, env, make_conf, |_| {})
+    }
+
+    /// As [`mrg_on_fixtures_with`], with `tweak` applied to the copy's root
+    /// before the run.
+    fn run_on_copy(
+        args: &[&str],
+        extra: &[&str],
+        env: &[(&str, &str)],
+        make_conf: &str,
+        tweak: impl Fn(&Path),
     ) -> (i32, String) {
         let tmp = tempfile::tempdir_in("/var/tmp").unwrap();
         let root = tmp.path().join("root");
@@ -133,6 +304,7 @@ pub(crate) mod tests {
             text.push_str(make_conf);
             std::fs::write(&conf, text).unwrap();
         }
+        tweak(&root);
         let out = Command::new(crate::self_exe::built_portuale_bin())
             .envs(env.iter().copied())
             .arg("mrg")
@@ -278,5 +450,89 @@ pub(crate) mod tests {
             1,
             "junk not read under the flag"
         );
+    }
+
+    /// Adds `dev-libs/w692unread-1`: no md5-cache entry, and a syntax error
+    /// so the depend phase `mrg` falls back on cannot make one either.
+    fn add_unreadable_ebuild(root: &Path) {
+        let dir = root.join("repo/dev-libs/w692unread");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("w692unread-1.ebuild"),
+            "EAPI=8\nSLOT=\"0\"\nKEYWORDS=\"amd64\"\nif [[ ((\n",
+        )
+        .unwrap();
+    }
+
+    /// Charter properties 1 and 5 (PMS, metadata cache): a world that reaches
+    /// an ebuild whose metadata cannot be read is not clean, and the report
+    /// says which. Control: the same world without the ebuild stays clean.
+    #[test]
+    fn an_unreadable_ebuild_fails_the_check() {
+        let world = ["dev-libs/w692unread"];
+        let (rc, out) = run_on_copy(&["--check-world"], &world, &[], "", add_unreadable_ebuild);
+        assert_eq!(rc, 1, "{out}");
+        assert!(
+            out.contains(
+                "UNREADABLE dev-libs/w692unread-1  (metadata not read: no usable cache entry, and the ebuild could not be sourced)"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "NO MATCH dev-libs/w692unread  <- @world  (ebuilds not read: dev-libs/w692unread-1)"
+            ),
+            "{out}"
+        );
+        assert!(out.contains("1 unsatisfiable, 1 not read"), "{out}");
+        let (rc, out) = check(&[]);
+        assert_eq!(rc, 0, "{out}");
+        assert!(!out.contains("not read"), "{out}");
+    }
+
+    /// Charter property 1: a clean world prints the summary object alone.
+    #[test]
+    fn json_of_a_clean_world_is_the_summary_only() {
+        let (rc, out) = mrg_on_fixtures(&["--check-world", "--json"], &[]);
+        assert_eq!(rc, 0, "{out}");
+        assert_eq!(out.lines().count(), 1, "{out}");
+        assert!(out.starts_with("{\"atoms\":"), "{out}");
+        assert!(
+            out.trim_end()
+                .ends_with("\"unsatisfiable\":0,\"not_read\":0}"),
+            "{out}"
+        );
+    }
+
+    /// Charter property 1: a missing package is one `world-no-match` line
+    /// naming the asker and the atom, and the exit code is the text form's.
+    #[test]
+    fn json_of_a_missing_package_is_one_no_match_line() {
+        let (rc, out) = mrg_on_fixtures(&["--check-world", "--json"], &["app-misc/doesnotexist"]);
+        assert_eq!(rc, 1, "{out}");
+        let first = out.lines().next().unwrap();
+        assert_eq!(
+            first,
+            "{\"property\":\"world-no-match\",\"package\":\"@world\",\"atom\":\"app-misc/doesnotexist\",\"reason\":\"no ebuild matches; asked by @world\",\"pre_existing\":false}"
+        );
+        assert_eq!(out.lines().count(), 2, "{out}");
+    }
+
+    /// An unreadable ebuild is a `checker-limitation` finding in JSON.
+    #[test]
+    fn json_of_an_unreadable_ebuild_is_a_checker_limitation() {
+        let (rc, out) = run_on_copy(
+            &["--check-world", "--json"],
+            &["dev-libs/w692unread"],
+            &[],
+            "",
+            add_unreadable_ebuild,
+        );
+        assert_eq!(rc, 1, "{out}");
+        assert!(
+            out.contains("\"property\":\"checker-limitation\",\"package\":\"dev-libs/w692unread-1\",\"atom\":\"\",\"reason\":\"dependencies not read\""),
+            "{out}"
+        );
+        assert!(out.trim_end().ends_with("\"not_read\":1}"), "{out}");
     }
 }

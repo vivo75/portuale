@@ -177,6 +177,40 @@ pub fn list_candidates(
     Ok(result)
 }
 
+/// `cat/pkg-ver` of every ebuild of the package whose metadata cannot be
+/// read (no usable cache entry, no provider) and whose head EAPI is
+/// supported: [`list_candidates`] skips these, so an atom for them looks
+/// like a missing package. An unsupported EAPI is a masked candidate
+/// already and is not listed.
+#[must_use]
+pub fn unreadable_ebuilds(repos: &[RepoConfig], category: &str, package: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for repo in repos {
+        let pkg_dir = repo.location.join(category).join(package);
+        let Ok(entries) = portage_util::read_dir_entries(&pkg_dir) else {
+            continue;
+        };
+        for entry in entries {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Some(stem) = name.strip_suffix(".ebuild") else {
+                continue;
+            };
+            let Some(version) = strip_version_prefix(stem, package) else {
+                continue;
+            };
+            if repo_aux_metadata(&repo.location, category, stem).is_err()
+                && unsupported_head_eapi(&pkg_dir.join(name.as_ref())).is_none()
+            {
+                out.push(format!("{category}/{package}-{version}"));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 pub(crate) fn list_candidates_uncached(
     repos: &[RepoConfig],
     category: &str,

@@ -54,7 +54,14 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
     for slot in &rows {
         println!("{}", row(slot));
     }
-    eprintln!("plan-world: {} to install, order {sort}", rows.len());
+    let unread = match world.unreadable.len() {
+        0 => String::new(),
+        n => format!(", {n} not read"),
+    };
+    eprintln!(
+        "plan-world: {} to install, order {sort}{unread}",
+        rows.len()
+    );
     ExitCode::SUCCESS
 }
 

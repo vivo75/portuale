@@ -38,7 +38,7 @@ mod gates;
 mod global_updates;
 mod help;
 mod info;
-mod json;
+pub(crate) mod json;
 mod merge_list;
 mod merge_run;
 mod merge_setup;
