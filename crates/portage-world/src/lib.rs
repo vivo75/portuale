@@ -19,7 +19,7 @@
 //! and `PDEPEND` (like Portage without `--with-bdeps`); `--with-bdeps`
 //! restores the build-time edges.
 //! A kept package that must be built again ([`World::rebuilds`]) follows every
-//! edge, like a built one.
+//! edge, like a built one; with `emptytree` that is every reached package.
 //!
 //! A `[foo]` / `[-foo]` USE dependency filters the versions an atom matches
 //! by the candidate's own USE; the parent-relative forms (`[foo?]`, `[foo=]`)
@@ -412,6 +412,9 @@ pub struct Options {
     /// With `rebuilds`: an installed package whose recorded `USE`, cut to the `IUSE` of the
     /// version kept, differs from the configured one is built again.
     pub newuse: bool,
+    /// With `rebuilds`: everything is built, so every reached slot with a
+    /// chosen version is a row and a kept one is built again.
+    pub emptytree: bool,
     /// Sets added to the seeds besides `@world` (`--set NAME`).
     pub extra_sets: Vec<String>,
     /// Atoms and `@set` names to start from instead of `@world`; empty
@@ -431,6 +434,7 @@ impl Options {
             with_bdeps: false,
             rebuilds: false,
             newuse: false,
+            emptytree: false,
             extra_sets: Vec::new(),
             targets: Vec::new(),
         }
@@ -515,7 +519,11 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         if !opts.rebuilds {
             return Ok(world);
         }
-        let mut more = rebuild::slot_operator(&world, &opts.root);
+        let mut more = if opts.emptytree {
+            rebuild::every_kept(&world)
+        } else {
+            rebuild::slot_operator(&world, &opts.root)
+        };
         if opts.newuse {
             more.extend(rebuild::changed_use(&world, &opts.root, &config));
         }

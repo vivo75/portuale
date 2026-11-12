@@ -59,6 +59,15 @@ pub(crate) fn slot_operator(world: &World, root: &std::path::Path) -> BTreeSet<S
         .collect()
 }
 
+/// `cat/pkg:slot` of every kept installed package that has a version to
+/// install: with everything built, each is built again.
+pub(crate) fn every_kept(world: &World) -> BTreeSet<String> {
+    kept(world)
+        .filter(|(s, _)| s.chosen().is_some())
+        .map(|(s, _)| s.node())
+        .collect()
+}
+
 /// `cat/pkg:slot` of each kept installed package whose recorded `USE`, cut to
 /// the `IUSE` of the version kept, differs from the configured one.
 ///
@@ -102,4 +111,31 @@ pub(crate) fn changed_use(
         })
         .map(|(s, _)| s.node())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Order, testkit::analyse_fixture_with};
+
+    /// PMS `dependencies.tex`: with everything built, every slot `@world`
+    /// reaches is a row, so the rows are the reached slots that have a chosen
+    /// version; the installed one that is kept is a `Rebuild`.
+    #[test]
+    fn emptytree_has_a_row_for_every_reached_slot_with_a_version() {
+        let installed = [("dev-libs/newpkg-1.0", "0")];
+        let world = analyse_fixture_with(&["dev-libs/withdeps"], &installed, |o| {
+            o.rebuilds = true;
+            o.emptytree = true;
+        });
+        let reached = world
+            .slots
+            .iter()
+            .filter(|s| world.reached.contains(&s.node()) && s.chosen().is_some())
+            .count();
+        let rows = world.ordered(&Order::Alpha);
+        assert!(reached > 1);
+        assert_eq!(rows.len(), reached);
+        let kept = rows.iter().find(|s| s.cp == "dev-libs/newpkg").unwrap();
+        assert_eq!(world.change(kept), Some(crate::Change::Rebuild));
+    }
 }

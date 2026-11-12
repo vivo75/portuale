@@ -146,10 +146,10 @@ const OPTIONS: &[Opt] = &[
         long: "--plan-world",
         alias: None,
         short: None,
-        kind: Kind::Flag,
+        kind: Kind::OptionalValue,
         choices: &[],
-        missing: "",
-        help: "list what updating @world would install, without the resolver",
+        missing: "update",
+        help: "list what @world would install, without the resolver: =update (default) or =emptytree",
     },
     Opt {
         id: "sort",
@@ -1195,7 +1195,10 @@ pub fn command() -> Command {
 /// runs installs: any action with `--remote-hostname` is a usage error
 /// (checked in `remote.rs`).
 pub(crate) fn action_selected(matches: &ArgMatches) -> Option<&'static str> {
-    ACTION_IDS.iter().find(|id| matches.get_flag(id)).copied()
+    ACTION_IDS
+        .iter()
+        .find(|id| matches.value_source(id) == Some(clap::parser::ValueSource::CommandLine))
+        .copied()
 }
 
 /// Whether the emerge codepath (`pretend::run`, the parse loop in
@@ -1441,7 +1444,12 @@ pub fn run(args: &[String]) -> ExitCode {
     let argv = std::iter::once(bin).chain(joined.iter().map(String::as_str));
     match command().try_get_matches_from(argv) {
         Ok(matches) if matches.get_flag("check_world") => crate::check_world::run(&matches),
-        Ok(matches) if matches.get_flag("plan_world") => crate::plan_world::run(&matches),
+        Ok(matches)
+            if matches.contains_id("plan_world")
+                && matches.get_one::<String>("plan_world").is_some() =>
+        {
+            crate::plan_world::run(&matches)
+        }
         Ok(matches) if matches.get_flag("json") => {
             eprintln!("mrg: --json needs --check-world or --plan-world");
             ExitCode::from(2)

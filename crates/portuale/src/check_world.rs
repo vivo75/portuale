@@ -293,6 +293,18 @@ pub(crate) mod tests {
         make_conf: &str,
         tweak: impl Fn(&Path),
     ) -> (i32, String) {
+        let (rc, out, _) = run_on_copy_with_stderr(args, extra, env, make_conf, tweak);
+        (rc, out)
+    }
+
+    /// As [`run_on_copy`], also returning stderr: (exit code, stdout, stderr).
+    pub(crate) fn run_on_copy_with_stderr(
+        args: &[&str],
+        extra: &[&str],
+        env: &[(&str, &str)],
+        make_conf: &str,
+        tweak: impl Fn(&Path),
+    ) -> (i32, String, String) {
         let tmp = tempfile::tempdir_in("/var/tmp").unwrap();
         let root = tmp.path().join("root");
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
@@ -332,6 +344,7 @@ pub(crate) mod tests {
         (
             out.status.code().unwrap(),
             String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
         )
     }
 

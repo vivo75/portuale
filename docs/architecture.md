@@ -64,9 +64,12 @@ applet also runs. So resolution, merge order and display are shared with
   knows nothing of blockers or backtracking. An ebuild whose metadata cannot be
   read is listed apart (`UNREADABLE`) and also exits 1. `--json` prints one
   health-checker finding per line, then a summary object.
-- `--plan-world [--sort alpha|depend|resolver]` lists what updating `@world`
-  would install, from the same crate; `resolver` orders the rows as
-  `emerge --pretend` would (it runs it, about 20 s), the other two do not.
+- `--plan-world[=update|emptytree] [--sort alpha|depend|resolver]` lists what
+  updating (or, with `emptytree`, rebuilding) `@world` would install, from the
+  same crate; `resolver` orders the rows as `emerge --pretend` would (it runs
+  it, about 20 s), the other two do not. It prints two lines on stderr, the
+  second saying what it did not check. Both actions are described in
+  [world-check-and-plan.md](world-check-and-plan.md).
 - `--remote-*` options (hostname, user, port, root, vdb, ledger and more)
   merge gpkg binary packages onto a remote host over SSH. Resolution runs
   on the server; the phases run on the client. The design is in

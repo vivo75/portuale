@@ -1,5 +1,6 @@
-//! `mrg --plan-world [--sort alpha|depend|resolver]`: what `emerge -uDNp @world`
-//! would install, worked out by `portage-world` instead of the resolver. One
+//! `mrg --plan-world[=update|emptytree] [--sort alpha|depend|resolver]`: what
+//! `emerge -uDNp @world` (or, with `emptytree`, `emerge -pe @world`) would
+//! install, worked out by `portage-world` instead of the resolver. One
 //! row per slot whose best visible version is not the installed one, and an `R`
 //! row for a kept package whose `:slot/sub-slot=` dependency the plan breaks
 //! (with `plan-world-newuse`, also one whose USE changed). It sees no blockers
@@ -22,8 +23,17 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         Ok(setup) => setup,
         Err(code) => return code,
     };
+    let mode = match Mode::from_arg(matches) {
+        Ok(mode) => mode,
+        Err(message) => {
+            eprintln!("plan-world: {message}");
+            return ExitCode::from(2);
+        }
+    };
     opts.rebuilds = true;
     opts.newuse = future.on("plan-world-newuse");
+    opts.emptytree = mode == Mode::Emptytree;
+    opts.with_bdeps |= opts.emptytree;
     let sort = matches
         .get_one::<String>("sort")
         .map_or("alpha", String::as_str);
@@ -66,7 +76,54 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         "plan-world: {} to install, order {sort}{unread}",
         rows.len()
     );
+    eprintln!("{}", not_checked(mode, opts.newuse));
     ExitCode::SUCCESS
+}
+
+/// Which plan `--plan-world` works out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// What `emerge -uDNp @world` would change.
+    Update,
+    /// Every slot `@world` reaches, as `emerge -pe @world` lists them.
+    Emptytree,
+}
+
+impl Mode {
+    /// The mode named by `--plan-world[=mode]`.
+    fn from_arg(matches: &ArgMatches) -> Result<Mode, String> {
+        match matches.get_one::<String>("plan_world").map(String::as_str) {
+            Some("update") => Ok(Mode::Update),
+            Some("emptytree") => Ok(Mode::Emptytree),
+            other => Err(format!(
+                "--plan-world={}: the modes are `update` and `emptytree`",
+                other.unwrap_or_default()
+            )),
+        }
+    }
+
+    /// The `mrg` command that gives the full plan for this mode.
+    fn full_plan(self) -> &'static str {
+        match self {
+            Mode::Update => "mrg -puDN @world",
+            Mode::Emptytree => "mrg -pe @world",
+        }
+    }
+}
+
+/// The second summary line: what the plan did not look at, and the command
+/// that does. A changed USE only needs naming for `update`: `emptytree`
+/// builds everything anyway.
+fn not_checked(mode: Mode, newuse: bool) -> String {
+    let use_rebuilds = if mode == Mode::Update && !newuse {
+        ", USE rebuilds"
+    } else {
+        ""
+    };
+    format!(
+        "not checked: blockers, REQUIRED_USE, slot conflicts{use_rebuilds}; run '{}' for the full plan",
+        mode.full_plan()
+    )
 }
 
 /// The plan as the one-line document `emerge -pv --json` prints and the
@@ -248,7 +305,9 @@ fn parse_plan_rows(text: &str) -> HashMap<String, usize> {
 #[cfg(test)]
 mod tests {
     use super::parse_plan_rows;
-    use crate::check_world::tests::{add_ebuild, add_installed, mrg_on_fixtures, run_on_copy};
+    use crate::check_world::tests::{
+        add_ebuild, add_installed, mrg_on_fixtures, run_on_copy, run_on_copy_with_stderr,
+    };
     use std::path::Path;
 
     /// The package of every row `--plan-world --sort <sort>` prints on the fixtures.
@@ -449,6 +508,92 @@ mod tests {
         let (rc, out) = run(&["--plan-world"]);
         assert_eq!(rc, 0, "{out}");
         assert!(!out.contains("w693"), "{out}");
+    }
+
+    /// The rows `--plan-world=<mode>` prints on the fixtures.
+    fn mode_rows(mode: &str, more: &[&str]) -> Vec<String> {
+        let mut args = vec![mode];
+        args.extend_from_slice(more);
+        let (rc, out) = mrg_on_fixtures(&args, &[]);
+        assert_eq!(rc, 0, "{out}");
+        out.lines().map(String::from).collect()
+    }
+
+    /// Owner decision (plan 02.692, Q1): a bare `--plan-world` is `=update`.
+    #[test]
+    fn a_bare_plan_world_is_the_update_plan() {
+        let bare = mode_rows("--plan-world", &["--sort", "depend"]);
+        let update = mode_rows("--plan-world=update", &["--sort", "depend"]);
+        assert_eq!(bare.len(), 4, "{bare:?}");
+        assert_eq!(bare, update);
+    }
+
+    /// PMS `dependencies.tex`: everything is built, so a kept version is a
+    /// row too (`R`) and its build dependencies are followed.
+    #[test]
+    fn emptytree_lists_the_kept_versions_as_rebuilds() {
+        let rows = mode_rows("--plan-world=emptytree", &["--sort", "alpha"]);
+        for want in [
+            "[ebuild   R    ] dev-libs/systempkg-1.0:0",
+            "[ebuild   R    ] dev-libs/nestedsetpkg-1.0:0",
+            "[ebuild     U  ] dev-libs/upgradepkg-2.0:0 [1.0]",
+            "[ebuild  N     ] dev-libs/newpkg-1.0:0",
+        ] {
+            assert!(rows.iter().any(|r| r == want), "{want} not in {rows:?}");
+        }
+        assert!(
+            rows.len() > mode_rows("--plan-world", &[]).len(),
+            "{rows:?}"
+        );
+    }
+
+    /// Charter property 5: a wrong mode is refused and both valid ones named.
+    #[test]
+    fn an_unknown_plan_mode_is_a_usage_error_naming_the_two() {
+        let (rc, out, err) =
+            run_on_copy_with_stderr(&["--plan-world=everything"], &[], &[], "", |_| {});
+        assert_eq!((rc, out.as_str()), (2, ""), "{err}");
+        assert!(err.contains("update") && err.contains("emptytree"), "{err}");
+    }
+
+    /// `--json` with emptytree: a kept version is a `reinstall` entry and is
+    /// not also in `kept`.
+    #[test]
+    fn emptytree_json_has_reinstall_entries_and_no_duplicate_in_kept() {
+        let (rc, out) = mrg_on_fixtures(&["--plan-world=emptytree", "--json"], &[]);
+        assert_eq!(rc, 0, "{out}");
+        let (entries, kept) = out.split_once("],\"kept\":").expect(&out);
+        assert!(
+            entries.contains("\"package\":\"systempkg\"")
+                && entries.contains("\"outcome\":\"reinstall\""),
+            "{out}"
+        );
+        assert!(!kept.contains("\"package\":\"systempkg\""), "{out}");
+    }
+
+    /// Charter property 5: the summary is two lines on stderr, the second
+    /// says what the plan did not look at, and stdout stays rows only.
+    #[test]
+    fn the_summary_says_what_was_not_checked() {
+        let run = |args: &[&str]| run_on_copy_with_stderr(args, &[], &[], "", |_| {});
+        let (rc, out, err) = run(&["--plan-world", "--sort", "depend"]);
+        assert_eq!(rc, 0, "{err}");
+        assert!(out.lines().all(|l| l.starts_with("[ebuild")), "{out}");
+        assert_eq!(
+            err,
+            "plan-world: 4 to install, order depend\n\
+             not checked: blockers, REQUIRED_USE, slot conflicts, USE rebuilds; \
+             run 'mrg -puDN @world' for the full plan\n"
+        );
+        let (_, _, err) = run(&["--plan-world", "--future-options=plan-world-newuse"]);
+        assert!(err.contains("slot conflicts; run 'mrg -puDN"), "{err}");
+        let (_, _, err) = run(&["--plan-world=emptytree"]);
+        assert!(err.contains("order alpha\nnot checked: blockers"), "{err}");
+        assert!(
+            err.ends_with("run 'mrg -pe @world' for the full plan\n"),
+            "{err}"
+        );
+        assert!(!err.contains("USE rebuilds"), "{err}");
     }
 
     #[test]
