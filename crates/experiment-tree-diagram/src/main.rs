@@ -14,6 +14,11 @@
 //! already implies it (`a -> b -> c` makes `a -> c` redundant), on the kinds
 //! drawn; `--bundle` joins arrows of one kind into the same package.
 //!
+//! `--jobs N` numbers the packages with the build step each falls in when N
+//! packages are built at once (`x` for a package already installed as chosen,
+//! `!` for one with no version to choose; neither is numbered): with 1 every number differs, with 2 or more two
+//! packages can share a number and are built at the same time.
+//!
 //! The graph is `portage-world`'s first pass, with its cuts. Further cuts:
 //! a set atom claims a package by name and slot only, its version is not
 //! compared; no aux-metadata provider is registered, so a repository
@@ -40,6 +45,8 @@ struct Cli {
     bundle: bool,
     /// Hide arrows a longer path implies (`--reduce`).
     reduce: bool,
+    /// Number the build steps for this many parallel builds (`--jobs N`).
+    jobs: Option<usize>,
 }
 
 /// Every bit of `portage_world::DEP_KEYS`.
@@ -90,6 +97,8 @@ fn run(cli: &Cli) -> Result<String, String> {
         eprintln!("experiment-tree-diagram: no ebuild matches {atom}");
     }
     let sets = portage_world::seed_sets(opts)?;
+    let to_build = to_build(&world);
+    let has_version = with_version(&world);
     let mut nodes = nodes(&world, &sets);
     let mut edges = world.edge_kinds.clone();
     if let Some(depth) = cli.depth {
@@ -100,6 +109,32 @@ fn run(cli: &Cli) -> Result<String, String> {
     // Levels come from every edge, so a row still means "can be built at the
     // same time" when only some kinds are drawn.
     let levels = levels::levels(&nodes.keys().cloned().collect(), &edges);
+    // The steps too come from every edge: a number is when the package can
+    // start, whatever is drawn.
+    let steps = cli.jobs.map(|jobs| {
+        let building: BTreeSet<String> = nodes
+            .keys()
+            .filter(|id| to_build.contains(*id))
+            .cloned()
+            .collect();
+        levels::schedule(&building, &edges, &levels.loose, jobs)
+    });
+    if let Some(steps) = &steps {
+        for (id, node) in &mut nodes {
+            let mark = marker(steps.get(id).copied(), has_version.contains(id));
+            node.label = format!("[{mark}] {}", node.label);
+        }
+        eprintln!(
+            "{} build steps with {} jobs",
+            steps.values().max().copied().unwrap_or(0),
+            cli.jobs.unwrap_or(1)
+        );
+        let no_version = nodes.keys().filter(|id| !has_version.contains(*id)).count();
+        eprintln!(
+            "{} packages marked x (already installed as chosen), {no_version} marked ! (no version to choose)",
+            nodes.len() - steps.len() - no_version,
+        );
+    }
     if cli.kinds != ALL_KINDS {
         edges.retain(|_, kinds| *kinds & cli.kinds != 0);
         for kinds in edges.values_mut() {
@@ -121,6 +156,38 @@ fn run(cli: &Cli) -> Result<String, String> {
         levels.level.values().max().map_or(0, |top| top + 1)
     );
     Ok(dot::render(&nodes, &edges, &levels, cli.bundle))
+}
+
+/// What a node's label shows in brackets: its build step, `x` when nothing
+/// has to be done for it (already installed as chosen), `!` when no version
+/// can be chosen for it.
+fn marker(step: Option<usize>, has_version: bool) -> String {
+    match (step, has_version) {
+        (Some(n), _) => n.to_string(),
+        (None, true) => "x".into(),
+        (None, false) => "!".into(),
+    }
+}
+
+/// The slots some visible version can be chosen for.
+fn with_version(world: &World) -> BTreeSet<String> {
+    world
+        .slots
+        .iter()
+        .filter(|s| s.chosen().is_some())
+        .map(portage_world::SlotSet::node)
+        .collect()
+}
+
+/// The slots a run would build and install: those whose chosen version is
+/// not already installed. The rest are left out of the numbering.
+fn to_build(world: &World) -> BTreeSet<String> {
+    world
+        .slots
+        .iter()
+        .filter(|s| s.change().is_some())
+        .map(portage_world::SlotSet::node)
+        .collect()
 }
 
 /// The package slots the command line asked for.
@@ -202,17 +269,30 @@ fn claims(atoms: &BTreeSet<String>) -> BTreeSet<(String, Option<String>)> {
 fn parse_args() -> Result<Cli, String> {
     const USAGE: &str = "usage: experiment-tree-diagram [--root DIR] [--config-root DIR] \
                          [--threads N] [--without-bdeps] [--depth N] \
-                         [--kinds all|KIND[,KIND]...] [--bundle] [--reduce] ATOM|@SET...";
+                         [--kinds all|KIND[,KIND]...] [--bundle] [--reduce] [--jobs N] ATOM|@SET...";
     let mut opts = Options::new(PathBuf::from("/"), PathBuf::from("/"));
     opts.with_bdeps = true;
     let mut depth = None;
     let mut kinds = ALL_KINDS;
     let mut bundle = false;
     let mut reduce = false;
+    let mut jobs = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
-        let mut value = |name: &str| args.next().ok_or(format!("{name} needs a value"));
-        match a.as_str() {
+        // `--name=value` as well as `--name value`.
+        let (name, mut inline) = match a.split_once('=') {
+            Some((name, value)) if name.starts_with("--") => {
+                (name.to_string(), Some(value.to_string()))
+            }
+            _ => (a.clone(), None),
+        };
+        let mut value = |name: &str| {
+            inline
+                .take()
+                .or_else(|| args.next())
+                .ok_or(format!("{name} needs a value"))
+        };
+        match name.as_str() {
             "--root" => opts.root = value("--root")?.into(),
             "--config-root" => opts.config_root = value("--config-root")?.into(),
             "--threads" => {
@@ -225,6 +305,15 @@ fn parse_args() -> Result<Cli, String> {
             "--bundle" => bundle = true,
             "--reduce" => reduce = true,
             "--kinds" => kinds = parse_kinds(&value("--kinds")?)?,
+            "--jobs" => {
+                let n = value("--jobs")?
+                    .parse::<usize>()
+                    .map_err(|e| format!("--jobs: {e}"))?;
+                if n == 0 {
+                    return Err("--jobs: at least 1".into());
+                }
+                jobs = Some(n);
+            }
             "--depth" => {
                 depth = Some(
                     value("--depth")?
@@ -246,12 +335,20 @@ fn parse_args() -> Result<Cli, String> {
         kinds,
         bundle,
         reduce,
+        jobs,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_label_shows_the_step_or_why_there_is_none() {
+        assert_eq!(marker(Some(3), true), "3");
+        assert_eq!(marker(None, true), "x");
+        assert_eq!(marker(None, false), "!");
+    }
 
     #[test]
     fn kinds_are_all_or_a_comma_separated_list_in_any_case() {

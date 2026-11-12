@@ -50,6 +50,78 @@ pub fn levels(nodes: &BTreeSet<String>, edges: &Edges) -> Levels {
     Levels { level, loose }
 }
 
+/// Which build step each package falls in when `jobs` packages can be built
+/// at once: step 1 is the first, and packages sharing a step are built at the
+/// same time. Every package is taken to need one step, so a step is a round,
+/// not a duration. A package starts once everything it waits for has
+/// finished in an earlier step; when more than `jobs` are ready, the ones
+/// with the longest chain of dependents above them go first (then by name),
+/// so the choice is the same on every run.
+pub fn schedule(
+    nodes: &BTreeSet<String>,
+    edges: &Edges,
+    loose: &BTreeSet<(String, String)>,
+    jobs: usize,
+) -> BTreeMap<String, usize> {
+    let mut waits_for: BTreeMap<&str, usize> = nodes.iter().map(|n| (n.as_str(), 0)).collect();
+    let mut dependents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (from, to) in edges.keys().filter(|e| !loose.contains(*e)) {
+        if let (Some(count), true) = (waits_for.get_mut(from.as_str()), nodes.contains(to)) {
+            *count += 1;
+            dependents.entry(to).or_default().push(from);
+        }
+    }
+    let mut above: BTreeMap<&str, usize> = BTreeMap::new();
+    for node in nodes {
+        chain_above(&dependents, node, &mut above);
+    }
+    let mut step_of = BTreeMap::new();
+    let mut ready: Vec<&str> = waits_for
+        .iter()
+        .filter(|(_, n)| **n == 0)
+        .map(|(id, _)| *id)
+        .collect();
+    let mut step = 1;
+    while !ready.is_empty() {
+        ready.sort_by(|a, b| above[b].cmp(&above[a]).then(a.cmp(b)));
+        let now: Vec<&str> = ready.drain(..jobs.min(ready.len())).collect();
+        for done in &now {
+            step_of.insert((*done).to_string(), step);
+        }
+        for done in now {
+            for parent in dependents.get(done).into_iter().flatten() {
+                let count = waits_for.get_mut(parent).expect("every node is counted");
+                *count -= 1;
+                if *count == 0 {
+                    ready.push(parent);
+                }
+            }
+        }
+        step += 1;
+    }
+    step_of
+}
+
+/// Longest chain of dependents above `node`; `dependents` has no cycle.
+fn chain_above<'a>(
+    dependents: &BTreeMap<&'a str, Vec<&'a str>>,
+    node: &'a str,
+    memo: &mut BTreeMap<&'a str, usize>,
+) -> usize {
+    if let Some(known) = memo.get(node) {
+        return *known;
+    }
+    let n = dependents
+        .get(node)
+        .into_iter()
+        .flatten()
+        .map(|up| chain_above(dependents, up, memo) + 1)
+        .max()
+        .unwrap_or(0);
+    memo.insert(node, n);
+    n
+}
+
 /// Drops every ordering edge a longer path already implies (`a -> c` when
 /// `a -> b -> c` exists), whatever its kinds: the order is the same without
 /// it. Loose edges neither count as a path nor are dropped.
@@ -170,6 +242,75 @@ mod tests {
         let loose = BTreeSet::from([edge("b", "c")]);
         reduce(&mut edges, &loose);
         assert_eq!(edges.len(), 3);
+    }
+
+    fn steps(
+        edges: &[(&str, &str, u8)],
+        loose: &[(&str, &str)],
+        jobs: usize,
+    ) -> Vec<(String, usize)> {
+        let edges: Edges = edges.iter().map(|(a, b, k)| (edge(a, b), *k)).collect();
+        let nodes = edges
+            .keys()
+            .flat_map(|(a, b)| [a.clone(), b.clone()])
+            .collect();
+        let loose = loose.iter().map(|(a, b)| edge(a, b)).collect();
+        schedule(&nodes, &edges, &loose, jobs).into_iter().collect()
+    }
+
+    #[test]
+    fn one_job_numbers_every_package_differently_dependencies_first() {
+        // t waits for x and y.
+        let got = steps(&[("t", "x", DEPEND), ("t", "y", DEPEND)], &[], 1);
+        assert_eq!(got, [("t".into(), 3), ("x".into(), 1), ("y".into(), 2)]);
+    }
+
+    #[test]
+    fn two_jobs_build_independent_packages_in_the_same_step() {
+        let got = steps(&[("t", "x", DEPEND), ("t", "y", DEPEND)], &[], 2);
+        assert_eq!(got, [("t".into(), 2), ("x".into(), 1), ("y".into(), 1)]);
+    }
+
+    #[test]
+    fn a_chain_ignores_the_job_count_and_the_longest_chain_goes_first() {
+        // a -> b -> c is a chain of three; z is alone.
+        let edges = [("a", "b", DEPEND), ("b", "c", DEPEND), ("a", "z", DEPEND)];
+        let got = steps(&edges, &[], 1);
+        // c has two packages above it, z one: c first.
+        assert_eq!(
+            got,
+            [
+                ("a".into(), 4),
+                ("b".into(), 2),
+                ("c".into(), 1),
+                ("z".into(), 3)
+            ]
+        );
+        let many = steps(&edges, &[], 8);
+        assert_eq!(
+            many,
+            [
+                ("a".into(), 3),
+                ("b".into(), 2),
+                ("c".into(), 1),
+                ("z".into(), 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_package_left_out_of_the_numbering_does_not_make_others_wait() {
+        // a -> b -> c, with c already installed: b can start in step 1.
+        let edges: Edges = [(edge("a", "b"), DEPEND), (edge("b", "c"), DEPEND)].into();
+        let building = BTreeSet::from(["a".to_string(), "b".to_string()]);
+        let got = schedule(&building, &edges, &BTreeSet::new(), 1);
+        assert_eq!(got, BTreeMap::from([("a".into(), 2), ("b".into(), 1)]));
+    }
+
+    #[test]
+    fn a_loose_edge_does_not_make_a_package_wait() {
+        let got = steps(&[("a", "b", PDEPEND)], &[("a", "b")], 1);
+        assert_eq!(got, [("a".into(), 1), ("b".into(), 2)]);
     }
 
     #[test]

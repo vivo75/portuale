@@ -41,7 +41,7 @@ The program reads the installation at `--root` and `--config-root` (default
 
 ### Arguments
 
-Atoms (`dev-libs/openssl`, `=app-editors/nano-9.3`) and sets (`@world`,
+Options also take the `--name=value` form (`--jobs=2`). Atoms (`dev-libs/openssl`, `=app-editors/nano-9.3`) and sets (`@world`,
 `@system`, `@profile`, a user set) can be mixed. At least one is needed.
 
 | Option | Meaning |
@@ -50,6 +50,7 @@ Atoms (`dev-libs/openssl`, `=app-editors/nano-9.3`) and sets (`@world`,
 | `--kinds all\|KIND[,KIND]...` | Draw only these dependency kinds: `DEPEND`, `RDEPEND`, `PDEPEND`, `BDEPEND`, `IDEPEND` (any case). Default `all` (also `tutte`). |
 | `--reduce` | Hide an arrow when a longer path between the same two packages already implies it (`a -> b -> c` makes `a -> c` redundant). The biggest readability win. |
 | `--bundle` | Join arrows of one kind that reach the same package into a small dot just above it, and go on as one arrow. |
+| `--jobs N` | Number the packages with their build step for N parallel builds: `[3] cat/pkg-1.0`. With `--jobs 1` every number differs (the exact build order); with `--jobs 2` or more, packages sharing a number are built at the same time. See "Build steps" below. |
 | `--without-bdeps` | Do not follow `DEPEND`/`BDEPEND`/`IDEPEND` of installed packages that stay as they are (Portage's default). Default here: follow them. |
 | `--root DIR`, `--config-root DIR` | Installation to read. |
 | `--threads N` | Worker threads of the walk. |
@@ -80,6 +81,30 @@ Atoms (`dev-libs/openssl`, `=app-editors/nano-9.3`) and sets (`@world`,
 - The rows come from every dependency even when `--kinds` shows only some, so a
   row always means "buildable together". After `--kinds`, a package left with no
   drawn arrow is dropped unless you asked for it.
+
+## Build steps (`--jobs`)
+
+`--jobs N` simulates N builders. Step 1 is the first round; a package starts
+in the first round after everything it waits for has finished (same rules as
+the rows: `DEPEND`, `BDEPEND`, `RDEPEND` and `IDEPEND` make it wait, `PDEPEND`
+and cut cycle arrows do not). When more than N packages are ready, the ones
+with the longest chain of dependents above them go first, then by name, so
+the numbers are the same on every run. With enough jobs the step of a package
+is its row; with fewer, rows spread over more steps (68 packages: 68 steps with
+`--jobs 1`, 34 with `--jobs 2`, 18 with `--jobs 4`).
+
+Two packages get a letter instead of a number and are left out of the
+numbering, so others do not wait for them: `[x]` is already installed at the
+version that would be chosen, `[!]` has no visible version to choose (an
+invalid slot, worth a look).
+
+Read the numbers with these limits in mind:
+
+- Every package is taken to need the same time, so a step is a round, not a
+  duration. A real build of `gcc` is not the length of a `zlib` one.
+- With `--depth` only the packages drawn are numbered.
+- The numbers come from every dependency, so `--kinds` and `--reduce` change
+  what is drawn, not the numbers.
 
 ## How it works
 
