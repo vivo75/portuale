@@ -17,41 +17,11 @@ use std::process::ExitCode;
 /// there are unsatisfiable slots or ebuilds not read, 0 if not, 2 if the
 /// repositories or the configuration cannot be read.
 pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
-    let path = |id: &str, fallback: PathBuf| {
-        matches
-            .get_one::<String>(id)
-            .map_or(fallback, PathBuf::from)
-    };
-    let mut opts = Options::new(
-        path("root", portage_repo::root_from_env()),
-        path("config_root", portage_repo::config_root_from_env()),
-    );
-    let future = match crate::future_options::resolve(
-        matches
-            .get_one::<String>("future_options")
-            .map(String::as_str),
-        &|k| std::env::var(k).ok(),
-        &mut crate::mrg::make_conf_lookup_at(opts.config_root.clone(), opts.root.clone()),
-    ) {
-        Ok(f) => f,
-        Err(message) => {
-            eprintln!("check-world: {message}");
-            return ExitCode::from(2);
-        }
+    let (mut opts, future) = match options(matches, "check-world") {
+        Ok(setup) => setup,
+        Err(code) => return code,
     };
     opts.unique = future.on("check-world-unique");
-    if let Some(n) = future.value("check-world-threads") {
-        match n.parse::<usize>() {
-            Ok(n) if n > 0 => opts.threads = n,
-            _ => {
-                eprintln!("check-world: check-world-threads={n:?} is not a positive number");
-                return ExitCode::from(2);
-            }
-        }
-    }
-    opts.with_bdeps = matches
-        .get_one::<String>("with_bdeps")
-        .is_some_and(|v| v == "y");
     let world = match portage_world::analyse(&opts) {
         Ok(w) => w,
         Err(message) => {
@@ -87,6 +57,50 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         );
     }
     ExitCode::from(u8::from(unsatisfiable > 0 || not_read > 0))
+}
+
+/// The `portage-world` options both `--check-world` and `--plan-world` take
+/// from the command line and the future options, with the resolved future
+/// options; `who` names the command in an error. Exit 2 on a bad value.
+pub(crate) fn options(
+    matches: &ArgMatches,
+    who: &str,
+) -> Result<(Options, crate::future_options::FutureOptions), ExitCode> {
+    let path = |id: &str, fallback: PathBuf| {
+        matches
+            .get_one::<String>(id)
+            .map_or(fallback, PathBuf::from)
+    };
+    let mut opts = Options::new(
+        path("root", portage_repo::root_from_env()),
+        path("config_root", portage_repo::config_root_from_env()),
+    );
+    let fail = |message: String| {
+        eprintln!("{who}: {message}");
+        ExitCode::from(2)
+    };
+    let future = crate::future_options::resolve(
+        matches
+            .get_one::<String>("future_options")
+            .map(String::as_str),
+        &|k| std::env::var(k).ok(),
+        &mut crate::mrg::make_conf_lookup_at(opts.config_root.clone(), opts.root.clone()),
+    )
+    .map_err(fail)?;
+    if let Some(n) = future.value("check-world-threads") {
+        match n.parse::<usize>() {
+            Ok(n) if n > 0 => opts.threads = n,
+            _ => {
+                return Err(fail(format!(
+                    "check-world-threads={n:?} is not a positive number"
+                )));
+            }
+        }
+    }
+    opts.with_bdeps = matches
+        .get_one::<String>("with_bdeps")
+        .is_some_and(|v| v == "y");
+    Ok((opts, future))
 }
 
 /// One thing the check found. The text and the JSON form are both rendered

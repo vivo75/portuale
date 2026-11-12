@@ -2,15 +2,16 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::{SlotSet, World};
+use crate::{DEP_KEYS, SlotSet, World};
 
 /// How [`World::ordered`] sorts the slots.
 pub enum Order<'a> {
     /// By `category/package`, then slot. No claim about build order.
     Alpha,
-    /// A slot after the slots it depends on, as the first pass followed
-    /// them. A cycle is cut where the walk meets it; the edges do not tell
-    /// run-time from post-merge dependencies.
+    /// A slot after the slots it needs before it is merged or usable
+    /// (`DEPEND`, `BDEPEND`, `RDEPEND`, `IDEPEND`), as the first pass followed
+    /// them. A `PDEPEND`-only edge puts no constraint on the order (PMS).
+    /// A cycle is cut where the walk meets it.
     Depend,
     /// By the position in an order the caller got elsewhere (the resolver's
     /// merge list), keyed `cat/pkg:slot`; a slot not in it comes last, in
@@ -34,7 +35,7 @@ impl World {
                 changed.sort_by_key(|s| rank.get(&s.node()).copied().unwrap_or(usize::MAX));
             }
             Order::Depend => {
-                let position: HashMap<String, usize> = depend_order(&self.edges)
+                let position: HashMap<String, usize> = depend_order(&self.ordering_edges())
                     .into_iter()
                     .enumerate()
                     .map(|(i, n)| (n, i))
@@ -43,6 +44,28 @@ impl World {
             }
         }
         changed
+    }
+}
+
+impl World {
+    /// `edges` without the edges that only a `PDEPEND` names.
+    fn ordering_edges(&self) -> BTreeMap<String, BTreeSet<String>> {
+        let post = 1u8 << DEP_KEYS.iter().position(|k| *k == "PDEPEND").unwrap_or(0);
+        self.edges
+            .iter()
+            .map(|(node, to)| {
+                let kept = to
+                    .iter()
+                    .filter(|dep| {
+                        self.edge_kinds
+                            .get(&(node.clone(), (*dep).clone()))
+                            .is_none_or(|mask| mask & !post != 0)
+                    })
+                    .cloned()
+                    .collect();
+                (node.clone(), kept)
+            })
+            .collect()
     }
 }
 
@@ -102,6 +125,42 @@ mod tests {
 
     fn pos(order: &[String], n: &str) -> usize {
         order.iter().position(|x| x == n).unwrap()
+    }
+
+    /// The `cat/pkg` of the slots `odw0a` (and what it pulls in, one
+    /// package per `*DEPEND` variable) would install, in `--sort depend` order.
+    fn odw0_order() -> Vec<String> {
+        let world = crate::testkit::analyse_fixture_with(&[], &[], |o| {
+            o.targets = vec!["dev-libs/odw0a".into()];
+        });
+        world
+            .ordered(&Order::Depend)
+            .iter()
+            .map(|s| s.cp.clone())
+            .collect()
+    }
+
+    /// PMS `dependencies.tex`: a `PDEPEND` package is merged "at some point
+    /// before the package manager finishes the batch", so it imposes no order.
+    #[test]
+    fn a_post_dependency_does_not_order() {
+        let o = odw0_order();
+        let at = |p: &str| o.iter().position(|x| x == p).unwrap();
+        assert!(at("dev-libs/odw0a") < at("dev-libs/odw0d"), "{o:?}");
+    }
+
+    /// PMS `dependencies.tex`: `DEPEND`, `BDEPEND`, `RDEPEND` and `IDEPEND`
+    /// packages come before the package that needs them.
+    #[test]
+    fn a_run_time_dependency_still_orders() {
+        let o = odw0_order();
+        let at = |p: &str| o.iter().position(|x| x == p).unwrap();
+        for dep in ["odw0b", "odw0c", "odw0e", "odw0f"] {
+            assert!(
+                at(&format!("dev-libs/{dep}")) < at("dev-libs/odw0a"),
+                "{o:?}"
+            );
+        }
     }
 
     #[test]

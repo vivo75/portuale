@@ -3,31 +3,28 @@
 //! row per slot whose best visible version is not the installed one. It sees
 //! no blockers, no `REQUIRED_USE`, no USE change that rebuilds a package, so
 //! it can list less or more than the resolver; `--sort resolver` shows the
-//! resolver's own order for the same rows.
+//! resolver's own order for the same rows. `--sort depend` puts a package
+//! after what it needs before it is merged or usable; a `PDEPEND` orders
+//! nothing (PMS).
 
+use crate::pretend::json::json_string as q;
 use clap::ArgMatches;
-use portage_world::{Change, Options, Order, SlotSet, World};
-use std::collections::HashMap;
-use std::path::PathBuf;
+use portage_world::{Change, Order, SlotSet, World};
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::process::{Command, ExitCode};
 
 /// Prints the rows and returns 0, or 2 when the tree cannot be read or the
 /// resolver order cannot be had.
 pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
-    let path = |id: &str, fallback: PathBuf| {
-        matches
-            .get_one::<String>(id)
-            .map_or(fallback, PathBuf::from)
+    let (opts, _) = match crate::check_world::options(matches, "plan-world") {
+        Ok(setup) => setup,
+        Err(code) => return code,
     };
-    let root = path("root", portage_repo::root_from_env());
-    let config_root = path("config_root", portage_repo::config_root_from_env());
     let sort = matches
         .get_one::<String>("sort")
         .map_or("alpha", String::as_str);
-    let mut opts = Options::new(root.clone(), config_root.clone());
-    opts.with_bdeps = matches
-        .get_one::<String>("with_bdeps")
-        .is_some_and(|v| v == "y");
+    let (root, config_root) = (opts.root.clone(), opts.config_root.clone());
     let world = match portage_world::analyse(&opts) {
         Ok(w) => w,
         Err(message) => {
@@ -51,8 +48,12 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         _ => Order::Alpha,
     };
     let rows = world.ordered(&order);
-    for slot in &rows {
-        println!("{}", row(slot));
+    if matches.get_flag("json") {
+        println!("{}", plan_json(&world, &rows, &root));
+    } else {
+        for slot in &rows {
+            println!("{}", row(slot));
+        }
     }
     let unread = match world.unreadable.len() {
         0 => String::new(),
@@ -63,6 +64,82 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         rows.len()
     );
     ExitCode::SUCCESS
+}
+
+/// The plan as the one-line document `emerge -pv --json` prints and the
+/// health checker reads: the rows as `entries` in order, and every
+/// installed package they do not replace as `kept` (the checker reads their
+/// dependencies from the VDB).
+fn plan_json(world: &World, rows: &[&SlotSet], root: &Path) -> String {
+    let entries: Vec<String> = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(order, slot)| entry_json(world, slot, order))
+        .collect();
+    let replaced: HashSet<(String, String)> = rows
+        .iter()
+        .map(|s| (s.cp.clone(), s.slot.clone()))
+        .collect();
+    let kept: Vec<String> = portage_repo::all_installed_packages(root)
+        .iter()
+        .filter(|p| {
+            let slot = p.slot.split('/').next().unwrap_or_default();
+            !replaced.contains(&(format!("{}/{}", p.category, p.package), slot.to_string()))
+        })
+        .map(|p| {
+            format!(
+                "{{\"category\":{},\"package\":{},\"version\":{},\"slot\":{}}}",
+                q(&p.category),
+                q(&p.package),
+                q(&p.version),
+                q(&p.slot)
+            )
+        })
+        .collect();
+    format!(
+        "{{\"entries\":[{}],\"kept\":[{}],\"aborted\":null}}",
+        entries.join(","),
+        kept.join(",")
+    )
+}
+
+/// One `entries` object of [`plan_json`]; `None` for a slot with no chosen
+/// version (it has no row either).
+fn entry_json(world: &World, slot: &SlotSet, order: usize) -> Option<String> {
+    let chosen = slot.chosen()?;
+    let (category, package) = slot.cp.split_once('/')?;
+    let (outcome, from) = match (slot.change()?, slot.installed.as_deref()) {
+        (Change::New, _) => ("new", None),
+        (Change::Upgrade, have) => ("upgrade", have),
+        (Change::Downgrade, have) => ("downgrade", have),
+    };
+    let mut fields = vec![
+        format!("\"category\":{}", q(category)),
+        format!("\"package\":{}", q(package)),
+        format!("\"version\":{}", q(&chosen.version)),
+        format!("\"slot\":{}", q(&slot.slot)),
+        format!("\"sub_slot\":{}", q(&chosen.sub_slot)),
+        format!("\"outcome\":{}", q(outcome)),
+        format!("\"merge_order\":{order}"),
+        "\"source\":\"ebuild\"".to_string(),
+    ];
+    if let Some(from) = from {
+        fields.push(format!("\"from_version\":{}", q(from)));
+    }
+    let pf = format!("{package}-{}", chosen.version);
+    if let Ok(metadata) = portage_repo::repo_aux_metadata(&chosen.repo_location, category, &pf) {
+        let use_flags = world
+            .planned_use
+            .get(&slot.node())
+            .cloned()
+            .unwrap_or_default();
+        let input = portage_repo::DepInput {
+            metadata,
+            use_flags: use_flags.into_iter().collect(),
+        };
+        fields.extend(crate::pretend::json::dep_input_fields(&input));
+    }
+    Some(format!("{{{}}}", fields.join(",")))
 }
 
 /// `[ebuild  N     ] cat/pkg-ver:slot`, with the installed version of an
@@ -214,6 +291,45 @@ mod tests {
         assert_eq!(r.len(), 4);
     }
 
+    /// The value of the first `"key":"..."` in `text` (no escapes in fixtures).
+    fn field(text: &str, key: &str) -> String {
+        let marker = format!("\"{key}\":\"");
+        let start = text
+            .find(&marker)
+            .unwrap_or_else(|| panic!("no {key} in {text}"))
+            + marker.len();
+        text[start..].split('"').next().unwrap().to_string()
+    }
+
+    /// Charter property 1: `--json` is the same plan as the text, row for
+    /// row, in the `emerge --json` shape the health checker reads.
+    #[test]
+    fn json_rows_equal_text_rows_in_order() {
+        let (rc, out) = mrg_on_fixtures(&["--plan-world", "--json", "--sort", "depend"], &[]);
+        assert_eq!(rc, 0, "{out}");
+        let line = out
+            .lines()
+            .find(|l| l.starts_with("{\"entries\":"))
+            .expect(&out);
+        let entries = line.split("],\"kept\":").next().unwrap();
+        let json: Vec<String> = entries
+            .split("{\"category\":")
+            .skip(1)
+            .enumerate()
+            .map(|(i, e)| {
+                let e = format!("{{\"category\":{e}");
+                assert!(e.contains(&format!("\"merge_order\":{i}")), "{e}");
+                format!(
+                    "{}/{}-{}",
+                    field(&e, "category"),
+                    field(&e, "package"),
+                    field(&e, "version")
+                )
+            })
+            .collect();
+        assert_eq!(json, rows("depend"));
+    }
+
     #[test]
     fn resolver_order_is_the_resolvers_own() {
         assert_eq!(
@@ -225,6 +341,12 @@ mod tests {
                 "dev-libs/withdeps-1.0",
             ]
         );
+    }
+
+    #[test]
+    fn json_without_a_world_command_is_a_usage_error() {
+        let (rc, _) = mrg_on_fixtures(&["--json"], &[]);
+        assert_eq!(rc, 2);
     }
 
     #[test]

@@ -428,6 +428,9 @@ pub struct World {
     /// actually needs. An atom without a slot aims at every slot of its
     /// package, so a [`SlotSet`] alone does not tell.
     pub reached: BTreeSet<String>,
+    /// `cat/pkg:slot` -> the enabled USE flags of the version a plan would
+    /// install there, for each reached slot with a change.
+    pub planned_use: BTreeMap<String, BTreeSet<String>>,
     /// `cat/pkg-ver` of the ebuilds of every reached package whose metadata
     /// could not be read: they are no candidates, so their dependencies
     /// are missing from the walk. Sorted.
@@ -558,6 +561,7 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         })
         .collect();
     let reached: BTreeSet<String> = atom_nodes.values().flatten().cloned().collect();
+    let planned_use = planned_use(&slots, &reached, &config);
     // slot -> the slots it depends on (itself left out).
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut edge_kinds: BTreeMap<(String, String), u8> = BTreeMap::new();
@@ -579,8 +583,36 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         edges,
         edge_kinds,
         reached,
+        planned_use,
         unreadable,
     })
+}
+
+/// The enabled USE of the chosen version of every reached slot a plan changes.
+fn planned_use(
+    slots: &[SlotSet],
+    reached: &BTreeSet<String>,
+    config: &Config,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut out = BTreeMap::new();
+    for slot in slots {
+        let Some(best) = slot.chosen() else { continue };
+        if !reached.contains(&slot.node()) || slot.change().is_none() {
+            continue;
+        }
+        let (category, package) = slot.cp.split_once('/').unwrap_or_default();
+        let flags = portage_repo::effective_use_flags(EffectiveUseFlagsArgs {
+            config,
+            iuse: &best.iuse,
+            keywords: &best.keywords,
+            candidate_str: &best.match_str(category, package),
+            build_id: None,
+            category,
+            package,
+        });
+        out.insert(slot.node(), flags.iter().cloned().collect());
+    }
+    out
 }
 
 /// The unreadable ebuilds of every reached package, sorted and unique.
