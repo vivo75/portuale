@@ -117,27 +117,6 @@ fn remove_workdir(workdir: &Path) {
     }
 }
 
-/// Greedy word-wrap at 70 columns, matching Python's `textwrap.wrap(msg,
-/// 70)` whenever no single word exceeds the width (so its hyphen rules
-/// never fire, as in the stale-env notice).
-pub(crate) fn wrap_notice_70(msg: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in msg.split(' ') {
-        if !current.is_empty() && current.len() + 1 + word.len() > 70 {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    lines
-}
-
 /// The stale-env notice bodies (`>>> ` prefix added by the caller):
 /// `bin/ebuild` prints them to stderr when `${T}/environment` survives
 /// from a previous run (`portage.writemsg` defaults to stderr, and the
@@ -148,7 +127,7 @@ pub(crate) fn stale_env_lines(pf: &str) -> Vec<String> {
         "Existing ${{T}}/environment for '{pf}' will be sourced. Run 'clean' to start \
          with a fresh environment."
     );
-    wrap_notice_70(&msg)
+    crate::emerge_build::wrap_words(&msg, 70)
 }
 
 #[cfg(test)]

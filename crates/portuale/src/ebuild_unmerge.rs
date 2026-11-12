@@ -159,28 +159,6 @@ fn uninstall_ignore_matches(patterns: &[String], abs_path: &str) -> bool {
         .any(|p| crate::install_mask::fnmatch(abs_path, p))
 }
 
-/// Greedy 72-column word wrap, Portage's `textwrap.wrap(msg, 72)` for a
-/// message with no long words (the preserved-symlink notice).
-fn wrap_72(msg: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut cur = String::new();
-    for word in msg.split_whitespace() {
-        if cur.is_empty() {
-            cur.push_str(word);
-        } else if cur.len() + 1 + word.len() <= 72 {
-            cur.push(' ');
-            cur.push_str(word);
-        } else {
-            lines.push(std::mem::take(&mut cur));
-            cur.push_str(word);
-        }
-    }
-    if !cur.is_empty() {
-        lines.push(cur);
-    }
-    lines
-}
-
 /// Live `(dev, ino)` of every recorded path's parent directory, each with
 /// the recorded parents behind it. Portage builds the same map per dblink
 /// to match a path through a symlinked directory by inode.
@@ -608,12 +586,13 @@ fn remove_contents(args: RemoveContentsArgs<'_>) -> Result<Vec<String>, String> 
             .values()
             .flat_map(|syms| syms.iter())
             .collect();
-        elog.extend(wrap_72(
+        elog.extend(crate::emerge_build::wrap_words(
             "One or more symlinks to directories have been preserved in order to \
              ensure that files installed via these symlinks remain accessible. \
              This indicates that the mentioned symlink(s) may be obsolete remnants \
              of an old install, and it may be appropriate to replace a given symlink \
              with the directory that it points to.",
+            72,
         ));
         elog.push(String::new());
         for f in flat {
@@ -2801,16 +2780,17 @@ mod tests {
     }
 
     #[test]
-    fn wrap_72_matches_portage_textwrap_on_the_preserved_notice() {
+    fn the_preserved_notice_wraps_like_portage_textwrap_at_72() {
         // Portage 3.0.82.2, S0 cell C1a-pg (`textwrap.wrap(msg, 72)`): the
         // trailing preserved-symlink notice wraps to exactly these lines.
         assert_eq!(
-            wrap_72(
+            crate::emerge_build::wrap_words(
                 "One or more symlinks to directories have been preserved in order to \
                  ensure that files installed via these symlinks remain accessible. \
                  This indicates that the mentioned symlink(s) may be obsolete remnants \
                  of an old install, and it may be appropriate to replace a given symlink \
-                 with the directory that it points to."
+                 with the directory that it points to.",
+                72
             ),
             vec![
                 "One or more symlinks to directories have been preserved in order to",

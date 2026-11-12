@@ -939,7 +939,7 @@ fn run_merge_loop_keep_going_restarts_the_progress_counter() {
 fn wrap_words_breaks_like_textwrap() {
     // Expected lines are Python 3's `textwrap.wrap(text, width)` (which splits
     // after a hyphen that follows two letters and cuts words longer than a line).
-    let cases: [(&str, usize, &[&str]); 5] = [
+    let cases: [(&str, usize, &[&str]); 8] = [
         (
             "emerge --keep-going: dev-libs/schedbaddep-1.0 for /var/tmp/w0/bt-final1/test_emerge_keep_going_endgame0/root dropped because it requires dev-libs/schedbad",
             75,
@@ -985,6 +985,19 @@ fn wrap_words_breaks_like_textwrap() {
                 "xxxxxxxxxx tail",
             ],
         ),
+        (
+            // A word longer than the room left is cut at its last hyphen that
+            // fits (`TextWrapper._handle_long_word`), not at the column.
+            "emerge --keep-going: dev-libs/schedbaddep-1.0 for /var/tmp/p715-backlog-700-705-2026-11-11-evidence-x/test_emerge_keep_going_endgame0/root/ dropped because it requires dev-libs/schedbad",
+            75,
+            &[
+                "emerge --keep-going: dev-libs/schedbaddep-1.0 for /var/tmp/p715-backlog-",
+                "700-705-2026-11-11-evidence-x/test_emerge_keep_going_endgame0/root/ dropped",
+                "because it requires dev-libs/schedbad",
+            ],
+        ),
+        ("ab x-y-zz-qq", 6, &["ab", "x-y-", "zz-qq"]),
+        ("ab q-r_s tt", 4, &["ab q", "-r_s", "tt"]),
     ];
     for (text, width, expected) in cases {
         assert_eq!(wrap_words(text, width), expected, "{text}");

@@ -148,7 +148,7 @@ pub(crate) struct Ledger {
 /// (`TextWrapper.wordsep_re`, `break_on_hyphens=True`).
 fn textwrap_chunks(text: &str) -> Vec<Vec<char>> {
     let chars: Vec<char> = text.chars().collect();
-    let letter = |c: char| c.is_alphabetic();
+    let letter = |c: char| c.is_alphabetic() || c == '_';
     let mut chunks: Vec<Vec<char>> = Vec::new();
     let mut i = 0;
     while i < chars.len() {
@@ -165,7 +165,8 @@ fn textwrap_chunks(text: &str) -> Vec<Vec<char>> {
             let hyphen_break = chars[i] == '-'
                 && i >= start + 2
                 && letter(chars[i - 1])
-                && letter(chars[i - 2])
+                && (letter(chars[i - 2])
+                    || (i >= start + 3 && chars[i - 2] == '-' && letter(chars[i - 3])))
                 && chars.get(i + 1).is_some_and(|c| letter(*c))
                 && (chars.get(i + 2).is_some_and(|c| letter(*c))
                     || (chars.get(i + 2) == Some(&'-')
@@ -204,7 +205,13 @@ pub(crate) fn wrap_words(text: &str, width: usize) -> Vec<String> {
             && chunk.len() > width
         {
             let room = width.saturating_sub(line.len());
-            line.extend(chunk.drain(..room));
+            // Cut after the last hyphen that fits, if a real letter precedes it.
+            let cut = chunk[..room.min(chunk.len())]
+                .iter()
+                .rposition(|c| *c == '-')
+                .filter(|&h| h > 0 && chunk[..h].iter().any(|c| *c != '-'))
+                .map_or(room, |h| h + 1);
+            line.extend(chunk.drain(..cut));
         }
         while line.last().is_some_and(|c| c.is_whitespace()) {
             line.pop();
