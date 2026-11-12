@@ -110,7 +110,8 @@ pub(crate) struct Memos<'a> {
     visible: Memo<bool>,
     use_sets: Memo<Arc<HashSet<String>>>,
     atom_available: Memo<bool>,
-    deps: Memo<Arc<BTreeSet<String>>>,
+    /// Dependency atom -> the `*DEPEND` variables naming it (bits of [`DEP_KEYS`]).
+    deps: Memo<Arc<DepAtoms>>,
 }
 
 impl<'a> Memos<'a> {
@@ -208,13 +209,7 @@ impl<'a> Memos<'a> {
         use_deps_hold(atom_str, &c.iuse, &enabled)
     }
 
-    fn deps(
-        &self,
-        c: &Candidate,
-        category: &str,
-        package: &str,
-        config: &Config,
-    ) -> Arc<BTreeSet<String>> {
+    fn deps(&self, c: &Candidate, category: &str, package: &str, config: &Config) -> Arc<DepAtoms> {
         // An installed package that stays as it is needs only its run-time
         // dependencies; one that is built or rebuilt needs them all.
         // Portage: depgraph.py, _add_pkg_deps (built pkgs, bdeps unset)
@@ -287,10 +282,10 @@ impl<'a> Memos<'a> {
         (category, package): (&str, &str),
         config: &Config,
         keys: &[&str],
-    ) -> BTreeSet<String> {
+    ) -> BTreeMap<String, u8> {
         let pf = format!("{package}-{}", best.version);
         let Ok(meta) = portage_repo::repo_aux_metadata(&best.repo_location, category, &pf) else {
-            return BTreeSet::new();
+            return BTreeMap::new();
         };
         let use_set = portage_repo::effective_use_flags(EffectiveUseFlagsArgs {
             config,
@@ -301,9 +296,13 @@ impl<'a> Memos<'a> {
             category,
             package,
         });
-        let mut out = BTreeSet::new();
+        let mut out = BTreeMap::new();
         for key in keys {
             let Some(text) = meta.get(*key) else { continue };
+            let bit = DEP_KEYS
+                .iter()
+                .position(|k| k == key)
+                .map_or(0, |i| 1u8 << i);
             let tokens: Vec<String> = text.split_whitespace().map(String::from).collect();
             // First listed branch wins a tie.
             let mut first = |_: &[Vec<String>]| 0usize;
@@ -325,9 +324,9 @@ impl<'a> Memos<'a> {
                 {
                     // `[flag?]`, `[flag=]` ... become plain `[flag]`/`[-flag]`
                     // against this package's USE; a dropped one leaves none.
-                    out.insert(
-                        portage_dep::evaluate_atom_conditionals(&tok, &use_set).unwrap_or(tok),
-                    );
+                    let atom =
+                        portage_dep::evaluate_atom_conditionals(&tok, &use_set).unwrap_or(tok);
+                    *out.entry(atom).or_default() |= bit;
                 }
             }
         }
@@ -366,13 +365,16 @@ fn use_deps_hold(atom_str: &str, iuse: &str, enabled: &HashSet<String>) -> bool 
 }
 
 const RUNTIME_KEYS: [&str; 2] = ["RDEPEND", "PDEPEND"];
-const DEP_KEYS: [&str; 5] = ["DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"];
+/// Dependency atom -> the `*DEPEND` variables naming it (bits of [`DEP_KEYS`]).
+type DepAtoms = BTreeMap<String, u8>;
+/// Every `*DEPEND` variable; an edge's kind mask has bit `i` set for `DEP_KEYS[i]`.
+pub const DEP_KEYS: [&str; 5] = ["DEPEND", "RDEPEND", "PDEPEND", "BDEPEND", "IDEPEND"];
 
 /// The result for one atom: for every slot it can match, the best ebuild
 /// of that slot (as `cat/pkg-ver`) with the atoms it depends on.
 struct AtomResult {
-    /// `(cat/pkg-ver, cat/pkg:slot, dependency atoms)` per slot.
-    per_slot: Vec<(String, String, Arc<BTreeSet<String>>)>,
+    /// `(cat/pkg-ver, cat/pkg:slot, dependency atoms with their kinds)` per slot.
+    per_slot: Vec<(String, String, Arc<DepAtoms>)>,
     /// No ebuild of any repository matches the atom (the package is gone,
     /// or no version or USE setting fits it): it points at no slot at all.
     unmatched: bool,
@@ -388,6 +390,9 @@ pub struct Options {
     pub with_bdeps: bool,
     /// Sets added to the seeds besides `@world` (`--set NAME`).
     pub extra_sets: Vec<String>,
+    /// Atoms and `@set` names to start from instead of `@world`; empty
+    /// means `@world`.
+    pub targets: Vec<String>,
 }
 
 impl Options {
@@ -401,6 +406,7 @@ impl Options {
             unique: false,
             with_bdeps: false,
             extra_sets: Vec::new(),
+            targets: Vec::new(),
         }
     }
 }
@@ -414,6 +420,9 @@ pub struct World {
     pub unmatched: Vec<(String, Vec<String>)>,
     /// `cat/pkg:slot` -> the slots it depends on, as the first pass followed them.
     pub edges: BTreeMap<String, BTreeSet<String>>,
+    /// `(slot, slot it depends on)` -> the `*DEPEND` variables behind that
+    /// edge, as bits of [`DEP_KEYS`].
+    pub edge_kinds: BTreeMap<(String, String), u8>,
     /// The slots the first pass followed (`cat/pkg:slot`): the ones `@world`
     /// actually needs. An atom without a slot aims at every slot of its
     /// package, so a [`SlotSet`] alone does not tell.
@@ -460,7 +469,7 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
     let mut unmatched: BTreeSet<String> = BTreeSet::new();
     // atom -> the slots it reaches; slot -> the atoms it depends on.
     let mut atom_nodes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut node_atoms: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut node_atoms: BTreeMap<String, BTreeMap<String, u8>> = BTreeMap::new();
 
     while !frontier.is_empty() {
         let results = parallel_map(&frontier, opts.threads, |atom| {
@@ -477,11 +486,11 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
                     .entry(atom.clone())
                     .or_default()
                     .insert(node.clone());
-                node_atoms
-                    .entry(node)
-                    .or_default()
-                    .extend(deps.iter().cloned());
-                for dep in deps.iter().cloned() {
+                let kinds = node_atoms.entry(node).or_default();
+                for (dep, mask) in deps.iter() {
+                    *kinds.entry(dep.clone()).or_default() |= mask;
+                }
+                for dep in deps.keys().cloned() {
                     requesters
                         .entry(dep.clone())
                         .or_default()
@@ -527,24 +536,25 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         .collect();
     let reached: BTreeSet<String> = atom_nodes.values().flatten().cloned().collect();
     // slot -> the slots it depends on (itself left out).
-    let edges = node_atoms
-        .into_iter()
-        .map(|(node, atoms)| {
-            let to: BTreeSet<String> = atoms
-                .iter()
-                .filter_map(|a| atom_nodes.get(a))
-                .flatten()
-                .filter(|n| **n != node)
-                .cloned()
-                .collect();
-            (node, to)
-        })
-        .collect();
+    let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut edge_kinds: BTreeMap<(String, String), u8> = BTreeMap::new();
+    for (node, atoms) in node_atoms {
+        let to = edges.entry(node.clone()).or_default();
+        for (atom, mask) in &atoms {
+            for dep in atom_nodes.get(atom).into_iter().flatten() {
+                if *dep != node {
+                    to.insert(dep.clone());
+                    *edge_kinds.entry((node.clone(), dep.clone())).or_default() |= mask;
+                }
+            }
+        }
+    }
     Ok(World {
         atoms: done.len(),
         slots,
         unmatched,
         edges,
+        edge_kinds,
         reached,
     })
 }
@@ -692,9 +702,54 @@ fn load_config(config_root: &Path, root: &Path, repos: &[RepoConfig]) -> Result<
     .map_err(|e| e.to_string())
 }
 
-/// `@world` as `portage.conf` defines it (`@profile @selected @system`):
-/// the world file, every set named in `world_sets` (expanded through
-/// `sets.conf`), `@system` and `@profile`.
+/// The atoms of the three sets `@world` is made of.
+pub struct SeedSets {
+    pub system: BTreeSet<String>,
+    pub profile: BTreeSet<String>,
+    /// The world file and every set named in `world_sets`.
+    pub selected: BTreeSet<String>,
+}
+
+/// `@system`, `@profile` and `@selected`, each on its own.
+///
+/// # Errors
+/// The repositories or the configuration cannot be read.
+pub fn seed_sets(opts: &Options) -> Result<SeedSets, String> {
+    let repos = portage_repo::find_repos_quiet(&opts.config_root).map_err(|e| e.to_string())?;
+    let config = load_config(&opts.config_root, &opts.root, &repos)?;
+    let mut selected = BTreeSet::new();
+    SetResolver::new(&opts.root, &opts.config_root, &repos, &config)
+        .expand("selected", &mut selected);
+    selected.retain(|a| portage_dep::parse_atom(a).is_some());
+    Ok(SeedSets {
+        system: system_atoms(&config),
+        profile: profile_atoms(&config),
+        selected,
+    })
+}
+
+fn system_atoms(config: &Config) -> BTreeSet<String> {
+    config
+        .system_packages
+        .iter()
+        .map(|a| a.trim_start_matches('*').to_string())
+        .filter(|a| portage_dep::parse_atom(a).is_some())
+        .collect()
+}
+
+fn profile_atoms(config: &Config) -> BTreeSet<String> {
+    config
+        .profile_packages
+        .iter()
+        .filter(|a| portage_dep::parse_atom(a).is_some())
+        .cloned()
+        .collect()
+}
+
+/// The seed atoms: `opts.targets` when given, else `@world` as
+/// `portage.conf` defines it (`@profile @selected @system`: the world file,
+/// every set named in `world_sets` expanded through `sets.conf`, `@system`
+/// and `@profile`), plus `opts.extra_sets` either way.
 fn world_atoms(
     opts: &Options,
     repos: &[RepoConfig],
@@ -703,17 +758,32 @@ fn world_atoms(
     let (root, config_root) = (&opts.root, &opts.config_root);
     let mut atoms = BTreeSet::new();
     let mut sets = SetResolver::new(root, config_root, repos, config);
-    sets.expand("selected", &mut atoms);
+    let world = ["@world".to_string()];
+    let targets = if opts.targets.is_empty() {
+        &world[..]
+    } else {
+        &opts.targets[..]
+    };
+    for target in targets {
+        match target.as_str() {
+            "@world" => {
+                sets.expand("selected", &mut atoms);
+                atoms.extend(system_atoms(config));
+                atoms.extend(profile_atoms(config));
+            }
+            "@system" => atoms.extend(system_atoms(config)),
+            "@profile" => atoms.extend(profile_atoms(config)),
+            other => match other.strip_prefix('@') {
+                Some(name) => sets.expand(name, &mut atoms),
+                None => {
+                    atoms.insert(other.to_string());
+                }
+            },
+        }
+    }
     for name in &opts.extra_sets {
         sets.expand(name, &mut atoms);
     }
-    atoms.extend(
-        config
-            .system_packages
-            .iter()
-            .map(|a| a.trim_start_matches('*').to_string()),
-    );
-    atoms.extend(config.profile_packages.iter().cloned());
     atoms.retain(|a| portage_dep::parse_atom(a).is_some());
     Ok(atoms)
 }
@@ -833,6 +903,34 @@ mod tests {
             .get(parent)
             .unwrap_or_else(|| panic!("{parent} was not followed"))
             .clone()
+    }
+
+    /// `odw0a` names one package per `*DEPEND` variable, and is given as a
+    /// target while `@world` is empty: every edge carries its variable's bit.
+    #[test]
+    fn a_target_is_followed_and_each_edge_knows_its_dependency_kind() {
+        let world = testkit::analyse_fixture_with(&[], &[], |o| {
+            o.targets = vec!["dev-libs/odw0a".into()];
+        });
+        let kinds: Vec<(String, &str)> = world
+            .edge_kinds
+            .iter()
+            .filter(|((from, _), _)| from == "dev-libs/odw0a:0")
+            .map(|((_, to), mask)| {
+                let key = DEP_KEYS[mask.trailing_zeros() as usize];
+                assert_eq!(mask.count_ones(), 1);
+                (to.clone(), key)
+            })
+            .collect();
+        let expected = [
+            ("dev-libs/odw0b:0", "DEPEND"),
+            ("dev-libs/odw0c:0", "RDEPEND"),
+            ("dev-libs/odw0d:0", "PDEPEND"),
+            ("dev-libs/odw0e:0", "IDEPEND"),
+            ("dev-libs/odw0f:0", "BDEPEND"),
+        ]
+        .map(|(to, key)| (to.to_string(), key));
+        assert_eq!(kinds, expected);
     }
 
     fn set(slots: &[&str]) -> BTreeSet<String> {

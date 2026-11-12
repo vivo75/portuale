@@ -1,0 +1,16 @@
+[package]
+name = "experiment-tree-diagram"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Experiment: the dependency tree of packages or sets as a Graphviz DOT diagram, one build level per row."
+
+# Not a default workspace member (see the root `Cargo.toml`): a bare
+# `cargo build` skips it. Build it explicitly with
+# `cargo build --release -p experiment-tree-diagram`.
+[dependencies]
+portage-dep = { path = "../portage-dep" }
+portage-world = { path = "../portage-world" }
+
+[lints]
+workspace = true

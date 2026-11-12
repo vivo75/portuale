@@ -19,9 +19,11 @@ members = [
     "crates/required-use-harness",
     "crates/portuale",
     "crates/experiment-pre-sort-atoms",
+    "crates/experiment-tree-diagram",
 ]
 # A bare `cargo build` / `cargo test` leaves the experiments out; build one
-# with `cargo build --release -p experiment-pre-sort-atoms`.
+# with `cargo build --release -p experiment-pre-sort-atoms` (or
+# `-p experiment-tree-diagram`).
 default-members = [
     "crates/portage-versions",
     "crates/portage-util",

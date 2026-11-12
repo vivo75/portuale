@@ -699,6 +699,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "experiment-tree-diagram"
+version = "300.83.0"
+dependencies = [
+ "portage-dep",
+ "portage-world",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
