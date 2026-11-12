@@ -5375,6 +5375,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
         if stale.is_empty() && fresh_rebuild.is_empty() && fresh_atoms.is_empty() {
             result.held_back_no_route = no_route;
             name_holder_parents(&mut result, &parents);
+            drop_unrequired_pins(&mut result, &req.atoms, &opts.extra_atoms);
             return Ok(result);
         }
         opts.masked_binaries.extend(stale);
@@ -5384,8 +5385,29 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
     resolve_pubgrub_at(req, &opts).map(|(mut result, _, _)| {
         result.held_back_no_route = no_route;
         name_holder_parents(&mut result, &parents);
+        drop_unrequired_pins(&mut result, &req.atoms, &opts.extra_atoms);
         result
     })
+}
+
+/// The holder pass withholds a provider by also asking for its installed version.
+/// When nothing in the plan depends on that provider and the user did not name
+/// it, the pin has done its work and its entry would be an unparented
+/// `already_installed` row (#736); the default solver has none.
+fn drop_unrequired_pins(result: &mut GraphResult, asked: &[String], pins: &[String]) {
+    let cpn = |atom: &String| {
+        portage_solver::Dep::parse(atom)
+            .ok()
+            .map(|d| d.cpn.to_string())
+    };
+    let asked: HashSet<String> = asked.iter().filter_map(cpn).collect();
+    let pinned: HashSet<String> = pins.iter().filter_map(cpn).collect();
+    result.entries.retain(|e| {
+        let kept_only = matches!(e.outcome, PretendOutcome::AlreadyInstalled { .. })
+            && e.required_by.is_empty();
+        let cp = format!("{}/{}", e.category, e.package);
+        !(kept_only && pinned.contains(&cp) && !asked.contains(&cp))
+    });
 }
 
 /// A holder that joins the plan only because its provider moves names that

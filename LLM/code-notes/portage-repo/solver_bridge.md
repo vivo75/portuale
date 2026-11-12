@@ -264,3 +264,7 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 ## fn complete_required_by
 
 #732: the pubgrub crate reports one requirer per package, `--tree` nests a row under any entry whose `deps` resolve to it (`resolved_dep_targets`). Both now read the same edges. The holders' provider parent (#718, `name_holder_parents`) is added afterwards and stays.
+
+## fn drop_unrequired_pins
+
+#736: the holder pass withholds a provider with a `=cat/pkg-ver` request. Its entry is kept when something in the plan depends on it (it then has a parent) and when the user named the package; otherwise it would be an `already_installed` row nobody asked for, which the output invariants flag.
