@@ -232,6 +232,42 @@ fn p727_a_plain_request_leaves_the_provider_where_it_is() {
     }
 }
 
+/// #728, charter property 3: a package rebuilt for the provider's new sub-slot moves to its
+/// best visible version, in every solver. `p728virt` pins `p728core` with `~`, so both move
+/// together and the plan stays consistent.
+#[test]
+fn p728_a_rebuilt_package_moves_to_its_best_visible_version() {
+    let world = ["dev-libs/p728virt"];
+    let root = hermetic_root(&world);
+    for (cpv, rdepend) in [
+        ("dev-libs/p728core-1", "dev-libs/p569prov:0/5.42="),
+        (
+            "dev-libs/p728virt-1",
+            "~dev-libs/p728core-1 dev-libs/p569prov:0/5.42=",
+        ),
+    ] {
+        let dir = root.join("var/db/pkg").join(cpv);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("CATEGORY"), "dev-libs\n").unwrap();
+        fs::write(dir.join("EAPI"), "8\n").unwrap();
+        fs::write(dir.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
+        fs::write(dir.join("SLOT"), "0\n").unwrap();
+        fs::write(dir.join("repository"), "testrepo\n").unwrap();
+    }
+    for kind in SOLVERS {
+        let result = resolve_with(kind, &root, &world);
+        assert_eq!(
+            merged(&result),
+            [
+                "dev-libs/p569prov-5.44",
+                "dev-libs/p728core-2",
+                "dev-libs/p728virt-2",
+            ],
+            "{kind}"
+        );
+    }
+}
+
 /// The shared fixture vdb plus the installed #715 provider (sub-slot `0/1`) and
 /// two holders built against it (`p715prov:0/1=`).
 fn p715_root(world: &[&str]) -> TempDir {

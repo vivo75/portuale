@@ -5459,10 +5459,21 @@ fn holder_fix(
             }
             // A holder the plan moves is judged by the version it moves to
             // (its tree dependencies), a kept one by what the vdb recorded.
+            // A rebuild the bridge synthesised for the new sub-slot is at the installed
+            // version only because nothing chose another: it counts as kept, so its
+            // recorded pin is judged and the holder may move to a newer version (#728).
             let planned = entries.iter().find_map(|h| {
-                (h.category == holder.category && h.package == holder.package)
-                    .then(|| bound(h))
-                    .flatten()
+                (h.category == holder.category
+                    && h.package == holder.package
+                    && !matches!(
+                        h.outcome,
+                        PretendOutcome::Reinstall {
+                            slot_operator_rebuild: true,
+                            ..
+                        }
+                    ))
+                .then(|| bound(h))
+                .flatten()
             });
             let deps: [String; 5] = match &planned {
                 Some(ver) => {

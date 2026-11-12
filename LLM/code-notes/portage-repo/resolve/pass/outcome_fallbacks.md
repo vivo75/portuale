@@ -24,3 +24,6 @@ The installed fallbacks and reinstall flips applied to a resolved outcome.
 
 ## gate threading (#571)
 - Both `cp_has_tree_or_binary_candidate` sites use `ctx.gate()`.
+
+- Backlog #728: a root of `slot_operator_replace_installed` is resolved as a top-level atom (`resolve_outcome.rs`), so it takes its best visible version instead of staying at the installed one; the outcome may then be `Upgrade`, or a plain `Reinstall` that this function marks `slot_operator_rebuild` again. Portage's auto-rebuild set is an argument (`_want_update_pkg`, `arg_atoms`), which is why its rows read `r U`. The pubgrub bridge does the same in `holder_fix`: a synthesised rebuild row counts as kept, so the holder's recorded pin is judged and its route version can be requested.
+

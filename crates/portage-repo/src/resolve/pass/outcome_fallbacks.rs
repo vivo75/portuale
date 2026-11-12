@@ -218,6 +218,16 @@ pub(crate) fn apply_outcome_fallbacks(
             outcome = forced;
         }
     }
+    // A rebuilt package selected like an argument (#728) may come back as a plain
+    // reinstall of the best version: it is still the slot-operator rebuild.
+    if bp.slot_operator_replace_installed.contains(key)
+        && let PretendOutcome::Reinstall {
+            slot_operator_rebuild,
+            ..
+        } = &mut outcome
+    {
+        *slot_operator_rebuild = true;
+    }
     if let PretendOutcome::AlreadyInstalled { version } = &outcome {
         let cpv = format!("{}/{}-{version}", key.0, key.1);
         if ctx
