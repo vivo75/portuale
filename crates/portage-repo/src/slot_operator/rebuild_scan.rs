@@ -168,6 +168,58 @@ pub(crate) fn slot_operator_rebuild_scan(
     };
     // Per-(provider, bound-slot) memo for the revision check below.
     let mut revision_memo: HashMap<((String, String), String), bool> = HashMap::new();
+    // Providers an in-scope consumer already covers with a stale `:=`
+    // pin (same slot, moved sub-slot): the orphan arm below is their
+    // fallback, so it stays off for these -- orphans on a covered
+    // provider only cascade (`~` fallbacks, withholds).
+    // Portage-grounded in `holder_fix` (`solver_bridge.rs`): only
+    // plan/world-reached holders rebuild through the normal arms.
+    let mut covered: HashSet<(String, String)> = HashSet::new();
+    if !new_slot.is_empty() {
+        for pkg in installed.iter() {
+            let qcp = (pkg.category.clone(), pkg.package.clone());
+            if !(scope.unwrap_or(reachable).contains(&qcp) || walked_installed.contains(&qcp))
+                || undone.contains(&qcp)
+            {
+                continue;
+            }
+            let q_keys: &[&str] = match with_bdeps && walked.contains(&qcp) {
+                true => &["RDEPEND", "PDEPEND", "DEPEND", "BDEPEND", "IDEPEND"],
+                false => &["RDEPEND", "PDEPEND", "IDEPEND"],
+            };
+            let tokens: Vec<String> = q_keys
+                .iter()
+                .flat_map(|key| {
+                    read_vdb_string(root, &pkg.category, &pkg.package, &pkg.version, key)
+                        .split_whitespace()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            for tok in tokens {
+                let Some(atom) = parse_dep_atom(&tok, "rebuild_scan_tokens") else {
+                    continue;
+                };
+                if atom.slot_operator != Some(portage_dep::SlotOperator::Equals) {
+                    continue;
+                }
+                let (Some(a_slot), Some(a_sub)) = (atom.slot.as_deref(), atom.sub_slot.as_deref())
+                else {
+                    continue;
+                };
+                if a_sub.is_empty() {
+                    continue;
+                }
+                let provider_cp = (atom.category.clone(), atom.package.clone());
+                if let Some((_, n_slot, n_sub)) = new_slot.get(&provider_cp)
+                    && a_slot == n_slot
+                    && a_sub != n_sub
+                {
+                    covered.insert(provider_cp);
+                }
+            }
+        }
+    }
     // The new-slot arm reads available candidates too, so it can fire with
     // both maps empty; pre-check `want_update` here so plain resolves skip
     // the vdb loop as before.
@@ -190,10 +242,21 @@ pub(crate) fn slot_operator_rebuild_scan(
             if !merge_bound_consumer && in_graph.contains(&cp) && !already.contains(&cp) {
                 continue;
             }
-            // Same-slot arm scope: reachability, or an installed consumer the walk recursed into.
+            // Same-slot arm scope: reachability, an installed consumer the walk
+            // recursed into, or a #737 kept orphan (installed, no merging
+            // entry, outside the pass scope and unwalked: never a
+            // holder/probe entry the walk kept). The orphan's own `:=`
+            // sub-slot pin naming the moved sub-slot is checked per atom
+            // in `slot_op_edge_for_atom`.
             // Portage: depgraph.py, _add_pkg (recurse under --deep)
+            let kept_orphan = !in_graph.contains(&cp)
+                && !scope.unwrap_or(reachable).contains(&cp)
+                && !walked.contains(&cp)
+                && !walked_installed.contains(&cp);
             let same_slot_scope = !new_slot.is_empty()
-                && (scope.unwrap_or(reachable).contains(&cp) || walked_installed.contains(&cp));
+                && (scope.unwrap_or(reachable).contains(&cp)
+                    || walked_installed.contains(&cp)
+                    || kept_orphan);
             // New-slot arm scope: reachability or walked this pass.
             let new_slot_scope = scope.unwrap_or(reachable).contains(&cp) || walked.contains(&cp);
             if !same_slot_scope && !new_slot_scope {
@@ -231,6 +294,8 @@ pub(crate) fn slot_operator_rebuild_scan(
                         SlotOpEdgeCtx {
                             same_slot_scope,
                             new_slot_scope,
+                            orphan_scope: kept_orphan,
+                            covered: &covered,
                             new_slot: &new_slot,
                             new_slot_fresh: &new_slot_fresh,
                             update,
@@ -319,6 +384,10 @@ pub(crate) fn slot_operator_rebuild_scan(
 struct SlotOpEdgeCtx<'a> {
     same_slot_scope: bool,
     new_slot_scope: bool,
+    /// This consumer is in scope only through the kept-orphan disjunct.
+    orphan_scope: bool,
+    /// Providers an in-scope consumer already covers with a stale pin.
+    covered: &'a HashSet<(String, String)>,
     new_slot: &'a HashMap<(String, String), (String, String, String)>,
     new_slot_fresh: &'a HashMap<(String, String), (String, String, String)>,
     update: bool,
@@ -346,6 +415,8 @@ fn slot_op_edge_for_atom(
     let SlotOpEdgeCtx {
         same_slot_scope,
         new_slot_scope,
+        orphan_scope,
+        covered,
         new_slot,
         new_slot_fresh,
         update,
@@ -370,7 +441,13 @@ fn slot_op_edge_for_atom(
     let provider_cp = (atom.category.clone(), atom.package.clone());
     if same_slot_scope {
         let (n_ver, n_slot, n_sub) = new_slot.get(&provider_cp)?;
-        if a_slot == n_slot && a_sub != n_sub {
+        // The narrow kept-orphan arm only fires on a real sub-slot pin,
+        // and never for a provider an in-scope consumer already covers:
+        // covered providers rebuild through the normal arms.
+        if !a_sub.is_empty() && a_slot == n_slot && a_sub != n_sub {
+            if orphan_scope && covered.contains(&provider_cp) {
+                return None;
+            }
             let display = format!("{}/{}-{n_ver}", atom.category, atom.package);
             let cand = format!(
                 // match-str-ok: partial form (no ::repo) built from a record's or tuple's version/slot fields; match_str would add the repo

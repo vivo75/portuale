@@ -8,7 +8,7 @@ Slot-operator rebuild-scan pins: pin-forced downgrades, new-slot arm, refusal ve
 ## fn slot_operator_rebuild_scan_flags_only_the_stale_bindings
 - Backlog #24 S3: a cp already in `already` stays reported even once in the graph as the rebuild this scan asked for last pass -- that is how `abi_rebuilds` survives to the settling pass.
 - The `--solver=` bridges keep the pre-S3 synthesiser.
-- The S5 probe (backlog #24 S5, the slot-operator-dep probe) is not complete-mode gated, but `bar`'s upgrade carries no unbuilt `:=` dep, so nothing fires in the not-reachable leg.
+- The S5 probe (backlog #24 S5, the slot-operator-dep probe) is not complete-mode gated, but `bar`'s upgrade carries no unbuilt `:=` dep, so nothing else fires in the not-reachable leg. Backlog #737: that leg schedules the kept orphan `stale` (installed-only, unwalked, bound `bar:2/2=` vs the moved `2/9`) with its display pair; `fresh` (pin matches), `otherslot` (other slot) and `nonop` (plain dep) stay out.
 
 ## fn slot_operator_rebuild_scan_schedules_consumers_of_a_slot_moving_provider
 - Backlog #211 (v2 `#24b`): the new-child-slot arm (depgraph.py:3121-3126, bug 486580). Guards: a superseded installed child in the bound slot, a higher (or equal) version, `--update` (or a directly-requested provider), and a visible tree candidate for the consumer.
@@ -27,6 +27,7 @@ Slot-operator rebuild-scan pins: pin-forced downgrades, new-slot arm, refusal ve
 ## fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries
 - Backlog #211 item 2: `Upgrade`/`Downgrade`/`Reinstall` entries. Portage's candidate loop (`_iter_similar_available`, depgraph.py:2660-2695) ranges over every available package, not only fresh-slot merges.
 - #269: the new-slot arm records the consumer alone (Portage's `_slot_operator_update_backtrack`, `depgraph.py:2442`), so the bound-slot-mismatched `Upgrade` entry schedules `massn` with no `(provider, consumer)` display pair.
+- Backlog #737 narrowing (2026-11-12): `masso` is walked (an `AlreadyInstalled` entry), so the kept-orphan arm -- unwalked consumers only -- does not fire for it; the same-slot arm stays out of scope and the entry must not leak into the new arm.
 
 ## fn slot_operator_new_slot_arm_needs_a_replacement_atom_that_accepts_the_new_slot
 - Backlog #304: Portage `_slot_operator_update_probe` (depgraph.py:2667-2760). `pinned`'s current ebuild says `dev-libs/massm:0=`, so a slot-1 `massm` can never be pulled in by rebuilding it (host: `gnome-keyring`'s `gcr:0/1=` vs the installed `gcr:4`, expected value from Portage -- no rebuild); `open`'s says `dev-libs/massm:=` and does rebuild.
@@ -44,3 +45,6 @@ Slot-operator rebuild-scan pins: pin-forced downgrades, new-slot arm, refusal ve
 - Backlog #269: the `mmprov`/`mmcons` shape from the #253 recipe with only `mmcons` requested -- installed `mmprov-1` (`0/1`) + `mmprov-2` (`1/1`) + `mmcons-1` bound `mmprov:0/1=`, tree `mmprov-3` (`1/2`).
 - Portage 3.0.82.2 container probe 2026-10-01 (`emerge --ignore-default-opts --pretend --color=n --backtrack=20 --update --deep app-misc/mmcons dev-libs/slotconflictoldconsumer dev-libs/slotconflictnewconsumer`): merges `mmprov-3` bare plus the `mmcons-1` rebuild (`rR`) with no `causing rebuilds` block. The update probe (`_slot_operator_update_probe` with `new_child_slot=True`, depgraph.py:3121-3126) finds `mmprov-3` among the available packages (`_iter_similar_available`) though no pass scheduled it; the backtrack (`_slot_operator_update_backtrack`, depgraph.py:2442) records the consumer alone. The pre-#269 scan ranged only over the scheduled `New`/`Upgrade` entries, so with no provider entry it scheduled nothing.
 - The #252 shape (provider requested too): `want_update` rides on `--update`, and the greedy pin keeps it probing nothing.
+
+## fn slot_operator_rebuild_scan_schedules_a_kept_orphan_with_a_subslot_pin
+- Backlog #737: S0 (`/var/tmp/plan692/rs.json` + `rs-health.jsonl`): `cargo-c-0.10.25` kept-orphan, VDB pin `openssl:0/3=` from `:=`, provider `openssl-4.1.0` at `0/4`. The kept orphan (no entry, not reachable, not walked) with the stale `:=` sub-slot pin rebuilds; plain (`:0`) and slot-only (`:0=`) deps on kept orphans do not (narrow arm).
