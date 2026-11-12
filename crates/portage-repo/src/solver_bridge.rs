@@ -1751,6 +1751,77 @@ fn strip_self_from_entry(
         .expect("a one-entry strip keeps one entry")
 }
 
+/// Drops the `||` arms no package can satisfy: an arm naming a cp with no
+/// ebuild in any repo (outside the closure) and no installed instance. The
+/// pubgrub crate drops a dependency on an unknown package, so such an arm
+/// would count as satisfied with empty dependencies (#730). A group with no
+/// satisfiable arm is kept whole, so the miss is still reported.
+fn without_absent_alternatives(
+    lazy: &LazyRepo,
+    installed: &[super::InstalledPackage],
+    classes: &[Vec<portage_solver::DepEntry>; 5],
+) -> [Vec<portage_solver::DepEntry>; 5] {
+    let absent = |cp: &str| {
+        !lazy.closure.contains(cp)
+            && !installed
+                .iter()
+                .any(|inst| format!("{}/{}", inst.category, inst.package) == cp)
+    };
+    std::array::from_fn(|i| strip_absent_from_entries(&absent, &classes[i]))
+}
+
+/// Whether an `||` arm can never be satisfied: an atom of an absent cp, a
+/// group of which one member is, an `||` whose arms all are.
+fn arm_is_absent(entry: &portage_solver::DepEntry, absent: &dyn Fn(&str) -> bool) -> bool {
+    use portage_solver::DepEntry;
+    match entry {
+        DepEntry::Atom(dep) => dep.blocker.is_none() && absent(&format!("{}", dep.cpn)),
+        DepEntry::AllOf(children) => children.iter().any(|c| arm_is_absent(c, absent)),
+        DepEntry::AnyOf(children) => children.iter().all(|c| arm_is_absent(c, absent)),
+        _ => false,
+    }
+}
+
+/// The [`without_absent_alternatives`] rule over one entry tree.
+fn strip_absent_from_entries(
+    absent: &dyn Fn(&str) -> bool,
+    entries: &[portage_solver::DepEntry],
+) -> Vec<portage_solver::DepEntry> {
+    use portage_solver::DepEntry;
+    entries
+        .iter()
+        .map(|entry| match entry {
+            DepEntry::AnyOf(children) => {
+                let survivors: Vec<DepEntry> = children
+                    .iter()
+                    .filter(|child| !arm_is_absent(child, absent))
+                    .flat_map(|child| {
+                        strip_absent_from_entries(absent, std::slice::from_ref(child))
+                    })
+                    .collect();
+                if survivors.is_empty() {
+                    entry.clone()
+                } else {
+                    DepEntry::AnyOf(survivors)
+                }
+            }
+            DepEntry::AllOf(children) => {
+                DepEntry::AllOf(strip_absent_from_entries(absent, children))
+            }
+            DepEntry::UseConditional {
+                flag,
+                negate,
+                children,
+            } => DepEntry::UseConditional {
+                flag: *flag,
+                negate: *negate,
+                children: strip_absent_from_entries(absent, children),
+            },
+            _ => entry.clone(),
+        })
+        .collect()
+}
+
 /// Whether one `||` branch is the candidate's own cp-slot with no installed
 /// instance satisfying it: selecting it would build the candidate from
 /// itself. Blockers are not build edges and never count.
@@ -3977,8 +4048,11 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                     } else {
                         classes
                     };
-                let stripped =
-                    without_self_alternatives(&cp, &record.slot, &self.installed, classes);
+                let stripped = without_absent_alternatives(
+                    &self.lazy,
+                    &self.installed,
+                    &without_self_alternatives(&cp, &record.slot, &self.installed, classes),
+                );
                 apply_or_overrides_to_classes(&stripped, &record.cpv(), &self.or_overrides)
             };
             if let Some(row) = version_row(record, deps) {
@@ -4043,7 +4117,16 @@ impl portage_atom_pubgrub::PackageRepository for BridgeRepo {
                         // #34 S5 G3: same self-cycle rule as the repo path above.
                         // #34 S5 G5/G6: same `||` reorder/drop pass.
                         apply_or_overrides_to_classes(
-                            &without_self_alternatives(&cp, &record.slot, &self.installed, source),
+                            &without_absent_alternatives(
+                                &self.lazy,
+                                &self.installed,
+                                &without_self_alternatives(
+                                    &cp,
+                                    &record.slot,
+                                    &self.installed,
+                                    source,
+                                ),
+                            ),
                             &record.cpv(),
                             &self.or_overrides,
                         )

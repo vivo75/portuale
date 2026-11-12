@@ -253,6 +253,27 @@ fn p727_a_plain_request_leaves_the_provider_where_it_is() {
     }
 }
 
+/// #730, charter property 1: `p727virt-2` accepts only the new provider through an `||` arm
+/// whose package has no ebuild (like `virtual/perl-Storable`); with the provider kept at 5.42
+/// every solver plans `-1`, the virtual that accepts it.
+#[test]
+fn p730_a_kept_provider_picks_the_virtual_that_accepts_it() {
+    let world = [
+        "dev-libs/p698rebuild",
+        "dev-libs/p698reinst",
+        "dev-libs/p698upg",
+    ];
+    let root = p698_root(&world);
+    for kind in SOLVERS {
+        let plan = p727_resolve(kind, &root, &["dev-libs/p727top2"], false);
+        assert_eq!(
+            merged(&plan),
+            ["dev-libs/p727top2-1", "dev-libs/p727virt-1"],
+            "{kind}"
+        );
+    }
+}
+
 /// #728, charter property 3: a package rebuilt for the provider's new sub-slot moves to its
 /// best visible version, in every solver. `p728virt` pins `p728core` with `~`, so both move
 /// together and the plan stays consistent.

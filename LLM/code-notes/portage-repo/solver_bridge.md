@@ -232,3 +232,7 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 
 ## gate threading (#571)
 - `LazyRepo` owns `categories`/`config_root`/`warned` (built in `build()` from the request) with a `gate()` accessor; all seven lookup sites plus `cp_exists` gate on it. `bridge_slot_operator_rebuilds` takes `&LazyRepo` for its gate. `masked_candidates_for_atom`, `suggested_parent_use_candidate`, `parent_use_state`, `use_unsat_candidates_for_atom` and `pkg_use_display_for` use `lazy.gate()`.
+
+## fn without_absent_alternatives
+
+#730: the `portage-atom-pubgrub` crate drops a dependency on a package it does not know (`provider/mod.rs`, "remove dependencies on packages not present"); a `||` arm of such a package then has empty dependencies and counts as satisfied (`virtual/perl-Storable-3.410.0` has `|| ( =dev-lang/perl-5.44* ~perl-core/Storable-3.410.0 )` and there is no `perl-core/Storable`). The bridge removes those arms in `versions_for`, after `without_self_alternatives`. "Absent" means the cp is outside the closure (no repo directory) and not installed; an arm that exists but is masked stays, so autounmask still sees it. Pin: pmtest `test_727_a_kept_provider_picks_the_virtual_that_accepts_it`.
