@@ -249,6 +249,10 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 
 #714: `LoadedVersion` now carries the raw `SRC_URI` and the repo directory; the bytes still to fetch come from `fetch_bytes_to_download`, as in `resolve/pass/entry_fetch.rs`. A remote binary keeps its `SIZE`.
 
+## fn bridge_fetch_restriction
+
+#735: `LoadedVersion` carries the raw `RESTRICT`; the token is evaluated against the pick's own USE (flat `use_reduce`, as `evaluated_metadata_tokens` does for the walk). Ebuild picks only; the satisfied half is `fetch_restrict_files_all_present`.
+
 ## fn bridge_entry_for
 
 #733: an entry of a kept installed package that `KeptInstalled::expands` does not expand has empty `deps`. The edges were the only way `--tree` could nest a row under a hidden installed leaf (a PDEPEND/RDEPEND cycle such as `dev-build/ninja` and `app-alternatives/ninja`).

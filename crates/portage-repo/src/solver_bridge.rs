@@ -95,6 +95,8 @@ struct LoadedVersion {
     /// download size (empty for a binary or an installed-only record).
     src_uri: String,
     repo_location: PathBuf,
+    /// Raw `RESTRICT` (empty for a binary or an installed-only record).
+    restrict: String,
 }
 
 /// What a binary candidate carries that an ebuild computes: the USE it was
@@ -460,6 +462,7 @@ impl LazyRepo {
                     binary: None,
                     src_uri: metadata.get("SRC_URI").cloned().unwrap_or_default(),
                     repo_location: candidate.repo_location.clone(),
+                    restrict: candidate.restrict.clone(),
                 });
             }
         }
@@ -591,6 +594,7 @@ impl LazyRepo {
                 }),
                 src_uri: String::new(),
                 repo_location: PathBuf::new(),
+                restrict: String::new(),
             });
         }
         Ok(())
@@ -696,6 +700,7 @@ impl LazyRepo {
             binary: None,
             src_uri: String::new(),
             repo_location: PathBuf::new(),
+            restrict: String::new(),
         })
     }
 
@@ -1362,6 +1367,8 @@ fn bridge_entry_for(
         bridge_entry_deps(&record, &use_set)
     };
     collect_bridge_blockers(&record, &use_set, version, pending_blockers, seen_blockers);
+    let (fetch_restrict, fetch_restrict_satisfied) =
+        bridge_fetch_restriction(&record, &use_set, &req.distdir);
     Some(GraphEntry {
         discovery: 0,
         dep_input: Some(bridge_dep_input(&record, &use_set)),
@@ -1379,8 +1386,8 @@ fn bridge_entry_for(
         keyword_mask: None,
         new_slot,
         interactive: false,
-        fetch_restrict: false,
-        fetch_restrict_satisfied: false,
+        fetch_restrict,
+        fetch_restrict_satisfied,
         download_files: bridge_download_files(&record, cp, version, &use_set, &req.distdir),
         required_by,
         source: if record.binary.is_some() {
@@ -1419,6 +1426,39 @@ fn bridge_dep_input(
         metadata: std::sync::Arc::new(metadata),
         use_flags: use_set.clone(),
     })
+}
+
+/// Whether the pick is `RESTRICT=fetch` (evaluated against its USE) and, if so,
+/// whether every distfile is already in `distdir`: the `F`/`f` marker and the
+/// `Fetch Restriction:` line. A binary is never re-fetched.
+// Portage: output.py, getfetchsizes (only_restricted)
+fn bridge_fetch_restriction(
+    record: &LoadedVersion,
+    use_set: &HashSet<String>,
+    distdir: &Path,
+) -> (bool, bool) {
+    let tokens: Vec<String> = record
+        .restrict
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    let restricted = record.binary.is_none()
+        && portage_use_reduce::use_reduce_flat(
+            &tokens,
+            use_set,
+            portage_use_reduce::MatchMode::Normal,
+        )
+        .is_ok_and(|flat| flat.iter().any(|t| t == "fetch"));
+    let satisfied = restricted
+        && super::fetch_restrict_files_all_present(super::FetchRestrictFilesAllPresentArgs {
+            src_uri: &record.src_uri,
+            use_flags: use_set,
+            repo_location: &record.repo_location,
+            category: &record.category,
+            package: &record.package,
+            distdir,
+        });
+    (restricted, satisfied)
 }
 
 /// The bytes still to fetch for one pick, per distfile: the missing `SRC_URI`
@@ -8242,6 +8282,46 @@ mod tests {
         );
     }
 
+    /// #735: `RESTRICT=fetch` marks the pick, a USE-conditional token follows the pick's
+    /// USE, and a binary is never restricted.
+    #[test]
+    fn s735_fetch_restriction_follows_restrict_and_use() {
+        let mut record = super::LoadedVersion {
+            category: "dev-libs".to_string(),
+            package: "p735".to_string(),
+            version: "1".to_string(),
+            slot: "0".to_string(),
+            sub_slot: "0".to_string(),
+            repo_name: "testrepo".to_string(),
+            iuse: String::new(),
+            keywords: vec!["amd64".to_string()],
+            required_use: String::new(),
+            deps: Default::default(),
+            raw_deps: Default::default(),
+            binary: None,
+            src_uri: String::new(),
+            repo_location: std::path::PathBuf::new(),
+            restrict: "mirror cond? ( fetch )".to_string(),
+        };
+        let dist = std::path::Path::new("/nonexistent");
+        let off = std::collections::HashSet::new();
+        let on: std::collections::HashSet<String> = ["cond".to_string()].into();
+        assert_eq!(
+            super::bridge_fetch_restriction(&record, &off, dist),
+            (false, false)
+        );
+        // Empty `SRC_URI`: nothing to fetch by hand, so the restriction is satisfied.
+        assert_eq!(
+            super::bridge_fetch_restriction(&record, &on, dist),
+            (true, true)
+        );
+        record.src_uri = "http://x/y.tar".to_string();
+        assert_eq!(
+            super::bridge_fetch_restriction(&record, &on, dist),
+            (true, false)
+        );
+    }
+
     /// `version_row` leaves the sub-slot empty for a shared slot/sub-slot
     /// (the walk's own call renders no `/sub` then) and records a distinct
     /// one.
@@ -8262,6 +8342,7 @@ mod tests {
             binary: None,
             src_uri: String::new(),
             repo_location: std::path::PathBuf::new(),
+            restrict: String::new(),
         };
         let (_, versions) = super::version_row(&record, Default::default()).expect("row builds");
         assert!(
@@ -8302,6 +8383,7 @@ mod tests {
             binary: None,
             src_uri: String::new(),
             repo_location: std::path::PathBuf::new(),
+            restrict: String::new(),
         };
         let installed = super::InstalledView {
             by_slot: HashMap::from([(
@@ -8427,6 +8509,7 @@ mod tests {
             binary: None,
             src_uri: String::new(),
             repo_location: std::path::PathBuf::new(),
+            restrict: String::new(),
         };
         let (outcome, oldbest, new_slot) =
             super::bridge_outcome_for("dev-libs/pg359-gsblk", &record, "2", &installed, None, &vdb);
@@ -8468,6 +8551,7 @@ mod tests {
             binary: None,
             src_uri: String::new(),
             repo_location: std::path::PathBuf::new(),
+            restrict: String::new(),
         };
         let outcome = super::super::PretendOutcome::Reinstall {
             version: "1".to_string(),
@@ -8518,6 +8602,7 @@ mod tests {
             binary: None,
             src_uri: String::new(),
             repo_location: std::path::PathBuf::new(),
+            restrict: String::new(),
         };
         let use_set = std::collections::HashSet::new();
         let mut pending = Vec::new();
