@@ -9,3 +9,8 @@ Co-upgrade (#698): installed holders of a pin follow an upgrade when each has a 
 ## fn co_upgrade_request
 - Backlog #703: the notes are recorded before the `--backtrack=0` early return, so a run with no second walk still names the holder; with no world nothing is recorded (nobody is protected, #704 / #700). `driver.rs` keeps a note only for a provider that is still in the final `skipped_updates`.
 - Pubgrub: a withheld provider is pinned to its installed version in the next solve round, so only the round that found the route-less holder knows it; `resolve_pubgrub_unstale` accumulates the notes across rounds and stores them on the final result. Pubgrub still prints no skipped-update block (#431 S1 cut); the note is filled from repo facts, not from the bridge's conflicts.
+
+## fn request_updates
+
+- Backlog #727 (owner decision 2026-11-12, smallest plan): the co-upgrade applies only to a provider the request wants updated. Portage `depgraph.py` `_want_update_pkg` returns `(arg_atoms or update) and not _too_deep(depth)`: an argument atom (or set member) naming the package, or `--update` within `--deep`. The depth of the provider is not known here, so `--update` counts only together with `--deep` (any value). The default solver calls it per skipped provider in `co_upgrade_request`; the pubgrub bridge calls it in `holder_fix` with the request as the user typed it (`asked`, without the atoms the holder pass added) and, when it is false, pins the installed version like a route-less holder (the #703 NOTE is still printed when a holder has no route). `-u` without `-D` therefore keeps a dependency provider, as Portage does.
+

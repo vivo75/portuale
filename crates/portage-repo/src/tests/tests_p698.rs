@@ -168,6 +168,70 @@ fn a_holder_without_a_route_still_withholds_the_upgrade() {
     }
 }
 
+/// The #698 holders, the not-installed `p727top` (its `||` group lists the new
+/// provider first) and a request for it, with the given `--update` setting.
+fn p727_resolve(kind: SolverKind, root: &Path, atoms: &[&str], update: bool) -> GraphResult {
+    let world = [
+        "dev-libs/p698rebuild",
+        "dev-libs/p698reinst",
+        "dev-libs/p698upg",
+    ];
+    let mut req = request_in(root, atoms);
+    req.solver = kind;
+    req.selective = false;
+    req.update = update;
+    if update {
+        req.deep = Deep::Unlimited;
+    }
+    req.config.complete_seed_atoms = world.iter().map(|w| (*w).to_string()).collect();
+    active_resolver_for(kind)
+        .resolve(&req)
+        .expect("the #727 request resolves")
+}
+
+/// #727, owner decision 2026-11-12 (smallest plan): a request that names neither the
+/// provider nor `--update` leaves the provider where it is, in every solver; the
+/// co-upgrade applies when the provider is requested or the request updates deeply.
+#[test]
+fn p727_a_plain_request_leaves_the_provider_where_it_is() {
+    let world = [
+        "dev-libs/p698rebuild",
+        "dev-libs/p698reinst",
+        "dev-libs/p698upg",
+    ];
+    let root = p698_root(&world);
+    for kind in SOLVERS {
+        let plain = p727_resolve(kind, &root, &["dev-libs/p727top"], false);
+        assert_eq!(
+            merged(&plain),
+            ["dev-libs/p727top-1"],
+            "{kind}: plain request"
+        );
+        let updating = p727_resolve(kind, &root, &["dev-libs/p727top"], true);
+        assert_eq!(
+            merged(&updating),
+            [
+                "dev-libs/p569prov-5.44",
+                "dev-libs/p698rebuild-1",
+                "dev-libs/p698reinst-1",
+                "dev-libs/p698upg-2",
+                "dev-libs/p727top-1",
+            ],
+            "{kind}: --update --deep"
+        );
+        let named = p727_resolve(
+            kind,
+            &root,
+            &["dev-libs/p727top", "dev-libs/p569prov"],
+            false,
+        );
+        assert!(
+            merged(&named).contains(&"dev-libs/p569prov-5.44".to_string()),
+            "{kind}: the provider is requested"
+        );
+    }
+}
+
 /// The shared fixture vdb plus the installed #715 provider (sub-slot `0/1`) and
 /// two holders built against it (`p715prov:0/1=`).
 fn p715_root(world: &[&str]) -> TempDir {

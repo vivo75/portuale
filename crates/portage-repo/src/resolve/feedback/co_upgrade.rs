@@ -132,6 +132,24 @@ pub(crate) fn holder_routes(
     (routes, note)
 }
 
+/// Whether the request wants `provider` updated: it names the package itself
+/// (a command-line atom or a set member), or it is an `--update` that walks
+/// dependencies (`--deep`). Otherwise a withheld update stays withheld, the
+/// smallest plan (#727). Portage: depgraph.py, `_want_update_pkg`
+/// (`arg_atoms or update`, within `--deep`).
+pub(crate) fn request_updates(
+    atoms: &[String],
+    update: bool,
+    deep: &Deep,
+    provider: &(String, String),
+) -> bool {
+    (update && *deep != Deep::NotRequested)
+        || atoms.iter().any(|a| {
+            parse_dep_atom(a, "co_upgrade")
+                .is_some_and(|p| (&p.category, &p.package) == (&provider.0, &provider.1))
+        })
+}
+
 /// The request that lets every installed holder of a withheld provider follow
 /// its upgrade, when each of them has a route: the walk is run again with the
 /// holders as extra roots (`=cat/pkg-ver` for those that must move to a newer
@@ -166,6 +184,9 @@ pub(crate) fn co_upgrade_request(
     let mut followers: Vec<Followers> = Vec::new();
     let mut notes: Vec<HeldBackNoRoute> = Vec::new();
     for cp in providers {
+        if !request_updates(&req.atoms, req.update, &req.deep, &cp) {
+            continue;
+        }
         let rows: Vec<&SkippedUpdate> = first
             .skipped_updates
             .iter()

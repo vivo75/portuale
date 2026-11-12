@@ -5386,7 +5386,7 @@ fn resolve_pubgrub_at(
         record_relaxed_changes(req, &lazy, &order, &mut result);
     }
     let stale = stale_built_binaries(req, &lazy, &result.entries);
-    let fix = holder_fix(req, &lazy, &installed, &result.entries);
+    let fix = holder_fix(req, asked, &lazy, &installed, &result.entries);
     Ok((result, stale, fix))
 }
 
@@ -5407,6 +5407,7 @@ struct HolderFix {
 /// Read-only over the solved plan; the caller re-solves with the answer.
 fn holder_fix(
     req: &ResolveRequest,
+    asked: &[String],
     lazy: &LazyRepo,
     installed: &[super::InstalledPackage],
     entries: &[GraphEntry],
@@ -5518,8 +5519,10 @@ fn holder_fix(
             skipped_version: &new_ver,
             holders: &broken,
         });
-        if let Some(note) = note {
-            fix.no_route.push(note);
+        if note.is_some() || !super::request_updates(asked, req.update, &req.deep, &provider) {
+            // A holder cannot follow, or the request does not ask for the provider
+            // (#727): the provider stays where it is.
+            fix.no_route.extend(note);
             fix.atoms
                 .push(format!("={}/{}-{}", e.category, e.package, old.version));
         } else {
