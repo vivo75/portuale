@@ -23,8 +23,7 @@ from `docs/charter.md` for the properties themselves.
 `health_checker.py` lives in `../pmtest/pytests-contract-suite/`. Its atom
 matcher, version comparison and dependency evaluator are written from the PMS
 and share no code with portuale or Portage, so it cannot inherit their bugs.
-(`docs/CONTRIBUTING.md` and the pmtest README still say it covers properties 1
-and 2 only; the code and `l0-health.sh` cover 1–4.)
+(`docs/CONTRIBUTING.md` and the pmtest README say the same: properties 1–4.)
 
 ## Running it
 
