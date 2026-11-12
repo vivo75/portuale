@@ -56,6 +56,13 @@ pub(crate) const GATES: &[Gate] = &[
         since: "300.83",
         help: "--check-world: also list the slots another slot serves",
     },
+    Gate {
+        name: "plan-world-newuse",
+        takes_value: false,
+        stage: Stage::Alpha,
+        since: "300.83",
+        help: "--plan-world: rebuild a kept package whose installed USE differs from the configured one",
+    },
 ];
 
 /// The registry as text for `mrg --help`: name, stage, release, what it does.

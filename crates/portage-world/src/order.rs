@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::{DEP_KEYS, SlotSet, World};
+use crate::{Change, DEP_KEYS, SlotSet, World};
 
 /// How [`World::ordered`] sorts the slots.
 pub enum Order<'a> {
@@ -20,13 +20,23 @@ pub enum Order<'a> {
 }
 
 impl World {
+    /// What a plan does to `slot`: its own change, else a rebuild.
+    #[must_use]
+    pub fn change(&self, slot: &SlotSet) -> Option<Change> {
+        slot.change().or_else(|| {
+            self.rebuilds
+                .contains(&slot.node())
+                .then_some(Change::Rebuild)
+        })
+    }
+
     /// The slots `@world` needs that a plan would change, in `how` order.
     #[must_use]
     pub fn ordered(&self, how: &Order<'_>) -> Vec<&SlotSet> {
         let mut changed: Vec<&SlotSet> = self
             .slots
             .iter()
-            .filter(|s| self.reached.contains(&s.node()) && s.change().is_some())
+            .filter(|s| self.reached.contains(&s.node()) && self.change(s).is_some())
             .collect();
         changed.sort_by_key(|s| s.node());
         match how {

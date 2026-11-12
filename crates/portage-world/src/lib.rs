@@ -18,6 +18,8 @@
 //! An installed package that stays as it is contributes only its `RDEPEND`
 //! and `PDEPEND` (like Portage without `--with-bdeps`); `--with-bdeps`
 //! restores the build-time edges.
+//! A kept package that must be built again ([`World::rebuilds`]) follows every
+//! edge, like a built one.
 //!
 //! A `[foo]` / `[-foo]` USE dependency filters the versions an atom matches
 //! by the candidate's own USE; the parent-relative forms (`[foo?]`, `[foo=]`)
@@ -38,6 +40,7 @@ use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 mod memo;
 mod order;
+mod rebuild;
 mod reorder;
 mod sets;
 /// Test-only helpers: run [`analyse`] on the shared fixture config root with
@@ -105,6 +108,9 @@ pub(crate) struct Memos<'a> {
     installed_slots: HashMap<String, HashSet<String>>,
     /// `(cat/pkg, slot)` -> installed version, to tell a rebuild from a keep.
     installed_versions: HashMap<(String, String), String>,
+    /// `cat/pkg:slot` of installed packages a plan builds again: they follow
+    /// every dependency, as a built package does.
+    rebuilds: BTreeSet<String>,
     /// Follow `DEPEND`/`BDEPEND`/`IDEPEND` of an installed, unchanged
     /// package too (`--with-bdeps`); Portage does not by default.
     with_bdeps: bool,
@@ -116,7 +122,12 @@ pub(crate) struct Memos<'a> {
 }
 
 impl<'a> Memos<'a> {
-    fn new(repos: &'a [RepoConfig], root: &Path, with_bdeps: bool) -> Self {
+    fn new(
+        repos: &'a [RepoConfig],
+        root: &Path,
+        with_bdeps: bool,
+        rebuilds: BTreeSet<String>,
+    ) -> Self {
         let installed = portage_repo::all_installed_packages(root)
             .iter()
             .map(|p| format!("{}/{}", p.category, p.package))
@@ -139,6 +150,7 @@ impl<'a> Memos<'a> {
             installed,
             installed_slots,
             installed_versions,
+            rebuilds,
             with_bdeps,
             visible: Memo::new(),
             use_sets: Memo::new(),
@@ -217,7 +229,12 @@ impl<'a> Memos<'a> {
         let installed = self
             .installed_versions
             .get(&(format!("{category}/{package}"), c.slot.clone()))
-            .map(String::as_str);
+            .map(String::as_str)
+            .filter(|_| {
+                !self
+                    .rebuilds
+                    .contains(&format!("{category}/{package}:{}", c.slot))
+            });
         let keys = dependency_keys(self.with_bdeps, installed, &c.version);
         let kept = keys.len() == RUNTIME_KEYS.len();
         let key = format!("{}{}", c.match_str(category, package), u8::from(kept));
@@ -389,6 +406,12 @@ pub struct Options {
     /// More than one satisfying version also counts as invalid.
     pub unique: bool,
     pub with_bdeps: bool,
+    /// Work out which kept packages a plan must build again
+    /// ([`World::rebuilds`]); a check of `@world` alone does not need them.
+    pub rebuilds: bool,
+    /// With `rebuilds`: an installed package whose recorded `USE`, cut to the `IUSE` of the
+    /// version kept, differs from the configured one is built again.
+    pub newuse: bool,
     /// Sets added to the seeds besides `@world` (`--set NAME`).
     pub extra_sets: Vec<String>,
     /// Atoms and `@set` names to start from instead of `@world`; empty
@@ -406,6 +429,8 @@ impl Options {
             threads: std::thread::available_parallelism().map_or(1, usize::from),
             unique: false,
             with_bdeps: false,
+            rebuilds: false,
+            newuse: false,
             extra_sets: Vec::new(),
             targets: Vec::new(),
         }
@@ -428,6 +453,10 @@ pub struct World {
     /// actually needs. An atom without a slot aims at every slot of its
     /// package, so a [`SlotSet`] alone does not tell.
     pub reached: BTreeSet<String>,
+    /// The reached slots whose installed version a plan keeps but builds
+    /// again (`cat/pkg:slot`): a recorded `:slot/sub-slot=` dependency no longer
+    /// matches the provider the plan chooses, or (with `newuse`) the USE changed.
+    pub rebuilds: BTreeSet<String>,
     /// `cat/pkg:slot` -> the enabled USE flags of the version a plan would
     /// install there, for each reached slot with a change.
     pub planned_use: BTreeMap<String, BTreeSet<String>>,
@@ -478,8 +507,34 @@ pub fn seeds(opts: &Options) -> Result<BTreeSet<String>, String> {
 pub fn analyse(opts: &Options) -> Result<World, String> {
     let repos = portage_repo::find_repos_quiet(&opts.config_root).map_err(|e| e.to_string())?;
     let config = load_config(&opts.config_root, &opts.root, &repos)?;
-    let memo = Memos::new(&repos, &opts.root, opts.with_bdeps);
-    let seeds = world_atoms(opts, &repos, &config)?;
+    // A package that must be built again follows more dependencies, which
+    // can need more rebuilds: walk again until the set stops growing.
+    let mut rebuilds = BTreeSet::new();
+    loop {
+        let mut world = walk(opts, (&repos, &config), &rebuilds)?;
+        if !opts.rebuilds {
+            return Ok(world);
+        }
+        let mut more = rebuild::slot_operator(&world, &opts.root);
+        if opts.newuse {
+            more.extend(rebuild::changed_use(&world, &opts.root, &config));
+        }
+        if more.is_subset(&rebuilds) {
+            world.rebuilds = rebuilds;
+            return Ok(world);
+        }
+        rebuilds.extend(more);
+    }
+}
+
+/// One walk of `@world`, with the `rebuilds` followed as built packages.
+fn walk(
+    opts: &Options,
+    (repos, config): (&[RepoConfig], &Config),
+    rebuilds: &BTreeSet<String>,
+) -> Result<World, String> {
+    let memo = Memos::new(repos, &opts.root, opts.with_bdeps, rebuilds.clone());
+    let seeds = world_atoms(opts, repos, config)?;
 
     // atom -> who asked for it.
     let mut requesters: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -498,7 +553,7 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
 
     while !frontier.is_empty() {
         let results = parallel_map(&frontier, opts.threads, |atom| {
-            process_atom(atom, &repos, &config, &memo)
+            process_atom(atom, repos, config, &memo)
         });
         let mut next = BTreeSet::new();
         for (atom, res) in frontier.iter().zip(results) {
@@ -537,11 +592,11 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         }
     }
     let jobs: Vec<_> = by_cp.into_iter().collect();
-    let unreadable = unreadable_of(&jobs, &repos, opts.threads);
+    let unreadable = unreadable_of(&jobs, repos, opts.threads);
     let ctx = reorder::Ctx {
         requesters: &requesters,
-        repos: &repos,
-        config: &config,
+        repos,
+        config,
         memo: &memo,
         unique: opts.unique,
     };
@@ -561,7 +616,7 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         })
         .collect();
     let reached: BTreeSet<String> = atom_nodes.values().flatten().cloned().collect();
-    let planned_use = planned_use(&slots, &reached, &config);
+    let planned_use = planned_use(&slots, &reached, rebuilds, config);
     // slot -> the slots it depends on (itself left out).
     let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut edge_kinds: BTreeMap<(String, String), u8> = BTreeMap::new();
@@ -583,6 +638,7 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
         edges,
         edge_kinds,
         reached,
+        rebuilds: BTreeSet::new(),
         planned_use,
         unreadable,
     })
@@ -592,12 +648,15 @@ pub fn analyse(opts: &Options) -> Result<World, String> {
 fn planned_use(
     slots: &[SlotSet],
     reached: &BTreeSet<String>,
+    rebuilds: &BTreeSet<String>,
     config: &Config,
 ) -> BTreeMap<String, BTreeSet<String>> {
     let mut out = BTreeMap::new();
     for slot in slots {
         let Some(best) = slot.chosen() else { continue };
-        if !reached.contains(&slot.node()) || slot.change().is_none() {
+        if !reached.contains(&slot.node())
+            || (slot.change().is_none() && !rebuilds.contains(&slot.node()))
+        {
             continue;
         }
         let (category, package) = slot.cp.split_once('/').unwrap_or_default();
@@ -1119,5 +1178,95 @@ mod tests {
                 ["dev-libs/w692unread-1"]
             );
         }
+    }
+
+    /// A repository ebuild with its md5-cache entry, in the tree copy `root`.
+    fn add_ebuild(root: &Path, cpv: &str, slot: &str, rdepend: &str) {
+        let (category, pf) = cpv.split_once('/').expect("category/pf");
+        let package = pf.rsplit_once('-').expect("pf").0;
+        let text =
+            format!("EAPI=\"8\"\nSLOT=\"{slot}\"\nKEYWORDS=\"amd64\"\nRDEPEND=\"{rdepend}\"\n");
+        let dir = root.join("repo").join(category).join(package);
+        std::fs::create_dir_all(&dir).expect("package dir");
+        std::fs::write(dir.join(format!("{pf}.ebuild")), &text).expect("ebuild");
+        let md5 = std::process::Command::new("md5sum")
+            .arg(dir.join(format!("{pf}.ebuild")))
+            .output()
+            .expect("md5sum runs")
+            .stdout;
+        let md5 = String::from_utf8_lossy(&md5);
+        let cache = root.join("repo/metadata/md5-cache").join(category);
+        std::fs::create_dir_all(&cache).expect("cache dir");
+        let entry = format!(
+            "EAPI=8\nKEYWORDS=amd64\nRDEPEND={rdepend}\nSLOT={slot}\n_md5_={}\n",
+            md5.split(' ').next().unwrap_or_default()
+        );
+        std::fs::write(cache.join(pf), entry).expect("cache entry");
+    }
+
+    /// PMS `dependencies.tex`, `sec:slot-dep`: a consumer is rebuilt when the
+    /// plan moves the sub-slot its `:=` dependency recorded; a `:*` consumer,
+    /// and a stale binding to a provider the plan leaves alone, are not.
+    #[test]
+    fn a_sub_slot_change_rebuilds_the_slot_operator_consumers_only() {
+        let tree = tempfile::tempdir_in("/var/tmp").expect("temporary config root");
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/.");
+        let copied = std::process::Command::new("cp")
+            .arg("-a")
+            .arg(fixtures)
+            .arg(tree.path())
+            .status();
+        assert!(copied.expect("cp runs").success());
+        add_ebuild(tree.path(), "dev-libs/w693prov-2", "0/2", "");
+        add_ebuild(tree.path(), "dev-libs/w693calm-1", "0/1", "");
+        add_ebuild(
+            tree.path(),
+            "dev-libs/w693cons-1",
+            "0",
+            "dev-libs/w693prov:=",
+        );
+        add_ebuild(
+            tree.path(),
+            "dev-libs/w693star-1",
+            "0",
+            "dev-libs/w693prov:*",
+        );
+        add_ebuild(
+            tree.path(),
+            "dev-libs/w693stale-1",
+            "0",
+            "dev-libs/w693calm:=",
+        );
+        let world = [
+            "dev-libs/w693cons",
+            "dev-libs/w693star",
+            "dev-libs/w693stale",
+        ];
+        let installed = [
+            ("dev-libs/w693prov-1", "0/1"),
+            ("dev-libs/w693calm-1", "0/1"),
+            ("dev-libs/w693cons-1", "0"),
+            ("dev-libs/w693star-1", "0"),
+            ("dev-libs/w693stale-1", "0"),
+        ];
+        let world = testkit::analyse_fixture_with(&world, &installed, |o| {
+            o.config_root = tree.path().to_path_buf();
+            o.rebuilds = true;
+            for (cpf, recorded) in [
+                ("w693cons-1", "dev-libs/w693prov:0/1="),
+                ("w693star-1", "dev-libs/w693prov:*"),
+                ("w693stale-1", "dev-libs/w693calm:0/9="),
+            ] {
+                std::fs::write(
+                    o.root.join("var/db/pkg/dev-libs").join(cpf).join("RDEPEND"),
+                    recorded,
+                )
+                .expect("recorded RDEPEND");
+            }
+        });
+        assert_eq!(
+            world.rebuilds.iter().collect::<Vec<_>>(),
+            ["dev-libs/w693cons:0"]
+        );
     }
 }

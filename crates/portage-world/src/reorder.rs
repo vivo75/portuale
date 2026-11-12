@@ -30,6 +30,8 @@ pub enum Change {
     New,
     Upgrade,
     Downgrade,
+    /// The installed version stays but is built again.
+    Rebuild,
 }
 
 impl SlotSet {

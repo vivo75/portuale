@@ -30,6 +30,7 @@ command line carries `--future-options`, `make.conf` is not read at all.
 | `check-world-unique` | `--check-world` | A slot with several satisfying versions is unsatisfiable. |
 | `check-world-threads=N` | `--check-world` | Number of threads (default: every core). The answer does not depend on it. |
 | `check-world-unneeded` | `--check-world` | Also list (`UNNEEDED cat/pkg:slot`) the slots another slot serves. The exit code does not change. |
+| `plan-world-newuse` | `--plan-world` | A kept package whose installed `USE`, cut to the `IUSE` of the version kept, differs from the configured one gets an `R` row. |
 
 Only `mrg` has the option: no option here is used by `emerge`. The code is in
 `crates/portuale/src/future_options.rs`; adding, promoting or removing an

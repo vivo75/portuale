@@ -286,7 +286,7 @@ pub(crate) mod tests {
 
     /// As [`mrg_on_fixtures_with`], with `tweak` applied to the copy's root
     /// before the run.
-    fn run_on_copy(
+    pub(crate) fn run_on_copy(
         args: &[&str],
         extra: &[&str],
         env: &[(&str, &str)],
@@ -333,6 +333,42 @@ pub(crate) mod tests {
             out.status.code().unwrap(),
             String::from_utf8_lossy(&out.stdout).into_owned(),
         )
+    }
+
+    /// Adds an ebuild `cat/pkg-ver` to the repository of the copy at `root`,
+    /// with the md5-cache entry the metadata check needs; `fields` are the
+    /// variables besides `EAPI`, `SLOT` and `KEYWORDS`.
+    pub(crate) fn add_ebuild(root: &Path, cpv: &str, slot: &str, fields: &[(&str, &str)]) {
+        let (category, pf) = cpv.split_once('/').unwrap();
+        let package = pf.rsplit_once('-').unwrap().0;
+        let mut vars = vec![("EAPI", "8"), ("SLOT", slot), ("KEYWORDS", "amd64")];
+        vars.extend_from_slice(fields);
+        let ebuild: String = vars.iter().map(|(k, v)| format!("{k}=\"{v}\"\n")).collect();
+        let dir = root.join("repo").join(category).join(package);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(format!("{pf}.ebuild"));
+        std::fs::write(&file, &ebuild).unwrap();
+        let sum = Command::new("md5sum").arg(&file).output().unwrap().stdout;
+        let sum = String::from_utf8(sum).unwrap();
+        let mut cache: Vec<String> = vars.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+        cache.sort();
+        let cache = cache.concat() + &format!("_md5_={}\n", sum.split(' ').next().unwrap());
+        let cache_dir = root.join("repo/metadata/md5-cache").join(category);
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(cache_dir.join(pf), cache).unwrap();
+    }
+
+    /// Marks `cat/pf` installed in the copy at `root`, with the `SLOT` and
+    /// the other variables a VDB entry records (`RDEPEND`, `USE`...).
+    pub(crate) fn add_installed(root: &Path, cpf: &str, slot: &str, fields: &[(&str, &str)]) {
+        let dir = root.join("var/db/pkg").join(cpf);
+        std::fs::create_dir_all(&dir).unwrap();
+        let category = cpf.split_once('/').unwrap().0;
+        let mut files = vec![("CATEGORY", category), ("SLOT", slot), ("EAPI", "8")];
+        files.extend_from_slice(fields);
+        for (name, value) in files {
+            std::fs::write(dir.join(name), format!("{value}\n")).unwrap();
+        }
     }
 
     #[test]

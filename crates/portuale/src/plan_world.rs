@@ -1,8 +1,9 @@
 //! `mrg --plan-world [--sort alpha|depend|resolver]`: what `emerge -uDNp @world`
 //! would install, worked out by `portage-world` instead of the resolver. One
-//! row per slot whose best visible version is not the installed one. It sees
-//! no blockers, no `REQUIRED_USE`, no USE change that rebuilds a package, so
-//! it can list less or more than the resolver; `--sort resolver` shows the
+//! row per slot whose best visible version is not the installed one, and an `R`
+//! row for a kept package whose `:slot/sub-slot=` dependency the plan breaks
+//! (with `plan-world-newuse`, also one whose USE changed). It sees no blockers
+//! and no `REQUIRED_USE`, so it can list less or more than the resolver; `--sort resolver` shows the
 //! resolver's own order for the same rows. `--sort depend` puts a package
 //! after what it needs before it is merged or usable; a `PDEPEND` orders
 //! nothing (PMS).
@@ -17,10 +18,12 @@ use std::process::{Command, ExitCode};
 /// Prints the rows and returns 0, or 2 when the tree cannot be read or the
 /// resolver order cannot be had.
 pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
-    let (opts, _) = match crate::check_world::options(matches, "plan-world") {
+    let (mut opts, future) = match crate::check_world::options(matches, "plan-world") {
         Ok(setup) => setup,
         Err(code) => return code,
     };
+    opts.rebuilds = true;
+    opts.newuse = future.on("plan-world-newuse");
     let sort = matches
         .get_one::<String>("sort")
         .map_or("alpha", String::as_str);
@@ -52,7 +55,7 @@ pub(crate) fn run(matches: &ArgMatches) -> ExitCode {
         println!("{}", plan_json(&world, &rows, &root));
     } else {
         for slot in &rows {
-            println!("{}", row(slot));
+            println!("{}", row(&world, slot));
         }
     }
     let unread = match world.unreadable.len() {
@@ -108,8 +111,9 @@ fn plan_json(world: &World, rows: &[&SlotSet], root: &Path) -> String {
 fn entry_json(world: &World, slot: &SlotSet, order: usize) -> Option<String> {
     let chosen = slot.chosen()?;
     let (category, package) = slot.cp.split_once('/')?;
-    let (outcome, from) = match (slot.change()?, slot.installed.as_deref()) {
+    let (outcome, from) = match (world.change(slot)?, slot.installed.as_deref()) {
         (Change::New, _) => ("new", None),
+        (Change::Rebuild, _) => ("reinstall", None),
         (Change::Upgrade, have) => ("upgrade", have),
         (Change::Downgrade, have) => ("downgrade", have),
     };
@@ -144,12 +148,13 @@ fn entry_json(world: &World, slot: &SlotSet, order: usize) -> Option<String> {
 
 /// `[ebuild  N     ] cat/pkg-ver:slot`, with the installed version of an
 /// upgrade or downgrade after it.
-fn row(slot: &SlotSet) -> String {
+fn row(world: &World, slot: &SlotSet) -> String {
     let Some(chosen) = slot.chosen() else {
         return String::new();
     };
-    let (mark, old) = match (slot.change(), slot.installed.as_deref()) {
+    let (mark, old) = match (world.change(slot), slot.installed.as_deref()) {
         (Some(Change::New), _) => ("  N     ", String::new()),
+        (Some(Change::Rebuild), _) => ("   R    ", String::new()),
         (Some(Change::Upgrade), Some(have)) => ("     U  ", format!(" [{have}]")),
         (_, Some(have)) => ("      D ", format!(" [{have}]")),
         _ => ("        ", String::new()),
@@ -243,7 +248,8 @@ fn parse_plan_rows(text: &str) -> HashMap<String, usize> {
 #[cfg(test)]
 mod tests {
     use super::parse_plan_rows;
-    use crate::check_world::tests::mrg_on_fixtures;
+    use crate::check_world::tests::{add_ebuild, add_installed, mrg_on_fixtures, run_on_copy};
+    use std::path::Path;
 
     /// The package of every row `--plan-world --sort <sort>` prints on the fixtures.
     fn rows(sort: &str) -> Vec<String> {
@@ -341,6 +347,108 @@ mod tests {
                 "dev-libs/withdeps-1.0",
             ]
         );
+    }
+
+    /// A provider upgraded across a sub-slot (0/1 to 0/2), a consumer that
+    /// recorded `:0/1=` and builds with a tool, one that recorded `:*`.
+    fn sub_slot_tree(root: &Path) {
+        add_ebuild(root, "dev-libs/w693prov-2", "0/2", &[]);
+        add_installed(root, "dev-libs/w693prov-1", "0/1", &[]);
+        add_ebuild(root, "dev-libs/w693tool-1", "0", &[]);
+        let cons = [
+            ("RDEPEND", "dev-libs/w693prov:="),
+            ("DEPEND", "dev-libs/w693tool"),
+        ];
+        add_ebuild(root, "dev-libs/w693cons-1", "0", &cons);
+        add_installed(
+            root,
+            "dev-libs/w693cons-1",
+            "0",
+            &[("RDEPEND", "dev-libs/w693prov:0/1=")],
+        );
+        add_ebuild(
+            root,
+            "dev-libs/w693star-1",
+            "0",
+            &[("RDEPEND", "dev-libs/w693prov:*")],
+        );
+        add_installed(
+            root,
+            "dev-libs/w693star-1",
+            "0",
+            &[("RDEPEND", "dev-libs/w693prov:*")],
+        );
+    }
+
+    /// PMS `dependencies.tex`, `sec:slot-dep`: `:=` breaks when the
+    /// sub-slot of the provider changes, `:*` does not. The rebuilt consumer
+    /// is built, so its `DEPEND` is followed and ordered too.
+    #[test]
+    fn a_slot_operator_consumer_is_rebuilt_after_its_provider() {
+        let world = ["dev-libs/w693cons", "dev-libs/w693star"];
+        let (rc, out) = run_on_copy(
+            &["--plan-world", "--sort", "depend"],
+            &world,
+            &[],
+            "",
+            sub_slot_tree,
+        );
+        assert_eq!(rc, 0, "{out}");
+        let rows: Vec<&str> = out.lines().filter(|l| l.contains("w693")).collect();
+        let at = |what: &str| rows.iter().position(|r| r.ends_with(what)).expect(&out);
+        assert_eq!(rows.len(), 3, "{out}");
+        assert!(
+            rows.contains(&"[ebuild   R    ] dev-libs/w693cons-1:0"),
+            "{out}"
+        );
+        assert!(
+            rows.contains(&"[ebuild  N     ] dev-libs/w693tool-1:0"),
+            "{out}"
+        );
+        assert!(at("w693prov-2:0 [1]") < at("w693cons-1:0"), "{out}");
+        assert!(at("w693tool-1:0") < at("w693cons-1:0"), "{out}");
+    }
+
+    /// Two kept packages declaring `IUSE="w693flag"`, neither with the flag
+    /// configured: one installed with it on, one with a flag its ebuild no
+    /// longer declares.
+    fn use_tree(root: &Path) {
+        for name in ["w693on", "w693gone"] {
+            add_ebuild(
+                root,
+                &format!("dev-libs/{name}-1"),
+                "0",
+                &[("IUSE", "w693flag")],
+            );
+        }
+        add_installed(
+            root,
+            "dev-libs/w693on-1",
+            "0",
+            &[("USE", "w693flag"), ("IUSE", "w693flag")],
+        );
+        add_installed(
+            root,
+            "dev-libs/w693gone-1",
+            "0",
+            &[("USE", "w693old"), ("IUSE", "w693old")],
+        );
+    }
+
+    /// PMS `dependencies.tex`: USE is restricted to `IUSE_EFFECTIVE`, so a
+    /// flag the kept version does not declare is no difference. Behind
+    /// the `plan-world-newuse` future option only.
+    #[test]
+    fn a_changed_use_rebuilds_only_with_the_future_option() {
+        let world = ["dev-libs/w693on", "dev-libs/w693gone"];
+        let run = |args: &[&str]| run_on_copy(args, &world, &[], "", use_tree);
+        let (rc, out) = run(&["--plan-world", "--future-options=plan-world-newuse"]);
+        assert_eq!(rc, 0, "{out}");
+        let rows: Vec<&str> = out.lines().filter(|l| l.contains("w693")).collect();
+        assert_eq!(rows, ["[ebuild   R    ] dev-libs/w693on-1:0"], "{out}");
+        let (rc, out) = run(&["--plan-world"]);
+        assert_eq!(rc, 0, "{out}");
+        assert!(!out.contains("w693"), "{out}");
     }
 
     #[test]
