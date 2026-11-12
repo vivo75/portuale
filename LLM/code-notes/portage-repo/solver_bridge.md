@@ -236,3 +236,15 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 ## fn without_absent_alternatives
 
 #730: the `portage-atom-pubgrub` crate drops a dependency on a package it does not know (`provider/mod.rs`, "remove dependencies on packages not present"); a `||` arm of such a package then has empty dependencies and counts as satisfied (`virtual/perl-Storable-3.410.0` has `|| ( =dev-lang/perl-5.44* ~perl-core/Storable-3.410.0 )` and there is no `perl-core/Storable`). The bridge removes those arms in `versions_for`, after `without_self_alternatives`. "Absent" means the cp is outside the closure (no repo directory) and not installed; an arm that exists but is masked stays, so autounmask still sees it. Pin: pmtest `test_727_a_kept_provider_picks_the_virtual_that_accepts_it`.
+
+## fn bridge_use_columns
+
+#714: the installed side of the USE diff follows `use_display::display_versions` (the same function `refresh_one_entry_display` uses): a New row diffs against the highest installed instance of another slot, Upgrade and Downgrade against `from`, Reinstall against itself. Before, only `Reinstall` had an installed side, so upgrade rows lost `*`, `%` and the `(-flag%)` entries and `-p` printed every flag.
+
+## fn vdb_installed_ref
+
+#714: one constructor for the `[oldver]` bracket entries (sub-slot and repo from the vdb, #446); the Upgrade/Downgrade arm used the candidate's sub-slot before.
+
+## fn bridge_download_files
+
+#714: `LoadedVersion` now carries the raw `SRC_URI` and the repo directory; the bytes still to fetch come from `fetch_bytes_to_download`, as in `resolve/pass/entry_fetch.rs`. A remote binary keeps its `SIZE`.

@@ -204,19 +204,10 @@ pub(crate) fn refresh_one_entry_display(
     root: &Path,
     config: &portage_profile::Config,
 ) {
-    let (version, installed_version) = match &e.outcome {
-        // A new slot diffs against the highest installed instance of another
-        // slot, not against nothing.
-        // Portage: output.py, set_pkg_info (`cp_matches[-1]`)
-        PretendOutcome::New { version } => (
-            version.clone(),
-            highest_installed_version(root, &e.category, &e.package),
-        ),
-        PretendOutcome::Upgrade { from, to } | PretendOutcome::Downgrade { from, to } => {
-            (to.clone(), Some(from.clone()))
-        }
-        PretendOutcome::Reinstall { version, .. } => (version.clone(), Some(version.clone())),
-        _ => return,
+    let Some((version, installed_version)) =
+        display_versions(&e.outcome, root, &e.category, &e.package)
+    else {
+        return;
     };
     let cat = e.category.clone();
     let pkg = e.package.clone();
@@ -288,6 +279,29 @@ pub(crate) fn refresh_one_entry_display(
     });
     e.use_flags_display = display;
 }
+/// The version a row installs and the installed version its USE display is
+/// diffed against: a new slot diffs against the highest installed instance of
+/// another slot, not against nothing. `None` for an outcome with no USE display.
+// Portage: output.py, set_pkg_info (`cp_matches[-1]`)
+pub(crate) fn display_versions(
+    outcome: &PretendOutcome,
+    root: &Path,
+    category: &str,
+    package: &str,
+) -> Option<(String, Option<String>)> {
+    match outcome {
+        PretendOutcome::New { version } => Some((
+            version.clone(),
+            highest_installed_version(root, category, package),
+        )),
+        PretendOutcome::Upgrade { from, to } | PretendOutcome::Downgrade { from, to } => {
+            Some((to.clone(), Some(from.clone())))
+        }
+        PretendOutcome::Reinstall { version, .. } => Some((version.clone(), Some(version.clone()))),
+        _ => None,
+    }
+}
+
 /// The highest installed version of `category/package` in any slot.
 pub(crate) fn highest_installed_version(
     root: &Path,

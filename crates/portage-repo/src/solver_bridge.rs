@@ -40,7 +40,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::parse_dep_atom;
 
@@ -91,6 +91,10 @@ struct LoadedVersion {
     /// `Some` for a binary package (`--usepkg`): the build-time facts that
     /// replace what an ebuild computes. `None` for an ebuild or an installed-only record.
     binary: Option<BinaryFacts>,
+    /// Raw `SRC_URI` and the repo directory it was read from, for the row's
+    /// download size (empty for a binary or an installed-only record).
+    src_uri: String,
+    repo_location: PathBuf,
 }
 
 /// What a binary candidate carries that an ebuild computes: the USE it was
@@ -454,6 +458,8 @@ impl LazyRepo {
                     deps,
                     raw_deps,
                     binary: None,
+                    src_uri: metadata.get("SRC_URI").cloned().unwrap_or_default(),
+                    repo_location: candidate.repo_location.clone(),
                 });
             }
         }
@@ -583,6 +589,8 @@ impl LazyRepo {
                     build_time: candidate.build_time,
                     size: metadata.get("SIZE").and_then(|s| s.parse().ok()),
                 }),
+                src_uri: String::new(),
+                repo_location: PathBuf::new(),
             });
         }
         Ok(())
@@ -686,6 +694,8 @@ impl LazyRepo {
             deps,
             raw_deps,
             binary: None,
+            src_uri: String::new(),
+            repo_location: PathBuf::new(),
         })
     }
 
@@ -1002,6 +1012,25 @@ fn apply_use_flips(use_set: &mut HashSet<String>, flips: &[(String, bool)]) {
     }
 }
 
+/// An installed instance as the `[oldver]` bracket shows it: the sub-slot and
+/// repo come from the vdb, not from the candidate that replaces it, so the
+/// bracket renders `[1.0:1::testrepo]` (backlog #446, #714).
+// Portage: output.py, convert_myoldbest
+fn vdb_installed_ref(
+    root: &Path,
+    category: &str,
+    package: &str,
+    version: &str,
+    slot: &str,
+) -> InstalledRef {
+    InstalledRef {
+        version: version.to_string(),
+        slot: slot.to_string(),
+        sub_slot: read_vdb_slot(root, category, package, version).1,
+        repo: installed_pkg_repo(root, category, package, version),
+    }
+}
+
 /// One planned pick against the installed db: `Reinstall` for a rebuild
 /// member, `Upgrade`/`Downgrade` across slots, else `New` or `AlreadyInstalled`.
 #[allow(clippy::too_many_arguments)]
@@ -1054,12 +1083,13 @@ fn bridge_outcome_for(
             };
             (
                 outcome,
-                vec![InstalledRef {
-                    version: from,
-                    slot: record.slot.clone(),
-                    sub_slot: record.sub_slot.clone(),
-                    repo: record.repo_name.clone(),
-                }],
+                vec![vdb_installed_ref(
+                    root,
+                    &record.category,
+                    &record.package,
+                    &from,
+                    &record.slot,
+                )],
                 false,
             )
         }
@@ -1073,19 +1103,7 @@ fn bridge_outcome_for(
                 .filter(|((cat, pkg, _), _)| cat == &record.category && pkg == &record.package)
                 .flat_map(|((_, _, slot), versions)| {
                     versions.iter().map(|v| {
-                        // Like the default solver's `installed_refs`: the
-                        // sub-slot and repo come from the vdb, so the
-                        // `[oldver]` bracket renders `[1.0:1::testrepo]`,
-                        // not `[1.0:1/::]` (backlog #446). Portage:
-                        // output.py, convert_myoldbest.
-                        let (_, sub_slot) =
-                            read_vdb_slot(root, &record.category, &record.package, v);
-                        InstalledRef {
-                            version: v.clone(),
-                            slot: slot.clone(),
-                            sub_slot,
-                            repo: installed_pkg_repo(root, &record.category, &record.package, v),
-                        }
+                        vdb_installed_ref(root, &record.category, &record.package, v, slot)
                     })
                 })
                 .collect();
@@ -1149,26 +1167,21 @@ fn bridge_use_columns(
     // drifted flag renders `x*`; anything else keeps no markers. Gated
     // on the outcome, so resolvo (which never yields `Reinstall`) and
     // every non-`R` row do not move.
-    let (installed_state, reinst_flags): (Option<InstalledUseState>, HashSet<String>) =
-        match outcome {
-            PretendOutcome::Reinstall { changed_flags, .. } => {
-                let old_iuse = read_vdb_flag_set(
-                    &req.root,
-                    &record.category,
-                    &record.package,
-                    version,
-                    "IUSE",
-                );
+    let installed_state =
+        super::use_display::display_versions(outcome, &req.root, &record.category, &record.package)
+            .and_then(|(_, installed)| installed)
+            .map(|old| {
+                let old_iuse =
+                    read_vdb_flag_set(&req.root, &record.category, &record.package, &old, "IUSE");
                 let mut old_use =
-                    read_vdb_flag_set(&req.root, &record.category, &record.package, version, "USE");
+                    read_vdb_flag_set(&req.root, &record.category, &record.package, &old, "USE");
                 old_use.retain(|flag| old_iuse.contains(flag));
-                (
-                    Some(InstalledUseState { old_use, old_iuse }),
-                    changed_flags.iter().cloned().collect(),
-                )
-            }
-            _ => (None, HashSet::new()),
-        };
+                InstalledUseState { old_use, old_iuse }
+            });
+    let reinst_flags: HashSet<String> = match outcome {
+        PretendOutcome::Reinstall { changed_flags, .. } => changed_flags.iter().cloned().collect(),
+        _ => HashSet::new(),
+    };
     let use_expand_display = super::build_use_expand_display(super::BuildUseExpandDisplayArgs {
         use_flags_display: &use_flags_display,
         config: &req.config,
@@ -1322,12 +1335,7 @@ fn bridge_entry_for(
         interactive: false,
         fetch_restrict: false,
         fetch_restrict_satisfied: false,
-        download_files: record
-            .binary
-            .as_ref()
-            .filter(|b| b.remote)
-            .and_then(|b| b.size.map(|size| vec![(format!("{cp}-{version}"), size)]))
-            .unwrap_or_default(),
+        download_files: bridge_download_files(&record, cp, version, &use_set, &req.distdir),
         required_by,
         source: if record.binary.is_some() {
             super::CandidateSource::Binary
@@ -1344,6 +1352,34 @@ fn bridge_entry_for(
         build_time: record.binary.as_ref().and_then(|b| b.build_time),
         deps,
     })
+}
+
+/// The bytes still to fetch for one pick, per distfile: the missing `SRC_URI`
+/// files of an ebuild, the `SIZE` of a remote binary, nothing for a local one.
+// Portage: output.py, _calc_size (getfetchsizes)
+fn bridge_download_files(
+    record: &LoadedVersion,
+    cp: &str,
+    version: &str,
+    use_set: &HashSet<String>,
+    distdir: &Path,
+) -> Vec<(String, u64)> {
+    match &record.binary {
+        Some(binary) => binary
+            .remote
+            .then_some(binary.size)
+            .flatten()
+            .map(|size| vec![(format!("{cp}-{version}"), size)])
+            .unwrap_or_default(),
+        None => super::fetch_bytes_to_download(super::FetchBytesToDownloadArgs {
+            src_uri: &record.src_uri,
+            use_flags: use_set,
+            repo_location: &record.repo_location,
+            category: &record.category,
+            package: &record.package,
+            distdir,
+        }),
+    }
 }
 
 /// Blocker reporting via the shared walk-path helper, filed on owner entries.
@@ -6479,6 +6515,25 @@ mod tests {
         }
     }
 
+    /// #714: an upgrade row is diffed against the installed package it replaces, like the
+    /// default solver's: `-change*`, `added%*`, `(-drop%)`, a plain `keep`.
+    #[test]
+    fn p714_upgrade_row_is_compared_with_the_installed_package() {
+        let mut req = fixture_request(&["dev-libs/upgradeusepkg"]);
+        req.solver = super::super::SolverKind::PubGrub;
+        req.update = true;
+        let result = active_resolver_for(super::super::SolverKind::PubGrub)
+            .resolve(&req)
+            .expect("upgradeusepkg resolves");
+        let body: String = result.entries[0]
+            .use_expand_display
+            .iter()
+            .map(|(_, text)| text.clone())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(body, "added%* keep -change* (-drop%)");
+    }
+
     /// The bridge reports the unbreakable build-time cycle through the walk's own
     /// map; resolvo cannot order a cyclic closure and errors first.
     #[test]
@@ -8120,6 +8175,8 @@ mod tests {
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
             binary: None,
+            src_uri: String::new(),
+            repo_location: std::path::PathBuf::new(),
         };
         let (_, versions) = super::version_row(&record, Default::default()).expect("row builds");
         assert!(
@@ -8158,6 +8215,8 @@ mod tests {
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
             binary: None,
+            src_uri: String::new(),
+            repo_location: std::path::PathBuf::new(),
         };
         let installed = super::InstalledView {
             by_slot: HashMap::from([(
@@ -8281,6 +8340,8 @@ mod tests {
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
             binary: None,
+            src_uri: String::new(),
+            repo_location: std::path::PathBuf::new(),
         };
         let (outcome, oldbest, new_slot) =
             super::bridge_outcome_for("dev-libs/pg359-gsblk", &record, "2", &installed, None, &vdb);
@@ -8320,6 +8381,8 @@ mod tests {
             deps: [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()],
             raw_deps: Default::default(),
             binary: None,
+            src_uri: String::new(),
+            repo_location: std::path::PathBuf::new(),
         };
         let outcome = super::super::PretendOutcome::Reinstall {
             version: "1".to_string(),
@@ -8368,6 +8431,8 @@ mod tests {
                 String::new(),
             ],
             binary: None,
+            src_uri: String::new(),
+            repo_location: std::path::PathBuf::new(),
         };
         let use_set = std::collections::HashSet::new();
         let mut pending = Vec::new();
