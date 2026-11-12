@@ -294,6 +294,32 @@ fn p733_a_kept_installed_package_carries_no_edges_without_deep() {
     }
 }
 
+/// #716/#732: every merge-bound pubgrub entry, the slot-operator rebuilds of the holders
+/// included, carries the dependency data `--json` reports.
+#[test]
+fn p732_every_merge_bound_pubgrub_entry_carries_its_dep_input() {
+    let world = [
+        "dev-libs/p698rebuild",
+        "dev-libs/p698reinst",
+        "dev-libs/p698upg",
+    ];
+    let root = p698_root(&world);
+    let result = p727_resolve(SolverKind::PubGrub, &root, &["dev-libs/p727top"], true);
+    assert!(
+        result.entries.len() >= 4,
+        "the update moves the holders too"
+    );
+    for entry in &result.entries {
+        if !matches!(entry.outcome, PretendOutcome::AlreadyInstalled { .. }) {
+            assert!(
+                entry.dep_input.is_some(),
+                "{} has no dep input",
+                entry.package
+            );
+        }
+    }
+}
+
 /// #728, charter property 3: a package rebuilt for the provider's new sub-slot moves to its
 /// best visible version, in every solver. `p728virt` pins `p728core` with `~`, so both move
 /// together and the plan stays consistent.

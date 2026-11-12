@@ -916,6 +916,18 @@ fn graph_result_from_order(
         file_bridge_blocker_conflicts(req, repo, &mut entries, kept, &pending_blockers);
     let (slot_op_rebuilds, abi_rebuilds) = bridge_slot_operator_rebuilds(req, &entries, repo);
     entries.extend(slot_op_rebuilds);
+    // The rebuild rows the slot-operator pass adds have no solver record: read
+    // the same dependency data for them, so `--json` is whole for every
+    // merge-bound row (#716, #732).
+    for entry in entries.iter_mut().filter(|e| e.dep_input.is_none()) {
+        let Some(version) = super::merge_bound_version(&entry.outcome) else {
+            continue;
+        };
+        let cp = format!("{}/{}", entry.category, entry.package);
+        if let Some(record) = repo.record(&cp, version) {
+            entry.dep_input = Some(bridge_dep_input(&record, &repo.use_of(&record)));
+        }
+    }
     // Same merge-order sort the walk applies: engine order only seeds positions.
     let (entries, _) = super::topological_merge_order(super::TopologicalMergeOrderArgs {
         entries,
@@ -928,6 +940,8 @@ fn graph_result_from_order(
         // No backtrack restart runs here, so no cycle map to demote by.
         circular: &HashMap::new(),
     });
+    let mut entries = entries;
+    complete_required_by(&mut entries, &req.root);
     let (circular_deps, large_cycle_count, report_cycles, cycle_display) =
         bridge_circular_display(req, &entries);
 
@@ -1008,6 +1022,32 @@ fn apply_use_flips(use_set: &mut HashSet<String>, flips: &[(String, bool)]) {
             use_set.insert(flag.clone());
         } else {
             use_set.remove(flag);
+        }
+    }
+}
+
+/// Adds every real dependent to `required_by`: the solver names one requirer per
+/// package, while `--tree` nests a row under any entry whose dependencies resolve
+/// to it. Both read the same edges (`resolved_dep_targets`), so the list and the
+/// tree cannot disagree (#732).
+fn complete_required_by(entries: &mut [GraphEntry], root: &Path) {
+    let targets = super::resolved_dep_targets(entries, root, &HashMap::new());
+    let mut owners: Vec<(usize, (String, String))> = Vec::new();
+    for (parent, children) in targets.iter().enumerate() {
+        for &child in children.iter().flatten() {
+            owners.push((
+                child,
+                (
+                    entries[parent].category.clone(),
+                    entries[parent].package.clone(),
+                ),
+            ));
+        }
+    }
+    for (child, owner) in owners {
+        if !entries[child].required_by.contains(&owner) {
+            entries[child].required_by.push(owner);
+            entries[child].required_by.sort();
         }
     }
 }

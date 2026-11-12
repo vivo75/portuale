@@ -256,3 +256,7 @@ The `--autounmask-use` flip that plans a rebuild (config USE misses the atom) ap
 ## fn bridge_dep_input
 
 #716: `GraphEntry::dep_input` feeds only the `--json` fields `sub_slot`, `dependencies`, `required_use`, `iuse`, `use` (`pretend/json.rs`, `dep_input_fields`). The bridge left it `None`; the health checker needs it to evaluate a planned package alone.
+
+## fn complete_required_by
+
+#732: the pubgrub crate reports one requirer per package, `--tree` nests a row under any entry whose `deps` resolve to it (`resolved_dep_targets`). Both now read the same edges. The holders' provider parent (#718, `name_holder_parents`) is added afterwards and stays.
