@@ -14,3 +14,7 @@ Co-upgrade (#698): installed holders of a pin follow an upgrade when each has a 
 
 - Backlog #727 (owner decision 2026-11-12, smallest plan): the co-upgrade applies only to a provider the request wants updated. Portage `depgraph.py` `_want_update_pkg` returns `(arg_atoms or update) and not _too_deep(depth)`: an argument atom (or set member) naming the package, or `--update` within `--deep`. The depth of the provider is not known here, so `--update` counts only together with `--deep` (any value). The default solver calls it per skipped provider in `co_upgrade_request`; the pubgrub bridge calls it in `holder_fix` with the request as the user typed it (`asked`, without the atoms the holder pass added) and, when it is false, pins the installed version like a route-less holder (the #703 NOTE is still printed when a holder has no route). `-u` without `-D` therefore keeps a dependency provider, as Portage does.
 
+## fn name_holder_parents (solver_bridge.rs)
+
+- Backlog #718 (a): `holder_fix` returns, next to the rebuild and atom lists, the `(holder, provider)` pair of every holder it routes; `resolve_pubgrub_unstale` collects them over its rounds and `name_holder_parents` adds the provider to `required_by` of the holder's row in the final plan, as `backtracking_resolve` does for the default solver (#713). `--tree` is not touched (owner decision 2026-11-12: it follows the real dependency edges).
+

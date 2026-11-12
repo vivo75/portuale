@@ -5131,9 +5131,11 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
     // A withheld provider is pinned to its installed version in the next round,
     // so the round that found its route-less holder is the one that knows them.
     let mut no_route: Vec<super::HeldBackNoRoute> = Vec::new();
+    let mut parents: Vec<super::Followers> = Vec::new();
     for _ in 0..STALE_BINARY_MAX_ROUNDS {
         let (mut result, stale, fix) = resolve_pubgrub_at(req, &opts)?;
         no_route.extend(fix.no_route);
+        parents.extend(fix.parents);
         let fresh_rebuild: Vec<String> = fix
             .rebuild
             .into_iter()
@@ -5146,6 +5148,7 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
             .collect();
         if stale.is_empty() && fresh_rebuild.is_empty() && fresh_atoms.is_empty() {
             result.held_back_no_route = no_route;
+            name_holder_parents(&mut result, &parents);
             return Ok(result);
         }
         opts.masked_binaries.extend(stale);
@@ -5154,8 +5157,25 @@ fn resolve_pubgrub_unstale(req: &ResolveRequest, relax: Relax) -> Result<GraphRe
     }
     resolve_pubgrub_at(req, &opts).map(|(mut result, _, _)| {
         result.held_back_no_route = no_route;
+        name_holder_parents(&mut result, &parents);
         result
     })
+}
+
+/// A holder that joins the plan only because its provider moves names that
+/// provider as its parent, so the plan says why it is there (#718, as #713 does
+/// for the default solver).
+fn name_holder_parents(result: &mut GraphResult, parents: &[super::Followers]) {
+    for entry in &mut result.entries {
+        for (holder, provider) in parents {
+            if (&entry.category, &entry.package) == (&holder.0, &holder.1)
+                && !entry.required_by.contains(provider)
+            {
+                entry.required_by.push(provider.clone());
+                entry.required_by.sort();
+            }
+        }
+    }
 }
 
 /// The planned binaries (`cat/pkg-ver`) whose recorded built slot-operator
@@ -5397,6 +5417,8 @@ struct HolderFix {
     atoms: Vec<String>,
     /// Withheld moves with a route-less holder, for the #703 note.
     no_route: Vec<super::HeldBackNoRoute>,
+    /// `(holder, provider)` as `(category, package)`: why a holder joins the plan (#718).
+    parents: Vec<super::Followers>,
 }
 
 /// Installed packages whose recorded dependency on a package the plan moves no
@@ -5538,6 +5560,7 @@ fn holder_fix(
                 .push(format!("={}/{}-{}", e.category, e.package, old.version));
         } else {
             for (((c, p, v), _), route) in broken.iter().zip(routes) {
+                fix.parents.push(((c.clone(), p.clone()), provider.clone()));
                 let target = route.expect("every holder has a route");
                 if target == *v {
                     fix.rebuild.push(format!("{c}/{p}-{v}"));

@@ -125,6 +125,27 @@ fn p713_co_upgraded_holders_name_the_provider_as_parent() {
     }
 }
 
+/// #718 (a): the pubgrub bridge names the provider as the parent of its holders too.
+#[test]
+fn p718_pubgrub_holders_name_the_provider_as_parent() {
+    let world = [
+        "dev-libs/p698rebuild",
+        "dev-libs/p698reinst",
+        "dev-libs/p698upg",
+    ];
+    let root = p698_root(&world);
+    let result = resolve_with(SolverKind::PubGrub, &root, &world);
+    let provider = ("dev-libs".to_string(), "p569prov".to_string());
+    for name in ["p698rebuild", "p698reinst", "p698upg"] {
+        let entry = result
+            .entries
+            .iter()
+            .find(|e| e.package == name)
+            .unwrap_or_else(|| panic!("{name} is in the plan"));
+        assert_eq!(entry.required_by, std::slice::from_ref(&provider), "{name}");
+    }
+}
+
 /// #713, charter property 5: a consumer rebuilt only because the provider's sub-slot changed
 /// names that provider as its parent (the walk queues such rebuilds as parentless roots).
 #[test]
