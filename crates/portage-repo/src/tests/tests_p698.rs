@@ -26,6 +26,9 @@ fn p698_root(world: &[&str]) -> TempDir {
             "dev-libs/p573virt-1",
             "=dev-libs/p569prov-5.42* dev-libs/p569prov:0/5.42=",
         ),
+        // #733: `p733top` has `PDEPEND=p733dep`, and `p733dep` needs `p733top` back.
+        ("dev-libs/p733top-1", ""),
+        ("dev-libs/p733dep-1", "dev-libs/p733top"),
     ];
     for (cpv, rdepend) in recorded {
         let dir = base.join("var/db/pkg").join(cpv);
@@ -271,6 +274,23 @@ fn p730_a_kept_provider_picks_the_virtual_that_accepts_it() {
             ["dev-libs/p727top2-1", "dev-libs/p727virt-1"],
             "{kind}"
         );
+    }
+}
+
+/// #733: a kept installed package is a leaf without `--deep`, so its entry carries no
+/// dependency edges; the `--tree` would otherwise nest the requested `p733top` under
+/// the hidden `p733dep` that needs it back.
+#[test]
+fn p733_a_kept_installed_package_carries_no_edges_without_deep() {
+    let root = p698_root(&[]);
+    for kind in SOLVERS {
+        let result = p727_resolve(kind, &root, &["dev-libs/p733top"], false);
+        let kept = result
+            .entries
+            .iter()
+            .find(|e| e.package == "p733dep")
+            .unwrap_or_else(|| panic!("{kind}: p733dep is in the plan"));
+        assert!(kept.deps.is_empty(), "{kind}: the leaf has edges");
     }
 }
 

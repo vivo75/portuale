@@ -1314,7 +1314,13 @@ fn bridge_entry_for(
     let mut required_by: Vec<(String, String)> = parents.get(&cpv).cloned().unwrap_or_default();
     required_by.sort();
     required_by.dedup();
-    let deps = bridge_entry_deps(&record, &use_set);
+    // A kept installed package that is not expanded (no `--deep`) is a leaf:
+    // its dependencies are not part of the plan, so the entry has no edges.
+    let deps = if kept.is_some_and(|kept| !kept.expands(&cpv)) {
+        Vec::new()
+    } else {
+        bridge_entry_deps(&record, &use_set)
+    };
     collect_bridge_blockers(&record, &use_set, version, pending_blockers, seen_blockers);
     Some(GraphEntry {
         discovery: 0,
