@@ -172,10 +172,10 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
     });
     assert!(empty_sched.is_empty() && empty_abi.is_empty());
 
-    // Not reachable -> only kept orphans whose own `:=` pin names the
-    // moved sub-slot fire (backlog #737); the rest stay suppressed.
-    // The slot-operator-dep probe is not complete-mode gated, but `bar`'s
-    // upgrade carries no unbuilt `:=` dep, so nothing else fires here.
+    // Not reachable -> the post-walk vdb scan is suppressed entirely
+    // (Portage: no slot-op rebuild for a consumer outside the required
+    // sets). The slot-operator-dep probe is not complete-mode gated, but `bar`'s
+    // upgrade carries no unbuilt `:=` dep, so nothing fires here.
     let (none_sched, none_abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         effective: None,
         root: &dir,
@@ -193,21 +193,7 @@ fn slot_operator_rebuild_scan_flags_only_the_stale_bindings() {
         config: &test_config(),
         gate: crate::test_gate(&[]),
     });
-    assert_eq!(
-        none_sched,
-        BTreeSet::from([
-            ("dev-libs".to_string(), "bar".to_string()),
-            ("dev-libs".to_string(), "stale".to_string())
-        ]),
-        "the kept consumer bound to the moved sub-slot rebuilds without reachability"
-    );
-    assert_eq!(
-        none_abi,
-        vec![(
-            "dev-libs/bar-2.0".to_string(),
-            "dev-libs/stale-1.0".to_string()
-        )]
-    );
+    assert!(none_sched.is_empty() && none_abi.is_empty());
 
     // A cp already in `already` stays reported once in the graph as
     // the asked-for rebuild (`abi_rebuilds` survives); a different
@@ -941,9 +927,7 @@ fn slot_operator_new_slot_arm_probes_bound_slot_mismatched_entries() {
     // Both consumers walked, neither reachable: the same-slot arm is
     // out of scope. `massn` (bound to slot 0) probes the slot-1
     // upgrade; `masso` (bound to the entry's own slot 1) must not
-    // leak that entry into the new arm. `masso` is walked (an
-    // `AlreadyInstalled` entry), so backlog #737's kept-orphan arm --
-    // unwalked consumers only -- does not fire for it either.
+    // leak that entry into the new arm.
     let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
         effective: None,
         root: &base,
@@ -1343,8 +1327,8 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
         gate: crate::test_gate(&[]),
     });
     assert!(done_sched.is_empty(), "`undone` suppresses the rebuild");
-    // A reachable set that omits the consumer still schedules it when the
-    // consumer is a kept orphan with a stale `:=` pin (backlog #737).
+    // A reachable set that omits the consumer suppresses the scan --
+    // the gate itself is non-empty, so the loop runs and skips.
     let elsewhere: HashSet<(String, String)> =
         HashSet::from([("dev-libs".to_string(), "other".to_string())]);
     let (far_sched, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
@@ -1364,11 +1348,7 @@ fn slot_operator_rebuild_scan_reinstall_parent_and_skip_clauses() {
         config: &test_config(),
         gate: crate::test_gate(&[]),
     });
-    assert_eq!(
-        far_sched,
-        BTreeSet::from([stale.clone(), ("dev-libs".to_string(), "bar".to_string())]),
-        "a kept consumer with a stale pin schedules without reachability"
-    );
+    assert!(far_sched.is_empty(), "unreachable consumers never schedule");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1791,7 +1771,7 @@ fn deep_scan_scope_is_the_walked_set_narrowed_by_the_closure() {
 
 /// An installed consumer the `--deep` walk recursed into is scheduled by the
 /// same-slot arm even when it is outside the reachable scope (#598); the same
-/// consumer unwalked schedules too when kept with a stale pin (#737 orphan).
+/// consumer unwalked is not.
 /// Portage: depgraph.py, _add_pkg (recurse under --deep)
 #[test]
 fn slot_operator_rebuild_scan_schedules_a_walked_installed_consumer_outside_reachable() {
@@ -1841,7 +1821,7 @@ fn slot_operator_rebuild_scan_schedules_a_walked_installed_consumer_outside_reac
     let (scheduled, abi, ..) = scan(&HashSet::from([holder.clone()]));
     assert_eq!(
         scheduled,
-        BTreeSet::from([("dev-libs".to_string(), "bar".to_string()), holder.clone()])
+        BTreeSet::from([("dev-libs".to_string(), "bar".to_string()), holder])
     );
     assert_eq!(
         abi,
@@ -1852,17 +1832,9 @@ fn slot_operator_rebuild_scan_schedules_a_walked_installed_consumer_outside_reac
         "provider and consumer display pair"
     );
     let (unwalked, abi, ..) = scan(&HashSet::new());
-    assert_eq!(
-        unwalked,
-        BTreeSet::from([("dev-libs".to_string(), "bar".to_string()), holder]),
-        "not walked, not reachable, but kept with a stale pin: scheduled (backlog #737)"
-    );
-    assert_eq!(
-        abi,
-        vec![(
-            "dev-libs/bar-2.0".to_string(),
-            "dev-libs/holder-1.0".to_string()
-        )],
+    assert!(
+        unwalked.is_empty() && abi.is_empty(),
+        "not walked, not reachable: skipped"
     );
     let _ = fs::remove_dir_all(&dir);
 }
@@ -1993,79 +1965,4 @@ fn slot_operator_rebuild_scan_pairs_a_consumer_upgrading_in_the_same_run() {
         "an upgrading consumer appears under its merge-bound replacement"
     );
     let _ = fs::remove_dir_all(&base);
-}
-
-/// Backlog #737: a kept orphan consumer (installed, no merging entry,
-/// outside `reachable` and unwalked) whose built `:=` pin names a moved
-/// sub-slot still rebuilds. S0 (`/var/tmp/plan692/rs.json` +
-/// `rs-health.jsonl`): `cargo-c-0.10.25` kept-orphan (out of world, no
-/// reverse-dep), VDB pin `openssl:0/3=` from `:=`, provider lands at
-/// `0/4`. Narrow: only the `:=` sub-slot pin fires; a plain or
-/// slot-only dep on the same kept orphan does not.
-/// Portage: `_emerge/depgraph.py`, `_slot_operator_trigger_reinstalls`;
-/// kept+stale-pin shape after `portage.sets.dbapi.SubslotChangedSet`
-/// (workspace precedent: `portage-world/src/rebuild.rs:slot_operator`).
-#[test]
-fn slot_operator_rebuild_scan_schedules_a_kept_orphan_with_a_subslot_pin() {
-    let dir = TempDir::new("portage-repo-slotop-737-kept-orphan");
-    for (name, slot, rdepend) in [
-        ("bar-1.0", "0/1", ""),
-        ("holder-1.0", "0", "dev-libs/bar:0/1="),
-        ("plain-1.0", "0", "dev-libs/bar:0"),
-        ("slotonly-1.0", "0", "dev-libs/bar:0="),
-    ] {
-        let d = dir.join("var/db/pkg/dev-libs").join(name);
-        fs::create_dir_all(&d).unwrap();
-        fs::write(d.join("CATEGORY"), "dev-libs\n").unwrap();
-        fs::write(d.join("SLOT"), format!("{slot}\n")).unwrap();
-        if !rdepend.is_empty() {
-            fs::write(d.join("RDEPEND"), format!("{rdepend}\n")).unwrap();
-        }
-    }
-    // `bar` moves sub-slot `1 -> 2` in the same slot this run; the
-    // consumers sit in the vdb only (orphan kept: no entry, not
-    // reachable, not walked).
-    let bar_upgrade = GraphEntry {
-        outcome: PretendOutcome::Upgrade {
-            from: "1.0".into(),
-            to: "2.0".into(),
-        },
-        slot: Some("0".into()),
-        sub_slot: Some("2".into()),
-        ..graph_entry("dev-libs", "bar", "2.0")
-    };
-    let empty: BTreeSet<(String, String)> = BTreeSet::new();
-    let (scheduled, abi, ..) = slot_operator_rebuild_scan(SlotOperatorRebuildScanArgs {
-        effective: None,
-        root: &dir,
-        entries: std::slice::from_ref(&bar_upgrade),
-        reachable: &HashSet::new(),
-        scope: None,
-        walked_installed: &HashSet::new(),
-        already: &empty,
-        undone: &empty,
-        with_bdeps: true,
-        update: false,
-        top_level_cps: &HashSet::new(),
-        top_level_atoms: &HashSet::new(),
-        excluded: &[],
-        config: &test_config(),
-        gate: crate::test_gate(&[]),
-    });
-    assert_eq!(
-        scheduled,
-        BTreeSet::from([
-            ("dev-libs".to_string(), "bar".to_string()),
-            ("dev-libs".to_string(), "holder".to_string())
-        ]),
-        "the kept orphan bound to the moved sub-slot rebuilds"
-    );
-    assert_eq!(
-        abi,
-        vec![(
-            "dev-libs/bar-2.0".to_string(),
-            "dev-libs/holder-1.0".to_string()
-        )],
-    );
-    let _ = fs::remove_dir_all(&dir);
 }
